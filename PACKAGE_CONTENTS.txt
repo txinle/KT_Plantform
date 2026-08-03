@@ -1,0 +1,19 @@
+KT 数据采集平台首版本地完整包
+
+包含：
+- Django 源代码
+- Bootstrap 响应式 UI
+- 管理员、教师、学生端页面
+- 题目与 KC 导入模板
+- 单题导航、草稿保存、正式提交与导出逻辑
+- SQLite 本地启动脚本（Windows / Linux / macOS）
+- Docker、PostgreSQL、Nginx 部署配置
+- README、设计规格、数据字典、UI 与验证说明
+- 单元测试与源码检查脚本
+
+开始使用：
+1. Windows：双击 run_local.bat
+2. Linux/macOS：执行 chmod +x run_local.sh && ./run_local.sh
+3. 浏览器访问 http://127.0.0.1:8000/
+
+正式采集前必须修改演示密码，并完成小规模试测。

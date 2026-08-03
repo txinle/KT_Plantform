@@ -1,0 +1,14 @@
+KT 交互数据采集平台：本地首版
+
+Windows：双击 run_local.bat
+Linux/macOS：终端执行 ./run_local.sh
+
+首次运行需要联网安装 Python 依赖。启动后访问：
+http://127.0.0.1:8000/
+
+演示账号：
+管理员 admin / admin123
+教师 teacher / teacher123
+学生 S001 / student123
+
+正式采集前请修改演示密码并先完成小规模试测。

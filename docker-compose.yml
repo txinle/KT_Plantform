@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kt_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-kt_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kt_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kt_user} -d ${POSTGRES_DB:-kt_platform}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      DJANGO_DEBUG: 0
+      SEED_DEMO: ${SEED_DEMO:-1}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - static_data:/app/staticfiles
+      - media_data:/app/media
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on: [web]
+    volumes:
+      - ./nginx/kt-platform.conf:/etc/nginx/conf.d/default.conf:ro
+      - static_data:/static:ro
+      - media_data:/media:ro
+volumes:
+  postgres_data:
+  static_data:
+  media_data:
