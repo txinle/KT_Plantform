@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from unittest import TestCase
 
@@ -76,4 +77,20 @@ class UIContractTests(TestCase):
             self.assertIn(token, template)
         self.assertIn("data-visibility-control", script)
         self.assertIn("data-auto-submit", script)
+        self.assertRegex(
+            script,
+            r"if \(control\.open\) control\.querySelector\('\[data-auto-submit\]'\)\?\.focus\(\);",
+        )
+        self.assertIn("form.setAttribute('aria-busy', 'true')", script)
         self.assertIn("form.requestSubmit()", script)
+        self.assertNotIn("control.disabled", script)
+        self.assertNotRegex(script, r"\[data-auto-submit\][\s\S]{0,300}\.disabled\s*=")
+
+    def test_question_bank_list_links_remain_identifiable_without_hover(self):
+        source = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
+
+        for selector in (".cell-title", ".count-link"):
+            self.assertRegex(
+                source,
+                rf"{re.escape(selector)}\s*\{{[^}}]*text-decoration:\s*underline;",
+            )

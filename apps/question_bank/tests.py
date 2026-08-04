@@ -1,3 +1,5 @@
+import re
+
 from django.test import TestCase
 from django.urls import reverse
 from apps.accounts.models import User
@@ -95,11 +97,43 @@ class QuestionBankListUITests(TestCase):
         )
 
     def test_owned_bank_visibility_control_includes_update_form_and_choices(self):
-        self.assertContains(self.response, "data-visibility-control")
-        self.assertContains(self.response, "data-auto-submit")
-        self.assertContains(self.response, f'action="{self.visibility_url}"')
+        content = self.response.content.decode()
+        form_match = re.search(
+            (
+                rf'<form class="visibility-form" method="post" action="{re.escape(self.visibility_url)}">'
+                r'(?P<body>.*?)</form>'
+            ),
+            content,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(form_match)
+        visibility_form = form_match.group(0)
+        select_id = f"visibility-{self.bank.pk}"
+
+        self.assertEqual(content.count(f'for="{select_id}"'), 1)
+        self.assertEqual(content.count(f'id="{select_id}"'), 1)
+        self.assertRegex(
+            visibility_form,
+            r'<input type="hidden" name="csrfmiddlewaretoken" value="[^"]+">',
+        )
+        self.assertInHTML(
+            f'<label class="visually-hidden" for="{select_id}">题库可见性</label>',
+            visibility_form,
+        )
+        select_match = re.search(
+            (
+                rf'<select class="form-select" id="{select_id}" name="visibility" data-auto-submit>'
+                r'(?P<options>.*?)</select>'
+            ),
+            visibility_form,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(select_match)
+        select_html = select_match.group(0)
+        self.assertEqual(select_html.count("<option "), len(QuestionBank.Visibility.choices))
         for value, label in QuestionBank.Visibility.choices:
-            self.assertContains(
-                self.response,
-                f'<option value="{value}"',
+            selected = " selected" if value == QuestionBank.Visibility.PRIVATE else ""
+            self.assertInHTML(
+                f'<option value="{value}"{selected}>{label}</option>',
+                select_html,
             )

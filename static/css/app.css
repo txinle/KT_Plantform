@@ -310,10 +310,10 @@ textarea.form-control { min-height: 7rem; }
 .table thead th { background: var(--kt-surface-subtle); color: #425164; font-size: var(--font-size-xs); font-weight: var(--weight-bold); letter-spacing: .02em; white-space: nowrap; }
 .table tbody tr:last-child > * { border-bottom: 0; }
 .table tbody tr:hover { background: #fbfcfd; }
-.cell-title { display: block; color: var(--kt-ink); font-weight: var(--weight-semibold); text-decoration: none; }
+.cell-title { display: block; color: var(--kt-ink); font-weight: var(--weight-semibold); text-decoration: underline; text-underline-offset: .16em; }
 .cell-title:hover,
 .count-link:hover { color: var(--kt-brand-700); text-decoration: underline; }
-.count-link { color: var(--kt-brand-700); font-weight: var(--weight-semibold); text-decoration: none; }
+.count-link { color: var(--kt-brand-700); font-weight: var(--weight-semibold); text-decoration: underline; text-underline-offset: .16em; }
 .cell-meta { margin-top: var(--space-1); color: var(--kt-muted); font-size: var(--font-size-xs); }
 .question-cell { min-width: 20rem; max-width: 42rem; white-space: normal; }
 .numeric,
