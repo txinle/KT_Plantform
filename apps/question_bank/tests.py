@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from django.conf import settings
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from apps.accounts.models import User
@@ -16,56 +17,68 @@ class ImportTemplateDownloadTests(TestCase):
         self.student = User.objects.create_user(username="template-student", role=User.Role.STUDENT)
         self.question_template_url = reverse("question_bank:question_import_template")
         self.kc_template_url = reverse("question_bank:kc_import_template")
+        self.templates = (
+            (self.question_template_url, "question_import_template.csv"),
+            (self.kc_template_url, "kc_mapping_template.csv"),
+        )
 
-    def test_teacher_can_download_question_import_template(self):
+    def test_teacher_can_download_complete_import_templates_and_closes_streams(self):
         self.client.force_login(self.teacher)
 
-        response = self.client.get(self.question_template_url)
-        try:
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
-            self.assertIn('filename="question_import_template.csv"', response["Content-Disposition"])
-            content = b"".join(response.streaming_content).decode("utf-8-sig")
-            self.assertIn("序号,题目,选项A,选项B,选项C,选项D,选项E,选项F,答案", content)
-            self.assertIn("Knowledge Tracing 的中文名称是什么？", content)
-        finally:
-            response.close()
+        for url, filename in self.templates:
+            with self.subTest(filename=filename):
+                response = self.client.get(url)
+                stream = response.file_to_stream or next(
+                    closer.__self__
+                    for closer in response._resource_closers
+                    if hasattr(closer, "__self__") and hasattr(closer.__self__, "closed")
+                )
+                try:
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
+                    self.assertEqual(response["Content-Disposition"], f'attachment; filename="{filename}"')
+                    self.assertEqual(
+                        b"".join(response.streaming_content),
+                        (settings.BASE_DIR / "fixtures" / filename).read_bytes(),
+                    )
+                finally:
+                    response.close()
+                self.assertTrue(stream.closed)
 
-    def test_teacher_can_download_kc_mapping_template(self):
+    def test_import_templates_reject_post(self):
         self.client.force_login(self.teacher)
 
-        response = self.client.get(self.kc_template_url)
-        try:
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
-            self.assertIn('filename="kc_mapping_template.csv"', response["Content-Disposition"])
-            content = b"".join(response.streaming_content).decode("utf-8-sig")
-            self.assertIn("题目序号,主知识点,次知识点", content)
-            self.assertIn("基础运算,整数加法", content)
-        finally:
-            response.close()
+        for url, filename in self.templates:
+            with self.subTest(filename=filename):
+                self.assertEqual(self.client.post(url).status_code, 405)
 
     def test_anonymous_user_is_redirected_to_login(self):
-        response = self.client.get(self.question_template_url)
+        for url, filename in self.templates:
+            with self.subTest(filename=filename):
+                response = self.client.get(url)
 
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.url, f"{reverse('login')}?next={self.question_template_url}")
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response.url, f"{reverse('login')}?next={url}")
 
     def test_student_cannot_download_import_templates(self):
         self.client.force_login(self.student)
 
-        response = self.client.get(self.question_template_url)
+        for url, filename in self.templates:
+            with self.subTest(filename=filename):
+                response = self.client.get(url)
 
-        self.assertEqual(response.status_code, 403)
+                self.assertEqual(response.status_code, 403)
 
     def test_missing_template_returns_not_found_without_path_disclosure(self):
         self.client.force_login(self.teacher)
         with TemporaryDirectory() as directory:
             with override_settings(BASE_DIR=Path(directory)):
-                response = self.client.get(self.question_template_url)
+                for url, filename in self.templates:
+                    with self.subTest(filename=filename):
+                        response = self.client.get(url)
 
-        self.assertEqual(response.status_code, 404)
-        self.assertNotIn(directory, response.content.decode())
+                        self.assertEqual(response.status_code, 404)
+                        self.assertNotIn(directory, response.content.decode())
 
 
 class ImportTemplateLinkTests(TestCase):
@@ -76,15 +89,27 @@ class ImportTemplateLinkTests(TestCase):
 
     def test_question_import_page_links_to_question_template(self):
         response = self.client.get(reverse("question_bank:question_import", args=[self.bank.pk]))
+        template_url = reverse("question_bank:question_import_template")
+        anchor = (
+            f'<a class="btn btn-sm btn-outline-primary ms-2" href="{template_url}">'
+            "下载题目 CSV 示例</a>"
+        )
 
-        self.assertContains(response, "下载题目 CSV 示例")
-        self.assertContains(response, reverse("question_bank:question_import_template"))
+        self.assertInHTML(anchor, response.content.decode())
+        self.assertEqual(response.content.decode().count(anchor), 1)
+        self.assertNotContains(response, "下载 KC CSV 示例")
 
     def test_kc_import_page_links_to_kc_template(self):
         response = self.client.get(reverse("question_bank:kc_import", args=[self.bank.pk]))
+        template_url = reverse("question_bank:kc_import_template")
+        anchor = (
+            f'<a class="btn btn-sm btn-outline-primary ms-2" href="{template_url}">'
+            "下载 KC CSV 示例</a>"
+        )
 
-        self.assertContains(response, "下载 KC CSV 示例")
-        self.assertContains(response, reverse("question_bank:kc_import_template"))
+        self.assertInHTML(anchor, response.content.decode())
+        self.assertEqual(response.content.decode().count(anchor), 1)
+        self.assertNotContains(response, "下载题目 CSV 示例")
 
 class QuestionImportTests(TestCase):
     def setUp(self):

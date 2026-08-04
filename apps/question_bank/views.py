@@ -3,7 +3,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.http import FileResponse, Http404
 from django.db.models import Count
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.accounts.permissions import role_required
 from apps.audit.services import log_action
@@ -32,11 +32,13 @@ def _fixture_download(filename):
 
 
 @role_required("teacher", "admin")
+@require_GET
 def question_import_template(request):
     return _fixture_download("question_import_template.csv")
 
 
 @role_required("teacher", "admin")
+@require_GET
 def kc_import_template(request):
     return _fixture_download("kc_mapping_template.csv")
 
