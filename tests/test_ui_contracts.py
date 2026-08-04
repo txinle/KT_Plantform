@@ -23,6 +23,13 @@ class UIContractTests(TestCase):
         self.assertIn(".teacher-nav .teacher-nav-collapse { display: block; }", source)
         self.assertIn(".teacher-nav-collapse:not(.show) { display: none; }", source)
 
+    def test_table_scroll_shell_establishes_containing_block_to_prevent_absolute_accessibility_text_from_expanding_root(self):
+        source = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
+        rule = re.search(r"(?m)^\.table-shell\s*\{(?P<body>[^}]*)\}", source)
+
+        self.assertIsNotNone(rule)
+        self.assertRegex(rule.group("body"), r"(?:^|;)\s*position:\s*relative\s*;")
+
     def test_base_defines_accessible_teacher_breadcrumb_shell(self):
         source = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
         self.assertIn("{% block breadcrumb_items %}", source)
