@@ -28,6 +28,11 @@ class UIContractTests(TestCase):
         self.assertIn('aria-label="层级目录"', source)
         self.assertIn('aria-current="page"', source)
 
+    def test_account_identity_is_not_hidden_on_mobile(self):
+        source = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+        self.assertIn('class="account-label"', source)
+        self.assertNotIn('account-label d-none', source)
+
     def test_every_teacher_subpage_declares_breadcrumb_items(self):
         template_root = ROOT / "templates" / "teacher"
         for path in template_root.glob("*.html"):

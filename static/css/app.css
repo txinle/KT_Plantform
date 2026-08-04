@@ -140,7 +140,9 @@ a:hover { color: var(--kt-brand-900); }
 }
 
 .account-actions { gap: var(--space-4); }
-.account-label { display: inline-flex; align-items: baseline; gap: var(--space-2); color: #dce8f4; font-size: var(--font-size-sm); }
+.account-label { display: inline-flex; max-width: min(42vw, 20rem); align-items: baseline; gap: var(--space-2); color: #dce8f4; font-size: var(--font-size-sm); }
+.account-name,
+.account-username { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-name { font-weight: var(--weight-semibold); }
 .account-separator { color: rgba(255, 255, 255, .62); }
 .account-username { color: #fff; }
@@ -515,6 +517,7 @@ textarea.form-control { min-height: 7rem; }
   .site-header .navbar { min-height: 3.5rem; }
   .brand-mark { display: none; }
   .account-actions { gap: var(--space-2); }
+  .account-label { max-width: 9rem; gap: var(--space-1); font-size: var(--font-size-xs); }
   .page-actions .btn,
   .page-actions form { flex: 1 1 auto; }
   .page-actions form .btn { width: 100%; }

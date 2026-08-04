@@ -7,7 +7,7 @@
   <meta name="description" content="KT 教育科研交互数据采集平台">
   <title>{% block title %}KT 交互数据平台{% endblock %}</title>
   <link rel="stylesheet" href="{% static 'vendor/bootstrap/css/bootstrap.min.css' %}?v=5.3.8">
-  <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20260804">
+  <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20260804.2">
   {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
@@ -21,7 +21,7 @@
         </a>
         {% if user.is_authenticated %}
           <div class="account-actions">
-            <span class="account-label d-none d-sm-inline">
+            <span class="account-label">
               {% if user.shown_name != user.username %}
                 <span class="account-name">{{ user.shown_name }}</span>
                 <span class="account-separator" aria-hidden="true">·</span>
