@@ -86,7 +86,7 @@ d62b12cb3ce6ffe20305fef4ed456c7523892dcce64932a33ad4b227cd2f0774  ./docs/data-di
 01f0bb25ecb90b9167c3325b66e374fb6dbdff1588cc6315eca3c3f8db91b069  ./docs/design-spec.md
 ce60f0814e6f59bf88da2984df28f034c13f6cc26c19cce7ee677f3da744dc61  ./docs/superpowers/plans/2026-08-03-local-mvp.md
 8e594216a1286a6aa7c2bc4d1b5113ec4af2f343200bd48f8ff2263c063c9f2f  ./docs/superpowers/plans/2026-08-04-teacher-navigation-dashboard.md
-f7d00766b0640939f81ccb75ac79493e5402217a17b2b8b123e322a00475dce6  ./docs/superpowers/specs/2026-08-04-teacher-navigation-dashboard-design.md
+29afe2d8a41535ea4e5eb6f2629f1da46dc8ee9c8cf903b8c9561a3be483cb4f  ./docs/superpowers/specs/2026-08-04-teacher-navigation-dashboard-design.md
 febc6b89446e0a7c0bf79064817a1142d9ffab90467ed5ca455614c8d8961c8f  ./docs/ui/DESIGN-SYSTEM.md
 e70096e79ecf0ac4e1dab78762ad301eb11d4d6ffc56d49a7de7e8f15d6b91f4  ./docs/ui/screenshots/before/desktop-1440x900/bank-detail.png
 316c2543bee43d66280d1439ee5ea8c9b91513e6a7e21e71ee341786e849d5c6  ./docs/ui/screenshots/before/desktop-1440x900/experiment-detail.png
@@ -98,7 +98,7 @@ af6e8bffdb0d89fb35ea6b960fa524a574cbc528567b5d9a30e48f43fb6e42fa  ./docs/ui/scre
 fe8190e8fbf4c6a0112646e3031e0c0e012b3b819d9d0dcf5188a402f538b00d  ./docs/ui/screenshots/before/mobile-390x844/student-dashboard.png
 3d03ba22a54d0e7d4bc866694619b630059250edd2bbd3e9233be2a96bad7a26  ./docs/ui/screenshots/before/mobile-390x844/student-question-single.png
 d947a7a02d83ffe5033a5d52713b9b4614137c5a3cfd64538f5279d5ce678d2f  ./docs/ui/UI-AUDIT.md
-d8953749d0171b5a4e9ad2f276d74cc1e6f94d6a30c284155a7644eb488e9d65  ./docs/ui/UI-CHANGELOG.md
+3de9609377fec74251fd830f145f38977fab83c8b4cb024c9f4c8fd8f8ebe56f  ./docs/ui/UI-CHANGELOG.md
 de4cd264feec798881c9b7ebaf2b7150ab305e6e10ae976240c7b2d3d65d6869  ./docs/ui-implementation.md
 9d902c825e1714a7ffe152f4655666de8ff2031e0a5d62b651f6c9636f5ab266  ./fixtures/kc_mapping_template.csv
 e359b1b80708442474890eb24db182d1a6fbd6a6f8d281add45d98f4c8c73f11  ./fixtures/question_import_template.csv

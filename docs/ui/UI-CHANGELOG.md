@@ -1,6 +1,6 @@
 # UI change log
 
-更新日期：2026-08-04  
+更新日期：2026-08-04
 实施依据：`E:\ATOP\KT Research UI Optimization Plan.md`
 
 ## Design read
