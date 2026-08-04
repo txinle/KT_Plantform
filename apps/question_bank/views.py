@@ -1,5 +1,7 @@
 from dataclasses import asdict
+from django.conf import settings
 from django.contrib import messages
+from django.http import FileResponse, Http404
 from django.db.models import Count
 from django.views.decorators.http import require_POST
 from django.shortcuts import get_object_or_404, redirect, render
@@ -15,6 +17,28 @@ from .services.import_service import copy_shared_bank, import_kc_mappings, impor
 def _owned_bank(request, pk):
     qs = QuestionBank.objects.all() if request.user.is_superuser else QuestionBank.objects.filter(owner=request.user)
     return get_object_or_404(qs, pk=pk)
+
+
+def _fixture_download(filename):
+    path = settings.BASE_DIR / "fixtures" / filename
+    if not path.is_file():
+        raise Http404("示例文件不存在")
+    return FileResponse(
+        path.open("rb"),
+        as_attachment=True,
+        filename=filename,
+        content_type="text/csv; charset=utf-8",
+    )
+
+
+@role_required("teacher", "admin")
+def question_import_template(request):
+    return _fixture_download("question_import_template.csv")
+
+
+@role_required("teacher", "admin")
+def kc_import_template(request):
+    return _fixture_download("kc_mapping_template.csv")
 
 @role_required("teacher", "admin")
 def dashboard(request):

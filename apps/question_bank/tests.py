@@ -1,11 +1,90 @@
 import re
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from apps.accounts.models import User
 from .models import Question, QuestionBank
 from .services.import_parsing import parse_kc_rows, parse_question_rows
 from .services.import_service import import_kc_mappings, import_questions
+
+
+class ImportTemplateDownloadTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(username="template-teacher", role=User.Role.TEACHER)
+        self.student = User.objects.create_user(username="template-student", role=User.Role.STUDENT)
+        self.question_template_url = reverse("question_bank:question_import_template")
+        self.kc_template_url = reverse("question_bank:kc_import_template")
+
+    def test_teacher_can_download_question_import_template(self):
+        self.client.force_login(self.teacher)
+
+        response = self.client.get(self.question_template_url)
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
+            self.assertIn('filename="question_import_template.csv"', response["Content-Disposition"])
+            content = b"".join(response.streaming_content).decode("utf-8-sig")
+            self.assertIn("序号,题目,选项A,选项B,选项C,选项D,选项E,选项F,答案", content)
+            self.assertIn("Knowledge Tracing 的中文名称是什么？", content)
+        finally:
+            response.close()
+
+    def test_teacher_can_download_kc_mapping_template(self):
+        self.client.force_login(self.teacher)
+
+        response = self.client.get(self.kc_template_url)
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
+            self.assertIn('filename="kc_mapping_template.csv"', response["Content-Disposition"])
+            content = b"".join(response.streaming_content).decode("utf-8-sig")
+            self.assertIn("题目序号,主知识点,次知识点", content)
+            self.assertIn("基础运算,整数加法", content)
+        finally:
+            response.close()
+
+    def test_anonymous_user_is_redirected_to_login(self):
+        response = self.client.get(self.question_template_url)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, f"{reverse('login')}?next={self.question_template_url}")
+
+    def test_student_cannot_download_import_templates(self):
+        self.client.force_login(self.student)
+
+        response = self.client.get(self.question_template_url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_missing_template_returns_not_found_without_path_disclosure(self):
+        self.client.force_login(self.teacher)
+        with TemporaryDirectory() as directory:
+            with override_settings(BASE_DIR=Path(directory)):
+                response = self.client.get(self.question_template_url)
+
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn(directory, response.content.decode())
+
+
+class ImportTemplateLinkTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(username="template-link-teacher", role=User.Role.TEACHER)
+        self.bank = QuestionBank.objects.create(owner=self.teacher, name="Template links bank")
+        self.client.force_login(self.teacher)
+
+    def test_question_import_page_links_to_question_template(self):
+        response = self.client.get(reverse("question_bank:question_import", args=[self.bank.pk]))
+
+        self.assertContains(response, "下载题目 CSV 示例")
+        self.assertContains(response, reverse("question_bank:question_import_template"))
+
+    def test_kc_import_page_links_to_kc_template(self):
+        response = self.client.get(reverse("question_bank:kc_import", args=[self.bank.pk]))
+
+        self.assertContains(response, "下载 KC CSV 示例")
+        self.assertContains(response, reverse("question_bank:kc_import_template"))
 
 class QuestionImportTests(TestCase):
     def setUp(self):
