@@ -14,4 +14,3 @@
 - [ ] Bootstrap and required local styling work without network access.
 - [ ] Django checks, tests, static collection, and JavaScript syntax checks were freshly run.
 - [ ] Visible copy was reviewed for directness, correctness, and research meaning.
-

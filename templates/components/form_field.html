@@ -7,4 +7,3 @@
   {% if field.help_text %}<div class="form-help" id="{{ field.id_for_label }}_help">{{ field.help_text|safe }}</div>{% endif %}
   {% for error in field.errors %}<div class="field-error" id="{{ field.id_for_label }}_error">{{ error }}</div>{% endfor %}
 </div>
-

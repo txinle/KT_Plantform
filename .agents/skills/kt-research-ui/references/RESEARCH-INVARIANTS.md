@@ -17,4 +17,3 @@ Read this file before changing UI code that can affect navigation, drafts, submi
 - UI changes must not alter CSRF, authorization, database transactions, idempotency tokens, or export semantics.
 
 Any change to a file that implements one of these rules requires automated regression coverage.
-

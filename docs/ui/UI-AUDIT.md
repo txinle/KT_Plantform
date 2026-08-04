@@ -45,4 +45,3 @@ Student path: login -> experiment list -> start/resume -> visit question -> auto
 - Preserve: navy identity, compact teacher information, single-question assessment, server-rendered navigation, current Chinese copy register.
 - Retire: CDN-only runtime, identical rounded cards everywhere, weak focus/state semantics, inline styles, native dialogs, color-only status, and decorative metrics.
 - Information architecture, routes, field names, and core workflows are sound and must remain stable.
-

@@ -63,4 +63,3 @@ node --check static/js/assessment.js
 ```
 
 Also exercise teacher and student demo paths at 1440 x 900 and 390 x 844. For any touched research invariant, add or update an automated regression test before reporting completion.
-

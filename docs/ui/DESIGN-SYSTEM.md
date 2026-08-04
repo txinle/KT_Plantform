@@ -50,4 +50,3 @@ The implementation in `static/css/app.css` defines:
 - The current navigation item uses `aria-current="page"`; the current question uses `aria-current="step"`.
 - At 200 percent zoom, primary flows remain available without two-dimensional page scrolling.
 - Nonessential transitions are disabled under `prefers-reduced-motion: reduce`.
-

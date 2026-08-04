@@ -26,4 +26,3 @@ Use an institutional research-product language: calm precision, trust first, hig
 ## Source note
 
 The audit-first approach, design-read method, anti-template checks, and pre-flight discipline were adapted from `Leonxlnx/taste-skill` (`redesign-skill`, `taste-skill`, and `gpt-tasteskill`). The source repository is distributed under the MIT License. This project-specific rewrite excludes its marketing, AIDA, Awwwards, cinematic scrolling, and GSAP prescriptions.
-

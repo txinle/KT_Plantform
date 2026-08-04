@@ -16,4 +16,3 @@ Check:
 - Offline availability of required frontend assets
 
 Prioritize functional breakage and research-risk ambiguity over cosmetic polish.
-
