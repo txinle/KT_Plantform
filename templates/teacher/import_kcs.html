@@ -5,7 +5,7 @@
 <header class="page-header"><div class="page-header-copy"><h1 class="page-title">导入 KC 对应表</h1><p class="page-subtitle">只更新已有题目的知识点关联，不会创建或修改题干、选项和答案。</p></div></header>
 <ol class="step-list" aria-label="导入进度"><li class="{% if not preview %}active{% endif %}">上传文件</li><li class="{% if preview %}active{% endif %}">校验预览</li><li>确认导入</li></ol>
 <div class="card"><div class="card-body p-md-4">
-  <div class="notice-panel mb-4"><strong>模板列：</strong><code>题目序号、主知识点、次知识点</code>。多个次知识点用分号分隔；新名称会创建为教师私有 KC。<a class="btn btn-sm btn-outline-primary ms-2" href="{% url 'question_bank:kc_import_template' %}">下载 KC CSV 示例</a></div>
+  <div class="notice-panel mb-4"><strong>模板列：</strong><code>sequence, primary_kc, secondary_kcs</code>。多个次知识点用分号分隔；新名称会创建为教师私有 KC。<a class="btn btn-sm btn-outline-primary ms-2" href="{% url 'question_bank:kc_import_template' %}">下载 KC CSV 示例</a></div>
   {% include 'components/error_summary.html' with form=form %}
   {% if not preview %}
     <form method="post" enctype="multipart/form-data" novalidate>{% csrf_token %}{% include 'components/form_field.html' with field=form.file %}<button class="btn btn-primary" type="submit">校验并生成预览</button></form>

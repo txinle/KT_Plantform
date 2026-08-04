@@ -1,5 +1,6 @@
+import csv
 import re
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -40,6 +41,32 @@ class ImportTemplateDownloadTests(TestCase):
                     )
                 finally:
                     response.close()
+
+    def test_import_templates_use_ascii_english_examples_accepted_by_parsers(self):
+        question_text = (settings.BASE_DIR / "fixtures" / "question_import_template.csv").read_bytes().decode("ascii")
+        question_reader = csv.DictReader(StringIO(question_text))
+        question_rows = list(question_reader)
+
+        self.assertEqual(
+            question_reader.fieldnames,
+            ["sequence", "question", "option_a", "option_b", "option_c", "option_d", "option_e", "option_f", "answer"],
+        )
+        parsed_questions = parse_question_rows(question_rows)
+        self.assertEqual(len(parsed_questions), 4)
+        self.assertEqual(
+            [item.question_type for item in parsed_questions],
+            ["single_choice", "multiple_choice", "numeric", "short_answer"],
+        )
+
+        kc_text = (settings.BASE_DIR / "fixtures" / "kc_mapping_template.csv").read_bytes().decode("ascii")
+        kc_reader = csv.DictReader(StringIO(kc_text))
+        kc_rows = list(kc_reader)
+
+        self.assertEqual(kc_reader.fieldnames, ["sequence", "primary_kc", "secondary_kcs"])
+        parsed_mappings = parse_kc_rows(kc_rows)
+        self.assertEqual(len(parsed_mappings), 4)
+        self.assertEqual(parsed_mappings[0].primary, "Arithmetic")
+        self.assertEqual(parsed_mappings[0].secondary, ["Integer addition"])
 
     def test_import_template_responses_close_opened_streams(self):
         self.client.force_login(self.teacher)
@@ -113,6 +140,7 @@ class ImportTemplateLinkTests(TestCase):
 
         self.assertInHTML(anchor, response.content.decode())
         self.assertEqual(response.content.decode().count(anchor), 1)
+        self.assertContains(response, "<code>sequence, question, option_a ... option_f, answer</code>", html=True)
         self.assertNotContains(response, "下载 KC CSV 示例")
 
     def test_kc_import_page_links_to_kc_template(self):
@@ -125,6 +153,7 @@ class ImportTemplateLinkTests(TestCase):
 
         self.assertInHTML(anchor, response.content.decode())
         self.assertEqual(response.content.decode().count(anchor), 1)
+        self.assertContains(response, "<code>sequence, primary_kc, secondary_kcs</code>", html=True)
         self.assertNotContains(response, "下载题目 CSV 示例")
 
 class QuestionImportTests(TestCase):

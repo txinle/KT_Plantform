@@ -1,5 +1,5 @@
-序号,题目,选项A,选项B,选项C,选项D,选项E,选项F,答案
-1,2+2等于多少？,3,4,5,6,,,B
-2,下列哪些数是质数？,2,4,5,6,,,"A,C"
-3,圆周率保留两位小数约为多少？,,,,,,,3.14
-4,Knowledge Tracing 的中文名称是什么？,,,,,,,知识追踪
+sequence,question,option_a,option_b,option_c,option_d,option_e,option_f,answer
+1,What is 2 + 2?,3,4,5,6,,,B
+2,Which numbers are prime?,2,4,5,6,,,"A,C"
+3,What is pi rounded to two decimal places?,,,,,,,3.14
+4,What does KT stand for?,,,,,,,Knowledge Tracing
