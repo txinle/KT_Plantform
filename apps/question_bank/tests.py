@@ -50,6 +50,7 @@ class QuestionBankVisibilityTests(TestCase):
 
         response = self.client.post(self.url, {"visibility": "public"}, follow=True)
 
+        self.assertRedirects(response, reverse("question_bank:bank_list"))
         self.assertContains(response, "可见性更新失败，请重新选择")
         self.bank.refresh_from_db()
         self.assertEqual(self.bank.visibility, QuestionBank.Visibility.PRIVATE)
