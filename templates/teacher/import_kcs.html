@@ -1,1 +1,18 @@
-{% extends 'base.html' %}{% block content %}<div class="mb-3"><a href="{% url 'question_bank:bank_detail' bank.pk %}">← 返回 {{ bank.name }}</a></div><div class="card"><div class="card-header">导入 KC 对应表</div><div class="card-body"><p>文件列：<code>题目序号、主知识点、次知识点</code>。多个次知识点用分号分隔；不存在的名称会自动创建为教师私有 KC。</p>{% if not preview %}<form method="post" enctype="multipart/form-data">{% csrf_token %}{{ form.as_div }}<button class="btn btn-primary mt-3">校验并预览</button></form>{% else %}<div class="alert alert-success">校验通过，共 {{ preview|length }} 条对应关系。</div><table class="table"><thead><tr><th>题目</th><th>主 KC</th><th>次 KC</th></tr></thead><tbody>{% for item in preview %}<tr><td>{{ item.sequence }}</td><td>{{ item.primary }}</td><td>{{ item.secondary|join:'；' }}</td></tr>{% endfor %}</tbody></table><form method="post">{% csrf_token %}<input type="hidden" name="action" value="confirm"><button class="btn btn-success">确认导入</button></form>{% endif %}</div></div>{% endblock %}
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li><a href="{% url 'question_bank:dashboard' %}">教师工作台</a></li><li><a href="{% url 'question_bank:bank_list' %}">题库</a></li><li><a href="{% url 'question_bank:bank_detail' bank.pk %}">{{ bank.name }}</a></li><li class="breadcrumb-item-current" aria-current="page">导入 KC</li>{% endblock %}
+{% block title %}导入 KC 对应 | {{ bank.name }}{% endblock %}
+{% block content %}
+<header class="page-header"><div class="page-header-copy"><h1 class="page-title">导入 KC 对应表</h1><p class="page-subtitle">只更新已有题目的知识点关联，不会创建或修改题干、选项和答案。</p></div></header>
+<ol class="step-list" aria-label="导入进度"><li class="{% if not preview %}active{% endif %}">上传文件</li><li class="{% if preview %}active{% endif %}">校验预览</li><li>确认导入</li></ol>
+<div class="card"><div class="card-body p-md-4">
+  <div class="notice-panel mb-4"><strong>模板列：</strong><code>题目序号、主知识点、次知识点</code>。多个次知识点用分号分隔；新名称会创建为教师私有 KC。</div>
+  {% include 'components/error_summary.html' with form=form %}
+  {% if not preview %}
+    <form method="post" enctype="multipart/form-data" novalidate>{% csrf_token %}{% include 'components/form_field.html' with field=form.file %}<button class="btn btn-primary" type="submit">校验并生成预览</button></form>
+  {% else %}
+    <div class="d-flex flex-wrap justify-content-between gap-3 mb-4"><div><strong>{{ upload_name }}</strong><div class="cell-meta">校验通过，可预览 {{ preview|length }} 条对应关系；错误 0 条。</div></div><span class="status-badge status-success">校验通过</span></div>
+    <div class="table-shell mb-4"><table class="table"><thead><tr><th scope="col">题目序号</th><th scope="col">主 KC</th><th scope="col">次 KC</th></tr></thead><tbody>{% for item in preview %}<tr><td class="mono">{{ item.sequence }}</td><td>{{ item.primary }}</td><td>{{ item.secondary|join:'；'|default:'无' }}</td></tr>{% endfor %}</tbody></table></div>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="confirm"><div class="notice-panel mb-3">确认后将更新 {{ preview|length }} 道题的知识点关联。题目和发布快照保持不变。</div><button class="btn btn-primary" type="submit">确认导入 KC 对应</button></form>
+  {% endif %}
+</div></div>
+{% endblock %}

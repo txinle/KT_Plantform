@@ -1,1 +1,30 @@
-{% extends 'base.html' %}{% block content %}<div class="mb-3"><a href="{% url 'question_bank:bank_detail' bank.pk %}">← 返回 {{ bank.name }}</a></div><div class="card"><div class="card-header">编辑题目 {{ question.code }}</div><div class="card-body"><form method="post">{% csrf_token %}<div class="row g-3">{% for field in form %}<div class="{% if 'option_' in field.name %}col-md-6{% else %}col-12{% endif %}"><label class="form-label fw-semibold">{{ field.label }}</label>{{ field }}{{ field.errors }}{% if field.help_text %}<span class="helptext">{{ field.help_text }}</span>{% endif %}</div>{% endfor %}</div><div class="mt-4 d-flex gap-2"><button class="btn btn-primary">保存</button><a class="btn btn-outline-secondary" href="{% url 'question_bank:bank_detail' bank.pk %}">取消</a></div></form></div></div>{% endblock %}
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li><a href="{% url 'question_bank:dashboard' %}">教师工作台</a></li><li><a href="{% url 'question_bank:bank_list' %}">题库</a></li><li><a href="{% url 'question_bank:bank_detail' bank.pk %}">{{ bank.name }}</a></li><li class="breadcrumb-item-current" aria-current="page">编辑 {{ question.code }}</li>{% endblock %}
+{% block title %}编辑 {{ question.code }} | {{ bank.name }}{% endblock %}
+{% block content %}
+<header class="page-header"><div class="page-header-copy"><h1 class="page-title">编辑题目 <span class="mono">{{ question.code }}</span></h1><p class="page-subtitle">字段按题型显示。保存不会改变已发布实验中的题目快照。</p></div></header>
+<div class="card">
+  <div class="card-body p-md-4">
+    {% include 'components/error_summary.html' with form=form %}
+    <form method="post" novalidate>{% csrf_token %}
+      <section class="form-section" aria-labelledby="question-basic-title">
+        <h2 class="form-section-title" id="question-basic-title">题干与题型</h2>
+        <div class="row g-3"><div class="col-12">{% include 'components/form_field.html' with field=form.text %}</div><div class="col-md-6">{% include 'components/form_field.html' with field=form.question_type %}</div><div class="col-md-6">{% include 'components/form_field.html' with field=form.status %}</div></div>
+      </section>
+      <section class="form-section" aria-labelledby="options-title" data-question-field-group="single_choice multiple_choice">
+        <h2 class="form-section-title" id="options-title">选项</h2>
+        <div class="row g-3"><div class="col-md-6">{% include 'components/form_field.html' with field=form.option_a %}</div><div class="col-md-6">{% include 'components/form_field.html' with field=form.option_b %}</div><div class="col-md-6">{% include 'components/form_field.html' with field=form.option_c %}</div><div class="col-md-6">{% include 'components/form_field.html' with field=form.option_d %}</div><div class="col-md-6">{% include 'components/form_field.html' with field=form.option_e %}</div><div class="col-md-6">{% include 'components/form_field.html' with field=form.option_f %}</div></div>
+      </section>
+      <section class="form-section" aria-labelledby="scoring-title">
+        <h2 class="form-section-title" id="scoring-title">评分规则</h2>
+        <div class="row g-3"><div class="col-md-6">{% include 'components/form_field.html' with field=form.correct_answer_text %}</div><div class="col-md-6" data-question-field-group="short_answer">{% include 'components/form_field.html' with field=form.accepted_answers_text %}</div><div class="col-md-6" data-question-field-group="numeric">{% include 'components/form_field.html' with field=form.absolute_tolerance %}<div class="form-help">答案与标准值的绝对差不超过此值时可判定为匹配。</div></div><div class="col-md-6" data-question-field-group="numeric">{% include 'components/form_field.html' with field=form.relative_tolerance %}<div class="form-help">相对于标准值的误差比例不超过此值时可判定为匹配。</div></div></div>
+      </section>
+      <section class="form-section" aria-labelledby="metadata-title">
+        <h2 class="form-section-title" id="metadata-title">难度、解析与状态</h2>
+        <div class="row g-3"><div class="col-md-5">{% include 'components/form_field.html' with field=form.teacher_difficulty %}</div><div class="col-12">{% include 'components/form_field.html' with field=form.explanation %}</div></div>
+      </section>
+      <div class="form-actions"><button class="btn btn-primary" type="submit">保存题目</button><a class="btn btn-secondary" href="{% url 'question_bank:bank_detail' bank.pk %}">取消</a></div>
+    </form>
+  </div>
+</div>
+{% endblock %}

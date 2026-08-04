@@ -1,1 +1,16 @@
-{% extends 'base.html' %}{% block content %}<div class="card"><div class="card-header">{% if experiment %}编辑实验{% else %}创建实验{% endif %}</div><div class="card-body"><form method="post">{% csrf_token %}<div class="row g-3">{% for field in form %}<div class="col-md-6"><label class="form-label fw-semibold">{{ field.label }}</label>{{ field }}{{ field.errors }}</div>{% endfor %}</div><button class="btn btn-primary mt-4">{% if experiment %}保存实验配置{% else %}创建并载入题库题目{% endif %}</button></form></div></div>{% endblock %}
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li><a href="{% url 'question_bank:dashboard' %}">教师工作台</a></li><li><a href="{% url 'experiments:list' %}">实验</a></li>{% if experiment %}<li><a href="{% url 'experiments:detail' experiment.pk %}">{{ experiment.name }}</a></li><li class="breadcrumb-item-current" aria-current="page">编辑配置</li>{% else %}<li class="breadcrumb-item-current" aria-current="page">新建实验</li>{% endif %}{% endblock %}
+{% block title %}{% if experiment %}编辑实验{% else %}创建实验{% endif %} | KT Data Lab{% endblock %}
+{% block content %}
+<header class="page-header"><div class="page-header-copy"><h1 class="page-title">{% if experiment %}编辑实验配置{% else %}创建实验{% endif %}</h1><p class="page-subtitle">发布前可调整配置。发布后系统使用不可变快照，不能继续修改。</p></div></header>
+<div class="card"><div class="card-body p-md-4">
+{% include 'components/error_summary.html' with form=form %}
+<form method="post" novalidate>{% csrf_token %}
+  <section class="form-section" aria-labelledby="experiment-content-title"><h2 class="form-section-title" id="experiment-content-title">内容</h2><div class="row g-3"><div class="col-md-7">{% include 'components/form_field.html' with field=form.name %}</div><div class="col-md-5">{% include 'components/form_field.html' with field=form.question_bank %}</div><div class="col-12">{% include 'components/form_field.html' with field=form.description %}</div></div></section>
+  <section class="form-section" aria-labelledby="experiment-delivery-title"><h2 class="form-section-title" id="experiment-delivery-title">题目顺序与反馈</h2><div class="row g-3"><div class="col-md-6">{% include 'components/form_field.html' with field=form.ordering_mode %}</div><div class="col-md-6">{% include 'components/form_field.html' with field=form.feedback_mode %}</div></div></section>
+  <section class="form-section" aria-labelledby="experiment-time-title"><h2 class="form-section-title" id="experiment-time-title">时间</h2><div class="row g-3"><div class="col-md-4">{% include 'components/form_field.html' with field=form.time_mode %}</div><div class="col-md-4" data-time-field="total">{% include 'components/form_field.html' with field=form.total_time_limit_minutes %}</div><div class="col-md-4" data-time-field="per_question">{% include 'components/form_field.html' with field=form.per_question_time_limit_seconds %}</div></div></section>
+  <section class="form-section" aria-labelledby="experiment-resume-title"><h2 class="form-section-title" id="experiment-resume-title">断点续答</h2><div class="row"><div class="col-md-6">{% include 'components/form_field.html' with field=form.resume_mode %}</div></div></section>
+  <div class="form-actions"><button class="btn btn-primary" type="submit">{% if experiment %}保存实验配置{% else %}创建并载入题库题目{% endif %}</button><a class="btn btn-secondary" href="{% if experiment %}{% url 'experiments:detail' experiment.pk %}{% else %}{% url 'experiments:list' %}{% endif %}">取消</a></div>
+</form>
+</div></div>
+{% endblock %}

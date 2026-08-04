@@ -1,1 +1,58 @@
-{% extends 'base.html' %}{% block content %}<div class="d-flex justify-content-between align-items-center mb-4"><div><h1 class="page-title mb-1">教师工作台</h1><p class="text-muted mb-0">管理题库、KC、实验与数据导出。</p></div><a class="btn btn-primary" href="{% url 'experiments:create' %}">新建实验</a></div><div class="row g-3 mb-4"><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-muted">我的题库</div><div class="metric">{{ banks.count }}</div></div></div></div><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-muted">题目总数</div><div class="metric">{{ question_count }}</div></div></div></div><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-muted">实施原则</div><div class="fw-bold mt-2">先快照，再采集</div></div></div></div></div><div class="card"><div class="card-header d-flex justify-content-between"><span>最近题库</span><a href="{% url 'question_bank:bank_list' %}">全部</a></div><div class="card-body p-0"><div class="table-responsive"><table class="table mb-0"><thead><tr><th>名称</th><th>题目数</th><th>状态</th></tr></thead><tbody>{% for bank in banks|slice:':5' %}<tr><td><a href="{% url 'question_bank:bank_detail' bank.pk %}">{{ bank.name }}</a></td><td>{{ bank.questions.count }}</td><td>{{ bank.get_visibility_display }}</td></tr>{% empty %}<tr><td colspan="3" class="empty-state">尚未创建题库</td></tr>{% endfor %}</tbody></table></div></div></div>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}教师工作台 | KT Data Lab{% endblock %}
+{% block content %}
+<header class="page-header">
+  <div class="page-header-copy">
+    <p class="page-kicker">教师工作区</p>
+    <h1 class="page-title">教师工作台</h1>
+    <p class="page-subtitle">从题库准备、实验配置到数据导出，按采集流程推进工作。</p>
+  </div>
+  <div class="page-actions"><a class="btn btn-primary" href="{% url 'experiments:create' %}">新建实验</a></div>
+</header>
+
+<div class="metric-row mb-4" aria-label="工作区概况">
+  <div class="metric-item"><div class="metric-label">我的题库</div><div class="metric">{{ banks.count }}</div></div>
+  <div class="metric-item"><div class="metric-label">可用于配置的题目</div><div class="metric">{{ question_count }}</div></div>
+</div>
+
+<div class="workflow-grid mb-4">
+  <section aria-labelledby="workflow-title">
+    <div class="section-heading"><h2 class="section-title" id="workflow-title">主要工作</h2></div>
+    <div class="workflow-links">
+      <a class="workflow-link" href="{% url 'question_bank:bank_list' %}"><span class="workflow-link-title">准备题库</span><span class="workflow-link-copy">创建、复制、导入并编辑题目。</span></a>
+      <a class="workflow-link" href="{% url 'question_bank:concept_list' %}"><span class="workflow-link-title">核对 KC</span><span class="workflow-link-copy">检查公共与私有知识点及题目关联。</span></a>
+      <a class="workflow-link" href="{% url 'experiments:list' %}"><span class="workflow-link-title">配置实验</span><span class="workflow-link-copy">设置顺序、反馈、时间和学生分配。</span></a>
+      <a class="workflow-link" href="{% url 'experiments:list' %}"><span class="workflow-link-title">查看采集结果</span><span class="workflow-link-copy">从已发布实验进入会话与导出页面。</span></a>
+    </div>
+  </section>
+  <section aria-labelledby="recent-experiments-title">
+    <div class="section-heading"><h2 class="section-title" id="recent-experiments-title">近期实验</h2><a href="{% url 'experiments:list' %}">查看全部</a></div>
+    <div class="surface">
+      {% for experiment in recent_experiments %}
+        <a class="d-flex justify-content-between gap-3 p-3 border-bottom text-decoration-none" href="{% url 'experiments:detail' experiment.pk %}">
+          <span><strong class="d-block text-body">{{ experiment.name }}</strong><span class="cell-meta">{{ experiment.question_bank }}</span></span>
+          <span class="status-badge {% if experiment.status == 'published' %}status-success{% elif experiment.status == 'draft' %}status-warning{% else %}status-neutral{% endif %}">{{ experiment.get_status_display }}</span>
+        </a>
+      {% empty %}
+        <div class="empty-state"><h3 class="empty-state-title">尚无实验</h3><p>题库准备完成后创建第一个实验。</p><a class="btn btn-primary" href="{% url 'experiments:create' %}">新建实验</a></div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+
+<section aria-labelledby="recent-banks-title">
+  <div class="section-heading"><h2 class="section-title" id="recent-banks-title">最近题库</h2><a href="{% url 'question_bank:bank_list' %}">管理题库</a></div>
+  <div class="table-shell">
+    <table class="table">
+      <thead><tr><th scope="col">名称</th><th scope="col">题目数</th><th scope="col">可见性</th><th scope="col">最近更新</th></tr></thead>
+      <tbody>
+        {% for bank in banks|slice:':5' %}
+          <tr><td><a class="cell-title" href="{% url 'question_bank:bank_detail' bank.pk %}">{{ bank.name }}</a><div class="cell-meta">{{ bank.description|default:'未填写说明'|truncatechars:60 }}</div></td><td class="numeric">{{ bank.questions.count }}</td><td><span class="status-badge status-neutral">{{ bank.get_visibility_display }}</span></td><td class="numeric text-nowrap">{{ bank.updated_at|date:'Y-m-d H:i' }}</td></tr>
+        {% empty %}
+          <tr><td colspan="4"><div class="empty-state"><h3 class="empty-state-title">尚未创建题库</h3><p>先创建题库，再导入题目文件。</p><a class="btn btn-primary" href="{% url 'question_bank:bank_list' %}">创建题库</a></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

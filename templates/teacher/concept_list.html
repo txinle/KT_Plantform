@@ -1,1 +1,9 @@
-{% extends 'base.html' %}{% block content %}<h1 class="page-title mb-3">KC 知识点库</h1><div class="card"><div class="card-body p-0"><table class="table mb-0"><thead><tr><th>名称</th><th>范围</th><th>创建者</th><th>关联题目</th></tr></thead><tbody>{% for c in concepts %}<tr><td>{{ c.name }}</td><td>{{ c.get_scope_display }}</td><td>{{ c.owner.shown_name|default:'管理员' }}</td><td>{{ c.questions.count }}</td></tr>{% empty %}<tr><td colspan="4" class="empty-state">KC 会在导入对应表时自动生成</td></tr>{% endfor %}</tbody></table></div></div>{% endblock %}
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li><a href="{% url 'question_bank:dashboard' %}">教师工作台</a></li><li class="breadcrumb-item-current" aria-current="page">KC 库</li>{% endblock %}
+{% block title %}KC 知识点库 | KT Data Lab{% endblock %}
+{% block content %}
+<header class="page-header"><div class="page-header-copy"><p class="page-kicker">知识点管理</p><h1 class="page-title">KC 知识点库</h1><p class="page-subtitle">公共 KC 可由所有教师使用；私有 KC 仅供创建者的题库使用。</p></div></header>
+<div class="table-shell"><table class="table"><thead><tr><th scope="col">名称</th><th scope="col">范围</th><th scope="col">创建者</th><th scope="col">关联题目</th></tr></thead><tbody>
+{% for c in concepts %}<tr><td><strong>{{ c.name }}</strong></td><td><span class="status-badge {% if c.scope == 'public' %}status-info{% else %}status-neutral{% endif %}">{{ c.get_scope_display }}</span></td><td>{{ c.owner.shown_name|default:'管理员' }}</td><td class="numeric">{{ c.questions.count }}</td></tr>{% empty %}<tr><td colspan="4"><div class="empty-state"><h2 class="empty-state-title">尚无 KC</h2><p>KC 会在导入题目对应表时自动生成。</p></div></td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

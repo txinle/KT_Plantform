@@ -28,6 +28,17 @@ class UIContractTests(TestCase):
         self.assertIn('aria-label="层级目录"', source)
         self.assertIn('aria-current="page"', source)
 
+    def test_every_teacher_subpage_declares_breadcrumb_items(self):
+        template_root = ROOT / "templates" / "teacher"
+        for path in template_root.glob("*.html"):
+            if path.name == "dashboard.html":
+                continue
+            with self.subTest(template=path.name):
+                source = path.read_text(encoding="utf-8")
+                self.assertIn("{% block breadcrumb_items %}", source)
+                self.assertIn('aria-current="page"', source)
+                self.assertNotIn('class="back-link"', source)
+
     def test_question_template_preserves_fetch_hooks_and_accessible_state(self):
         source = (ROOT / "templates" / "student" / "question.html").read_text(encoding="utf-8")
         for hook in ("question-form", "save-status", "submit-btn", "skip-btn", "countdown"):
