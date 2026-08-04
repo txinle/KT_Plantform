@@ -58,6 +58,15 @@
     {% endif %}
   </header>
   <main id="main-content" class="container-fluid app-shell page-main" tabindex="-1">
+    {% if user.is_authenticated and user.role == 'teacher' %}
+      <nav class="breadcrumb-nav" aria-label="层级目录">
+        <ol class="breadcrumb-list">
+          {% block breadcrumb_items %}
+            <li class="breadcrumb-item-current" aria-current="page">教师工作台</li>
+          {% endblock %}
+        </ol>
+      </nav>
+    {% endif %}
     {% if messages %}
       <section class="message-stack" aria-label="系统消息" aria-live="polite">
         {% for message in messages %}
