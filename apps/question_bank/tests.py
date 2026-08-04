@@ -1,4 +1,5 @@
 from django.test import TestCase
+from django.urls import reverse
 from apps.accounts.models import User
 from .models import Question, QuestionBank
 from .services.import_parsing import parse_kc_rows, parse_question_rows
@@ -17,3 +18,45 @@ class QuestionImportTests(TestCase):
         question = Question.objects.get(bank=self.bank)
         self.assertEqual(question.primary_concept.name, "加法")
         self.assertEqual(question.options.count(), 2)
+
+
+class QuestionBankVisibilityTests(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="owner", role=User.Role.TEACHER)
+        self.other_teacher = User.objects.create_user(username="other_teacher", role=User.Role.TEACHER)
+        self.bank = QuestionBank.objects.create(owner=self.owner, name="private bank")
+        self.url = reverse("question_bank:bank_visibility_update", args=[self.bank.pk])
+
+    def test_owner_can_share_bank(self):
+        self.client.force_login(self.owner)
+
+        response = self.client.post(self.url, {"visibility": QuestionBank.Visibility.SHARED})
+
+        self.assertRedirects(response, reverse("question_bank:bank_list"))
+        self.bank.refresh_from_db()
+        self.assertEqual(self.bank.visibility, QuestionBank.Visibility.SHARED)
+
+    def test_other_teacher_cannot_update_bank_visibility(self):
+        self.client.force_login(self.other_teacher)
+
+        response = self.client.post(self.url, {"visibility": QuestionBank.Visibility.SHARED})
+
+        self.assertEqual(response.status_code, 404)
+        self.bank.refresh_from_db()
+        self.assertEqual(self.bank.visibility, QuestionBank.Visibility.PRIVATE)
+
+    def test_invalid_visibility_keeps_bank_private(self):
+        self.client.force_login(self.owner)
+
+        response = self.client.post(self.url, {"visibility": "public"}, follow=True)
+
+        self.assertContains(response, "可见性更新失败，请重新选择")
+        self.bank.refresh_from_db()
+        self.assertEqual(self.bank.visibility, QuestionBank.Visibility.PRIVATE)
+
+    def test_visibility_update_rejects_get(self):
+        self.client.force_login(self.owner)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 405)

@@ -1,9 +1,10 @@
 from dataclasses import asdict
 from django.contrib import messages
+from django.views.decorators.http import require_POST
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.accounts.permissions import role_required
 from apps.audit.services import log_action
-from .forms import QuestionBankForm, QuestionEditForm, UploadForm
+from .forms import QuestionBankForm, QuestionBankVisibilityForm, QuestionEditForm, UploadForm
 from .models import Concept, Question, QuestionBank
 from .services.file_reader import read_uploaded_rows
 from .services.import_parsing import ParsedKCMapping, ParsedQuestion, parse_kc_rows, parse_question_rows
@@ -42,6 +43,19 @@ def bank_list(request):
 def bank_detail(request, pk):
     bank = _owned_bank(request, pk)
     return render(request, "teacher/bank_detail.html", {"bank": bank, "questions": bank.questions.prefetch_related("options", "concept_links__concept")})
+
+
+@role_required("teacher", "admin")
+@require_POST
+def bank_visibility_update(request, pk):
+    bank = _owned_bank(request, pk)
+    form = QuestionBankVisibilityForm(request.POST, instance=bank)
+    if form.is_valid():
+        form.save()
+        messages.success(request, f"题库“{bank.name}”的可见性已更新")
+    else:
+        messages.error(request, "可见性更新失败，请重新选择")
+    return redirect("question_bank:bank_list")
 
 @role_required("teacher", "admin")
 def question_edit(request, bank_pk, question_pk):

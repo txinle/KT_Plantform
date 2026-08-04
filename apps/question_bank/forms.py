@@ -8,6 +8,12 @@ class QuestionBankForm(forms.ModelForm):
         labels = {"name": "题库名称", "description": "说明", "visibility": "可见性"}
         widgets = {"description": forms.Textarea(attrs={"rows": 4})}
 
+
+class QuestionBankVisibilityForm(forms.ModelForm):
+    class Meta:
+        model = QuestionBank
+        fields = ["visibility"]
+
 class UploadForm(forms.Form):
     file = forms.FileField(label="CSV 或 Excel 文件")
 
