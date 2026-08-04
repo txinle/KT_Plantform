@@ -1,0 +1,15 @@
+<div class="modal fade" id="{{ dialog_id }}" tabindex="-1" aria-labelledby="{{ dialog_id }}-title" aria-describedby="{{ dialog_id }}-body">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title fs-5" id="{{ dialog_id }}-title">{{ dialog_title }}</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body" id="{{ dialog_id }}-body">{{ dialog_body }}</div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn {{ dialog_confirm_class|default:'btn-danger' }}" data-confirm-action>{{ dialog_confirm_label }}</button>
+      </div>
+    </div>
+  </div>
+</div>

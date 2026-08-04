@@ -1,5 +1,7 @@
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.views import LoginView
 from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, redirect, render
 
@@ -7,6 +9,15 @@ from .forms import ClassGroupForm, PasswordResetForm, StudentCreateForm
 from .models import ClassGroup, User
 from .permissions import role_required
 from apps.audit.services import log_action
+
+
+class PlatformLoginView(LoginView):
+    template_name = "registration/login.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["show_demo_credentials"] = settings.DEBUG
+        return context
 
 
 @login_required

@@ -1,0 +1,4 @@
+interface:
+  display_name: "KT Research UI"
+  short_description: "审计并优化 KT 科研平台的 Django 与 Bootstrap 界面"
+  default_prompt: "Use $kt-research-ui to audit and improve the current KT research platform interface without changing research semantics."
