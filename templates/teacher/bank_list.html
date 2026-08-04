@@ -1,1 +1,52 @@
-{% extends 'base.html' %}{% block content %}<div class="row g-4"><div class="col-lg-8"><h1 class="page-title mb-3">题库</h1><div class="card"><div class="card-body p-0"><table class="table mb-0"><thead><tr><th>题库</th><th>题目</th><th>可见性</th><th></th></tr></thead><tbody>{% for bank in banks %}<tr><td><strong>{{ bank.name }}</strong><div class="small text-muted">{{ bank.description|truncatechars:60 }}</div></td><td>{{ bank.questions.count }}</td><td>{{ bank.get_visibility_display }}</td><td><a class="btn btn-sm btn-outline-primary" href="{% url 'question_bank:bank_detail' bank.pk %}">管理</a></td></tr>{% empty %}<tr><td colspan="4" class="empty-state">暂无题库</td></tr>{% endfor %}</tbody></table></div></div>{% if shared_banks %}<div class="card mt-4"><div class="card-header">可复制的共享题库</div><div class="card-body p-0"><table class="table mb-0"><tbody>{% for bank in shared_banks %}<tr><td><strong>{{ bank.name }}</strong><div class="small text-muted">{{ bank.owner.shown_name }} · {{ bank.questions.count }} 题</div></td><td class="text-end"><form method="post" action="{% url 'question_bank:copy_bank' bank.pk %}">{% csrf_token %}<button class="btn btn-sm btn-outline-primary">复制到我的题库</button></form></td></tr>{% endfor %}</tbody></table></div></div>{% endif %}</div><div class="col-lg-4"><div class="card"><div class="card-header">创建题库</div><div class="card-body"><form method="post">{% csrf_token %}{{ form.as_div }}<button class="btn btn-primary w-100 mt-3">创建</button></form></div></div></div></div>{% endblock %}
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li><a href="{% url 'question_bank:dashboard' %}">教师工作台</a></li><li class="breadcrumb-item-current" aria-current="page">题库</li>{% endblock %}
+{% block title %}题库 | KT Data Lab{% endblock %}
+{% block content %}
+<header class="page-header">
+  <div class="page-header-copy"><p class="page-kicker">内容准备</p><h1 class="page-title">题库</h1><p class="page-subtitle">管理私有题库，或复制其他教师共享的题库作为独立副本。</p></div>
+</header>
+<div class="row g-4">
+  <div class="col-xl-8">
+    <section aria-labelledby="my-banks-title">
+      <div class="section-heading"><h2 class="section-title" id="my-banks-title">我的题库</h2><span class="text-muted numeric">{{ banks.count }} 个</span></div>
+      <div class="table-shell">
+        <table class="table">
+          <thead><tr><th scope="col">题库</th><th scope="col">题目</th><th scope="col">可见性</th><th scope="col">最近更新</th><th scope="col"><span class="visually-hidden">操作</span></th></tr></thead>
+          <tbody>
+            {% for bank in banks %}
+              <tr><td><strong>{{ bank.name }}</strong><div class="cell-meta">所有者：{{ bank.owner.shown_name }}<br>{{ bank.description|default:'未填写说明'|truncatechars:72 }}</div></td><td class="numeric">{{ bank.questions.count }}</td><td><span class="status-badge {% if bank.visibility == 'shared' %}status-info{% elif bank.visibility == 'archived' %}status-neutral{% else %}status-neutral{% endif %}">{{ bank.get_visibility_display }}</span></td><td class="numeric text-nowrap">{{ bank.updated_at|date:'Y-m-d H:i' }}</td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'question_bank:bank_detail' bank.pk %}">管理</a></td></tr>
+            {% empty %}
+              <tr><td colspan="5"><div class="empty-state"><h3 class="empty-state-title">还没有自己的题库</h3><p>使用右侧表单创建空题库，或从下方复制共享题库。</p></div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    {% if shared_banks %}
+      <section class="mt-5" aria-labelledby="shared-banks-title">
+        <div class="section-heading"><h2 class="section-title" id="shared-banks-title">可复制的共享题库</h2></div>
+        <div class="table-shell">
+          <table class="table"><thead><tr><th scope="col">题库</th><th scope="col">所有者</th><th scope="col">题目</th><th scope="col"><span class="visually-hidden">操作</span></th></tr></thead><tbody>
+          {% for bank in shared_banks %}<tr><td><strong>{{ bank.name }}</strong><div class="cell-meta">{{ bank.description|default:'未填写说明'|truncatechars:72 }}</div></td><td>{{ bank.owner.shown_name }}</td><td class="numeric">{{ bank.questions.count }}</td><td class="text-end"><form method="post" action="{% url 'question_bank:copy_bank' bank.pk %}">{% csrf_token %}<button class="btn btn-sm btn-outline-primary" type="submit">复制为私有副本</button></form></td></tr>{% endfor %}
+          </tbody></table>
+        </div>
+      </section>
+    {% endif %}
+  </div>
+  <aside class="col-xl-4" aria-labelledby="create-bank-title">
+    <div class="card">
+      <div class="card-header" id="create-bank-title">创建题库</div>
+      <div class="card-body">
+        {% include 'components/error_summary.html' with form=form %}
+        <form method="post" novalidate>{% csrf_token %}
+          {% include 'components/form_field.html' with field=form.name %}
+          {% include 'components/form_field.html' with field=form.description %}
+          {% include 'components/form_field.html' with field=form.visibility %}
+          <button class="btn btn-primary w-100" type="submit">创建题库</button>
+        </form>
+      </div>
+    </div>
+  </aside>
+</div>
+{% endblock %}

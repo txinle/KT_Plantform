@@ -1,1 +1,16 @@
-{% extends 'base.html' %}{% block content %}<div class="mb-4"><h1 class="page-title mb-1">我的实验</h1><p class="text-muted mb-0">{{ user.student_number }} · {{ user.shown_name }} · {{ user.class_group }}</p></div><div class="row g-3">{% for card in experiment_cards %}<div class="col-lg-6"><div class="card h-100"><div class="card-body"><div class="d-flex justify-content-between gap-3"><div><h2 class="h5 fw-bold">{{ card.experiment.name }}</h2><p class="text-muted">{{ card.experiment.description }}</p></div><span class="badge badge-soft align-self-start">{{ card.experiment.get_status_display }}</span></div><dl class="row small"><dt class="col-4">题目</dt><dd class="col-8">{{ card.experiment.questions.count }} 题</dd><dt class="col-4">排序</dt><dd class="col-8">{{ card.experiment.get_ordering_mode_display }}</dd><dt class="col-4">反馈</dt><dd class="col-8">{{ card.experiment.get_feedback_mode_display }}</dd></dl><a class="btn btn-primary" href="{% url 'assessment:start' card.experiment.pk %}">{% if card.session and card.session.status == 'in_progress' %}继续作答{% elif card.session %}查看完成状态{% else %}开始实验{% endif %}</a></div></div></div>{% empty %}<div class="col-12"><div class="card"><div class="empty-state">当前没有分配给你的实验</div></div></div>{% endfor %}</div>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}我的实验 | KT Data Lab{% endblock %}
+{% block content %}
+<header class="page-header student-page-header"><div class="page-header-copy"><p class="page-kicker">学生工作区</p><h1 class="page-title">我的实验</h1><p class="page-subtitle"><span class="mono">{{ user.student_number }}</span><span aria-hidden="true"> / </span>{{ user.shown_name }}<span aria-hidden="true"> / </span>{{ user.class_group }}</p></div></header>
+<div class="student-experiment-list">
+{% for card in experiment_cards %}
+  <article class="student-experiment">
+    <div class="student-experiment-main"><div class="d-flex flex-wrap justify-content-between gap-3"><div><h2>{{ card.experiment.name }}</h2><p>{{ card.experiment.description|default:'未填写实验说明' }}</p></div><span class="status-badge {% if card.session and card.session.status == 'completed' %}status-success{% elif card.session and card.session.status == 'in_progress' %}status-info{% elif card.experiment.status == 'published' %}status-warning{% else %}status-neutral{% endif %}">{% if card.session %}{{ card.session.get_status_display }}{% else %}{{ card.experiment.get_status_display }}{% endif %}</span></div>
+    <dl class="student-experiment-details"><div><dt>题目</dt><dd class="numeric">{{ card.experiment.questions.count }} 题</dd></div><div><dt>时间</dt><dd>{{ card.experiment.get_time_mode_display }}</dd></div><div><dt>反馈</dt><dd>{{ card.experiment.get_feedback_mode_display }}</dd></div><div><dt>续答</dt><dd>{{ card.experiment.get_resume_mode_display }}</dd></div></dl></div>
+    <div class="student-experiment-action"><a class="btn {% if card.session and card.session.status == 'completed' %}btn-outline-primary{% else %}btn-primary{% endif %}" href="{% url 'assessment:start' card.experiment.pk %}">{% if card.session and card.session.status == 'in_progress' %}继续作答{% elif card.session %}查看完成状态{% else %}开始实验{% endif %}</a></div>
+  </article>
+{% empty %}
+  <div class="surface"><div class="empty-state"><h2 class="empty-state-title">当前没有分配给你的实验</h2><p>教师发布并分配实验后会显示在这里。</p></div></div>
+{% endfor %}
+</div>
+{% endblock %}

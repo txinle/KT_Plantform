@@ -5,6 +5,8 @@ class QuestionBankForm(forms.ModelForm):
     class Meta:
         model = QuestionBank
         fields = ["name", "description", "visibility"]
+        labels = {"name": "题库名称", "description": "说明", "visibility": "可见性"}
+        widgets = {"description": forms.Textarea(attrs={"rows": 4})}
 
 class UploadForm(forms.Form):
     file = forms.FileField(label="CSV 或 Excel 文件")
@@ -21,9 +23,19 @@ class QuestionEditForm(forms.ModelForm):
     class Meta:
         model = Question
         fields = ["text", "question_type", "teacher_difficulty", "absolute_tolerance", "relative_tolerance", "explanation", "status"]
+        labels = {
+            "text": "题干",
+            "question_type": "题型",
+            "teacher_difficulty": "教师设定难度",
+            "absolute_tolerance": "绝对误差容限",
+            "relative_tolerance": "相对误差容限",
+            "explanation": "解析",
+            "status": "题目状态",
+        }
         widgets = {"text": forms.Textarea(attrs={"rows": 4}), "explanation": forms.Textarea(attrs={"rows": 3})}
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["question_type"].widget.attrs["data-question-type-controller"] = ""
         if self.instance.pk:
             option_map = {item.key.lower(): item.text for item in self.instance.options.all()}
             for key in "abcdef": self.fields[f"option_{key}"].initial = option_map.get(key, "")

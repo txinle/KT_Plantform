@@ -6,9 +6,21 @@ class ExperimentForm(forms.ModelForm):
     class Meta:
         model = Experiment
         fields = ["name", "description", "question_bank", "ordering_mode", "feedback_mode", "time_mode", "total_time_limit_minutes", "per_question_time_limit_seconds", "resume_mode"]
+        labels = {
+            "name": "实验名称",
+            "description": "实验说明",
+            "question_bank": "题库",
+            "ordering_mode": "题目顺序",
+            "feedback_mode": "反馈模式",
+            "time_mode": "时间模式",
+            "total_time_limit_minutes": "实验总时限（分钟）",
+            "per_question_time_limit_seconds": "单题时限（秒）",
+            "resume_mode": "续答规则",
+        }
         widgets = {"description": forms.Textarea(attrs={"rows": 3})}
     def __init__(self, *args, owner=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["time_mode"].widget.attrs["data-time-mode-controller"] = ""
         if owner is not None:
             if owner.is_superuser or owner.role == User.Role.ADMIN:
                 from apps.question_bank.models import QuestionBank

@@ -19,6 +19,7 @@ class AssessmentFlowTests(TestCase):
         ExperimentQuestion.objects.create(experiment=self.experiment, question=question, display_order=1)
         ExperimentStudent.objects.create(experiment=self.experiment, student=self.student)
         publish_experiment(self.experiment, self.teacher)
+        self.experiment.refresh_from_db()
 
     def test_visit_draft_submit_and_idempotency(self):
         session = get_or_create_session(self.experiment, self.student)

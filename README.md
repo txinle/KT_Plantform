@@ -5,7 +5,7 @@ Django 单体应用，用于多实验、单题级自由导航和题目交互数�
 ## 界面技术
 
 - Django Templates：服务端页面与权限控制
-- Bootstrap 5.3：响应式教师工作台和学生答题页
+- 本地托管的 Bootstrap 5.3.8：响应式教师工作台和学生答题页，运行时不依赖前端 CDN
 - 原生 JavaScript Fetch API：800ms 草稿自动保存、提交幂等、倒计时
 - 无 Node.js、npm 或前端打包步骤
 
@@ -80,4 +80,4 @@ docker compose up --build -d
 - `last_visit_to_submission_ms` 是“最后一次进入该题至提交”的时长，不是完整认知作答时长。
 - 未提交、跳过和超时默认 `is_correct` 为空。
 - 分层随机首版对全部题目按主 KC 与难度区间分组后交错排序，不做自适应推荐或动态抽题。
-- Bootstrap 通过带完整性校验的 CDN 加载；首次版后端与数据功能不依赖 Node.js。离线网络环境下页面仍可提交，但样式会退化。
+- Bootstrap 5.3.8 已随项目本地托管；后端与数据功能不依赖 Node.js，断网环境不会因 CDN 不可用而丢失基础布局和交互组件。

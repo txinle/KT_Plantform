@@ -16,8 +16,14 @@ def _owned_bank(request, pk):
 
 @role_required("teacher", "admin")
 def dashboard(request):
+    from apps.experiments.models import Experiment
     banks = QuestionBank.objects.filter(owner=request.user)
-    return render(request, "teacher/dashboard.html", {"banks": banks, "question_count": Question.objects.filter(bank__owner=request.user).count()})
+    recent_experiments = Experiment.objects.filter(owner=request.user).select_related("question_bank")[:5]
+    return render(request, "teacher/dashboard.html", {
+        "banks": banks,
+        "question_count": Question.objects.filter(bank__owner=request.user).count(),
+        "recent_experiments": recent_experiments,
+    })
 
 @role_required("teacher", "admin")
 def bank_list(request):
@@ -51,6 +57,7 @@ def question_edit(request, bank_pk, question_pk):
 def question_import(request, pk):
     bank = _owned_bank(request, pk)
     preview = None
+    upload_name = ""
     if request.method == "POST" and request.POST.get("action") == "confirm":
         stored = request.session.pop(f"question_import_{bank.pk}", [])
         parsed = [ParsedQuestion(**item) for item in stored]
@@ -58,6 +65,7 @@ def question_import(request, pk):
         return redirect("question_bank:bank_detail", pk=bank.pk)
     form = UploadForm(request.POST or None, request.FILES or None)
     if request.method == "POST" and form.is_valid():
+        upload_name = form.cleaned_data["file"].name
         try:
             parsed = parse_question_rows(read_uploaded_rows(form.cleaned_data["file"]))
             incoming = [item.sequence for item in parsed]
@@ -67,12 +75,13 @@ def question_import(request, pk):
             request.session[f"question_import_{bank.pk}"] = [asdict(item) for item in parsed]
             preview = parsed
         except ValueError as exc: form.add_error("file", str(exc))
-    return render(request, "teacher/import_questions.html", {"bank": bank, "form": form, "preview": preview})
+    return render(request, "teacher/import_questions.html", {"bank": bank, "form": form, "preview": preview, "upload_name": upload_name})
 
 @role_required("teacher", "admin")
 def kc_import(request, pk):
     bank = _owned_bank(request, pk)
     preview = None
+    upload_name = ""
     if request.method == "POST" and request.POST.get("action") == "confirm":
         stored = request.session.pop(f"kc_import_{bank.pk}", [])
         mappings = [ParsedKCMapping(**item) for item in stored]
@@ -82,6 +91,7 @@ def kc_import(request, pk):
         return redirect("question_bank:bank_detail", pk=bank.pk)
     form = UploadForm(request.POST or None, request.FILES or None)
     if request.method == "POST" and form.is_valid():
+        upload_name = form.cleaned_data["file"].name
         try:
             parsed = parse_kc_rows(read_uploaded_rows(form.cleaned_data["file"]))
             missing = [item.sequence for item in parsed if not bank.questions.filter(sequence=item.sequence).exists()]
@@ -89,7 +99,7 @@ def kc_import(request, pk):
             request.session[f"kc_import_{bank.pk}"] = [asdict(item) for item in parsed]
             preview = parsed
         except ValueError as exc: form.add_error("file", str(exc))
-    return render(request, "teacher/import_kcs.html", {"bank": bank, "form": form, "preview": preview})
+    return render(request, "teacher/import_kcs.html", {"bank": bank, "form": form, "preview": preview, "upload_name": upload_name})
 
 @role_required("teacher", "admin")
 def concept_list(request):

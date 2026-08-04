@@ -2,13 +2,14 @@ KT 数据采集平台首版本地完整包
 
 包含：
 - Django 源代码
-- Bootstrap 响应式 UI
+- 本地托管的 Bootstrap 5.3.8 响应式 UI
 - 管理员、教师、学生端页面
 - 题目与 KC 导入模板
 - 单题导航、草稿保存、正式提交与导出逻辑
 - SQLite 本地启动脚本（Windows / Linux / macOS）
 - Docker、PostgreSQL、Nginx 部署配置
-- README、设计规格、数据字典、UI 与验证说明
+- README、设计规格、数据字典、UI 审计、设计系统与变更记录
+- 项目级 KT Research UI 设计技能与验收清单
 - 单元测试与源码检查脚本
 
 开始使用：
