@@ -18,11 +18,28 @@
 <div class="workflow-grid mb-4">
   <section aria-labelledby="workflow-title">
     <div class="section-heading"><h2 class="section-title" id="workflow-title">主要工作</h2></div>
-    <div class="workflow-links">
-      <a class="workflow-link" href="{% url 'question_bank:bank_list' %}"><span class="workflow-link-title">准备题库</span><span class="workflow-link-copy">创建、复制、导入并编辑题目。</span></a>
-      <a class="workflow-link" href="{% url 'question_bank:concept_list' %}"><span class="workflow-link-title">核对 KC</span><span class="workflow-link-copy">检查公共与私有知识点及题目关联。</span></a>
-      <a class="workflow-link" href="{% url 'experiments:list' %}"><span class="workflow-link-title">配置实验</span><span class="workflow-link-copy">设置顺序、反馈、时间和学生分配。</span></a>
-      <a class="workflow-link" href="{% url 'experiments:list' %}"><span class="workflow-link-title">查看采集结果</span><span class="workflow-link-copy">从已发布实验进入会话与导出页面。</span></a>
+    <div class="workflow-stages">
+      <article class="workflow-stage">
+        <div class="workflow-stage-header"><span class="workflow-stage-index numeric">01</span><h3>内容准备</h3></div>
+        <div class="workflow-stage-links">
+          <a class="workflow-link" href="{% url 'question_bank:bank_list' %}"><span class="workflow-link-title">管理题库</span><span class="workflow-link-copy">创建、复制、导入并编辑题目。</span></a>
+          <a class="workflow-link" href="{% url 'question_bank:concept_list' %}"><span class="workflow-link-title">管理 KC</span><span class="workflow-link-copy">检查知识点及题目关联。</span></a>
+        </div>
+      </article>
+      <article class="workflow-stage">
+        <div class="workflow-stage-header"><span class="workflow-stage-index numeric">02</span><h3>参与者管理</h3></div>
+        <div class="workflow-stage-links">
+          <a class="workflow-link" href="{% url 'accounts:class_list' %}"><span class="workflow-link-title">管理班级</span><span class="workflow-link-copy">维护学年、班级和可用状态。</span></a>
+          <a class="workflow-link" href="{% url 'accounts:student_list' %}"><span class="workflow-link-title">管理学生</span><span class="workflow-link-copy">创建账号、分班并重置密码。</span></a>
+        </div>
+      </article>
+      <article class="workflow-stage">
+        <div class="workflow-stage-header"><span class="workflow-stage-index numeric">03</span><h3>实验采集</h3></div>
+        <div class="workflow-stage-links">
+          <a class="workflow-link" href="{% url 'experiments:list' %}"><span class="workflow-link-title">配置实验</span><span class="workflow-link-copy">设置题库、顺序、反馈、时间和学生分配。</span></a>
+          <a class="workflow-link" href="{% url 'experiments:list' %}"><span class="workflow-link-title">查看采集结果</span><span class="workflow-link-copy">进入已发布实验的会话和导出页面。</span></a>
+        </div>
+      </article>
     </div>
   </section>
   <section aria-labelledby="recent-experiments-title">

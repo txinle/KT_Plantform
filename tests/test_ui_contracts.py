@@ -39,6 +39,23 @@ class UIContractTests(TestCase):
                 self.assertIn('aria-current="page"', source)
                 self.assertNotIn('class="back-link"', source)
 
+    def test_teacher_dashboard_groups_all_six_workflow_destinations(self):
+        source = (ROOT / "templates" / "teacher" / "dashboard.html").read_text(encoding="utf-8")
+        for label in (
+            "内容准备",
+            "参与者管理",
+            "实验采集",
+            "管理题库",
+            "管理 KC",
+            "管理班级",
+            "管理学生",
+            "配置实验",
+            "查看采集结果",
+        ):
+            self.assertIn(label, source)
+        self.assertIn("{% url 'accounts:class_list' %}", source)
+        self.assertIn("{% url 'accounts:student_list' %}", source)
+
     def test_question_template_preserves_fetch_hooks_and_accessible_state(self):
         source = (ROOT / "templates" / "student" / "question.html").read_text(encoding="utf-8")
         for hook in ("question-form", "save-status", "submit-btn", "skip-btn", "countdown"):
