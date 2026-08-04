@@ -311,6 +311,9 @@ textarea.form-control { min-height: 7rem; }
 .table tbody tr:last-child > * { border-bottom: 0; }
 .table tbody tr:hover { background: #fbfcfd; }
 .cell-title { display: block; color: var(--kt-ink); font-weight: var(--weight-semibold); text-decoration: none; }
+.cell-title:hover,
+.count-link:hover { color: var(--kt-brand-700); text-decoration: underline; }
+.count-link { color: var(--kt-brand-700); font-weight: var(--weight-semibold); text-decoration: none; }
 .cell-meta { margin-top: var(--space-1); color: var(--kt-muted); font-size: var(--font-size-xs); }
 .question-cell { min-width: 20rem; max-width: 42rem; white-space: normal; }
 .numeric,
@@ -335,6 +338,13 @@ textarea.form-control { min-height: 7rem; }
 .status-success { border-color: #abd5bd; background: var(--kt-success-bg); color: var(--kt-success); }
 .status-warning { border-color: #e8c77f; background: var(--kt-warning-bg); color: var(--kt-warning); }
 .status-danger { border-color: #e4aaaa; background: var(--kt-danger-bg); color: var(--kt-danger); }
+.visibility-control { min-width: 8rem; }
+.visibility-summary { display: inline-flex; align-items: center; gap: var(--space-2); cursor: pointer; list-style: none; }
+.visibility-summary::-webkit-details-marker { display: none; }
+.visibility-summary::marker { content: ""; }
+.visibility-summary::after { color: var(--kt-muted); content: "▾"; font-size: var(--font-size-xs); }
+.visibility-control[open] .visibility-summary::after { content: "▴"; }
+.visibility-form { max-width: 14rem; margin-top: var(--space-2); }
 
 .empty-state { padding: var(--space-10) var(--space-6); text-align: center; color: var(--kt-muted); }
 .empty-state-title { margin: 0 0 var(--space-2); color: var(--kt-ink); font-size: var(--font-size-lg); font-weight: var(--weight-bold); }

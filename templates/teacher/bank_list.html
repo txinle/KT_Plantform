@@ -14,7 +14,25 @@
           <thead><tr><th scope="col">题库</th><th scope="col">题目</th><th scope="col">可见性</th><th scope="col">最近更新</th><th scope="col"><span class="visually-hidden">操作</span></th></tr></thead>
           <tbody>
             {% for bank in banks %}
-              <tr><td><strong>{{ bank.name }}</strong><div class="cell-meta">所有者：{{ bank.owner.shown_name }}<br>{{ bank.description|default:'未填写说明'|truncatechars:72 }}</div></td><td class="numeric">{{ bank.questions.count }}</td><td><span class="status-badge {% if bank.visibility == 'shared' %}status-info{% elif bank.visibility == 'archived' %}status-neutral{% else %}status-neutral{% endif %}">{{ bank.get_visibility_display }}</span></td><td class="numeric text-nowrap">{{ bank.updated_at|date:'Y-m-d H:i' }}</td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'question_bank:bank_detail' bank.pk %}">管理</a></td></tr>
+              <tr>
+                <td><a class="cell-title" href="{% url 'question_bank:bank_detail' bank.pk %}">{{ bank.name }}</a><div class="cell-meta">所有者：{{ bank.owner.shown_name }}<br>{{ bank.description|default:'未填写说明'|truncatechars:72 }}</div></td>
+                <td class="numeric"><a class="count-link" href="{% url 'question_bank:bank_detail' bank.pk %}" aria-label="进入题库 {{ bank.name }}，共 {{ bank.questions.count }} 题">{{ bank.questions.count }}</a></td>
+                <td>
+                  <details class="visibility-control" data-visibility-control>
+                    <summary class="visibility-summary"><span class="status-badge {% if bank.visibility == 'shared' %}status-info{% elif bank.visibility == 'archived' %}status-neutral{% else %}status-neutral{% endif %}">{{ bank.get_visibility_display }}</span></summary>
+                    <form class="visibility-form" method="post" action="{% url 'question_bank:bank_visibility_update' bank.pk %}">
+                      {% csrf_token %}
+                      <label class="visually-hidden" for="visibility-{{ bank.pk }}">题库可见性</label>
+                      <select class="form-select" id="visibility-{{ bank.pk }}" name="visibility" data-auto-submit>
+                        {% for value, label in visibility_choices %}<option value="{{ value }}"{% if bank.visibility == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+                      </select>
+                      <noscript><button class="btn btn-sm btn-primary mt-2" type="submit">保存</button></noscript>
+                    </form>
+                  </details>
+                </td>
+                <td class="numeric text-nowrap">{{ bank.updated_at|date:'Y-m-d H:i' }}</td>
+                <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'question_bank:bank_detail' bank.pk %}">管理</a></td>
+              </tr>
             {% empty %}
               <tr><td colspan="5"><div class="empty-state"><h3 class="empty-state-title">还没有自己的题库</h3><p>使用右侧表单创建空题库，或从下方复制共享题库。</p></div></td></tr>
             {% endfor %}

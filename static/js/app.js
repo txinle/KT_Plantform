@@ -20,6 +20,21 @@
     const errorSummary = document.querySelector('[data-error-summary]');
     if (errorSummary) errorSummary.focus();
 
+    document.querySelectorAll('[data-visibility-control]').forEach((control) => {
+      control.addEventListener('toggle', () => {
+        if (control.open) control.querySelector('[data-auto-submit]')?.focus();
+      });
+    });
+
+    document.querySelectorAll('[data-auto-submit]').forEach((field) => {
+      field.addEventListener('change', () => {
+        const form = field.closest('form');
+        if (!form) return;
+        form.setAttribute('aria-busy', 'true');
+        form.requestSubmit();
+      });
+    });
+
     const finishDialog = document.getElementById('finish-confirm-dialog');
     const finishForm = document.querySelector('[data-finish-form]');
     const finishConfirm = finishDialog?.querySelector('[data-confirm-action]');

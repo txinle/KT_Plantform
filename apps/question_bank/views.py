@@ -37,7 +37,12 @@ def bank_list(request):
             messages.success(request, "题库已创建")
             return redirect("question_bank:bank_detail", pk=bank.pk)
     else: form = QuestionBankForm()
-    return render(request, "teacher/bank_list.html", {"banks": banks, "shared_banks": shared_banks, "form": form})
+    return render(request, "teacher/bank_list.html", {
+        "banks": banks,
+        "shared_banks": shared_banks,
+        "form": form,
+        "visibility_choices": QuestionBank.Visibility.choices,
+    })
 
 @role_required("teacher", "admin")
 def bank_detail(request, pk):

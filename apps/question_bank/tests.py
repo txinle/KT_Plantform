@@ -61,3 +61,45 @@ class QuestionBankVisibilityTests(TestCase):
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 405)
+
+
+class QuestionBankListUITests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(username="list-teacher", role=User.Role.TEACHER)
+        self.bank = QuestionBank.objects.create(owner=self.teacher, name="Clickable bank")
+        Question.objects.create(
+            bank=self.bank,
+            sequence=1,
+            question_type=Question.Type.SINGLE,
+            text="Which option is correct?",
+            correct_answer=["A"],
+        )
+        self.client.force_login(self.teacher)
+        self.response = self.client.get(reverse("question_bank:bank_list"))
+        self.detail_url = reverse("question_bank:bank_detail", args=[self.bank.pk])
+        self.visibility_url = reverse("question_bank:bank_visibility_update", args=[self.bank.pk])
+
+    def test_owned_bank_name_and_question_count_link_to_detail(self):
+        self.assertContains(
+            self.response,
+            f'<a class="cell-title" href="{self.detail_url}">Clickable bank</a>',
+            html=True,
+        )
+        self.assertContains(
+            self.response,
+            (
+                f'<a class="count-link" href="{self.detail_url}" '
+                'aria-label="进入题库 Clickable bank，共 1 题">1</a>'
+            ),
+            html=True,
+        )
+
+    def test_owned_bank_visibility_control_includes_update_form_and_choices(self):
+        self.assertContains(self.response, "data-visibility-control")
+        self.assertContains(self.response, "data-auto-submit")
+        self.assertContains(self.response, f'action="{self.visibility_url}"')
+        for value, label in QuestionBank.Visibility.choices:
+            self.assertContains(
+                self.response,
+                f'<option value="{value}"',
+            )

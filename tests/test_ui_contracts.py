@@ -67,3 +67,13 @@ class UIContractTests(TestCase):
             self.assertIn(f'id="{hook}"', source)
         self.assertIn('aria-current="step"', source)
         self.assertIn('aria-live="polite"', source)
+
+    def test_question_bank_list_visibility_contract_uses_progressive_enhancement(self):
+        template = (ROOT / "templates" / "teacher" / "bank_list.html").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        for token in ("<details", "<summary", "<noscript>", "data-visibility-control", "data-auto-submit"):
+            self.assertIn(token, template)
+        self.assertIn("data-visibility-control", script)
+        self.assertIn("data-auto-submit", script)
+        self.assertIn("form.requestSubmit()", script)
