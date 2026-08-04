@@ -1,10 +1,12 @@
 import re
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from django.conf import settings
-from django.test import TestCase, override_settings
-from django.urls import reverse
+from django.test import RequestFactory, TestCase, override_settings
+from django.urls import resolve, reverse
 from apps.accounts.models import User
 from .models import Question, QuestionBank
 from .services.import_parsing import parse_kc_rows, parse_question_rows
@@ -22,17 +24,12 @@ class ImportTemplateDownloadTests(TestCase):
             (self.kc_template_url, "kc_mapping_template.csv"),
         )
 
-    def test_teacher_can_download_complete_import_templates_and_closes_streams(self):
+    def test_teacher_can_download_complete_import_templates(self):
         self.client.force_login(self.teacher)
 
         for url, filename in self.templates:
             with self.subTest(filename=filename):
                 response = self.client.get(url)
-                stream = response.file_to_stream or next(
-                    closer.__self__
-                    for closer in response._resource_closers
-                    if hasattr(closer, "__self__") and hasattr(closer.__self__, "closed")
-                )
                 try:
                     self.assertEqual(response.status_code, 200)
                     self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
@@ -43,6 +40,25 @@ class ImportTemplateDownloadTests(TestCase):
                     )
                 finally:
                     response.close()
+
+    def test_import_template_responses_close_opened_streams(self):
+        self.client.force_login(self.teacher)
+
+        for url, filename in self.templates:
+            with self.subTest(filename=filename):
+                expected_bytes = (settings.BASE_DIR / "fixtures" / filename).read_bytes()
+                stream = BytesIO(expected_bytes)
+                with patch.object(Path, "open", return_value=stream) as open_mock:
+                    request = RequestFactory().get(url)
+                    request.user = self.teacher
+                    response = resolve(url).func(request)
+                    try:
+                        self.assertFalse(stream.closed)
+                        self.assertEqual(b"".join(response.streaming_content), expected_bytes)
+                    finally:
+                        response.close()
+
+                open_mock.assert_called_once_with("rb")
                 self.assertTrue(stream.closed)
 
     def test_import_templates_reject_post(self):
