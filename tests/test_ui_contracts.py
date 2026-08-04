@@ -94,3 +94,10 @@ class UIContractTests(TestCase):
                 source,
                 rf"{re.escape(selector)}\s*\{{[^}}]*text-decoration:\s*underline;",
             )
+
+    def test_question_bank_list_owned_row_uses_annotated_question_count(self):
+        source = (ROOT / "templates" / "teacher" / "bank_list.html").read_text(encoding="utf-8")
+        owned_row = source.split("{% for bank in banks %}", 1)[1].split("{% empty %}", 1)[0]
+
+        self.assertGreaterEqual(owned_row.count("bank.question_count"), 2)
+        self.assertNotIn("bank.questions.count", owned_row)

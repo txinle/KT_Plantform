@@ -82,6 +82,11 @@ class QuestionBankListUITests(TestCase):
         self.visibility_url = reverse("question_bank:bank_visibility_update", args=[self.bank.pk])
 
     def test_owned_bank_name_and_question_count_link_to_detail(self):
+        rendered_bank = self.response.context["banks"].get(pk=self.bank.pk)
+        self.assertTrue(hasattr(rendered_bank, "question_count"))
+        if not hasattr(rendered_bank, "question_count"):
+            return
+        self.assertEqual(rendered_bank.question_count, 1)
         self.assertContains(
             self.response,
             f'<a class="cell-title" href="{self.detail_url}">Clickable bank</a>',

@@ -16,7 +16,7 @@
             {% for bank in banks %}
               <tr>
                 <td><a class="cell-title" href="{% url 'question_bank:bank_detail' bank.pk %}">{{ bank.name }}</a><div class="cell-meta">所有者：{{ bank.owner.shown_name }}<br>{{ bank.description|default:'未填写说明'|truncatechars:72 }}</div></td>
-                <td class="numeric"><a class="count-link" href="{% url 'question_bank:bank_detail' bank.pk %}" aria-label="进入题库 {{ bank.name }}，共 {{ bank.questions.count }} 题">{{ bank.questions.count }}</a></td>
+                <td class="numeric"><a class="count-link" href="{% url 'question_bank:bank_detail' bank.pk %}" aria-label="进入题库 {{ bank.name }}，共 {{ bank.question_count }} 题">{{ bank.question_count }}</a></td>
                 <td>
                   <details class="visibility-control" data-visibility-control>
                     <summary class="visibility-summary"><span class="status-badge {% if bank.visibility == 'shared' %}status-info{% elif bank.visibility == 'archived' %}status-neutral{% else %}status-neutral{% endif %}">{{ bank.get_visibility_display }}</span></summary>

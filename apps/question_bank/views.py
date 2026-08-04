@@ -1,5 +1,6 @@
 from dataclasses import asdict
 from django.contrib import messages
+from django.db.models import Count
 from django.views.decorators.http import require_POST
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.accounts.permissions import role_required
@@ -28,7 +29,7 @@ def dashboard(request):
 
 @role_required("teacher", "admin")
 def bank_list(request):
-    banks = QuestionBank.objects.filter(owner=request.user)
+    banks = QuestionBank.objects.filter(owner=request.user).annotate(question_count=Count("questions"))
     shared_banks = QuestionBank.objects.filter(visibility=QuestionBank.Visibility.SHARED).exclude(owner=request.user)
     if request.method == "POST":
         form = QuestionBankForm(request.POST)
