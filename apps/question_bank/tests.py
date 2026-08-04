@@ -262,3 +262,36 @@ class QuestionBankListUITests(TestCase):
                 f'<option value="{value}"{selected}>{label}</option>',
                 select_html,
             )
+
+
+class QuestionLabelDisplayTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(username="question-label-teacher", role=User.Role.TEACHER)
+        self.bank = QuestionBank.objects.create(owner=self.teacher, name="Question labels")
+        self.first_question = Question.objects.create(
+            bank=self.bank,
+            sequence=1,
+            question_type=Question.Type.SINGLE,
+            text="First question",
+            correct_answer="A",
+        )
+        self.second_question = Question.objects.create(
+            bank=self.bank,
+            sequence=2,
+            question_type=Question.Type.SINGLE,
+            text="Second question",
+            correct_answer="B",
+        )
+        self.client.force_login(self.teacher)
+
+    def test_question_list_displays_unpadded_sequence_labels_without_changing_codes(self):
+        response = self.client.get(reverse("question_bank:bank_detail", args=[self.bank.pk]))
+
+        self.assertContains(response, '<div class="cell-meta mono">Q1</div>', html=True)
+        self.assertContains(response, '<div class="cell-meta mono">Q2</div>', html=True)
+        self.assertNotContains(response, '<div class="cell-meta mono">Q0001</div>', html=True)
+        self.assertNotContains(response, '<div class="cell-meta mono">Q0002</div>', html=True)
+        self.first_question.refresh_from_db()
+        self.second_question.refresh_from_db()
+        self.assertEqual(self.first_question.code, "Q0001")
+        self.assertEqual(self.second_question.code, "Q0002")
