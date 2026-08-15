@@ -82,7 +82,7 @@ else {
 }
 
 foreach ($candidate in $candidates) {
-    & $candidate -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" *> $null
+    & $candidate -c "import ensurepip, os, sys, venv; raise SystemExit(0 if sys.version_info >= (3, 10) and os.path.isfile(sys.executable) else 1)" *> $null
     if ($LASTEXITCODE -eq 0) {
         [Console]::Out.WriteLine($candidate)
         exit 0
