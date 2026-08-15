@@ -1,3 +1,7 @@
+import subprocess
+import sys
+import tarfile
+import tempfile
 from pathlib import Path
 from unittest import TestCase
 
@@ -40,3 +44,31 @@ class PortableLauncherContractTests(TestCase):
         ):
             with self.subTest(token=token):
                 self.assertIn(token, source)
+
+
+class PortableArchiveTests(TestCase):
+    def test_tar_archive_marks_unix_launcher_executable(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "source"
+            source.mkdir()
+            (source / "run_local.sh").write_text(
+                "#!/usr/bin/env bash\n", encoding="utf-8"
+            )
+            (source / "manage.py").write_text("", encoding="utf-8")
+            archive = root / "package.tar.gz"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "create_portable_archive.py"),
+                    "--source",
+                    str(source),
+                    "--output",
+                    str(archive),
+                ],
+                check=True,
+            )
+            with tarfile.open(archive, "r:gz") as tar:
+                members = {member.name: member for member in tar.getmembers()}
+            self.assertEqual(members["run_local.sh"].mode, 0o755)
+            self.assertEqual(members["manage.py"].mode, 0o644)
