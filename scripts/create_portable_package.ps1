@@ -24,7 +24,12 @@ $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $packageName = "kt-data-platform-$timestamp"
 $packageDirectory = Join-Path $outputRootFull $packageName
 $zipPath = Join-Path $outputRootFull "$packageName.zip"
-if ((Test-Path -LiteralPath $packageDirectory) -or (Test-Path -LiteralPath $zipPath)) {
+$tarGzPath = Join-Path $outputRootFull "$packageName.tar.gz"
+if (
+    (Test-Path -LiteralPath $packageDirectory) -or
+    (Test-Path -LiteralPath $zipPath) -or
+    (Test-Path -LiteralPath $tarGzPath)
+) {
     throw "Package output already exists: $packageName"
 }
 
@@ -45,6 +50,7 @@ $runtimeFiles = @(
     'manage.py',
     'requirements.txt',
     'run_local.bat',
+    'run_local.sh',
     'START-HERE.txt'
 )
 foreach ($relativePath in $runtimeFiles) {
@@ -57,7 +63,11 @@ foreach ($relativePath in $runtimeFiles) {
 
 $packageScripts = Join-Path $packageDirectory 'scripts'
 New-Item -ItemType Directory -Path $packageScripts | Out-Null
-foreach ($scriptName in @('find_python.ps1', 'create_portable_package.ps1')) {
+foreach ($scriptName in @(
+    'find_python.ps1',
+    'create_portable_package.ps1',
+    'create_portable_archive.py'
+)) {
     $source = Join-Path $PSScriptRoot $scriptName
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Required package script is missing: $scriptName"
@@ -79,6 +89,21 @@ Requirement: Python 3.10+ or Anaconda/Miniconda. Internet access is needed for t
 Do not copy .venv from another computer. This package contains no source-computer database, accounts, experiments, uploads, or private configuration.
 '@
 Set-Content -LiteralPath (Join-Path $packageDirectory 'PORTABLE_WINDOWS_README.md') -Value $recipientReadme -Encoding UTF8
+
+$unixReadme = @'
+# KT Data Platform - Linux/macOS Portable Package
+
+Requirement: Python 3.10+ with venv and ensurepip. Internet access is needed for the first dependency installation.
+
+1. Extract the complete .tar.gz to a writable folder.
+2. Open a terminal in that folder and run ./run_local.sh.
+3. First start creates this computer's own .venv and a clean local database.
+4. The browser opens http://127.0.0.1:8000/ after Django is ready.
+5. Keep the terminal open while using the site. Press Ctrl+C to stop it.
+
+This launcher uses Django's development server. Do not expose it directly to the public internet.
+'@
+Set-Content -LiteralPath (Join-Path $packageDirectory 'PORTABLE_UNIX_README.md') -Value $unixReadme -Encoding UTF8
 
 $cacheDirectories = @(
     Get-ChildItem -LiteralPath $packageDirectory -Directory -Recurse -Force |
@@ -115,5 +140,16 @@ if ($cachedArtifacts.Count -gt 0) {
 
 Compress-Archive -Path (Join-Path $packageDirectory '*') -DestinationPath $zipPath -CompressionLevel Optimal
 
+$finderOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'find_python.ps1')
+if ($LASTEXITCODE -ne 0) {
+    throw 'Python 3.10+ is required to create the Unix archive.'
+}
+$archivePython = @($finderOutput)[0].Trim()
+& $archivePython (Join-Path $PSScriptRoot 'create_portable_archive.py') --source $packageDirectory --output $tarGzPath
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unix archive creation failed.'
+}
+
 Write-Output "PACKAGE_DIR=$packageDirectory"
 Write-Output "PACKAGE_ZIP=$zipPath"
+Write-Output "PACKAGE_TAR_GZ=$tarGzPath"
