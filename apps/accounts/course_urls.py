@@ -23,6 +23,7 @@ urlpatterns = [
     path("<int:course_pk>/banks/copy/<int:source_pk>/", bank_views.copy_bank, name="copy_bank"),
     path("<int:course_pk>/classes/", course_resource_views.class_list, name="classes"),
     path("<int:course_pk>/classes/<int:class_pk>/", course_resource_views.class_detail, name="class_detail"),
+    path("<int:course_pk>/classes/<int:class_pk>/students/import-template.xlsx", course_resource_views.student_import_template, name="student_import_template"),
     path("<int:course_pk>/classes/<int:class_pk>/students/import/", course_resource_views.student_import, name="student_import"),
     path("<int:course_pk>/classes/<int:class_pk>/students/<int:student_pk>/move/", course_resource_views.move_student, name="move_student"),
     path("<int:course_pk>/classes/<int:class_pk>/students/<int:student_pk>/reset-password/", course_resource_views.reset_student_password, name="reset_password"),

@@ -163,7 +163,21 @@ a:hover { color: var(--kt-brand-900); }
   font-weight: var(--weight-semibold);
 }
 .teacher-nav .teacher-nav-collapse { display: block; }
-.teacher-nav .nav { flex-wrap: nowrap; gap: var(--space-1); }
+.teacher-nav-layout { display: flex; min-width: 0; align-items: stretch; justify-content: space-between; gap: var(--space-5); }
+.teacher-course-context {
+  display: flex;
+  min-width: 0;
+  max-width: 24rem;
+  flex: 0 1 24rem;
+  flex-direction: column;
+  justify-content: center;
+  padding-block: var(--space-2);
+}
+.teacher-course-context-name,
+.teacher-course-context-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.teacher-course-context-name { color: var(--kt-ink); font-size: var(--font-size-sm); font-weight: var(--weight-bold); }
+.teacher-course-context-meta { color: var(--kt-muted); font-size: var(--font-size-xs); }
+.teacher-nav .nav { min-width: 0; flex: 0 0 auto; flex-wrap: nowrap; gap: var(--space-1); }
 .teacher-nav .nav-link {
   min-height: 3.25rem;
   padding: .9rem .85rem .75rem;
@@ -178,6 +192,9 @@ a:hover { color: var(--kt-brand-900); }
   border-bottom-color: var(--kt-brand-700);
   color: var(--kt-brand-900);
 }
+.teacher-nav-toggle-copy { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; text-align: left; }
+.teacher-nav-toggle-label { font-size: var(--font-size-xs); color: var(--kt-muted); }
+.teacher-nav-toggle-course { max-width: min(72vw, 30rem); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .page-main { padding-top: var(--space-8); padding-bottom: var(--space-12); }
 .breadcrumb-nav { margin-top: calc(var(--space-5) * -1); margin-bottom: var(--space-5); overflow-x: auto; scrollbar-width: thin; }
@@ -235,6 +252,7 @@ a:hover { color: var(--kt-brand-900); }
 .metric-item + .metric-item { border-left: 1px solid var(--kt-border); }
 .metric-label { color: var(--kt-muted); font-size: var(--font-size-sm); }
 .metric { margin-top: var(--space-1); font-size: 1.75rem; font-weight: var(--weight-bold); line-height: 1.2; font-variant-numeric: tabular-nums; }
+.metric-row-four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
 .workflow-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(18rem, .65fr); gap: var(--space-6); }
 .workflow-stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--kt-border); border-radius: var(--radius-surface); background: var(--kt-surface); overflow: hidden; }
@@ -485,6 +503,10 @@ textarea.form-control { min-height: 7rem; }
 .modal-footer { border-color: var(--kt-border); }
 
 @media (max-width: 991.98px) {
+  .teacher-course-context { max-width: 18rem; flex-basis: 18rem; }
+  .metric-row-four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-row-four .metric-item:nth-child(3) { border-top: 1px solid var(--kt-border); border-left: 0; }
+  .metric-row-four .metric-item:nth-child(4) { border-top: 1px solid var(--kt-border); }
   .workflow-grid { grid-template-columns: 1fr; }
   .workflow-stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .workflow-stage:nth-child(3) { grid-column: 1 / -1; border-top: 1px solid var(--kt-border); border-left: 0; }
@@ -504,6 +526,8 @@ textarea.form-control { min-height: 7rem; }
   .teacher-nav-inner { min-height: auto; }
   .teacher-nav-toggle { display: flex; }
   .teacher-nav .teacher-nav-collapse:not(.show) { display: none; }
+  .teacher-nav-layout { display: block; }
+  .teacher-course-context { display: none; }
   .teacher-nav .nav { display: grid; grid-template-columns: repeat(2, 1fr); padding-bottom: var(--space-3); }
   .teacher-nav .nav-link { min-height: 2.75rem; padding: .65rem .75rem; border: 1px solid var(--kt-border); border-radius: var(--radius-control); }
   .teacher-nav .nav-link.active { border: 2px solid var(--kt-brand-700); background: var(--kt-brand-050); }
@@ -533,6 +557,7 @@ textarea.form-control { min-height: 7rem; }
   .page-actions form .btn { width: 100%; }
   .metric-row { grid-template-columns: 1fr; }
   .metric-item + .metric-item { border-top: 1px solid var(--kt-border); border-left: 0; }
+  .metric-row-four { grid-template-columns: 1fr; }
   .step-list li { padding-inline: var(--space-2); font-size: var(--font-size-xs); }
   .question-page .page-main { padding-inline: var(--space-3); }
   .question-grid { grid-template-columns: repeat(5, minmax(2.5rem, 1fr)); }

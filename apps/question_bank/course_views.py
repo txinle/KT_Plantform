@@ -38,9 +38,12 @@ def bank_list(request, course_pk):
     else:
         form = QuestionBankForm()
     banks = course.question_banks.annotate(question_count=Count("questions"))
-    shared_banks = QuestionBank.objects.filter(visibility=QuestionBank.Visibility.SHARED).exclude(
-        course=course
-    ).select_related("course")
+    shared_banks = (
+        QuestionBank.objects.filter(visibility=QuestionBank.Visibility.SHARED)
+        .exclude(course=course)
+        .select_related("course", "created_by", "owner")
+        .annotate(question_count=Count("questions"))
+    )
     return render(
         request,
         "teacher/course_bank_list.html",
@@ -50,6 +53,7 @@ def bank_list(request, course_pk):
             "banks": banks,
             "shared_banks": shared_banks,
             "form": form,
+            "visibility_choices": QuestionBank.Visibility.choices,
         },
     )
 

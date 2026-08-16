@@ -42,12 +42,22 @@ def course_create(request):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def course_detail(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
+    recent_experiments = course.experiments.select_related("question_bank")[:5]
+    recent_banks = course.question_banks.annotate(
+        question_count=Count("questions", distinct=True),
+    )[:5]
     return render(
         request,
         "teacher/course_detail.html",
         {
             "course": course,
             "current_course": course,
+            "class_count": course.classes.count(),
+            "bank_count": course.question_banks.count(),
+            "experiment_count": course.experiments.count(),
+            "student_count": course.enrollments.filter(is_active=True).count(),
+            "recent_experiments": recent_experiments,
+            "recent_banks": recent_banks,
             "is_course_owner": request.user.is_superuser
             or request.user.role == User.Role.ADMIN
             or course.owner_id == request.user.id,

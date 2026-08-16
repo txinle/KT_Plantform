@@ -7,7 +7,7 @@
   <meta name="description" content="KT 教育科研交互数据采集平台">
   <title>{% block title %}KT 交互数据平台{% endblock %}</title>
   <link rel="stylesheet" href="{% static 'vendor/bootstrap/css/bootstrap.min.css' %}?v=5.3.8">
-  <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20260804.2">
+  <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20260816.1">
   {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
@@ -36,33 +36,45 @@
         {% endif %}
       </div>
     </nav>
-    {% if user.is_authenticated and user.role == 'teacher' %}
+    {% if user.is_authenticated %}{% if user.role == 'teacher' or user.role == 'admin' %}
       <nav class="teacher-nav" aria-label="教师工作区">
         <div class="container-fluid app-shell teacher-nav-inner">
           <button class="teacher-nav-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#teacher-navigation" aria-controls="teacher-navigation" aria-expanded="false">
-            <span>{% if current_course %}{{ current_course.name }} · {{ current_course.code }} · {{ current_course.term }}{% else %}工作区导航{% endif %}</span>
+            <span class="teacher-nav-toggle-copy">
+              <span class="teacher-nav-toggle-label">{% if current_course %}课程导航{% else %}工作区导航{% endif %}</span>
+              {% if current_course %}<span class="teacher-nav-toggle-course">{{ current_course.name }} · {{ current_course.code }} · {{ current_course.term }}</span>{% endif %}
+            </span>
             <span aria-hidden="true">菜单</span>
           </button>
           <div class="collapse teacher-nav-collapse" id="teacher-navigation">
-            <div class="nav nav-underline">
-              <a class="nav-link" href="{% url 'courses:list' %}">我的课程</a>
+            <div class="teacher-nav-layout">
               {% if current_course %}
-                <span class="nav-link disabled" aria-label="当前课程">{{ current_course.name }} · <span class="mono">{{ current_course.code }} · {{ current_course.term }}</span></span>
-                <a class="nav-link" href="{% url 'courses:detail' current_course.pk %}">概览</a>
-                <a class="nav-link" href="{% url 'courses:banks' current_course.pk %}">题库</a>
-                <a class="nav-link" href="{% url 'courses:classes' current_course.pk %}">班级</a>
-                <a class="nav-link" href="{% url 'courses:experiments' current_course.pk %}">实验</a>
-                <a class="nav-link" href="{% url 'courses:data' current_course.pk %}">数据</a>
-                {% if user.pk == current_course.owner_id %}<a class="nav-link" href="{% url 'courses:settings' current_course.pk %}">设置</a>{% endif %}
+                <div class="teacher-course-context" aria-label="当前课程">
+                  <span class="teacher-course-context-name">{{ current_course.name }}</span>
+                  <span class="teacher-course-context-meta mono">{{ current_course.code }} · {{ current_course.term }}</span>
+                </div>
               {% endif %}
+              {% with current_name=request.resolver_match.url_name %}
+              <div class="nav nav-underline">
+                <a class="nav-link{% if not current_course %} active{% endif %}"{% if not current_course %} aria-current="page"{% endif %} href="{% url 'courses:list' %}">我的课程</a>
+                {% if current_course %}
+                  <a class="nav-link{% if current_name == 'detail' %} active{% endif %}"{% if current_name == 'detail' %} aria-current="page"{% endif %} href="{% url 'courses:detail' current_course.pk %}">概览</a>
+                  <a class="nav-link{% if current_name == 'banks' or current_name == 'bank_detail' or current_name == 'question_import' or current_name == 'kc_import' or current_name == 'question_edit' or current_name == 'copy_bank' or current_name == 'bank_visibility' %} active{% endif %}"{% if current_name == 'banks' or current_name == 'bank_detail' or current_name == 'question_import' or current_name == 'kc_import' or current_name == 'question_edit' or current_name == 'copy_bank' or current_name == 'bank_visibility' %} aria-current="page"{% endif %} href="{% url 'courses:banks' current_course.pk %}">题库</a>
+                  <a class="nav-link{% if current_name == 'classes' or current_name == 'class_detail' or current_name == 'student_import' or current_name == 'student_import_template' or current_name == 'move_student' or current_name == 'reset_password' %} active{% endif %}"{% if current_name == 'classes' or current_name == 'class_detail' or current_name == 'student_import' or current_name == 'student_import_template' or current_name == 'move_student' or current_name == 'reset_password' %} aria-current="page"{% endif %} href="{% url 'courses:classes' current_course.pk %}">班级</a>
+                  <a class="nav-link{% if current_name == 'experiments' or current_name == 'experiment_create' or current_name == 'experiment_detail' or current_name == 'experiment_edit' or current_name == 'experiment_assign' or current_name == 'experiment_publish' or current_name == 'experiment_sync_questions' or current_name == 'experiment_results' %} active{% endif %}"{% if current_name == 'experiments' or current_name == 'experiment_create' or current_name == 'experiment_detail' or current_name == 'experiment_edit' or current_name == 'experiment_assign' or current_name == 'experiment_publish' or current_name == 'experiment_sync_questions' or current_name == 'experiment_results' %} aria-current="page"{% endif %} href="{% url 'courses:experiments' current_course.pk %}">实验</a>
+                  <a class="nav-link{% if current_name == 'data' %} active{% endif %}"{% if current_name == 'data' %} aria-current="page"{% endif %} href="{% url 'courses:data' current_course.pk %}">数据</a>
+                  {% if user.pk == current_course.owner_id or user.role == 'admin' %}<a class="nav-link{% if current_name == 'settings' %} active{% endif %}"{% if current_name == 'settings' %} aria-current="page"{% endif %} href="{% url 'courses:settings' current_course.pk %}">设置</a>{% endif %}
+                {% endif %}
+              </div>
+              {% endwith %}
             </div>
           </div>
         </div>
       </nav>
-    {% endif %}
+    {% endif %}{% endif %}
   </header>
   <main id="main-content" class="container-fluid app-shell page-main" tabindex="-1">
-    {% if user.is_authenticated and user.role == 'teacher' %}
+    {% if user.is_authenticated %}{% if user.role == 'teacher' or user.role == 'admin' %}
       <nav class="breadcrumb-nav" aria-label="层级目录">
         <ol class="breadcrumb-list">
           {% block breadcrumb_items %}
@@ -70,7 +82,7 @@
           {% endblock %}
         </ol>
       </nav>
-    {% endif %}
+    {% endif %}{% endif %}
     {% if messages %}
       <section class="message-stack" aria-label="系统消息" aria-live="polite">
         {% for message in messages %}

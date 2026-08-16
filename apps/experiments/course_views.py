@@ -69,6 +69,7 @@ def experiment_detail(request, course_pk, pk):
             "current_course": course,
             "experiment": experiment,
             "assignment_form": assignment_form,
+            "student_links": experiment.student_links.select_related("student"),
         },
     )
 

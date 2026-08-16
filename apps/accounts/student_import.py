@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from io import BytesIO
 
 from django.db.models import Q
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 from .models import User
 
@@ -20,6 +20,37 @@ class ParsedStudent:
     display_name: str
     class_id: int
     class_name: str
+
+
+def build_student_import_workbook(classes, scope_label=None):
+    classes = list(classes)
+    workbook = Workbook()
+    import_sheet = workbook.active
+    import_sheet.title = "学生导入"
+    import_sheet.append(["学号", "姓名", "班级"])
+    import_sheet.freeze_panes = "A2"
+    for column in ("A", "B", "C"):
+        import_sheet.column_dimensions[column].number_format = "@"
+
+    instructions = workbook.create_sheet("填写说明")
+    instructions.append(["填写规则"])
+    if scope_label:
+        instructions.append([f"适用范围：{scope_label}"])
+    instructions.append(["仅支持 .xlsx；学号、姓名、班级均为必填字段。"])
+    instructions.append(["班级必须与下列可用班级完整名称精确一致。"])
+    instructions.append(["新账号初始密码规则：S + 学号；已有账号密码保持不变。"])
+    instructions.append([])
+    instructions.append(["填写示例（仅供参考，不会从本页导入）"])
+    instructions.append(["学号", "姓名", "班级"])
+    instructions.append(["20260001", "示例学生", str(classes[0]) if classes else "2026 示例班级"])
+    instructions.append([])
+    instructions.append(["可用班级完整名称"])
+    for class_group in classes:
+        instructions.append([str(class_group)])
+
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
 
 
 def parse_student_workbook(uploaded_file, classes, *, allow_existing=False):

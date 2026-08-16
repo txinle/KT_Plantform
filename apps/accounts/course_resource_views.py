@@ -1,7 +1,10 @@
 from django.contrib import messages
 from django.core.exceptions import ValidationError
+from django.db.models import Q
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
+from urllib.parse import quote
 
 from apps.audit.services import log_action
 
@@ -10,7 +13,12 @@ from .enrollment_services import enroll_parsed_students
 from .forms import ClassGroupForm, PasswordResetForm, StudentBatchUploadForm
 from .models import ClassGroup, CourseEnrollment, User
 from .permissions import role_required
-from .student_import import ParsedStudent, StudentImportError, parse_student_workbook
+from .student_import import (
+    ParsedStudent,
+    StudentImportError,
+    build_student_import_workbook,
+    parse_student_workbook,
+)
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
@@ -44,6 +52,13 @@ def class_detail(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     class_group = get_object_or_404(course.classes, pk=class_pk)
     enrollments = class_group.enrollments.select_related("student")
+    query = request.GET.get("q", "").strip()
+    if query:
+        enrollments = enrollments.filter(
+            Q(student__student_number__icontains=query)
+            | Q(student__display_name__icontains=query)
+            | Q(student__username__icontains=query)
+        )
     return render(
         request,
         "teacher/course_class_detail.html",
@@ -53,8 +68,30 @@ def class_detail(request, course_pk, class_pk):
             "class_group": class_group,
             "enrollments": enrollments,
             "course_classes": course.classes.filter(is_active=True),
+            "query": query,
         },
     )
+
+
+@require_GET
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def student_import_template(request, course_pk, class_pk):
+    course = get_accessible_course(request.user, course_pk)
+    class_group = get_object_or_404(course.classes, pk=class_pk)
+    content = build_student_import_workbook(
+        [class_group],
+        scope_label=f"{course.name}（{course.code} · {course.term}） / {class_group}",
+    )
+    response = HttpResponse(
+        content,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    encoded_name = quote(f"{course.code}-{class_group.name}-学生导入模板.xlsx")
+    response["Content-Disposition"] = (
+        "attachment; filename=student_import_template.xlsx; "
+        f"filename*=UTF-8''{encoded_name}"
+    )
+    return response
 
 
 @require_POST

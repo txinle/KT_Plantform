@@ -2,27 +2,17 @@
 {% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:detail' course.pk %}">{{ course.name }}</a></li><li><a href="{% url 'courses:class_detail' course.pk class_group.pk %}">{{ class_group.name }}</a></li><li class="breadcrumb-item-current" aria-current="page">导入学生</li>{% endblock %}
 {% block title %}导入学生 | {{ class_group.name }}{% endblock %}
 {% block content %}
-<header class="page-header">
-  <div class="page-header-copy">
-    <p class="page-kicker mono">{{ course.code }} · {{ course.term }} / {{ class_group.name }}</p>
-    <h1 class="page-title">导入课程学生</h1>
-    <p class="page-subtitle">已有学生账号将被复用且密码保持不变；系统只新增当前课程的选课关系。</p>
-  </div>
-</header>
-<section class="card-panel">
-  <form method="post" enctype="multipart/form-data" class="stack-form">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button class="btn btn-primary" type="submit">校验并预览</button>
-  </form>
-</section>
-{% if preview %}
-<section class="card-panel mt-4" aria-labelledby="preview-title">
-  <h2 id="preview-title">导入预览</h2>
-  <div class="table-shell"><table class="table"><thead><tr><th>学号</th><th>姓名</th><th>班级</th></tr></thead><tbody>
-  {% for item in preview %}<tr><td class="mono">{{ item.student_number }}</td><td>{{ item.display_name }}</td><td>{{ item.class_name }}</td></tr>{% endfor %}
-  </tbody></table></div>
-  <form method="post">{% csrf_token %}<input type="hidden" name="action" value="confirm"><button class="btn btn-primary" type="submit">确认建立选课关系</button></form>
-</section>
-{% endif %}
+<header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }} / {{ class_group.name }}</p><h1 class="page-title">批量导入课程学生</h1><p class="page-subtitle">先使用当前班级的 Excel 模板整理名单，校验预览通过后再一次性建立选课关系。</p></div></header>
+<ol class="step-list" aria-label="导入进度"><li class="{% if not preview %}active{% endif %}">上传文件</li><li class="{% if preview %}active{% endif %}">校验预览</li><li>确认导入</li></ol>
+<section class="card" aria-labelledby="course-student-import-title"><div class="card-body"><h2 class="visually-hidden" id="course-student-import-title">课程学生名单导入</h2>
+  <div class="notice-panel mb-4"><strong>模板列：</strong><code>学号、姓名、班级</code>。班级必须与当前班级完整名称一致；新账号初始密码为 <code>S + 学号</code>，已有账号密码保持不变。<a class="btn btn-sm btn-outline-primary ms-2" href="{% url 'courses:student_import_template' course.pk class_group.pk %}">下载 Excel 参考模板</a></div>
+  {% if not preview %}
+    {% include 'components/error_summary.html' with form=form %}
+    <form method="post" enctype="multipart/form-data" novalidate>{% csrf_token %}{% for field in form %}{% include 'components/form_field.html' with field=field %}{% endfor %}<div class="form-actions"><button class="btn btn-primary" type="submit">校验并生成预览</button><a class="btn btn-secondary" href="{% url 'courses:class_detail' course.pk class_group.pk %}">取消</a></div></form>
+  {% else %}
+    <div class="d-flex flex-wrap justify-content-between gap-3 mb-4"><div><strong>名单校验通过</strong><div class="cell-meta">可预览 {{ preview|length }} 名学生；尚未写入数据库。</div></div><span class="status-badge status-success">校验通过</span></div>
+    <div class="table-shell mb-4"><table class="table"><thead><tr><th scope="col">学号</th><th scope="col">姓名</th><th scope="col">课程班级</th><th scope="col">账号处理</th></tr></thead><tbody>{% for student in preview %}<tr><td class="mono">{{ student.student_number }}</td><td>{{ student.display_name }}</td><td>{{ student.class_name }}</td><td>已有账号复用；新账号使用 <span class="mono">S + 学号</span></td></tr>{% endfor %}</tbody></table></div>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="confirm"><div class="notice-panel mb-3">确认后将一次性处理 {{ preview|length }} 条选课记录；任一身份、班级或重复选课冲突都会使整批回滚。</div><div class="form-actions"><button class="btn btn-primary" type="submit">确认建立 {{ preview|length }} 条选课关系</button><a class="btn btn-secondary" href="{% url 'courses:student_import' course.pk class_group.pk %}">重新上传</a></div></form>
+  {% endif %}
+</div></section>
 {% endblock %}
