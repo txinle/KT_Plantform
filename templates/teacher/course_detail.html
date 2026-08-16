@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li class="breadcrumb-item-current" aria-current="page">{{ course.name }}</li>{% endblock %}
+{% block title %}{{ course.name }} | KT Data Lab{% endblock %}
+{% block content %}
+<header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">{{ course.name }}</h1><p class="page-subtitle">{{ course.description|default:'未填写课程说明' }}</p></div>{% if is_course_owner %}<div class="page-actions"><a class="btn btn-outline-primary" href="{% url 'courses:settings' course.pk %}">课程设置</a></div>{% endif %}</header>
+{% if course.status == 'archived' %}<div class="notice-panel mb-4"><strong>课程已归档。</strong>课程资源和历史数据保持可读，但不能继续修改或开始新实验。</div>{% endif %}
+<div class="workflow-stages">
+  <article class="workflow-stage"><div class="workflow-stage-header"><span class="workflow-stage-index numeric">01</span><h2>题库</h2></div><p>管理题目以及课程级 KC 与题目映射。</p><a class="btn btn-sm btn-outline-primary" href="{% url 'courses:banks' course.pk %}">进入题库</a></article>
+  <article class="workflow-stage"><div class="workflow-stage-header"><span class="workflow-stage-index numeric">02</span><h2>班级</h2></div><p>进入班级管理学生名单、导入和账号。</p><a class="btn btn-sm btn-outline-primary" href="{% url 'courses:classes' course.pk %}">进入班级</a></article>
+  <article class="workflow-stage"><div class="workflow-stage-header"><span class="workflow-stage-index numeric">03</span><h2>实验</h2></div><p>使用本课程题库和学生配置研究采集。</p><a class="btn btn-sm btn-outline-primary" href="{% url 'courses:experiments' course.pk %}">进入实验</a></article>
+</div>
+{% endblock %}

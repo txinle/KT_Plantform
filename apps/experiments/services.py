@@ -8,6 +8,8 @@ from .models import Experiment, ExperimentQuestion, ExperimentStudent, Experimen
 
 
 def validate_for_publish(experiment):
+    if experiment.question_bank.course_id != experiment.course_id:
+        raise ValidationError("实验与题库必须属于同一课程")
     links = list(experiment.question_links.select_related("question").prefetch_related("question__options", "question__concept_links__concept"))
     if not links: raise ValidationError("实验至少需要一道题")
     missing = [link.question.code for link in links if not link.question.primary_concept]
@@ -28,7 +30,18 @@ def publish_experiment(experiment, actor):
         "per_question_time_limit_seconds": experiment.per_question_time_limit_seconds,
         "resume_mode": experiment.resume_mode,
     }
-    version = ExperimentVersion.objects.create(experiment=experiment, version_number=version_number, configuration=config, published_by=actor)
+    course_snapshot = {
+        "course_name_snapshot": experiment.course.name if experiment.course_id else "",
+        "course_code_snapshot": experiment.course.code if experiment.course_id else "",
+        "course_term_snapshot": experiment.course.term if experiment.course_id else "",
+    }
+    version = ExperimentVersion.objects.create(
+        experiment=experiment,
+        version_number=version_number,
+        configuration=config,
+        published_by=actor,
+        **course_snapshot,
+    )
     for link in links:
         q = link.question
         kc_links = list(q.concept_links.select_related("concept"))
@@ -85,5 +98,31 @@ def sync_experiment_questions(experiment):
 def assign_students(experiment, students):
     if experiment.status != Experiment.Status.DRAFT: raise ValidationError("发布后不能修改学生")
     experiment.student_links.all().delete()
+    if experiment.course_id is None:
+        for student in students:
+            ExperimentStudent.objects.create(
+                experiment=experiment,
+                student=student,
+                class_snapshot_name=str(student.class_group or ""),
+            )
+        return
+
+    from apps.accounts.models import CourseEnrollment
+
+    enrollments = {
+        item.student_id: item
+        for item in CourseEnrollment.objects.filter(
+            course=experiment.course,
+            student__in=students,
+            is_active=True,
+        ).select_related("class_group")
+    }
+    if len(enrollments) != len(students):
+        raise ValidationError("只能分配实验所属课程的在读学生")
     for student in students:
-        ExperimentStudent.objects.create(experiment=experiment, student=student, class_snapshot_name=str(student.class_group or ""))
+        enrollment = enrollments[student.pk]
+        ExperimentStudent.objects.create(
+            experiment=experiment,
+            student=student,
+            class_snapshot_name=str(enrollment.class_group),
+        )

@@ -4,19 +4,28 @@ from io import BytesIO
 from urllib.parse import quote
 
 from django.http import HttpResponse
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_POST
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
 
 from apps.accounts.permissions import role_required
+from apps.accounts.course_access import accessible_courses
+from apps.accounts.models import User
 from apps.assessment.models import Attempt, QuestionVisitEvent
 from apps.audit.services import log_action
 from apps.experiments.models import Experiment
 from .export_fields import FIELD_LABELS, field_values
 
 def _experiment(request, pk):
-    qs = Experiment.objects.all() if request.user.is_superuser else Experiment.objects.filter(owner=request.user)
+    if request.user.is_superuser or request.user.role == User.Role.ADMIN:
+        qs = Experiment.objects.all()
+    else:
+        qs = Experiment.objects.filter(
+            Q(course__in=accessible_courses(request.user))
+            | Q(course__isnull=True, owner=request.user)
+        )
     return get_object_or_404(qs, pk=pk)
 
 def _anon(student_id, experiment_id):

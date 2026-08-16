@@ -18,10 +18,12 @@ class ExperimentForm(forms.ModelForm):
             "resume_mode": "续答规则",
         }
         widgets = {"description": forms.Textarea(attrs={"rows": 3})}
-    def __init__(self, *args, owner=None, **kwargs):
+    def __init__(self, *args, owner=None, course=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["time_mode"].widget.attrs["data-time-mode-controller"] = ""
-        if owner is not None:
+        if course is not None:
+            self.fields["question_bank"].queryset = course.question_banks.exclude(visibility="archived")
+        elif owner is not None:
             if owner.is_superuser or owner.role == User.Role.ADMIN:
                 from apps.question_bank.models import QuestionBank
                 self.fields["question_bank"].queryset = QuestionBank.objects.exclude(visibility=QuestionBank.Visibility.ARCHIVED)
@@ -37,9 +39,11 @@ class ExperimentForm(forms.ModelForm):
 
 class StudentAssignmentForm(forms.Form):
     students = forms.ModelMultipleChoiceField(queryset=User.objects.none(), widget=forms.CheckboxSelectMultiple, label="参加学生")
-    def __init__(self, *args, owner=None, **kwargs):
+    def __init__(self, *args, owner=None, course=None, **kwargs):
         super().__init__(*args, **kwargs)
         qs = User.objects.filter(role=User.Role.STUDENT, is_active=True).select_related("class_group")
-        if owner is not None and not (owner.is_superuser or owner.role == User.Role.ADMIN):
+        if course is not None:
+            qs = qs.filter(course_enrollments__course=course, course_enrollments__is_active=True)
+        elif owner is not None and not (owner.is_superuser or owner.role == User.Role.ADMIN):
             qs = qs.filter(class_group__owner=owner)
         self.fields["students"].queryset = qs

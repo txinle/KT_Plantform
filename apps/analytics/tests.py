@@ -5,7 +5,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from openpyxl import load_workbook
 
-from apps.accounts.models import ClassGroup, User
+from apps.accounts.models import ClassGroup, Course, CourseTeacher, User
 from apps.assessment.models import Attempt, ExperimentSession, QuestionVisitEvent, StudentQuestionAssignment
 from apps.audit.models import AuditLog
 from apps.experiments.models import Experiment, ExperimentVersion, QuestionSnapshot
@@ -20,10 +20,29 @@ class ExportPermissionTests(TestCase):
         self.client.force_login(other)
         self.assertEqual(self.client.get(reverse("analytics:kt_export", args=[experiment.id])).status_code, 404)
 
+    def test_course_collaborator_can_export_course_experiment(self):
+        owner = User.objects.create_user(username="course-owner", role=User.Role.TEACHER)
+        collaborator = User.objects.create_user(username="collaborator", role=User.Role.TEACHER)
+        course = Course.objects.create(owner=owner, name="课程", code="C1", term="2026春")
+        CourseTeacher.objects.create(course=course, teacher=collaborator)
+        bank = QuestionBank.objects.create(course=course, created_by=owner, name="bank")
+        experiment = Experiment.objects.create(
+            course=course,
+            created_by=owner,
+            question_bank=bank,
+            name="exp",
+        )
+        self.client.force_login(collaborator)
+
+        response = self.client.get(reverse("analytics:kt_export", args=[experiment.id]))
+
+        self.assertEqual(response.status_code, 200)
+
 
 class IdentifiedExportTests(TestCase):
     all_fields = [
         "student_number", "student_name", "class_name",
+        "course_name", "course_code", "course_term",
         "experiment_id", "experiment_version", "session_id", "session_status",
         "question_code", "question_type", "primary_kc", "all_kcs",
         "teacher_difficulty", "empirical_difficulty",
@@ -58,6 +77,9 @@ class IdentifiedExportTests(TestCase):
             experiment=self.experiment,
             version_number=2,
             published_by=self.teacher,
+            course_name_snapshot="认知诊断导论",
+            course_code_snapshot="CD101",
+            course_term_snapshot="2026春",
         )
         snapshot = QuestionSnapshot.objects.create(
             version=version,
@@ -128,6 +150,18 @@ class IdentifiedExportTests(TestCase):
             {"fields": ["student_number", "student_name", "final_answer"], "row_count": 1},
         )
 
+    def test_course_fields_come_from_publish_snapshot(self):
+        response = self.client.post(
+            self.export_url,
+            {"fields": ["course_term", "course_name", "course_code"]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        workbook = load_workbook(BytesIO(response.content), data_only=False)
+        rows = list(workbook["KT数据"].iter_rows(values_only=True))
+        self.assertEqual(rows[0], ("课程名称", "课程代码", "学期"))
+        self.assertEqual(rows[1], ("认知诊断导论", "CD101", "2026春"))
+
     def test_rejects_empty_or_unknown_fields_and_requires_post(self):
         self.assertEqual(self.client.get(self.export_url).status_code, 405)
         self.assertEqual(self.client.post(self.export_url, {}).status_code, 400)
@@ -181,11 +215,11 @@ class IdentifiedExportTests(TestCase):
         self.assertEqual(response.status_code, 200)
         workbook = load_workbook(BytesIO(response.content), read_only=True, data_only=False)
         rows = list(workbook["KT数据"].iter_rows(values_only=True))
-        self.assertEqual(len(rows[0]), 26)
+        self.assertEqual(len(rows[0]), 29)
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0][:4], ("学号", "姓名", "班级", "实验 ID"))
+        self.assertEqual(rows[0][:7], ("学号", "姓名", "班级", "课程名称", "课程代码", "学期", "实验 ID"))
         self.assertEqual(rows[1][:3], ("00123", "林晓雨", "2026 中文实验班"))
-        self.assertEqual(rows[1][6], ExperimentSession.Status.COMPLETED)
+        self.assertEqual(rows[1][9], ExperimentSession.Status.COMPLETED)
         self.assertEqual(rows[1][-1], Attempt.Status.SUBMITTED)
 
     def test_exports_large_attempt_set_without_changing_row_grain(self):

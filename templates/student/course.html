@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block title %}{{ course.name }} | 我的课程{% endblock %}
+{% block content %}
+<header class="page-header student-page-header"><div class="page-header-copy"><p class="page-kicker"><a href="{% url 'assessment:dashboard' %}">我的课程</a></p><h1 class="page-title">{{ course.name }}</h1><p class="page-subtitle"><span class="mono">{{ course.code }} · {{ course.term }}</span><span aria-hidden="true"> / </span>{{ enrollment.class_group.name }}</p></div></header>
+{% if course.status == 'archived' %}<div class="notice-panel mb-4"><strong>课程已归档。</strong>你仍可查看历史完成状态，但不能开始新的实验。</div>{% endif %}
+<div class="student-experiment-list">
+{% for card in experiment_cards %}
+  <article class="student-experiment">
+    <div class="student-experiment-main"><div class="d-flex flex-wrap justify-content-between gap-3"><div><h2>{{ card.experiment.name }}</h2><p>{{ card.experiment.description|default:'未填写实验说明' }}</p></div><span class="status-badge {% if card.session and card.session.status == 'completed' %}status-success{% elif card.session and card.session.status == 'in_progress' %}status-info{% elif card.experiment.status == 'published' %}status-warning{% else %}status-neutral{% endif %}">{% if card.session %}{{ card.session.get_status_display }}{% else %}{{ card.experiment.get_status_display }}{% endif %}</span></div><dl class="student-experiment-details"><div><dt>题目</dt><dd class="numeric">{{ card.experiment.questions.count }} 题</dd></div><div><dt>时间</dt><dd>{{ card.experiment.get_time_mode_display }}</dd></div><div><dt>反馈</dt><dd>{{ card.experiment.get_feedback_mode_display }}</dd></div><div><dt>续答</dt><dd>{{ card.experiment.get_resume_mode_display }}</dd></div></dl></div>
+    <div class="student-experiment-action">{% if course.status == 'active' %}<a class="btn {% if card.session and card.session.status == 'completed' %}btn-outline-primary{% else %}btn-primary{% endif %}" href="{% url 'assessment:start' card.experiment.pk %}">{% if card.session and card.session.status == 'in_progress' %}继续作答{% elif card.session %}查看完成状态{% else %}开始实验{% endif %}</a>{% else %}<span class="text-muted">课程已归档</span>{% endif %}</div>
+  </article>
+{% empty %}<div class="surface"><div class="empty-state"><h2 class="empty-state-title">当前课程没有分配给你的实验</h2><p>教师发布并分配实验后会显示在这里。</p></div></div>{% endfor %}
+</div>
+{% endblock %}

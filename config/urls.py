@@ -11,6 +11,7 @@ urlpatterns = [
     path("logout/", LogoutView.as_view(), name="logout"),
     path("admin/", admin.site.urls),
     path("teacher/", include("apps.question_bank.urls")),
+    path("teacher/courses/", include("apps.accounts.course_urls")),
     path("teacher/accounts/", include("apps.accounts.urls")),
     path("teacher/experiments/", include("apps.experiments.urls")),
     path("student/", include("apps.assessment.urls")),

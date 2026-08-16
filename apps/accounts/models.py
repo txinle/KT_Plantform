@@ -1,16 +1,96 @@
 from django.contrib.auth.models import AbstractUser
+from django.core.exceptions import ValidationError
 from django.db import models
+
+
+class Course(models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = "active", "进行中"
+        ARCHIVED = "archived", "已归档"
+
+    name = models.CharField("课程名称", max_length=160)
+    code = models.CharField("课程代码", max_length=64)
+    term = models.CharField("学期", max_length=64)
+    description = models.TextField("课程说明", blank=True)
+    owner = models.ForeignKey(
+        "User",
+        on_delete=models.PROTECT,
+        related_name="owned_courses",
+        limit_choices_to={"role": "teacher"},
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-term", "code", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner", "code", "term"],
+                name="unique_course_owner_code_term",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.code} · {self.name} · {self.term}"
+
+    def can_manage(self, user):
+        if not getattr(user, "is_authenticated", False):
+            return False
+        if user.is_superuser or user.role == User.Role.ADMIN or self.owner_id == user.id:
+            return True
+        return self.teacher_links.filter(teacher=user).exists()
+
+
+class CourseTeacher(models.Model):
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="teacher_links")
+    teacher = models.ForeignKey("User", on_delete=models.PROTECT, related_name="course_links")
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["course", "teacher"],
+                name="unique_course_teacher",
+            )
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.teacher_id and self.teacher.role != User.Role.TEACHER:
+            raise ValidationError({"teacher": "课程协作成员必须是教师账号。"})
+        if self.course_id and self.teacher_id == self.course.owner_id:
+            raise ValidationError({"teacher": "课程负责人无需重复添加为协作教师。"})
+
 
 class ClassGroup(models.Model):
     name = models.CharField("班级", max_length=120)
     academic_year = models.CharField("学年", max_length=32, blank=True)
     owner = models.ForeignKey("User", null=True, blank=True, on_delete=models.SET_NULL, related_name="owned_classes")
+    course = models.ForeignKey(
+        Course,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="classes",
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["academic_year", "name"]
-        constraints = [models.UniqueConstraint(fields=["name", "academic_year"], name="unique_class_year")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["course", "name", "academic_year"],
+                condition=models.Q(course__isnull=False),
+                name="unique_course_class_year",
+            ),
+            models.UniqueConstraint(
+                fields=["name", "academic_year"],
+                condition=models.Q(course__isnull=True),
+                name="unique_legacy_class_year",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.academic_year} {self.name}".strip()
@@ -38,3 +118,37 @@ class User(AbstractUser):
         if self.role == self.Role.ADMIN:
             self.is_staff = True
         super().save(*args, **kwargs)
+
+
+class CourseEnrollment(models.Model):
+    course = models.ForeignKey(Course, on_delete=models.PROTECT, related_name="enrollments")
+    student = models.ForeignKey(User, on_delete=models.PROTECT, related_name="course_enrollments")
+    class_group = models.ForeignKey(
+        ClassGroup,
+        on_delete=models.PROTECT,
+        related_name="enrollments",
+    )
+    is_active = models.BooleanField(default=True)
+    enrolled_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["class_group__name", "student__student_number"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["course", "student"],
+                name="unique_course_student_enrollment",
+            )
+        ]
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.student_id and self.student.role != User.Role.STUDENT:
+            errors["student"] = "选课对象必须是学生账号。"
+        if self.course_id and self.class_group_id and self.class_group.course_id != self.course_id:
+            errors["class_group"] = "班级必须属于同一课程。"
+        if errors:
+            raise ValidationError(errors)
+
+    def __str__(self):
+        return f"{self.course} / {self.class_group} / {self.student.shown_name}"

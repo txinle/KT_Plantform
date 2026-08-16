@@ -40,17 +40,21 @@
       <nav class="teacher-nav" aria-label="教师工作区">
         <div class="container-fluid app-shell teacher-nav-inner">
           <button class="teacher-nav-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#teacher-navigation" aria-controls="teacher-navigation" aria-expanded="false">
-            <span>工作区导航</span>
+            <span>{% if current_course %}{{ current_course.name }} · {{ current_course.code }} · {{ current_course.term }}{% else %}工作区导航{% endif %}</span>
             <span aria-hidden="true">菜单</span>
           </button>
           <div class="collapse teacher-nav-collapse" id="teacher-navigation">
             <div class="nav nav-underline">
-              <a class="nav-link {% if request.resolver_match.namespace == 'question_bank' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}" {% if request.resolver_match.namespace == 'question_bank' and request.resolver_match.url_name == 'dashboard' %}aria-current="page"{% endif %} href="{% url 'question_bank:dashboard' %}">概览</a>
-              <a class="nav-link {% if request.resolver_match.namespace == 'question_bank' and request.resolver_match.url_name != 'dashboard' and request.resolver_match.url_name != 'concept_list' %}active{% endif %}" {% if request.resolver_match.namespace == 'question_bank' and request.resolver_match.url_name != 'dashboard' and request.resolver_match.url_name != 'concept_list' %}aria-current="page"{% endif %} href="{% url 'question_bank:bank_list' %}">题库</a>
-              <a class="nav-link {% if request.resolver_match.namespace == 'question_bank' and request.resolver_match.url_name == 'concept_list' %}active{% endif %}" {% if request.resolver_match.namespace == 'question_bank' and request.resolver_match.url_name == 'concept_list' %}aria-current="page"{% endif %} href="{% url 'question_bank:concept_list' %}">KC 库</a>
-              <a class="nav-link {% if request.resolver_match.namespace == 'accounts' and request.resolver_match.url_name == 'class_list' %}active{% endif %}" {% if request.resolver_match.namespace == 'accounts' and request.resolver_match.url_name == 'class_list' %}aria-current="page"{% endif %} href="{% url 'accounts:class_list' %}">班级</a>
-              <a class="nav-link {% if request.resolver_match.namespace == 'accounts' and request.resolver_match.url_name != 'class_list' %}active{% endif %}" {% if request.resolver_match.namespace == 'accounts' and request.resolver_match.url_name != 'class_list' %}aria-current="page"{% endif %} href="{% url 'accounts:student_list' %}">学生</a>
-              <a class="nav-link {% if request.resolver_match.namespace == 'experiments' %}active{% endif %}" {% if request.resolver_match.namespace == 'experiments' %}aria-current="page"{% endif %} href="{% url 'experiments:list' %}">实验</a>
+              <a class="nav-link" href="{% url 'courses:list' %}">我的课程</a>
+              {% if current_course %}
+                <span class="nav-link disabled" aria-label="当前课程">{{ current_course.name }} · <span class="mono">{{ current_course.code }} · {{ current_course.term }}</span></span>
+                <a class="nav-link" href="{% url 'courses:detail' current_course.pk %}">概览</a>
+                <a class="nav-link" href="{% url 'courses:banks' current_course.pk %}">题库</a>
+                <a class="nav-link" href="{% url 'courses:classes' current_course.pk %}">班级</a>
+                <a class="nav-link" href="{% url 'courses:experiments' current_course.pk %}">实验</a>
+                <a class="nav-link" href="{% url 'courses:data' current_course.pk %}">数据</a>
+                {% if user.pk == current_course.owner_id %}<a class="nav-link" href="{% url 'courses:settings' current_course.pk %}">设置</a>{% endif %}
+              {% endif %}
             </div>
           </div>
         </div>

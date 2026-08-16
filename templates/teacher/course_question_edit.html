@@ -1,0 +1,4 @@
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:detail' course.pk %}">{{ course.name }}</a></li><li><a href="{% url 'courses:bank_detail' course.pk bank.pk %}">{{ bank.name }}</a></li><li class="breadcrumb-item-current" aria-current="page">编辑题目</li>{% endblock %}
+{% block title %}编辑题目 | {{ course.name }}{% endblock %}
+{% block content %}<header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">编辑题目 {{ question.sequence }}</h1></div></header><section class="card"><div class="card-body"><form method="post">{% csrf_token %}{% include 'components/error_summary.html' with form=form %}{% for field in form %}{% include 'components/form_field.html' with field=field %}{% endfor %}<button class="btn btn-primary" type="submit">保存题目</button></form></div></section>{% endblock %}

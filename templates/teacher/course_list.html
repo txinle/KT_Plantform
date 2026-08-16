@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li class="breadcrumb-item-current" aria-current="page">我的课程</li>{% endblock %}
+{% block title %}我的课程 | KT Data Lab{% endblock %}
+{% block content %}
+<header class="page-header">
+  <div class="page-header-copy"><p class="page-kicker">教师工作区</p><h1 class="page-title">我的课程</h1><p class="page-subtitle">先进入课程，再管理课程内的题库、班级、实验与研究数据。</p></div>
+  <div class="page-actions"><a class="btn btn-primary" href="{% url 'courses:create' %}">新建课程</a></div>
+</header>
+<div class="table-shell"><table class="table"><thead><tr><th>课程</th><th>负责人</th><th>班级</th><th>题库</th><th>实验</th><th>状态</th><th><span class="visually-hidden">操作</span></th></tr></thead><tbody>
+{% for course in courses %}<tr><td><a class="cell-title" href="{% url 'courses:detail' course.pk %}">{{ course.name }}</a><div class="cell-meta mono">{{ course.code }} · {{ course.term }}</div></td><td>{{ course.owner.shown_name }}</td><td class="numeric">{{ course.class_count }}</td><td class="numeric">{{ course.bank_count }}</td><td class="numeric">{{ course.experiment_count }}</td><td><span class="status-badge {% if course.status == 'active' %}status-success{% else %}status-neutral{% endif %}">{{ course.get_status_display }}</span></td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'courses:detail' course.pk %}">进入课程</a></td></tr>
+{% empty %}<tr><td colspan="7"><div class="empty-state"><h2 class="empty-state-title">尚未创建课程</h2><p>创建课程后，再添加班级、题库和实验。</p><a class="btn btn-primary" href="{% url 'courses:create' %}">创建第一门课程</a></div></td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

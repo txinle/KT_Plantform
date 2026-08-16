@@ -4,6 +4,14 @@ import json
 FIELD_GROUPS = (
     ("身份信息", (("student_number", "学号"), ("student_name", "姓名"), ("class_name", "班级"))),
     (
+        "课程快照",
+        (
+            ("course_name", "课程名称"),
+            ("course_code", "课程代码"),
+            ("course_term", "学期"),
+        ),
+    ),
+    (
         "实验与会话",
         (
             ("experiment_id", "实验 ID"),
@@ -70,10 +78,14 @@ def field_values(attempt):
     snapshot = attempt.assignment.snapshot
     session = attempt.session
     student = session.student
+    version = session.version
     return {
         "student_number": student.student_number,
         "student_name": student.shown_name,
         "class_name": session.class_snapshot_name,
+        "course_name": version.course_name_snapshot,
+        "course_code": version.course_code_snapshot,
+        "course_term": version.course_term_snapshot,
         "experiment_id": session.version.experiment_id,
         "experiment_version": session.version.version_number,
         "session_id": session.pk,

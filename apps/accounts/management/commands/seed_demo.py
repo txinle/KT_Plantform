@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
-from apps.accounts.models import ClassGroup, User
+from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.experiments.models import Experiment, ExperimentQuestion, ExperimentStudent
 from apps.experiments.services import publish_experiment
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
@@ -13,16 +13,36 @@ class Command(BaseCommand):
         admin.set_password("admin123"); admin.is_staff = True; admin.is_superuser = True; admin.save()
         teacher, _ = User.objects.get_or_create(username="teacher", defaults={"role": User.Role.TEACHER, "display_name": "演示教师"})
         teacher.set_password("teacher123"); teacher.save()
-        cls, _ = ClassGroup.objects.get_or_create(name="认知追踪实验班", academic_year="2026", defaults={"owner": teacher})
+        course, _ = Course.objects.get_or_create(
+            owner=teacher,
+            code="KT101",
+            term="2026春",
+            defaults={"name": "知识追踪研究方法", "description": "课程中心式演示工作区"},
+        )
+        cls, _ = ClassGroup.objects.get_or_create(
+            course=course,
+            name="认知追踪实验班",
+            academic_year="2026",
+            defaults={"owner": teacher},
+        )
         students = []
         for index in range(1, 4):
             number = f"S{index:03d}"
-            student, _ = User.objects.get_or_create(username=number, defaults={"role": User.Role.STUDENT, "student_number": number, "display_name": f"学生{index}", "class_group": cls})
-            student.role = User.Role.STUDENT; student.student_number = number; student.class_group = cls; student.set_password("student123"); student.save(); students.append(student)
-        bank, created = QuestionBank.objects.get_or_create(owner=teacher, name="演示题库", defaults={"description": "用于验证单题导航与交互数据采集"})
+            student, _ = User.objects.get_or_create(username=number, defaults={"role": User.Role.STUDENT, "student_number": number, "display_name": f"学生{index}"})
+            student.role = User.Role.STUDENT; student.student_number = number; student.set_password("student123"); student.save(); students.append(student)
+            CourseEnrollment.objects.update_or_create(
+                course=course,
+                student=student,
+                defaults={"class_group": cls, "is_active": True},
+            )
+        bank, created = QuestionBank.objects.get_or_create(
+            course=course,
+            name="演示题库",
+            defaults={"created_by": teacher, "owner": teacher, "description": "用于验证单题导航与交互数据采集"},
+        )
         if created or not bank.questions.exists():
-            kc_math, _ = Concept.objects.get_or_create(owner=teacher, scope=Concept.Scope.PRIVATE, normalized_name="基础运算", defaults={"name": "基础运算"})
-            kc_prime, _ = Concept.objects.get_or_create(owner=teacher, scope=Concept.Scope.PRIVATE, normalized_name="质数", defaults={"name": "质数"})
+            kc_math, _ = Concept.objects.get_or_create(course=course, normalized_name="基础运算", defaults={"name": "基础运算"})
+            kc_prime, _ = Concept.objects.get_or_create(course=course, normalized_name="质数", defaults={"name": "质数"})
             data = [
                 (1, Question.Type.SINGLE, "2 + 2 等于多少？", {"A":"3","B":"4","C":"5","D":"6"}, "B", kc_math, "0.100"),
                 (2, Question.Type.MULTIPLE, "下列哪些数是质数？", {"A":"2","B":"4","C":"5","D":"6"}, ["A","C"], kc_prime, "0.350"),
@@ -33,7 +53,11 @@ class Command(BaseCommand):
                 q = Question.objects.create(bank=bank, sequence=seq, question_type=qtype, text=text, correct_answer=answer, teacher_difficulty=difficulty, accepted_answers=["认知追踪"] if seq==4 else [], absolute_tolerance="0.01" if seq==3 else None)
                 for order, (key, value) in enumerate(options.items(), start=1): QuestionOption.objects.create(question=q, key=key, text=value, display_order=order)
                 QuestionConcept.objects.create(question=q, concept=kc, is_primary=True)
-        experiment, created = Experiment.objects.get_or_create(owner=teacher, name="演示交互数据采集", defaults={"question_bank": bank, "description": "自由导航、草稿保存、每题提交锁定", "ordering_mode": Experiment.Ordering.STRATIFIED, "feedback_mode": Experiment.Feedback.CORRECTNESS, "resume_mode": Experiment.ResumeMode.RESUMABLE})
+        experiment, created = Experiment.objects.get_or_create(
+            course=course,
+            name="演示交互数据采集",
+            defaults={"created_by": teacher, "owner": teacher, "question_bank": bank, "description": "自由导航、草稿保存、每题提交锁定", "ordering_mode": Experiment.Ordering.STRATIFIED, "feedback_mode": Experiment.Feedback.CORRECTNESS, "resume_mode": Experiment.ResumeMode.RESUMABLE},
+        )
         if created:
             for idx, q in enumerate(bank.questions.all(), start=1): ExperimentQuestion.objects.create(experiment=experiment, question=q, display_order=idx)
             for s in students: ExperimentStudent.objects.create(experiment=experiment, student=s, class_snapshot_name=str(cls))

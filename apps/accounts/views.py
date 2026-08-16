@@ -34,7 +34,7 @@ def home(request):
     if request.user.is_superuser or request.user.role == User.Role.ADMIN:
         return redirect("admin:index")
     if request.user.role == User.Role.TEACHER:
-        return redirect("question_bank:dashboard")
+        return redirect("courses:list")
     return redirect("assessment:dashboard")
 
 

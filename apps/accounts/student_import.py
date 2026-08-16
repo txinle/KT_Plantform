@@ -22,7 +22,7 @@ class ParsedStudent:
     class_name: str
 
 
-def parse_student_workbook(uploaded_file, classes):
+def parse_student_workbook(uploaded_file, classes, *, allow_existing=False):
     if not uploaded_file.name.lower().endswith(".xlsx"):
         raise StudentImportError("仅支持 .xlsx 文件")
     try:
@@ -61,6 +61,9 @@ def parse_student_workbook(uploaded_file, classes):
         parsed.append(ParsedStudent(student_number, display_name, class_group.pk, class_name))
     if not parsed:
         raise StudentImportError("文件中没有可导入的学生")
+    if allow_existing:
+        return parsed
+
     numbers = [item.student_number for item in parsed]
     existing_rows = User.objects.filter(
         Q(student_number__in=numbers) | Q(username__in=numbers)

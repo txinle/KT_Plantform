@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 class Experiment(models.Model):
@@ -24,7 +25,27 @@ class Experiment(models.Model):
         RESUMABLE = "resumable", "允许断点续答"
     name = models.CharField(max_length=180)
     description = models.TextField(blank=True)
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="experiments")
+    course = models.ForeignKey(
+        "accounts.Course",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="experiments",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_experiments",
+    )
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="experiments",
+    )
     question_bank = models.ForeignKey("question_bank.QuestionBank", on_delete=models.PROTECT, related_name="experiments")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
     ordering_mode = models.CharField(max_length=24, choices=Ordering.choices, default=Ordering.FIXED)
@@ -39,6 +60,18 @@ class Experiment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     class Meta: ordering = ["-updated_at"]
     def __str__(self): return self.name
+
+    def clean(self):
+        super().clean()
+        if self.course_id and self.question_bank_id and self.question_bank.course_id != self.course_id:
+            raise ValidationError({"question_bank": "实验只能使用同一课程的题库。"})
+
+    def save(self, *args, **kwargs):
+        if self.created_by_id is None and self.owner_id is not None:
+            self.created_by_id = self.owner_id
+        if self.owner_id is None and self.created_by_id is not None:
+            self.owner_id = self.created_by_id
+        super().save(*args, **kwargs)
 
 class ExperimentQuestion(models.Model):
     experiment = models.ForeignKey(Experiment, on_delete=models.CASCADE, related_name="question_links")
@@ -59,10 +92,26 @@ class ExperimentStudent(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=["experiment", "student"], name="unique_experiment_student")]
 
+    def clean(self):
+        super().clean()
+        if not self.experiment_id or not self.student_id or self.experiment.course_id is None:
+            return
+        from apps.accounts.models import CourseEnrollment
+
+        if not CourseEnrollment.objects.filter(
+            course_id=self.experiment.course_id,
+            student_id=self.student_id,
+            is_active=True,
+        ).exists():
+            raise ValidationError({"student": "学生必须先加入实验所属课程。"})
+
 class ExperimentVersion(models.Model):
     experiment = models.ForeignKey(Experiment, on_delete=models.PROTECT, related_name="versions")
     version_number = models.PositiveIntegerField()
     configuration = models.JSONField(default=dict)
+    course_name_snapshot = models.CharField(max_length=160, blank=True)
+    course_code_snapshot = models.CharField(max_length=64, blank=True)
+    course_term_snapshot = models.CharField(max_length=64, blank=True)
     published_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     published_at = models.DateTimeField(auto_now_add=True)
     class Meta:

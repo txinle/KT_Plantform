@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:detail' course.pk %}">{{ course.name }}</a></li><li><a href="{% url 'courses:class_detail' course.pk class_group.pk %}">{{ class_group.name }}</a></li><li class="breadcrumb-item-current" aria-current="page">导入学生</li>{% endblock %}
+{% block title %}导入学生 | {{ class_group.name }}{% endblock %}
+{% block content %}
+<header class="page-header">
+  <div class="page-header-copy">
+    <p class="page-kicker mono">{{ course.code }} · {{ course.term }} / {{ class_group.name }}</p>
+    <h1 class="page-title">导入课程学生</h1>
+    <p class="page-subtitle">已有学生账号将被复用且密码保持不变；系统只新增当前课程的选课关系。</p>
+  </div>
+</header>
+<section class="card-panel">
+  <form method="post" enctype="multipart/form-data" class="stack-form">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn btn-primary" type="submit">校验并预览</button>
+  </form>
+</section>
+{% if preview %}
+<section class="card-panel mt-4" aria-labelledby="preview-title">
+  <h2 id="preview-title">导入预览</h2>
+  <div class="table-shell"><table class="table"><thead><tr><th>学号</th><th>姓名</th><th>班级</th></tr></thead><tbody>
+  {% for item in preview %}<tr><td class="mono">{{ item.student_number }}</td><td>{{ item.display_name }}</td><td>{{ item.class_name }}</td></tr>{% endfor %}
+  </tbody></table></div>
+  <form method="post">{% csrf_token %}<input type="hidden" name="action" value="confirm"><button class="btn btn-primary" type="submit">确认建立选课关系</button></form>
+</section>
+{% endif %}
+{% endblock %}

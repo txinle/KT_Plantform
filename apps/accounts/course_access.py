@@ -1,0 +1,30 @@
+from django.core.exceptions import PermissionDenied
+from django.db.models import Q
+from django.shortcuts import get_object_or_404
+
+from .models import Course, User
+
+
+def accessible_courses(user):
+    queryset = Course.objects.select_related("owner")
+    if user.is_superuser or user.role == User.Role.ADMIN:
+        return queryset
+    if user.role != User.Role.TEACHER:
+        return queryset.none()
+    return queryset.filter(Q(owner=user) | Q(teacher_links__teacher=user)).distinct()
+
+
+def get_accessible_course(user, course_pk):
+    return get_object_or_404(accessible_courses(user), pk=course_pk)
+
+
+def require_course_owner(course, user):
+    if user.is_superuser or user.role == User.Role.ADMIN or course.owner_id == user.id:
+        return course
+    raise PermissionDenied
+
+
+def require_writable_course(course):
+    if course.status != Course.Status.ACTIVE:
+        raise PermissionDenied
+    return course
