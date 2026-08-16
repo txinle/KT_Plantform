@@ -1,0 +1,6 @@
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:detail' course.pk %}">{{ course.name }}</a></li><li class="breadcrumb-item-current" aria-current="page">设置</li>{% endblock %}
+{% block title %}{{ course.name }}设置 | KT Data Lab{% endblock %}
+{% block content %}<header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">课程设置</h1><p class="page-subtitle">负责人可维护课程信息、协作教师和归档状态。</p></div></header>
+<div class="row g-4"><div class="col-xl-8"><section class="card"><div class="card-body"><form method="post" novalidate>{% csrf_token %}{% include 'components/error_summary.html' with form=form %}{% for field in form %}{% include 'components/form_field.html' with field=field %}{% endfor %}<button class="btn btn-primary" type="submit">保存设置</button></form></div></section></div>
+<div class="col-xl-4"><section class="card"><div class="card-header">课程归档</div><div class="card-body"><p>归档后课程只读，学生不能开始新的实验会话。</p>{% if course.status == 'active' %}<form method="post" action="{% url 'courses:archive' course.pk %}">{% csrf_token %}<button class="btn btn-danger" type="submit">归档课程</button></form>{% else %}<span class="status-badge status-neutral">已归档</span>{% endif %}</div></section></div></div>{% endblock %}

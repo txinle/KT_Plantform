@@ -7,6 +7,7 @@ from django.urls import reverse
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_POST
 from apps.accounts.permissions import role_required
+from apps.accounts.models import Course, CourseEnrollment
 from apps.experiments.models import Experiment
 from .models import Attempt, ExperimentSession, StudentQuestionAssignment
 from .services import finish_session, get_or_create_session, mark_skipped, record_visit, save_draft, submit_attempt
@@ -38,15 +39,43 @@ def _next_assignment(session, current_id=None):
 
 @role_required("student")
 def dashboard(request):
-    experiments = list(Experiment.objects.filter(student_links__student=request.user).distinct())
-    sessions = {s.version.experiment_id: s for s in request.user.assessment_sessions.select_related("version__experiment")}
+    enrollments = CourseEnrollment.objects.filter(
+        student=request.user,
+        is_active=True,
+    ).select_related("course", "class_group")
+    return render(request, "student/dashboard.html", {"course_enrollments": enrollments})
+
+
+@role_required("student")
+def course_dashboard(request, course_id):
+    enrollment = get_object_or_404(
+        CourseEnrollment.objects.select_related("course", "class_group"),
+        course_id=course_id,
+        student=request.user,
+        is_active=True,
+    )
+    experiments = list(
+        Experiment.objects.filter(
+            course=enrollment.course,
+            student_links__student=request.user,
+        ).distinct()
+    )
+    sessions = {
+        session.version.experiment_id: session
+        for session in request.user.assessment_sessions.select_related("version__experiment")
+        if session.version.experiment.course_id == enrollment.course_id
+    }
     cards = [{"experiment": experiment, "session": sessions.get(experiment.id)} for experiment in experiments]
-    return render(request, "student/dashboard.html", {"experiment_cards": cards})
+    return render(
+        request,
+        "student/course.html",
+        {"enrollment": enrollment, "course": enrollment.course, "experiment_cards": cards},
+    )
 
 
 @role_required("student")
 def start_experiment(request, experiment_id):
-    experiment = get_object_or_404(Experiment, pk=experiment_id)
+    experiment = get_object_or_404(Experiment.objects.select_related("course"), pk=experiment_id)
     try:
         session = get_or_create_session(experiment, request.user)
     except ValidationError as exc:

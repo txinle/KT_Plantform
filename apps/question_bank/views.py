@@ -3,9 +3,11 @@ from django.conf import settings
 from django.contrib import messages
 from django.http import FileResponse, Http404
 from django.db.models import Count
+from django.db.models import Q
 from django.views.decorators.http import require_GET, require_POST
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.accounts.permissions import role_required
+from apps.accounts.course_access import accessible_courses
 from apps.audit.services import log_action
 from .forms import QuestionBankForm, QuestionBankVisibilityForm, QuestionEditForm, UploadForm
 from .models import Concept, Question, QuestionBank
@@ -15,7 +17,11 @@ from .services.import_service import copy_shared_bank, import_kc_mappings, impor
 
 
 def _owned_bank(request, pk):
-    qs = QuestionBank.objects.all() if request.user.is_superuser else QuestionBank.objects.filter(owner=request.user)
+    qs = (
+        QuestionBank.objects.all()
+        if request.user.is_superuser or request.user.role == "admin"
+        else QuestionBank.objects.filter(Q(owner=request.user) | Q(course__in=accessible_courses(request.user)))
+    )
     return get_object_or_404(qs, pk=pk)
 
 
@@ -44,6 +50,8 @@ def kc_import_template(request):
 
 @role_required("teacher", "admin")
 def dashboard(request):
+    if accessible_courses(request.user).exists():
+        return redirect("courses:list")
     from apps.experiments.models import Experiment
     banks = QuestionBank.objects.filter(owner=request.user)
     recent_experiments = Experiment.objects.filter(owner=request.user).select_related("question_bank")[:5]
@@ -55,13 +63,25 @@ def dashboard(request):
 
 @role_required("teacher", "admin")
 def bank_list(request):
+    courses = accessible_courses(request.user).filter(status="active")
+    if request.method == "GET" and courses.exists():
+        return redirect("courses:list")
     banks = QuestionBank.objects.filter(owner=request.user).annotate(question_count=Count("questions"))
     shared_banks = QuestionBank.objects.filter(visibility=QuestionBank.Visibility.SHARED).exclude(owner=request.user)
     if request.method == "POST":
         form = QuestionBankForm(request.POST)
         if form.is_valid():
-            bank = form.save(commit=False); bank.owner = request.user; bank.save()
+            bank = form.save(commit=False)
+            if courses.count() == 1:
+                bank.course = courses.get()
+                bank.created_by = request.user
+            elif courses.count() > 1:
+                messages.error(request, "请先进入目标课程，再创建题库。")
+                return redirect("courses:list")
+            bank.owner = request.user; bank.save()
             messages.success(request, "题库已创建")
+            if bank.course_id:
+                return redirect("courses:bank_detail", bank.course_id, bank.pk)
             return redirect("question_bank:bank_detail", pk=bank.pk)
     else: form = QuestionBankForm()
     return render(request, "teacher/bank_list.html", {
@@ -74,6 +94,8 @@ def bank_list(request):
 @role_required("teacher", "admin")
 def bank_detail(request, pk):
     bank = _owned_bank(request, pk)
+    if bank.course_id:
+        return redirect("courses:bank_detail", bank.course_id, bank.pk)
     return render(request, "teacher/bank_detail.html", {"bank": bank, "questions": bank.questions.prefetch_related("options", "concept_links__concept")})
 
 
@@ -81,6 +103,9 @@ def bank_detail(request, pk):
 @require_POST
 def bank_visibility_update(request, pk):
     bank = _owned_bank(request, pk)
+    if bank.course_id:
+        from . import course_views
+        return course_views.bank_visibility_update(request, bank.course_id, bank.pk)
     form = QuestionBankVisibilityForm(request.POST, instance=bank)
     if form.is_valid():
         form.save()
@@ -92,6 +117,9 @@ def bank_visibility_update(request, pk):
 @role_required("teacher", "admin")
 def question_edit(request, bank_pk, question_pk):
     bank = _owned_bank(request, bank_pk)
+    if bank.course_id:
+        from . import course_views
+        return course_views.question_edit(request, bank.course_id, bank.pk, question_pk)
     question = get_object_or_404(bank.questions, pk=question_pk)
     form = QuestionEditForm(request.POST or None, instance=question)
     if request.method == "POST" and form.is_valid():
@@ -102,6 +130,9 @@ def question_edit(request, bank_pk, question_pk):
 @role_required("teacher", "admin")
 def question_import(request, pk):
     bank = _owned_bank(request, pk)
+    if bank.course_id:
+        from . import course_views
+        return course_views.question_import(request, bank.course_id, bank.pk)
     preview = None
     upload_name = ""
     if request.method == "POST" and request.POST.get("action") == "confirm":
@@ -126,6 +157,9 @@ def question_import(request, pk):
 @role_required("teacher", "admin")
 def kc_import(request, pk):
     bank = _owned_bank(request, pk)
+    if bank.course_id:
+        from . import course_views
+        return course_views.kc_import(request, bank.course_id, bank.pk)
     preview = None
     upload_name = ""
     if request.method == "POST" and request.POST.get("action") == "confirm":
@@ -149,6 +183,8 @@ def kc_import(request, pk):
 
 @role_required("teacher", "admin")
 def concept_list(request):
+    if accessible_courses(request.user).exists():
+        return redirect("courses:list")
     if request.user.is_superuser or request.user.role == "admin":
         concepts = Concept.objects.all()
     else:
@@ -160,8 +196,15 @@ def concept_list(request):
 def copy_bank(request, pk):
     source = get_object_or_404(QuestionBank, pk=pk, visibility=QuestionBank.Visibility.SHARED)
     if request.method == "POST":
-        bank = copy_shared_bank(source, request.user)
+        targets = accessible_courses(request.user).filter(status="active")
+        if targets.count() > 1:
+            messages.error(request, "请先进入目标课程，再复制共享题库。")
+            return redirect("courses:list")
+        target = targets.first()
+        bank = copy_shared_bank(source, target or request.user, request.user if target else None)
         log_action(request, "question_bank.copy", bank, {"source_bank_id": source.pk})
         messages.success(request, "共享题库已复制为你的私有副本")
+        if bank.course_id:
+            return redirect("courses:bank_detail", bank.course_id, bank.pk)
         return redirect("question_bank:bank_detail", pk=bank.pk)
     return redirect("question_bank:bank_list")

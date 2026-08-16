@@ -1,7 +1,45 @@
 from django import forms
 from django.db import transaction
 
-from .models import ClassGroup, User
+from .models import ClassGroup, Course, CourseTeacher, User
+
+
+class CourseForm(forms.ModelForm):
+    class Meta:
+        model = Course
+        fields = ["name", "code", "term", "description"]
+        widgets = {"description": forms.Textarea(attrs={"rows": 3})}
+
+
+class CourseSettingsForm(CourseForm):
+    teachers = forms.ModelMultipleChoiceField(
+        label="协作教师",
+        queryset=User.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["teachers"].queryset = User.objects.filter(
+            role=User.Role.TEACHER,
+            is_active=True,
+        ).exclude(pk=self.instance.owner_id)
+        if not self.is_bound:
+            self.initial["teachers"] = self.instance.teacher_links.values_list(
+                "teacher_id",
+                flat=True,
+            )
+
+    @transaction.atomic
+    def save(self, commit=True):
+        course = super().save(commit=commit)
+        if commit:
+            course.teacher_links.all().delete()
+            CourseTeacher.objects.bulk_create(
+                [CourseTeacher(course=course, teacher=teacher) for teacher in self.cleaned_data["teachers"]]
+            )
+        return course
 
 
 class ClassGroupForm(forms.ModelForm):

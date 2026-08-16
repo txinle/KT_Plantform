@@ -10,12 +10,38 @@ class QuestionBank(models.Model):
         ARCHIVED = "archived", "归档"
     name = models.CharField(max_length=160)
     description = models.TextField(blank=True)
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="question_banks")
+    course = models.ForeignKey(
+        "accounts.Course",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="question_banks",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_question_banks",
+    )
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="question_banks",
+    )
     visibility = models.CharField(max_length=16, choices=Visibility.choices, default=Visibility.PRIVATE)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     class Meta:
         ordering = ["-updated_at"]
+    def save(self, *args, **kwargs):
+        if self.created_by_id is None and self.owner_id is not None:
+            self.created_by_id = self.owner_id
+        if self.owner_id is None and self.created_by_id is not None:
+            self.owner_id = self.created_by_id
+        super().save(*args, **kwargs)
     def __str__(self): return self.name
 
 class Concept(models.Model):
@@ -24,6 +50,13 @@ class Concept(models.Model):
         PRIVATE = "private", "私有"
     name = models.CharField(max_length=160)
     normalized_name = models.CharField(max_length=160)
+    course = models.ForeignKey(
+        "accounts.Course",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="concepts",
+    )
     scope = models.CharField(max_length=16, choices=Scope.choices, default=Scope.PRIVATE)
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.CASCADE, related_name="concepts")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -32,10 +65,19 @@ class Concept(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["normalized_name"], condition=Q(scope="public"), name="unique_public_concept"),
             models.UniqueConstraint(fields=["owner", "normalized_name"], condition=Q(scope="private"), name="unique_private_concept"),
+            models.UniqueConstraint(
+                fields=["course", "normalized_name"],
+                condition=Q(course__isnull=False),
+                name="unique_course_concept",
+            ),
         ]
     def save(self, *args, **kwargs):
         self.normalized_name = " ".join(self.name.strip().casefold().split())
-        if self.scope == self.Scope.PUBLIC: self.owner = None
+        if self.course_id is not None:
+            self.scope = self.Scope.PRIVATE
+            self.owner = None
+        elif self.scope == self.Scope.PUBLIC:
+            self.owner = None
         super().save(*args, **kwargs)
     def __str__(self): return self.name
 

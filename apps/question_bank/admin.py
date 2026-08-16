@@ -8,5 +8,16 @@ class QuestionAdmin(admin.ModelAdmin):
     list_filter = ("question_type", "status", "bank")
     search_fields = ("code", "text")
     inlines = [OptionInline, ConceptInline]
-admin.site.register(QuestionBank)
-admin.site.register(Concept)
+
+@admin.register(QuestionBank)
+class QuestionBankAdmin(admin.ModelAdmin):
+    list_display = ("name", "course", "created_by", "visibility", "updated_at")
+    list_filter = ("course", "visibility")
+    search_fields = ("name", "course__name", "course__code")
+
+
+@admin.register(Concept)
+class ConceptAdmin(admin.ModelAdmin):
+    list_display = ("name", "course", "scope", "owner")
+    list_filter = ("course", "scope")
+    search_fields = ("name", "normalized_name", "course__name")

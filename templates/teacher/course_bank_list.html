@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:detail' course.pk %}">{{ course.name }}</a></li><li class="breadcrumb-item-current" aria-current="page">题库</li>{% endblock %}
+{% block title %}{{ course.name }}题库 | KT Data Lab{% endblock %}
+{% block content %}
+<header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">题库</h1><p class="page-subtitle">管理本课程题目与 KC 映射；跨课程共享题库只允许复制为独立副本。</p></div></header>
+<div class="row g-4">
+  <div class="{% if course.status == 'active' %}col-xl-8{% else %}col-12{% endif %}">
+    <section aria-labelledby="course-banks-title">
+      <div class="section-heading"><h2 class="section-title" id="course-banks-title">课程题库</h2><span class="text-muted numeric">{{ banks.count }} 个</span></div>
+      <div class="table-shell"><table class="table"><thead><tr><th scope="col">题库</th><th scope="col">题目</th><th scope="col">可见性</th><th scope="col">最近更新</th><th scope="col"><span class="visually-hidden">操作</span></th></tr></thead><tbody>
+      {% for bank in banks %}<tr>
+        <td><a class="cell-title" href="{% url 'courses:bank_detail' course.pk bank.pk %}">{{ bank.name }}</a><div class="cell-meta">创建者：{{ bank.created_by.shown_name|default:course.owner.shown_name }}<br>{{ bank.description|default:'未填写说明'|truncatechars:72 }}</div></td>
+        <td class="numeric"><a class="count-link" href="{% url 'courses:bank_detail' course.pk bank.pk %}" aria-label="进入题库 {{ bank.name }}，共 {{ bank.question_count }} 题">{{ bank.question_count }}</a></td>
+        <td>{% if course.status == 'active' %}<details class="visibility-control" data-visibility-control><summary class="visibility-summary"><span class="status-badge {% if bank.visibility == 'shared' %}status-info{% else %}status-neutral{% endif %}">{{ bank.get_visibility_display }}</span></summary><form class="visibility-form" method="post" action="{% url 'courses:bank_visibility' course.pk bank.pk %}">{% csrf_token %}<label class="visually-hidden" for="visibility-{{ bank.pk }}">题库可见性</label><select class="form-select" id="visibility-{{ bank.pk }}" name="visibility" data-auto-submit>{% for value, label in visibility_choices %}<option value="{{ value }}"{% if bank.visibility == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select><noscript><button class="btn btn-sm btn-primary mt-2" type="submit">保存</button></noscript></form></details>{% else %}<span class="status-badge status-neutral">{{ bank.get_visibility_display }}</span>{% endif %}</td>
+        <td class="numeric text-nowrap">{{ bank.updated_at|date:'Y-m-d H:i' }}</td>
+        <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'courses:bank_detail' course.pk bank.pk %}">管理</a></td>
+      </tr>{% empty %}<tr><td colspan="5"><div class="empty-state"><h3 class="empty-state-title">本课程还没有题库</h3><p>{% if course.status == 'active' %}使用右侧表单创建空题库，或从下方复制共享题库。{% else %}归档课程保持只读。{% endif %}</p></div></td></tr>{% endfor %}
+      </tbody></table></div>
+    </section>
+
+    {% if shared_banks and course.status == 'active' %}<section class="mt-5" aria-labelledby="shared-banks-title"><div class="section-heading"><h2 class="section-title" id="shared-banks-title">可复制的共享题库</h2></div><div class="table-shell"><table class="table"><thead><tr><th scope="col">题库</th><th scope="col">来源课程</th><th scope="col">创建者</th><th scope="col">题目</th><th scope="col"><span class="visually-hidden">操作</span></th></tr></thead><tbody>
+      {% for shared in shared_banks %}<tr><td><strong>{{ shared.name }}</strong><div class="cell-meta">{{ shared.description|default:'未填写说明'|truncatechars:72 }}</div></td><td>{{ shared.course }}</td><td>{{ shared.created_by.shown_name|default:shared.owner.shown_name }}</td><td class="numeric">{{ shared.question_count }}</td><td class="text-end"><form method="post" action="{% url 'courses:copy_bank' course.pk shared.pk %}">{% csrf_token %}<button class="btn btn-sm btn-outline-primary" type="submit">复制到本课程</button></form></td></tr>{% endfor %}
+      </tbody></table></div></section>{% endif %}
+  </div>
+  {% if course.status == 'active' %}<aside class="col-xl-4" aria-labelledby="create-bank-title"><div class="card"><div class="card-header" id="create-bank-title">创建题库</div><div class="card-body">{% include 'components/error_summary.html' with form=form %}<form method="post" novalidate>{% csrf_token %}{% include 'components/form_field.html' with field=form.name %}{% include 'components/form_field.html' with field=form.description %}{% include 'components/form_field.html' with field=form.visibility %}<button class="btn btn-primary w-100" type="submit">创建题库</button></form></div></div></aside>{% endif %}
+</div>
+{% endblock %}

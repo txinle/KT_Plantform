@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block breadcrumb_items %}<li><a href="{% url 'question_bank:dashboard' %}">教师工作台</a></li><li><a href="{% url 'question_bank:bank_list' %}">题库</a></li><li><a href="{% url 'question_bank:bank_detail' bank.pk %}">{{ bank.name }}</a></li><li class="breadcrumb-item-current" aria-current="page">导入 KC</li>{% endblock %}
+{% block breadcrumb_items %}{% if course %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:detail' course.pk %}">{{ course.name }}</a></li><li><a href="{% url 'courses:bank_detail' course.pk bank.pk %}">{{ bank.name }}</a></li>{% else %}<li><a href="{% url 'question_bank:dashboard' %}">教师工作台</a></li><li><a href="{% url 'question_bank:bank_list' %}">题库</a></li><li><a href="{% url 'question_bank:bank_detail' bank.pk %}">{{ bank.name }}</a></li>{% endif %}<li class="breadcrumb-item-current" aria-current="page">导入 KC</li>{% endblock %}
 {% block title %}导入 KC 对应 | {{ bank.name }}{% endblock %}
 {% block content %}
 <header class="page-header"><div class="page-header-copy"><h1 class="page-title">导入 KC 对应表</h1><p class="page-subtitle">只更新已有题目的知识点关联，不会创建或修改题干、选项和答案。</p></div></header>

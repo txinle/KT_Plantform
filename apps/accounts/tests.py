@@ -10,10 +10,10 @@ from .models import ClassGroup, User
 from .student_import import parse_student_workbook
 
 class HomeRoutingTests(TestCase):
-    def test_teacher_is_routed_to_teacher_dashboard(self):
+    def test_teacher_is_routed_to_course_workspace(self):
         user = User.objects.create_user(username="t", password="x", role=User.Role.TEACHER)
         self.client.force_login(user)
-        self.assertRedirects(self.client.get(reverse("home")), reverse("question_bank:dashboard"))
+        self.assertRedirects(self.client.get(reverse("home")), reverse("courses:list"))
 
     def test_student_is_routed_to_student_dashboard(self):
         user = User.objects.create_user(username="S1", password="x", role=User.Role.STUDENT, student_number="S1")

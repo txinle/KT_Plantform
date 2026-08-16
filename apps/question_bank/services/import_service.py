@@ -17,8 +17,15 @@ def import_questions(bank, parsed_rows: list[ParsedQuestion]):
         created.append(question)
     return created
 
-def _get_or_create_concept(owner, name):
+def _get_or_create_concept(owner, name, course=None):
     normalized = " ".join(name.strip().casefold().split())
+    if course is not None:
+        concept, _ = Concept.objects.get_or_create(
+            course=course,
+            normalized_name=normalized,
+            defaults={"name": name, "owner": None, "scope": Concept.Scope.PRIVATE},
+        )
+        return concept
     public = Concept.objects.filter(scope=Concept.Scope.PUBLIC, normalized_name=normalized).first()
     if public:
         return public
@@ -43,21 +50,25 @@ def import_kc_mappings(bank, owner, mappings: list[ParsedKCMapping]):
     for mapping in mappings:
         question = bank.questions.get(sequence=mapping.sequence)
         question.concept_links.all().delete()
-        primary = _get_or_create_concept(owner, mapping.primary)
+        primary = _get_or_create_concept(owner, mapping.primary, bank.course)
         QuestionConcept.objects.create(question=question, concept=primary, is_primary=True)
         for name in mapping.secondary:
-            QuestionConcept.objects.get_or_create(question=question, concept=_get_or_create_concept(owner, name), defaults={"is_primary": False})
+            QuestionConcept.objects.get_or_create(question=question, concept=_get_or_create_concept(owner, name, bank.course), defaults={"is_primary": False})
         updated += 1
     return updated
 
 
 @transaction.atomic
-def copy_shared_bank(source_bank, new_owner):
+def copy_shared_bank(source_bank, target_course, actor=None):
     from ..models import QuestionBank
+    if actor is None:
+        actor = target_course
+        target_course = None
     if source_bank.visibility != QuestionBank.Visibility.SHARED:
         raise ValueError("只能复制已共享题库")
     target = QuestionBank.objects.create(
-        owner=new_owner,
+        course=target_course,
+        created_by=actor,
         name=f"{source_bank.name}（副本）",
         description=source_bank.description,
         visibility=QuestionBank.Visibility.PRIVATE,
@@ -76,8 +87,6 @@ def copy_shared_bank(source_bank, new_owner):
             for o in source.options.all()
         ])
         for link in source.concept_links.select_related("concept"):
-            concept = link.concept
-            if concept.scope == Concept.Scope.PRIVATE:
-                concept = _get_or_create_concept(new_owner, concept.name)
+            concept = _get_or_create_concept(actor, link.concept.name, target_course)
             QuestionConcept.objects.create(question=question, concept=concept, is_primary=link.is_primary)
     return target

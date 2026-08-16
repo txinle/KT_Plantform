@@ -1,0 +1,229 @@
+from dataclasses import asdict
+
+from django.contrib import messages
+from django.db.models import Count
+from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST
+
+from apps.accounts.course_access import get_accessible_course, require_writable_course
+from apps.accounts.models import User
+from apps.accounts.permissions import role_required
+from apps.audit.services import log_action
+
+from .forms import QuestionBankForm, QuestionBankVisibilityForm, QuestionEditForm, UploadForm
+from .models import Concept, QuestionBank
+from .services.file_reader import read_uploaded_rows
+from .services.import_parsing import ParsedKCMapping, ParsedQuestion, parse_kc_rows, parse_question_rows
+from .services.import_service import copy_shared_bank, import_kc_mappings, import_questions
+
+
+def _bank(course, pk):
+    return get_object_or_404(course.question_banks, pk=pk)
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def bank_list(request, course_pk):
+    course = get_accessible_course(request.user, course_pk)
+    if request.method == "POST":
+        require_writable_course(course)
+        form = QuestionBankForm(request.POST)
+        if form.is_valid():
+            bank = form.save(commit=False)
+            bank.course = course
+            bank.created_by = request.user
+            bank.save()
+            log_action(request, "question_bank.create", bank, {"course_id": course.pk})
+            messages.success(request, "题库已创建。")
+            return redirect("courses:bank_detail", course.pk, bank.pk)
+    else:
+        form = QuestionBankForm()
+    banks = course.question_banks.annotate(question_count=Count("questions"))
+    shared_banks = (
+        QuestionBank.objects.filter(visibility=QuestionBank.Visibility.SHARED)
+        .exclude(course=course)
+        .select_related("course", "created_by", "owner")
+        .annotate(question_count=Count("questions"))
+    )
+    return render(
+        request,
+        "teacher/course_bank_list.html",
+        {
+            "course": course,
+            "current_course": course,
+            "banks": banks,
+            "shared_banks": shared_banks,
+            "form": form,
+            "visibility_choices": QuestionBank.Visibility.choices,
+        },
+    )
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def bank_detail(request, course_pk, pk):
+    course = get_accessible_course(request.user, course_pk)
+    bank = _bank(course, pk)
+    questions = bank.questions.prefetch_related("options", "concept_links__concept")
+    concepts = course.concepts.order_by("name")
+    return render(
+        request,
+        "teacher/course_bank_detail.html",
+        {
+            "course": course,
+            "current_course": course,
+            "bank": bank,
+            "questions": questions,
+            "concepts": concepts,
+        },
+    )
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def bank_visibility_update(request, course_pk, pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_writable_course(course)
+    bank = _bank(course, pk)
+    form = QuestionBankVisibilityForm(request.POST, instance=bank)
+    if form.is_valid():
+        form.save()
+        log_action(request, "question_bank.visibility", bank, {"visibility": bank.visibility})
+        messages.success(request, "题库可见性已更新。")
+    else:
+        messages.error(request, "题库可见性更新失败。")
+    return redirect("courses:banks", course.pk)
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def question_edit(request, course_pk, bank_pk, question_pk):
+    course = get_accessible_course(request.user, course_pk)
+    bank = _bank(course, bank_pk)
+    question = get_object_or_404(bank.questions, pk=question_pk)
+    if request.method == "POST":
+        require_writable_course(course)
+    form = QuestionEditForm(request.POST or None, instance=question)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        log_action(request, "question.update", question, {"course_id": course.pk})
+        messages.success(request, "题目已保存。")
+        return redirect("courses:bank_detail", course.pk, bank.pk)
+    return render(
+        request,
+        "teacher/course_question_edit.html",
+        {"course": course, "current_course": course, "bank": bank, "question": question, "form": form},
+    )
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def question_import(request, course_pk, pk):
+    course = get_accessible_course(request.user, course_pk)
+    bank = _bank(course, pk)
+    session_key = f"course_question_import:{course.pk}:{bank.pk}"
+    preview = None
+    upload_name = ""
+    form = UploadForm()
+    if request.method == "POST":
+        require_writable_course(course)
+        if request.POST.get("action") == "confirm":
+            parsed = [ParsedQuestion(**item) for item in request.session.get(session_key, [])]
+            if not parsed:
+                messages.error(request, "导入预览已失效，请重新上传文件。")
+            else:
+                import_questions(bank, parsed)
+                request.session.pop(session_key, None)
+                log_action(request, "question.import", bank, {"course_id": course.pk, "count": len(parsed)})
+                messages.success(request, f"已导入 {len(parsed)} 道题。")
+                return redirect("courses:bank_detail", course.pk, bank.pk)
+        else:
+            request.session.pop(session_key, None)
+            form = UploadForm(request.POST, request.FILES)
+            if form.is_valid():
+                upload_name = form.cleaned_data["file"].name
+                try:
+                    parsed = parse_question_rows(read_uploaded_rows(form.cleaned_data["file"]))
+                    incoming = [item.sequence for item in parsed]
+                    existing = list(bank.questions.filter(sequence__in=incoming).values_list("sequence", flat=True))
+                    if existing:
+                        raise ValueError(f"题库中已存在以下序号：{sorted(existing)}。请先修改序号或编辑现有题目。")
+                except ValueError as exc:
+                    form.add_error("file", str(exc))
+                else:
+                    request.session[session_key] = [asdict(item) for item in parsed]
+                    preview = parsed
+    return render(
+        request,
+        "teacher/import_questions.html",
+        {
+            "course": course,
+            "current_course": course,
+            "bank": bank,
+            "form": form,
+            "preview": preview,
+            "upload_name": upload_name,
+        },
+    )
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def kc_import(request, course_pk, pk):
+    course = get_accessible_course(request.user, course_pk)
+    bank = _bank(course, pk)
+    session_key = f"course_kc_import:{course.pk}:{bank.pk}"
+    preview = None
+    upload_name = ""
+    form = UploadForm()
+    if request.method == "POST":
+        require_writable_course(course)
+        if request.POST.get("action") == "confirm":
+            mappings = [ParsedKCMapping(**item) for item in request.session.get(session_key, [])]
+            if not mappings:
+                messages.error(request, "导入预览已失效，请重新上传文件。")
+            else:
+                import_kc_mappings(bank, request.user, mappings)
+                request.session.pop(session_key, None)
+                log_action(request, "kc.import", bank, {"course_id": course.pk, "count": len(mappings)})
+                messages.success(request, f"已更新 {len(mappings)} 道题的 KC 映射。")
+                return redirect("courses:bank_detail", course.pk, bank.pk)
+        else:
+            request.session.pop(session_key, None)
+            form = UploadForm(request.POST, request.FILES)
+            if form.is_valid():
+                upload_name = form.cleaned_data["file"].name
+                try:
+                    parsed = parse_kc_rows(read_uploaded_rows(form.cleaned_data["file"]))
+                    missing = [item.sequence for item in parsed if not bank.questions.filter(sequence=item.sequence).exists()]
+                    if missing:
+                        raise ValueError(f"题库中不存在题目序号：{missing}")
+                except ValueError as exc:
+                    form.add_error("file", str(exc))
+                else:
+                    request.session[session_key] = [asdict(item) for item in parsed]
+                    preview = parsed
+    return render(
+        request,
+        "teacher/import_kcs.html",
+        {
+            "course": course,
+            "current_course": course,
+            "bank": bank,
+            "form": form,
+            "preview": preview,
+            "upload_name": upload_name,
+        },
+    )
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def copy_bank(request, course_pk, source_pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_writable_course(course)
+    source = get_object_or_404(QuestionBank, pk=source_pk, visibility=QuestionBank.Visibility.SHARED)
+    bank = copy_shared_bank(source, course, request.user)
+    log_action(
+        request,
+        "question_bank.copy",
+        bank,
+        {"source_bank_id": source.pk, "course_id": course.pk},
+    )
+    messages.success(request, "共享题库已复制为本课程的独立副本。")
+    return redirect("courses:bank_detail", course.pk, bank.pk)

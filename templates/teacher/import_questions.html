@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block breadcrumb_items %}<li><a href="{% url 'question_bank:dashboard' %}">教师工作台</a></li><li><a href="{% url 'question_bank:bank_list' %}">题库</a></li><li><a href="{% url 'question_bank:bank_detail' bank.pk %}">{{ bank.name }}</a></li><li class="breadcrumb-item-current" aria-current="page">导入题目</li>{% endblock %}
+{% block breadcrumb_items %}{% if course %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:detail' course.pk %}">{{ course.name }}</a></li><li><a href="{% url 'courses:bank_detail' course.pk bank.pk %}">{{ bank.name }}</a></li>{% else %}<li><a href="{% url 'question_bank:dashboard' %}">教师工作台</a></li><li><a href="{% url 'question_bank:bank_list' %}">题库</a></li><li><a href="{% url 'question_bank:bank_detail' bank.pk %}">{{ bank.name }}</a></li>{% endif %}<li class="breadcrumb-item-current" aria-current="page">导入题目</li>{% endblock %}
 {% block title %}导入题目 | {{ bank.name }}{% endblock %}
 {% block content %}
 <header class="page-header"><div class="page-header-copy"><h1 class="page-title">导入题目文件</h1><p class="page-subtitle">新建题目、选项和答案。KC 关联需在题目导入完成后使用独立入口处理。</p></div></header>
