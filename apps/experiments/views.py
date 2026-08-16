@@ -2,7 +2,9 @@ from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.accounts.permissions import role_required
+from apps.assessment.models import ExperimentSession
 from apps.audit.services import log_action
+from apps.analytics.export_fields import FIELD_GROUPS
 from .forms import ExperimentForm, StudentAssignmentForm
 from .models import Experiment
 from .services import assign_students, publish_experiment, sync_experiment_questions
@@ -78,8 +80,25 @@ def experiment_publish(request, pk):
 @role_required("teacher", "admin")
 def experiment_results(request, pk):
     experiment = _owned(request, pk)
-    sessions = experiment.versions.order_by("-version_number").first().sessions.select_related("student") if experiment.versions.exists() else []
-    return render(request, "teacher/experiment_results.html", {"experiment": experiment, "sessions": sessions})
+    latest_version = experiment.versions.order_by("-version_number").first()
+    sessions = latest_version.sessions.select_related("student") if latest_version else ExperimentSession.objects.none()
+    valid_statuses = {value for value, _label in ExperimentSession.Status.choices}
+    selected_status = request.GET.get("status", "")
+    if selected_status in valid_statuses:
+        sessions = sessions.filter(status=selected_status)
+    else:
+        selected_status = ""
+    return render(
+        request,
+        "teacher/experiment_results.html",
+        {
+            "experiment": experiment,
+            "sessions": sessions,
+            "session_status_choices": ExperimentSession.Status.choices,
+            "selected_status": selected_status,
+            "export_field_groups": FIELD_GROUPS,
+        },
+    )
 
 
 @role_required("teacher", "admin")

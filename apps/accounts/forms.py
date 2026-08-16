@@ -45,3 +45,7 @@ class StudentCreateForm(forms.Form):
 
 class PasswordResetForm(forms.Form):
     password = forms.CharField(label="新密码", widget=forms.PasswordInput, min_length=8)
+
+
+class StudentBatchUploadForm(forms.Form):
+    file = forms.FileField(label="Excel 学生名单")

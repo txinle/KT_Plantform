@@ -5,4 +5,6 @@ urlpatterns = [
     path("experiments/<int:experiment_id>/kt.csv", views.kt_export, name="kt_export"),
     path("experiments/<int:experiment_id>/navigation.csv", views.navigation_export, name="navigation_export"),
     path("experiments/<int:experiment_id>/identity.csv", views.identity_export, name="identity_export"),
+    path("experiments/<int:experiment_id>/identified.xlsx", views.identified_export, name="identified_export"),
+    path("experiments/<int:experiment_id>/navigation-identified.csv", views.identified_navigation_export, name="identified_navigation_export"),
 ]
