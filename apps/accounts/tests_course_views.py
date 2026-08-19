@@ -3,10 +3,11 @@ from django.urls import reverse
 from django.core.files.uploadedfile import SimpleUploadedFile
 from io import BytesIO
 from openpyxl import Workbook
+from unittest.mock import patch
 
 from apps.audit.models import AuditLog
 
-from .forms import ClassGroupUpdateForm
+from .forms import ClassGroupRenameForm, ClassGroupUpdateForm
 from .models import ClassGroup, Course, CourseEnrollment, CourseTeacher, User
 
 
@@ -397,6 +398,35 @@ class CourseWorkspaceViewTests(TestCase):
         self.course.status = Course.Status.ARCHIVED
         self.course.save(update_fields=["status"])
         self.assertEqual(self.client.post(url, {"name": "归档后改名"}).status_code, 403)
+
+    def test_class_rename_does_not_reactivate_a_class_changed_before_save(self):
+        class_group = ClassGroup.objects.create(
+            course=self.course,
+            name="待停用班级",
+            academic_year="2026",
+            is_active=True,
+        )
+        self.client.force_login(self.owner)
+        original_is_valid = ClassGroupRenameForm.is_valid
+
+        def deactivate_before_save(form):
+            ClassGroup.objects.filter(pk=class_group.pk).update(is_active=False)
+            return original_is_valid(form)
+
+        with patch.object(
+            ClassGroupRenameForm,
+            "is_valid",
+            new=deactivate_before_save,
+        ):
+            response = self.client.post(
+                reverse("courses:class_rename", args=[self.course.pk, class_group.pk]),
+                {"name": "已重命名班级"},
+            )
+
+        self.assertRedirects(response, reverse("courses:classes", args=[self.course.pk]))
+        class_group.refresh_from_db()
+        self.assertEqual(class_group.name, "已重命名班级")
+        self.assertFalse(class_group.is_active)
 
     def test_inactive_class_detail_explains_write_restrictions_and_hides_import(self):
         class_group = ClassGroup.objects.create(

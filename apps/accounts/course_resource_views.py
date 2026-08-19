@@ -79,14 +79,24 @@ def class_list(request, course_pk):
 def class_rename(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
-    class_group = get_object_or_404(course.classes, pk=class_pk)
-    form = ClassGroupRenameForm(request.POST, instance=class_group)
-    if form.is_valid():
-        form.save()
+    saved_class_group = None
+    with transaction.atomic():
+        class_group = get_object_or_404(
+            ClassGroup.objects.select_for_update(),
+            pk=class_pk,
+            course_id=course.pk,
+        )
+        form = ClassGroupRenameForm(request.POST, instance=class_group)
+        if form.is_valid():
+            class_group.name = form.cleaned_data["name"]
+            class_group.save(update_fields=["name"])
+            saved_class_group = class_group
+
+    if saved_class_group:
         log_action(
             request,
             "class.rename",
-            class_group,
+            saved_class_group,
             {"course_id": course.pk, "changed_fields": ["name"]},
         )
         messages.success(request, "班级名称已更新。")
