@@ -1,17 +1,21 @@
 from dataclasses import asdict
+from collections import Counter
 
 from django.contrib import messages
-from django.db.models import Count
+from django.db import transaction
+from django.db.models import Count, Prefetch
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.views.decorators.http import require_POST
+from django.urls import reverse
+from django.views.decorators.http import require_GET, require_POST
 
 from apps.accounts.course_access import get_accessible_course, require_writable_course
 from apps.accounts.models import User
 from apps.accounts.permissions import role_required
 from apps.audit.services import log_action
 
-from .forms import QuestionBankForm, QuestionBankVisibilityForm, QuestionEditForm, UploadForm
-from .models import Concept, QuestionBank
+from .forms import CourseConceptForm, QuestionBankForm, QuestionBankVisibilityForm, QuestionEditForm, UploadForm
+from .models import Concept, QuestionBank, QuestionConcept
 from .services.file_reader import read_uploaded_rows
 from .services.import_parsing import ParsedKCMapping, ParsedQuestion, parse_kc_rows, parse_question_rows
 from .services.import_service import copy_shared_bank, import_kc_mappings, import_questions
@@ -44,6 +48,25 @@ def bank_list(request, course_pk):
         .select_related("course", "created_by", "owner")
         .annotate(question_count=Count("questions"))
     )
+    concept_queryset = course.concepts.prefetch_related(
+        Prefetch(
+            "question_links",
+            queryset=QuestionConcept.objects.select_related("question__bank").order_by(
+                "question__bank__name", "question__sequence"
+            ),
+        )
+    )
+    course_concepts = []
+    for concept in concept_queryset:
+        distribution = Counter(link.question.bank for link in concept.question_links.all())
+        course_concepts.append(
+            {
+                "concept": concept,
+                "question_count": sum(distribution.values()),
+                "bank_count": len(distribution),
+                "distribution": sorted(distribution.items(), key=lambda item: item[0].name.casefold()),
+            }
+        )
     return render(
         request,
         "teacher/course_bank_list.html",
@@ -54,6 +77,8 @@ def bank_list(request, course_pk):
             "shared_banks": shared_banks,
             "form": form,
             "visibility_choices": QuestionBank.Visibility.choices,
+            "course_concepts": course_concepts,
+            "concept_form": CourseConceptForm(course=course),
         },
     )
 
@@ -63,7 +88,18 @@ def bank_detail(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     bank = _bank(course, pk)
     questions = bank.questions.prefetch_related("options", "concept_links__concept")
-    concepts = course.concepts.order_by("name")
+    chapter_map = {}
+    links = QuestionConcept.objects.filter(question__bank=bank).select_related("concept", "question")
+    for link in links:
+        item = chapter_map.setdefault(
+            link.concept_id,
+            {"concept": link.concept, "primary_count": 0, "secondary_count": 0, "questions": {}},
+        )
+        item["primary_count" if link.is_primary else "secondary_count"] += 1
+        item["questions"][link.question_id] = link.question
+    chapter_concepts = sorted(chapter_map.values(), key=lambda item: item["concept"].name.casefold())
+    for item in chapter_concepts:
+        item["questions"] = sorted(item["questions"].values(), key=lambda question: question.sequence)
     return render(
         request,
         "teacher/course_bank_detail.html",
@@ -72,9 +108,74 @@ def bank_detail(request, course_pk, pk):
             "current_course": course,
             "bank": bank,
             "questions": questions,
-            "concepts": concepts,
+            "chapter_concepts": chapter_concepts,
         },
     )
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def concept_create(request, course_pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_writable_course(course)
+    form = CourseConceptForm(request.POST, course=course)
+    if form.is_valid():
+        concept = form.save()
+        log_action(request, "concept.create", concept, {"course_id": course.pk, "name": concept.name})
+        messages.success(request, "课程 KC 已创建。")
+    else:
+        messages.error(request, "课程 KC 创建失败：" + "; ".join(form.errors.get("name", [])))
+    return redirect("courses:banks", course.pk)
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def concept_rename(request, course_pk, concept_pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_writable_course(course)
+    concept = get_object_or_404(course.concepts, pk=concept_pk)
+    old_name = concept.name
+    form = CourseConceptForm(request.POST, course=course, instance=concept)
+    if form.is_valid():
+        form.save()
+        log_action(
+            request,
+            "concept.rename",
+            concept,
+            {"course_id": course.pk, "old_name": old_name, "new_name": concept.name},
+        )
+        messages.success(request, "课程 KC 已重命名。")
+    else:
+        messages.error(request, "课程 KC 重命名失败：" + "; ".join(form.errors.get("name", [])))
+    return redirect("courses:banks", course.pk)
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+@transaction.atomic
+def concept_delete(request, course_pk, concept_pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_writable_course(course)
+    concept = get_object_or_404(course.concepts, pk=concept_pk)
+    if concept.question_links.exists():
+        messages.error(request, "该 KC 已被题目引用，不能删除。")
+        return redirect("courses:banks", course.pk)
+    concept_name = concept.name
+    log_action(request, "concept.delete", concept, {"course_id": course.pk, "name": concept_name})
+    concept.delete()
+    messages.success(request, "未引用的课程 KC 已删除。")
+    return redirect("courses:banks", course.pk)
+
+
+@require_GET
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def concept_search(request, course_pk):
+    course = get_accessible_course(request.user, course_pk)
+    query = " ".join(request.GET.get("q", "").strip().casefold().split())
+    concepts = course.concepts.none()
+    if query:
+        concepts = course.concepts.filter(normalized_name__icontains=query).order_by("name")[:12]
+    return JsonResponse({"results": [{"id": item.pk, "name": item.name} for item in concepts]})
 
 
 @require_POST
@@ -100,16 +201,24 @@ def question_edit(request, course_pk, bank_pk, question_pk):
     question = get_object_or_404(bank.questions, pk=question_pk)
     if request.method == "POST":
         require_writable_course(course)
-    form = QuestionEditForm(request.POST or None, instance=question)
+    form = QuestionEditForm(request.POST or None, instance=question, course=course)
     if request.method == "POST" and form.is_valid():
-        form.save()
-        log_action(request, "question.update", question, {"course_id": course.pk})
+        with transaction.atomic():
+            form.save()
+            log_action(request, "question.update", question, {"course_id": course.pk})
         messages.success(request, "题目已保存。")
         return redirect("courses:bank_detail", course.pk, bank.pk)
     return render(
         request,
         "teacher/course_question_edit.html",
-        {"course": course, "current_course": course, "bank": bank, "question": question, "form": form},
+        {
+            "course": course,
+            "current_course": course,
+            "bank": bank,
+            "question": question,
+            "form": form,
+            "concept_search_url": reverse("courses:concept_search", args=[course.pk]),
+        },
     )
 
 

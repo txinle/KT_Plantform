@@ -108,3 +108,41 @@ class UIContractTests(TestCase):
 
         self.assertGreaterEqual(owned_row.count("bank.question_count"), 2)
         self.assertNotIn("bank.questions.count", owned_row)
+
+    def test_course_question_kc_picker_is_progressive_and_keyboard_accessible(self):
+        template = (ROOT / "templates" / "teacher" / "course_question_edit.html").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        stylesheet = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
+
+        for token in (
+            "data-concept-picker",
+            "data-search-url",
+            "form.primary_concept",
+            "form.secondary_concepts",
+            "无 JavaScript 时仍可直接使用",
+        ):
+            self.assertIn(token, template)
+        for token in (
+            "data-concept-select",
+            "role', 'combobox",
+            "aria-autocomplete",
+            "aria-activedescendant",
+            "ArrowDown",
+            "ArrowUp",
+            "Enter",
+            "Escape",
+            "AbortController",
+            "fetch(",
+            "concept-tag-remove",
+        ):
+            self.assertIn(token, script)
+        self.assertIn(".concept-combobox", stylesheet)
+        self.assertIn(".concept-tags", stylesheet)
+
+    def test_course_kc_delete_dialogs_are_not_nested_inside_table_bodies(self):
+        template = (ROOT / "templates" / "teacher" / "course_bank_list.html").read_text(encoding="utf-8")
+        kc_section = template.split('id="course-kc-title"', 1)[1]
+        table_body = kc_section.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+
+        self.assertNotIn('class="modal fade"', table_body)
+        self.assertIn('class="modal fade"', kc_section.split("</tbody>", 1)[1])

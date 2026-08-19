@@ -72,6 +72,185 @@
     questionType?.addEventListener('change', updateQuestionFields);
     updateQuestionFields();
 
+    const conceptPicker = document.querySelector('[data-concept-picker]');
+    const enhanceConceptSelect = (select) => {
+      if (!conceptPicker || !select) return;
+      const mode = select.dataset.conceptSelect;
+      const field = select.closest('.form-field');
+      const label = field?.querySelector('label');
+      const searchUrl = conceptPicker.dataset.searchUrl;
+      if (!field || !label || !searchUrl) return;
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'concept-combobox';
+      const input = document.createElement('input');
+      input.className = 'form-control';
+      input.id = `${select.id}_search`;
+      input.type = 'search';
+      input.autocomplete = 'off';
+      input.placeholder = mode === 'primary' ? '输入名称搜索主 KC' : '输入名称添加次 KC';
+      input.setAttribute('role', 'combobox');
+      input.setAttribute('aria-autocomplete', 'list');
+      input.setAttribute('aria-expanded', 'false');
+      const listId = `${select.id}_results`;
+      input.setAttribute('aria-controls', listId);
+      const list = document.createElement('ul');
+      list.className = 'concept-results';
+      list.id = listId;
+      list.setAttribute('role', 'listbox');
+      list.hidden = true;
+      const status = document.createElement('div');
+      status.className = 'visually-hidden';
+      status.setAttribute('aria-live', 'polite');
+      const tags = document.createElement('div');
+      tags.className = 'concept-tags';
+
+      wrapper.append(input, list, status);
+      if (mode === 'secondary') wrapper.append(tags);
+      select.before(wrapper);
+      select.hidden = true;
+      label.htmlFor = input.id;
+      const describedBy = select.getAttribute('aria-describedby');
+      if (describedBy) input.setAttribute('aria-describedby', describedBy);
+      if (select.getAttribute('aria-invalid') === 'true') input.setAttribute('aria-invalid', 'true');
+
+      let results = [];
+      let activeIndex = -1;
+      let searchTimer = null;
+      let controller = null;
+
+      const selectedOptions = () => Array.from(select.selectedOptions).filter((option) => option.value);
+      const closeResults = () => {
+        list.hidden = true;
+        input.setAttribute('aria-expanded', 'false');
+        input.removeAttribute('aria-activedescendant');
+        activeIndex = -1;
+      };
+      const updateActive = (nextIndex) => {
+        const options = Array.from(list.querySelectorAll('[role="option"]'));
+        if (!options.length) return;
+        activeIndex = (nextIndex + options.length) % options.length;
+        options.forEach((option, index) => option.setAttribute('aria-selected', String(index === activeIndex)));
+        const active = options[activeIndex];
+        input.setAttribute('aria-activedescendant', active.id);
+        active.scrollIntoView({ block: 'nearest' });
+      };
+      const renderTags = () => {
+        if (mode !== 'secondary') return;
+        tags.replaceChildren();
+        selectedOptions().forEach((option) => {
+          const tag = document.createElement('span');
+          tag.className = 'concept-tag';
+          const text = document.createElement('span');
+          text.textContent = option.textContent;
+          const remove = document.createElement('button');
+          remove.className = 'concept-tag-remove';
+          remove.type = 'button';
+          remove.setAttribute('aria-label', `移除次 KC ${option.textContent}`);
+          remove.textContent = '×';
+          remove.addEventListener('click', () => {
+            option.selected = false;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            renderTags();
+            input.focus();
+          });
+          tag.append(text, remove);
+          tags.append(tag);
+        });
+      };
+      const chooseResult = (item) => {
+        let option = Array.from(select.options).find((candidate) => candidate.value === String(item.id));
+        if (!option) {
+          option = new Option(item.name, item.id);
+          select.add(option);
+        }
+        if (mode === 'primary') {
+          select.value = String(item.id);
+          input.value = item.name;
+        } else {
+          option.selected = true;
+          input.value = '';
+          renderTags();
+        }
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        closeResults();
+        input.focus();
+      };
+      const renderResults = (items) => {
+        const selectedIds = new Set(selectedOptions().map((option) => option.value));
+        results = mode === 'secondary'
+          ? items.filter((item) => !selectedIds.has(String(item.id)))
+          : items;
+        list.replaceChildren();
+        results.forEach((item, index) => {
+          const option = document.createElement('li');
+          option.id = `${listId}_${index}`;
+          option.className = 'concept-result';
+          option.setAttribute('role', 'option');
+          option.setAttribute('aria-selected', 'false');
+          option.textContent = item.name;
+          option.addEventListener('mousedown', (event) => event.preventDefault());
+          option.addEventListener('click', () => chooseResult(item));
+          list.append(option);
+        });
+        status.textContent = results.length ? `找到 ${results.length} 个 KC` : '没有匹配的课程 KC';
+        if (!results.length) {
+          closeResults();
+          return;
+        }
+        list.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+        updateActive(0);
+      };
+      const search = async () => {
+        const query = input.value.trim();
+        if (!query) {
+          closeResults();
+          return;
+        }
+        controller?.abort();
+        controller = new AbortController();
+        try {
+          const response = await fetch(`${searchUrl}?q=${encodeURIComponent(query)}`, {
+            headers: { Accept: 'application/json' },
+            signal: controller.signal,
+          });
+          if (!response.ok) throw new Error('KC search failed');
+          const payload = await response.json();
+          renderResults(payload.results || []);
+        } catch (error) {
+          if (error.name === 'AbortError') return;
+          closeResults();
+          status.textContent = 'KC 联想暂时不可用，请使用原选择框或稍后重试';
+        }
+      };
+
+      input.addEventListener('input', () => {
+        if (mode === 'primary') select.value = '';
+        window.clearTimeout(searchTimer);
+        searchTimer = window.setTimeout(search, 160);
+      });
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          updateActive(activeIndex + 1);
+        } else if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          updateActive(activeIndex - 1);
+        } else if (event.key === 'Enter' && !list.hidden && activeIndex >= 0) {
+          event.preventDefault();
+          chooseResult(results[activeIndex]);
+        } else if (event.key === 'Escape') {
+          closeResults();
+        }
+      });
+      input.addEventListener('blur', () => window.setTimeout(closeResults, 120));
+
+      if (mode === 'primary') input.value = selectedOptions()[0]?.textContent || '';
+      renderTags();
+    };
+    document.querySelectorAll('[data-concept-select]').forEach(enhanceConceptSelect);
+
     const timeMode = document.querySelector('[data-time-mode-controller]');
     const updateTimeFields = () => {
       if (!timeMode) return;

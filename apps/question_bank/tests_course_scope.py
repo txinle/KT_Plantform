@@ -1,10 +1,12 @@
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import Client, TestCase
 from django.urls import reverse
 
 from apps.accounts.models import Course, CourseEnrollment, ClassGroup, User
+from apps.audit.models import AuditLog
 from apps.experiments.models import Experiment, ExperimentStudent
+from apps.experiments.services import assign_students, publish_experiment, sync_experiment_questions
 
 from .models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
 from .services.import_service import copy_shared_bank
@@ -133,3 +135,310 @@ class CourseQuestionBankScopeTests(TestCase):
             set(question.concept_links.values_list("concept__name", flat=True)),
             {"加法", "整数"},
         )
+
+    def test_course_bank_list_shows_course_kc_totals_and_bank_distribution(self):
+        first_bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="第一章")
+        second_bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="第二章")
+        concept = Concept.objects.create(course=self.course_a, name="基础运算")
+        for bank, sequence in ((first_bank, 1), (second_bank, 1)):
+            question = Question.objects.create(
+                bank=bank,
+                sequence=sequence,
+                question_type=Question.Type.SHORT,
+                text=f"{bank.name}题目",
+                correct_answer="答案",
+            )
+            QuestionConcept.objects.create(question=question, concept=concept, is_primary=True)
+
+        response = self.client.get(reverse("courses:banks", args=[self.course_a.pk]))
+
+        self.assertContains(response, "课程 KC 总库")
+        self.assertContains(response, "基础运算")
+        self.assertContains(response, "第一章：1 题")
+        self.assertContains(response, "第二章：1 题")
+        self.assertContains(response, "2 个题库")
+        self.assertContains(response, "2 道题")
+
+    def test_bank_detail_only_shows_current_bank_chapter_kc_distribution(self):
+        bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="当前章节")
+        other_bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="其他章节")
+        shared = Concept.objects.create(course=self.course_a, name="共享知识点")
+        other_only = Concept.objects.create(course=self.course_a, name="其他章节知识点")
+        primary_question = Question.objects.create(
+            bank=bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="主知识点题",
+            correct_answer="A",
+        )
+        secondary_question = Question.objects.create(
+            bank=bank,
+            sequence=2,
+            question_type=Question.Type.SHORT,
+            text="次知识点题",
+            correct_answer="B",
+        )
+        outside_question = Question.objects.create(
+            bank=other_bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="外部题",
+            correct_answer="C",
+        )
+        QuestionConcept.objects.create(question=primary_question, concept=shared, is_primary=True)
+        QuestionConcept.objects.create(question=secondary_question, concept=shared, is_primary=False)
+        QuestionConcept.objects.create(question=outside_question, concept=other_only, is_primary=True)
+
+        response = self.client.get(reverse("courses:bank_detail", args=[self.course_a.pk, bank.pk]))
+
+        self.assertContains(response, "本题库章节 KC")
+        self.assertContains(response, "共享知识点")
+        self.assertNotContains(response, "其他章节知识点")
+        self.assertContains(response, "Q0001")
+        self.assertContains(response, "Q0002")
+        self.assertContains(response, "主 KC：1")
+        self.assertContains(response, "次 KC：1")
+
+    def test_course_kc_create_rename_and_safe_delete_are_audited(self):
+        self.client.post(
+            reverse("courses:concept_create", args=[self.course_a.pk]),
+            {"name": "  基础运算  "},
+        )
+        concept = Concept.objects.get(course=self.course_a, normalized_name="基础运算")
+        self.assertEqual(concept.name, "基础运算")
+        self.assertTrue(AuditLog.objects.filter(action="concept.create", object_id=str(concept.pk)).exists())
+
+        self.client.post(
+            reverse("courses:concept_rename", args=[self.course_a.pk, concept.pk]),
+            {"name": "算术基础"},
+        )
+        concept.refresh_from_db()
+        self.assertEqual(concept.name, "算术基础")
+        rename_audit = AuditLog.objects.get(action="concept.rename", object_id=str(concept.pk))
+        self.assertEqual(rename_audit.details["old_name"], "基础运算")
+
+        response = self.client.post(
+            reverse("courses:concept_delete", args=[self.course_a.pk, concept.pk])
+        )
+        self.assertRedirects(response, reverse("courses:banks", args=[self.course_a.pk]))
+        self.assertFalse(Concept.objects.filter(pk=concept.pk).exists())
+        self.assertTrue(AuditLog.objects.filter(action="concept.delete", object_id=str(concept.pk)).exists())
+
+    def test_referenced_or_duplicate_course_kc_changes_are_rejected(self):
+        bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="题库")
+        question = Question.objects.create(
+            bank=bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="题目",
+            correct_answer="答案",
+        )
+        referenced = Concept.objects.create(course=self.course_a, name="已引用")
+        duplicate = Concept.objects.create(course=self.course_a, name="重复名称")
+        QuestionConcept.objects.create(question=question, concept=referenced, is_primary=True)
+
+        delete = self.client.post(
+            reverse("courses:concept_delete", args=[self.course_a.pk, referenced.pk])
+        )
+        self.assertRedirects(delete, reverse("courses:banks", args=[self.course_a.pk]))
+        self.assertTrue(Concept.objects.filter(pk=referenced.pk).exists())
+
+        rename = self.client.post(
+            reverse("courses:concept_rename", args=[self.course_a.pk, referenced.pk]),
+            {"name": duplicate.name},
+        )
+        self.assertRedirects(rename, reverse("courses:banks", args=[self.course_a.pk]))
+        referenced.refresh_from_db()
+        self.assertEqual(referenced.name, "已引用")
+
+    def test_course_kc_search_is_normalized_limited_and_course_scoped(self):
+        for index in range(14):
+            Concept.objects.create(course=self.course_a, name=f"基础知识 {index:02d}")
+        Concept.objects.create(course=self.course_a, name="无关概念")
+        Concept.objects.create(course=self.course_b, name="基础知识 外部")
+
+        response = self.client.get(
+            reverse("courses:concept_search", args=[self.course_a.pk]),
+            {"q": "  基础知识  "},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload["results"]), 12)
+        self.assertTrue(all(set(item) == {"id", "name"} for item in payload["results"]))
+        self.assertTrue(all("基础知识" in item["name"] for item in payload["results"]))
+        self.assertNotIn("基础知识 外部", [item["name"] for item in payload["results"]])
+
+    def test_question_edit_saves_one_primary_and_multiple_secondary_course_kcs(self):
+        bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="章节题库")
+        question = Question.objects.create(
+            bank=bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="原题目",
+            correct_answer="原答案",
+        )
+        primary = Concept.objects.create(course=self.course_a, name="基础运算")
+        secondary_a = Concept.objects.create(course=self.course_a, name="整数")
+        secondary_b = Concept.objects.create(course=self.course_a, name="近似")
+        url = reverse("courses:question_edit", args=[self.course_a.pk, bank.pk, question.pk])
+
+        page = self.client.get(url)
+        self.assertContains(page, 'name="primary_concept"')
+        self.assertContains(page, 'name="secondary_concepts"')
+        self.assertContains(page, 'data-concept-picker')
+        self.assertContains(page, reverse("courses:concept_search", args=[self.course_a.pk]))
+
+        response = self.client.post(
+            url,
+            {
+                "text": "更新题目",
+                "question_type": Question.Type.SHORT,
+                "status": Question.Status.ACTIVE,
+                "correct_answer_text": "更新答案",
+                "accepted_answers_text": "",
+                "primary_concept": primary.pk,
+                "secondary_concepts": [secondary_a.pk, secondary_b.pk],
+            },
+        )
+
+        self.assertRedirects(response, reverse("courses:bank_detail", args=[self.course_a.pk, bank.pk]))
+        links = question.concept_links.select_related("concept")
+        self.assertEqual(links.get(is_primary=True).concept, primary)
+        self.assertSetEqual(
+            set(links.filter(is_primary=False).values_list("concept__name", flat=True)),
+            {"整数", "近似"},
+        )
+
+    def test_question_edit_rejects_cross_course_or_duplicate_kc_values_atomically(self):
+        bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="章节题库")
+        question = Question.objects.create(
+            bank=bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="保持原题目",
+            correct_answer="答案",
+        )
+        existing = Concept.objects.create(course=self.course_a, name="原 KC")
+        local = Concept.objects.create(course=self.course_a, name="本课程 KC")
+        foreign = Concept.objects.create(course=self.course_b, name="外部 KC")
+        QuestionConcept.objects.create(question=question, concept=existing, is_primary=True)
+        url = reverse("courses:question_edit", args=[self.course_a.pk, bank.pk, question.pk])
+        base_payload = {
+            "text": "不应保存",
+            "question_type": Question.Type.SHORT,
+            "status": Question.Status.ACTIVE,
+            "correct_answer_text": "新答案",
+            "accepted_answers_text": "",
+        }
+
+        cross_course = self.client.post(
+            url,
+            {**base_payload, "primary_concept": foreign.pk},
+        )
+        self.assertEqual(cross_course.status_code, 200)
+        self.assertContains(cross_course, "选择一个有效的选项")
+        question.refresh_from_db()
+        self.assertEqual(question.text, "保持原题目")
+        self.assertEqual(question.primary_concept, existing)
+
+        duplicate_primary = self.client.post(
+            url,
+            {
+                **base_payload,
+                "primary_concept": local.pk,
+                "secondary_concepts": [local.pk],
+            },
+        )
+        self.assertContains(duplicate_primary, "主 KC 不能同时作为次 KC")
+        question.refresh_from_db()
+        self.assertEqual(question.text, "保持原题目")
+        self.assertEqual(question.primary_concept, existing)
+
+        duplicate_secondary = self.client.post(
+            url,
+            {
+                **base_payload,
+                "primary_concept": local.pk,
+                "secondary_concepts": [existing.pk, existing.pk],
+            },
+        )
+        self.assertContains(duplicate_secondary, "次 KC 不能重复")
+        question.refresh_from_db()
+        self.assertEqual(question.text, "保持原题目")
+
+    def test_class_and_kc_renames_do_not_rewrite_published_snapshots(self):
+        class_group = ClassGroup.objects.create(
+            course=self.course_a,
+            name="发布时班级",
+            academic_year="2026",
+        )
+        CourseEnrollment.objects.create(
+            course=self.course_a,
+            class_group=class_group,
+            student=self.student,
+        )
+        bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="发布题库")
+        question = Question.objects.create(
+            bank=bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="发布题目",
+            correct_answer="答案",
+        )
+        concept = Concept.objects.create(course=self.course_a, name="发布时 KC")
+        QuestionConcept.objects.create(question=question, concept=concept, is_primary=True)
+        experiment = Experiment.objects.create(
+            course=self.course_a,
+            created_by=self.teacher,
+            question_bank=bank,
+            name="快照实验",
+        )
+        sync_experiment_questions(experiment)
+        assign_students(experiment, [self.student])
+        version = publish_experiment(experiment, self.teacher)
+
+        self.client.post(
+            reverse("courses:concept_rename", args=[self.course_a.pk, concept.pk]),
+            {"name": "改名后 KC"},
+        )
+        self.client.post(
+            reverse("courses:class_rename", args=[self.course_a.pk, class_group.pk]),
+            {"name": "改名后班级"},
+        )
+
+        snapshot = version.question_snapshots.get()
+        assignment = experiment.student_links.get(student=self.student)
+        self.assertEqual(snapshot.primary_kc, "发布时 KC")
+        self.assertEqual(snapshot.all_kcs, ["发布时 KC"])
+        self.assertEqual(assignment.class_snapshot_name, "2026 发布时班级")
+
+    def test_course_kc_writes_are_post_only_csrf_protected_and_archived_read_only(self):
+        concept = Concept.objects.create(course=self.course_a, name="安全 KC")
+        self.assertEqual(
+            self.client.get(reverse("courses:concept_delete", args=[self.course_a.pk, concept.pk])).status_code,
+            405,
+        )
+
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.teacher)
+        self.assertEqual(
+            csrf_client.post(
+                reverse("courses:concept_rename", args=[self.course_a.pk, concept.pk]),
+                {"name": "无令牌改名"},
+            ).status_code,
+            403,
+        )
+
+        self.course_a.status = Course.Status.ARCHIVED
+        self.course_a.save(update_fields=["status"])
+        self.assertEqual(
+            self.client.post(
+                reverse("courses:concept_rename", args=[self.course_a.pk, concept.pk]),
+                {"name": "归档改名"},
+            ).status_code,
+            403,
+        )
+        page = self.client.get(reverse("courses:banks", args=[self.course_a.pk]))
+        self.assertContains(page, "只读")
+        self.assertNotContains(page, "新增课程 KC")
