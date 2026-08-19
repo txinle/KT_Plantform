@@ -5,12 +5,18 @@ from django.db.models import Q
 from .models import CourseEnrollment, User
 
 
+def _require_active_target_class(class_group):
+    if not class_group.is_active:
+        raise ValidationError("目标班级已停用，不能新增学生。")
+
+
 @transaction.atomic
 def enroll_single_student(course, class_group, student_number, display_name):
     student_number = student_number.strip()
     display_name = display_name.strip()
     if class_group.course_id != course.pk:
         raise ValidationError("班级必须属于当前课程")
+    _require_active_target_class(class_group)
     matches = list(
         User.objects.filter(
             Q(student_number=student_number) | Q(username=student_number)
@@ -48,6 +54,7 @@ def enroll_single_student(course, class_group, student_number, display_name):
 def copy_class_enrollments(*, target_course, target_class, source_class):
     if target_class.course_id != target_course.pk:
         raise ValidationError("目标班级必须属于目标课程")
+    _require_active_target_class(target_class)
     if source_class.course_id == target_course.pk:
         raise ValidationError("来源班级必须属于其他课程")
     source_student_ids = list(
@@ -81,6 +88,7 @@ def copy_class_enrollments(*, target_course, target_class, source_class):
 def enroll_parsed_students(course, class_group, parsed_students):
     if class_group.course_id != course.pk:
         raise ValidationError("班级必须属于当前课程")
+    _require_active_target_class(class_group)
     numbers = [item.student_number for item in parsed_students]
     if len(numbers) != len(set(numbers)):
         raise ValidationError("导入文件中存在重复学号")

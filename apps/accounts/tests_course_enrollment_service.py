@@ -141,6 +141,29 @@ class CourseEnrollmentImportTests(TestCase):
         with self.assertRaisesMessage(ValidationError, "已加入当前课程"):
             enroll_single_student(self.course_b, self.class_b, "S3", "学生丙")
 
+    def test_manual_enrollment_rejects_an_inactive_target_class(self):
+        from .enrollment_services import enroll_single_student
+
+        self.class_b.is_active = False
+        self.class_b.save(update_fields=["is_active"])
+
+        with self.assertRaisesMessage(ValidationError, "目标班级已停用"):
+            enroll_single_student(self.course_b, self.class_b, "S4", "停用班级学生")
+
+        self.assertFalse(User.objects.filter(student_number="S4").exists())
+
+    def test_batch_enrollment_rejects_an_inactive_target_class(self):
+        from .enrollment_services import enroll_parsed_students
+
+        self.class_b.is_active = False
+        self.class_b.save(update_fields=["is_active"])
+        parsed = [ParsedStudent("S5", "批量学生", self.class_b.pk, str(self.class_b))]
+
+        with self.assertRaisesMessage(ValidationError, "目标班级已停用"):
+            enroll_parsed_students(self.course_b, self.class_b, parsed)
+
+        self.assertFalse(User.objects.filter(student_number="S5").exists())
+
     def test_copy_class_enrollments_skips_target_course_conflicts_and_keeps_passwords(self):
         from .enrollment_services import copy_class_enrollments
 
@@ -175,3 +198,35 @@ class CourseEnrollmentImportTests(TestCase):
         second.refresh_from_db()
         self.assertTrue(first.check_password("first-password"))
         self.assertTrue(second.check_password("second-password"))
+
+    def test_class_copy_rejects_an_inactive_target_but_allows_an_inactive_source(self):
+        from .enrollment_services import copy_class_enrollments
+
+        student = User.objects.create_user(
+            username="C3",
+            student_number="C3",
+            display_name="历史来源学生",
+            role=User.Role.STUDENT,
+        )
+        CourseEnrollment.objects.create(course=self.course_a, class_group=self.class_a, student=student)
+        self.class_b.is_active = False
+        self.class_b.save(update_fields=["is_active"])
+
+        with self.assertRaisesMessage(ValidationError, "目标班级已停用"):
+            copy_class_enrollments(
+                target_course=self.course_b,
+                target_class=self.class_b,
+                source_class=self.class_a,
+            )
+
+        self.class_b.is_active = True
+        self.class_b.save(update_fields=["is_active"])
+        self.class_a.is_active = False
+        self.class_a.save(update_fields=["is_active"])
+        created, skipped = copy_class_enrollments(
+            target_course=self.course_b,
+            target_class=self.class_b,
+            source_class=self.class_a,
+        )
+
+        self.assertEqual((created, skipped), (1, 0))

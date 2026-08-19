@@ -105,6 +105,33 @@ class CourseQuestionBankScopeTests(TestCase):
         with self.assertRaises(ValidationError):
             link.full_clean()
 
+    def test_experiment_assignment_excludes_students_from_inactive_classes(self):
+        class_group = ClassGroup.objects.create(course=self.course_a, name="停用班级", is_active=False)
+        CourseEnrollment.objects.create(
+            course=self.course_a,
+            class_group=class_group,
+            student=self.student,
+        )
+        bank = QuestionBank.objects.create(
+            course=self.course_a,
+            created_by=self.teacher,
+            name="实验题库",
+        )
+        experiment = Experiment.objects.create(
+            course=self.course_a,
+            created_by=self.teacher,
+            question_bank=bank,
+            name="实验",
+        )
+
+        with self.assertRaisesMessage(ValidationError, "可用班级"):
+            assign_students(experiment, [self.student])
+
+        response = self.client.get(
+            reverse("courses:experiment_detail", args=[self.course_a.pk, experiment.pk])
+        )
+        self.assertNotContains(response, self.student.student_number)
+
     def test_course_bank_imports_questions_then_course_scoped_kc(self):
         bank = QuestionBank.objects.create(
             course=self.course_a,

@@ -6,6 +6,7 @@ from openpyxl import Workbook
 
 from apps.audit.models import AuditLog
 
+from .forms import ClassGroupUpdateForm
 from .models import ClassGroup, Course, CourseEnrollment, CourseTeacher, User
 
 
@@ -209,6 +210,67 @@ class CourseWorkspaceViewTests(TestCase):
         self.assertEqual(audit.details["old_name"], "错误班名")
         self.assertEqual(audit.details["new_name"], "修正班名")
 
+    def test_class_edit_updates_metadata_and_audits_changed_fields(self):
+        class_group = ClassGroup.objects.create(
+            course=self.course,
+            name="原班级",
+            academic_year="2026",
+            is_active=True,
+        )
+        self.client.force_login(self.owner)
+
+        response = self.client.post(
+            reverse("courses:class_edit", args=[self.course.pk, class_group.pk]),
+            {"name": "修订班级", "academic_year": "2027"},
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("courses:class_detail", args=[self.course.pk, class_group.pk]),
+        )
+        class_group.refresh_from_db()
+        self.assertEqual(class_group.name, "修订班级")
+        self.assertEqual(class_group.academic_year, "2027")
+        self.assertFalse(class_group.is_active)
+        audit = AuditLog.objects.get(action="class.update", object_id=str(class_group.pk))
+        self.assertEqual(
+            audit.details,
+            {
+                "course_id": self.course.pk,
+                "changed_fields": ["name", "academic_year", "is_active"],
+            },
+        )
+
+    def test_class_edit_rejects_duplicate_course_name_and_year_in_chinese(self):
+        ClassGroup.objects.create(
+            course=self.course,
+            name="已有班级",
+            academic_year="2027",
+        )
+        class_group = ClassGroup.objects.create(
+            course=self.course,
+            name="待编辑班级",
+            academic_year="2026",
+        )
+        self.client.force_login(self.owner)
+
+        payload = {"name": "已有班级", "academic_year": "2027", "is_active": "on"}
+        form = ClassGroupUpdateForm(payload, instance=class_group)
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("同一课程和学年中已存在该班级名称。", form.non_field_errors())
+
+        response = self.client.post(
+            reverse("courses:class_edit", args=[self.course.pk, class_group.pk]),
+            payload,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "同一课程和学年中已存在该班级名称。")
+        class_group.refresh_from_db()
+        self.assertEqual(class_group.name, "待编辑班级")
+        self.assertEqual(class_group.academic_year, "2026")
+
     def test_class_rename_rejects_duplicate_name_and_archived_course(self):
         source = ClassGroup.objects.create(course=self.course, name="一班", academic_year="2026")
         target = ClassGroup.objects.create(course=self.course, name="二班", academic_year="2026")
@@ -224,6 +286,157 @@ class CourseWorkspaceViewTests(TestCase):
         self.course.status = Course.Status.ARCHIVED
         self.course.save(update_fields=["status"])
         self.assertEqual(self.client.post(url, {"name": "归档后改名"}).status_code, 403)
+
+    def test_inactive_class_detail_explains_write_restrictions_and_hides_import(self):
+        class_group = ClassGroup.objects.create(
+            course=self.course,
+            name="历史班级",
+            is_active=False,
+        )
+        self.client.force_login(self.owner)
+
+        response = self.client.get(
+            reverse("courses:class_detail", args=[self.course.pk, class_group.pk])
+        )
+
+        self.assertContains(response, "班级已停用。")
+        self.assertContains(response, "不能向此班级手动新增、Excel 导入、复制或转入学生")
+        self.assertNotContains(
+            response,
+            reverse("courses:student_add", args=[self.course.pk, class_group.pk]),
+        )
+
+    def test_inactive_class_cannot_be_a_copy_target(self):
+        target = ClassGroup.objects.create(course=self.course, name="停用目标", is_active=False)
+        source_course = Course.objects.create(
+            name="来源课程",
+            code="SOURCE",
+            term="2025秋",
+            owner=self.owner,
+        )
+        source = ClassGroup.objects.create(course=source_course, name="历史来源")
+        self.client.force_login(self.owner)
+        url = reverse("courses:student_copy", args=[self.course.pk, target.pk])
+
+        response = self.client.post(url, {"action": "preview", "source_class": source.pk}, follow=True)
+
+        self.assertRedirects(
+            response,
+            reverse("courses:class_detail", args=[self.course.pk, target.pk]),
+        )
+        self.assertContains(response, "目标班级已停用，不能复制学生。")
+
+    def test_inactive_class_rejects_student_add_and_excel_import_entry_points(self):
+        class_group = ClassGroup.objects.create(course=self.course, name="停用班级", is_active=False)
+        self.client.force_login(self.owner)
+        detail_url = reverse("courses:class_detail", args=[self.course.pk, class_group.pk])
+
+        for url_name in ("student_add", "student_import", "student_import_template"):
+            with self.subTest(url_name=url_name):
+                response = self.client.get(
+                    reverse(f"courses:{url_name}", args=[self.course.pk, class_group.pk]),
+                    follow=True,
+                )
+
+                self.assertRedirects(response, detail_url)
+                self.assertContains(response, "目标班级已停用，不能新增学生。")
+
+    def test_inactive_class_cannot_be_a_transfer_target(self):
+        source = ClassGroup.objects.create(course=self.course, name="可用来源")
+        target = ClassGroup.objects.create(course=self.course, name="停用目标", is_active=False)
+        student = User.objects.create_user(
+            username="MOVE1",
+            student_number="MOVE1",
+            role=User.Role.STUDENT,
+        )
+        enrollment = CourseEnrollment.objects.create(
+            course=self.course,
+            class_group=source,
+            student=student,
+        )
+        self.client.force_login(self.owner)
+
+        response = self.client.post(
+            reverse("courses:move_student", args=[self.course.pk, source.pk, student.pk]),
+            {"class_group": target.pk},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("courses:class_detail", args=[self.course.pk, source.pk]))
+        self.assertContains(response, "目标班级已停用，不能转入学生。")
+        enrollment.refresh_from_db()
+        self.assertEqual(enrollment.class_group, source)
+
+    def test_inactive_class_allows_password_reset_and_transfer_out(self):
+        source = ClassGroup.objects.create(course=self.course, name="停用来源", is_active=False)
+        target = ClassGroup.objects.create(course=self.course, name="可用目标")
+        student = User.objects.create_user(
+            username="MOVE2",
+            student_number="MOVE2",
+            role=User.Role.STUDENT,
+            password="old-password",
+        )
+        enrollment = CourseEnrollment.objects.create(
+            course=self.course,
+            class_group=source,
+            student=student,
+        )
+        self.client.force_login(self.owner)
+
+        reset = self.client.post(
+            reverse("courses:reset_password", args=[self.course.pk, source.pk, student.pk]),
+            {"password": "new-password"},
+        )
+        self.assertRedirects(reset, reverse("courses:class_detail", args=[self.course.pk, source.pk]))
+        student.refresh_from_db()
+        self.assertTrue(student.check_password("new-password"))
+
+        moved = self.client.post(
+            reverse("courses:move_student", args=[self.course.pk, source.pk, student.pk]),
+            {"class_group": target.pk},
+        )
+        self.assertRedirects(moved, reverse("courses:class_detail", args=[self.course.pk, target.pk]))
+        enrollment.refresh_from_db()
+        self.assertEqual(enrollment.class_group, target)
+
+    def test_class_edit_enforces_course_scope_and_csrf(self):
+        class_group = ClassGroup.objects.create(course=self.course, name="受限班级")
+        url = reverse("courses:class_edit", args=[self.course.pk, class_group.pk])
+
+        self.client.force_login(self.outsider)
+        self.assertEqual(self.client.get(url).status_code, 404)
+
+        self.client.force_login(self.collaborator)
+        self.assertEqual(self.client.get(url).status_code, 200)
+
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.owner)
+        self.assertEqual(
+            csrf_client.post(
+                url,
+                {"name": "无令牌", "academic_year": "2026", "is_active": "on"},
+            ).status_code,
+            403,
+        )
+
+    def test_inactive_class_write_endpoints_keep_archived_course_read_only(self):
+        class_group = ClassGroup.objects.create(course=self.course, name="停用班级", is_active=False)
+        self.course.status = Course.Status.ARCHIVED
+        self.course.save(update_fields=["status"])
+        self.client.force_login(self.owner)
+
+        for url_name, payload in (
+            ("student_add_manual", {"student_number": "ARCH1", "display_name": "归档测试"}),
+            ("student_copy", {"action": "preview"}),
+            ("student_import", {"action": "confirm"}),
+        ):
+            with self.subTest(url_name=url_name):
+                response = self.client.post(
+                    reverse(f"courses:{url_name}", args=[self.course.pk, class_group.pk]),
+                    payload,
+                )
+
+                self.assertEqual(response.status_code, 403)
 
     def test_student_add_hub_exposes_all_three_supported_methods(self):
         class_group = ClassGroup.objects.create(course=self.course, name="一班")

@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -15,6 +16,7 @@ from .enrollment_services import copy_class_enrollments, enroll_parsed_students,
 from .forms import (
     ClassGroupForm,
     ClassGroupRenameForm,
+    ClassGroupUpdateForm,
     ManualStudentEnrollmentForm,
     PasswordResetForm,
     StudentBatchUploadForm,
@@ -28,6 +30,11 @@ from .student_import import (
     build_student_import_workbook,
     parse_student_workbook,
 )
+
+
+def _inactive_target_class_response(request, course, class_group, action):
+    messages.error(request, f"目标班级已停用，不能{action}。")
+    return redirect("courses:class_detail", course.pk, class_group.pk)
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
@@ -89,9 +96,54 @@ def class_rename(request, course_pk, class_pk):
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_edit(request, course_pk, class_pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_writable_course(course)
+    class_group = get_object_or_404(course.classes, pk=class_pk)
+    previous_values = {
+        "name": class_group.name,
+        "academic_year": class_group.academic_year,
+        "is_active": class_group.is_active,
+    }
+    form = ClassGroupUpdateForm(request.POST or None, instance=class_group)
+    if request.method == "POST" and form.is_valid():
+        changed_fields = [
+            field
+            for field, previous_value in previous_values.items()
+            if form.cleaned_data[field] != previous_value
+        ]
+        try:
+            with transaction.atomic():
+                class_group = form.save()
+                log_action(
+                    request,
+                    "class.update",
+                    class_group,
+                    {"course_id": course.pk, "changed_fields": changed_fields},
+                )
+        except IntegrityError:
+            form.add_error(None, "同一课程和学年中已存在该班级名称。")
+        else:
+            messages.success(request, "班级设置已保存。")
+            return redirect("courses:class_detail", course.pk, class_group.pk)
+    return render(
+        request,
+        "teacher/course_class_edit.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": class_group,
+            "form": form,
+        },
+    )
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
 def student_add(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     class_group = get_object_or_404(course.classes, pk=class_pk)
+    if not class_group.is_active:
+        return _inactive_target_class_response(request, course, class_group, "新增学生")
     return render(
         request,
         "teacher/course_student_add.html",
@@ -103,9 +155,12 @@ def student_add(request, course_pk, class_pk):
 def student_add_manual(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     class_group = get_object_or_404(course.classes, pk=class_pk)
-    form = ManualStudentEnrollmentForm(request.POST or None)
     if request.method == "POST":
         require_writable_course(course)
+    if not class_group.is_active:
+        return _inactive_target_class_response(request, course, class_group, "新增学生")
+    form = ManualStudentEnrollmentForm(request.POST or None)
+    if request.method == "POST":
         if form.is_valid():
             try:
                 student, created_account = enroll_single_student(
@@ -146,6 +201,10 @@ def student_add_manual(request, course_pk, class_pk):
 def student_copy(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     target_class = get_object_or_404(course.classes, pk=class_pk)
+    if request.method == "POST":
+        require_writable_course(course)
+    if not target_class.is_active:
+        return _inactive_target_class_response(request, course, target_class, "复制学生")
     source_classes = ClassGroup.objects.filter(
         course__in=accessible_courses(request.user).exclude(pk=course.pk)
     ).select_related("course")
@@ -154,7 +213,6 @@ def student_copy(request, course_pk, class_pk):
     source_class = None
     form = StudentClassCopyForm(source_classes=source_classes)
     if request.method == "POST":
-        require_writable_course(course)
         if request.POST.get("action") == "confirm":
             source_id = request.session.get(session_key)
             source_class = source_classes.filter(pk=source_id).first()
@@ -239,6 +297,8 @@ def class_detail(request, course_pk, class_pk):
 def student_import_template(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     class_group = get_object_or_404(course.classes, pk=class_pk)
+    if not class_group.is_active:
+        return _inactive_target_class_response(request, course, class_group, "新增学生")
     content = build_student_import_workbook(
         [class_group],
         scope_label=f"{course.name}（{course.code} · {course.term}） / {class_group}",
@@ -268,7 +328,9 @@ def move_student(request, course_pk, class_pk, student_pk):
         student_id=student_pk,
         is_active=True,
     )
-    target = get_object_or_404(course.classes, pk=request.POST.get("class_group"), is_active=True)
+    target = get_object_or_404(course.classes, pk=request.POST.get("class_group"))
+    if not target.is_active:
+        return _inactive_target_class_response(request, course, source, "转入学生")
     enrollment.class_group = target
     enrollment.full_clean()
     enrollment.save(update_fields=["class_group"])
@@ -286,12 +348,15 @@ def move_student(request, course_pk, class_pk, student_pk):
 def student_import(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     class_group = get_object_or_404(course.classes, pk=class_pk)
+    if request.method == "POST":
+        require_writable_course(course)
+    if not class_group.is_active:
+        return _inactive_target_class_response(request, course, class_group, "新增学生")
     session_key = f"course_student_import:{course.pk}:{class_group.pk}"
     preview = None
     form = StudentBatchUploadForm()
 
     if request.method == "POST":
-        require_writable_course(course)
         if request.POST.get("action") == "confirm":
             preview = [ParsedStudent(**item) for item in request.session.get(session_key, [])]
             try:

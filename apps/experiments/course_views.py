@@ -141,7 +141,7 @@ def experiment_assign(request, course_pk, pk):
         except ValidationError as exc:
             messages.error(request, "; ".join(exc.messages))
     else:
-        messages.error(request, "学生分配无效；只能选择本课程学生。")
+        messages.error(request, "学生分配无效；只能选择本课程可用班级中的在读学生。")
     return redirect("courses:experiment_detail", course.pk, experiment.pk)
 
 

@@ -115,10 +115,11 @@ def assign_students(experiment, students):
             course=experiment.course,
             student__in=students,
             is_active=True,
+            class_group__is_active=True,
         ).select_related("class_group")
     }
     if len(enrollments) != len(students):
-        raise ValidationError("只能分配实验所属课程的在读学生")
+        raise ValidationError("只能分配当前课程可用班级中的在读学生")
     for student in students:
         enrollment = enrollments[student.pk]
         ExperimentStudent.objects.create(

@@ -43,7 +43,11 @@ class StudentAssignmentForm(forms.Form):
         super().__init__(*args, **kwargs)
         qs = User.objects.filter(role=User.Role.STUDENT, is_active=True).select_related("class_group")
         if course is not None:
-            qs = qs.filter(course_enrollments__course=course, course_enrollments__is_active=True)
+            qs = qs.filter(
+                course_enrollments__course=course,
+                course_enrollments__is_active=True,
+                course_enrollments__class_group__is_active=True,
+            )
         elif owner is not None and not (owner.is_superuser or owner.role == User.Role.ADMIN):
             qs = qs.filter(class_group__owner=owner)
         self.fields["students"].queryset = qs

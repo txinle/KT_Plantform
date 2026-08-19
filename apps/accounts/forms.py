@@ -67,6 +67,41 @@ class ClassGroupRenameForm(forms.ModelForm):
         return value
 
 
+class ClassGroupUpdateForm(forms.ModelForm):
+    class Meta:
+        model = ClassGroup
+        fields = ["name", "academic_year", "is_active"]
+        labels = {
+            "name": "班级名称",
+            "academic_year": "学年",
+            "is_active": "班级可用",
+        }
+
+    def clean_name(self):
+        value = self.cleaned_data["name"].strip()
+        if not value:
+            raise forms.ValidationError("班级名称不能为空。")
+        return value
+
+    def clean_academic_year(self):
+        return self.cleaned_data["academic_year"].strip()
+
+    def clean(self):
+        cleaned = super().clean()
+        name = cleaned.get("name")
+        academic_year = cleaned.get("academic_year")
+        if name is None or academic_year is None:
+            return cleaned
+        duplicate = ClassGroup.objects.filter(
+            course=self.instance.course,
+            name=name,
+            academic_year=academic_year,
+        ).exclude(pk=self.instance.pk)
+        if duplicate.exists():
+            raise forms.ValidationError("同一课程和学年中已存在该班级名称。")
+        return cleaned
+
+
 class StudentCreateForm(forms.Form):
     student_number = forms.CharField(label="学号", max_length=64)
     display_name = forms.CharField(label="姓名", max_length=80)
