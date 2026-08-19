@@ -97,8 +97,16 @@ def sync_experiment_questions(experiment):
 @transaction.atomic
 def assign_students(experiment, students):
     if experiment.status != Experiment.Status.DRAFT: raise ValidationError("发布后不能修改学生")
-    experiment.student_links.all().delete()
+    students = list(students)
     if experiment.course_id is None:
+        from apps.accounts.models import User
+
+        if User.objects.filter(
+            pk__in=[student.pk for student in students],
+            class_group__is_active=False,
+        ).exists():
+            raise ValidationError("不能分配停用班级中的学生")
+        experiment.student_links.all().delete()
         for student in students:
             ExperimentStudent.objects.create(
                 experiment=experiment,
@@ -107,6 +115,7 @@ def assign_students(experiment, students):
             )
         return
 
+    experiment.student_links.all().delete()
     from apps.accounts.models import CourseEnrollment
 
     enrollments = {

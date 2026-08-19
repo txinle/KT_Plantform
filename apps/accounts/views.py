@@ -52,6 +52,11 @@ def _student_queryset(user):
     return qs
 
 
+def _require_active_import_class(class_group, class_name):
+    if not class_group.is_active:
+        raise StudentImportError(f"班级已停用，不能导入学生：{class_name}")
+
+
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def class_list(request):
     form = ClassGroupForm(request.POST or None)
@@ -156,6 +161,7 @@ def student_import(request):
                     class_group = accessible_classes.get(item.class_id)
                     if class_group is None or str(class_group) != item.class_name:
                         raise StudentImportError(f"班级已变更或无权访问：{item.class_name}")
+                    _require_active_import_class(class_group, item.class_name)
                     User.objects.create_user(
                         username=item.student_number,
                         student_number=item.student_number,
@@ -176,13 +182,20 @@ def student_import(request):
         form = StudentBatchUploadForm(request.POST, request.FILES)
         if form.is_valid():
             try:
-                preview = parse_student_workbook(
+                classes = list(_class_queryset(request.user))
+                candidate_preview = parse_student_workbook(
                     form.cleaned_data["file"],
-                    _class_queryset(request.user),
+                    classes,
                 )
+                classes_by_id = {class_group.pk: class_group for class_group in classes}
+                for item in candidate_preview:
+                    _require_active_import_class(
+                        classes_by_id[item.class_id], item.class_name
+                    )
             except StudentImportError as exc:
                 form.add_error("file", str(exc))
             else:
+                preview = candidate_preview
                 request.session[session_key] = [item.__dict__ for item in preview]
     return render(
         request,

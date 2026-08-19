@@ -48,6 +48,8 @@ class StudentAssignmentForm(forms.Form):
                 course_enrollments__is_active=True,
                 course_enrollments__class_group__is_active=True,
             )
-        elif owner is not None and not (owner.is_superuser or owner.role == User.Role.ADMIN):
-            qs = qs.filter(class_group__owner=owner)
+        else:
+            qs = qs.exclude(class_group__is_active=False)
+            if owner is not None and not (owner.is_superuser or owner.role == User.Role.ADMIN):
+                qs = qs.filter(class_group__owner=owner)
         self.fields["students"].queryset = qs

@@ -207,8 +207,10 @@ class CourseWorkspaceViewTests(TestCase):
         class_group.refresh_from_db()
         self.assertEqual(class_group.name, "修正班名")
         audit = AuditLog.objects.get(action="class.rename", object_id=str(class_group.pk))
-        self.assertEqual(audit.details["old_name"], "错误班名")
-        self.assertEqual(audit.details["new_name"], "修正班名")
+        self.assertEqual(
+            audit.details,
+            {"course_id": self.course.pk, "changed_fields": ["name"]},
+        )
 
     def test_class_edit_updates_metadata_and_audits_changed_fields(self):
         class_group = ClassGroup.objects.create(

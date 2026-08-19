@@ -1,12 +1,13 @@
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.urls import reverse
-from apps.accounts.models import User
+from apps.accounts.models import ClassGroup, User
 from apps.analytics.export_fields import FIELD_LABELS
 from apps.assessment.models import ExperimentSession
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
+from .forms import StudentAssignmentForm
 from .models import Experiment, ExperimentQuestion, ExperimentStudent, ExperimentVersion
-from .services import publish_experiment
+from .services import assign_students, publish_experiment
 
 class PublishingTests(TestCase):
     def setUp(self):
@@ -32,6 +33,80 @@ class PublishingTests(TestCase):
         snapshot.refresh_from_db()
         self.assertEqual(snapshot.text, "KT?")
         self.assertEqual(snapshot.primary_kc, "追踪")
+
+
+class LegacyExperimentInactiveClassAssignmentTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="legacy-teacher",
+            password="x",
+            role=User.Role.TEACHER,
+        )
+        self.active_class = ClassGroup.objects.create(
+            owner=self.teacher,
+            academic_year="2026",
+            name="可用班级",
+        )
+        self.inactive_class = ClassGroup.objects.create(
+            owner=self.teacher,
+            academic_year="2026",
+            name="停用班级",
+            is_active=False,
+        )
+        self.active_student = User.objects.create_user(
+            username="ACTIVE-STUDENT",
+            student_number="ACTIVE-STUDENT",
+            class_group=self.active_class,
+            role=User.Role.STUDENT,
+        )
+        self.inactive_student = User.objects.create_user(
+            username="INACTIVE-STUDENT",
+            student_number="INACTIVE-STUDENT",
+            class_group=self.inactive_class,
+            role=User.Role.STUDENT,
+        )
+        bank = QuestionBank.objects.create(owner=self.teacher, name="legacy-bank")
+        self.experiment = Experiment.objects.create(
+            owner=self.teacher,
+            question_bank=bank,
+            name="legacy-experiment",
+        )
+        self.client.force_login(self.teacher)
+
+    def test_legacy_assignment_form_hides_students_from_inactive_classes(self):
+        form = StudentAssignmentForm(owner=self.teacher)
+
+        self.assertIn(self.active_student, form.fields["students"].queryset)
+        self.assertNotIn(self.inactive_student, form.fields["students"].queryset)
+
+    def test_legacy_assignment_direct_post_rejects_an_inactive_class_student(self):
+        response = self.client.post(
+            reverse("experiments:assign", args=[self.experiment.pk]),
+            {"students": [self.inactive_student.pk]},
+        )
+
+        self.assertRedirects(response, reverse("experiments:detail", args=[self.experiment.pk]))
+        self.assertFalse(
+            ExperimentStudent.objects.filter(
+                experiment=self.experiment,
+                student=self.inactive_student,
+            ).exists()
+        )
+
+    def test_legacy_assignment_service_rejects_an_inactive_class_student_without_replacing_assignments(self):
+        ExperimentStudent.objects.create(
+            experiment=self.experiment,
+            student=self.active_student,
+            class_snapshot_name=str(self.active_class),
+        )
+
+        with self.assertRaisesMessage(ValidationError, "停用班级"):
+            assign_students(self.experiment, [self.inactive_student])
+
+        self.assertEqual(
+            list(self.experiment.student_links.values_list("student_id", flat=True)),
+            [self.active_student.pk],
+        )
 
 
 class ExperimentResultStatusFilterTests(TestCase):

@@ -74,7 +74,6 @@ def class_rename(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     class_group = get_object_or_404(course.classes, pk=class_pk)
-    old_name = class_group.name
     form = ClassGroupRenameForm(request.POST, instance=class_group)
     if form.is_valid():
         form.save()
@@ -82,7 +81,7 @@ def class_rename(request, course_pk, class_pk):
             request,
             "class.rename",
             class_group,
-            {"course_id": course.pk, "old_name": old_name, "new_name": class_group.name},
+            {"course_id": course.pk, "changed_fields": ["name"]},
         )
         messages.success(request, "班级名称已更新。")
     else:

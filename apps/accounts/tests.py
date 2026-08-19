@@ -379,6 +379,46 @@ class StudentBatchImportValidationTests(StudentBatchImportCoreTests):
         self.assertFalse(User.objects.filter(student_number="SAFE").exists())
         self.assertEqual(User.objects.filter(student_number="RACE").count(), 1)
 
+    def test_direct_legacy_import_preview_rejects_an_inactive_class(self):
+        self.class_group.is_active = False
+        self.class_group.save(update_fields=["is_active"])
+
+        response = self.client.post(
+            self.import_url,
+            {
+                "file": self._upload(
+                    ["学号", "姓名", "班级"],
+                    [["INACTIVE-PREVIEW", "停用预览学生", str(self.class_group)]],
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "班级已停用，不能导入学生")
+        self.assertNotContains(response, "校验通过")
+        self.assertFalse(User.objects.filter(student_number="INACTIVE-PREVIEW").exists())
+
+    def test_direct_legacy_import_confirm_rejects_a_class_deactivated_after_preview(self):
+        preview = self.client.post(
+            self.import_url,
+            {
+                "file": self._upload(
+                    ["学号", "姓名", "班级"],
+                    [["INACTIVE-CONFIRM", "停用确认学生", str(self.class_group)]],
+                )
+            },
+        )
+        self.assertEqual(preview.status_code, 200)
+        self.assertContains(preview, "校验通过")
+        self.class_group.is_active = False
+        self.class_group.save(update_fields=["is_active"])
+
+        response = self.client.post(self.import_url, {"action": "confirm"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "班级已停用，不能导入学生")
+        self.assertFalse(User.objects.filter(student_number="INACTIVE-CONFIRM").exists())
+
     def test_student_role_cannot_download_template_or_open_import(self):
         student = User.objects.create_user(
             username="STUDENT",
