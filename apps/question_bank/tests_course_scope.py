@@ -406,7 +406,7 @@ class CourseQuestionBankScopeTests(TestCase):
         question.refresh_from_db()
         self.assertEqual(question.text, "保持原题目")
 
-    def test_question_edit_requires_primary_kc_without_mutating_existing_mapping(self):
+    def test_question_edit_allows_empty_primary_with_secondary_course_kcs(self):
         bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="章节题库")
         question = Question.objects.create(
             bank=bank,
@@ -433,12 +433,11 @@ class CourseQuestionBankScopeTests(TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "这个字段是必填项")
+        self.assertRedirects(response, reverse("courses:bank_detail", args=[self.course_a.pk, bank.pk]))
         question.refresh_from_db()
-        self.assertEqual(question.text, "保持原题目")
-        self.assertEqual(question.primary_concept, existing)
-        self.assertFalse(question.concept_links.filter(concept=secondary).exists())
+        self.assertEqual(question.text, "不应保存")
+        self.assertIsNone(question.primary_concept)
+        self.assertTrue(question.concept_links.filter(concept=secondary, is_primary=False).exists())
 
     def test_class_and_kc_renames_do_not_rewrite_published_snapshots(self):
         class_group = ClassGroup.objects.create(
