@@ -1,3 +1,4 @@
+import re
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -161,6 +162,18 @@ class CourseQuestionBankScopeTests(TestCase):
         self.assertContains(response, "第二章：1 题")
         self.assertContains(response, "2 个题库")
         self.assertContains(response, "2 道题")
+
+    def test_course_bank_list_form_control_ids_are_unique(self):
+        Concept.objects.create(course=self.course_a, name="基础运算")
+        Concept.objects.create(course=self.course_a, name="质数")
+
+        response = self.client.get(reverse("courses:banks", args=[self.course_a.pk]))
+
+        control_ids = re.findall(
+            r'<(?:input|select|textarea)\b[^>]*\bid="([^"]+)"',
+            response.content.decode(),
+        )
+        self.assertEqual(control_ids, list(dict.fromkeys(control_ids)))
 
     def test_bank_detail_only_shows_current_bank_chapter_kc_distribution(self):
         bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="当前章节")

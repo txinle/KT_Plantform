@@ -25,6 +25,8 @@ class CourseConceptForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.course = course
         self.instance = instance
+        if instance is None:
+            self.fields["name"].widget.attrs["id"] = "id_course_concept_name"
         if instance is not None and not self.is_bound:
             self.initial["name"] = instance.name
 
