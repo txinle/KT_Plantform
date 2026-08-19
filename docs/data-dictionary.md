@@ -9,6 +9,21 @@
 - `QuestionVisitEvent`: 每次题号导航或恢复进入题目的明细事件。
 - `SubmissionEvent.committed_at`: 数据库正式提交完成时间，作为正式提交时间。
 
+## 课程班级与学生账号
+
+- `User.student_number`：平台级唯一学号；同一账号可以加入多门课程。
+- `CourseEnrollment`：学生在单门课程中的唯一选课关系，`class_group` 表示该课程下的班级归属。
+- 手动添加和 Excel 导入复用同学号、同姓名的既有账号；新账号密码规则为 `S + 原始学号`。
+- 从其他课程班级复制时只复制有效 `CourseEnrollment`；目标课程已有选课的学生被跳过，不复制账号、不改密码、不自动转班。
+- 实验分配时保存 `ExperimentStudent.class_snapshot_name`；班级后续改名不改变该快照。
+
+## 课程 KC 与章节视图
+
+- `Concept.course`：课程 KC 的所属课程；同一课程按 `normalized_name` 唯一。
+- `QuestionConcept`：题目与课程 KC 的映射；每题最多一个 `is_primary=True` 的主 KC，并可关联多个次 KC。
+- “课程 KC 总库”统计课程内全部题库和题目关联；“本题库章节 KC”只统计当前题库引用的同一批课程 KC，不是独立数据实体。
+- `QuestionSnapshot.primary_kc` 与 `QuestionSnapshot.all_kcs` 在实验发布时复制 KC 名称；后续 KC 重命名不回写历史快照。
+
 ## 实名可选字段 Excel
 
 工作表 `KT数据` 的观测单位为“学生 × 题目”，每个 `Attempt` 一行。界面默认选择全部字段，服务端按下列固定顺序输出所选列：
