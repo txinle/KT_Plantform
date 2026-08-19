@@ -21,6 +21,7 @@ from .forms import (
     PasswordResetForm,
     StudentBatchUploadForm,
     StudentClassCopyForm,
+    class_group_state_token_matches,
 )
 from .models import ClassGroup, CourseEnrollment, User
 from .permissions import role_required
@@ -99,32 +100,45 @@ def class_edit(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     class_group = get_object_or_404(course.classes, pk=class_pk)
-    previous_values = {
-        "name": class_group.name,
-        "academic_year": class_group.academic_year,
-        "is_active": class_group.is_active,
-    }
-    form = ClassGroupUpdateForm(request.POST or None, instance=class_group)
-    if request.method == "POST" and form.is_valid():
-        changed_fields = [
-            field
-            for field, previous_value in previous_values.items()
-            if form.cleaned_data[field] != previous_value
-        ]
+    form = ClassGroupUpdateForm(instance=class_group)
+    saved_class_group = None
+    if request.method == "POST":
         try:
             with transaction.atomic():
-                class_group = form.save()
-                log_action(
-                    request,
-                    "class.update",
-                    class_group,
-                    {"course_id": course.pk, "changed_fields": changed_fields},
+                class_group = get_object_or_404(
+                    ClassGroup.objects.select_for_update(),
+                    pk=class_pk,
+                    course_id=course.pk,
                 )
+                form = ClassGroupUpdateForm(request.POST, instance=class_group)
+                previous_values = {
+                    "name": class_group.name,
+                    "academic_year": class_group.academic_year,
+                    "is_active": class_group.is_active,
+                }
+                if not class_group_state_token_matches(
+                    request.POST.get("state_token", ""),
+                    class_group,
+                ):
+                    form.add_error(None, "班级信息已被其他操作更新，请刷新后重试。")
+                elif form.is_valid():
+                    changed_fields = [
+                        field
+                        for field, previous_value in previous_values.items()
+                        if form.cleaned_data[field] != previous_value
+                    ]
+                    saved_class_group = form.save()
+                    log_action(
+                        request,
+                        "class.update",
+                        saved_class_group,
+                        {"course_id": course.pk, "changed_fields": changed_fields},
+                    )
         except IntegrityError:
             form.add_error(None, "同一课程和学年中已存在该班级名称。")
-        else:
+        if saved_class_group:
             messages.success(request, "班级设置已保存。")
-            return redirect("courses:class_detail", course.pk, class_group.pk)
+            return redirect("courses:class_detail", course.pk, saved_class_group.pk)
     return render(
         request,
         "teacher/course_class_edit.html",

@@ -1,7 +1,47 @@
+import hashlib
+
 from django import forms
+from django.core import signing
 from django.db import transaction
+from django.utils.crypto import constant_time_compare
 
 from .models import ClassGroup, Course, CourseTeacher, User
+
+
+CLASS_GROUP_STATE_TOKEN_SALT = "accounts.class_group_state"
+
+
+def _class_group_state_digest(class_group):
+    serialized_state = "\x1f".join(
+        [
+            str(class_group.pk),
+            class_group.name,
+            class_group.academic_year,
+            str(class_group.is_active),
+        ]
+    )
+    return hashlib.sha256(serialized_state.encode("utf-8")).hexdigest()
+
+
+def class_group_state_token(class_group):
+    return signing.dumps(
+        {
+            "class_group_id": class_group.pk,
+            "state_digest": _class_group_state_digest(class_group),
+        },
+        salt=CLASS_GROUP_STATE_TOKEN_SALT,
+    )
+
+
+def class_group_state_token_matches(token, class_group):
+    try:
+        payload = signing.loads(token, salt=CLASS_GROUP_STATE_TOKEN_SALT)
+    except signing.BadSignature:
+        return False
+    return payload.get("class_group_id") == class_group.pk and constant_time_compare(
+        payload.get("state_digest", ""),
+        _class_group_state_digest(class_group),
+    )
 
 
 class CourseForm(forms.ModelForm):
@@ -68,6 +108,12 @@ class ClassGroupRenameForm(forms.ModelForm):
 
 
 class ClassGroupUpdateForm(forms.ModelForm):
+    state_token = forms.CharField(
+        required=True,
+        widget=forms.HiddenInput,
+        error_messages={"required": "页面状态已过期，请刷新后重试。"},
+    )
+
     class Meta:
         model = ClassGroup
         fields = ["name", "academic_year", "is_active"]
@@ -76,6 +122,11 @@ class ClassGroupUpdateForm(forms.ModelForm):
             "academic_year": "学年",
             "is_active": "班级可用",
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.is_bound and self.instance.pk:
+            self.initial["state_token"] = class_group_state_token(self.instance)
 
     def clean_name(self):
         value = self.cleaned_data["name"].strip()
