@@ -6,6 +6,78 @@ from .models import CourseEnrollment, User
 
 
 @transaction.atomic
+def enroll_single_student(course, class_group, student_number, display_name):
+    student_number = student_number.strip()
+    display_name = display_name.strip()
+    if class_group.course_id != course.pk:
+        raise ValidationError("班级必须属于当前课程")
+    matches = list(
+        User.objects.filter(
+            Q(student_number=student_number) | Q(username=student_number)
+        ).distinct()
+    )
+    if len(matches) > 1:
+        raise ValidationError(f"学号与多个账号冲突：{student_number}")
+    created = not matches
+    if matches:
+        student = matches[0]
+        if student.role != User.Role.STUDENT:
+            raise ValidationError(f"学号与非学生账号冲突：{student_number}")
+        if student.shown_name != display_name:
+            raise ValidationError(f"学号对应姓名不一致：{student_number}")
+    else:
+        student = User.objects.create_user(
+            username=student_number,
+            student_number=student_number,
+            display_name=display_name,
+            role=User.Role.STUDENT,
+            password=f"S{student_number}",
+        )
+    if CourseEnrollment.objects.filter(course=course, student=student).exists():
+        raise ValidationError(f"学生已加入当前课程：{student_number}")
+    CourseEnrollment.objects.create(
+        course=course,
+        class_group=class_group,
+        student=student,
+        is_active=True,
+    )
+    return student, created
+
+
+@transaction.atomic
+def copy_class_enrollments(*, target_course, target_class, source_class):
+    if target_class.course_id != target_course.pk:
+        raise ValidationError("目标班级必须属于目标课程")
+    if source_class.course_id == target_course.pk:
+        raise ValidationError("来源班级必须属于其他课程")
+    source_student_ids = list(
+        source_class.enrollments.filter(is_active=True).values_list("student_id", flat=True)
+    )
+    existing_ids = set(
+        CourseEnrollment.objects.filter(
+            course=target_course,
+            student_id__in=source_student_ids,
+        ).values_list("student_id", flat=True)
+    )
+    created = 0
+    skipped = 0
+    for student_id in source_student_ids:
+        if student_id in existing_ids:
+            skipped += 1
+            continue
+        _, was_created = CourseEnrollment.objects.get_or_create(
+            course=target_course,
+            student_id=student_id,
+            defaults={"class_group": target_class, "is_active": True},
+        )
+        if was_created:
+            created += 1
+        else:
+            skipped += 1
+    return created, skipped
+
+
+@transaction.atomic
 def enroll_parsed_students(course, class_group, parsed_students):
     if class_group.course_id != course.pk:
         raise ValidationError("班级必须属于当前课程")

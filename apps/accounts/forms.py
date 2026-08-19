@@ -48,6 +48,25 @@ class ClassGroupForm(forms.ModelForm):
         fields = ["name", "academic_year"]
 
 
+class ClassGroupRenameForm(forms.ModelForm):
+    class Meta:
+        model = ClassGroup
+        fields = ["name"]
+
+    def clean_name(self):
+        value = self.cleaned_data["name"].strip()
+        if not value:
+            raise forms.ValidationError("班级名称不能为空。")
+        duplicate = ClassGroup.objects.filter(
+            course=self.instance.course,
+            academic_year=self.instance.academic_year,
+            name=value,
+        ).exclude(pk=self.instance.pk)
+        if duplicate.exists():
+            raise forms.ValidationError("同一课程和学年中已存在该班级名称。")
+        return value
+
+
 class StudentCreateForm(forms.Form):
     student_number = forms.CharField(label="学号", max_length=64)
     display_name = forms.CharField(label="姓名", max_length=80)
@@ -87,3 +106,39 @@ class PasswordResetForm(forms.Form):
 
 class StudentBatchUploadForm(forms.Form):
     file = forms.FileField(label="Excel 学生名单")
+
+
+class ManualStudentEnrollmentForm(forms.Form):
+    student_number = forms.CharField(label="学号", max_length=64)
+    display_name = forms.CharField(label="姓名", max_length=80)
+
+    def clean_student_number(self):
+        value = self.cleaned_data["student_number"].strip()
+        if not value:
+            raise forms.ValidationError("学号不能为空。")
+        return value
+
+    def clean_display_name(self):
+        value = self.cleaned_data["display_name"].strip()
+        if not value:
+            raise forms.ValidationError("姓名不能为空。")
+        return value
+
+
+class SourceClassChoiceField(forms.ModelChoiceField):
+    def label_from_instance(self, obj):
+        return f"{obj.course} / {obj}"
+
+
+class StudentClassCopyForm(forms.Form):
+    source_class = SourceClassChoiceField(
+        label="来源课程班级",
+        queryset=ClassGroup.objects.none(),
+        empty_label="请选择来源课程班级",
+        error_messages={"invalid_choice": "请选择一个有效的选项。"},
+    )
+
+    def __init__(self, *args, source_classes=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if source_classes is not None:
+            self.fields["source_class"].queryset = source_classes

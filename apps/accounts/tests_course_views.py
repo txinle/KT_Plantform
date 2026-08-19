@@ -1,4 +1,4 @@
-from django.test import TestCase
+from django.test import Client, TestCase
 from django.urls import reverse
 from django.core.files.uploadedfile import SimpleUploadedFile
 from io import BytesIO
@@ -6,7 +6,7 @@ from openpyxl import Workbook
 
 from apps.audit.models import AuditLog
 
-from .models import Course, CourseTeacher, User
+from .models import ClassGroup, Course, CourseEnrollment, CourseTeacher, User
 
 
 class CourseWorkspaceViewTests(TestCase):
@@ -171,3 +171,176 @@ class CourseWorkspaceViewTests(TestCase):
         self.assertTrue(
             AuditLog.objects.filter(action="student.class_transfer", object_id=str(enrollment.pk)).exists()
         )
+
+    def test_class_list_searches_name_or_academic_year_and_preserves_query(self):
+        ClassGroup.objects.create(course=self.course, name="认知追踪实验班", academic_year="2026")
+        ClassGroup.objects.create(course=self.course, name="数据分析班", academic_year="2025")
+        self.client.force_login(self.owner)
+        url = reverse("courses:classes", args=[self.course.pk])
+
+        by_name = self.client.get(url, {"q": "  认知  "})
+        self.assertContains(by_name, "认知追踪实验班")
+        self.assertNotContains(by_name, "数据分析班")
+        self.assertContains(by_name, 'value="认知"')
+        self.assertContains(by_name, "1 个")
+
+        by_year = self.client.get(url, {"q": "2025"})
+        self.assertContains(by_year, "数据分析班")
+        self.assertNotContains(by_year, "认知追踪实验班")
+        self.assertContains(by_year, "清除筛选")
+
+    def test_class_name_can_be_trimmed_renamed_and_audited(self):
+        class_group = ClassGroup.objects.create(
+            course=self.course,
+            name="错误班名",
+            academic_year="2026",
+        )
+        self.client.force_login(self.owner)
+
+        response = self.client.post(
+            reverse("courses:class_rename", args=[self.course.pk, class_group.pk]),
+            {"name": "  修正班名  ", "q": "错误"},
+        )
+
+        self.assertRedirects(response, f'{reverse("courses:classes", args=[self.course.pk])}?q=%E9%94%99%E8%AF%AF')
+        class_group.refresh_from_db()
+        self.assertEqual(class_group.name, "修正班名")
+        audit = AuditLog.objects.get(action="class.rename", object_id=str(class_group.pk))
+        self.assertEqual(audit.details["old_name"], "错误班名")
+        self.assertEqual(audit.details["new_name"], "修正班名")
+
+    def test_class_rename_rejects_duplicate_name_and_archived_course(self):
+        source = ClassGroup.objects.create(course=self.course, name="一班", academic_year="2026")
+        target = ClassGroup.objects.create(course=self.course, name="二班", academic_year="2026")
+        self.client.force_login(self.owner)
+        url = reverse("courses:class_rename", args=[self.course.pk, target.pk])
+
+        duplicate = self.client.post(url, {"name": source.name})
+        self.assertRedirects(duplicate, reverse("courses:classes", args=[self.course.pk]))
+        target.refresh_from_db()
+        self.assertEqual(target.name, "二班")
+        self.assertFalse(AuditLog.objects.filter(action="class.rename", object_id=str(target.pk)).exists())
+
+        self.course.status = Course.Status.ARCHIVED
+        self.course.save(update_fields=["status"])
+        self.assertEqual(self.client.post(url, {"name": "归档后改名"}).status_code, 403)
+
+    def test_student_add_hub_exposes_all_three_supported_methods(self):
+        class_group = ClassGroup.objects.create(course=self.course, name="一班")
+        self.client.force_login(self.owner)
+
+        response = self.client.get(
+            reverse("courses:student_add", args=[self.course.pk, class_group.pk])
+        )
+
+        self.assertContains(response, "手动添加单个学生")
+        self.assertContains(response, "Excel 批量导入")
+        self.assertContains(response, "从其他课程班级复制")
+        self.assertContains(
+            response,
+            reverse("courses:student_import", args=[self.course.pk, class_group.pk]),
+        )
+        self.assertContains(
+            response,
+            reverse("courses:student_add_manual", args=[self.course.pk, class_group.pk]),
+        )
+        self.assertContains(
+            response,
+            reverse("courses:student_copy", args=[self.course.pk, class_group.pk]),
+        )
+
+    def test_manual_student_add_creates_enrollment_and_audit(self):
+        class_group = ClassGroup.objects.create(course=self.course, name="一班")
+        self.client.force_login(self.owner)
+        url = reverse("courses:student_add_manual", args=[self.course.pk, class_group.pk])
+
+        response = self.client.post(
+            url,
+            {"student_number": "00123", "display_name": "临时学生"},
+        )
+
+        self.assertRedirects(response, reverse("courses:class_detail", args=[self.course.pk, class_group.pk]))
+        student = User.objects.get(student_number="00123")
+        self.assertTrue(student.check_password("S00123"))
+        enrollment = CourseEnrollment.objects.get(course=self.course, student=student)
+        audit = AuditLog.objects.get(action="student.manual_enroll", object_id=str(enrollment.pk))
+        self.assertEqual(audit.details["created_account"], True)
+        self.assertNotIn("password", audit.details)
+
+    def test_copy_other_course_class_previews_skips_and_confirms(self):
+        target = ClassGroup.objects.create(course=self.course, name="目标班")
+        source_course = Course.objects.create(
+            name="历史课程",
+            code="OLD101",
+            term="2025秋",
+            owner=self.owner,
+            status=Course.Status.ARCHIVED,
+        )
+        source = ClassGroup.objects.create(course=source_course, name="历史一班")
+        eligible = User.objects.create_user(
+            username="COPY1",
+            student_number="COPY1",
+            display_name="可复制学生",
+            role=User.Role.STUDENT,
+            password="keep-password",
+        )
+        conflict = User.objects.create_user(
+            username="COPY2",
+            student_number="COPY2",
+            display_name="已选课学生",
+            role=User.Role.STUDENT,
+        )
+        CourseEnrollment.objects.create(course=source_course, class_group=source, student=eligible)
+        CourseEnrollment.objects.create(course=source_course, class_group=source, student=conflict)
+        CourseEnrollment.objects.create(course=self.course, class_group=target, student=conflict)
+        self.client.force_login(self.owner)
+        url = reverse("courses:student_copy", args=[self.course.pk, target.pk])
+
+        preview = self.client.post(url, {"action": "preview", "source_class": source.pk})
+        self.assertContains(preview, "可复制学生")
+        self.assertContains(preview, "已选课学生")
+        self.assertContains(preview, "将跳过")
+
+        confirmed = self.client.post(url, {"action": "confirm"})
+        self.assertRedirects(confirmed, reverse("courses:class_detail", args=[self.course.pk, target.pk]))
+        self.assertTrue(CourseEnrollment.objects.filter(course=self.course, student=eligible).exists())
+        eligible.refresh_from_db()
+        self.assertTrue(eligible.check_password("keep-password"))
+        audit = AuditLog.objects.get(action="student.class_copy", object_id=str(target.pk))
+        self.assertEqual(audit.details["copied"], 1)
+        self.assertEqual(audit.details["skipped"], 1)
+
+    def test_copy_student_source_is_limited_to_accessible_other_courses(self):
+        target = ClassGroup.objects.create(course=self.course, name="目标班")
+        outsider_course = Course.objects.create(
+            name="无权课程",
+            code="NOACCESS",
+            term="2026春",
+            owner=self.outsider,
+        )
+        outsider_class = ClassGroup.objects.create(course=outsider_course, name="外部班级")
+        self.client.force_login(self.owner)
+        url = reverse("courses:student_copy", args=[self.course.pk, target.pk])
+
+        page = self.client.get(url)
+        self.assertNotContains(page, "外部班级")
+        rejected = self.client.post(url, {"action": "preview", "source_class": outsider_class.pk})
+        self.assertEqual(rejected.status_code, 200)
+        self.assertContains(rejected, "请选择一个有效的选项")
+
+    def test_student_write_endpoints_require_csrf(self):
+        class_group = ClassGroup.objects.create(course=self.course, name="一班")
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.owner)
+
+        manual = client.post(
+            reverse("courses:student_add_manual", args=[self.course.pk, class_group.pk]),
+            {"student_number": "CSRF1", "display_name": "测试"},
+        )
+        copy = client.post(
+            reverse("courses:student_copy", args=[self.course.pk, class_group.pk]),
+            {"action": "confirm"},
+        )
+
+        self.assertEqual(manual.status_code, 403)
+        self.assertEqual(copy.status_code, 403)

@@ -3,14 +3,23 @@ from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 from urllib.parse import quote
+from urllib.parse import urlencode
 
 from apps.audit.services import log_action
 
-from .course_access import get_accessible_course, require_writable_course
-from .enrollment_services import enroll_parsed_students
-from .forms import ClassGroupForm, PasswordResetForm, StudentBatchUploadForm
+from .course_access import accessible_courses, get_accessible_course, require_writable_course
+from .enrollment_services import copy_class_enrollments, enroll_parsed_students, enroll_single_student
+from .forms import (
+    ClassGroupForm,
+    ClassGroupRenameForm,
+    ManualStudentEnrollmentForm,
+    PasswordResetForm,
+    StudentBatchUploadForm,
+    StudentClassCopyForm,
+)
 from .models import ClassGroup, CourseEnrollment, User
 from .permissions import role_required
 from .student_import import (
@@ -35,14 +44,166 @@ def class_list(request, course_pk):
         log_action(request, "class.create", class_group, {"course_id": course.pk})
         messages.success(request, "班级已创建。")
         return redirect("courses:class_detail", course.pk, class_group.pk)
+    query = request.GET.get("q", "").strip()
+    classes = course.classes.all()
+    if query:
+        classes = classes.filter(Q(name__icontains=query) | Q(academic_year__icontains=query))
     return render(
         request,
         "teacher/course_class_list.html",
         {
             "course": course,
             "current_course": course,
-            "classes": course.classes.all(),
+            "classes": classes,
             "form": form,
+            "query": query,
+        },
+    )
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_rename(request, course_pk, class_pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_writable_course(course)
+    class_group = get_object_or_404(course.classes, pk=class_pk)
+    old_name = class_group.name
+    form = ClassGroupRenameForm(request.POST, instance=class_group)
+    if form.is_valid():
+        form.save()
+        log_action(
+            request,
+            "class.rename",
+            class_group,
+            {"course_id": course.pk, "old_name": old_name, "new_name": class_group.name},
+        )
+        messages.success(request, "班级名称已更新。")
+    else:
+        errors = form.non_field_errors() or form.errors.get("name", [])
+        messages.error(request, "班级名称更新失败：" + "; ".join(errors))
+    target = reverse("courses:classes", args=[course.pk])
+    query = request.POST.get("q", "").strip()
+    if query:
+        target = f"{target}?{urlencode({'q': query})}"
+    return redirect(target)
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def student_add(request, course_pk, class_pk):
+    course = get_accessible_course(request.user, course_pk)
+    class_group = get_object_or_404(course.classes, pk=class_pk)
+    return render(
+        request,
+        "teacher/course_student_add.html",
+        {"course": course, "current_course": course, "class_group": class_group},
+    )
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def student_add_manual(request, course_pk, class_pk):
+    course = get_accessible_course(request.user, course_pk)
+    class_group = get_object_or_404(course.classes, pk=class_pk)
+    form = ManualStudentEnrollmentForm(request.POST or None)
+    if request.method == "POST":
+        require_writable_course(course)
+        if form.is_valid():
+            try:
+                student, created_account = enroll_single_student(
+                    course,
+                    class_group,
+                    form.cleaned_data["student_number"],
+                    form.cleaned_data["display_name"],
+                )
+            except ValidationError as exc:
+                form.add_error(None, "; ".join(exc.messages))
+            else:
+                enrollment = CourseEnrollment.objects.get(course=course, student=student)
+                log_action(
+                    request,
+                    "student.manual_enroll",
+                    enrollment,
+                    {
+                        "course_id": course.pk,
+                        "class_id": class_group.pk,
+                        "created_account": created_account,
+                    },
+                )
+                messages.success(request, "学生已加入当前班级。")
+                return redirect("courses:class_detail", course.pk, class_group.pk)
+    return render(
+        request,
+        "teacher/course_student_add_manual.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": class_group,
+            "form": form,
+        },
+    )
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def student_copy(request, course_pk, class_pk):
+    course = get_accessible_course(request.user, course_pk)
+    target_class = get_object_or_404(course.classes, pk=class_pk)
+    source_classes = ClassGroup.objects.filter(
+        course__in=accessible_courses(request.user).exclude(pk=course.pk)
+    ).select_related("course")
+    session_key = f"course_student_copy:{course.pk}:{target_class.pk}"
+    preview = None
+    source_class = None
+    form = StudentClassCopyForm(source_classes=source_classes)
+    if request.method == "POST":
+        require_writable_course(course)
+        if request.POST.get("action") == "confirm":
+            source_id = request.session.get(session_key)
+            source_class = source_classes.filter(pk=source_id).first()
+            if source_class is None:
+                messages.error(request, "复制预览已失效，请重新选择来源班级。")
+            else:
+                created, skipped = copy_class_enrollments(
+                    target_course=course,
+                    target_class=target_class,
+                    source_class=source_class,
+                )
+                request.session.pop(session_key, None)
+                log_action(
+                    request,
+                    "student.class_copy",
+                    target_class,
+                    {
+                        "course_id": course.pk,
+                        "source_course_id": source_class.course_id,
+                        "source_class_id": source_class.pk,
+                        "copied": created,
+                        "skipped": skipped,
+                    },
+                )
+                messages.success(request, f"已复制 {created} 名学生，跳过 {skipped} 名已选课学生。")
+                return redirect("courses:class_detail", course.pk, target_class.pk)
+        else:
+            request.session.pop(session_key, None)
+            form = StudentClassCopyForm(request.POST, source_classes=source_classes)
+            if form.is_valid():
+                source_class = form.cleaned_data["source_class"]
+                request.session[session_key] = source_class.pk
+                existing_ids = set(
+                    CourseEnrollment.objects.filter(course=course).values_list("student_id", flat=True)
+                )
+                preview = [
+                    {"student": enrollment.student, "skip": enrollment.student_id in existing_ids}
+                    for enrollment in source_class.enrollments.filter(is_active=True).select_related("student")
+                ]
+    return render(
+        request,
+        "teacher/course_student_copy.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": target_class,
+            "form": form,
+            "source_class": source_class,
+            "preview": preview,
         },
     )
 

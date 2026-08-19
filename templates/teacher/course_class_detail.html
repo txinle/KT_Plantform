@@ -4,7 +4,7 @@
 {% block content %}
 <header class="page-header">
   <div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">{{ class_group.name }}</h1><p class="page-subtitle">学生账号属于平台；本页只管理其在当前课程中的选课和班级关系。</p><div class="d-flex flex-wrap gap-2 mt-3"><span class="status-badge {% if class_group.is_active %}status-success{% else %}status-neutral{% endif %}">{% if class_group.is_active %}班级可用{% else %}班级停用{% endif %}</span><span class="cell-meta">学年：{{ class_group.academic_year|default:'未设置' }}</span></div></div>
-  {% if course.status == 'active' %}<div class="page-actions"><a class="btn btn-primary" href="{% url 'courses:student_import' course.pk class_group.pk %}">批量导入学生</a></div>{% endif %}
+  {% if course.status == 'active' %}<div class="page-actions"><a class="btn btn-primary" href="{% url 'courses:student_add' course.pk class_group.pk %}">导入学生</a></div>{% endif %}
 </header>
 <div class="notice-panel mb-4"><strong>密码是全局账号属性。</strong> 在本课程重置密码会影响学生登录其全部课程，但不会改变选课和实验分配。</div>
 <section aria-labelledby="student-table-title">

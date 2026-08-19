@@ -76,3 +76,102 @@ class CourseEnrollmentImportTests(TestCase):
             enroll_parsed_students(self.course_b, self.class_b, parsed)
 
         self.assertFalse(User.objects.filter(student_number="NEW").exists())
+
+    def test_manual_enrollment_creates_account_with_standard_password(self):
+        from .enrollment_services import enroll_single_student
+
+        student, created = enroll_single_student(
+            self.course_b,
+            self.class_b,
+            "00123",
+            "学生甲",
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(student.student_number, "00123")
+        self.assertTrue(student.check_password("S00123"))
+        self.assertTrue(
+            CourseEnrollment.objects.filter(
+                course=self.course_b,
+                class_group=self.class_b,
+                student=student,
+            ).exists()
+        )
+
+    def test_manual_enrollment_reuses_matching_account_without_changing_password(self):
+        from .enrollment_services import enroll_single_student
+
+        student = User.objects.create_user(
+            username="S2",
+            student_number="S2",
+            display_name="学生乙",
+            role=User.Role.STUDENT,
+            password="original-password",
+        )
+
+        reused, created = enroll_single_student(
+            self.course_b,
+            self.class_b,
+            "S2",
+            "学生乙",
+        )
+
+        self.assertEqual(reused, student)
+        self.assertFalse(created)
+        student.refresh_from_db()
+        self.assertTrue(student.check_password("original-password"))
+
+    def test_manual_enrollment_rejects_identity_mismatch_or_existing_course_enrollment(self):
+        from .enrollment_services import enroll_single_student
+
+        student = User.objects.create_user(
+            username="S3",
+            student_number="S3",
+            display_name="学生丙",
+            role=User.Role.STUDENT,
+        )
+        with self.assertRaisesMessage(ValidationError, "姓名不一致"):
+            enroll_single_student(self.course_b, self.class_b, "S3", "另一个姓名")
+
+        CourseEnrollment.objects.create(
+            course=self.course_b,
+            class_group=self.class_b,
+            student=student,
+        )
+        with self.assertRaisesMessage(ValidationError, "已加入当前课程"):
+            enroll_single_student(self.course_b, self.class_b, "S3", "学生丙")
+
+    def test_copy_class_enrollments_skips_target_course_conflicts_and_keeps_passwords(self):
+        from .enrollment_services import copy_class_enrollments
+
+        first = User.objects.create_user(
+            username="C1",
+            student_number="C1",
+            display_name="复制甲",
+            role=User.Role.STUDENT,
+            password="first-password",
+        )
+        second = User.objects.create_user(
+            username="C2",
+            student_number="C2",
+            display_name="复制乙",
+            role=User.Role.STUDENT,
+            password="second-password",
+        )
+        CourseEnrollment.objects.create(course=self.course_a, class_group=self.class_a, student=first)
+        CourseEnrollment.objects.create(course=self.course_a, class_group=self.class_a, student=second)
+        CourseEnrollment.objects.create(course=self.course_b, class_group=self.class_b, student=second)
+
+        created, skipped = copy_class_enrollments(
+            target_course=self.course_b,
+            target_class=self.class_b,
+            source_class=self.class_a,
+        )
+
+        self.assertEqual((created, skipped), (1, 1))
+        self.assertTrue(CourseEnrollment.objects.filter(course=self.course_b, student=first).exists())
+        self.assertEqual(User.objects.filter(student_number__in=["C1", "C2"]).count(), 2)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertTrue(first.check_password("first-password"))
+        self.assertTrue(second.check_password("second-password"))
