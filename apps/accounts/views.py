@@ -105,7 +105,7 @@ def student_list(request):
 @require_GET
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def student_import_template(request):
-    classes = list(_class_queryset(request.user))
+    classes = list(_class_queryset(request.user).filter(is_active=True))
     workbook = Workbook()
     import_sheet = workbook.active
     import_sheet.title = "学生导入"

@@ -251,6 +251,23 @@ class StudentBatchImportCoreTests(TestCase):
         self.assertEqual(workbook["学生导入"].column_dimensions["B"].number_format, "@")
         self.assertEqual(workbook["学生导入"].column_dimensions["C"].number_format, "@")
 
+    def test_template_excludes_inactive_classes_from_its_available_class_list(self):
+        inactive_class = ClassGroup.objects.create(
+            owner=self.teacher,
+            academic_year="2026",
+            name="停用导入班",
+            is_active=False,
+        )
+
+        response = self.client.get(self.template_url)
+
+        workbook = load_workbook(BytesIO(response.content), data_only=True)
+        instructions = "\n".join(
+            str(cell.value or "") for row in workbook["填写说明"].iter_rows() for cell in row
+        )
+        self.assertIn(str(self.class_group), instructions)
+        self.assertNotIn(str(inactive_class), instructions)
+
     def test_previews_chinese_rows_with_columns_in_any_order(self):
         upload = self._upload(
             ["班级", "姓名", "学号"],
@@ -271,6 +288,7 @@ class StudentBatchImportCoreTests(TestCase):
 
         self.assertContains(response, 'id="student-import-title"')
         self.assertContains(response, 'aria-labelledby="student-import-title"')
+        self.assertContains(response, "停用班级不能作为导入目标")
 
     def test_confirm_creates_students_atomically_with_documented_password(self):
         upload = self._upload(
