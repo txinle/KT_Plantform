@@ -139,6 +139,26 @@ class UIContractTests(TestCase):
         self.assertIn(".concept-combobox", stylesheet)
         self.assertIn(".concept-tags", stylesheet)
 
+    def test_long_kc_and_page_header_text_wrap_without_root_overflow(self):
+        stylesheet = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
+
+        self.assertRegex(
+            stylesheet,
+            r"\.concept-tag\s*\{[^}]*max-width:\s*100%;[^}]*min-width:\s*0;",
+        )
+        self.assertRegex(
+            stylesheet,
+            r"\.concept-tag\s*>\s*span\s*\{[^}]*min-width:\s*0;[^}]*overflow-wrap:\s*anywhere;",
+        )
+        self.assertRegex(
+            stylesheet,
+            r"\.concept-result\s*\{[^}]*overflow-wrap:\s*anywhere;",
+        )
+        self.assertRegex(
+            stylesheet,
+            r"\.page-kicker,[^}]*\.page-title,[^}]*\.page-subtitle\s*\{[^}]*overflow-wrap:\s*anywhere;",
+        )
+
     def test_course_kc_delete_dialogs_are_not_nested_inside_table_bodies(self):
         template = (ROOT / "templates" / "teacher" / "course_bank_list.html").read_text(encoding="utf-8")
         kc_section = template.split('id="course-kc-title"', 1)[1]

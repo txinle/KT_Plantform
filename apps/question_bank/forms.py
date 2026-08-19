@@ -85,6 +85,7 @@ class QuestionEditForm(forms.ModelForm):
             course = self.instance.bank.course
         self.manage_concepts = course is not None
         concept_queryset = course.concepts.order_by("name") if course is not None else Concept.objects.none()
+        self.fields["primary_concept"].required = self.manage_concepts
         self.fields["primary_concept"].queryset = concept_queryset
         self.fields["secondary_concepts"].queryset = concept_queryset
         self.fields["primary_concept"].widget.attrs["data-concept-select"] = "primary"

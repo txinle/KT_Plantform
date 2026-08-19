@@ -1,5 +1,8 @@
+from unittest.mock import patch
+
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError
 from django.test import Client, TestCase
 from django.urls import reverse
 
@@ -251,6 +254,29 @@ class CourseQuestionBankScopeTests(TestCase):
         referenced.refresh_from_db()
         self.assertEqual(referenced.name, "已引用")
 
+    def test_course_kc_create_and_rename_handle_database_duplicate_races(self):
+        concept = Concept.objects.create(course=self.course_a, name="原名称")
+
+        with patch(
+            "apps.question_bank.course_views.CourseConceptForm.save",
+            side_effect=IntegrityError("unique_course_concept"),
+        ):
+            create_response = self.client.post(
+                reverse("courses:concept_create", args=[self.course_a.pk]),
+                {"name": "并发名称"},
+                follow=True,
+            )
+            rename_response = self.client.post(
+                reverse("courses:concept_rename", args=[self.course_a.pk, concept.pk]),
+                {"name": "并发改名"},
+                follow=True,
+            )
+
+        self.assertContains(create_response, "当前课程已存在同名 KC")
+        self.assertContains(rename_response, "当前课程已存在同名 KC")
+        concept.refresh_from_db()
+        self.assertEqual(concept.name, "原名称")
+
     def test_course_kc_search_is_normalized_limited_and_course_scoped(self):
         for index in range(14):
             Concept.objects.create(course=self.course_a, name=f"基础知识 {index:02d}")
@@ -366,6 +392,40 @@ class CourseQuestionBankScopeTests(TestCase):
         self.assertContains(duplicate_secondary, "次 KC 不能重复")
         question.refresh_from_db()
         self.assertEqual(question.text, "保持原题目")
+
+    def test_question_edit_requires_primary_kc_without_mutating_existing_mapping(self):
+        bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="章节题库")
+        question = Question.objects.create(
+            bank=bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="保持原题目",
+            correct_answer="原答案",
+        )
+        existing = Concept.objects.create(course=self.course_a, name="原主 KC")
+        secondary = Concept.objects.create(course=self.course_a, name="候选次 KC")
+        QuestionConcept.objects.create(question=question, concept=existing, is_primary=True)
+        url = reverse("courses:question_edit", args=[self.course_a.pk, bank.pk, question.pk])
+
+        response = self.client.post(
+            url,
+            {
+                "text": "不应保存",
+                "question_type": Question.Type.SHORT,
+                "status": Question.Status.ACTIVE,
+                "correct_answer_text": "新答案",
+                "accepted_answers_text": "",
+                "primary_concept": "",
+                "secondary_concepts": [secondary.pk],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "这个字段是必填项")
+        question.refresh_from_db()
+        self.assertEqual(question.text, "保持原题目")
+        self.assertEqual(question.primary_concept, existing)
+        self.assertFalse(question.concept_links.filter(concept=secondary).exists())
 
     def test_class_and_kc_renames_do_not_rewrite_published_snapshots(self):
         class_group = ClassGroup.objects.create(

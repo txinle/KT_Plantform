@@ -2,7 +2,7 @@ from dataclasses import asdict
 from collections import Counter
 
 from django.contrib import messages
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Prefetch
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -120,9 +120,14 @@ def concept_create(request, course_pk):
     require_writable_course(course)
     form = CourseConceptForm(request.POST, course=course)
     if form.is_valid():
-        concept = form.save()
-        log_action(request, "concept.create", concept, {"course_id": course.pk, "name": concept.name})
-        messages.success(request, "课程 KC 已创建。")
+        try:
+            with transaction.atomic():
+                concept = form.save()
+                log_action(request, "concept.create", concept, {"course_id": course.pk, "name": concept.name})
+        except IntegrityError:
+            messages.error(request, "课程 KC 创建失败：当前课程已存在同名 KC。")
+        else:
+            messages.success(request, "课程 KC 已创建。")
     else:
         messages.error(request, "课程 KC 创建失败：" + "; ".join(form.errors.get("name", [])))
     return redirect("courses:banks", course.pk)
@@ -137,14 +142,19 @@ def concept_rename(request, course_pk, concept_pk):
     old_name = concept.name
     form = CourseConceptForm(request.POST, course=course, instance=concept)
     if form.is_valid():
-        form.save()
-        log_action(
-            request,
-            "concept.rename",
-            concept,
-            {"course_id": course.pk, "old_name": old_name, "new_name": concept.name},
-        )
-        messages.success(request, "课程 KC 已重命名。")
+        try:
+            with transaction.atomic():
+                form.save()
+                log_action(
+                    request,
+                    "concept.rename",
+                    concept,
+                    {"course_id": course.pk, "old_name": old_name, "new_name": concept.name},
+                )
+        except IntegrityError:
+            messages.error(request, "课程 KC 重命名失败：当前课程已存在同名 KC。")
+        else:
+            messages.success(request, "课程 KC 已重命名。")
     else:
         messages.error(request, "课程 KC 重命名失败：" + "; ".join(form.errors.get("name", [])))
     return redirect("courses:banks", course.pk)

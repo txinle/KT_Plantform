@@ -226,6 +226,9 @@ a:hover { color: var(--kt-brand-900); }
   text-wrap: balance;
 }
 .page-subtitle { max-width: 68ch; margin: var(--space-2) 0 0; color: var(--kt-muted); }
+.page-kicker,
+.page-title,
+.page-subtitle { overflow-wrap: anywhere; }
 .page-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); }
 
 .section-title { margin: 0; font-size: var(--font-size-lg); font-weight: var(--weight-bold); }
@@ -323,11 +326,12 @@ textarea.form-control { min-height: 7rem; }
 
 .concept-combobox { position: relative; }
 .concept-results { position: absolute; z-index: 20; inset: calc(100% + .25rem) 0 auto; max-height: 15rem; margin: 0; padding: .25rem; overflow-y: auto; list-style: none; border: 1px solid var(--kt-border); border-radius: var(--radius-control); background: var(--kt-surface); box-shadow: var(--shadow-elevated); }
-.concept-result { padding: .65rem .75rem; border-radius: var(--radius-status); cursor: pointer; }
+.concept-result { padding: .65rem .75rem; overflow-wrap: anywhere; border-radius: var(--radius-status); cursor: pointer; }
 .concept-result[aria-selected="true"],
 .concept-result:hover { background: var(--kt-brand-050); color: var(--kt-brand-900); }
 .concept-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
-.concept-tag { display: inline-flex; align-items: center; gap: .35rem; padding: .3rem .35rem .3rem .65rem; border: 1px solid var(--kt-border); border-radius: var(--radius-control); background: var(--kt-surface-subtle); }
+.concept-tag { display: inline-flex; max-width: 100%; min-width: 0; align-items: center; gap: .35rem; padding: .3rem .35rem .3rem .65rem; border: 1px solid var(--kt-border); border-radius: var(--radius-control); background: var(--kt-surface-subtle); }
+.concept-tag > span { min-width: 0; overflow-wrap: anywhere; }
 .concept-tag-remove { display: inline-grid; width: 1.75rem; height: 1.75rem; padding: 0; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--kt-muted); font: inherit; }
 .concept-tag-remove:hover,
 .concept-tag-remove:focus-visible { background: var(--kt-danger-bg); color: var(--kt-danger); }
