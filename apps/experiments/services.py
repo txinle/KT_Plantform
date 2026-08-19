@@ -4,6 +4,7 @@ import random
 from collections import defaultdict, deque
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from apps.accounts.class_lifecycle import lock_active_class_groups
 from .models import Experiment, ExperimentQuestion, ExperimentStudent, ExperimentVersion, QuestionSnapshot
 
 
@@ -98,41 +99,48 @@ def sync_experiment_questions(experiment):
 def assign_students(experiment, students):
     if experiment.status != Experiment.Status.DRAFT: raise ValidationError("发布后不能修改学生")
     students = list(students)
+    student_ids = [student.pk for student in students]
     if experiment.course_id is None:
         from apps.accounts.models import User
 
-        if User.objects.filter(
-            pk__in=[student.pk for student in students],
-            class_group__is_active=False,
-        ).exists():
-            raise ValidationError("不能分配停用班级中的学生")
-        experiment.student_links.all().delete()
-        for student in students:
-            ExperimentStudent.objects.create(
-                experiment=experiment,
-                student=student,
-                class_snapshot_name=str(student.class_group or ""),
-            )
+        student_class_ids = dict(
+            User.objects.filter(pk__in=student_ids).values_list("pk", "class_group_id")
+        )
+        with lock_active_class_groups(
+            student_class_ids.values(),
+            inactive_error="不能分配停用班级中的学生",
+        ) as locked_classes:
+            experiment.student_links.all().delete()
+            for student in students:
+                class_group = locked_classes.get(student_class_ids[student.pk])
+                ExperimentStudent.objects.create(
+                    experiment=experiment,
+                    student=student,
+                    class_snapshot_name=str(class_group or ""),
+                )
         return
 
-    experiment.student_links.all().delete()
     from apps.accounts.models import CourseEnrollment
 
     enrollments = {
-        item.student_id: item
+        item["student_id"]: item
         for item in CourseEnrollment.objects.filter(
             course=experiment.course,
-            student__in=students,
+            student_id__in=student_ids,
             is_active=True,
-            class_group__is_active=True,
-        ).select_related("class_group")
+        ).values("student_id", "class_group_id")
     }
     if len(enrollments) != len(students):
         raise ValidationError("只能分配当前课程可用班级中的在读学生")
-    for student in students:
-        enrollment = enrollments[student.pk]
-        ExperimentStudent.objects.create(
-            experiment=experiment,
-            student=student,
-            class_snapshot_name=str(enrollment.class_group),
-        )
+    with lock_active_class_groups(
+        [enrollment["class_group_id"] for enrollment in enrollments.values()],
+        inactive_error="只能分配当前课程可用班级中的在读学生",
+    ) as locked_classes:
+        experiment.student_links.all().delete()
+        for student in students:
+            enrollment = enrollments[student.pk]
+            ExperimentStudent.objects.create(
+                experiment=experiment,
+                student=student,
+                class_snapshot_name=str(locked_classes[enrollment["class_group_id"]]),
+            )

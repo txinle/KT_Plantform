@@ -1,7 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.urls import reverse
-from apps.accounts.models import ClassGroup, User
+from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.analytics.export_fields import FIELD_LABELS
 from apps.assessment.models import ExperimentSession
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
@@ -106,6 +106,73 @@ class LegacyExperimentInactiveClassAssignmentTests(TestCase):
         self.assertEqual(
             list(self.experiment.student_links.values_list("student_id", flat=True)),
             [self.active_student.pk],
+        )
+
+    def test_legacy_assignment_rejects_a_class_deactivated_after_the_student_was_read(self):
+        ExperimentStudent.objects.create(
+            experiment=self.experiment,
+            student=self.active_student,
+            class_snapshot_name=str(self.active_class),
+        )
+        stale_student = User.objects.select_related("class_group").get(pk=self.active_student.pk)
+        ClassGroup.objects.filter(pk=self.active_class.pk).update(is_active=False)
+
+        with self.assertRaisesMessage(ValidationError, "停用班级"):
+            assign_students(self.experiment, [stale_student])
+
+        self.assertEqual(
+            list(self.experiment.student_links.values_list("student_id", flat=True)),
+            [self.active_student.pk],
+        )
+
+
+class CourseExperimentInactiveClassAssignmentTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="course-experiment-teacher",
+            role=User.Role.TEACHER,
+        )
+        self.course = Course.objects.create(
+            owner=self.teacher,
+            name="实验课程",
+            code="EXP-LOCK",
+            term="2026春",
+        )
+        self.class_group = ClassGroup.objects.create(course=self.course, name="实验班")
+        self.student = User.objects.create_user(
+            username="COURSE-STALE-STUDENT",
+            student_number="COURSE-STALE-STUDENT",
+            role=User.Role.STUDENT,
+        )
+        CourseEnrollment.objects.create(
+            course=self.course,
+            class_group=self.class_group,
+            student=self.student,
+        )
+        bank = QuestionBank.objects.create(owner=self.teacher, course=self.course, name="课程实验题库")
+        self.experiment = Experiment.objects.create(
+            owner=self.teacher,
+            created_by=self.teacher,
+            course=self.course,
+            question_bank=bank,
+            name="课程实验",
+        )
+        ExperimentStudent.objects.create(
+            experiment=self.experiment,
+            student=self.student,
+            class_snapshot_name=str(self.class_group),
+        )
+
+    def test_course_assignment_rejects_a_class_deactivated_after_the_student_was_read(self):
+        stale_student = User.objects.get(pk=self.student.pk)
+        ClassGroup.objects.filter(pk=self.class_group.pk).update(is_active=False)
+
+        with self.assertRaisesMessage(ValidationError, "可用班级"):
+            assign_students(self.experiment, [stale_student])
+
+        self.assertEqual(
+            list(self.experiment.student_links.values_list("student_id", flat=True)),
+            [self.student.pk],
         )
 
 

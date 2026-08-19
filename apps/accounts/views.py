@@ -6,13 +6,14 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
 from django.core.exceptions import PermissionDenied
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_GET
 from openpyxl import Workbook
 
+from .enrollment_services import import_legacy_students
 from .forms import ClassGroupForm, PasswordResetForm, StudentBatchUploadForm, StudentCreateForm
 from .models import ClassGroup, User
 from .permissions import role_required
@@ -148,28 +149,7 @@ def student_import(request):
         stored = request.session.get(session_key, [])
         preview = [ParsedStudent(**item) for item in stored]
         try:
-            with transaction.atomic():
-                accessible_classes = {
-                    class_group.pk: class_group for class_group in _class_queryset(request.user)
-                }
-                numbers = [item.student_number for item in preview]
-                if not preview:
-                    raise StudentImportError("导入预览已失效，请重新上传文件")
-                if User.objects.filter(Q(student_number__in=numbers) | Q(username__in=numbers)).exists():
-                    raise StudentImportError("部分学号已存在，请重新校验名单")
-                for item in preview:
-                    class_group = accessible_classes.get(item.class_id)
-                    if class_group is None or str(class_group) != item.class_name:
-                        raise StudentImportError(f"班级已变更或无权访问：{item.class_name}")
-                    _require_active_import_class(class_group, item.class_name)
-                    User.objects.create_user(
-                        username=item.student_number,
-                        student_number=item.student_number,
-                        display_name=item.display_name,
-                        class_group=class_group,
-                        role=User.Role.STUDENT,
-                        password=f"S{item.student_number}",
-                    )
+            import_legacy_students(preview, _class_queryset(request.user))
         except (StudentImportError, IntegrityError) as exc:
             messages.error(request, str(exc) if str(exc) else "导入失败，请重新校验名单")
         else:

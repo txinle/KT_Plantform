@@ -12,7 +12,12 @@ from urllib.parse import urlencode
 from apps.audit.services import log_action
 
 from .course_access import accessible_courses, get_accessible_course, require_writable_course
-from .enrollment_services import copy_class_enrollments, enroll_parsed_students, enroll_single_student
+from .enrollment_services import (
+    copy_class_enrollments,
+    enroll_parsed_students,
+    enroll_single_student,
+    transfer_course_enrollment,
+)
 from .forms import (
     ClassGroupForm,
     ClassGroupRenameForm,
@@ -344,9 +349,11 @@ def move_student(request, course_pk, class_pk, student_pk):
     target = get_object_or_404(course.classes, pk=request.POST.get("class_group"))
     if not target.is_active:
         return _inactive_target_class_response(request, course, source, "转入学生")
-    enrollment.class_group = target
-    enrollment.full_clean()
-    enrollment.save(update_fields=["class_group"])
+    try:
+        enrollment = transfer_course_enrollment(enrollment, target)
+    except ValidationError as exc:
+        messages.error(request, "; ".join(exc.messages))
+        return redirect("courses:class_detail", course.pk, source.pk)
     log_action(
         request,
         "student.class_transfer",

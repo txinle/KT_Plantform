@@ -1,8 +1,9 @@
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 
 from .models import ClassGroup, Course, CourseEnrollment, User
-from .student_import import ParsedStudent
+from . import enrollment_services
+from .student_import import ParsedStudent, StudentImportError
 
 
 class CourseEnrollmentImportTests(TestCase):
@@ -230,3 +231,125 @@ class CourseEnrollmentImportTests(TestCase):
         )
 
         self.assertEqual((created, skipped), (1, 0))
+
+
+class FreshClassLifecycleWriteTests(TransactionTestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(username="locking-teacher", role=User.Role.TEACHER)
+        self.course_a = Course.objects.create(
+            owner=self.teacher,
+            name="来源课程",
+            code="LOCK-A",
+            term="2026春",
+        )
+        self.course_b = Course.objects.create(
+            owner=self.teacher,
+            name="目标课程",
+            code="LOCK-B",
+            term="2026春",
+        )
+        self.source_class = ClassGroup.objects.create(course=self.course_a, name="来源班")
+        self.target_class = ClassGroup.objects.create(course=self.course_b, name="目标班")
+
+    def _deactivate_after_read(self, class_group):
+        stale_class = ClassGroup.objects.get(pk=class_group.pk)
+        ClassGroup.objects.filter(pk=class_group.pk).update(is_active=False)
+        return stale_class
+
+    def test_manual_enrollment_reloads_a_stale_target_class_before_writing(self):
+        stale_target = self._deactivate_after_read(self.target_class)
+
+        with self.assertRaisesMessage(ValidationError, "目标班级已停用"):
+            enrollment_services.enroll_single_student(
+                self.course_b,
+                stale_target,
+                "STALE-MANUAL",
+                "陈旧手工学生",
+            )
+
+        self.assertFalse(User.objects.filter(student_number="STALE-MANUAL").exists())
+        self.assertFalse(CourseEnrollment.objects.filter(course=self.course_b).exists())
+
+    def test_excel_enrollment_reloads_a_stale_target_class_before_writing(self):
+        stale_target = self._deactivate_after_read(self.target_class)
+        parsed_students = [
+            ParsedStudent(
+                "STALE-EXCEL",
+                "陈旧 Excel 学生",
+                stale_target.pk,
+                str(stale_target),
+            )
+        ]
+
+        with self.assertRaisesMessage(ValidationError, "目标班级已停用"):
+            enrollment_services.enroll_parsed_students(
+                self.course_b,
+                stale_target,
+                parsed_students,
+            )
+
+        self.assertFalse(User.objects.filter(student_number="STALE-EXCEL").exists())
+        self.assertFalse(CourseEnrollment.objects.filter(course=self.course_b).exists())
+
+    def test_copy_reloads_a_stale_target_class_before_writing(self):
+        student = User.objects.create_user(
+            username="STALE-COPY",
+            student_number="STALE-COPY",
+            display_name="陈旧复制学生",
+            role=User.Role.STUDENT,
+        )
+        CourseEnrollment.objects.create(
+            course=self.course_a,
+            class_group=self.source_class,
+            student=student,
+        )
+        stale_target = self._deactivate_after_read(self.target_class)
+
+        with self.assertRaisesMessage(ValidationError, "目标班级已停用"):
+            enrollment_services.copy_class_enrollments(
+                target_course=self.course_b,
+                target_class=stale_target,
+                source_class=self.source_class,
+            )
+
+        self.assertFalse(CourseEnrollment.objects.filter(course=self.course_b).exists())
+
+    def test_transfer_reloads_a_stale_target_class_before_writing(self):
+        student = User.objects.create_user(
+            username="STALE-TRANSFER",
+            student_number="STALE-TRANSFER",
+            display_name="陈旧转班学生",
+            role=User.Role.STUDENT,
+        )
+        enrollment = CourseEnrollment.objects.create(
+            course=self.course_b,
+            class_group=self.target_class,
+            student=student,
+        )
+        destination = ClassGroup.objects.create(course=self.course_b, name="转入目标班")
+        stale_destination = self._deactivate_after_read(destination)
+
+        with self.assertRaisesMessage(ValidationError, "目标班级已停用"):
+            enrollment_services.transfer_course_enrollment(enrollment, stale_destination)
+
+        enrollment.refresh_from_db()
+        self.assertEqual(enrollment.class_group_id, self.target_class.pk)
+
+    def test_legacy_import_reloads_stale_target_classes_before_writing(self):
+        legacy_class = ClassGroup.objects.create(owner=self.teacher, name="旧导入班")
+        stale_legacy_class = self._deactivate_after_read(legacy_class)
+
+        with self.assertRaisesMessage(StudentImportError, "班级已停用，不能导入学生"):
+            enrollment_services.import_legacy_students(
+                [
+                    ParsedStudent(
+                        "STALE-LEGACY",
+                        "陈旧旧导入学生",
+                        stale_legacy_class.pk,
+                        str(stale_legacy_class),
+                    )
+                ],
+                [stale_legacy_class],
+            )
+
+        self.assertFalse(User.objects.filter(student_number="STALE-LEGACY").exists())
