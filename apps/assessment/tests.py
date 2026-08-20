@@ -3,7 +3,7 @@ from django.test import TestCase
 from apps.accounts.models import User
 from apps.experiments.models import Experiment, ExperimentQuestion, ExperimentStudent
 from apps.experiments.services import publish_experiment
-from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
+from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
 from .models import Attempt
 from .services import get_or_create_session, record_visit, save_draft, submit_attempt
 
@@ -14,6 +14,8 @@ class AssessmentFlowTests(TestCase):
         bank = QuestionBank.objects.create(owner=self.teacher, name="bank")
         concept = Concept.objects.create(owner=self.teacher, scope=Concept.Scope.PRIVATE, name="加法", normalized_name="加法")
         question = Question.objects.create(bank=bank, sequence=1, question_type=Question.Type.SINGLE, text="2+2", correct_answer="B")
+        QuestionOption.objects.create(question=question, key="A", text="3")
+        QuestionOption.objects.create(question=question, key="B", text="4")
         QuestionConcept.objects.create(question=question, concept=concept, is_primary=True)
         self.experiment = Experiment.objects.create(owner=self.teacher, question_bank=bank, name="exp")
         ExperimentQuestion.objects.create(experiment=self.experiment, question=question, display_order=1)

@@ -141,6 +141,7 @@ class ImportTemplateLinkTests(TestCase):
         self.assertInHTML(anchor, response.content.decode())
         self.assertEqual(response.content.decode().count(anchor), 1)
         self.assertContains(response, "<code>sequence, question, option_a ... option_f, answer</code>", html=True)
+        self.assertContains(response, "填空题和判断题必须显式填写题型")
         self.assertNotContains(response, "下载 KC CSV 示例")
 
     def test_kc_import_page_links_to_kc_template(self):

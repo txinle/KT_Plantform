@@ -111,6 +111,8 @@ class Question(models.Model):
         MULTIPLE = "multiple_choice", "多选题"
         NUMERIC = "numeric", "数值题"
         SHORT = "short_answer", "简答题"
+        FILL_BLANK = "fill_blank", "填空题"
+        TRUE_FALSE = "true_false", "判断题"
     class Status(models.TextChoices):
         DRAFT = "draft", "草稿"
         ACTIVE = "active", "可用"

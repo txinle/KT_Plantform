@@ -8,6 +8,18 @@ def _normalized_text(value: Any) -> str:
     return " ".join(str(value or "").strip().casefold().split())
 
 
+def normalize_true_false_answer(value: Any) -> bool | None:
+    """Map the fixed judgement responses to their JSON boolean representation."""
+    if isinstance(value, bool):
+        return value
+    normalized = _normalized_text(value)
+    if normalized in {"true", "1", "正确", "对", "是", "yes"}:
+        return True
+    if normalized in {"false", "0", "错误", "错", "否", "no"}:
+        return False
+    return None
+
+
 def _choice_set(value: Any) -> set[str]:
     if value is None:
         return set()
@@ -58,10 +70,14 @@ def score_payload(
                 scale = abs(expected) if expected != 0 else Decimal("1")
                 checks.append(difference <= relative * scale)
             is_correct = any(checks) if checks else difference == 0
-    elif question_type == "short_answer":
+    elif question_type in {"short_answer", "fill_blank"}:
         candidates = [correct_answer, *(accepted_answers or [])]
         submitted = _normalized_text(submitted_answer)
         is_correct = bool(submitted) and submitted in {_normalized_text(item) for item in candidates}
+    elif question_type == "true_false":
+        expected = normalize_true_false_answer(correct_answer)
+        observed = normalize_true_false_answer(submitted_answer)
+        is_correct = expected is not None and observed is not None and expected is observed
     else:
         raise ValueError(f"Unsupported question type: {question_type}")
 

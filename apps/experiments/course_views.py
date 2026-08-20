@@ -21,6 +21,7 @@ from .services import (
     assign_students,
     lock_experiment_question_bank,
     publish_experiment,
+    selection_display_context,
     sync_experiment_questions,
 )
 
@@ -59,6 +60,7 @@ def experiment_create(request, course_pk):
                 experiment.created_by = request.user
                 experiment.full_clean()
                 experiment.save()
+                form.save_quotas(experiment)
                 sync_experiment_questions(experiment)
                 log_action(request, "experiment.create", experiment, {"course_id": course.pk})
         except ValidationError as exc:
@@ -91,6 +93,7 @@ def experiment_detail(request, course_pk, pk):
             "experiment": experiment,
             "assignment_form": assignment_form,
             "student_links": experiment.student_links.select_related("student"),
+            **selection_display_context(experiment),
         },
     )
 
@@ -129,6 +132,7 @@ def experiment_edit(request, course_pk, pk):
                     experiment.question_bank = question_bank
                     experiment.full_clean()
                     experiment.save()
+                    form.save_quotas(experiment)
                     if experiment.question_bank_id != original_bank_id:
                         sync_experiment_questions(experiment)
                     log_action(request, "experiment.update", experiment, {"course_id": course.pk})

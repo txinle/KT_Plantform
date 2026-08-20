@@ -76,6 +76,44 @@ class UIContractTests(TestCase):
         self.assertIn('aria-current="step"', source)
         self.assertIn('aria-live="polite"', source)
 
+    def test_question_type_templates_render_fixed_judgement_controls_and_single_line_fill_blank_input(self):
+        source = (ROOT / "templates" / "student" / "question.html").read_text(encoding="utf-8")
+
+        self.assertIn("snapshot.question_type == 'true_false'", source)
+        self.assertIn('value="true"', source)
+        self.assertIn('value="false"', source)
+        self.assertIn("snapshot.question_type == 'fill_blank'", source)
+        self.assertIn('type="text"', source)
+        self.assertIn("填空答案", source)
+
+    def test_assessment_payload_restore_and_feedback_handle_judgement_answers(self):
+        source = (ROOT / "static" / "js" / "assessment.js").read_text(encoding="utf-8")
+
+        self.assertIn("type === 'true_false'", source)
+        self.assertIn("formatCorrectAnswer", source)
+        self.assertIn("正确", source)
+        self.assertIn("错误", source)
+
+    def test_question_edit_templates_expose_fill_blank_accepted_answers(self):
+        for filename in ("question_edit.html", "course_question_edit.html"):
+            with self.subTest(template=filename):
+                source = (ROOT / "templates" / "teacher" / filename).read_text(encoding="utf-8")
+                self.assertIn('data-question-field-group="short_answer fill_blank"', source)
+                self.assertIn("form.accepted_answers_text", source)
+
+    def test_experiment_templates_and_native_script_expose_quota_configuration(self):
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("data-selection-mode-controller", script)
+        self.assertIn("data-quota-input", script)
+        self.assertIn("data-quota-total", script)
+        for filename in ("experiment_form.html", "course_experiment_form.html"):
+            with self.subTest(template=filename):
+                source = (ROOT / "templates" / "teacher" / filename).read_text(encoding="utf-8")
+                self.assertIn("form.selection_mode", source)
+                self.assertIn("form.quota_single_choice", source)
+                self.assertIn("form.quota_true_false", source)
+                self.assertIn("data-quota-total", source)
+
     def test_question_bank_list_visibility_contract_uses_progressive_enhancement(self):
         template = (ROOT / "templates" / "teacher" / "bank_list.html").read_text(encoding="utf-8")
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")

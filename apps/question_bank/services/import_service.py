@@ -12,7 +12,8 @@ def import_questions(bank, parsed_rows: list[ParsedQuestion]):
     for row in parsed_rows:
         question = Question.objects.create(
             bank=bank, sequence=row.sequence, question_type=row.question_type,
-            text=row.text, correct_answer=row.answer, status=Question.Status.ACTIVE,
+            text=row.text, correct_answer=row.answer, accepted_answers=row.accepted_answers,
+            status=Question.Status.ACTIVE,
         )
         QuestionOption.objects.bulk_create([
             QuestionOption(question=question, key=key, text=value, display_order=index)

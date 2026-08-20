@@ -1,0 +1,357 @@
+from django.core.exceptions import ValidationError
+from django.test import TestCase
+from django.urls import reverse
+
+from apps.accounts.models import Course, User
+from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
+from apps.assessment.models import ExperimentSession
+from apps.assessment.services import get_or_create_session
+
+from .forms import ExperimentForm
+from .models import Experiment, ExperimentQuestion, ExperimentQuestionQuota, ExperimentStudent, QuestionSnapshot
+from .services import publish_experiment
+
+
+class ExperimentQuotaFormTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="quota-form-teacher",
+            role=User.Role.TEACHER,
+        )
+        self.bank = QuestionBank.objects.create(owner=self.teacher, name="配额题库")
+
+    def payload(self, **overrides):
+        data = {
+            "name": "配额实验",
+            "description": "",
+            "question_bank": self.bank.pk,
+            "selection_mode": Experiment.SelectionMode.QUOTA,
+            "ordering_mode": Experiment.Ordering.FIXED,
+            "feedback_mode": Experiment.Feedback.NONE,
+            "time_mode": Experiment.TimeMode.NONE,
+            "total_time_limit_minutes": "",
+            "per_question_time_limit_seconds": "",
+            "resume_mode": Experiment.ResumeMode.RESUMABLE,
+        }
+        data.update({f"quota_{question_type}": 0 for question_type in Question.Type.values})
+        data.update(overrides)
+        return data
+
+    def test_quota_mode_requires_a_positive_total(self):
+        form = ExperimentForm(self.payload(), owner=self.teacher)
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("至少需要抽取 1 道题", str(form.errors["selection_mode"]))
+
+    def test_quota_form_persists_a_nonnegative_row_for_every_question_type(self):
+        form = ExperimentForm(
+            self.payload(quota_single_choice=2, quota_true_false=1),
+            owner=self.teacher,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        experiment = form.save(commit=False)
+        experiment.owner = self.teacher
+        experiment.save()
+        form.save_quotas(experiment)
+
+        self.assertEqual(
+            dict(experiment.question_quotas.values_list("question_type", "amount")),
+            {
+                Question.Type.SINGLE: 2,
+                Question.Type.MULTIPLE: 0,
+                Question.Type.NUMERIC: 0,
+                Question.Type.SHORT: 0,
+                Question.Type.FILL_BLANK: 0,
+                Question.Type.TRUE_FALSE: 1,
+            },
+        )
+
+    def test_legacy_form_payload_without_selection_fields_defaults_to_all_mode(self):
+        data = self.payload()
+        data.pop("selection_mode")
+        for question_type in Question.Type.values:
+            data.pop(f"quota_{question_type}")
+
+        form = ExperimentForm(data, owner=self.teacher)
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["selection_mode"], Experiment.SelectionMode.ALL)
+
+    def test_legacy_create_view_saves_submitted_quota_values(self):
+        self.client.force_login(self.teacher)
+
+        response = self.client.post(
+            reverse("experiments:create"),
+            self.payload(quota_single_choice=3, quota_true_false=2),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        experiment = Experiment.objects.get(name="配额实验")
+        self.assertEqual(experiment.selection_mode, Experiment.SelectionMode.QUOTA)
+        self.assertEqual(
+            dict(experiment.question_quotas.values_list("question_type", "amount"))[Question.Type.SINGLE],
+            3,
+        )
+        self.assertEqual(
+            dict(experiment.question_quotas.values_list("question_type", "amount"))[Question.Type.TRUE_FALSE],
+            2,
+        )
+
+    def test_course_create_view_saves_submitted_quota_values(self):
+        course = Course.objects.create(
+            owner=self.teacher,
+            name="配额课程",
+            code="QUOTA-COURSE",
+            term="2026 秋",
+        )
+        bank = QuestionBank.objects.create(owner=self.teacher, course=course, name="课程配额题库")
+        data = self.payload(question_bank=bank.pk, quota_fill_blank=2)
+        self.client.force_login(self.teacher)
+
+        response = self.client.post(reverse("courses:experiment_create", args=[course.pk]), data)
+
+        self.assertEqual(response.status_code, 302)
+        experiment = Experiment.objects.get(name="配额实验")
+        self.assertEqual(experiment.course_id, course.pk)
+        self.assertEqual(
+            dict(experiment.question_quotas.values_list("question_type", "amount"))[Question.Type.FILL_BLANK],
+            2,
+        )
+
+
+class QuotaPublishingTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="quota-publish-teacher",
+            role=User.Role.TEACHER,
+        )
+        self.student = User.objects.create_user(
+            username="quota-publish-student",
+            student_number="quota-publish-student",
+            role=User.Role.STUDENT,
+        )
+        self.bank = QuestionBank.objects.create(owner=self.teacher, name="发布配额题库")
+        self.concept = Concept.objects.create(
+            owner=self.teacher,
+            scope=Concept.Scope.PRIVATE,
+            name="发布 KC",
+            normalized_name="发布 kc",
+        )
+
+    def question(self, sequence, question_type, correct_answer, *, options=None):
+        question = Question.objects.create(
+            bank=self.bank,
+            sequence=sequence,
+            question_type=question_type,
+            text=f"题目 {sequence}",
+            correct_answer=correct_answer,
+        )
+        QuestionConcept.objects.create(question=question, concept=self.concept, is_primary=True)
+        for index, (key, text) in enumerate((options or {}).items(), start=1):
+            QuestionOption.objects.create(question=question, key=key, text=text, display_order=index)
+        return question
+
+    def experiment(self, **quota_values):
+        experiment = Experiment.objects.create(
+            owner=self.teacher,
+            question_bank=self.bank,
+            name="按配额发布",
+            selection_mode=Experiment.SelectionMode.QUOTA,
+        )
+        for question_type, amount in quota_values.items():
+            experiment.question_quotas.filter(question_type=question_type).update(amount=amount)
+        ExperimentStudent.objects.create(experiment=experiment, student=self.student)
+        return experiment
+
+    def test_quota_publish_freezes_the_full_active_candidate_pool_and_inventory_configuration(self):
+        linked = self.question(1, Question.Type.SINGLE, "A", options={"A": "正确", "B": "错误"})
+        self.question(2, Question.Type.SINGLE, "A", options={"A": "正确", "B": "错误"})
+        self.question(3, Question.Type.SINGLE, "A", options={"A": "正确", "B": "错误"})
+        self.question(4, Question.Type.FILL_BLANK, "Knowledge Tracing")
+        self.question(5, Question.Type.SHORT, "简答")
+        experiment = self.experiment(single_choice=2, fill_blank=1)
+        ExperimentQuestion.objects.create(experiment=experiment, question=linked, display_order=1)
+
+        version = publish_experiment(experiment, self.teacher)
+
+        self.assertEqual(QuestionSnapshot.objects.filter(version=version).count(), 5)
+        self.assertEqual(version.configuration["selection_mode"], Experiment.SelectionMode.QUOTA)
+        self.assertEqual(version.configuration["quota_map"][Question.Type.SINGLE], 2)
+        self.assertEqual(version.configuration["quota_map"][Question.Type.FILL_BLANK], 1)
+        self.assertEqual(version.configuration["candidate_inventory"][Question.Type.SINGLE], {"need": 2, "available": 3})
+        self.assertEqual(version.configuration["candidate_inventory"][Question.Type.FILL_BLANK], {"need": 1, "available": 1})
+        self.assertEqual(version.configuration["candidate_count"], 5)
+        self.assertEqual(version.configuration["sampling_algorithm_version"], "v1")
+        self.assertEqual(len(version.configuration["sampling_salt"]), 64)
+
+    def test_quota_publish_rejects_insufficient_inventory_without_creating_any_snapshot(self):
+        linked = self.question(1, Question.Type.FILL_BLANK, "Knowledge Tracing")
+        experiment = self.experiment(fill_blank=2)
+        ExperimentQuestion.objects.create(experiment=experiment, question=linked, display_order=1)
+
+        with self.assertRaisesMessage(ValidationError, "填空题：需要 2 题，可用 1 题"):
+            publish_experiment(experiment, self.teacher)
+
+        experiment.refresh_from_db()
+        self.assertEqual(experiment.status, Experiment.Status.DRAFT)
+        self.assertFalse(experiment.versions.exists())
+        self.assertFalse(QuestionSnapshot.objects.exists())
+
+    def test_publish_rejects_an_active_question_with_an_invalid_judgement_answer(self):
+        linked = self.question(1, Question.Type.TRUE_FALSE, "不确定")
+        experiment = self.experiment(true_false=1)
+        ExperimentQuestion.objects.create(experiment=experiment, question=linked, display_order=1)
+
+        with self.assertRaisesMessage(ValidationError, "判断题"):
+            publish_experiment(experiment, self.teacher)
+
+        self.assertFalse(experiment.versions.exists())
+
+    def test_experiment_detail_makes_quota_candidate_pool_and_inventory_visible(self):
+        linked = self.question(1, Question.Type.SINGLE, "A", options={"A": "正确", "B": "错误"})
+        self.question(2, Question.Type.SINGLE, "A", options={"A": "正确", "B": "错误"})
+        experiment = self.experiment(single_choice=1)
+        ExperimentQuestion.objects.create(experiment=experiment, question=linked, display_order=1)
+        self.client.force_login(self.teacher)
+
+        draft = self.client.get(reverse("experiments:detail", args=[experiment.pk]))
+        self.assertContains(draft, "选题方式")
+        self.assertContains(draft, "按题型配额抽题")
+        self.assertContains(draft, "候选池库存")
+
+        publish_experiment(experiment, self.teacher)
+        published = self.client.get(reverse("experiments:detail", args=[experiment.pk]))
+        self.assertContains(published, "候选池与库存明细")
+        self.assertContains(published, "单选题")
+        self.assertContains(published, "需要 1")
+
+
+class SamplingSessionTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="sampling-teacher",
+            role=User.Role.TEACHER,
+        )
+        self.students = [
+            User.objects.create_user(
+                username=f"sampling-student-{index}",
+                student_number=f"sampling-student-{index}",
+                role=User.Role.STUDENT,
+            )
+            for index in range(1, 4)
+        ]
+        self.bank = QuestionBank.objects.create(owner=self.teacher, name="个体抽题题库")
+        self.concept = Concept.objects.create(
+            owner=self.teacher,
+            scope=Concept.Scope.PRIVATE,
+            name="抽题 KC",
+            normalized_name="抽题 kc",
+        )
+
+    def question(self, sequence, question_type):
+        if question_type == Question.Type.SINGLE:
+            answer, options = "A", {"A": "正确", "B": "错误"}
+        elif question_type == Question.Type.MULTIPLE:
+            answer, options = ["A", "B"], {"A": "一", "B": "二", "C": "三"}
+        elif question_type == Question.Type.NUMERIC:
+            answer, options = "1", None
+        elif question_type == Question.Type.TRUE_FALSE:
+            answer, options = True, None
+        else:
+            answer, options = "文本答案", None
+        question = Question.objects.create(
+            bank=self.bank,
+            sequence=sequence,
+            question_type=question_type,
+            text=f"抽题 {sequence}",
+            correct_answer=answer,
+        )
+        QuestionConcept.objects.create(question=question, concept=self.concept, is_primary=True)
+        for order, (key, text) in enumerate((options or {}).items(), start=1):
+            QuestionOption.objects.create(question=question, key=key, text=text, display_order=order)
+        return question
+
+    def publish(self, *, selection_mode=Experiment.SelectionMode.QUOTA, ordering_mode=Experiment.Ordering.FIXED, quotas=None):
+        experiment = Experiment.objects.create(
+            owner=self.teacher,
+            question_bank=self.bank,
+            name=f"抽题实验-{ordering_mode}",
+            selection_mode=selection_mode,
+            ordering_mode=ordering_mode,
+        )
+        for question_type, amount in (quotas or {}).items():
+            experiment.question_quotas.filter(question_type=question_type).update(amount=amount)
+        for student in self.students:
+            ExperimentStudent.objects.create(experiment=experiment, student=student)
+        version = publish_experiment(experiment, self.teacher)
+        experiment.refresh_from_db()
+        return experiment, version
+
+    def test_quota_session_draws_exact_type_counts_without_replacement_and_keeps_assignments(self):
+        for sequence in range(1, 6):
+            self.question(sequence, Question.Type.SINGLE)
+        for sequence in range(6, 9):
+            self.question(sequence, Question.Type.FILL_BLANK)
+        experiment, version = self.publish(
+            quotas={Question.Type.SINGLE: 3, Question.Type.FILL_BLANK: 2},
+        )
+
+        session = get_or_create_session(experiment, self.students[0])
+        assignments = list(session.assignments.select_related("snapshot"))
+        repeated = get_or_create_session(experiment, self.students[0])
+
+        self.assertEqual(len(assignments), 5)
+        self.assertEqual(len({assignment.snapshot_id for assignment in assignments}), 5)
+        self.assertEqual(
+            [assignment.snapshot.question_type for assignment in assignments].count(Question.Type.SINGLE),
+            3,
+        )
+        self.assertEqual(
+            [assignment.snapshot.question_type for assignment in assignments].count(Question.Type.FILL_BLANK),
+            2,
+        )
+        self.assertEqual(repeated.pk, session.pk)
+        self.assertEqual(repeated.assignments.count(), 5)
+        self.assertEqual(session.sampling_algorithm_version, version.configuration["sampling_algorithm_version"])
+        self.assertEqual(len(session.sampling_seed), 64)
+        self.assertEqual(len(session.ordering_seed), 64)
+        self.assertNotEqual(session.sampling_seed, session.ordering_seed)
+
+    def test_different_students_receive_different_deterministic_samples_when_the_pool_is_large(self):
+        for sequence in range(1, 61):
+            self.question(sequence, Question.Type.SINGLE)
+        experiment, version = self.publish(quotas={Question.Type.SINGLE: 3})
+        configuration = dict(version.configuration)
+        configuration["sampling_salt"] = "stable-test-salt"
+        version.configuration = configuration
+        version.save(update_fields=["configuration"])
+
+        first = get_or_create_session(experiment, self.students[0])
+        second = get_or_create_session(experiment, self.students[1])
+
+        first_ids = set(first.assignments.values_list("snapshot_id", flat=True))
+        second_ids = set(second.assignments.values_list("snapshot_id", flat=True))
+        self.assertNotEqual(first_ids, second_ids)
+
+    def test_fixed_order_sorts_the_drawn_personal_set_by_bank_sequence(self):
+        for sequence in range(1, 9):
+            self.question(sequence, Question.Type.SINGLE)
+        experiment, _version = self.publish(quotas={Question.Type.SINGLE: 4})
+
+        session = get_or_create_session(experiment, self.students[0])
+
+        bank_sequences = list(session.assignments.values_list("snapshot__bank_sequence", flat=True))
+        self.assertEqual(bank_sequences, sorted(bank_sequences))
+
+    def test_published_candidate_pool_is_immutable_and_all_mode_assigns_every_snapshot(self):
+        for sequence in range(1, 4):
+            self.question(sequence, Question.Type.SINGLE)
+        experiment, version = self.publish(selection_mode=Experiment.SelectionMode.ALL)
+        self.question(4, Question.Type.SINGLE)
+
+        session = get_or_create_session(experiment, self.students[0])
+
+        self.assertEqual(version.question_snapshots.count(), 3)
+        self.assertEqual(session.assignments.count(), 3)
+        self.assertEqual(session.sampling_algorithm_version, "v1")

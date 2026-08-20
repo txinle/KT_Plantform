@@ -6,7 +6,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 from apps.experiments.models import Experiment, ExperimentStudent, ExperimentVersion
-from apps.experiments.services import ordered_snapshots, seed_for
+from apps.experiments.services import derive_session_seeds, ordered_snapshots, select_snapshots
 from apps.question_bank.services.scoring import score_payload
 from .models import Attempt, DraftSaveEvent, ExperimentSession, QuestionVisitEvent, StudentQuestionAssignment, SubmissionEvent
 
@@ -27,15 +27,27 @@ def get_or_create_session(experiment, student):
     if not enrollment: raise ValidationError("你没有参加该实验的权限")
     if experiment.status != Experiment.Status.PUBLISHED: raise ValidationError("实验尚未开放")
     version = experiment.versions.order_by("-version_number").first()
-    session, created = ExperimentSession.objects.get_or_create(version=version, student=student, defaults={"class_snapshot_name": enrollment.class_snapshot_name})
+    sampling_seed, ordering_seed, algorithm_version = derive_session_seeds(version, student.id)
+    session, created = ExperimentSession.objects.get_or_create(
+        version=version,
+        student=student,
+        defaults={
+            "class_snapshot_name": enrollment.class_snapshot_name,
+            "sampling_seed": sampling_seed,
+            "ordering_seed": ordering_seed,
+            "sampling_algorithm_version": algorithm_version,
+        },
+    )
     if created:
         if version.configuration.get("time_mode") == "total":
             session.deadline_at = timezone.now() + timedelta(minutes=int(version.configuration["total_time_limit_minutes"]))
             session.save(update_fields=["deadline_at"])
-        for index, snapshot in enumerate(ordered_snapshots(version, student.id), start=1):
+        selected = select_snapshots(version, student.id, sampling_seed)
+        ordered = ordered_snapshots(version, student.id, selected, ordering_seed)
+        for index, snapshot in enumerate(ordered, start=1):
             assignment = StudentQuestionAssignment.objects.create(
                 session=session, snapshot=snapshot, assigned_sequence_index=index,
-                random_seed=str(seed_for(version.id, student.id)),
+                random_seed=ordering_seed,
             )
             Attempt.objects.create(session=session, assignment=assignment)
     return session

@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Q
 
 class Experiment(models.Model):
     class Status(models.TextChoices):
@@ -12,6 +13,9 @@ class Experiment(models.Model):
         FIXED = "fixed", "固定顺序"
         RANDOM = "random", "随机顺序"
         STRATIFIED = "stratified_random", "按 KC 与难度分层随机"
+    class SelectionMode(models.TextChoices):
+        ALL = "all", "全量题池"
+        QUOTA = "quota", "按题型配额抽题"
     class Feedback(models.TextChoices):
         NONE = "none", "仅显示已提交"
         CORRECTNESS = "correctness", "显示正误"
@@ -48,6 +52,11 @@ class Experiment(models.Model):
     )
     question_bank = models.ForeignKey("question_bank.QuestionBank", on_delete=models.PROTECT, related_name="experiments")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    selection_mode = models.CharField(
+        max_length=16,
+        choices=SelectionMode.choices,
+        default=SelectionMode.ALL,
+    )
     ordering_mode = models.CharField(max_length=24, choices=Ordering.choices, default=Ordering.FIXED)
     feedback_mode = models.CharField(max_length=16, choices=Feedback.choices, default=Feedback.NONE)
     time_mode = models.CharField(max_length=20, choices=TimeMode.choices, default=TimeMode.NONE)
@@ -67,11 +76,20 @@ class Experiment(models.Model):
             raise ValidationError({"question_bank": "实验只能使用同一课程的题库。"})
 
     def save(self, *args, **kwargs):
+        created = self._state.adding
         if self.created_by_id is None and self.owner_id is not None:
             self.created_by_id = self.owner_id
         if self.owner_id is None and self.created_by_id is not None:
             self.owner_id = self.created_by_id
         super().save(*args, **kwargs)
+        if created:
+            ExperimentQuestionQuota.objects.bulk_create(
+                [
+                    ExperimentQuestionQuota(experiment=self, question_type=question_type, amount=0)
+                    for question_type, _label in QuestionSnapshot._meta.get_field("question_type").choices
+                ],
+                ignore_conflicts=True,
+            )
 
 class ExperimentQuestion(models.Model):
     experiment = models.ForeignKey(Experiment, on_delete=models.CASCADE, related_name="question_links")
@@ -82,6 +100,39 @@ class ExperimentQuestion(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["experiment", "question"], name="unique_experiment_question"),
             models.UniqueConstraint(fields=["experiment", "display_order"], name="unique_experiment_display_order"),
+        ]
+
+
+class ExperimentQuestionQuota(models.Model):
+    experiment = models.ForeignKey(
+        Experiment,
+        on_delete=models.CASCADE,
+        related_name="question_quotas",
+    )
+    question_type = models.CharField(
+        max_length=24,
+        choices=[
+            ("single_choice", "单选题"),
+            ("multiple_choice", "多选题"),
+            ("numeric", "数值题"),
+            ("short_answer", "简答题"),
+            ("fill_blank", "填空题"),
+            ("true_false", "判断题"),
+        ],
+    )
+    amount = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["question_type"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["experiment", "question_type"],
+                name="unique_experiment_question_type_quota",
+            ),
+            models.CheckConstraint(
+                condition=Q(amount__gte=0),
+                name="experiment_question_quota_nonnegative",
+            ),
         ]
 
 class ExperimentStudent(models.Model):
@@ -133,6 +184,8 @@ class QuestionSnapshot(models.Model):
         ("multiple_choice", "多选题"),
         ("numeric", "数值题"),
         ("short_answer", "简答题"),
+        ("fill_blank", "填空题"),
+        ("true_false", "判断题"),
     ])
     text = models.TextField()
     options = models.JSONField(default=list)

@@ -24,6 +24,14 @@
   }[character]));
   const makeToken = () => window.crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}-4000-8000-${Math.random().toString(16).slice(2).padEnd(12, '0').slice(0, 12)}`;
 
+  function formatCorrectAnswer(value) {
+    if (form.dataset.questionType === 'true_false' && typeof value === 'boolean') {
+      return value ? '正确' : '错误';
+    }
+    if (Array.isArray(value)) return value.join(', ');
+    return value === null || value === undefined ? '' : String(value);
+  }
+
   function setSaveState(message, state = '') {
     status.textContent = message;
     status.className = `save-status${state ? ` is-${state}` : ''}`;
@@ -46,7 +54,7 @@
 
   function collect() {
     const type = form.dataset.questionType;
-    if (type === 'single_choice') return form.querySelector('input[name="answer"]:checked')?.value || null;
+    if (type === 'single_choice' || type === 'true_false') return form.querySelector('input[name="answer"]:checked')?.value || null;
     if (type === 'multiple_choice') return [...form.querySelectorAll('input[name="answer"]:checked')].map((item) => item.value).sort();
     return form.querySelector('[name="answer"]')?.value ?? null;
   }
@@ -54,7 +62,7 @@
   function restore() {
     if (draft === null || draft === undefined) return;
     const type = form.dataset.questionType;
-    if (type === 'single_choice') {
+    if (type === 'single_choice' || type === 'true_false') {
       const element = form.querySelector(`input[value="${escapeCss(String(draft))}"]`);
       if (element) element.checked = true;
     } else if (type === 'multiple_choice') {
@@ -126,7 +134,7 @@
         client_clicked_at: new Date().toISOString()
       });
       let details = '';
-      if (data.correct_answer !== undefined) details += `<div class="mt-2"><strong>正确答案：</strong>${escapeHtml(JSON.stringify(data.correct_answer))}</div>`;
+      if (data.correct_answer !== undefined) details += `<div class="mt-2"><strong>正确答案：</strong>${escapeHtml(formatCorrectAnswer(data.correct_answer))}</div>`;
       if (data.explanation) details += `<div class="mt-2"><strong>解析：</strong>${escapeHtml(data.explanation)}</div>`;
       const correctness = data.is_correct === true ? '，回答正确' : data.is_correct === false ? '，回答错误' : '';
       feedback.innerHTML = `<div class="alert alert-success mb-0">本题已提交并锁定${correctness}${details}</div>`;

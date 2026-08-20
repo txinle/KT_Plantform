@@ -14,6 +14,7 @@ from .services import (
     assign_students,
     lock_experiment_question_bank,
     publish_experiment,
+    selection_display_context,
     sync_experiment_questions,
 )
 
@@ -60,6 +61,7 @@ def experiment_create(request):
                 experiment.question_bank = question_bank
                 experiment.owner = request.user
                 experiment.save()
+                form.save_quotas(experiment)
                 sync_experiment_questions(experiment)
                 log_action(request, "experiment.create", experiment)
         except ValidationError as exc:
@@ -100,6 +102,7 @@ def experiment_edit(request, pk):
                     experiment = form.save(commit=False)
                     experiment.question_bank = question_bank
                     experiment.save()
+                    form.save_quotas(experiment)
                     if experiment.question_bank_id != original_bank_id:
                         sync_experiment_questions(experiment)
                     log_action(request, "experiment.update", experiment)
@@ -118,7 +121,15 @@ def experiment_detail(request, pk):
     if experiment.course_id:
         return redirect("courses:experiment_detail", experiment.course_id, experiment.pk)
     assignment_form = StudentAssignmentForm(initial={"students": experiment.students.all()}, owner=request.user)
-    return render(request, "teacher/experiment_detail.html", {"experiment": experiment, "assignment_form": assignment_form})
+    return render(
+        request,
+        "teacher/experiment_detail.html",
+        {
+            "experiment": experiment,
+            "assignment_form": assignment_form,
+            **selection_display_context(experiment),
+        },
+    )
 
 @role_required("teacher", "admin")
 def experiment_assign(request, pk):

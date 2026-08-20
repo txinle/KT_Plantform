@@ -17,7 +17,7 @@
       </section>
       <section class="form-section" aria-labelledby="scoring-title">
         <h2 class="form-section-title" id="scoring-title">评分规则</h2>
-        <div class="row g-3"><div class="col-md-6">{% include 'components/form_field.html' with field=form.correct_answer_text %}</div><div class="col-md-6" data-question-field-group="short_answer">{% include 'components/form_field.html' with field=form.accepted_answers_text %}</div><div class="col-md-6" data-question-field-group="numeric">{% include 'components/form_field.html' with field=form.absolute_tolerance %}<div class="form-help">答案与标准值的绝对差不超过此值时可判定为匹配。</div></div><div class="col-md-6" data-question-field-group="numeric">{% include 'components/form_field.html' with field=form.relative_tolerance %}<div class="form-help">相对于标准值的误差比例不超过此值时可判定为匹配。</div></div></div>
+        <div class="row g-3"><div class="col-md-6">{% include 'components/form_field.html' with field=form.correct_answer_text %}</div><div class="col-md-6" data-question-field-group="short_answer fill_blank">{% include 'components/form_field.html' with field=form.accepted_answers_text %}</div><div class="col-md-6" data-question-field-group="numeric">{% include 'components/form_field.html' with field=form.absolute_tolerance %}<div class="form-help">答案与标准值的绝对差不超过此值时可判定为匹配。</div></div><div class="col-md-6" data-question-field-group="numeric">{% include 'components/form_field.html' with field=form.relative_tolerance %}<div class="form-help">相对于标准值的误差比例不超过此值时可判定为匹配。</div></div></div>
       </section>
       <section class="form-section" aria-labelledby="metadata-title">
         <h2 class="form-section-title" id="metadata-title">难度、解析与状态</h2>

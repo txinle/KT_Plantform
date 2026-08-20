@@ -262,5 +262,21 @@
     };
     timeMode?.addEventListener('change', updateTimeFields);
     updateTimeFields();
+
+    const selectionMode = document.querySelector('[data-selection-mode-controller]');
+    const quotaFields = document.querySelector('[data-selection-quota-fields]');
+    const quotaInputs = Array.from(document.querySelectorAll('[data-quota-input]'));
+    const quotaTotal = document.querySelector('[data-quota-total]');
+    const updateQuotaFields = () => {
+      if (!selectionMode || !quotaFields) return;
+      const active = selectionMode.value === 'quota';
+      quotaFields.hidden = !active;
+      quotaInputs.forEach((field) => { field.disabled = !active; });
+      const total = quotaInputs.reduce((sum, field) => sum + Math.max(0, Number(field.value) || 0), 0);
+      if (quotaTotal) quotaTotal.textContent = String(total);
+    };
+    selectionMode?.addEventListener('change', updateQuotaFields);
+    quotaInputs.forEach((field) => field.addEventListener('input', updateQuotaFields));
+    updateQuotaFields();
   });
 })();

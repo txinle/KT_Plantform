@@ -24,6 +24,26 @@ class ScoringTests(unittest.TestCase):
             (True, Decimal('1')),
         )
 
+    def test_fill_blank_matches_after_trimming_casefolding_and_collapsing_internal_whitespace(self):
+        self.assertEqual(
+            score_payload(
+                'fill_blank',
+                'Knowledge Tracing',
+                '  knowledge\t  tracing  ',
+                accepted_answers=['KT'],
+            ),
+            (True, Decimal('1')),
+        )
+        self.assertEqual(
+            score_payload('fill_blank', 'Knowledge Tracing', 'knowledge-tracing'),
+            (False, Decimal('0')),
+        )
+
+    def test_true_false_normalizes_fixed_correct_and_incorrect_answers_to_booleans(self):
+        self.assertEqual(score_payload('true_false', True, '正确'), (True, Decimal('1')))
+        self.assertEqual(score_payload('true_false', False, 'false'), (True, Decimal('1')))
+        self.assertEqual(score_payload('true_false', True, '错误'), (False, Decimal('0')))
+
 
 if __name__ == '__main__':
     unittest.main()

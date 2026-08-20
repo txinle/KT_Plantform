@@ -1,5 +1,6 @@
 from django import forms
 from .models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
+from .services.scoring import normalize_true_false_answer
 
 class QuestionBankForm(forms.ModelForm):
     class Meta:
@@ -96,7 +97,10 @@ class QuestionEditForm(forms.ModelForm):
             option_map = {item.key.lower(): item.text for item in self.instance.options.all()}
             for key in "abcdef": self.fields[f"option_{key}"].initial = option_map.get(key, "")
             answer = self.instance.correct_answer
-            self.fields["correct_answer_text"].initial = ",".join(answer) if isinstance(answer, list) else answer
+            if self.instance.question_type == Question.Type.TRUE_FALSE:
+                self.fields["correct_answer_text"].initial = "正确" if answer is True else "错误"
+            else:
+                self.fields["correct_answer_text"].initial = ",".join(answer) if isinstance(answer, list) else answer
             self.fields["accepted_answers_text"].initial = ";".join(self.instance.accepted_answers or [])
             primary_link = self.instance.concept_links.filter(is_primary=True).first()
             self.fields["primary_concept"].initial = primary_link.concept_id if primary_link else None
@@ -132,6 +136,9 @@ class QuestionEditForm(forms.ModelForm):
                 float(raw_answer)
             except (TypeError, ValueError):
                 self.add_error("correct_answer_text", "数值题答案必须是有效数字")
+        elif question_type == Question.Type.TRUE_FALSE:
+            if normalize_true_false_answer(raw_answer) is None:
+                self.add_error("correct_answer_text", "判断题答案必须为正确或错误")
         primary = cleaned.get("primary_concept")
         secondary = cleaned.get("secondary_concepts")
         if primary is not None and secondary is not None and primary in secondary:
@@ -147,9 +154,14 @@ class QuestionEditForm(forms.ModelForm):
         raw = self.cleaned_data["correct_answer_text"].strip()
         if question.question_type == Question.Type.MULTIPLE:
             question.correct_answer = sorted({x.strip().upper() for x in raw.replace("，", ",").split(",") if x.strip()})
+        elif question.question_type == Question.Type.TRUE_FALSE:
+            question.correct_answer = normalize_true_false_answer(raw)
         else:
             question.correct_answer = raw.upper() if question.question_type == Question.Type.SINGLE else raw
-        question.accepted_answers = [x.strip() for x in self.cleaned_data["accepted_answers_text"].replace("；", ";").split(";") if x.strip()]
+        if question.question_type in {Question.Type.SHORT, Question.Type.FILL_BLANK}:
+            question.accepted_answers = [x.strip() for x in self.cleaned_data["accepted_answers_text"].replace("；", ";").split(";") if x.strip()]
+        else:
+            question.accepted_answers = []
         if commit:
             question.save()
             question.options.all().delete()
