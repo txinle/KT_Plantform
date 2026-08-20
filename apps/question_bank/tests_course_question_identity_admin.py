@@ -25,6 +25,12 @@ class CourseQuestionIdentityAdminTests(TestCase):
             code="ADMIN101",
             term="2026 秋",
         )
+        self.other_course = Course.objects.create(
+            owner=self.teacher,
+            name="另一门后台课程",
+            code="ADMIN102",
+            term="2026 秋",
+        )
         self.bank = QuestionBank.objects.create(
             course=self.course,
             created_by=self.teacher,
@@ -68,4 +74,48 @@ class CourseQuestionIdentityAdminTests(TestCase):
                 question=question,
                 course=self.course,
             ).exists()
+        )
+
+    def test_admin_change_rejects_course_reassignment_without_writing_questions_or_identities(self):
+        question = Question.objects.create(
+            bank=self.bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="题库归属不应改变",
+            correct_answer="答案",
+        )
+        identity = CourseQuestionIdentity.objects.get(question=question)
+        before = {
+            "course_id": self.bank.course_id,
+            "question_bank_id": question.bank_id,
+            "identity_course_id": identity.course_id,
+            "identity_question_id": identity.question_id,
+        }
+
+        response = self.client.post(
+            reverse("admin:question_bank_questionbank_change", args=[self.bank.pk]),
+            {
+                "name": self.bank.name,
+                "description": self.bank.description,
+                "course": self.other_course.pk,
+                "created_by": self.teacher.pk,
+                "owner": self.teacher.pk,
+                "visibility": self.bank.visibility,
+                "_save": "保存",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "已创建题库的所属课程不可修改。")
+        self.bank.refresh_from_db()
+        question.refresh_from_db()
+        identity.refresh_from_db()
+        self.assertEqual(
+            {
+                "course_id": self.bank.course_id,
+                "question_bank_id": question.bank_id,
+                "identity_course_id": identity.course_id,
+                "identity_question_id": identity.question_id,
+            },
+            before,
         )

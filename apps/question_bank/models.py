@@ -1,7 +1,12 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from django.db.models import Q
+
+
+QUESTION_BANK_COURSE_IMMUTABLE_MESSAGE = "已创建题库的所属课程不可修改。"
+
 
 class QuestionBank(models.Model):
     class Visibility(models.TextChoices):
@@ -36,7 +41,26 @@ class QuestionBank(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     class Meta:
         ordering = ["-updated_at"]
+
+    def _validate_course_is_immutable(self, using=None):
+        if self.pk is None:
+            return
+        database = using or self._state.db or "default"
+        existing = (
+            type(self)._default_manager.using(database)
+            .filter(pk=self.pk)
+            .values("course_id")
+            .first()
+        )
+        if existing is not None and existing["course_id"] != self.course_id:
+            raise ValidationError({"course": QUESTION_BANK_COURSE_IMMUTABLE_MESSAGE})
+
+    def clean(self):
+        super().clean()
+        self._validate_course_is_immutable()
+
     def save(self, *args, **kwargs):
+        self._validate_course_is_immutable(using=kwargs.get("using"))
         if self.created_by_id is None and self.owner_id is not None:
             self.created_by_id = self.owner_id
         if self.owner_id is None and self.created_by_id is not None:

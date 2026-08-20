@@ -1,3 +1,4 @@
+from django import forms
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase
 from django.core.management import call_command
@@ -245,3 +246,116 @@ class CourseQuestionIdentityAllocatorTests(TestCase):
 
         self.assertEqual(attempts, 2)
         self.assertEqual(identity.course_sequence, 1)
+
+
+class QuestionBankCourseImmutabilityTests(TestCase):
+    course_error_message = "已创建题库的所属课程不可修改。"
+
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="immutable-bank-teacher",
+            role=User.Role.TEACHER,
+        )
+        self.course_a = Course.objects.create(
+            owner=self.teacher,
+            name="课程 A",
+            code="IMM-A",
+            term="2026 秋",
+        )
+        self.course_b = Course.objects.create(
+            owner=self.teacher,
+            name="课程 B",
+            code="IMM-B",
+            term="2026 秋",
+        )
+        self.course_bank = QuestionBank.objects.create(
+            course=self.course_a,
+            created_by=self.teacher,
+            name="课程题库",
+        )
+        self.course_question = Question.objects.create(
+            bank=self.course_bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="课程题目",
+            correct_answer="答案",
+        )
+        self.legacy_bank = QuestionBank.objects.create(
+            created_by=self.teacher,
+            name="历史题库",
+        )
+        self.legacy_question = Question.objects.create(
+            bank=self.legacy_bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="历史题目",
+            correct_answer="答案",
+        )
+
+    @staticmethod
+    def _snapshot(bank):
+        return {
+            "course_id": QuestionBank.objects.values_list("course_id", flat=True).get(pk=bank.pk),
+            "questions": list(
+                Question.objects.filter(bank=bank)
+                .order_by("pk")
+                .values_list("pk", "bank_id")
+            ),
+            "identities": list(
+                CourseQuestionIdentity.objects.filter(question__bank=bank)
+                .order_by("pk")
+                .values_list("pk", "course_id", "question_id")
+            ),
+        }
+
+    def assert_course_change_is_rejected(self, bank, new_course_id, **save_kwargs):
+        before = self._snapshot(bank)
+        bank.course_id = new_course_id
+
+        with self.assertRaises(ValidationError) as raised:
+            bank.save(**save_kwargs)
+
+        self.assertEqual(raised.exception.message_dict["course"], [self.course_error_message])
+        bank.refresh_from_db()
+        self.assertEqual(self._snapshot(bank), before)
+
+    def test_direct_save_rejects_course_a_to_b_without_writing_related_records(self):
+        self.assert_course_change_is_rejected(self.course_bank, self.course_b.pk)
+
+    def test_direct_save_rejects_changed_course_even_if_update_fields_omits_course(self):
+        self.assert_course_change_is_rejected(
+            self.course_bank,
+            self.course_b.pk,
+            update_fields=["name"],
+        )
+
+    def test_direct_save_rejects_legacy_bank_assignment_to_a_course(self):
+        self.assert_course_change_is_rejected(self.legacy_bank, self.course_a.pk)
+
+    def test_direct_save_rejects_course_bank_assignment_to_legacy_scope(self):
+        self.assert_course_change_is_rejected(self.course_bank, None)
+
+    def test_model_form_reports_the_course_error_without_writing(self):
+        bank_form = forms.modelform_factory(QuestionBank, fields=["name", "course"])
+        before = self._snapshot(self.course_bank)
+        form = bank_form(
+            data={"name": self.course_bank.name, "course": self.course_b.pk},
+            instance=self.course_bank,
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertEqual(form.errors["course"], [self.course_error_message])
+        self.assertEqual(self._snapshot(self.course_bank), before)
+
+    def test_new_bank_and_same_course_save_are_allowed(self):
+        bank = QuestionBank.objects.create(
+            course=self.course_b,
+            created_by=self.teacher,
+            name="新建课程题库",
+        )
+        bank.name = "同课程更新后的题库"
+        bank.save()
+
+        bank.refresh_from_db()
+        self.assertEqual(bank.course_id, self.course_b.pk)
+        self.assertEqual(bank.name, "同课程更新后的题库")
