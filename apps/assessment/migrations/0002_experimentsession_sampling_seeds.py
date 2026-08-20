@@ -7,7 +7,6 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("assessment", "0001_initial"),
-        ("experiments", "0004_experiment_selection_mode_and_more"),
     ]
 
     operations = [

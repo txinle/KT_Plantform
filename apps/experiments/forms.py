@@ -84,6 +84,8 @@ class ExperimentForm(forms.ModelForm):
             return 0
 
     def save_quotas(self, experiment):
+        if self.cleaned_data.get("selection_mode") != Experiment.SelectionMode.QUOTA:
+            return
         for question_type, amount in self.quota_amounts.items():
             experiment.question_quotas.update_or_create(
                 question_type=question_type,

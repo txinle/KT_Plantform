@@ -50,6 +50,7 @@ class ImportParsingTests(unittest.TestCase):
         cases = [
             ({'sequence': 1, 'question': 'x', 'question_type': 'essay', 'answer': 'x'}, '未知题型'),
             ({'sequence': 1, 'question': 'x', 'question_type': 'true_false', 'answer': '不确定'}, '判断题答案'),
+            ({'sequence': 1, 'question': 'x', 'question_type': 'true_false', 'answer': '1'}, '判断题答案'),
             (
                 {
                     'sequence': 1,

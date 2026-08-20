@@ -5,6 +5,7 @@ from typing import Any, Iterable
 
 
 def _normalized_text(value: Any) -> str:
+    """Trim, casefold, then collapse every run of internal whitespace."""
     return " ".join(str(value or "").strip().casefold().split())
 
 
@@ -13,9 +14,9 @@ def normalize_true_false_answer(value: Any) -> bool | None:
     if isinstance(value, bool):
         return value
     normalized = _normalized_text(value)
-    if normalized in {"true", "1", "正确", "对", "是", "yes"}:
+    if normalized in {"true", "正确"}:
         return True
-    if normalized in {"false", "0", "错误", "错", "否", "no"}:
+    if normalized in {"false", "错误"}:
         return False
     return None
 

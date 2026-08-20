@@ -153,7 +153,10 @@ class QuestionEditForm(forms.ModelForm):
         question = super().save(commit=False)
         raw = self.cleaned_data["correct_answer_text"].strip()
         if question.question_type == Question.Type.MULTIPLE:
-            question.correct_answer = sorted({x.strip().upper() for x in raw.replace("，", ",").split(",") if x.strip()})
+            normalized = raw.replace("，", ",").replace("；", ",").replace(";", ",")
+            question.correct_answer = sorted(
+                {x.strip().upper() for x in normalized.split(",") if x.strip()}
+            )
         elif question.question_type == Question.Type.TRUE_FALSE:
             question.correct_answer = normalize_true_false_answer(raw)
         else:
@@ -165,9 +168,10 @@ class QuestionEditForm(forms.ModelForm):
         if commit:
             question.save()
             question.options.all().delete()
-            for idx, key in enumerate("abcdef", start=1):
-                value = self.cleaned_data.get(f"option_{key}", "").strip()
-                if value: QuestionOption.objects.create(question=question, key=key.upper(), text=value, display_order=idx)
+            if question.question_type in {Question.Type.SINGLE, Question.Type.MULTIPLE}:
+                for idx, key in enumerate("abcdef", start=1):
+                    value = self.cleaned_data.get(f"option_{key}", "").strip()
+                    if value: QuestionOption.objects.create(question=question, key=key.upper(), text=value, display_order=idx)
             if self.manage_concepts:
                 question.concept_links.all().delete()
                 primary = self.cleaned_data.get("primary_concept")

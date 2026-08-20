@@ -15,6 +15,7 @@ from .models import Experiment, ExperimentQuestion, ExperimentStudent, Experimen
 
 ARCHIVED_EXPERIMENT_BANK_MESSAGE = "题库已归档，不能同步或发布实验。"
 SAMPLING_ALGORITHM_VERSION = "v1"
+LEGACY_SAMPLING_ALGORITHM_VERSION = "legacy-v0"
 
 
 def _choice_answers(value):
@@ -79,6 +80,25 @@ def _publish_candidates(question_bank):
     )
 
 
+def _invalid_identity_codes(questions):
+    invalid = []
+    for question in questions:
+        identity = getattr(question, "course_identity", None)
+        if question.bank.course_id is not None and (
+            identity is None or identity.course_id != question.bank.course_id
+        ):
+            invalid.append(question.code or f"题目#{question.pk}")
+    return invalid
+
+
+def _raise_for_invalid_identities(questions):
+    invalid_identities = _invalid_identity_codes(questions)
+    if invalid_identities:
+        raise ValidationError(
+            f"以下课程题目缺少或不匹配永久题目标识：{', '.join(invalid_identities)}"
+        )
+
+
 def lock_experiment_question_bank(bank_or_pk, course=None):
     bank = lock_question_bank(bank_or_pk)
     if bank.visibility == QuestionBank.Visibility.ARCHIVED:
@@ -96,20 +116,23 @@ def validate_for_publish(experiment, question_bank=None):
     question_bank = question_bank or experiment.question_bank
     if question_bank.course_id != experiment.course_id:
         raise ValidationError("实验与题库必须属于同一课程")
+
+    # Candidate discovery is deliberately fresh from the active bank.  Retain
+    # the legacy link integrity check first, however, so a stale cross-course
+    # link is diagnosed as a broken permanent identity rather than masked as
+    # an empty candidate pool.
+    linked_questions = [
+        link.question
+        for link in experiment.question_links.select_for_update().select_related(
+            "question__bank", "question__course_identity"
+        )
+    ]
+    _raise_for_invalid_identities(linked_questions)
+
     questions = _publish_candidates(question_bank)
     if not questions:
         raise ValidationError("题库中至少需要一道可用题目")
-    invalid_identities = []
-    for question in questions:
-        identity = getattr(question, "course_identity", None)
-        if question.bank.course_id is not None and (
-            identity is None or identity.course_id != question.bank.course_id
-        ):
-            invalid_identities.append(question.code or f"题目#{question.pk}")
-    if invalid_identities:
-        raise ValidationError(
-            f"以下课程题目缺少或不匹配永久题目标识：{', '.join(invalid_identities)}"
-        )
+    _raise_for_invalid_identities(questions)
     missing = []
     for question in questions:
         links = list(question.concept_links.all())
@@ -226,6 +249,11 @@ def publish_experiment(experiment, actor):
         raise ValidationError("只有草稿实验可以发布")
     questions = validate_for_publish(experiment, question_bank)
     quota_map = _quota_map(experiment)
+    if (
+        experiment.selection_mode == Experiment.SelectionMode.QUOTA
+        and sum(quota_map.values()) <= 0
+    ):
+        raise ValidationError("按题型配额抽题至少需要抽取 1 道题")
     inventory = _candidate_inventory(questions, experiment.selection_mode, quota_map)
     version_number = (experiment.versions.order_by("-version_number").values_list("version_number", flat=True).first() or 0) + 1
     config = {
@@ -286,7 +314,25 @@ def seed_for(version_id, student_id):
 
 def derive_session_seeds(version, student_id):
     configuration = version.configuration or {}
-    salt = str(configuration.get("sampling_salt") or f"legacy-version:{version.pk}")
+    salt = configuration.get("sampling_salt")
+    if not salt:
+        # Versions published before individualized sampling used seed_for() for
+        # random ordering. Keep that exact stream when a legacy version first
+        # receives a session after this migration.
+        ordering_seed = hashlib.sha256(f"{version.pk}:{student_id}".encode()).hexdigest()
+        sampling_seed = hashlib.sha256(
+            f"legacy-version:{version.pk}:{student_id}:sample".encode()
+        ).hexdigest()
+        return (
+            sampling_seed,
+            ordering_seed,
+            str(
+                configuration.get("sampling_algorithm_version")
+                or LEGACY_SAMPLING_ALGORITHM_VERSION
+            ),
+        )
+
+    salt = str(salt)
     algorithm_version = str(
         configuration.get("sampling_algorithm_version") or SAMPLING_ALGORITHM_VERSION
     )

@@ -43,6 +43,7 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(score_payload('true_false', True, '正确'), (True, Decimal('1')))
         self.assertEqual(score_payload('true_false', False, 'false'), (True, Decimal('1')))
         self.assertEqual(score_payload('true_false', True, '错误'), (False, Decimal('0')))
+        self.assertEqual(score_payload('true_false', True, 'yes'), (False, Decimal('0')))
 
 
 if __name__ == '__main__':

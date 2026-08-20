@@ -1,5 +1,7 @@
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 
 from apps.accounts.models import Course, User
@@ -9,7 +11,13 @@ from apps.assessment.services import get_or_create_session
 
 from .forms import ExperimentForm
 from .models import Experiment, ExperimentQuestion, ExperimentQuestionQuota, ExperimentStudent, QuestionSnapshot
-from .services import publish_experiment
+from .services import (
+    derive_session_seeds,
+    ordered_snapshots,
+    publish_experiment,
+    seed_for,
+    select_snapshots,
+)
 
 
 class ExperimentQuotaFormTests(TestCase):
@@ -77,6 +85,30 @@ class ExperimentQuotaFormTests(TestCase):
 
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data["selection_mode"], Experiment.SelectionMode.ALL)
+
+    def test_all_mode_edit_preserves_existing_quotas_when_native_js_disables_inputs(self):
+        experiment = Experiment.objects.create(
+            owner=self.teacher,
+            question_bank=self.bank,
+            name="保留配额",
+            selection_mode=Experiment.SelectionMode.QUOTA,
+        )
+        experiment.question_quotas.filter(question_type=Question.Type.SINGLE).update(amount=3)
+        data = self.payload(selection_mode=Experiment.SelectionMode.ALL)
+        for question_type in Question.Type.values:
+            data.pop(f"quota_{question_type}")
+
+        form = ExperimentForm(data, instance=experiment, owner=self.teacher)
+
+        self.assertTrue(form.is_valid(), form.errors)
+        updated = form.save(commit=False)
+        updated.save()
+        form.save_quotas(updated)
+
+        self.assertEqual(
+            updated.question_quotas.get(question_type=Question.Type.SINGLE).amount,
+            3,
+        )
 
     def test_legacy_create_view_saves_submitted_quota_values(self):
         self.client.force_login(self.teacher)
@@ -198,6 +230,18 @@ class QuotaPublishingTests(TestCase):
         self.assertFalse(experiment.versions.exists())
         self.assertFalse(QuestionSnapshot.objects.exists())
 
+    def test_quota_publish_rejects_a_zero_total_when_the_form_is_bypassed(self):
+        linked = self.question(1, Question.Type.FILL_BLANK, "Knowledge Tracing")
+        experiment = self.experiment()
+        ExperimentQuestion.objects.create(experiment=experiment, question=linked, display_order=1)
+
+        with self.assertRaisesMessage(ValidationError, "至少需要抽取 1 道题"):
+            publish_experiment(experiment, self.teacher)
+
+        experiment.refresh_from_db()
+        self.assertEqual(experiment.status, Experiment.Status.DRAFT)
+        self.assertFalse(experiment.versions.exists())
+
     def test_publish_rejects_an_active_question_with_an_invalid_judgement_answer(self):
         linked = self.question(1, Question.Type.TRUE_FALSE, "不确定")
         experiment = self.experiment(true_false=1)
@@ -318,6 +362,63 @@ class SamplingSessionTests(TestCase):
         self.assertEqual(len(session.ordering_seed), 64)
         self.assertNotEqual(session.sampling_seed, session.ordering_seed)
 
+    def test_quota_sampling_covers_each_of_the_six_question_types(self):
+        for sequence, question_type in enumerate(Question.Type.values, start=1):
+            self.question(sequence, question_type)
+        experiment, _version = self.publish(
+            quotas={question_type: 1 for question_type in Question.Type.values},
+        )
+
+        session = get_or_create_session(experiment, self.students[0])
+        assigned_types = list(session.assignments.values_list("snapshot__question_type", flat=True))
+
+        self.assertEqual(len(assigned_types), 6)
+        self.assertEqual(
+            {question_type: assigned_types.count(question_type) for question_type in Question.Type.values},
+            {question_type: 1 for question_type in Question.Type.values},
+        )
+
+    def test_quota_sampling_and_ordering_are_reproducible_from_independent_seeds(self):
+        for sequence in range(1, 10):
+            self.question(sequence, Question.Type.SINGLE)
+        _experiment, version = self.publish(
+            ordering_mode=Experiment.Ordering.RANDOM,
+            quotas={Question.Type.SINGLE: 4},
+        )
+        configuration = dict(version.configuration)
+        configuration["sampling_salt"] = "reproducible-seed-salt"
+        version.configuration = configuration
+        version.save(update_fields=["configuration"])
+
+        sampling_seed, ordering_seed, _algorithm_version = derive_session_seeds(
+            version,
+            self.students[0].pk,
+        )
+        first_sample = select_snapshots(version, self.students[0].pk, sampling_seed)
+        second_sample = select_snapshots(version, self.students[0].pk, sampling_seed)
+        first_order = ordered_snapshots(
+            version,
+            self.students[0].pk,
+            first_sample,
+            ordering_seed,
+        )
+        second_order = ordered_snapshots(
+            version,
+            self.students[0].pk,
+            second_sample,
+            ordering_seed,
+        )
+
+        self.assertNotEqual(sampling_seed, ordering_seed)
+        self.assertEqual(
+            [snapshot.pk for snapshot in first_sample],
+            [snapshot.pk for snapshot in second_sample],
+        )
+        self.assertEqual(
+            [snapshot.pk for snapshot in first_order],
+            [snapshot.pk for snapshot in second_order],
+        )
+
     def test_different_students_receive_different_deterministic_samples_when_the_pool_is_large(self):
         for sequence in range(1, 61):
             self.question(sequence, Question.Type.SINGLE)
@@ -344,6 +445,27 @@ class SamplingSessionTests(TestCase):
         bank_sequences = list(session.assignments.values_list("snapshot__bank_sequence", flat=True))
         self.assertEqual(bank_sequences, sorted(bank_sequences))
 
+    def test_legacy_all_mode_version_retains_the_previous_ordering_seed(self):
+        for sequence in range(1, 4):
+            self.question(sequence, Question.Type.SINGLE)
+        _experiment, version = self.publish(
+            selection_mode=Experiment.SelectionMode.ALL,
+            ordering_mode=Experiment.Ordering.RANDOM,
+        )
+        version.configuration = {"ordering_mode": Experiment.Ordering.RANDOM}
+        version.save(update_fields=["configuration"])
+
+        _sampling_seed, ordering_seed, algorithm_version = derive_session_seeds(
+            version,
+            self.students[0].pk,
+        )
+
+        self.assertEqual(
+            int(ordering_seed[:16], 16),
+            seed_for(version.pk, self.students[0].pk),
+        )
+        self.assertEqual(algorithm_version, "legacy-v0")
+
     def test_published_candidate_pool_is_immutable_and_all_mode_assigns_every_snapshot(self):
         for sequence in range(1, 4):
             self.question(sequence, Question.Type.SINGLE)
@@ -355,3 +477,73 @@ class SamplingSessionTests(TestCase):
         self.assertEqual(version.question_snapshots.count(), 3)
         self.assertEqual(session.assignments.count(), 3)
         self.assertEqual(session.sampling_algorithm_version, "v1")
+
+
+class ExperimentQuestionQuotaMigrationTests(TransactionTestCase):
+    reset_sequences = True
+    migrate_from = ("experiments", "0003_snapshot_course_question_identity")
+    migrate_to = ("experiments", "0004_experiment_selection_mode_and_more")
+
+    @staticmethod
+    def _targets_with_experiments_at(executor, experiments_target):
+        return [
+            experiments_target if target[0] == "experiments" else target
+            for target in executor.loader.graph.leaf_nodes()
+        ]
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.executor = MigrationExecutor(connection)
+        cls.current_targets = cls.executor.loader.graph.leaf_nodes()
+        cls.old_targets = cls._targets_with_experiments_at(cls.executor, cls.migrate_from)
+        cls.executor.migrate(cls.old_targets)
+        old_apps = cls.executor.loader.project_state(cls.old_targets).apps
+
+        User = old_apps.get_model("accounts", "User")
+        QuestionBank = old_apps.get_model("question_bank", "QuestionBank")
+        Experiment = old_apps.get_model("experiments", "Experiment")
+        teacher = User.objects.create(username="quota-migration-teacher", role="teacher")
+        bank = QuestionBank.objects.create(owner_id=teacher.pk, name="迁移前题库")
+        experiment = Experiment.objects.create(
+            owner_id=teacher.pk,
+            question_bank_id=bank.pk,
+            name="迁移前实验",
+        )
+        cls.experiment_pk = experiment.pk
+
+        cls.executor = MigrationExecutor(connection)
+        cls.new_targets = cls._targets_with_experiments_at(cls.executor, cls.migrate_to)
+        cls.executor.migrate(cls.new_targets)
+        cls.apps = cls.executor.loader.project_state(cls.new_targets).apps
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            MigrationExecutor(connection).migrate(cls.current_targets)
+        finally:
+            super().tearDownClass()
+
+    def test_existing_experiments_receive_all_mode_and_six_zero_quota_rows(self):
+        Experiment = self.apps.get_model("experiments", "Experiment")
+        ExperimentQuestionQuota = self.apps.get_model("experiments", "ExperimentQuestionQuota")
+
+        experiment = Experiment.objects.get(pk=self.experiment_pk)
+        rows = dict(
+            ExperimentQuestionQuota.objects.filter(experiment_id=experiment.pk).values_list(
+                "question_type", "amount"
+            )
+        )
+
+        self.assertEqual(experiment.selection_mode, "all")
+        self.assertEqual(
+            rows,
+            {
+                "single_choice": 0,
+                "multiple_choice": 0,
+                "numeric": 0,
+                "short_answer": 0,
+                "fill_blank": 0,
+                "true_false": 0,
+            },
+        )
