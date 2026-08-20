@@ -68,6 +68,74 @@ class ImportParsingTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, error):
                     parse_question_rows([row])
 
+    def test_explicit_non_choice_type_with_options_rejects_the_entire_batch(self):
+        valid_first_row = {
+            "sequence": 1,
+            "question": "先前有效的填空题",
+            "question_type": "fill_blank",
+            "answer": "答案",
+        }
+        cases = (
+            ("numeric", "1"),
+            ("fill_blank", "答案"),
+            ("true_false", "正确"),
+            ("short_answer", "答案"),
+        )
+
+        for question_type, answer in cases:
+            with self.subTest(question_type=question_type):
+                rows = [
+                    valid_first_row,
+                    {
+                        "sequence": 2,
+                        "question": "不应接受选项的题目",
+                        "question_type": question_type,
+                        "answer": answer,
+                        "option_a": "残留选项",
+                    },
+                ]
+
+                with self.assertRaisesRegex(ValueError, "非选择题不能填写选项"):
+                    parse_question_rows(rows)
+
+    def test_explicit_numeric_type_rejects_nonfinite_answers(self):
+        for answer in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(answer=answer):
+                with self.assertRaisesRegex(ValueError, "数值题答案必须是有效数字"):
+                    parse_question_rows(
+                        [
+                            {
+                                "sequence": 1,
+                                "question": "数值题",
+                                "question_type": "numeric",
+                                "answer": answer,
+                            }
+                        ]
+                    )
+
+    def test_legacy_rows_without_a_type_keep_choice_and_numeric_inference(self):
+        parsed = parse_question_rows(
+            [
+                {
+                    "sequence": 1,
+                    "question": "旧式单选",
+                    "option_a": "选项 A",
+                    "option_b": "选项 B",
+                    "answer": "B",
+                },
+                {
+                    "sequence": 2,
+                    "question": "旧式数值",
+                    "answer": "3.5",
+                },
+            ]
+        )
+
+        self.assertEqual(
+            [item.question_type for item in parsed],
+            ["single_choice", "numeric"],
+        )
+
     def test_kc_names_are_split_and_normalized(self):
         rows = [{'题目序号': 1, '主知识点': ' 一元一次方程 ', '次知识点': '移项； 等式性质'}]
         parsed = parse_kc_rows(rows)

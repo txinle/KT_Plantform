@@ -150,13 +150,24 @@ def parse_question_rows(rows: Iterable[Mapping[str, Any]]) -> list[ParsedQuestio
         )
         if explicit_type:
             question_type = _explicit_question_type(explicit_type, row_number)
+            if question_type in {
+                "numeric",
+                "fill_blank",
+                "true_false",
+                "short_answer",
+            } and options:
+                raise ValueError(f"第 {row_number} 行非选择题不能填写选项")
             if question_type in {"single_choice", "multiple_choice"}:
                 answer = _parse_choice_answer(raw_answer, options, question_type, row_number)
             elif question_type == "numeric":
                 try:
-                    Decimal(raw_answer)
+                    numeric_answer = Decimal(raw_answer)
                 except InvalidOperation:
                     raise ValueError(f"第 {row_number} 行数值题答案必须是有效数字") from None
+                # Decimal.is_finite() is the exact equivalent of math.isfinite
+                # here and does not narrow large valid Decimal values to float.
+                if not numeric_answer.is_finite():
+                    raise ValueError(f"第 {row_number} 行数值题答案必须是有效数字")
                 answer = raw_answer
             elif question_type == "true_false":
                 answer = normalize_true_false_answer(raw_answer)
