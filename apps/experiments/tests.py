@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.urls import reverse
@@ -5,7 +7,7 @@ from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.analytics.export_fields import FIELD_LABELS
 from apps.assessment.models import ExperimentSession
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
-from .forms import StudentAssignmentForm
+from .forms import ExperimentForm, StudentAssignmentForm
 from .models import Experiment, ExperimentQuestion, ExperimentStudent, ExperimentVersion, QuestionSnapshot
 from .services import assign_students, publish_experiment, sync_experiment_questions
 
@@ -108,6 +110,130 @@ class ArchivedQuestionBankExperimentServiceTests(TestCase):
         self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
         self.assertEqual(ExperimentVersion.objects.filter(experiment=self.experiment).count(), 0)
         self.assertEqual(QuestionSnapshot.objects.count(), 0)
+
+
+class ExperimentFormArchivedBankRaceTests(TestCase):
+    archived_bank_message = "题库已归档，不能同步或发布实验。"
+
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="experiment-form-race-teacher",
+            role=User.Role.TEACHER,
+        )
+        self.course = Course.objects.create(
+            owner=self.teacher,
+            name="事务实验课程",
+            code="TX-EXP",
+            term="2026 秋",
+        )
+        self.course_bank = QuestionBank.objects.create(
+            owner=self.teacher,
+            course=self.course,
+            name="课程原题库",
+        )
+        self.course_target_bank = QuestionBank.objects.create(
+            owner=self.teacher,
+            course=self.course,
+            name="课程待归档题库",
+        )
+        self.legacy_bank = QuestionBank.objects.create(owner=self.teacher, name="旧版原题库")
+        self.legacy_target_bank = QuestionBank.objects.create(
+            owner=self.teacher,
+            name="旧版待归档题库",
+        )
+        self.course_experiment = Experiment.objects.create(
+            owner=self.teacher,
+            created_by=self.teacher,
+            course=self.course,
+            question_bank=self.course_bank,
+            name="课程既有草稿",
+        )
+        self.legacy_experiment = Experiment.objects.create(
+            owner=self.teacher,
+            question_bank=self.legacy_bank,
+            name="旧版既有草稿",
+        )
+        self.client.force_login(self.teacher)
+
+    def payload(self, bank, name):
+        return {
+            "name": name,
+            "description": "",
+            "question_bank": bank.pk,
+            "ordering_mode": Experiment.Ordering.FIXED,
+            "feedback_mode": Experiment.Feedback.NONE,
+            "time_mode": Experiment.TimeMode.NONE,
+            "total_time_limit_minutes": "",
+            "per_question_time_limit_seconds": "",
+            "resume_mode": Experiment.ResumeMode.RESUMABLE,
+        }
+
+    def post_after_archiving_the_validated_bank(self, url, bank, payload):
+        original_is_valid = ExperimentForm.is_valid
+
+        def archive_after_validation(form):
+            is_valid = original_is_valid(form)
+            if is_valid:
+                QuestionBank.objects.filter(pk=bank.pk).update(
+                    visibility=QuestionBank.Visibility.ARCHIVED
+                )
+            return is_valid
+
+        original_raise_request_exception = self.client.raise_request_exception
+        self.client.raise_request_exception = False
+        try:
+            with patch.object(ExperimentForm, "is_valid", new=archive_after_validation):
+                return self.client.post(url, payload)
+        finally:
+            self.client.raise_request_exception = original_raise_request_exception
+
+    def assert_archived_bank_error(self, response, bank):
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.archived_bank_message)
+        bank.refresh_from_db()
+        self.assertEqual(bank.visibility, QuestionBank.Visibility.ARCHIVED)
+
+    def test_course_create_rolls_back_when_the_validated_bank_is_archived_before_save(self):
+        response = self.post_after_archiving_the_validated_bank(
+            reverse("courses:experiment_create", args=[self.course.pk]),
+            self.course_target_bank,
+            self.payload(self.course_target_bank, "不应创建的课程草稿"),
+        )
+
+        self.assert_archived_bank_error(response, self.course_target_bank)
+        self.assertFalse(Experiment.objects.filter(name="不应创建的课程草稿").exists())
+
+    def test_course_edit_keeps_the_existing_bank_when_the_target_is_archived_before_save(self):
+        response = self.post_after_archiving_the_validated_bank(
+            reverse("courses:experiment_edit", args=[self.course.pk, self.course_experiment.pk]),
+            self.course_target_bank,
+            self.payload(self.course_target_bank, "不应换绑的课程草稿"),
+        )
+
+        self.assert_archived_bank_error(response, self.course_target_bank)
+        self.course_experiment.refresh_from_db()
+        self.assertEqual(self.course_experiment.question_bank_id, self.course_bank.pk)
+
+    def test_legacy_create_rolls_back_when_the_validated_bank_is_archived_before_save(self):
+        response = self.post_after_archiving_the_validated_bank(
+            reverse("experiments:create"),
+            self.legacy_target_bank,
+            self.payload(self.legacy_target_bank, "不应创建的旧版草稿"),
+        )
+
+        self.assert_archived_bank_error(response, self.legacy_target_bank)
+        self.assertFalse(Experiment.objects.filter(name="不应创建的旧版草稿").exists())
+
+    def test_legacy_edit_keeps_the_existing_bank_when_the_target_is_archived_before_save(self):
+        response = self.post_after_archiving_the_validated_bank(
+            reverse("experiments:edit", args=[self.legacy_experiment.pk]),
+            self.legacy_target_bank,
+            self.payload(self.legacy_target_bank, "不应换绑的旧版草稿"),
+        )
+
+        self.assert_archived_bank_error(response, self.legacy_target_bank)
+        self.legacy_experiment.refresh_from_db()
+        self.assertEqual(self.legacy_experiment.question_bank_id, self.legacy_bank.pk)
 
 
 class LegacyExperimentInactiveClassAssignmentTests(TestCase):

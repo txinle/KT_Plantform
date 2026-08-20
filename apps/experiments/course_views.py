@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
@@ -36,15 +37,20 @@ def experiment_create(request, course_pk):
         require_writable_course(course)
     form = ExperimentForm(request.POST or None, owner=request.user, course=course)
     if request.method == "POST" and form.is_valid():
-        experiment = form.save(commit=False)
-        experiment.course = course
-        experiment.created_by = request.user
-        experiment.full_clean()
-        experiment.save()
-        sync_experiment_questions(experiment)
-        log_action(request, "experiment.create", experiment, {"course_id": course.pk})
-        messages.success(request, "实验草稿已创建。")
-        return redirect("courses:experiment_detail", course.pk, experiment.pk)
+        try:
+            with transaction.atomic():
+                experiment = form.save(commit=False)
+                experiment.course = course
+                experiment.created_by = request.user
+                experiment.full_clean()
+                experiment.save()
+                sync_experiment_questions(experiment)
+                log_action(request, "experiment.create", experiment, {"course_id": course.pk})
+        except ValidationError as exc:
+            form.add_error("question_bank", exc)
+        else:
+            messages.success(request, "实验草稿已创建。")
+            return redirect("courses:experiment_detail", course.pk, experiment.pk)
     return render(
         request,
         "teacher/course_experiment_form.html",
@@ -86,14 +92,19 @@ def experiment_edit(request, course_pk, pk):
     original_bank_id = experiment.question_bank_id
     form = ExperimentForm(request.POST or None, instance=experiment, owner=request.user, course=course)
     if request.method == "POST" and form.is_valid():
-        experiment = form.save(commit=False)
-        experiment.full_clean()
-        experiment.save()
-        if experiment.question_bank_id != original_bank_id:
-            sync_experiment_questions(experiment)
-        log_action(request, "experiment.update", experiment, {"course_id": course.pk})
-        messages.success(request, "实验配置已保存。")
-        return redirect("courses:experiment_detail", course.pk, experiment.pk)
+        try:
+            with transaction.atomic():
+                experiment = form.save(commit=False)
+                experiment.full_clean()
+                experiment.save()
+                if experiment.question_bank_id != original_bank_id:
+                    sync_experiment_questions(experiment)
+                log_action(request, "experiment.update", experiment, {"course_id": course.pk})
+        except ValidationError as exc:
+            form.add_error("question_bank", exc)
+        else:
+            messages.success(request, "实验配置已保存。")
+            return redirect("courses:experiment_detail", course.pk, experiment.pk)
     return render(
         request,
         "teacher/course_experiment_form.html",

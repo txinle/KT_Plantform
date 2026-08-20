@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.db.models import Q
 from apps.accounts.course_access import accessible_courses
@@ -34,19 +35,25 @@ def experiment_create(request):
         return redirect("courses:list")
     form = ExperimentForm(request.POST or None, owner=request.user)
     if request.method == "POST" and form.is_valid():
-        experiment = form.save(commit=False)
-        if experiment.question_bank.course_id:
-            if not courses.filter(pk=experiment.question_bank.course_id).exists():
-                raise ValidationError("题库不属于可管理的课程")
-            experiment.course = experiment.question_bank.course
-            experiment.created_by = request.user
-        experiment.owner = request.user; experiment.save()
-        sync_experiment_questions(experiment)
-        log_action(request, "experiment.create", experiment)
-        messages.success(request, "实验已创建，并已加入题库中的全部可用题目")
-        if experiment.course_id:
-            return redirect("courses:experiment_detail", experiment.course_id, experiment.pk)
-        return redirect("experiments:detail", pk=experiment.pk)
+        try:
+            with transaction.atomic():
+                experiment = form.save(commit=False)
+                if experiment.question_bank.course_id:
+                    if not courses.filter(pk=experiment.question_bank.course_id).exists():
+                        raise ValidationError("题库不属于可管理的课程")
+                    experiment.course = experiment.question_bank.course
+                    experiment.created_by = request.user
+                experiment.owner = request.user
+                experiment.save()
+                sync_experiment_questions(experiment)
+                log_action(request, "experiment.create", experiment)
+        except ValidationError as exc:
+            form.add_error("question_bank", exc)
+        else:
+            messages.success(request, "实验已创建，并已加入题库中的全部可用题目")
+            if experiment.course_id:
+                return redirect("courses:experiment_detail", experiment.course_id, experiment.pk)
+            return redirect("experiments:detail", pk=experiment.pk)
     return render(request, "teacher/experiment_form.html", {"form": form})
 
 
@@ -64,12 +71,18 @@ def experiment_edit(request, pk):
     original_bank_id = experiment.question_bank_id
     form = ExperimentForm(request.POST or None, instance=experiment, owner=request.user)
     if request.method == "POST" and form.is_valid():
-        experiment = form.save()
-        if experiment.question_bank_id != original_bank_id:
-            sync_experiment_questions(experiment)
-        log_action(request, "experiment.update", experiment)
-        messages.success(request, "实验配置已保存")
-        return redirect("experiments:detail", pk=experiment.pk)
+        try:
+            with transaction.atomic():
+                experiment = form.save(commit=False)
+                experiment.save()
+                if experiment.question_bank_id != original_bank_id:
+                    sync_experiment_questions(experiment)
+                log_action(request, "experiment.update", experiment)
+        except ValidationError as exc:
+            form.add_error("question_bank", exc)
+        else:
+            messages.success(request, "实验配置已保存")
+            return redirect("experiments:detail", pk=experiment.pk)
     return render(request, "teacher/experiment_form.html", {"form": form, "experiment": experiment})
 
 @role_required("teacher", "admin")
