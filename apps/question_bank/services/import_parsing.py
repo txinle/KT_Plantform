@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping
 
+from .numeric import NonFiniteDecimalError, normalize_finite_decimal
 from .scoring import normalize_true_false_answer
 
 
@@ -161,13 +161,9 @@ def parse_question_rows(rows: Iterable[Mapping[str, Any]]) -> list[ParsedQuestio
                 answer = _parse_choice_answer(raw_answer, options, question_type, row_number)
             elif question_type == "numeric":
                 try:
-                    numeric_answer = Decimal(raw_answer)
-                except InvalidOperation:
+                    normalize_finite_decimal(raw_answer)
+                except ValueError:
                     raise ValueError(f"第 {row_number} 行数值题答案必须是有效数字") from None
-                # Decimal.is_finite() is the exact equivalent of math.isfinite
-                # here and does not narrow large valid Decimal values to float.
-                if not numeric_answer.is_finite():
-                    raise ValueError(f"第 {row_number} 行数值题答案必须是有效数字")
                 answer = raw_answer
             elif question_type == "true_false":
                 answer = normalize_true_false_answer(raw_answer)
@@ -183,9 +179,11 @@ def parse_question_rows(rows: Iterable[Mapping[str, Any]]) -> list[ParsedQuestio
             answer = sorted(set(choices)) if question_type == "multiple_choice" else choices[0]
         else:
             try:
-                Decimal(raw_answer)
+                normalize_finite_decimal(raw_answer)
                 question_type = "numeric"
-            except InvalidOperation:
+            except NonFiniteDecimalError:
+                raise ValueError(f"第 {row_number} 行数值题答案必须是有效数字") from None
+            except ValueError:
                 question_type = "short_answer"
             answer = raw_answer
 

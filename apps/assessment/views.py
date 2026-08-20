@@ -152,7 +152,7 @@ def submit_api(request, attempt_id):
             response.update({"correct_answer": attempt.assignment.snapshot.correct_answer, "explanation": attempt.assignment.snapshot.explanation})
         return JsonResponse(response)
     except ValidationError as exc:
-        return JsonResponse({"success": False, "error": "; ".join(exc.messages)}, status=409)
+        return JsonResponse({"success": False, "error": "; ".join(exc.messages)}, status=400)
 
 
 @role_required("student")

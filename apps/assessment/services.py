@@ -7,6 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 from apps.experiments.models import Experiment, ExperimentStudent, ExperimentVersion
 from apps.experiments.services import derive_session_seeds, ordered_snapshots, select_snapshots
+from apps.question_bank.services.numeric import normalize_finite_decimal
 from apps.question_bank.services.scoring import score_payload
 from .models import Attempt, DraftSaveEvent, ExperimentSession, QuestionVisitEvent, StudentQuestionAssignment, SubmissionEvent
 
@@ -169,6 +170,11 @@ def submit_attempt(attempt_id, token, client_time=None):
     try: token_value = uuid.UUID(str(token))
     except ValueError: raise ValidationError("提交令牌无效") from None
     snapshot = attempt.assignment.snapshot
+    if snapshot.question_type == "numeric":
+        try:
+            normalize_finite_decimal(attempt.draft_answer)
+        except ValueError:
+            raise ValidationError("数值题答案必须是有效数字") from None
     correct, score = score_payload(
         snapshot.question_type, snapshot.correct_answer, attempt.draft_answer,
         accepted_answers=snapshot.accepted_answers,

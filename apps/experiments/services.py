@@ -3,12 +3,12 @@ import hashlib
 import random
 import secrets
 from collections import defaultdict, deque
-from decimal import Decimal, InvalidOperation
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from apps.accounts.class_lifecycle import lock_active_class_groups
 from apps.question_bank.access import lock_question_bank
 from apps.question_bank.models import Question, QuestionBank
+from apps.question_bank.services.numeric import normalize_finite_decimal
 from apps.question_bank.services.scoring import normalize_true_false_answer
 from .models import Experiment, ExperimentQuestion, ExperimentStudent, ExperimentVersion, QuestionSnapshot
 
@@ -48,10 +48,8 @@ def _validate_question_answer_structure(question):
             raise ValidationError(f"{question_name} 的多选题答案必须对应至少两个已有选项")
     elif question.question_type == Question.Type.NUMERIC:
         try:
-            numeric_answer = Decimal(str(answer).strip())
-        except (InvalidOperation, AttributeError, ValueError):
-            raise ValidationError(f"{question_name} 的数值题答案必须是有效数字") from None
-        if not numeric_answer.is_finite():
+            normalize_finite_decimal(answer)
+        except ValueError:
             raise ValidationError(f"{question_name} 的数值题答案必须是有效数字")
     elif question.question_type in {Question.Type.SHORT, Question.Type.FILL_BLANK}:
         if not _has_text(answer):

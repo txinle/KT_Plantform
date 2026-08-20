@@ -24,6 +24,22 @@ class ScoringTests(unittest.TestCase):
             (True, Decimal('1')),
         )
 
+    def test_numeric_nonfinite_or_invalid_answers_are_never_correct(self):
+        for correct, submitted in (
+            ("NaN", "1"),
+            ("sNaN", "1"),
+            ("Infinity", "1"),
+            ("1", "NaN"),
+            ("1", "sNaN"),
+            ("1", "Infinity"),
+            ("not-a-number", "1"),
+        ):
+            with self.subTest(correct=correct, submitted=submitted):
+                self.assertEqual(
+                    score_payload("numeric", correct, submitted),
+                    (False, Decimal("0")),
+                )
+
     def test_fill_blank_matches_after_trimming_casefolding_and_collapsing_internal_whitespace(self):
         self.assertEqual(
             score_payload(

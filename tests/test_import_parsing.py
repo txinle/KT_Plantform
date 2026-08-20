@@ -113,6 +113,20 @@ class ImportParsingTests(unittest.TestCase):
                         ]
                     )
 
+    def test_legacy_numeric_inference_rejects_nonfinite_answers(self):
+        for answer in ("NaN", "sNaN", "Infinity", "-Infinity"):
+            with self.subTest(answer=answer):
+                with self.assertRaisesRegex(ValueError, "数值题答案必须是有效数字"):
+                    parse_question_rows(
+                        [
+                            {
+                                "sequence": 1,
+                                "question": "旧式数值题",
+                                "answer": answer,
+                            }
+                        ]
+                    )
+
     def test_legacy_rows_without_a_type_keep_choice_and_numeric_inference(self):
         parsed = parse_question_rows(
             [

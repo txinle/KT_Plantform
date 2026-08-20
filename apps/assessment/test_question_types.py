@@ -11,6 +11,7 @@ from apps.experiments.models import Experiment, ExperimentStudent
 from apps.experiments.services import publish_experiment
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
 
+from .models import Attempt, SubmissionEvent
 from .services import get_or_create_session
 
 
@@ -47,7 +48,17 @@ class StudentQuestionTypeFlowTests(TestCase):
             text="所有学生会收到相同的配额题集。",
             correct_answer=False,
         )
-        for question in (fill_blank, judgement):
+        numeric_questions = [
+            Question.objects.create(
+                bank=bank,
+                sequence=sequence,
+                question_type=Question.Type.NUMERIC,
+                text=f"数值题 {sequence}",
+                correct_answer="2",
+            )
+            for sequence in range(3, 6)
+        ]
+        for question in (fill_blank, judgement, *numeric_questions):
             QuestionConcept.objects.create(question=question, concept=concept, is_primary=True)
         self.experiment = Experiment.objects.create(
             owner=self.teacher,
@@ -117,3 +128,34 @@ class StudentQuestionTypeFlowTests(TestCase):
         self.assertEqual(exported.status_code, 200)
         rows = list(load_workbook(BytesIO(exported.content), data_only=True).active.values)
         self.assertIn((Question.Type.TRUE_FALSE, "false", True), rows)
+
+    def test_numeric_nonfinite_draft_submit_returns_400_without_mutating_submission_state(self):
+        self.client.raise_request_exception = False
+
+        assignments = self.session.assignments.filter(
+            snapshot__question_type=Question.Type.NUMERIC
+        ).order_by("assigned_sequence_index")
+        for assignment, answer in zip(assignments, ("NaN", "sNaN", "Infinity")):
+            with self.subTest(answer=answer):
+                self.client.get(reverse("assessment:question", args=[self.session.pk, assignment.pk]))
+                saved = self.client.post(
+                    reverse("assessment:save_draft", args=[assignment.attempt.pk]),
+                    data=json.dumps({"answer": answer}),
+                    content_type="application/json",
+                )
+                self.assertEqual(saved.status_code, 200)
+
+                submitted = self.client.post(
+                    reverse("assessment:submit", args=[assignment.attempt.pk]),
+                    data=json.dumps({"submission_token": str(uuid.uuid4())}),
+                    content_type="application/json",
+                )
+
+                self.assertEqual(submitted.status_code, 400)
+                assignment.attempt.refresh_from_db()
+                self.session.refresh_from_db()
+                self.assertEqual(assignment.attempt.status, Attempt.Status.DRAFT)
+                self.assertIsNone(assignment.attempt.final_answer)
+                self.assertIsNone(assignment.attempt.submission_sequence_index)
+                self.assertEqual(self.session.submission_count, 0)
+                self.assertEqual(SubmissionEvent.objects.filter(attempt=assignment.attempt).count(), 0)

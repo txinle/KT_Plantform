@@ -80,6 +80,20 @@ class QuestionTypeEditingTests(TestCase):
         self.assertEqual(question.accepted_answers, [])
         self.assertFalse(question.options.exists())
 
+    def test_numeric_answer_rejects_nonfinite_decimal_values(self):
+        for answer in ("NaN", "sNaN", "Infinity", "-Infinity"):
+            with self.subTest(answer=answer):
+                form = QuestionEditForm(
+                    self.payload(
+                        question_type=Question.Type.NUMERIC,
+                        correct_answer_text=answer,
+                    ),
+                    instance=self.question,
+                )
+
+                self.assertFalse(form.is_valid())
+                self.assertIn("correct_answer_text", form.errors)
+
     def test_converting_a_choice_question_to_fill_blank_clears_stale_options(self):
         QuestionOption.objects.create(
             question=self.question,

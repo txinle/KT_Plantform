@@ -1,5 +1,6 @@
 from django import forms
 from .models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
+from .services.numeric import normalize_finite_decimal
 from .services.scoring import normalize_true_false_answer
 
 class QuestionBankForm(forms.ModelForm):
@@ -133,8 +134,8 @@ class QuestionEditForm(forms.ModelForm):
                 self.add_error("correct_answer_text", "多选题至少需要两个正确选项")
         elif question_type == Question.Type.NUMERIC:
             try:
-                float(raw_answer)
-            except (TypeError, ValueError):
+                normalize_finite_decimal(raw_answer)
+            except ValueError:
                 self.add_error("correct_answer_text", "数值题答案必须是有效数字")
         elif question_type == Question.Type.TRUE_FALSE:
             if normalize_true_false_answer(raw_answer) is None:

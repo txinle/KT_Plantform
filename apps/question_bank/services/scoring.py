@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any, Iterable
+
+from .numeric import normalize_finite_decimal
 
 
 def _normalized_text(value: Any) -> str:
@@ -36,8 +38,8 @@ def _choice_set(value: Any) -> set[str]:
 
 def _decimal(value: Any) -> Decimal | None:
     try:
-        return Decimal(str(value).strip())
-    except (InvalidOperation, AttributeError, ValueError):
+        return normalize_finite_decimal(value)
+    except ValueError:
         return None
 
 
