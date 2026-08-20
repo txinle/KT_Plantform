@@ -288,6 +288,46 @@ class IdentifiedExportTests(TestCase):
             403,
         )
 
+    def test_course_collaborator_cannot_download_identified_exports(self):
+        course = Course.objects.create(
+            owner=self.teacher,
+            name="协作课程",
+            code="COLLAB",
+            term="2026春",
+        )
+        CourseTeacher.objects.create(course=course, teacher=self.other_teacher)
+        bank = QuestionBank.objects.create(
+            course=course,
+            created_by=self.teacher,
+            name="协作课程题库",
+        )
+        experiment = Experiment.objects.create(
+            course=course,
+            created_by=self.teacher,
+            question_bank=bank,
+            name="协作课程实验",
+        )
+        self.client.force_login(self.other_teacher)
+
+        identified = self.client.post(
+            reverse("analytics:identified_export", args=[experiment.pk]),
+            {"fields": ["student_number"]},
+        )
+        navigation = self.client.post(
+            reverse("analytics:identified_navigation_export", args=[experiment.pk]),
+        )
+
+        self.assertEqual(identified.status_code, 404)
+        self.assertEqual(navigation.status_code, 404)
+        self.assertFalse(
+            AuditLog.objects.filter(
+                action__in=[
+                    "experiment.identified_export",
+                    "experiment.identified_navigation_export",
+                ]
+            ).exists()
+        )
+
     def test_identified_navigation_contains_original_identity_and_audit(self):
         response = self.client.post(self.navigation_url)
 

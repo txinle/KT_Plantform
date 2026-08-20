@@ -28,6 +28,14 @@ def _experiment(request, pk):
         )
     return get_object_or_404(qs, pk=pk)
 
+
+def _identified_experiment(request, pk):
+    if request.user.is_superuser or request.user.role == User.Role.ADMIN:
+        qs = Experiment.objects.all()
+    else:
+        qs = Experiment.objects.filter(owner=request.user)
+    return get_object_or_404(qs, pk=pk)
+
 def _anon(student_id, experiment_id):
     return hashlib.sha256(f"kt:{experiment_id}:{student_id}".encode()).hexdigest()[:16]
 
@@ -85,7 +93,7 @@ def _literal_cell(sheet, value):
 @role_required("teacher", "admin")
 @require_POST
 def identified_export(request, experiment_id):
-    experiment = _experiment(request, experiment_id)
+    experiment = _identified_experiment(request, experiment_id)
     requested = request.POST.getlist("fields")
     if not requested or any(key not in FIELD_LABELS for key in requested):
         return HttpResponse("请选择有效的导出字段", status=400, content_type="text/plain; charset=utf-8")
@@ -135,7 +143,7 @@ def identified_export(request, experiment_id):
 @role_required("teacher", "admin")
 @require_POST
 def identified_navigation_export(request, experiment_id):
-    experiment = _experiment(request, experiment_id)
+    experiment = _identified_experiment(request, experiment_id)
     events = (
         QuestionVisitEvent.objects.filter(session__version__experiment=experiment)
         .select_related(
