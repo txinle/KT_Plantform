@@ -5,11 +5,24 @@ from collections import defaultdict, deque
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from apps.accounts.class_lifecycle import lock_active_class_groups
+from apps.question_bank.access import lock_question_bank
+from apps.question_bank.models import QuestionBank
 from .models import Experiment, ExperimentQuestion, ExperimentStudent, ExperimentVersion, QuestionSnapshot
 
 
-def validate_for_publish(experiment):
-    if experiment.question_bank.course_id != experiment.course_id:
+ARCHIVED_EXPERIMENT_BANK_MESSAGE = "题库已归档，不能同步或发布实验。"
+
+
+def _lock_experiment_question_bank(experiment):
+    bank = lock_question_bank(experiment.question_bank_id)
+    if bank.visibility == QuestionBank.Visibility.ARCHIVED:
+        raise ValidationError(ARCHIVED_EXPERIMENT_BANK_MESSAGE)
+    return bank
+
+
+def validate_for_publish(experiment, question_bank=None):
+    question_bank = question_bank or experiment.question_bank
+    if question_bank.course_id != experiment.course_id:
         raise ValidationError("实验与题库必须属于同一课程")
     links = list(experiment.question_links.select_related("question").prefetch_related("question__options", "question__concept_links__concept"))
     if not links: raise ValidationError("实验至少需要一道题")
@@ -21,9 +34,10 @@ def validate_for_publish(experiment):
 @transaction.atomic
 def publish_experiment(experiment, actor):
     experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
+    question_bank = _lock_experiment_question_bank(experiment)
     if experiment.status != Experiment.Status.DRAFT:
         raise ValidationError("只有草稿实验可以发布")
-    links = validate_for_publish(experiment)
+    links = validate_for_publish(experiment, question_bank)
     version_number = (experiment.versions.order_by("-version_number").values_list("version_number", flat=True).first() or 0) + 1
     config = {
         "ordering_mode": experiment.ordering_mode, "feedback_mode": experiment.feedback_mode,
@@ -90,9 +104,11 @@ def ordered_snapshots(version, student_id):
 
 @transaction.atomic
 def sync_experiment_questions(experiment):
+    experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
+    question_bank = _lock_experiment_question_bank(experiment)
     if experiment.status != Experiment.Status.DRAFT: raise ValidationError("发布后不能修改题目")
     experiment.question_links.all().delete()
-    for idx, question in enumerate(experiment.question_bank.questions.filter(status="active"), start=1):
+    for idx, question in enumerate(question_bank.questions.filter(status="active"), start=1):
         ExperimentQuestion.objects.create(experiment=experiment, question=question, display_order=idx)
 
 @transaction.atomic

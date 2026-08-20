@@ -1,6 +1,7 @@
 from dataclasses import asdict
 from django.conf import settings
 from django.contrib import messages
+from django.db import transaction
 from django.http import FileResponse, Http404
 from django.db.models import Count
 from django.db.models import Q
@@ -9,7 +10,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from apps.accounts.permissions import role_required
 from apps.accounts.course_access import accessible_courses
 from apps.audit.services import log_action
-from .access import require_writable_bank_content
+from .access import lock_question_bank, lock_writable_bank_content, require_writable_bank_content
 from .audit import bank_metadata_audit_details
 from .forms import QuestionBankForm, QuestionBankVisibilityForm, QuestionEditForm, UploadForm
 from .models import Concept, Question, QuestionBank
@@ -108,19 +109,21 @@ def bank_visibility_update(request, pk):
     if bank.course_id:
         from . import course_views
         return course_views.bank_visibility_update(request, bank.course_id, bank.pk)
-    form = QuestionBankVisibilityForm(request.POST, instance=bank)
-    if form.is_valid():
-        changed_fields = form.changed_data
-        form.save()
-        log_action(
-            request,
-            "question_bank.visibility",
-            bank,
-            bank_metadata_audit_details(bank, changed_fields),
-        )
-        messages.success(request, f"题库“{bank.name}”的可见性已更新")
-    else:
-        messages.error(request, "可见性更新失败，请重新选择")
+    with transaction.atomic():
+        bank = lock_question_bank(bank)
+        form = QuestionBankVisibilityForm(request.POST, instance=bank)
+        if form.is_valid():
+            changed_fields = form.changed_data
+            form.save()
+            log_action(
+                request,
+                "question_bank.visibility",
+                bank,
+                bank_metadata_audit_details(bank, changed_fields),
+            )
+            messages.success(request, f"题库“{bank.name}”的可见性已更新")
+        else:
+            messages.error(request, "可见性更新失败，请重新选择")
     return redirect("question_bank:bank_list")
 
 @role_required("teacher", "admin")
@@ -129,12 +132,19 @@ def question_edit(request, bank_pk, question_pk):
     if bank.course_id:
         from . import course_views
         return course_views.question_edit(request, bank.course_id, bank.pk, question_pk)
-    require_writable_bank_content(bank)
-    question = get_object_or_404(bank.questions, pk=question_pk)
-    form = QuestionEditForm(request.POST or None, instance=question)
-    if request.method == "POST" and form.is_valid():
-        form.save(); messages.success(request, "题目已保存")
-        return redirect("question_bank:bank_detail", pk=bank.pk)
+    if request.method == "POST":
+        with transaction.atomic():
+            bank = lock_writable_bank_content(bank)
+            question = get_object_or_404(bank.questions, pk=question_pk)
+            form = QuestionEditForm(request.POST, instance=question)
+            if form.is_valid():
+                form.save()
+                messages.success(request, "题目已保存")
+                return redirect("question_bank:bank_detail", pk=bank.pk)
+    else:
+        require_writable_bank_content(bank)
+        question = get_object_or_404(bank.questions, pk=question_pk)
+        form = QuestionEditForm(instance=question)
     return render(request, "teacher/question_edit.html", {"bank": bank, "question": question, "form": form})
 
 @role_required("teacher", "admin")

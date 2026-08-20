@@ -1,11 +1,11 @@
 from django.db import transaction
-from ..access import require_writable_bank_content
+from ..access import lock_writable_bank_content
 from .import_parsing import ParsedKCMapping, ParsedQuestion
 from ..models import Concept, Question, QuestionConcept, QuestionOption
 
 @transaction.atomic
 def import_questions(bank, parsed_rows: list[ParsedQuestion]):
-    require_writable_bank_content(bank)
+    bank = lock_writable_bank_content(bank)
     created = []
     for row in parsed_rows:
         question = Question.objects.create(
@@ -48,7 +48,7 @@ def _get_or_create_concept(owner, name, course=None):
 
 @transaction.atomic
 def import_kc_mappings(bank, owner, mappings: list[ParsedKCMapping]):
-    require_writable_bank_content(bank)
+    bank = lock_writable_bank_content(bank)
     updated = 0
     for mapping in mappings:
         question = bank.questions.get(sequence=mapping.sequence)

@@ -6,7 +6,7 @@
 {% if bank.visibility == 'archived' %}<div class="notice-panel mb-4" role="status"><strong>题库已归档。</strong> 此处只允许恢复可见性或更新题库说明，题目内容和 KC 映射仍保持只读。</div>{% endif %}
 <div class="card"><div class="card-body p-md-4">
   {% include 'components/error_summary.html' with form=form %}
-  <form method="post" novalidate>
+  <form method="post" action="{% url 'courses:bank_update' course.pk bank.pk %}" novalidate>
     {% csrf_token %}
     <section class="form-section" aria-labelledby="bank-metadata-title"><h2 class="form-section-title" id="bank-metadata-title">题库信息</h2><div class="row g-3"><div class="col-12">{% include 'components/form_field.html' with field=form.name %}</div><div class="col-12">{% include 'components/form_field.html' with field=form.description %}</div><div class="col-md-6">{% include 'components/form_field.html' with field=form.visibility %}</div></div></section>
     <div class="form-actions"><button class="btn btn-primary" type="submit">保存题库信息</button><a class="btn btn-secondary" href="{% url 'courses:bank_detail' course.pk bank.pk %}">取消</a></div>

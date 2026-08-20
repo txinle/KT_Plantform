@@ -1,3 +1,4 @@
+from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -6,6 +7,8 @@ from apps.accounts.models import Course, CourseTeacher, User
 from apps.audit.models import AuditLog
 
 from .models import Concept, Question, QuestionBank, QuestionConcept
+from .services.import_parsing import ParsedKCMapping, ParsedQuestion
+from .services.import_service import import_kc_mappings, import_questions
 
 
 class CourseBankMetadataEditTests(TestCase):
@@ -14,6 +17,13 @@ class CourseBankMetadataEditTests(TestCase):
         self.bank_owner = User.objects.create_user(username="bank-owner", role=User.Role.TEACHER)
         self.collaborator = User.objects.create_user(username="collaborator", role=User.Role.TEACHER)
         self.outsider = User.objects.create_user(username="outsider", role=User.Role.TEACHER)
+        self.admin = User.objects.create_user(username="metadata-admin", role=User.Role.ADMIN)
+        self.superuser = User.objects.create_user(
+            username="metadata-superuser",
+            role=User.Role.ADMIN,
+            is_staff=True,
+            is_superuser=True,
+        )
         self.course = Course.objects.create(
             name="研究方法",
             code="RM101",
@@ -30,6 +40,7 @@ class CourseBankMetadataEditTests(TestCase):
             visibility=QuestionBank.Visibility.ARCHIVED,
         )
         self.edit_url = reverse("courses:bank_edit", args=[self.course.pk, self.bank.pk])
+        self.update_url = reverse("courses:bank_update", args=[self.course.pk, self.bank.pk])
         self.visibility_url = reverse(
             "courses:bank_visibility", args=[self.course.pk, self.bank.pk]
         )
@@ -54,10 +65,12 @@ class CourseBankMetadataEditTests(TestCase):
 
         page = self.client.get(self.edit_url)
         self.assertEqual(page.status_code, 200)
+        self.assertContains(page, f'action="{self.update_url}"')
+        self.assertContains(page, 'name="csrfmiddlewaretoken"')
         for field_name in ("name", "description", "visibility"):
             self.assertContains(page, f'name="{field_name}"')
 
-        response = self.client.post(self.edit_url, self.metadata_payload())
+        response = self.client.post(self.update_url, self.metadata_payload())
 
         self.assertRedirects(
             response,
@@ -82,7 +95,7 @@ class CourseBankMetadataEditTests(TestCase):
     def test_invalid_metadata_form_returns_accessible_error_feedback_without_writing(self):
         self.client.force_login(self.owner)
 
-        response = self.client.post(self.edit_url, self.metadata_payload(name=""))
+        response = self.client.post(self.update_url, self.metadata_payload(name=""))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "请检查以下内容")
@@ -93,7 +106,7 @@ class CourseBankMetadataEditTests(TestCase):
     def test_metadata_edit_is_limited_to_course_owner_or_bank_owner(self):
         self.client.force_login(self.collaborator)
 
-        denied = self.client.post(self.edit_url, self.metadata_payload())
+        denied = self.client.post(self.update_url, self.metadata_payload())
         quick_denied = self.client.post(
             self.visibility_url,
             {"visibility": QuestionBank.Visibility.SHARED},
@@ -106,7 +119,7 @@ class CourseBankMetadataEditTests(TestCase):
         self.assertEqual(self.bank.name, "原始题库名称")
 
         self.client.force_login(self.bank_owner)
-        allowed = self.client.post(self.edit_url, self.metadata_payload())
+        allowed = self.client.post(self.update_url, self.metadata_payload())
         self.assertRedirects(
             allowed,
             reverse("courses:bank_detail", args=[self.course.pk, self.bank.pk]),
@@ -116,21 +129,47 @@ class CourseBankMetadataEditTests(TestCase):
         outside = self.client.get(self.edit_url)
         self.assertEqual(outside.status_code, 404)
 
-    def test_metadata_writes_are_post_only_csrf_protected_and_course_archiving_still_wins(self):
+    def test_metadata_edit_entry_is_visible_only_to_authorized_metadata_editors(self):
+        cases = (
+            (self.owner, True),
+            (self.bank_owner, True),
+            (self.admin, True),
+            (self.superuser, True),
+            (self.collaborator, False),
+        )
+
+        for user, can_edit in cases:
+            with self.subTest(user=user.username):
+                self.client.force_login(user)
+                response = self.client.get(
+                    reverse("courses:bank_detail", args=[self.course.pk, self.bank.pk])
+                )
+
+                self.assertEqual(response.context["can_edit_bank_metadata"], can_edit)
+                if can_edit:
+                    self.assertContains(response, self.edit_url)
+                else:
+                    self.assertNotContains(response, self.edit_url)
+
+    def test_metadata_routes_are_method_split_csrf_protected_and_course_archiving_still_wins(self):
         self.client.force_login(self.owner)
 
-        self.assertEqual(self.client.put(self.edit_url, self.metadata_payload()).status_code, 405)
+        self.assertEqual(self.client.post(self.edit_url, self.metadata_payload()).status_code, 405)
+        self.assertEqual(self.client.get(self.update_url).status_code, 405)
+        self.assertEqual(self.client.put(self.update_url, self.metadata_payload()).status_code, 405)
+        self.bank.refresh_from_db()
+        self.assertEqual(self.bank.name, "原始题库名称")
 
         csrf_client = Client(enforce_csrf_checks=True)
         csrf_client.force_login(self.owner)
-        csrf_denied = csrf_client.post(self.edit_url, self.metadata_payload())
+        csrf_denied = csrf_client.post(self.update_url, self.metadata_payload())
         self.assertEqual(csrf_denied.status_code, 403)
         self.bank.refresh_from_db()
         self.assertEqual(self.bank.name, "原始题库名称")
 
         self.course.status = Course.Status.ARCHIVED
         self.course.save(update_fields=["status"])
-        archived_course = self.client.post(self.edit_url, self.metadata_payload())
+        archived_course = self.client.post(self.update_url, self.metadata_payload())
         archived_course_quick = self.client.post(
             self.visibility_url,
             {"visibility": QuestionBank.Visibility.PRIVATE},
@@ -140,6 +179,11 @@ class CourseBankMetadataEditTests(TestCase):
         self.bank.refresh_from_db()
         self.assertEqual(self.bank.name, "原始题库名称")
         self.assertEqual(self.bank.visibility, QuestionBank.Visibility.ARCHIVED)
+
+    def test_visibility_shortcut_remains_post_only(self):
+        self.client.force_login(self.owner)
+
+        self.assertEqual(self.client.get(self.visibility_url).status_code, 405)
 
     def test_visibility_shortcut_preserves_redirect_and_uses_privacy_safe_audit_details(self):
         self.bank.visibility = QuestionBank.Visibility.PRIVATE
@@ -164,6 +208,54 @@ class CourseBankMetadataEditTests(TestCase):
             },
         )
         self.assertNotIn("shared", str(audit.details))
+
+
+class ArchivedBankStaleServiceWriteTests(TestCase):
+    archived_write_message = "题库已归档，不能写入题目内容或 KC 映射。"
+
+    def setUp(self):
+        self.teacher = User.objects.create_user(username="stale-bank-service-teacher", role=User.Role.TEACHER)
+        self.bank = QuestionBank.objects.create(owner=self.teacher, name="服务层锁定题库")
+        self.question = Question.objects.create(
+            bank=self.bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="已有题目",
+            correct_answer="已有答案",
+        )
+
+    def archive_after_loading_a_stale_bank(self):
+        stale_bank = QuestionBank.objects.get(pk=self.bank.pk)
+        self.assertEqual(stale_bank.visibility, QuestionBank.Visibility.PRIVATE)
+        QuestionBank.objects.filter(pk=self.bank.pk).update(
+            visibility=QuestionBank.Visibility.ARCHIVED
+        )
+        return stale_bank
+
+    def test_question_import_rechecks_a_stale_bank_inside_its_transaction(self):
+        stale_bank = self.archive_after_loading_a_stale_bank()
+        parsed_question = ParsedQuestion(
+            sequence=2,
+            text="不应导入",
+            options={"A": "甲", "B": "乙"},
+            answer="A",
+            question_type=Question.Type.SINGLE,
+        )
+
+        with self.assertRaisesMessage(PermissionDenied, self.archived_write_message):
+            import_questions(stale_bank, [parsed_question])
+
+        self.assertFalse(self.bank.questions.filter(sequence=2).exists())
+
+    def test_kc_import_rechecks_a_stale_bank_inside_its_transaction(self):
+        stale_bank = self.archive_after_loading_a_stale_bank()
+        mapping = ParsedKCMapping(sequence=1, primary="不应创建 KC", secondary=[])
+
+        with self.assertRaisesMessage(PermissionDenied, self.archived_write_message):
+            import_kc_mappings(stale_bank, self.teacher, [mapping])
+
+        self.assertFalse(QuestionConcept.objects.filter(question=self.question).exists())
+        self.assertFalse(Concept.objects.filter(owner=self.teacher, name="不应创建 KC").exists())
 
 
 class ArchivedCourseBankContentWriteTests(TestCase):

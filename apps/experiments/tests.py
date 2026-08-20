@@ -6,8 +6,8 @@ from apps.analytics.export_fields import FIELD_LABELS
 from apps.assessment.models import ExperimentSession
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
 from .forms import StudentAssignmentForm
-from .models import Experiment, ExperimentQuestion, ExperimentStudent, ExperimentVersion
-from .services import assign_students, publish_experiment
+from .models import Experiment, ExperimentQuestion, ExperimentStudent, ExperimentVersion, QuestionSnapshot
+from .services import assign_students, publish_experiment, sync_experiment_questions
 
 class PublishingTests(TestCase):
     def setUp(self):
@@ -33,6 +33,81 @@ class PublishingTests(TestCase):
         snapshot.refresh_from_db()
         self.assertEqual(snapshot.text, "KT?")
         self.assertEqual(snapshot.primary_kc, "追踪")
+
+
+class ArchivedQuestionBankExperimentServiceTests(TestCase):
+    archived_bank_message = "题库已归档，不能同步或发布实验。"
+
+    def setUp(self):
+        self.teacher = User.objects.create_user(username="archived-bank-experiment-teacher", role=User.Role.TEACHER)
+        self.student = User.objects.create_user(
+            username="ARCHIVED-BANK-STUDENT",
+            student_number="ARCHIVED-BANK-STUDENT",
+            role=User.Role.STUDENT,
+        )
+        self.bank = QuestionBank.objects.create(owner=self.teacher, name="实验归档题库")
+        self.question = Question.objects.create(
+            bank=self.bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="实验题目",
+            correct_answer="实验答案",
+        )
+        concept = Concept.objects.create(
+            owner=self.teacher,
+            scope=Concept.Scope.PRIVATE,
+            name="实验 KC",
+            normalized_name="实验 kc",
+        )
+        QuestionConcept.objects.create(question=self.question, concept=concept, is_primary=True)
+        self.experiment = Experiment.objects.create(
+            owner=self.teacher,
+            question_bank=self.bank,
+            name="归档绕过实验",
+        )
+        ExperimentQuestion.objects.create(
+            experiment=self.experiment,
+            question=self.question,
+            display_order=1,
+        )
+        ExperimentStudent.objects.create(experiment=self.experiment, student=self.student)
+
+    def stale_experiment_after_archiving_its_bank(self):
+        stale_experiment = Experiment.objects.select_related("question_bank").get(pk=self.experiment.pk)
+        self.assertEqual(stale_experiment.question_bank.visibility, QuestionBank.Visibility.PRIVATE)
+        QuestionBank.objects.filter(pk=self.bank.pk).update(
+            visibility=QuestionBank.Visibility.ARCHIVED
+        )
+        return stale_experiment
+
+    def test_sync_rejects_an_archived_bank_from_a_stale_experiment_without_replacing_links(self):
+        stale_experiment = self.stale_experiment_after_archiving_its_bank()
+        before_links = list(
+            self.experiment.question_links.values_list("question_id", "display_order")
+        )
+
+        with self.assertRaisesMessage(ValidationError, self.archived_bank_message):
+            sync_experiment_questions(stale_experiment)
+
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
+        self.assertEqual(
+            list(self.experiment.question_links.values_list("question_id", "display_order")),
+            before_links,
+        )
+        self.assertEqual(ExperimentVersion.objects.filter(experiment=self.experiment).count(), 0)
+        self.assertEqual(QuestionSnapshot.objects.count(), 0)
+
+    def test_publish_rejects_an_archived_bank_from_a_stale_experiment_without_creating_snapshots(self):
+        stale_experiment = self.stale_experiment_after_archiving_its_bank()
+
+        with self.assertRaisesMessage(ValidationError, self.archived_bank_message):
+            publish_experiment(stale_experiment, self.teacher)
+
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
+        self.assertEqual(ExperimentVersion.objects.filter(experiment=self.experiment).count(), 0)
+        self.assertEqual(QuestionSnapshot.objects.count(), 0)
 
 
 class LegacyExperimentInactiveClassAssignmentTests(TestCase):

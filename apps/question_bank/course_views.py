@@ -8,14 +8,14 @@ from django.db.models import Count, Prefetch
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.views.decorators.http import require_GET, require_http_methods, require_POST
+from django.views.decorators.http import require_GET, require_POST
 
 from apps.accounts.course_access import get_accessible_course, require_writable_course
 from apps.accounts.models import User
 from apps.accounts.permissions import role_required
 from apps.audit.services import log_action
 
-from .access import require_writable_bank_content
+from .access import lock_question_bank, lock_writable_bank_content, require_writable_bank_content
 from .audit import bank_metadata_audit_details
 from .forms import CourseConceptForm, QuestionBankForm, QuestionBankVisibilityForm, QuestionEditForm, UploadForm
 from .models import Concept, QuestionBank, QuestionConcept
@@ -28,16 +28,18 @@ def _bank(course, pk):
     return get_object_or_404(course.question_banks, pk=pk)
 
 
-def _require_bank_metadata_editor(request, course, bank):
-    user = request.user
-    if (
+def can_edit_bank_metadata(user, course, bank):
+    return bool(
         user.is_superuser
         or user.role == User.Role.ADMIN
         or course.owner_id == user.id
         or bank.owner_id == user.id
-        or bank.created_by_id == user.id
-    ):
-        return
+    )
+
+
+def _require_bank_metadata_editor(request, course, bank):
+    if can_edit_bank_metadata(request.user, course, bank):
+        return bank
     raise PermissionDenied("只有课程负责人或题库所有者可以修改题库元数据。")
 
 
@@ -125,18 +127,39 @@ def bank_detail(request, course_pk, pk):
             "bank": bank,
             "questions": questions,
             "chapter_concepts": chapter_concepts,
+            "can_edit_bank_metadata": can_edit_bank_metadata(request.user, course, bank),
         },
     )
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
-@require_http_methods(["GET", "POST"])
+@require_GET
 def bank_edit(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     bank = _bank(course, pk)
     _require_bank_metadata_editor(request, course, bank)
-    if request.method == "POST":
-        require_writable_course(course)
+    form = QuestionBankForm(instance=bank)
+    return render(
+        request,
+        "teacher/course_bank_edit.html",
+        {
+            "course": course,
+            "current_course": course,
+            "bank": bank,
+            "form": form,
+        },
+    )
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def bank_update(request, course_pk, pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_writable_course(course)
+    bank = _bank(course, pk)
+    with transaction.atomic():
+        bank = lock_question_bank(bank)
+        _require_bank_metadata_editor(request, course, bank)
         form = QuestionBankForm(request.POST, instance=bank)
         if form.is_valid():
             changed_fields = form.changed_data
@@ -149,8 +172,6 @@ def bank_edit(request, course_pk, pk):
             )
             messages.success(request, "题库信息已保存。")
             return redirect("courses:bank_detail", course.pk, bank.pk)
-    else:
-        form = QuestionBankForm(instance=bank)
     return render(
         request,
         "teacher/course_bank_edit.html",
@@ -244,20 +265,22 @@ def bank_visibility_update(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     bank = _bank(course, pk)
-    _require_bank_metadata_editor(request, course, bank)
-    form = QuestionBankVisibilityForm(request.POST, instance=bank)
-    if form.is_valid():
-        changed_fields = form.changed_data
-        form.save()
-        log_action(
-            request,
-            "question_bank.visibility",
-            bank,
-            bank_metadata_audit_details(bank, changed_fields),
-        )
-        messages.success(request, "题库可见性已更新。")
-    else:
-        messages.error(request, "题库可见性更新失败。")
+    with transaction.atomic():
+        bank = lock_question_bank(bank)
+        _require_bank_metadata_editor(request, course, bank)
+        form = QuestionBankVisibilityForm(request.POST, instance=bank)
+        if form.is_valid():
+            changed_fields = form.changed_data
+            form.save()
+            log_action(
+                request,
+                "question_bank.visibility",
+                bank,
+                bank_metadata_audit_details(bank, changed_fields),
+            )
+            messages.success(request, "题库可见性已更新。")
+        else:
+            messages.error(request, "题库可见性更新失败。")
     return redirect("courses:banks", course.pk)
 
 
@@ -265,17 +288,21 @@ def bank_visibility_update(request, course_pk, pk):
 def question_edit(request, course_pk, bank_pk, question_pk):
     course = get_accessible_course(request.user, course_pk)
     bank = _bank(course, bank_pk)
-    question = get_object_or_404(bank.questions, pk=question_pk)
     if request.method == "POST":
         require_writable_course(course)
-    require_writable_bank_content(bank)
-    form = QuestionEditForm(request.POST or None, instance=question, course=course)
-    if request.method == "POST" and form.is_valid():
         with transaction.atomic():
-            form.save()
-            log_action(request, "question.update", question, {"course_id": course.pk})
-        messages.success(request, "题目已保存。")
-        return redirect("courses:bank_detail", course.pk, bank.pk)
+            bank = lock_writable_bank_content(bank)
+            question = get_object_or_404(bank.questions, pk=question_pk)
+            form = QuestionEditForm(request.POST, instance=question, course=course)
+            if form.is_valid():
+                form.save()
+                log_action(request, "question.update", question, {"course_id": course.pk})
+                messages.success(request, "题目已保存。")
+                return redirect("courses:bank_detail", course.pk, bank.pk)
+    else:
+        require_writable_bank_content(bank)
+        question = get_object_or_404(bank.questions, pk=question_pk)
+        form = QuestionEditForm(instance=question, course=course)
     return render(
         request,
         "teacher/course_question_edit.html",
