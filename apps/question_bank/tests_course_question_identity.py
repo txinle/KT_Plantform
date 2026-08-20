@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase
 from django.core.management import call_command
 from django.db import IntegrityError
@@ -56,9 +57,22 @@ class CourseQuestionIdentityAllocatorTests(TestCase):
             correct_answer="答案",
         )
 
+    @staticmethod
+    def _bulk_question(bank, sequence):
+        question = Question(
+            bank=bank,
+            sequence=sequence,
+            question_type=Question.Type.SHORT,
+            text=f"批量题目 {sequence}",
+            correct_answer="答案",
+        )
+        Question.objects.bulk_create([question])
+        question.refresh_from_db()
+        return question
+
     def test_allocator_assigns_independent_course_sequences_and_stable_codes(self):
-        question_a = self._question(self.bank_a, 50)
-        question_b = self._question(self.bank_b, 1)
+        question_a = self._bulk_question(self.bank_a, 50)
+        question_b = self._bulk_question(self.bank_b, 1)
 
         identity_a = allocate_course_question_identity(self.course_a, question_a)
         identity_b = allocate_course_question_identity(self.course_b, question_b)
@@ -67,6 +81,57 @@ class CourseQuestionIdentityAllocatorTests(TestCase):
         self.assertEqual(identity_b.course_sequence, 1)
         self.assertEqual(identity_a.stable_code, f"C{self.course_a.pk:06d}-Q000001")
         self.assertEqual(identity_b.stable_code, f"C{self.course_b.pk:06d}-Q000001")
+
+    def test_direct_orm_create_assigns_identity_for_a_course_question(self):
+        question = self._question(self.bank_a, 1)
+
+        self.assertTrue(
+            CourseQuestionIdentity.objects.filter(
+                question=question,
+                course=self.course_a,
+                course_sequence=1,
+                stable_code=f"C{self.course_a.pk:06d}-Q000001",
+            ).exists()
+        )
+
+    def test_moving_an_identified_question_to_another_course_bank_is_rejected(self):
+        question = self._question(self.bank_a, 1)
+        identity = allocate_course_question_identity(self.course_a, question)
+        question.bank = self.bank_b
+
+        with self.assertRaises(ValidationError):
+            question.save(update_fields=["bank"])
+
+        question.refresh_from_db()
+        identity.refresh_from_db()
+        self.assertEqual(question.bank_id, self.bank_a.pk)
+        self.assertEqual(identity.course_id, self.course_a.pk)
+
+    def test_moving_within_the_same_course_keeps_the_existing_identity(self):
+        second_course_bank = QuestionBank.objects.create(
+            course=self.course_a,
+            created_by=self.teacher,
+            name="课程 A 的第二题库",
+        )
+        question = self._question(self.bank_a, 1)
+        identity = CourseQuestionIdentity.objects.get(question=question)
+        question.bank = second_course_bank
+        question.save(update_fields=["bank"])
+
+        identity.refresh_from_db()
+        self.assertEqual(question.bank_id, second_course_bank.pk)
+        self.assertEqual(identity.question_id, question.pk)
+        self.assertEqual(identity.course_id, self.course_a.pk)
+
+    def test_legacy_question_creation_remains_without_a_course_identity(self):
+        legacy_bank = QuestionBank.objects.create(
+            created_by=self.teacher,
+            name="历史兼容题库",
+        )
+
+        question = self._question(legacy_bank, 1)
+
+        self.assertFalse(CourseQuestionIdentity.objects.filter(question=question).exists())
 
     def test_import_assigns_one_identity_to_each_question_in_the_atomic_batch(self):
         parsed_rows = [
@@ -138,7 +203,7 @@ class CourseQuestionIdentityAllocatorTests(TestCase):
 
     def test_database_uniqueness_prevents_two_course_identities_from_using_one_sequence(self):
         first_question = self._question(self.bank_a, 1)
-        second_question = self._question(self.bank_a, 2)
+        second_question = self._bulk_question(self.bank_a, 2)
         first_identity = allocate_course_question_identity(self.course_a, first_question)
 
         with self.assertRaises(IntegrityError):
@@ -150,7 +215,7 @@ class CourseQuestionIdentityAllocatorTests(TestCase):
             )
 
     def test_database_rejects_a_nonpositive_course_sequence(self):
-        question = self._question(self.bank_a, 1)
+        question = self._bulk_question(self.bank_a, 1)
 
         with self.assertRaises(IntegrityError):
             CourseQuestionIdentity.objects.create(
@@ -161,7 +226,7 @@ class CourseQuestionIdentityAllocatorTests(TestCase):
             )
 
     def test_allocator_retries_a_stale_unique_collision_for_sqlite_compatible_concurrency_coverage(self):
-        question = self._question(self.bank_a, 1)
+        question = self._bulk_question(self.bank_a, 1)
         create = CourseQuestionIdentity.objects.create
         attempts = 0
 

@@ -4,7 +4,6 @@ from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.experiments.models import Experiment, ExperimentQuestion, ExperimentStudent
 from apps.experiments.services import publish_experiment
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
-from apps.question_bank.services.course_question_identity import allocate_course_question_identity
 
 class Command(BaseCommand):
     help = "创建可直接登录体验的演示数据"
@@ -52,7 +51,6 @@ class Command(BaseCommand):
             ]
             for seq, qtype, text, options, answer, kc, difficulty in data:
                 q = Question.objects.create(bank=bank, sequence=seq, question_type=qtype, text=text, correct_answer=answer, teacher_difficulty=difficulty, accepted_answers=["认知追踪"] if seq==4 else [], absolute_tolerance="0.01" if seq==3 else None)
-                allocate_course_question_identity(course, q)
                 for order, (key, value) in enumerate(options.items(), start=1): QuestionOption.objects.create(question=q, key=key, text=value, display_order=order)
                 QuestionConcept.objects.create(question=q, concept=kc, is_primary=True)
         experiment, created = Experiment.objects.get_or_create(

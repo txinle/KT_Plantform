@@ -2,7 +2,6 @@ from django.db import transaction
 from apps.accounts.course_access import lock_writable_course
 
 from ..access import lock_question_bank, lock_writable_bank_content
-from .course_question_identity import allocate_course_question_identity
 from .import_parsing import ParsedKCMapping, ParsedQuestion
 from ..models import Concept, Question, QuestionConcept, QuestionOption
 
@@ -15,8 +14,6 @@ def import_questions(bank, parsed_rows: list[ParsedQuestion]):
             bank=bank, sequence=row.sequence, question_type=row.question_type,
             text=row.text, correct_answer=row.answer, status=Question.Status.ACTIVE,
         )
-        if bank.course_id is not None:
-            allocate_course_question_identity(bank.course_id, question)
         QuestionOption.objects.bulk_create([
             QuestionOption(question=question, key=key, text=value, display_order=index)
             for index, (key, value) in enumerate(row.options.items(), start=1)
@@ -93,8 +90,6 @@ def copy_shared_bank(source_bank, target_course, actor=None):
             explanation=source.explanation, teacher_difficulty=source.teacher_difficulty,
             empirical_difficulty=source.empirical_difficulty, status=source.status,
         )
-        if target_course is not None:
-            allocate_course_question_identity(target_course, question)
         QuestionOption.objects.bulk_create([
             QuestionOption(question=question, key=o.key, text=o.text, display_order=o.display_order)
             for o in source.options.all()

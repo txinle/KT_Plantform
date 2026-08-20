@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
 
 class QuestionBank(models.Model):
@@ -111,8 +111,14 @@ class Question(models.Model):
         ordering = ["sequence", "id"]
         constraints = [models.UniqueConstraint(fields=["bank", "sequence"], name="unique_question_sequence_in_bank")]
     def save(self, *args, **kwargs):
-        if not self.code: self.code = f"Q{self.sequence:04d}"
-        super().save(*args, **kwargs)
+        if not self.code:
+            self.code = f"Q{self.sequence:04d}"
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            # Import locally so the allocator can import this model without a module cycle.
+            from .services.course_question_identity import ensure_course_question_identity
+
+            ensure_course_question_identity(self)
     @property
     def primary_concept(self):
         link = self.concept_links.filter(is_primary=True).select_related("concept").first()

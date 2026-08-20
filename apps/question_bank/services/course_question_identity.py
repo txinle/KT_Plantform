@@ -1,5 +1,6 @@
 from time import sleep
 
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import Max
 
@@ -9,10 +10,25 @@ from ..models import CourseQuestionIdentity, Question
 
 
 MAX_ALLOCATION_RETRIES = 5
+COURSE_IDENTITY_MISMATCH_MESSAGE = "题目不能移动到与其永久题目标识不同的课程题库。"
 
 
 def stable_course_question_code(course_id, course_sequence):
     return f"C{course_id:06d}-Q{course_sequence:06d}"
+
+
+def ensure_course_question_identity(question_or_pk):
+    """Keep a saved question's identity aligned with its current bank course."""
+    question_id = getattr(question_or_pk, "pk", question_or_pk)
+    question = Question.objects.select_related("bank").get(pk=question_id)
+    existing = CourseQuestionIdentity.objects.filter(question_id=question.pk).first()
+    if existing is not None:
+        if existing.course_id != question.bank.course_id:
+            raise ValidationError(COURSE_IDENTITY_MISMATCH_MESSAGE)
+        return existing
+    if question.bank.course_id is None:
+        return None
+    return allocate_course_question_identity(question.bank.course_id, question)
 
 
 def allocate_course_question_identity(course_or_pk, question_or_pk):

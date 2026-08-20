@@ -37,6 +37,18 @@ def validate_for_publish(experiment, question_bank=None):
         ).prefetch_related("question__options", "question__concept_links__concept")
     )
     if not links: raise ValidationError("实验至少需要一道题")
+    invalid_identities = []
+    for link in links:
+        question = link.question
+        identity = getattr(question, "course_identity", None)
+        if question.bank.course_id is not None and (
+            identity is None or identity.course_id != question.bank.course_id
+        ):
+            invalid_identities.append(question.code or f"题目#{question.pk}")
+    if invalid_identities:
+        raise ValidationError(
+            f"以下课程题目缺少或不匹配永久题目标识：{', '.join(invalid_identities)}"
+        )
     missing = [link.question.code for link in links if not link.question.primary_concept]
     if missing: raise ValidationError(f"以下题目缺少主知识点：{', '.join(missing)}")
     if not experiment.student_links.exists(): raise ValidationError("实验至少需要分配一名学生")

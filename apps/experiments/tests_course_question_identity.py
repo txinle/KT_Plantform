@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from apps.accounts.models import Course, User
@@ -83,3 +84,56 @@ class CourseQuestionIdentitySnapshotTests(TestCase):
         self.assertEqual(snapshot.source_bank_id, self.bank.pk)
         self.assertEqual(snapshot.source_bank_name, "原题库名称")
         self.assertEqual(snapshot.bank_sequence, 17)
+
+    def test_publish_rejects_bulk_created_course_question_without_identity(self):
+        bulk_question = Question(
+            bank=self.bank,
+            sequence=18,
+            code="BULK-IDENTITY",
+            question_type=Question.Type.SHORT,
+            text="批量绕过模型保存的题目",
+            correct_answer="答案",
+        )
+        Question.objects.bulk_create([bulk_question])
+        bulk_question.refresh_from_db()
+        concept = Concept.objects.create(course=self.course, name="批量题目 KC")
+        QuestionConcept.objects.create(
+            question=bulk_question,
+            concept=concept,
+            is_primary=True,
+        )
+        ExperimentQuestion.objects.create(
+            experiment=self.experiment,
+            question=bulk_question,
+            display_order=2,
+        )
+
+        with self.assertRaisesRegex(ValidationError, "BULK-IDENTITY"):
+            publish_experiment(self.experiment, self.teacher)
+
+        self.experiment.refresh_from_db()
+        self.assertEqual(QuestionSnapshot.objects.count(), 0)
+        self.assertFalse(self.experiment.versions.exists())
+        self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
+
+    def test_publish_rejects_an_identity_mismatched_to_the_question_bank(self):
+        other_course = Course.objects.create(
+            owner=self.teacher,
+            name="另一门课程",
+            code="OTHER101",
+            term="2026 秋",
+        )
+        other_bank = QuestionBank.objects.create(
+            course=other_course,
+            created_by=self.teacher,
+            name="另一课程题库",
+        )
+        Question.objects.filter(pk=self.question.pk).update(bank=other_bank)
+
+        with self.assertRaisesRegex(ValidationError, self.question.code):
+            publish_experiment(self.experiment, self.teacher)
+
+        self.experiment.refresh_from_db()
+        self.assertEqual(QuestionSnapshot.objects.count(), 0)
+        self.assertFalse(self.experiment.versions.exists())
+        self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
