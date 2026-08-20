@@ -7,6 +7,7 @@ from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.experiments.models import Experiment, ExperimentQuestion, ExperimentStudent
 from apps.experiments.services import publish_experiment
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
+from apps.question_bank.services.course_question_identity import allocate_course_question_identity
 
 from .models import DraftSaveEvent, ExperimentSession
 
@@ -49,6 +50,7 @@ class StudentCourseNavigationTests(TestCase):
             text="1+1",
             correct_answer="2",
         )
+        self.question_identity = allocate_course_question_identity(self.course, question)
         QuestionConcept.objects.create(question=question, concept=concept, is_primary=True)
         self.experiment = Experiment.objects.create(
             course=self.course,
@@ -81,6 +83,19 @@ class StudentCourseNavigationTests(TestCase):
         self.assertContains(course_page, "MATH101")
         self.assertContains(course_page, "测验")
         self.assertContains(course_page, "开始实验")
+
+    def test_student_navigation_keeps_assigned_numbers_and_shows_the_stable_course_code(self):
+        self.client.force_login(self.student)
+        self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
+        session = ExperimentSession.objects.get(student=self.student)
+        assignment = session.assignments.get()
+
+        response = self.client.get(
+            reverse("assessment:question", args=[session.pk, assignment.pk])
+        )
+
+        self.assertContains(response, "第 1 题")
+        self.assertContains(response, self.question_identity.stable_code)
 
     def test_student_cannot_open_course_without_active_enrollment(self):
         self.client.force_login(self.other_student)

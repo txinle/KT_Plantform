@@ -122,6 +122,11 @@ class QuestionSnapshot(models.Model):
     version = models.ForeignKey(ExperimentVersion, on_delete=models.CASCADE, related_name="question_snapshots")
     source_question = models.ForeignKey("question_bank.Question", on_delete=models.PROTECT)
     source_sequence = models.PositiveIntegerField()
+    course_sequence = models.PositiveIntegerField(null=True, blank=True)
+    stable_code = models.CharField(max_length=32, blank=True, default="")
+    source_bank_id = models.PositiveBigIntegerField(null=True, blank=True)
+    source_bank_name = models.CharField(max_length=160, blank=True, default="")
+    bank_sequence = models.PositiveIntegerField(null=True, blank=True)
     code = models.CharField(max_length=64)
     question_type = models.CharField(max_length=24, choices=[
         ("single_choice", "单选题"),

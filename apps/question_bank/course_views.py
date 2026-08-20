@@ -111,7 +111,10 @@ def bank_list(request, course_pk):
 def bank_detail(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     bank = _bank(course, pk)
-    questions = bank.questions.prefetch_related("options", "concept_links__concept")
+    questions = bank.questions.select_related("course_identity").prefetch_related(
+        "options",
+        "concept_links__concept",
+    )
     chapter_map = {}
     links = QuestionConcept.objects.filter(question__bank=bank).select_related("concept", "question")
     for link in links:

@@ -4,7 +4,7 @@ from io import BytesIO
 from urllib.parse import quote
 
 from django.http import HttpResponse
-from django.db.models import Q
+from django.db.models import F, Q
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_POST
 from openpyxl import Workbook
@@ -98,7 +98,12 @@ def identified_export(request, experiment_id):
             "session__version",
             "assignment__snapshot",
         )
-        .order_by("session_id", "submission_sequence_index", "assignment__assigned_sequence_index")
+        .order_by(
+            "session__student__student_number",
+            F("assignment__snapshot__course_sequence").asc(nulls_last=True),
+            "assignment__assigned_sequence_index",
+            "pk",
+        )
     )
     workbook = Workbook(write_only=True)
     sheet = workbook.create_sheet("KT数据")

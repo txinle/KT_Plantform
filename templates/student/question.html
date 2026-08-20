@@ -50,7 +50,7 @@
       </div>
     </div>
     <div class="question-content">
-      <div class="question-context"><span class="mono">{{ snapshot.code }}</span><span aria-hidden="true"> / </span>主 KC：{{ snapshot.primary_kc }}</div>
+      <div class="question-context">{% if snapshot.stable_code %}<span class="mono">课程题目：{{ snapshot.stable_code }}</span><span aria-hidden="true"> / </span>{% endif %}<span class="mono">{{ snapshot.code }}</span><span aria-hidden="true"> / </span>主 KC：{{ snapshot.primary_kc }}</div>
       <div class="question-stem">{{ snapshot.text }}</div>
       <form id="question-form"
             data-question-type="{{ snapshot.question_type }}"

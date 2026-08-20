@@ -21,6 +21,16 @@ FIELD_GROUPS = (
         ),
     ),
     (
+        "课程题目标识",
+        (
+            ("course_sequence", "课程永久题号"),
+            ("stable_code", "稳定课程代码"),
+            ("source_bank_id", "题库 ID"),
+            ("source_bank_name", "题库名称快照"),
+            ("bank_sequence", "题库内序号"),
+        ),
+    ),
+    (
         "题目与知识点",
         (
             ("question_code", "题目标识"),
@@ -90,6 +100,11 @@ def field_values(attempt):
         "experiment_version": session.version.version_number,
         "session_id": session.pk,
         "session_status": session.status,
+        "course_sequence": snapshot.course_sequence,
+        "stable_code": snapshot.stable_code,
+        "source_bank_id": snapshot.source_bank_id,
+        "source_bank_name": snapshot.source_bank_name,
+        "bank_sequence": snapshot.bank_sequence,
         "question_code": snapshot.code,
         "question_type": snapshot.question_type,
         "primary_kc": snapshot.primary_kc,

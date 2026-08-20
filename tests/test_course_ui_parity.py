@@ -13,6 +13,7 @@ from apps.experiments.models import (
     ExperimentVersion,
 )
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
+from apps.question_bank.services.course_question_identity import allocate_course_question_identity
 
 
 class CourseWorkspaceUIParityTests(TestCase):
@@ -66,6 +67,7 @@ class CourseWorkspaceUIParityTests(TestCase):
             correct_answer="B",
             teacher_difficulty="0.250",
         )
+        self.question_identity = allocate_course_question_identity(self.course, self.question)
         concept = Concept.objects.create(course=self.course, name="整数加法")
         QuestionConcept.objects.create(
             question=self.question,
@@ -161,6 +163,16 @@ class CourseWorkspaceUIParityTests(TestCase):
         self.assertContains(detail_response, self.question.get_question_type_display())
         self.assertContains(detail_response, "0.250")
         self.assertContains(detail_response, "status-badge")
+
+    def test_course_bank_detail_shows_course_identity_and_bank_sequence_separately(self):
+        response = self.client.get(
+            reverse("courses:bank_detail", args=[self.course.pk, self.bank.pk])
+        )
+
+        self.assertContains(response, "课程题号")
+        self.assertContains(response, "稳定课程代码")
+        self.assertContains(response, "题库内序号")
+        self.assertContains(response, self.question_identity.stable_code)
 
     def test_course_experiment_pages_preserve_main_lifecycle_and_snapshot_detail(self):
         draft_response = self.client.get(

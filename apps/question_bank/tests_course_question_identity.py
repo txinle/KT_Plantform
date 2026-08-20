@@ -149,6 +149,17 @@ class CourseQuestionIdentityAllocatorTests(TestCase):
                 stable_code=f"C{self.course_a.pk:06d}-Q999999",
             )
 
+    def test_database_rejects_a_nonpositive_course_sequence(self):
+        question = self._question(self.bank_a, 1)
+
+        with self.assertRaises(IntegrityError):
+            CourseQuestionIdentity.objects.create(
+                course=self.course_a,
+                question=question,
+                course_sequence=0,
+                stable_code=f"C{self.course_a.pk:06d}-Q000000",
+            )
+
     def test_allocator_retries_a_stale_unique_collision_for_sqlite_compatible_concurrency_coverage(self):
         question = self._question(self.bank_a, 1)
         create = CourseQuestionIdentity.objects.create

@@ -30,7 +30,12 @@ def validate_for_publish(experiment, question_bank=None):
     question_bank = question_bank or experiment.question_bank
     if question_bank.course_id != experiment.course_id:
         raise ValidationError("实验与题库必须属于同一课程")
-    links = list(experiment.question_links.select_related("question").prefetch_related("question__options", "question__concept_links__concept"))
+    links = list(
+        experiment.question_links.select_related(
+            "question__bank",
+            "question__course_identity",
+        ).prefetch_related("question__options", "question__concept_links__concept")
+    )
     if not links: raise ValidationError("实验至少需要一道题")
     missing = [link.question.code for link in links if not link.question.primary_concept]
     if missing: raise ValidationError(f"以下题目缺少主知识点：{', '.join(missing)}")
@@ -65,10 +70,19 @@ def publish_experiment(experiment, actor):
     )
     for link in links:
         q = link.question
+        identity = getattr(q, "course_identity", None)
         kc_links = list(q.concept_links.select_related("concept"))
         primary = next(item.concept.name for item in kc_links if item.is_primary)
         QuestionSnapshot.objects.create(
-            version=version, source_question=q, source_sequence=link.display_order, code=q.code,
+            version=version,
+            source_question=q,
+            source_sequence=link.display_order,
+            course_sequence=identity.course_sequence if identity else None,
+            stable_code=identity.stable_code if identity else "",
+            source_bank_id=q.bank_id,
+            source_bank_name=q.bank.name,
+            bank_sequence=q.sequence,
+            code=q.code,
             question_type=q.question_type, text=q.text,
             options=[{"key": item.key, "text": item.text} for item in q.options.all()],
             correct_answer=q.correct_answer, accepted_answers=q.accepted_answers,

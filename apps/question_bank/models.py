@@ -133,13 +133,17 @@ class CourseQuestionIdentity(models.Model):
         on_delete=models.SET_NULL,
         related_name="course_identity",
     )
-    course_sequence = models.PositiveIntegerField()
+    course_sequence = models.PositiveIntegerField(validators=[MinValueValidator(1)])
     stable_code = models.CharField(max_length=32, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["course_id", "course_sequence"]
         constraints = [
+            models.CheckConstraint(
+                condition=Q(course_sequence__gt=0),
+                name="course_question_identity_sequence_positive",
+            ),
             models.UniqueConstraint(
                 fields=["course", "course_sequence"],
                 name="unique_course_question_identity_sequence",

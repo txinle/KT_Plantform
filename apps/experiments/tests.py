@@ -617,8 +617,8 @@ class ExperimentResultStatusFilterTests(TestCase):
         self.assertContains(response, f'action="{navigation_url}"')
         self.assertContains(response, "实名可选字段 Excel")
         self.assertContains(response, "兼容导出")
-        self.assertEqual(len(FIELD_LABELS), 29)
-        self.assertEqual(html.count('type="checkbox" name="fields"'), 29)
+        self.assertEqual(len(FIELD_LABELS), 34)
+        self.assertEqual(html.count('type="checkbox" name="fields"'), 34)
         for field in FIELD_LABELS:
             self.assertContains(response, f'name="fields" value="{field}" checked')
         self.assertContains(response, reverse("analytics:kt_export", args=[self.experiment.pk]))
