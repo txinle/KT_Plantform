@@ -178,10 +178,10 @@ def experiment_edit(request, course_pk, pk):
         saved = False
         try:
             with transaction.atomic():
-                course = lock_writable_course(course)
                 experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
                 if experiment.status != Experiment.Status.DRAFT:
                     raise ValidationError("实验发布后不能修改配置。")
+                course = lock_writable_course(experiment.course_id)
                 original_bank_id = experiment.question_bank_id
                 question_bank = lock_experiment_question_bank(
                     form.cleaned_data["question_bank"],

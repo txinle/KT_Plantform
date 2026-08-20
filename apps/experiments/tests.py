@@ -404,6 +404,66 @@ class ExperimentFormPublishedRaceTests(TestCase):
             "旧版发布草稿",
         )
 
+    def test_course_edit_locks_experiment_before_course(self):
+        from . import course_views
+
+        lock_order = []
+        original_experiment_lock = Experiment.objects.select_for_update
+        original_course_lock = course_views.lock_writable_course
+
+        def lock_experiment(*args, **kwargs):
+            lock_order.append("experiment")
+            return original_experiment_lock(*args, **kwargs)
+
+        def lock_course(*args, **kwargs):
+            lock_order.append("course")
+            return original_course_lock(*args, **kwargs)
+
+        with (
+            patch.object(
+                Experiment.objects,
+                "select_for_update",
+                side_effect=lock_experiment,
+            ),
+            patch(
+                "apps.experiments.course_views.lock_writable_course",
+                side_effect=lock_course,
+            ),
+        ):
+            response = self.client.post(
+                reverse(
+                    "courses:experiment_edit",
+                    args=[self.course.pk, self.course_experiment.pk],
+                ),
+                self.payload(self.course_bank, "锁序课程草稿"),
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(lock_order[:2], ["experiment", "course"])
+
+    def test_legacy_edit_locks_only_experiment(self):
+        from . import views
+
+        lock_order = []
+        original_experiment_lock = Experiment.objects.select_for_update
+
+        def lock_experiment(*args, **kwargs):
+            lock_order.append("experiment")
+            return original_experiment_lock(*args, **kwargs)
+
+        with patch.object(
+            Experiment.objects,
+            "select_for_update",
+            side_effect=lock_experiment,
+        ):
+            response = self.client.post(
+                reverse("experiments:edit", args=[self.legacy_experiment.pk]),
+                self.payload(self.legacy_bank, "锁序旧版草稿"),
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(lock_order, ["experiment"])
+
 
 class LegacyExperimentInactiveClassAssignmentTests(TestCase):
     def setUp(self):
