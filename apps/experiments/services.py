@@ -44,29 +44,39 @@ def _participant_ids(values, label):
     return sorted(ids)
 
 
-def _lock_participant_course(experiment):
+def _lock_participant_course(experiment, *, action="修改实验参与规则"):
     if experiment.course_id is None:
         raise ValidationError("参与规则仅适用于课程实验。")
     course = lock_course(experiment.course_id)
     if course.status != Course.Status.ACTIVE:
-        raise ValidationError("课程已归档，不能修改实验参与规则。")
+        raise ValidationError(f"课程已归档，不能{action}。")
     return course
 
 
-def _locked_requested_classes(course, class_ids):
+def _lock_course_classes(course):
     class_groups = list(
         ClassGroup.objects.select_for_update()
-        .filter(pk__in=class_ids)
+        .filter(course=course)
         .order_by("pk")
     )
-    if len(class_groups) != len(class_ids):
-        raise ValidationError("参与班级已变更，请刷新后重试。")
-    for class_group in class_groups:
-        if class_group.course_id != course.pk:
+    return {class_group.pk: class_group for class_group in class_groups}
+
+
+def _locked_requested_classes(course, class_ids, locked_classes):
+    selected_classes = [locked_classes.get(class_id) for class_id in class_ids]
+    if any(class_group is None for class_group in selected_classes):
+        missing_ids = [
+            class_id
+            for class_id, class_group in zip(class_ids, selected_classes)
+            if class_group is None
+        ]
+        if ClassGroup.objects.filter(pk__in=missing_ids).exists():
             raise ValidationError("参与班级必须属于实验所属课程。")
+        raise ValidationError("参与班级已变更，请刷新后重试。")
+    for class_group in selected_classes:
         if not class_group.is_active:
             raise ValidationError("不能选择已停用的班级。")
-    return {class_group.pk: class_group for class_group in class_groups}
+    return {class_group.pk: class_group for class_group in selected_classes}
 
 
 def _active_enrollments(course, student_ids):
@@ -85,30 +95,49 @@ def _active_enrollments(course, student_ids):
     }
 
 
-@transaction.atomic
-def save_participant_rules(experiment, classes, includes, excludes):
-    """Atomically save a draft's rules and materialize its current roster preview."""
+def _validate_current_enrollments(
+    course,
+    locked_classes,
+    student_ids,
+    *,
+    error_message,
+):
+    enrollments = _active_enrollments(course, student_ids)
+    if len(enrollments) != len(student_ids):
+        raise ValidationError(error_message)
+    if any(
+        enrollment.class_group_id not in locked_classes
+        or not locked_classes[enrollment.class_group_id].is_active
+        for enrollment in enrollments.values()
+    ):
+        raise ValidationError(error_message)
+    return enrollments
 
-    class_ids = _participant_ids(classes, "参与班级")
-    include_ids = _participant_ids(includes, "显式纳入学生")
-    exclude_ids = _participant_ids(excludes, "排除学生")
-    if set(include_ids) & set(exclude_ids):
-        raise ValidationError("同一学生不能同时显式纳入和排除。")
 
-    course = _lock_participant_course(experiment)
-    selected_classes = _locked_requested_classes(course, class_ids)
-    experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
-    if experiment.status != Experiment.Status.DRAFT:
-        raise ValidationError("发布后不能修改参与规则。")
-    if experiment.course_id != course.pk:
-        raise ValidationError("实验所属课程已变更，请刷新后重试。")
-
-    requested_student_ids = sorted(set(include_ids) | set(exclude_ids))
-    requested_enrollments = _active_enrollments(course, requested_student_ids)
-    if len(requested_enrollments) != len(requested_student_ids):
-        raise ValidationError("学生必须是当前课程可用班级中的在读学生。")
-    if any(not enrollment.class_group.is_active for enrollment in requested_enrollments.values()):
-        raise ValidationError("学生必须是当前课程可用班级中的在读学生。")
+def _current_rule_roster(
+    course,
+    locked_classes,
+    class_ids,
+    include_ids,
+    exclude_ids,
+    *,
+    include_error,
+    validate_excludes,
+):
+    requested_ids = sorted(
+        set(include_ids) | (set(exclude_ids) if validate_excludes else set())
+    )
+    requested_enrollments = _validate_current_enrollments(
+        course,
+        locked_classes,
+        requested_ids,
+        error_message=include_error,
+    )
+    if validate_excludes and any(
+        requested_enrollments[student_id].class_group_id not in class_ids
+        for student_id in exclude_ids
+    ):
+        raise ValidationError("只能排除已选参与班级中的学生。")
 
     class_enrollments = list(
         CourseEnrollment.objects.select_for_update()
@@ -125,15 +154,103 @@ def save_participant_rules(experiment, classes, includes, excludes):
     roster = {
         enrollment.student_id: enrollment
         for enrollment in class_enrollments
-        if enrollment.class_group_id in selected_classes
+        if enrollment.class_group_id in locked_classes
     }
     roster.update({student_id: requested_enrollments[student_id] for student_id in include_ids})
     for student_id in exclude_ids:
         roster.pop(student_id, None)
+    return roster
+
+
+def _replace_experiment_students(experiment, roster):
+    ExperimentStudent.objects.filter(experiment=experiment).delete()
+    ExperimentStudent.objects.bulk_create(
+        [
+            ExperimentStudent(
+                experiment=experiment,
+                student_id=student_id,
+                class_snapshot_name=str(enrollment.class_group),
+            )
+            for student_id, enrollment in sorted(roster.items())
+        ]
+    )
+
+
+def _publish_participant_roster(experiment, course, locked_classes):
+    class_ids = list(
+        experiment.participant_class_links.select_for_update()
+        .order_by("class_group_id")
+        .values_list("class_group_id", flat=True)
+    )
+    overrides = list(
+        experiment.participant_override_links.select_for_update()
+        .order_by("student_id")
+        .values_list("student_id", "mode")
+    )
+    if not class_ids and not overrides:
+        # This is only a defensive compatibility path for pre-rule drafts that
+        # have not yet been migrated. It preserves, rather than broadens, their
+        # existing explicit list.
+        return None
+
+    if any(
+        class_id not in locked_classes or not locked_classes[class_id].is_active
+        for class_id in class_ids
+    ):
+        raise ValidationError("所选参与班级已停用或已移出当前课程，不能发布实验。")
+
+    include_ids = sorted(
+        student_id
+        for student_id, mode in overrides
+        if mode == ExperimentParticipantOverride.Mode.INCLUDE
+    )
+    exclude_ids = sorted(
+        student_id
+        for student_id, mode in overrides
+        if mode == ExperimentParticipantOverride.Mode.EXCLUDE
+    )
+    return _current_rule_roster(
+        course,
+        locked_classes,
+        class_ids,
+        include_ids,
+        exclude_ids,
+        include_error="显式纳入学生已退出当前课程或所在班级不可用，不能发布实验。",
+        validate_excludes=False,
+    )
+
+
+@transaction.atomic
+def save_participant_rules(experiment, classes, includes, excludes):
+    """Atomically save a draft's rules and materialize its current roster preview."""
+
+    class_ids = _participant_ids(classes, "参与班级")
+    include_ids = _participant_ids(includes, "显式纳入学生")
+    exclude_ids = _participant_ids(excludes, "排除学生")
+    if set(include_ids) & set(exclude_ids):
+        raise ValidationError("同一学生不能同时显式纳入和排除。")
+
+    course = _lock_participant_course(experiment)
+    locked_classes = _lock_course_classes(course)
+    selected_classes = _locked_requested_classes(course, class_ids, locked_classes)
+    experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
+    if experiment.status != Experiment.Status.DRAFT:
+        raise ValidationError("发布后不能修改参与规则。")
+    if experiment.course_id != course.pk:
+        raise ValidationError("实验所属课程已变更，请刷新后重试。")
+
+    roster = _current_rule_roster(
+        course,
+        locked_classes,
+        class_ids,
+        include_ids,
+        exclude_ids,
+        include_error="学生必须是当前课程可用班级中的在读学生。",
+        validate_excludes=True,
+    )
 
     ExperimentParticipantClass.objects.filter(experiment=experiment).delete()
     ExperimentParticipantOverride.objects.filter(experiment=experiment).delete()
-    ExperimentStudent.objects.filter(experiment=experiment).delete()
     ExperimentParticipantClass.objects.bulk_create(
         [
             ExperimentParticipantClass(experiment=experiment, class_group=class_group)
@@ -158,16 +275,7 @@ def save_participant_rules(experiment, classes, includes, excludes):
             for student_id in exclude_ids
         ]
     )
-    ExperimentStudent.objects.bulk_create(
-        [
-            ExperimentStudent(
-                experiment=experiment,
-                student_id=student_id,
-                class_snapshot_name=str(enrollment.class_group),
-            )
-            for student_id, enrollment in sorted(roster.items())
-        ]
-    )
+    _replace_experiment_students(experiment, roster)
 
 
 def _choice_answers(value):
@@ -262,7 +370,7 @@ def _lock_experiment_question_bank(experiment):
     return lock_experiment_question_bank(experiment.question_bank_id, experiment.course)
 
 
-def validate_for_publish(experiment, question_bank=None):
+def validate_for_publish(experiment, question_bank=None, participant_count=None):
     question_bank = question_bank or experiment.question_bank
     if question_bank.course_id != experiment.course_id:
         raise ValidationError("实验与题库必须属于同一课程")
@@ -291,7 +399,9 @@ def validate_for_publish(experiment, question_bank=None):
         _validate_question_answer_structure(question)
     if missing:
         raise ValidationError(f"以下题目缺少主知识点：{', '.join(missing)}")
-    if not experiment.student_links.exists():
+    if participant_count is None:
+        participant_count = experiment.student_links.count()
+    if not participant_count:
         raise ValidationError("实验至少需要分配一名学生")
     return questions
 
@@ -393,11 +503,28 @@ def selection_display_context(experiment):
 
 @transaction.atomic
 def publish_experiment(experiment, actor):
+    course = None
+    locked_classes = None
+    if experiment.course_id is not None:
+        course = _lock_participant_course(experiment, action="发布实验")
+        locked_classes = _lock_course_classes(course)
     experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
-    question_bank = _lock_experiment_question_bank(experiment)
+    if course is not None and experiment.course_id != course.pk:
+        raise ValidationError("实验所属课程已变更，请刷新后重试。")
     if experiment.status != Experiment.Status.DRAFT:
         raise ValidationError("只有草稿实验可以发布")
-    questions = validate_for_publish(experiment, question_bank)
+    roster = (
+        _publish_participant_roster(experiment, course, locked_classes)
+        if course is not None
+        else None
+    )
+    participant_count = len(roster) if roster is not None else experiment.student_links.count()
+    question_bank = _lock_experiment_question_bank(experiment)
+    questions = validate_for_publish(
+        experiment,
+        question_bank,
+        participant_count=participant_count,
+    )
     quota_map = _quota_map(experiment)
     if (
         experiment.selection_mode == Experiment.SelectionMode.QUOTA
@@ -405,6 +532,8 @@ def publish_experiment(experiment, actor):
     ):
         raise ValidationError("按题型配额抽题至少需要抽取 1 道题")
     inventory = _candidate_inventory(questions, experiment.selection_mode, quota_map)
+    if roster is not None:
+        _replace_experiment_students(experiment, roster)
     version_number = (experiment.versions.order_by("-version_number").values_list("version_number", flat=True).first() or 0) + 1
     config = {
         "ordering_mode": experiment.ordering_mode, "feedback_mode": experiment.feedback_mode,

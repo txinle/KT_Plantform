@@ -278,5 +278,33 @@
     selectionMode?.addEventListener('change', updateQuotaFields);
     quotaInputs.forEach((field) => field.addEventListener('input', updateQuotaFields));
     updateQuotaFields();
+
+    document.querySelectorAll('[data-participant-rules]').forEach((form) => {
+      form.querySelectorAll('[data-participant-class]').forEach((classRow) => {
+        const classInput = classRow.querySelector('[data-participant-class-input]');
+        const includeControls = classRow.querySelectorAll('[data-participant-include]');
+        const excludeControls = classRow.querySelectorAll('[data-participant-exclude]');
+        if (!classInput) return;
+
+        const updateParticipantControls = () => {
+          const selected = classInput.checked;
+          includeControls.forEach((control) => {
+            control.hidden = selected;
+            control.querySelectorAll('input').forEach((input) => {
+              input.disabled = selected;
+            });
+          });
+          excludeControls.forEach((control) => {
+            control.hidden = !selected;
+            control.querySelectorAll('input').forEach((input) => {
+              input.disabled = !selected;
+            });
+          });
+        };
+
+        classInput.addEventListener('change', updateParticipantControls);
+        updateParticipantControls();
+      });
+    });
   });
 })();

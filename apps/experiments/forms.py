@@ -1,5 +1,6 @@
 from django import forms
-from apps.accounts.models import User
+from django.core.exceptions import ValidationError
+from apps.accounts.models import ClassGroup, User
 from apps.question_bank.models import Question
 from .models import Experiment
 
@@ -108,3 +109,50 @@ class StudentAssignmentForm(forms.Form):
             if owner is not None and not (owner.is_superuser or owner.role == User.Role.ADMIN):
                 qs = qs.filter(class_group__owner=owner)
         self.fields["students"].queryset = qs
+
+
+class ParticipantRuleForm(forms.Form):
+    classes = forms.ModelMultipleChoiceField(
+        queryset=ClassGroup.objects.none(),
+        widget=forms.CheckboxSelectMultiple,
+        label="参与班级",
+        required=False,
+    )
+    includes = forms.ModelMultipleChoiceField(
+        queryset=User.objects.none(),
+        widget=forms.CheckboxSelectMultiple,
+        label="显式纳入学生",
+        required=False,
+    )
+    excludes = forms.ModelMultipleChoiceField(
+        queryset=User.objects.none(),
+        widget=forms.CheckboxSelectMultiple,
+        label="从参与班级中排除学生",
+        required=False,
+    )
+
+    def __init__(self, *args, course, **kwargs):
+        super().__init__(*args, **kwargs)
+        class_queryset = course.classes.filter(is_active=True).order_by("academic_year", "name", "pk")
+        student_queryset = (
+            User.objects.filter(
+                role=User.Role.STUDENT,
+                is_active=True,
+                course_enrollments__course=course,
+                course_enrollments__is_active=True,
+                course_enrollments__class_group__is_active=True,
+            )
+            .distinct()
+            .order_by("student_number", "pk")
+        )
+        self.fields["classes"].queryset = class_queryset
+        self.fields["includes"].queryset = student_queryset
+        self.fields["excludes"].queryset = student_queryset
+
+    def clean(self):
+        cleaned = super().clean()
+        includes = set(cleaned.get("includes") or [])
+        excludes = set(cleaned.get("excludes") or [])
+        if includes & excludes:
+            raise ValidationError("同一学生不能同时显式纳入和排除。")
+        return cleaned

@@ -403,6 +403,23 @@ textarea.form-control { min-height: 7rem; }
 .assignment-list li { border-bottom: 1px solid var(--kt-border); }
 .assignment-list li:last-child { border-bottom: 0; }
 .assignment-list label { display: flex; min-height: 2.75rem; align-items: center; gap: var(--space-3); padding: .55rem .75rem; cursor: pointer; }
+.participant-preview { margin: 0 0 var(--space-2); padding: var(--space-3) var(--space-4); border-left: 3px solid var(--kt-info); border-radius: var(--radius-control); background: var(--kt-info-bg); color: #24445d; }
+.participant-rule-fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.participant-class-list { display: grid; gap: var(--space-3); min-width: 0; }
+.participant-class { min-width: 0; border: 1px solid var(--kt-border); border-radius: var(--radius-control); background: var(--kt-surface); overflow: hidden; }
+.participant-class-toggle { display: flex; min-height: 2.75rem; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); background: var(--kt-surface-subtle); }
+.participant-class-toggle label { display: flex; min-width: 0; flex: 1; align-items: baseline; justify-content: space-between; gap: var(--space-3); cursor: pointer; }
+.participant-class-toggle label > span:first-child { min-width: 0; overflow-wrap: anywhere; font-weight: var(--weight-semibold); }
+.participant-class-disclosure { min-width: 0; border-top: 1px solid var(--kt-border); }
+.participant-class-disclosure > summary { display: flex; min-height: 2.75rem; align-items: center; padding: var(--space-3) var(--space-4); color: var(--kt-brand-700); cursor: pointer; font-weight: var(--weight-semibold); text-decoration: underline; text-underline-offset: .16em; }
+.participant-class-disclosure > summary:focus-visible { outline: 3px solid var(--kt-focus); outline-offset: -3px; }
+.participant-student-list { display: grid; min-width: 0; border-top: 1px solid var(--kt-border); }
+.participant-student-row { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--kt-border); }
+.participant-student-row:last-child { border-bottom: 0; }
+.participant-student-identity { display: flex; min-width: 0; flex-wrap: wrap; gap: var(--space-2); overflow-wrap: anywhere; }
+.participant-student-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-3); }
+.participant-student-actions .form-check { display: flex; min-height: 2.25rem; align-items: center; gap: var(--space-2); margin: 0; }
+.participant-student-actions .form-check-label { cursor: pointer; }
 .student-roster { margin: 0; padding: 0; list-style: none; }
 .student-roster li { display: grid; grid-template-columns: 5rem minmax(5rem, .6fr) minmax(8rem, 1fr); gap: var(--space-3); padding: .65rem 0; border-bottom: 1px solid var(--kt-border); }
 .student-roster li:last-child { border-bottom: 0; }
@@ -588,6 +605,10 @@ textarea.form-control { min-height: 7rem; }
   .student-experiment-main { padding: var(--space-5); }
   .student-experiment-action { padding: 0 var(--space-5) var(--space-5); }
   .student-experiment-details { grid-template-columns: repeat(2, 1fr); }
+  .participant-class-toggle { align-items: flex-start; }
+  .participant-class-toggle label { flex-direction: column; align-items: flex-start; }
+  .participant-student-row { grid-template-columns: minmax(0, 1fr); }
+  .participant-student-actions { justify-content: flex-start; }
   .lifecycle-step { padding-inline: var(--space-1); font-size: var(--font-size-xs); }
 }
 

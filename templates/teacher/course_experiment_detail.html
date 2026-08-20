@@ -16,8 +16,84 @@
     <section class="card" aria-labelledby="snapshot-title"><div class="card-header" id="snapshot-title">发布快照</div><div class="card-body p-0">{% for item in version_rows %}<div class="snapshot-row"><span><strong>版本 <span class="numeric">{{ item.version.version_number }}</span></strong><span class="cell-meta d-block numeric">候选池 {{ item.candidate_count }} 题 · {{ item.version.course_code_snapshot|default:course.code }} · {{ item.version.course_term_snapshot|default:course.term }}</span></span><time class="text-muted numeric" datetime="{{ item.version.published_at|date:'c' }}">{{ item.version.published_at|date:'Y-m-d H:i' }}</time></div><div class="px-3 pb-3"><div class="small fw-semibold mb-1">候选池与库存明细</div><div class="table-shell"><table class="table table-sm mb-0"><thead><tr><th scope="col">题型</th><th scope="col">需要</th><th scope="col">可用</th></tr></thead><tbody>{% for row in item.inventory_rows %}<tr><td>{{ row.label }}</td><td class="numeric">需要 {{ row.need }}</td><td class="numeric">{{ row.available }}</td></tr>{% endfor %}</tbody></table></div></div>{% empty %}<div class="empty-state"><h2 class="empty-state-title">尚未生成发布快照</h2><p>完成题目、主 KC 和学生检查后再发布。</p></div>{% endfor %}</div></section>
   </div>
   <div class="col-xl-5">
-    <section class="card mb-4" aria-labelledby="students-title"><div class="card-header d-flex justify-content-between"><span id="students-title">参加学生</span><span class="numeric">{{ experiment.students.count }} 人</span></div><div class="card-body">{% if experiment.status == 'draft' and course.status == 'active' %}<form method="post" action="{% url 'courses:experiment_assign' course.pk experiment.pk %}">{% csrf_token %}<div class="assignment-list">{{ assignment_form.students }}</div><button class="btn btn-primary w-100 mt-3" type="submit">保存学生分配</button></form>{% else %}<ul class="student-roster">{% for link in student_links %}<li><span class="mono">{{ link.student.student_number }}</span><span>{{ link.student.shown_name }}</span><span class="text-muted">{{ link.class_snapshot_name|default:'未记录班级' }}</span></li>{% empty %}<li>未分配学生</li>{% endfor %}</ul>{% endif %}</div></section>
-    {% if experiment.status == 'draft' and course.status == 'active' %}<section class="card" aria-labelledby="publish-title"><div class="card-header" id="publish-title">发布前检查</div><div class="card-body"><ul class="check-list"><li><span aria-hidden="true">{% if experiment.questions.count %}通过{% else %}待办{% endif %}</span> 已载入题目：<strong class="numeric">{{ experiment.questions.count }}</strong></li><li><span aria-hidden="true">{% if experiment.students.count %}通过{% else %}待办{% endif %}</span> 已分配学生：<strong class="numeric">{{ experiment.students.count }}</strong></li><li><span aria-hidden="true">核对</span> 所有题目需要主 KC</li></ul><div class="d-grid gap-2"><form method="post" action="{% url 'courses:experiment_sync_questions' course.pk experiment.pk %}">{% csrf_token %}<button class="btn btn-outline-primary w-100" type="submit">重新同步题库题目</button></form><form method="post" action="{% url 'courses:experiment_publish' course.pk experiment.pk %}">{% csrf_token %}<button class="btn btn-danger w-100" type="button" data-bs-toggle="modal" data-bs-target="#publish-confirm-dialog" data-confirm-form="#publish-confirm-dialog">发布并锁定实验</button></form></div></div></section>
+    <section class="card mb-4" aria-labelledby="students-title">
+      <div class="card-header d-flex justify-content-between gap-3">
+        <span id="students-title">参与班级与学生</span>
+        <span class="numeric">{{ participant_rule_summary.preview_count }} 人</span>
+      </div>
+      <div class="card-body">
+        {% if experiment.status == 'draft' and course.status == 'active' %}
+          <p class="participant-preview" role="status" aria-live="polite">
+            当前预览：<strong class="numeric">{{ participant_rule_summary.preview_count }}</strong> 人。
+            发布时将按最新在读名单重新核验并冻结。
+          </p>
+          <p class="cell-meta mb-3">
+            规则摘要：已选 <span class="numeric">{{ participant_rule_summary.class_count }}</span> 个班级；
+            显式纳入 <span class="numeric">{{ participant_rule_summary.include_count }}</span> 人；
+            排除 <span class="numeric">{{ participant_rule_summary.exclude_count }}</span> 人。
+          </p>
+          <form method="post" action="{% url 'courses:experiment_assign' course.pk experiment.pk %}" data-participant-rules>
+            {% csrf_token %}
+            <fieldset class="participant-rule-fieldset" aria-describedby="participant-rule-help">
+              <legend class="visually-hidden">参与班级与学生规则</legend>
+              <p class="form-help" id="participant-rule-help">选择班级即可纳入其当前在读学生。展开班级后，可额外纳入未选班级学生，或从已选班级中排除学生。</p>
+              <div class="participant-class-list">
+                {% for row in participant_class_rows %}
+                  <section class="participant-class" data-participant-class data-class-id="{{ row.class_group.pk }}">
+                    <div class="participant-class-toggle">
+                      <input class="form-check-input" type="checkbox" id="participant-class-{{ row.class_group.pk }}" name="classes" value="{{ row.class_group.pk }}"{% if row.selected %} checked{% endif %} data-participant-class-input>
+                      <label for="participant-class-{{ row.class_group.pk }}">
+                        <span>{{ row.class_group }}</span>
+                        <span class="cell-meta numeric">{{ row.students|length }} 名在读学生</span>
+                      </label>
+                    </div>
+                    <details class="participant-class-disclosure" data-participant-class-details>
+                      <summary>查看并调整学生</summary>
+                      <div class="participant-student-list">
+                        {% for item in row.students %}
+                          <div class="participant-student-row" data-participant-student>
+                            <div class="participant-student-identity">
+                              <span class="mono">{{ item.student.student_number }}</span>
+                              <span>{{ item.student.shown_name }}</span>
+                            </div>
+                            <div class="participant-student-actions">
+                              <div class="form-check" data-participant-include>
+                                <input class="form-check-input" type="checkbox" id="participant-include-{{ row.class_group.pk }}-{{ item.student.pk }}" name="includes" value="{{ item.student.pk }}"{% if item.include_checked %} checked{% endif %}>
+                                <label class="form-check-label" for="participant-include-{{ row.class_group.pk }}-{{ item.student.pk }}">额外纳入</label>
+                              </div>
+                              <div class="form-check" data-participant-exclude>
+                                <input class="form-check-input" type="checkbox" id="participant-exclude-{{ row.class_group.pk }}-{{ item.student.pk }}" name="excludes" value="{{ item.student.pk }}"{% if item.exclude_checked %} checked{% endif %}>
+                                <label class="form-check-label" for="participant-exclude-{{ row.class_group.pk }}-{{ item.student.pk }}">从本班排除</label>
+                              </div>
+                            </div>
+                          </div>
+                        {% empty %}
+                          <p class="cell-meta mb-0">该班级当前没有可用在读学生。</p>
+                        {% endfor %}
+                      </div>
+                    </details>
+                  </section>
+                {% empty %}
+                  <p class="empty-state mb-0">当前课程没有可用班级，不能建立参与规则。</p>
+                {% endfor %}
+              </div>
+            </fieldset>
+            <noscript><p class="form-help mt-3" role="status">无 JavaScript 时，三个复选框组仍可直接提交；请只在已选班级中勾选“从本班排除”。</p></noscript>
+            <button class="btn btn-primary w-100 mt-3" type="submit">保存参与规则与当前预览</button>
+          </form>
+        {% else %}
+          <p class="notice-panel" role="status"><strong>参与入口已锁定。</strong> 发布后的参与名单与班级快照不可修改。</p>
+          <ul class="student-roster">
+            {% for link in student_links %}
+              <li><span class="mono">{{ link.student.student_number }}</span><span>{{ link.student.shown_name }}</span><span class="text-muted">{{ link.class_snapshot_name|default:'未记录班级' }}</span></li>
+            {% empty %}
+              <li>未分配学生</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+    </section>
+    {% if experiment.status == 'draft' and course.status == 'active' %}<section class="card" aria-labelledby="publish-title"><div class="card-header" id="publish-title">发布前检查</div><div class="card-body"><ul class="check-list"><li><span aria-hidden="true">{% if experiment.questions.count %}通过{% else %}待办{% endif %}</span> 已载入题目：<strong class="numeric">{{ experiment.questions.count }}</strong></li><li><span aria-hidden="true">{% if participant_rule_summary.preview_count %}通过{% else %}待办{% endif %}</span> 当前参与预览：<strong class="numeric">{{ participant_rule_summary.preview_count }}</strong> 人</li><li><span aria-hidden="true">核对</span> 发布时会重新校验班级和在读名单</li><li><span aria-hidden="true">核对</span> 所有题目需要主 KC</li></ul><div class="d-grid gap-2"><form method="post" action="{% url 'courses:experiment_sync_questions' course.pk experiment.pk %}">{% csrf_token %}<button class="btn btn-outline-primary w-100" type="submit">重新同步题库题目</button></form><form method="post" action="{% url 'courses:experiment_publish' course.pk experiment.pk %}">{% csrf_token %}<button class="btn btn-danger w-100" type="button" data-bs-toggle="modal" data-bs-target="#publish-confirm-dialog" data-confirm-form="#publish-confirm-dialog">发布并锁定实验</button></form></div></div></section>
     {% elif course.status == 'archived' %}<div class="notice-panel"><strong>课程已归档。</strong> 实验与发布快照保持只读。</div>
     {% else %}<div class="notice-panel"><strong>实验已锁定。</strong> 题目、配置和学生分配以发布快照为准，题库后续修改不会影响本次实验。</div>{% endif %}
   </div>

@@ -184,6 +184,12 @@ class ExperimentParticipantClass(models.Model):
             return
         if self.experiment.course_id is None:
             raise ValidationError({"experiment": "参与班级仅适用于课程实验。"})
+        if self.experiment.status != Experiment.Status.DRAFT:
+            raise ValidationError({"experiment": "发布后不能修改参与规则。"})
+        from apps.accounts.models import Course
+
+        if self.experiment.course.status != Course.Status.ACTIVE:
+            raise ValidationError({"experiment": "课程已归档，不能修改参与规则。"})
         if self.class_group.course_id != self.experiment.course_id:
             raise ValidationError({"class_group": "参与班级必须属于实验所属课程。"})
         if not self.class_group.is_active:
@@ -227,13 +233,19 @@ class ExperimentParticipantOverride(models.Model):
             return
         if self.experiment.course_id is None:
             raise ValidationError({"experiment": "参与学生规则仅适用于课程实验。"})
-        from apps.accounts.models import CourseEnrollment
+        if self.experiment.status != Experiment.Status.DRAFT:
+            raise ValidationError({"experiment": "发布后不能修改参与规则。"})
+        from apps.accounts.models import Course, CourseEnrollment
 
+        if self.experiment.course.status != Course.Status.ACTIVE:
+            raise ValidationError({"experiment": "课程已归档，不能修改参与规则。"})
         if not CourseEnrollment.objects.filter(
             course_id=self.experiment.course_id,
             student_id=self.student_id,
             is_active=True,
             class_group__is_active=True,
+            student__role="student",
+            student__is_active=True,
         ).exists():
             raise ValidationError({"student": "学生必须是当前课程可用班级中的在读学生。"})
 

@@ -9,18 +9,18 @@ from apps.accounts.course_access import (
     lock_writable_course,
     require_writable_course,
 )
-from apps.accounts.models import User
+from apps.accounts.models import CourseEnrollment, User
 from apps.accounts.permissions import role_required
 from apps.audit.services import log_action
 from apps.analytics.export_fields import FIELD_GROUPS
 from apps.assessment.models import ExperimentSession
 
-from .forms import ExperimentForm, StudentAssignmentForm
+from .forms import ExperimentForm, ParticipantRuleForm
 from .models import Experiment
 from .services import (
-    assign_students,
     lock_experiment_question_bank,
     publish_experiment,
+    save_participant_rules,
     selection_display_context,
     sync_experiment_questions,
 )
@@ -28,6 +28,71 @@ from .services import (
 
 def _experiment(course, pk):
     return get_object_or_404(course.experiments, pk=pk)
+
+
+def _participant_rule_initial(experiment):
+    overrides = dict(
+        experiment.participant_override_links.values_list("student_id", "mode")
+    )
+    return {
+        "classes": experiment.participant_class_links.values_list("class_group_id", flat=True),
+        "includes": [
+            student_id
+            for student_id, mode in overrides.items()
+            if mode == "include"
+        ],
+        "excludes": [
+            student_id
+            for student_id, mode in overrides.items()
+            if mode == "exclude"
+        ],
+    }
+
+
+def _participant_rule_context(experiment, course):
+    selected_class_ids = set(
+        experiment.participant_class_links.values_list("class_group_id", flat=True)
+    )
+    overrides = dict(
+        experiment.participant_override_links.values_list("student_id", "mode")
+    )
+    class_groups = list(course.classes.filter(is_active=True).order_by("academic_year", "name", "pk"))
+    rows_by_class = {
+        class_group.pk: {
+            "class_group": class_group,
+            "selected": class_group.pk in selected_class_ids,
+            "students": [],
+        }
+        for class_group in class_groups
+    }
+    enrollments = (
+        CourseEnrollment.objects.filter(
+            course=course,
+            class_group_id__in=rows_by_class,
+            is_active=True,
+            student__role=User.Role.STUDENT,
+            student__is_active=True,
+        )
+        .select_related("student")
+        .order_by("class_group__academic_year", "class_group__name", "student__student_number", "pk")
+    )
+    for enrollment in enrollments:
+        rows_by_class[enrollment.class_group_id]["students"].append(
+            {
+                "student": enrollment.student,
+                "include_checked": overrides.get(enrollment.student_id) == "include",
+                "exclude_checked": overrides.get(enrollment.student_id) == "exclude",
+            }
+        )
+    return {
+        "participant_class_rows": list(rows_by_class.values()),
+        "participant_rule_summary": {
+            "class_count": len(selected_class_ids),
+            "include_count": sum(mode == "include" for mode in overrides.values()),
+            "exclude_count": sum(mode == "exclude" for mode in overrides.values()),
+            "preview_count": experiment.student_links.count(),
+        },
+    }
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
@@ -79,9 +144,8 @@ def experiment_create(request, course_pk):
 def experiment_detail(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     experiment = _experiment(course, pk)
-    assignment_form = StudentAssignmentForm(
-        initial={"students": experiment.students.all()},
-        owner=request.user,
+    participant_form = ParticipantRuleForm(
+        initial=_participant_rule_initial(experiment),
         course=course,
     )
     return render(
@@ -91,8 +155,10 @@ def experiment_detail(request, course_pk, pk):
             "course": course,
             "current_course": course,
             "experiment": experiment,
-            "assignment_form": assignment_form,
+            "assignment_form": participant_form,
+            "participant_form": participant_form,
             "student_links": experiment.student_links.select_related("student"),
+            **_participant_rule_context(experiment, course),
             **selection_display_context(experiment),
         },
     )
@@ -176,21 +242,29 @@ def experiment_assign(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     experiment = _experiment(course, pk)
-    form = StudentAssignmentForm(request.POST, owner=request.user, course=course)
+    form = ParticipantRuleForm(request.POST, course=course)
     if form.is_valid():
         try:
-            assign_students(experiment, form.cleaned_data["students"])
+            classes = list(form.cleaned_data["classes"])
+            includes = list(form.cleaned_data["includes"])
+            excludes = list(form.cleaned_data["excludes"])
+            save_participant_rules(experiment, classes, includes, excludes)
             log_action(
                 request,
                 "experiment.assign_students",
                 experiment,
-                {"count": len(form.cleaned_data["students"]), "course_id": course.pk},
+                {
+                    "class_count": len(classes),
+                    "include_count": len(includes),
+                    "exclude_count": len(excludes),
+                    "preview_count": experiment.student_links.count(),
+                },
             )
-            messages.success(request, "学生分配已更新。")
+            messages.success(request, "参与班级与学生规则已保存，当前预览已更新。")
         except ValidationError as exc:
             messages.error(request, "; ".join(exc.messages))
     else:
-        messages.error(request, "学生分配无效；只能选择本课程可用班级中的在读学生。")
+        messages.error(request, "参与班级与学生规则无效；只能选择本课程可用班级中的在读学生。")
     return redirect("courses:experiment_detail", course.pk, experiment.pk)
 
 
