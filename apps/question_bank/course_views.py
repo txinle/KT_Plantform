@@ -2,18 +2,21 @@ from dataclasses import asdict
 from collections import Counter
 
 from django.contrib import messages
+from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Prefetch
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from apps.accounts.course_access import get_accessible_course, require_writable_course
 from apps.accounts.models import User
 from apps.accounts.permissions import role_required
 from apps.audit.services import log_action
 
+from .access import require_writable_bank_content
+from .audit import bank_metadata_audit_details
 from .forms import CourseConceptForm, QuestionBankForm, QuestionBankVisibilityForm, QuestionEditForm, UploadForm
 from .models import Concept, QuestionBank, QuestionConcept
 from .services.file_reader import read_uploaded_rows
@@ -23,6 +26,19 @@ from .services.import_service import copy_shared_bank, import_kc_mappings, impor
 
 def _bank(course, pk):
     return get_object_or_404(course.question_banks, pk=pk)
+
+
+def _require_bank_metadata_editor(request, course, bank):
+    user = request.user
+    if (
+        user.is_superuser
+        or user.role == User.Role.ADMIN
+        or course.owner_id == user.id
+        or bank.owner_id == user.id
+        or bank.created_by_id == user.id
+    ):
+        return
+    raise PermissionDenied("只有课程负责人或题库所有者可以修改题库元数据。")
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
@@ -113,6 +129,40 @@ def bank_detail(request, course_pk, pk):
     )
 
 
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+@require_http_methods(["GET", "POST"])
+def bank_edit(request, course_pk, pk):
+    course = get_accessible_course(request.user, course_pk)
+    bank = _bank(course, pk)
+    _require_bank_metadata_editor(request, course, bank)
+    if request.method == "POST":
+        require_writable_course(course)
+        form = QuestionBankForm(request.POST, instance=bank)
+        if form.is_valid():
+            changed_fields = form.changed_data
+            bank = form.save()
+            log_action(
+                request,
+                "question_bank.update",
+                bank,
+                bank_metadata_audit_details(bank, changed_fields),
+            )
+            messages.success(request, "题库信息已保存。")
+            return redirect("courses:bank_detail", course.pk, bank.pk)
+    else:
+        form = QuestionBankForm(instance=bank)
+    return render(
+        request,
+        "teacher/course_bank_edit.html",
+        {
+            "course": course,
+            "current_course": course,
+            "bank": bank,
+            "form": form,
+        },
+    )
+
+
 @require_POST
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def concept_create(request, course_pk):
@@ -194,10 +244,17 @@ def bank_visibility_update(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     bank = _bank(course, pk)
+    _require_bank_metadata_editor(request, course, bank)
     form = QuestionBankVisibilityForm(request.POST, instance=bank)
     if form.is_valid():
+        changed_fields = form.changed_data
         form.save()
-        log_action(request, "question_bank.visibility", bank, {"visibility": bank.visibility})
+        log_action(
+            request,
+            "question_bank.visibility",
+            bank,
+            bank_metadata_audit_details(bank, changed_fields),
+        )
         messages.success(request, "题库可见性已更新。")
     else:
         messages.error(request, "题库可见性更新失败。")
@@ -211,6 +268,7 @@ def question_edit(request, course_pk, bank_pk, question_pk):
     question = get_object_or_404(bank.questions, pk=question_pk)
     if request.method == "POST":
         require_writable_course(course)
+    require_writable_bank_content(bank)
     form = QuestionEditForm(request.POST or None, instance=question, course=course)
     if request.method == "POST" and form.is_valid():
         with transaction.atomic():
@@ -236,12 +294,14 @@ def question_edit(request, course_pk, bank_pk, question_pk):
 def question_import(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     bank = _bank(course, pk)
+    if request.method == "POST":
+        require_writable_course(course)
+    require_writable_bank_content(bank)
     session_key = f"course_question_import:{course.pk}:{bank.pk}"
     preview = None
     upload_name = ""
     form = UploadForm()
     if request.method == "POST":
-        require_writable_course(course)
         if request.POST.get("action") == "confirm":
             parsed = [ParsedQuestion(**item) for item in request.session.get(session_key, [])]
             if not parsed:
@@ -286,12 +346,14 @@ def question_import(request, course_pk, pk):
 def kc_import(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     bank = _bank(course, pk)
+    if request.method == "POST":
+        require_writable_course(course)
+    require_writable_bank_content(bank)
     session_key = f"course_kc_import:{course.pk}:{bank.pk}"
     preview = None
     upload_name = ""
     form = UploadForm()
     if request.method == "POST":
-        require_writable_course(course)
         if request.POST.get("action") == "confirm":
             mappings = [ParsedKCMapping(**item) for item in request.session.get(session_key, [])]
             if not mappings:

@@ -16,6 +16,7 @@ urlpatterns = [
     path("<int:course_pk>/archive/", course_views.course_archive, name="archive"),
     path("<int:course_pk>/banks/", bank_views.bank_list, name="banks"),
     path("<int:course_pk>/banks/<int:pk>/", bank_views.bank_detail, name="bank_detail"),
+    path("<int:course_pk>/banks/<int:pk>/edit/", bank_views.bank_edit, name="bank_edit"),
     path("<int:course_pk>/banks/<int:pk>/import/", bank_views.question_import, name="question_import"),
     path("<int:course_pk>/banks/<int:pk>/kc-import/", bank_views.kc_import, name="kc_import"),
     path("<int:course_pk>/banks/<int:pk>/visibility/", bank_views.bank_visibility_update, name="bank_visibility"),

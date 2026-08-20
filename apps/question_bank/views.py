@@ -9,6 +9,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from apps.accounts.permissions import role_required
 from apps.accounts.course_access import accessible_courses
 from apps.audit.services import log_action
+from .access import require_writable_bank_content
+from .audit import bank_metadata_audit_details
 from .forms import QuestionBankForm, QuestionBankVisibilityForm, QuestionEditForm, UploadForm
 from .models import Concept, Question, QuestionBank
 from .services.file_reader import read_uploaded_rows
@@ -108,7 +110,14 @@ def bank_visibility_update(request, pk):
         return course_views.bank_visibility_update(request, bank.course_id, bank.pk)
     form = QuestionBankVisibilityForm(request.POST, instance=bank)
     if form.is_valid():
+        changed_fields = form.changed_data
         form.save()
+        log_action(
+            request,
+            "question_bank.visibility",
+            bank,
+            bank_metadata_audit_details(bank, changed_fields),
+        )
         messages.success(request, f"题库“{bank.name}”的可见性已更新")
     else:
         messages.error(request, "可见性更新失败，请重新选择")
@@ -120,6 +129,7 @@ def question_edit(request, bank_pk, question_pk):
     if bank.course_id:
         from . import course_views
         return course_views.question_edit(request, bank.course_id, bank.pk, question_pk)
+    require_writable_bank_content(bank)
     question = get_object_or_404(bank.questions, pk=question_pk)
     form = QuestionEditForm(request.POST or None, instance=question)
     if request.method == "POST" and form.is_valid():
@@ -133,6 +143,7 @@ def question_import(request, pk):
     if bank.course_id:
         from . import course_views
         return course_views.question_import(request, bank.course_id, bank.pk)
+    require_writable_bank_content(bank)
     preview = None
     upload_name = ""
     if request.method == "POST" and request.POST.get("action") == "confirm":
@@ -160,6 +171,7 @@ def kc_import(request, pk):
     if bank.course_id:
         from . import course_views
         return course_views.kc_import(request, bank.course_id, bank.pk)
+    require_writable_bank_content(bank)
     preview = None
     upload_name = ""
     if request.method == "POST" and request.POST.get("action") == "confirm":
