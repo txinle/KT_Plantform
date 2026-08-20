@@ -1198,3 +1198,48 @@ class ParticipantRuleDemoSeedTests(TestCase):
             ).count(),
             3,
         )
+
+    def test_seed_demo_locks_experiment_course_and_class_before_enrollment_write(self):
+        lock_order = []
+        original_experiment_lock = Experiment.objects.select_for_update
+        original_course_lock = Course.objects.select_for_update
+        original_class_lock = ClassGroup.objects.select_for_update
+        original_enrollment_write = CourseEnrollment.objects.update_or_create
+
+        def lock_experiment(*args, **kwargs):
+            lock_order.append("experiment")
+            return original_experiment_lock(*args, **kwargs)
+
+        def lock_course(*args, **kwargs):
+            lock_order.append("course")
+            return original_course_lock(*args, **kwargs)
+
+        def lock_class(*args, **kwargs):
+            lock_order.append("class")
+            return original_class_lock(*args, **kwargs)
+
+        def write_enrollment(*args, **kwargs):
+            lock_order.append("enrollment")
+            return original_enrollment_write(*args, **kwargs)
+
+        with (
+            patch.object(
+                Experiment.objects,
+                "select_for_update",
+                side_effect=lock_experiment,
+            ),
+            patch.object(Course.objects, "select_for_update", side_effect=lock_course),
+            patch.object(ClassGroup.objects, "select_for_update", side_effect=lock_class),
+            patch.object(
+                CourseEnrollment.objects,
+                "update_or_create",
+                side_effect=write_enrollment,
+            ),
+        ):
+            call_command("seed_demo", stdout=StringIO())
+
+        enrollment_index = lock_order.index("enrollment")
+        self.assertEqual(
+            lock_order[enrollment_index - 3 : enrollment_index + 1],
+            ["experiment", "course", "class", "enrollment"],
+        )

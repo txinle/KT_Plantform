@@ -19,8 +19,11 @@ def enroll_single_student(course, class_group, student_number, display_name):
     with lock_active_class_groups(
         [class_group],
         inactive_error=TARGET_CLASS_INACTIVE_ERROR,
+        lock_courses=True,
     ) as locked_classes:
         class_group = locked_classes[class_group.pk]
+        if class_group.course_id != course.pk:
+            raise ValidationError("班级必须属于当前课程")
         matches = list(
             User.objects.filter(
                 Q(student_number=student_number) | Q(username=student_number)
@@ -63,8 +66,11 @@ def copy_class_enrollments(*, target_course, target_class, source_class):
     with lock_active_class_groups(
         [target_class],
         inactive_error=TARGET_CLASS_INACTIVE_ERROR,
+        lock_courses=True,
     ) as locked_classes:
         target_class = locked_classes[target_class.pk]
+        if target_class.course_id != target_course.pk:
+            raise ValidationError("目标班级必须属于目标课程")
         source_student_ids = list(
             source_class.enrollments.filter(is_active=True).values_list("student_id", flat=True)
         )
@@ -99,8 +105,11 @@ def enroll_parsed_students(course, class_group, parsed_students):
     with lock_active_class_groups(
         [class_group],
         inactive_error=TARGET_CLASS_INACTIVE_ERROR,
+        lock_courses=True,
     ) as locked_classes:
         class_group = locked_classes[class_group.pk]
+        if class_group.course_id != course.pk:
+            raise ValidationError("班级必须属于当前课程")
         numbers = [item.student_number for item in parsed_students]
         if len(numbers) != len(set(numbers)):
             raise ValidationError("导入文件中存在重复学号")
@@ -154,6 +163,7 @@ def transfer_course_enrollment(enrollment, target_class):
     with lock_active_class_groups(
         [target_class],
         inactive_error="目标班级已停用，不能转入学生。",
+        lock_courses=True,
     ) as locked_classes:
         enrollment = CourseEnrollment.objects.select_for_update().get(pk=enrollment.pk)
         target_class = locked_classes[target_class.pk]
@@ -187,6 +197,7 @@ def import_legacy_students(parsed_students, accessible_classes):
         inactive_error=lambda class_group: StudentImportError(
             f"班级已停用，不能导入学生：{class_group}"
         ),
+        lock_courses=True,
     ) as locked_classes:
         for item in parsed_students:
             class_group = locked_classes[item.class_id]

@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.core.exceptions import ValidationError
 from django.test import TestCase, TransactionTestCase
 
@@ -353,3 +355,144 @@ class FreshClassLifecycleWriteTests(TransactionTestCase):
             )
 
         self.assertFalse(User.objects.filter(student_number="STALE-LEGACY").exists())
+
+
+class CourseEnrollmentLockOrderContractTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="enrollment-lock-teacher",
+            role=User.Role.TEACHER,
+        )
+        self.course_a = Course.objects.create(
+            owner=self.teacher,
+            name="锁序来源课程",
+            code="ENROLL-LOCK-A",
+            term="2026春",
+        )
+        self.course_b = Course.objects.create(
+            owner=self.teacher,
+            name="锁序目标课程",
+            code="ENROLL-LOCK-B",
+            term="2026春",
+        )
+        self.class_a = ClassGroup.objects.create(course=self.course_a, name="锁序来源班")
+        self.class_b = ClassGroup.objects.create(course=self.course_b, name="锁序目标班")
+
+    def test_manual_enrollment_locks_course_then_class_then_user(self):
+        lock_order = []
+        original_course_lock = Course.objects.select_for_update
+        original_class_lock = ClassGroup.objects.select_for_update
+        original_create_user = User.objects.create_user
+
+        def lock_course(*args, **kwargs):
+            lock_order.append("course")
+            return original_course_lock(*args, **kwargs)
+
+        def lock_class(*args, **kwargs):
+            lock_order.append("class")
+            return original_class_lock(*args, **kwargs)
+
+        def create_user(*args, **kwargs):
+            lock_order.append("user")
+            return original_create_user(*args, **kwargs)
+
+        with (
+            patch.object(Course.objects, "select_for_update", side_effect=lock_course),
+            patch.object(ClassGroup.objects, "select_for_update", side_effect=lock_class),
+            patch.object(User.objects, "create_user", side_effect=create_user),
+        ):
+            enrollment_services.enroll_single_student(
+                self.course_b,
+                self.class_b,
+                "LOCK-MANUAL",
+                "锁序手工学生",
+            )
+
+        self.assertEqual(lock_order[:3], ["course", "class", "user"])
+
+    def test_copy_locks_target_course_then_class_then_enrollment_write(self):
+        student = User.objects.create_user(
+            username="LOCK-COPY",
+            student_number="LOCK-COPY",
+            role=User.Role.STUDENT,
+        )
+        CourseEnrollment.objects.create(
+            course=self.course_a,
+            class_group=self.class_a,
+            student=student,
+        )
+        lock_order = []
+        original_course_lock = Course.objects.select_for_update
+        original_class_lock = ClassGroup.objects.select_for_update
+        original_enrollment_write = CourseEnrollment.objects.get_or_create
+
+        def lock_course(*args, **kwargs):
+            lock_order.append("course")
+            return original_course_lock(*args, **kwargs)
+
+        def lock_class(*args, **kwargs):
+            lock_order.append("class")
+            return original_class_lock(*args, **kwargs)
+
+        def write_enrollment(*args, **kwargs):
+            lock_order.append("enrollment")
+            return original_enrollment_write(*args, **kwargs)
+
+        with (
+            patch.object(Course.objects, "select_for_update", side_effect=lock_course),
+            patch.object(ClassGroup.objects, "select_for_update", side_effect=lock_class),
+            patch.object(
+                CourseEnrollment.objects,
+                "get_or_create",
+                side_effect=write_enrollment,
+            ),
+        ):
+            enrollment_services.copy_class_enrollments(
+                target_course=self.course_b,
+                target_class=self.class_b,
+                source_class=self.class_a,
+            )
+
+        self.assertEqual(lock_order[:3], ["course", "class", "enrollment"])
+
+    def test_transfer_locks_course_then_class_then_enrollment(self):
+        student = User.objects.create_user(
+            username="LOCK-TRANSFER",
+            student_number="LOCK-TRANSFER",
+            role=User.Role.STUDENT,
+        )
+        enrollment = CourseEnrollment.objects.create(
+            course=self.course_b,
+            class_group=self.class_b,
+            student=student,
+        )
+        destination = ClassGroup.objects.create(course=self.course_b, name="锁序转入班")
+        lock_order = []
+        original_course_lock = Course.objects.select_for_update
+        original_class_lock = ClassGroup.objects.select_for_update
+        original_enrollment_lock = CourseEnrollment.objects.select_for_update
+
+        def lock_course(*args, **kwargs):
+            lock_order.append("course")
+            return original_course_lock(*args, **kwargs)
+
+        def lock_class(*args, **kwargs):
+            lock_order.append("class")
+            return original_class_lock(*args, **kwargs)
+
+        def lock_enrollment(*args, **kwargs):
+            lock_order.append("enrollment")
+            return original_enrollment_lock(*args, **kwargs)
+
+        with (
+            patch.object(Course.objects, "select_for_update", side_effect=lock_course),
+            patch.object(ClassGroup.objects, "select_for_update", side_effect=lock_class),
+            patch.object(
+                CourseEnrollment.objects,
+                "select_for_update",
+                side_effect=lock_enrollment,
+            ),
+        ):
+            enrollment_services.transfer_course_enrollment(enrollment, destination)
+
+        self.assertEqual(lock_order[:3], ["course", "class", "enrollment"])

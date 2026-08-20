@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from apps.accounts.class_lifecycle import lock_active_class_groups
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.experiments.models import Experiment, ExperimentQuestion
 from apps.experiments.services import assign_students, publish_experiment
@@ -30,11 +31,6 @@ class Command(BaseCommand):
             number = f"S{index:03d}"
             student, _ = User.objects.get_or_create(username=number, defaults={"role": User.Role.STUDENT, "student_number": number, "display_name": f"学生{index}"})
             student.role = User.Role.STUDENT; student.student_number = number; student.set_password("student123"); student.save(); students.append(student)
-            CourseEnrollment.objects.update_or_create(
-                course=course,
-                student=student,
-                defaults={"class_group": cls, "is_active": True},
-            )
         bank, created = QuestionBank.objects.get_or_create(
             course=course,
             name="演示题库",
@@ -58,6 +54,19 @@ class Command(BaseCommand):
             name="演示交互数据采集",
             defaults={"created_by": teacher, "owner": teacher, "question_bank": bank, "description": "自由导航、草稿保存、每题提交锁定", "ordering_mode": Experiment.Ordering.STRATIFIED, "feedback_mode": Experiment.Feedback.CORRECTNESS, "resume_mode": Experiment.ResumeMode.RESUMABLE},
         )
+        experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
+        with lock_active_class_groups(
+            [cls],
+            inactive_error="演示班级已停用，不能写入选课。",
+            lock_courses=True,
+        ) as locked_classes:
+            cls = locked_classes[cls.pk]
+            for student in students:
+                CourseEnrollment.objects.update_or_create(
+                    course=course,
+                    student=student,
+                    defaults={"class_group": cls, "is_active": True},
+                )
         if created:
             for idx, q in enumerate(bank.questions.all(), start=1): ExperimentQuestion.objects.create(experiment=experiment, question=q, display_order=idx)
             assign_students(experiment, students)
