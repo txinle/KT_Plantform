@@ -65,7 +65,12 @@ def _xml_safe_text(value: str) -> str:
     return "".join(
         character
         for character in value
-        if character in "\t\n\r" or ord(character) >= 32
+        if (
+            character in "\t\n\r"
+            or 0x20 <= ord(character) <= 0xD7FF
+            or 0xE000 <= ord(character) <= 0xFFFD
+            or 0x10000 <= ord(character) <= 0x10FFFF
+        )
     )
 
 
@@ -103,8 +108,8 @@ def options_for_snapshot(snapshot) -> tuple[OptionPresentation, ...]:
 
     if snapshot.question_type == "true_false":
         return (
-            OptionPresentation(key="正确", text="正确"),
-            OptionPresentation(key="错误", text="错误"),
+            OptionPresentation(key="", text="正确"),
+            OptionPresentation(key="", text="错误"),
         )
 
     raw_options = snapshot.options

@@ -47,4 +47,5 @@ urlpatterns = [
     path("<int:course_pk>/experiments/<int:pk>/publish/", experiment_views.experiment_publish, name="experiment_publish"),
     path("<int:course_pk>/experiments/<int:pk>/results/", experiment_views.experiment_results, name="experiment_results"),
     path("<int:course_pk>/experiments/<int:pk>/sessions/<int:session_pk>/", experiment_views.experiment_session_detail, name="experiment_session_detail"),
+    path("<int:course_pk>/experiments/<int:pk>/sessions/<int:session_pk>/word/", experiment_views.experiment_session_word, name="experiment_session_word"),
 ]

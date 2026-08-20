@@ -8,7 +8,7 @@
     <h1 class="page-title">学生作答详情</h1>
     <p class="page-subtitle">按该学生实际获分配的题目顺序展示；草稿不等同于正式提交。</p>
   </div>
-  <div class="page-actions"><a class="btn btn-outline-secondary" href="{% url 'courses:experiment_results' course.pk experiment.pk %}">返回结果</a></div>
+  <div class="page-actions"><a class="btn btn-outline-secondary" href="{% url 'courses:experiment_results' course.pk experiment.pk %}">返回结果</a><form method="post" action="{% url 'courses:experiment_session_word' course.pk experiment.pk session.pk %}" class="d-inline">{% csrf_token %}<button class="btn btn-primary" type="submit">下载 Word 报告</button></form></div>
 </header>
 
 <section class="card mb-4" aria-labelledby="session-identity-title">

@@ -1,6 +1,9 @@
+from urllib.parse import quote
+
 from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
@@ -18,6 +21,7 @@ from apps.assessment.models import ExperimentSession, StudentQuestionAssignment
 from .forms import ExperimentForm, ParticipantRuleForm
 from .models import Experiment
 from .presentation import build_session_report_presentation
+from .session_report import build_session_report_document
 from .services import (
     lock_experiment_question_bank,
     publish_experiment,
@@ -351,3 +355,36 @@ def experiment_session_detail(request, course_pk, pk, session_pk):
             "report": report,
         },
     )
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def experiment_session_word(request, course_pk, pk, session_pk):
+    _course, experiment, session, report = _session_report_scope(
+        request,
+        course_pk,
+        pk,
+        session_pk,
+    )
+    document_bytes = build_session_report_document(report)
+    log_action(
+        request,
+        "experiment.session_word_report",
+        experiment,
+        {
+            "experiment_id": experiment.pk,
+            "version": session.version.version_number,
+            "session_id": session.pk,
+            "student_id": session.student_id,
+            "question_count": report.question_count,
+        },
+    )
+    response = HttpResponse(
+        document_bytes,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    response["Content-Disposition"] = (
+        f"attachment; filename=student-session-report-{session.pk}.docx; "
+        f"filename*=UTF-8''{quote(f'学生作答详情-会话-{session.pk}.docx')}"
+    )
+    return response
