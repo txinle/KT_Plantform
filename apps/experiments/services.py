@@ -50,6 +50,13 @@ def _participant_ids(values, label):
     return sorted(ids)
 
 
+def _lock_draft_experiment(experiment, *, error_message):
+    experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
+    if experiment.status != Experiment.Status.DRAFT:
+        raise ValidationError(error_message)
+    return experiment
+
+
 def _lock_participant_course(experiment, *, action="修改实验参与规则"):
     if experiment.course_id is None:
         raise ValidationError("参与规则仅适用于课程实验。")
@@ -182,6 +189,15 @@ def _replace_experiment_students(experiment, roster):
     )
 
 
+def _lock_materialized_participants(experiment):
+    return list(
+        ExperimentStudent.objects.select_for_update()
+        .filter(experiment=experiment)
+        .order_by("student_id")
+        .values_list("pk", flat=True)
+    )
+
+
 def _publish_participant_roster(experiment, course, locked_classes):
     class_ids = list(
         experiment.participant_class_links.select_for_update()
@@ -195,6 +211,8 @@ def _publish_participant_roster(experiment, course, locked_classes):
     )
     if not class_ids and not overrides:
         raise ValidationError("请先配置参与班级与学生。")
+
+    _lock_materialized_participants(experiment)
 
     if any(
         class_id not in locked_classes or not locked_classes[class_id].is_active
@@ -224,18 +242,28 @@ def _publish_participant_roster(experiment, course, locked_classes):
 
 
 def _locked_legacy_participant_count(experiment):
-    student_class_ids = list(
-        ExperimentStudent.objects.select_for_update()
-        .filter(experiment=experiment)
+    initial_class_ids = list(
+        ExperimentStudent.objects.filter(experiment=experiment)
         .order_by("student_id")
         .values_list("student__class_group_id", flat=True)
     )
     with lock_active_class_groups(
-        student_class_ids,
+        initial_class_ids,
         inactive_error="不能发布停用班级中的学生。",
-    ):
-        pass
-    return len(student_class_ids)
+    ) as locked_classes:
+        participant_links = list(
+            ExperimentStudent.objects.select_for_update()
+            .filter(experiment=experiment)
+            .select_related("student")
+            .order_by("student_id")
+        )
+        if any(
+            link.student.class_group_id is not None
+            and link.student.class_group_id not in locked_classes
+            for link in participant_links
+        ):
+            raise ValidationError("学生班级已变更，请刷新后重试。")
+    return len(participant_links)
 
 
 @transaction.atomic
@@ -248,14 +276,22 @@ def save_participant_rules(experiment, classes, includes, excludes):
     if set(include_ids) & set(exclude_ids):
         raise ValidationError("同一学生不能同时显式纳入和排除。")
 
+    experiment = _lock_draft_experiment(
+        experiment,
+        error_message="发布后不能修改参与规则。",
+    )
+    return _save_participant_rules_locked(
+        experiment,
+        class_ids,
+        include_ids,
+        exclude_ids,
+    )
+
+
+def _save_participant_rules_locked(experiment, class_ids, include_ids, exclude_ids):
     course = _lock_participant_course(experiment)
     locked_classes = _lock_course_classes(course)
     selected_classes = _locked_requested_classes(course, class_ids, locked_classes)
-    experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
-    if experiment.status != Experiment.Status.DRAFT:
-        raise ValidationError("发布后不能修改参与规则。")
-    if experiment.course_id != course.pk:
-        raise ValidationError("实验所属课程已变更，请刷新后重试。")
 
     roster = _current_rule_roster(
         course,
@@ -267,6 +303,7 @@ def save_participant_rules(experiment, classes, includes, excludes):
         validate_excludes=True,
     )
 
+    _lock_materialized_participants(experiment)
     ExperimentParticipantClass.objects.filter(experiment=experiment).delete()
     ExperimentParticipantOverride.objects.filter(experiment=experiment).delete()
     ExperimentParticipantClass.objects.bulk_create(
@@ -522,16 +559,15 @@ def selection_display_context(experiment):
 
 @transaction.atomic
 def publish_experiment(experiment, actor):
+    experiment = _lock_draft_experiment(
+        experiment,
+        error_message="只有草稿实验可以发布",
+    )
     course = None
     locked_classes = None
     if experiment.course_id is not None:
         course = _lock_participant_course(experiment, action="发布实验")
         locked_classes = _lock_course_classes(course)
-    experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
-    if course is not None and experiment.course_id != course.pk:
-        raise ValidationError("实验所属课程已变更，请刷新后重试。")
-    if experiment.status != Experiment.Status.DRAFT:
-        raise ValidationError("只有草稿实验可以发布")
     roster = None
     if course is not None:
         roster = _publish_participant_roster(experiment, course, locked_classes)
@@ -707,52 +743,42 @@ def sync_experiment_questions(experiment):
 @transaction.atomic
 def assign_students(experiment, students):
     students = list(students)
+    experiment = _lock_draft_experiment(
+        experiment,
+        error_message="发布后不能修改学生",
+    )
     if experiment.course_id is not None:
-        return save_participant_rules(experiment, [], students, [])
+        include_ids = _participant_ids(students, "显式纳入学生")
+        return _save_participant_rules_locked(experiment, [], include_ids, [])
 
-    if experiment.status != Experiment.Status.DRAFT: raise ValidationError("发布后不能修改学生")
-    student_ids = [student.pk for student in students]
-    if experiment.course_id is None:
-        from apps.accounts.models import User
-
-        student_class_ids = dict(
-            User.objects.filter(pk__in=student_ids).values_list("pk", "class_group_id")
-        )
-        with lock_active_class_groups(
-            student_class_ids.values(),
-            inactive_error="不能分配停用班级中的学生",
-        ) as locked_classes:
-            experiment.student_links.all().delete()
-            for student in students:
-                class_group = locked_classes.get(student_class_ids[student.pk])
-                ExperimentStudent.objects.create(
-                    experiment=experiment,
-                    student=student,
-                    class_snapshot_name=str(class_group or ""),
-                )
-        return
-
-    from apps.accounts.models import CourseEnrollment
-
-    enrollments = {
-        item["student_id"]: item
-        for item in CourseEnrollment.objects.filter(
-            course=experiment.course,
-            student_id__in=student_ids,
-            is_active=True,
-        ).values("student_id", "class_group_id")
-    }
-    if len(enrollments) != len(students):
-        raise ValidationError("只能分配当前课程可用班级中的在读学生")
+    student_ids = _participant_ids(students, "学生")
+    initial_class_ids = dict(
+        User.objects.filter(pk__in=student_ids).values_list("pk", "class_group_id")
+    )
+    if len(initial_class_ids) != len(student_ids):
+        raise ValidationError("学生已变更，请刷新后重试。")
     with lock_active_class_groups(
-        [enrollment["class_group_id"] for enrollment in enrollments.values()],
-        inactive_error="只能分配当前课程可用班级中的在读学生",
+        initial_class_ids.values(),
+        inactive_error="不能分配停用班级中的学生",
     ) as locked_classes:
-        experiment.student_links.all().delete()
-        for student in students:
-            enrollment = enrollments[student.pk]
+        locked_students = {
+            student.pk: student
+            for student in User.objects.select_for_update()
+            .filter(pk__in=student_ids)
+            .order_by("pk")
+        }
+        if len(locked_students) != len(student_ids) or any(
+            locked_students[student_id].class_group_id is not None
+            and locked_students[student_id].class_group_id not in locked_classes
+            for student_id in student_ids
+        ):
+            raise ValidationError("学生班级已变更，请刷新后重试。")
+        _lock_materialized_participants(experiment)
+        ExperimentStudent.objects.filter(experiment=experiment).delete()
+        for student_id in student_ids:
+            class_group = locked_classes.get(locked_students[student_id].class_group_id)
             ExperimentStudent.objects.create(
                 experiment=experiment,
-                student=student,
-                class_snapshot_name=str(locked_classes[enrollment["class_group_id"]]),
+                student_id=student_id,
+                class_snapshot_name=str(class_group or ""),
             )

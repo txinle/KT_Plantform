@@ -1,4 +1,7 @@
+from io import StringIO
+
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.test import Client, TestCase, TransactionTestCase
@@ -412,6 +415,98 @@ class ParticipantRuleSaveServiceTests(TestCase):
             },
         )
 
+    def test_save_locks_experiment_then_course_then_classes(self):
+        from . import services
+
+        lock_order = []
+        original_experiment_lock = Experiment.objects.select_for_update
+        original_course_lock = services.lock_course
+        original_class_lock = ClassGroup.objects.select_for_update
+
+        def lock_experiment(*args, **kwargs):
+            lock_order.append("experiment")
+            return original_experiment_lock(*args, **kwargs)
+
+        def lock_course(*args, **kwargs):
+            lock_order.append("course")
+            return original_course_lock(*args, **kwargs)
+
+        def lock_classes(*args, **kwargs):
+            lock_order.append("class")
+            return original_class_lock(*args, **kwargs)
+
+        with (
+            patch.object(
+                Experiment.objects,
+                "select_for_update",
+                side_effect=lock_experiment,
+            ),
+            patch("apps.experiments.services.lock_course", side_effect=lock_course),
+            patch.object(
+                ClassGroup.objects,
+                "select_for_update",
+                side_effect=lock_classes,
+            ),
+        ):
+            save_participant_rules(self.experiment, [self.class_a], [], [])
+
+        self.assertEqual(lock_order[:3], ["experiment", "course", "class"])
+
+    def test_assign_students_locks_experiment_then_course_then_classes(self):
+        from . import services
+
+        lock_order = []
+        original_experiment_lock = Experiment.objects.select_for_update
+        original_course_lock = services.lock_course
+        original_class_lock = ClassGroup.objects.select_for_update
+
+        def lock_experiment(*args, **kwargs):
+            lock_order.append("experiment")
+            return original_experiment_lock(*args, **kwargs)
+
+        def lock_course(*args, **kwargs):
+            lock_order.append("course")
+            return original_course_lock(*args, **kwargs)
+
+        def lock_classes(*args, **kwargs):
+            lock_order.append("class")
+            return original_class_lock(*args, **kwargs)
+
+        with (
+            patch.object(
+                Experiment.objects,
+                "select_for_update",
+                side_effect=lock_experiment,
+            ),
+            patch("apps.experiments.services.lock_course", side_effect=lock_course),
+            patch.object(
+                ClassGroup.objects,
+                "select_for_update",
+                side_effect=lock_classes,
+            ),
+        ):
+            assign_students(self.experiment, [self.student_a1])
+
+        self.assertEqual(lock_order[:3], ["experiment", "course", "class"])
+
+    def test_assign_students_rechecks_a_stale_draft_before_replacing_roster(self):
+        save_participant_rules(self.experiment, [self.class_a], [], [])
+        expected_preview = set(
+            self.experiment.student_links.values_list("student_id", flat=True)
+        )
+        stale_experiment = Experiment.objects.get(pk=self.experiment.pk)
+        Experiment.objects.filter(pk=self.experiment.pk).update(
+            status=Experiment.Status.PUBLISHED
+        )
+
+        with self.assertRaisesMessage(ValidationError, "发布后"):
+            assign_students(stale_experiment, [self.student_b1])
+
+        self.assertEqual(
+            set(self.experiment.student_links.values_list("student_id", flat=True)),
+            expected_preview,
+        )
+
     def test_invalid_rules_do_not_replace_existing_preview_or_rules(self):
         save_participant_rules(self.experiment, [self.class_a], [], [])
         expected_preview = set(
@@ -586,6 +681,44 @@ class ParticipantRulePublishServiceTests(TestCase):
             str(self.class_a),
         )
 
+    def test_publish_locks_experiment_then_course_then_classes(self):
+        from . import services
+
+        save_participant_rules(self.experiment, [self.class_a], [], [])
+        lock_order = []
+        original_experiment_lock = Experiment.objects.select_for_update
+        original_course_lock = services.lock_course
+        original_class_lock = ClassGroup.objects.select_for_update
+
+        def lock_experiment(*args, **kwargs):
+            lock_order.append("experiment")
+            return original_experiment_lock(*args, **kwargs)
+
+        def lock_course(*args, **kwargs):
+            lock_order.append("course")
+            return original_course_lock(*args, **kwargs)
+
+        def lock_classes(*args, **kwargs):
+            lock_order.append("class")
+            return original_class_lock(*args, **kwargs)
+
+        with (
+            patch.object(
+                Experiment.objects,
+                "select_for_update",
+                side_effect=lock_experiment,
+            ),
+            patch("apps.experiments.services.lock_course", side_effect=lock_course),
+            patch.object(
+                ClassGroup.objects,
+                "select_for_update",
+                side_effect=lock_classes,
+            ),
+        ):
+            publish_experiment(self.experiment, self.teacher)
+
+        self.assertEqual(lock_order[:3], ["experiment", "course", "class"])
+
     def test_publish_rejects_inactive_selected_class_without_creating_a_version(self):
         save_participant_rules(self.experiment, [self.class_a], [], [])
         ClassGroup.objects.filter(pk=self.class_a.pk).update(is_active=False)
@@ -756,6 +889,91 @@ class ParticipantRulePublishServiceTests(TestCase):
         legacy_experiment.refresh_from_db()
         self.assertEqual(legacy_experiment.status, Experiment.Status.DRAFT)
         self.assertFalse(legacy_experiment.versions.exists())
+
+    def test_legacy_publish_locks_experiment_then_class_then_participants(self):
+        legacy_class = ClassGroup.objects.create(name="历史可用班")
+        legacy_student = User.objects.create_user(
+            username="LEGACY-LOCK-ORDER",
+            student_number="LEGACY-LOCK-ORDER",
+            role=User.Role.STUDENT,
+            class_group=legacy_class,
+        )
+        legacy_bank = QuestionBank.objects.create(
+            owner=self.teacher,
+            name="历史锁序题库",
+        )
+        legacy_question = Question.objects.create(
+            bank=legacy_bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="历史锁序题目",
+            correct_answer="答案",
+        )
+        legacy_concept = Concept.objects.create(
+            owner=self.teacher,
+            scope=Concept.Scope.PRIVATE,
+            name="历史锁序 KC",
+            normalized_name="历史锁序 kc",
+        )
+        QuestionConcept.objects.create(
+            question=legacy_question,
+            concept=legacy_concept,
+            is_primary=True,
+        )
+        legacy_experiment = Experiment.objects.create(
+            owner=self.teacher,
+            created_by=self.teacher,
+            question_bank=legacy_bank,
+            name="历史锁序实验",
+        )
+        ExperimentQuestion.objects.create(
+            experiment=legacy_experiment,
+            question=legacy_question,
+            display_order=1,
+        )
+        ExperimentStudent.objects.create(
+            experiment=legacy_experiment,
+            student=legacy_student,
+            class_snapshot_name=str(legacy_class),
+        )
+
+        lock_order = []
+        original_experiment_lock = Experiment.objects.select_for_update
+        original_class_lock = ClassGroup.objects.select_for_update
+        original_participant_lock = ExperimentStudent.objects.select_for_update
+
+        def lock_experiment(*args, **kwargs):
+            lock_order.append("experiment")
+            return original_experiment_lock(*args, **kwargs)
+
+        def lock_classes(*args, **kwargs):
+            lock_order.append("class")
+            return original_class_lock(*args, **kwargs)
+
+        def lock_participants(*args, **kwargs):
+            lock_order.append("participant")
+            return original_participant_lock(*args, **kwargs)
+
+        with (
+            patch.object(
+                Experiment.objects,
+                "select_for_update",
+                side_effect=lock_experiment,
+            ),
+            patch.object(
+                ClassGroup.objects,
+                "select_for_update",
+                side_effect=lock_classes,
+            ),
+            patch.object(
+                ExperimentStudent.objects,
+                "select_for_update",
+                side_effect=lock_participants,
+            ),
+        ):
+            publish_experiment(legacy_experiment, self.teacher)
+
+        self.assertEqual(lock_order[:3], ["experiment", "class", "participant"])
 
 
 class ParticipantRuleViewTests(TestCase):
@@ -962,3 +1180,21 @@ class ParticipantRuleStaticContractTests(TestCase):
             ".participant-student-actions",
         ):
             self.assertIn(selector, stylesheet)
+
+
+class ParticipantRuleDemoSeedTests(TestCase):
+    def test_seed_demo_configures_participant_rules_before_publishing_course_experiment(self):
+        call_command("seed_demo", stdout=StringIO())
+
+        experiment = Experiment.objects.get(
+            course__code="KT101",
+            name="演示交互数据采集",
+        )
+        self.assertEqual(experiment.status, Experiment.Status.PUBLISHED)
+        self.assertEqual(experiment.student_links.count(), 3)
+        self.assertEqual(
+            experiment.participant_override_links.filter(
+                mode=ExperimentParticipantOverride.Mode.INCLUDE
+            ).count(),
+            3,
+        )

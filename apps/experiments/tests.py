@@ -527,11 +527,7 @@ class CourseExperimentInactiveClassAssignmentTests(TestCase):
             question_bank=bank,
             name="课程实验",
         )
-        ExperimentStudent.objects.create(
-            experiment=self.experiment,
-            student=self.student,
-            class_snapshot_name=str(self.class_group),
-        )
+        assign_students(self.experiment, [self.student])
 
     def test_course_assignment_rejects_a_class_deactivated_after_the_student_was_read(self):
         stale_student = User.objects.get(pk=self.student.pk)

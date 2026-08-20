@@ -1,8 +1,8 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
-from apps.experiments.models import Experiment, ExperimentQuestion, ExperimentStudent
-from apps.experiments.services import publish_experiment
+from apps.experiments.models import Experiment, ExperimentQuestion
+from apps.experiments.services import assign_students, publish_experiment
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
 
 class Command(BaseCommand):
@@ -60,6 +60,11 @@ class Command(BaseCommand):
         )
         if created:
             for idx, q in enumerate(bank.questions.all(), start=1): ExperimentQuestion.objects.create(experiment=experiment, question=q, display_order=idx)
-            for s in students: ExperimentStudent.objects.create(experiment=experiment, student=s, class_snapshot_name=str(cls))
+            assign_students(experiment, students)
+        elif experiment.status == Experiment.Status.DRAFT and not (
+            experiment.participant_class_links.exists()
+            or experiment.participant_override_links.exists()
+        ):
+            assign_students(experiment, students)
         if experiment.status == Experiment.Status.DRAFT and not experiment.versions.exists(): publish_experiment(experiment, teacher)
         self.stdout.write(self.style.SUCCESS("演示数据已就绪：admin/admin123，teacher/teacher123，S001-S003/student123"))

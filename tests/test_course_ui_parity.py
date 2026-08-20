@@ -9,9 +9,9 @@ from apps.assessment.models import ExperimentSession
 from apps.experiments.models import (
     Experiment,
     ExperimentQuestion,
-    ExperimentStudent,
     ExperimentVersion,
 )
+from apps.experiments.services import assign_students
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
 from apps.question_bank.services.course_question_identity import allocate_course_question_identity
 
@@ -91,24 +91,17 @@ class CourseWorkspaceUIParityTests(TestCase):
             question=self.question,
             display_order=1,
         )
-        ExperimentStudent.objects.create(
-            experiment=self.draft_experiment,
-            student=self.students[0],
-            class_snapshot_name=str(self.class_group),
-        )
+        assign_students(self.draft_experiment, [self.students[0]])
         self.published_experiment = Experiment.objects.create(
             course=self.course,
             created_by=self.teacher,
             owner=self.teacher,
             question_bank=self.bank,
             name="已发布实验",
-            status=Experiment.Status.PUBLISHED,
         )
-        ExperimentStudent.objects.create(
-            experiment=self.published_experiment,
-            student=self.students[0],
-            class_snapshot_name=str(self.class_group),
-        )
+        assign_students(self.published_experiment, [self.students[0]])
+        self.published_experiment.status = Experiment.Status.PUBLISHED
+        self.published_experiment.save(update_fields=["status"])
         self.version = ExperimentVersion.objects.create(
             experiment=self.published_experiment,
             version_number=1,

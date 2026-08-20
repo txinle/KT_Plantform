@@ -5,7 +5,7 @@ from django.urls import reverse
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.experiments.models import Experiment, ExperimentQuestion, ExperimentStudent
-from apps.experiments.services import publish_experiment
+from apps.experiments.services import assign_students, publish_experiment
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
 from apps.question_bank.services.course_question_identity import allocate_course_question_identity
 
@@ -63,11 +63,7 @@ class StudentCourseNavigationTests(TestCase):
             question=question,
             display_order=1,
         )
-        ExperimentStudent.objects.create(
-            experiment=self.experiment,
-            student=self.student,
-            class_snapshot_name="一班",
-        )
+        assign_students(self.experiment, [self.student])
         publish_experiment(self.experiment, self.teacher)
         self.experiment.refresh_from_db()
 
