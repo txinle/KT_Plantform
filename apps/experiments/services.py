@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import dataclass
 import hashlib
 import random
 import secrets
@@ -26,6 +27,11 @@ from .models import (
 ARCHIVED_EXPERIMENT_BANK_MESSAGE = "题库已归档，不能同步或发布实验。"
 SAMPLING_ALGORITHM_VERSION = "v1"
 LEGACY_SAMPLING_ALGORITHM_VERSION = "legacy-v0"
+
+
+@dataclass(frozen=True)
+class ParticipantRuleSaveResult:
+    preview_count: int
 
 
 def _participant_ids(values, label):
@@ -188,10 +194,7 @@ def _publish_participant_roster(experiment, course, locked_classes):
         .values_list("student_id", "mode")
     )
     if not class_ids and not overrides:
-        # This is only a defensive compatibility path for pre-rule drafts that
-        # have not yet been migrated. It preserves, rather than broadens, their
-        # existing explicit list.
-        return None
+        raise ValidationError("请先配置参与班级与学生。")
 
     if any(
         class_id not in locked_classes or not locked_classes[class_id].is_active
@@ -218,6 +221,21 @@ def _publish_participant_roster(experiment, course, locked_classes):
         include_error="显式纳入学生已退出当前课程或所在班级不可用，不能发布实验。",
         validate_excludes=False,
     )
+
+
+def _locked_legacy_participant_count(experiment):
+    student_class_ids = list(
+        ExperimentStudent.objects.select_for_update()
+        .filter(experiment=experiment)
+        .order_by("student_id")
+        .values_list("student__class_group_id", flat=True)
+    )
+    with lock_active_class_groups(
+        student_class_ids,
+        inactive_error="不能发布停用班级中的学生。",
+    ):
+        pass
+    return len(student_class_ids)
 
 
 @transaction.atomic
@@ -276,6 +294,7 @@ def save_participant_rules(experiment, classes, includes, excludes):
         ]
     )
     _replace_experiment_students(experiment, roster)
+    return ParticipantRuleSaveResult(preview_count=len(roster))
 
 
 def _choice_answers(value):
@@ -513,12 +532,12 @@ def publish_experiment(experiment, actor):
         raise ValidationError("实验所属课程已变更，请刷新后重试。")
     if experiment.status != Experiment.Status.DRAFT:
         raise ValidationError("只有草稿实验可以发布")
-    roster = (
-        _publish_participant_roster(experiment, course, locked_classes)
-        if course is not None
-        else None
-    )
-    participant_count = len(roster) if roster is not None else experiment.student_links.count()
+    roster = None
+    if course is not None:
+        roster = _publish_participant_roster(experiment, course, locked_classes)
+        participant_count = len(roster)
+    else:
+        participant_count = _locked_legacy_participant_count(experiment)
     question_bank = _lock_experiment_question_bank(experiment)
     questions = validate_for_publish(
         experiment,
@@ -687,8 +706,11 @@ def sync_experiment_questions(experiment):
 
 @transaction.atomic
 def assign_students(experiment, students):
-    if experiment.status != Experiment.Status.DRAFT: raise ValidationError("发布后不能修改学生")
     students = list(students)
+    if experiment.course_id is not None:
+        return save_participant_rules(experiment, [], students, [])
+
+    if experiment.status != Experiment.Status.DRAFT: raise ValidationError("发布后不能修改学生")
     student_ids = [student.pk for student in students]
     if experiment.course_id is None:
         from apps.accounts.models import User

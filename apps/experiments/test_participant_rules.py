@@ -4,6 +4,8 @@ from django.db.migrations.executor import MigrationExecutor
 from django.test import Client, TestCase, TransactionTestCase
 from django.urls import reverse
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.audit.models import AuditLog
@@ -16,7 +18,7 @@ from .models import (
     ExperimentQuestion,
     ExperimentStudent,
 )
-from .services import publish_experiment, save_participant_rules
+from .services import assign_students, publish_experiment, save_participant_rules
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -343,12 +345,14 @@ class ParticipantRuleSaveServiceTests(TestCase):
         return student
 
     def test_class_rule_with_include_and_exclude_materializes_current_preview(self):
-        save_participant_rules(
+        result = save_participant_rules(
             self.experiment,
             [self.class_a],
             [self.student_b1],
             [self.student_a2],
         )
+
+        self.assertEqual(result.preview_count, 2)
 
         self.assertEqual(
             list(
@@ -389,6 +393,23 @@ class ParticipantRuleSaveServiceTests(TestCase):
         self.assertEqual(
             set(self.experiment.student_links.values_list("student_id", flat=True)),
             {self.student_a1.pk, self.student_a2.pk, late_student.pk},
+        )
+
+    def test_legacy_course_assignment_service_records_explicit_include_rules(self):
+        assign_students(self.experiment, [self.student_a1, self.student_b1])
+
+        self.assertFalse(self.experiment.participant_class_links.exists())
+        self.assertEqual(
+            set(
+                self.experiment.participant_override_links.values_list(
+                    "student_id",
+                    "mode",
+                )
+            ),
+            {
+                (self.student_a1.pk, ExperimentParticipantOverride.Mode.INCLUDE),
+                (self.student_b1.pk, ExperimentParticipantOverride.Mode.INCLUDE),
+            },
         )
 
     def test_invalid_rules_do_not_replace_existing_preview_or_rules(self):
@@ -576,6 +597,53 @@ class ParticipantRulePublishServiceTests(TestCase):
         self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
         self.assertFalse(self.experiment.versions.exists())
 
+    def test_publish_rejects_a_direct_course_roster_without_participant_rules(self):
+        ExperimentStudent.objects.create(
+            experiment=self.experiment,
+            student=self.student_a1,
+            class_snapshot_name=str(self.class_a),
+        )
+
+        with self.assertRaisesMessage(ValidationError, "请先配置参与班级与学生"):
+            publish_experiment(self.experiment, self.teacher)
+
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
+        self.assertFalse(self.experiment.versions.exists())
+
+    def test_publish_rejects_a_retired_direct_course_roster_without_rules(self):
+        ExperimentStudent.objects.create(
+            experiment=self.experiment,
+            student=self.student_a1,
+            class_snapshot_name=str(self.class_a),
+        )
+        CourseEnrollment.objects.filter(
+            course=self.course,
+            student=self.student_a1,
+        ).update(is_active=False)
+
+        with self.assertRaisesMessage(ValidationError, "请先配置参与班级与学生"):
+            publish_experiment(self.experiment, self.teacher)
+
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
+        self.assertFalse(self.experiment.versions.exists())
+
+    def test_publish_rejects_an_inactive_class_direct_course_roster_without_rules(self):
+        ExperimentStudent.objects.create(
+            experiment=self.experiment,
+            student=self.student_a1,
+            class_snapshot_name=str(self.class_a),
+        )
+        ClassGroup.objects.filter(pk=self.class_a.pk).update(is_active=False)
+
+        with self.assertRaisesMessage(ValidationError, "请先配置参与班级与学生"):
+            publish_experiment(self.experiment, self.teacher)
+
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
+        self.assertFalse(self.experiment.versions.exists())
+
     def test_publish_rejects_a_selected_class_moved_out_of_course(self):
         save_participant_rules(self.experiment, [self.class_a], [], [])
         other_course = Course.objects.create(
@@ -608,7 +676,11 @@ class ParticipantRulePublishServiceTests(TestCase):
         self.assertFalse(self.experiment.versions.exists())
 
     def test_publish_rejects_an_empty_final_roster_without_creating_a_version(self):
-        save_participant_rules(self.experiment, [], [], [])
+        save_participant_rules(self.experiment, [self.class_a], [], [])
+        CourseEnrollment.objects.filter(
+            course=self.course,
+            class_group=self.class_a,
+        ).update(is_active=False)
 
         with self.assertRaisesMessage(ValidationError, "至少需要"):
             publish_experiment(self.experiment, self.teacher)
@@ -630,6 +702,60 @@ class ParticipantRulePublishServiceTests(TestCase):
             set(self.experiment.student_links.values_list("student_id", flat=True)),
             {self.student_a1.pk},
         )
+
+    def test_legacy_publish_revalidates_the_current_student_class(self):
+        legacy_class = ClassGroup.objects.create(name="历史停用班", is_active=False)
+        legacy_student = User.objects.create_user(
+            username="LEGACY-INACTIVE-CLASS",
+            student_number="LEGACY-INACTIVE-CLASS",
+            role=User.Role.STUDENT,
+            class_group=legacy_class,
+        )
+        legacy_bank = QuestionBank.objects.create(
+            owner=self.teacher,
+            name="历史规则题库",
+        )
+        legacy_question = Question.objects.create(
+            bank=legacy_bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="历史规则题目",
+            correct_answer="答案",
+        )
+        legacy_concept = Concept.objects.create(
+            owner=self.teacher,
+            scope=Concept.Scope.PRIVATE,
+            name="历史规则 KC",
+            normalized_name="历史规则 kc",
+        )
+        QuestionConcept.objects.create(
+            question=legacy_question,
+            concept=legacy_concept,
+            is_primary=True,
+        )
+        legacy_experiment = Experiment.objects.create(
+            owner=self.teacher,
+            created_by=self.teacher,
+            question_bank=legacy_bank,
+            name="历史规则实验",
+        )
+        ExperimentQuestion.objects.create(
+            experiment=legacy_experiment,
+            question=legacy_question,
+            display_order=1,
+        )
+        ExperimentStudent.objects.create(
+            experiment=legacy_experiment,
+            student=legacy_student,
+            class_snapshot_name=str(legacy_class),
+        )
+
+        with self.assertRaisesMessage(ValidationError, "停用班级"):
+            publish_experiment(legacy_experiment, self.teacher)
+
+        legacy_experiment.refresh_from_db()
+        self.assertEqual(legacy_experiment.status, Experiment.Status.DRAFT)
+        self.assertFalse(legacy_experiment.versions.exists())
 
 
 class ParticipantRuleViewTests(TestCase):
@@ -744,6 +870,23 @@ class ParticipantRuleViewTests(TestCase):
         )
         self.assertNotIn(str(self.student_a1.pk), str(audit.details))
         self.assertNotIn(str(self.student_b1.pk), str(audit.details))
+
+    def test_assignment_audit_uses_the_service_materialized_preview_count(self):
+        with patch(
+            "apps.experiments.course_views.save_participant_rules",
+            return_value=SimpleNamespace(preview_count=37),
+        ):
+            response = self.client.post(
+                self.assign_url,
+                {"classes": [self.class_a.pk]},
+            )
+
+        self.assertRedirects(response, self.detail_url)
+        audit = AuditLog.objects.get(
+            action="experiment.assign_students",
+            object_id=str(self.experiment.pk),
+        )
+        self.assertEqual(audit.details["preview_count"], 37)
 
     def test_assignment_rejects_other_course_ids_and_requires_post_csrf_and_access(self):
         other_course = Course.objects.create(

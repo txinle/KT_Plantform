@@ -253,6 +253,15 @@ class ExperimentFormPublishedRaceTests(TestCase):
             code="PUB-RACE",
             term="2026 秋",
         )
+        self.course_class = ClassGroup.objects.create(
+            course=self.course,
+            name="发布竞争班",
+        )
+        CourseEnrollment.objects.create(
+            course=self.course,
+            class_group=self.course_class,
+            student=self.student,
+        )
         self.course_bank = QuestionBank.objects.create(
             owner=self.teacher,
             course=self.course,
@@ -314,7 +323,11 @@ class ExperimentFormPublishedRaceTests(TestCase):
                 question=question,
                 display_order=1,
             )
-            ExperimentStudent.objects.create(experiment=experiment, student=self.student)
+        assign_students(self.course_experiment, [self.student])
+        ExperimentStudent.objects.create(
+            experiment=self.legacy_experiment,
+            student=self.student,
+        )
         self.client.force_login(self.teacher)
 
     def payload(self, bank, name):

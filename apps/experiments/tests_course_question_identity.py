@@ -1,12 +1,12 @@
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
-from apps.accounts.models import Course, User
+from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
 from apps.question_bank.services.course_question_identity import allocate_course_question_identity
 
-from .models import Experiment, ExperimentQuestion, ExperimentStudent, QuestionSnapshot
-from .services import publish_experiment
+from .models import Experiment, ExperimentQuestion, QuestionSnapshot
+from .services import publish_experiment, save_participant_rules
 
 
 class CourseQuestionIdentitySnapshotTests(TestCase):
@@ -25,6 +25,12 @@ class CourseQuestionIdentitySnapshotTests(TestCase):
             name="原课程名称",
             code="ORIGINAL101",
             term="2026 秋",
+        )
+        self.class_group = ClassGroup.objects.create(course=self.course, name="快照实验班")
+        CourseEnrollment.objects.create(
+            course=self.course,
+            class_group=self.class_group,
+            student=self.student,
         )
         self.bank = QuestionBank.objects.create(
             course=self.course,
@@ -56,11 +62,7 @@ class CourseQuestionIdentitySnapshotTests(TestCase):
             question=self.question,
             display_order=1,
         )
-        ExperimentStudent.objects.create(
-            experiment=self.experiment,
-            student=self.student,
-            class_snapshot_name="实验班",
-        )
+        save_participant_rules(self.experiment, [], [self.student], [])
 
     def test_publish_freezes_course_question_identity_and_bank_metadata(self):
         self.assertTrue(hasattr(QuestionSnapshot, "course_sequence"))

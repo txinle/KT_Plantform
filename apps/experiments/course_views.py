@@ -248,7 +248,7 @@ def experiment_assign(request, course_pk, pk):
             classes = list(form.cleaned_data["classes"])
             includes = list(form.cleaned_data["includes"])
             excludes = list(form.cleaned_data["excludes"])
-            save_participant_rules(experiment, classes, includes, excludes)
+            save_result = save_participant_rules(experiment, classes, includes, excludes)
             log_action(
                 request,
                 "experiment.assign_students",
@@ -257,7 +257,7 @@ def experiment_assign(request, course_pk, pk):
                     "class_count": len(classes),
                     "include_count": len(includes),
                     "exclude_count": len(excludes),
-                    "preview_count": experiment.student_links.count(),
+                    "preview_count": save_result.preview_count,
                 },
             )
             messages.success(request, "参与班级与学生规则已保存，当前预览已更新。")
