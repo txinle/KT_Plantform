@@ -38,6 +38,26 @@ from .student_import import (
 )
 
 
+CLASS_GROUP_AUDIT_FIELDS = ("name", "academic_year", "is_active")
+
+
+def _class_group_audit_details(course, class_group, previous_values, changed_fields):
+    changed_fields = [
+        field for field in CLASS_GROUP_AUDIT_FIELDS if field in changed_fields
+    ]
+    return {
+        "course_id": course.pk,
+        "changed_fields": changed_fields,
+        "changes": {
+            field: {
+                "before": previous_values[field],
+                "after": getattr(class_group, field),
+            }
+            for field in changed_fields
+        },
+    }
+
+
 def _inactive_target_class_response(request, course, class_group, action):
     messages.error(request, f"目标班级已停用，不能{action}。")
     return redirect("courses:class_detail", course.pk, class_group.pk)
@@ -80,6 +100,7 @@ def class_rename(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     saved_class_group = None
+    previous_values = None
     with transaction.atomic():
         class_group = get_object_or_404(
             ClassGroup.objects.select_for_update(),
@@ -87,6 +108,7 @@ def class_rename(request, course_pk, class_pk):
             course_id=course.pk,
         )
         form = ClassGroupRenameForm(request.POST, instance=class_group)
+        previous_values = {"name": class_group.name}
         if form.is_valid():
             class_group.name = form.cleaned_data["name"]
             class_group.save(update_fields=["name"])
@@ -97,7 +119,12 @@ def class_rename(request, course_pk, class_pk):
             request,
             "class.rename",
             saved_class_group,
-            {"course_id": course.pk, "changed_fields": ["name"]},
+            _class_group_audit_details(
+                course,
+                saved_class_group,
+                previous_values,
+                ["name"],
+            ),
         )
         messages.success(request, "班级名称已更新。")
     else:
@@ -110,50 +137,74 @@ def class_rename(request, course_pk, class_pk):
     return redirect(target)
 
 
+@require_GET
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def class_edit(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     class_group = get_object_or_404(course.classes, pk=class_pk)
     form = ClassGroupUpdateForm(instance=class_group)
+    return render(
+        request,
+        "teacher/course_class_edit.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": class_group,
+            "form": form,
+        },
+    )
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_update(request, course_pk, class_pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_writable_course(course)
+    class_group = get_object_or_404(course.classes, pk=class_pk)
+    form = ClassGroupUpdateForm(request.POST, instance=class_group)
     saved_class_group = None
-    if request.method == "POST":
-        try:
-            with transaction.atomic():
-                class_group = get_object_or_404(
-                    ClassGroup.objects.select_for_update(),
-                    pk=class_pk,
-                    course_id=course.pk,
-                )
-                form = ClassGroupUpdateForm(request.POST, instance=class_group)
-                previous_values = {
-                    "name": class_group.name,
-                    "academic_year": class_group.academic_year,
-                    "is_active": class_group.is_active,
-                }
-                if not class_group_state_token_matches(
-                    request.POST.get("state_token", ""),
-                    class_group,
-                ):
-                    form.add_error(None, "班级信息已被其他操作更新，请刷新后重试。")
-                elif form.is_valid():
-                    changed_fields = [
-                        field
-                        for field, previous_value in previous_values.items()
-                        if form.cleaned_data[field] != previous_value
-                    ]
-                    saved_class_group = form.save()
-                    log_action(
-                        request,
-                        "class.update",
+    try:
+        with transaction.atomic():
+            class_group = get_object_or_404(
+                ClassGroup.objects.select_for_update(),
+                pk=class_pk,
+                course_id=course.pk,
+            )
+            form = ClassGroupUpdateForm(request.POST, instance=class_group)
+            previous_values = {
+                "name": class_group.name,
+                "academic_year": class_group.academic_year,
+                "is_active": class_group.is_active,
+            }
+            if not class_group_state_token_matches(
+                request.POST.get("state_token", ""),
+                class_group,
+            ):
+                form.add_error(None, "班级信息已被其他操作更新，请刷新后重试。")
+            elif form.is_valid():
+                changed_fields = [
+                    field
+                    for field, previous_value in previous_values.items()
+                    if form.cleaned_data[field] != previous_value
+                ]
+                saved_class_group = form.save()
+                log_action(
+                    request,
+                    "class.update",
+                    saved_class_group,
+                    _class_group_audit_details(
+                        course,
                         saved_class_group,
-                        {"course_id": course.pk, "changed_fields": changed_fields},
-                    )
-        except IntegrityError:
-            form.add_error(None, "同一课程和学年中已存在该班级名称。")
-        if saved_class_group:
-            messages.success(request, "班级设置已保存。")
-            return redirect("courses:class_detail", course.pk, saved_class_group.pk)
+                        previous_values,
+                        changed_fields,
+                    ),
+                )
+    except IntegrityError:
+        form.add_error(None, "同一课程和学年中已存在该班级名称。")
+    if saved_class_group:
+        messages.success(request, "班级设置已保存。")
+        return redirect("courses:class_detail", course.pk, saved_class_group.pk)
     return render(
         request,
         "teacher/course_class_edit.html",

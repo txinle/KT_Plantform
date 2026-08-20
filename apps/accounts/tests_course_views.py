@@ -43,6 +43,9 @@ class CourseWorkspaceViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         return response.context["form"].initial["state_token"]
 
+    def _class_update_url(self, class_group):
+        return reverse("courses:class_update", args=[self.course.pk, class_group.pk])
+
     def test_teacher_home_and_course_list_are_course_first(self):
         self.client.force_login(self.owner)
 
@@ -217,7 +220,13 @@ class CourseWorkspaceViewTests(TestCase):
         audit = AuditLog.objects.get(action="class.rename", object_id=str(class_group.pk))
         self.assertEqual(
             audit.details,
-            {"course_id": self.course.pk, "changed_fields": ["name"]},
+            {
+                "course_id": self.course.pk,
+                "changed_fields": ["name"],
+                "changes": {
+                    "name": {"before": "错误班名", "after": "修正班名"},
+                },
+            },
         )
 
     def test_class_edit_renders_an_opaque_state_token(self):
@@ -236,6 +245,7 @@ class CourseWorkspaceViewTests(TestCase):
         self.assertIn("state_token", form.fields)
         token = form.initial["state_token"]
         self.assertContains(response, 'type="hidden" name="state_token"')
+        self.assertContains(response, f'action="{self._class_update_url(class_group)}"')
         self.assertTrue(token)
         self.assertNotIn(class_group.name, token)
         self.assertNotIn(class_group.academic_year, token)
@@ -254,7 +264,35 @@ class CourseWorkspaceViewTests(TestCase):
             html=True,
         )
 
-    def test_class_edit_updates_metadata_and_audits_changed_fields(self):
+    def test_class_edit_is_get_only_and_does_not_write(self):
+        class_group = ClassGroup.objects.create(
+            course=self.course,
+            name="只读编辑班级",
+            academic_year="2026",
+            is_active=True,
+        )
+        self.client.force_login(self.owner)
+        token = self._class_edit_state_token(class_group)
+
+        response = self.client.post(
+            reverse("courses:class_edit", args=[self.course.pk, class_group.pk]),
+            {
+                "name": "不应保存的班级",
+                "academic_year": "2027",
+                "state_token": token,
+            },
+        )
+
+        self.assertEqual(response.status_code, 405)
+        class_group.refresh_from_db()
+        self.assertEqual(class_group.name, "只读编辑班级")
+        self.assertEqual(class_group.academic_year, "2026")
+        self.assertTrue(class_group.is_active)
+        self.assertFalse(
+            AuditLog.objects.filter(action="class.update", object_id=str(class_group.pk)).exists()
+        )
+
+    def test_class_update_updates_metadata_and_audits_changed_field_values(self):
         class_group = ClassGroup.objects.create(
             course=self.course,
             name="原班级",
@@ -265,7 +303,7 @@ class CourseWorkspaceViewTests(TestCase):
         token = self._class_edit_state_token(class_group)
 
         response = self.client.post(
-            reverse("courses:class_edit", args=[self.course.pk, class_group.pk]),
+            self._class_update_url(class_group),
             {"name": "修订班级", "academic_year": "2027", "state_token": token},
         )
 
@@ -283,10 +321,52 @@ class CourseWorkspaceViewTests(TestCase):
             {
                 "course_id": self.course.pk,
                 "changed_fields": ["name", "academic_year", "is_active"],
+                "changes": {
+                    "name": {"before": "原班级", "after": "修订班级"},
+                    "academic_year": {"before": "2026", "after": "2027"},
+                    "is_active": {"before": True, "after": False},
+                },
+            },
+        )
+        self.assertNotIn("student", str(audit.details).lower())
+        self.assertNotIn("password", str(audit.details).lower())
+
+    def test_class_update_audit_omits_unchanged_field_values(self):
+        class_group = ClassGroup.objects.create(
+            course=self.course,
+            name="保持名称班级",
+            academic_year="2026",
+            is_active=True,
+        )
+        self.client.force_login(self.owner)
+
+        response = self.client.post(
+            self._class_update_url(class_group),
+            {
+                "name": "保持名称班级",
+                "academic_year": "2027",
+                "is_active": "on",
+                "state_token": self._class_edit_state_token(class_group),
             },
         )
 
-    def test_class_edit_rejects_duplicate_course_name_and_year_in_chinese(self):
+        self.assertRedirects(
+            response,
+            reverse("courses:class_detail", args=[self.course.pk, class_group.pk]),
+        )
+        audit = AuditLog.objects.get(action="class.update", object_id=str(class_group.pk))
+        self.assertEqual(
+            audit.details,
+            {
+                "course_id": self.course.pk,
+                "changed_fields": ["academic_year"],
+                "changes": {
+                    "academic_year": {"before": "2026", "after": "2027"},
+                },
+            },
+        )
+
+    def test_class_update_rejects_duplicate_course_name_and_year_in_chinese(self):
         ClassGroup.objects.create(
             course=self.course,
             name="已有班级",
@@ -311,7 +391,7 @@ class CourseWorkspaceViewTests(TestCase):
         self.assertIn("同一课程和学年中已存在该班级名称。", form.non_field_errors())
 
         response = self.client.post(
-            reverse("courses:class_edit", args=[self.course.pk, class_group.pk]),
+            self._class_update_url(class_group),
             payload,
         )
 
@@ -321,7 +401,7 @@ class CourseWorkspaceViewTests(TestCase):
         self.assertEqual(class_group.name, "待编辑班级")
         self.assertEqual(class_group.academic_year, "2026")
 
-    def test_class_edit_rejects_a_stale_state_token_without_overwriting_current_values(self):
+    def test_class_update_rejects_a_stale_state_token_without_overwriting_current_values(self):
         class_group = ClassGroup.objects.create(
             course=self.course,
             name="初始班级",
@@ -333,7 +413,7 @@ class CourseWorkspaceViewTests(TestCase):
         ClassGroup.objects.filter(pk=class_group.pk).update(name="并发更新班级")
 
         response = self.client.post(
-            reverse("courses:class_edit", args=[self.course.pk, class_group.pk]),
+            self._class_update_url(class_group),
             {
                 "name": "过期提交班级",
                 "academic_year": "2027",
@@ -352,7 +432,7 @@ class CourseWorkspaceViewTests(TestCase):
             AuditLog.objects.filter(action="class.update", object_id=str(class_group.pk)).exists()
         )
 
-    def test_class_edit_rejects_a_tampered_state_token_without_overwriting_values(self):
+    def test_class_update_rejects_a_tampered_state_token_without_overwriting_values(self):
         class_group = ClassGroup.objects.create(
             course=self.course,
             name="签名班级",
@@ -364,7 +444,7 @@ class CourseWorkspaceViewTests(TestCase):
         tampered_token = f"{token[:-1]}{'x' if token[-1] != 'x' else 'y'}"
 
         response = self.client.post(
-            reverse("courses:class_edit", args=[self.course.pk, class_group.pk]),
+            self._class_update_url(class_group),
             {
                 "name": "篡改提交班级",
                 "academic_year": "2027",
@@ -540,25 +620,52 @@ class CourseWorkspaceViewTests(TestCase):
         enrollment.refresh_from_db()
         self.assertEqual(enrollment.class_group, target)
 
-    def test_class_edit_enforces_course_scope_and_csrf(self):
+    def test_class_edit_and_update_enforce_methods_scope_and_csrf(self):
         class_group = ClassGroup.objects.create(course=self.course, name="受限班级")
-        url = reverse("courses:class_edit", args=[self.course.pk, class_group.pk])
+        edit_url = reverse("courses:class_edit", args=[self.course.pk, class_group.pk])
+        update_url = self._class_update_url(class_group)
 
         self.client.force_login(self.outsider)
-        self.assertEqual(self.client.get(url).status_code, 404)
+        self.assertEqual(self.client.get(edit_url).status_code, 404)
+        self.assertEqual(self.client.post(update_url, {}).status_code, 404)
 
         self.client.force_login(self.collaborator)
-        self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertEqual(self.client.get(edit_url).status_code, 200)
+        self.assertEqual(self.client.get(update_url).status_code, 405)
+
+        self.client.force_login(self.owner)
+        token = self._class_edit_state_token(class_group)
+        self.assertEqual(
+            self.client.post(
+                edit_url,
+                {"name": "不应保存", "academic_year": "2026", "state_token": token},
+            ).status_code,
+            405,
+        )
 
         csrf_client = Client(enforce_csrf_checks=True)
         csrf_client.force_login(self.owner)
         self.assertEqual(
             csrf_client.post(
-                url,
+                update_url,
                 {"name": "无令牌", "academic_year": "2026", "is_active": "on"},
             ).status_code,
             403,
         )
+
+    def test_class_update_rejects_an_archived_course(self):
+        class_group = ClassGroup.objects.create(course=self.course, name="归档班级")
+        self.course.status = Course.Status.ARCHIVED
+        self.course.save(update_fields=["status"])
+        self.client.force_login(self.owner)
+
+        self.assertEqual(
+            self.client.get(
+                reverse("courses:class_edit", args=[self.course.pk, class_group.pk])
+            ).status_code,
+            403,
+        )
+        self.assertEqual(self.client.post(self._class_update_url(class_group), {}).status_code, 403)
 
     def test_inactive_class_write_endpoints_keep_archived_course_read_only(self):
         class_group = ClassGroup.objects.create(course=self.course, name="停用班级", is_active=False)
