@@ -1,5 +1,7 @@
 from django.db import transaction
-from ..access import lock_writable_bank_content
+from apps.accounts.course_access import lock_writable_course
+
+from ..access import lock_question_bank, lock_writable_bank_content
 from .import_parsing import ParsedKCMapping, ParsedQuestion
 from ..models import Concept, Question, QuestionConcept, QuestionOption
 
@@ -67,6 +69,9 @@ def copy_shared_bank(source_bank, target_course, actor=None):
     if actor is None:
         actor = target_course
         target_course = None
+    if target_course is not None:
+        target_course = lock_writable_course(target_course)
+    source_bank = lock_question_bank(source_bank)
     if source_bank.visibility != QuestionBank.Visibility.SHARED:
         raise ValueError("只能复制已共享题库")
     target = QuestionBank.objects.create(

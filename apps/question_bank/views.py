@@ -8,7 +8,7 @@ from django.db.models import Q
 from django.views.decorators.http import require_GET, require_POST
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.accounts.permissions import role_required
-from apps.accounts.course_access import accessible_courses
+from apps.accounts.course_access import accessible_courses, lock_writable_course
 from apps.audit.services import log_action
 from .access import lock_question_bank, lock_writable_bank_content, require_writable_bank_content
 from .audit import bank_metadata_audit_details
@@ -67,7 +67,8 @@ def dashboard(request):
 @role_required("teacher", "admin")
 def bank_list(request):
     courses = accessible_courses(request.user).filter(status="active")
-    if request.method == "GET" and courses.exists():
+    course_ids = list(courses.values_list("pk", flat=True)[:2])
+    if request.method == "GET" and course_ids:
         return redirect("courses:list")
     banks = QuestionBank.objects.filter(owner=request.user).annotate(question_count=Count("questions"))
     shared_banks = QuestionBank.objects.filter(visibility=QuestionBank.Visibility.SHARED).exclude(owner=request.user)
@@ -75,13 +76,15 @@ def bank_list(request):
         form = QuestionBankForm(request.POST)
         if form.is_valid():
             bank = form.save(commit=False)
-            if courses.count() == 1:
-                bank.course = courses.get()
-                bank.created_by = request.user
-            elif courses.count() > 1:
+            if len(course_ids) > 1:
                 messages.error(request, "请先进入目标课程，再创建题库。")
                 return redirect("courses:list")
-            bank.owner = request.user; bank.save()
+            with transaction.atomic():
+                if course_ids:
+                    bank.course = lock_writable_course(course_ids[0])
+                    bank.created_by = request.user
+                bank.owner = request.user
+                bank.save()
             messages.success(request, "题库已创建")
             if bank.course_id:
                 return redirect("courses:bank_detail", bank.course_id, bank.pk)
@@ -219,12 +222,14 @@ def copy_bank(request, pk):
     source = get_object_or_404(QuestionBank, pk=pk, visibility=QuestionBank.Visibility.SHARED)
     if request.method == "POST":
         targets = accessible_courses(request.user).filter(status="active")
-        if targets.count() > 1:
+        target_ids = list(targets.values_list("pk", flat=True)[:2])
+        if len(target_ids) > 1:
             messages.error(request, "请先进入目标课程，再复制共享题库。")
             return redirect("courses:list")
-        target = targets.first()
-        bank = copy_shared_bank(source, target or request.user, request.user if target else None)
-        log_action(request, "question_bank.copy", bank, {"source_bank_id": source.pk})
+        with transaction.atomic():
+            target = lock_writable_course(target_ids[0]) if target_ids else None
+            bank = copy_shared_bank(source, target or request.user, request.user if target else None)
+            log_action(request, "question_bank.copy", bank, {"source_bank_id": source.pk})
         messages.success(request, "共享题库已复制为你的私有副本")
         if bank.course_id:
             return redirect("courses:bank_detail", bank.course_id, bank.pk)

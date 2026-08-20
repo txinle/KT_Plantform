@@ -2,7 +2,7 @@ import re
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -13,7 +13,92 @@ from apps.experiments.models import Experiment, ExperimentStudent
 from apps.experiments.services import assign_students, publish_experiment, sync_experiment_questions
 
 from .models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
+from .forms import QuestionBankForm
 from .services.import_service import copy_shared_bank
+
+
+class ArchivedCourseBankCreationRaceTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="archived-course-bank-create-teacher",
+            role=User.Role.TEACHER,
+        )
+        self.course = Course.objects.create(
+            name="待归档目标课程",
+            code="BANK-RACE",
+            term="2026 秋",
+            owner=self.teacher,
+        )
+        self.source = QuestionBank.objects.create(
+            owner=self.teacher,
+            name="共享复制源",
+            visibility=QuestionBank.Visibility.SHARED,
+        )
+        Question.objects.create(
+            bank=self.source,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="不应复制的源题",
+            correct_answer="答案",
+        )
+        self.client.force_login(self.teacher)
+
+    def bank_payload(self, name):
+        return {
+            "name": name,
+            "description": "",
+            "visibility": QuestionBank.Visibility.PRIVATE,
+        }
+
+    def assert_no_target_copy(self, before_question_count):
+        self.assertFalse(QuestionBank.objects.filter(course=self.course).exists())
+        self.assertEqual(Question.objects.count(), before_question_count)
+
+    def test_course_bank_create_rejects_a_stale_course_archived_before_save(self):
+        stale_course = Course.objects.get(pk=self.course.pk)
+        Course.objects.filter(pk=self.course.pk).update(status=Course.Status.ARCHIVED)
+        before_question_count = Question.objects.count()
+
+        with patch(
+            "apps.question_bank.course_views.get_accessible_course",
+            return_value=stale_course,
+        ):
+            response = self.client.post(
+                reverse("courses:banks", args=[self.course.pk]),
+                self.bank_payload("不应创建的课程题库"),
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assert_no_target_copy(before_question_count)
+
+    def test_legacy_bank_create_rejects_a_course_archived_after_target_selection(self):
+        original_is_valid = QuestionBankForm.is_valid
+        before_question_count = Question.objects.count()
+
+        def archive_after_validation(form):
+            is_valid = original_is_valid(form)
+            if is_valid:
+                Course.objects.filter(pk=self.course.pk).update(status=Course.Status.ARCHIVED)
+            return is_valid
+
+        with patch.object(QuestionBankForm, "is_valid", new=archive_after_validation):
+            response = self.client.post(
+                reverse("question_bank:bank_list"),
+                self.bank_payload("不应创建的旧版课程题库"),
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assert_no_target_copy(before_question_count)
+
+    def test_copy_service_rejects_a_stale_archived_target_course_without_creating_content(self):
+        stale_course = Course.objects.get(pk=self.course.pk)
+        Course.objects.filter(pk=self.course.pk).update(status=Course.Status.ARCHIVED)
+        before_question_count = Question.objects.count()
+
+        with self.assertRaises(PermissionDenied):
+            copy_shared_bank(self.source, stale_course, self.teacher)
+
+        self.assert_no_target_copy(before_question_count)
 
 
 class CourseQuestionBankScopeTests(TestCase):

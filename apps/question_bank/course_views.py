@@ -10,7 +10,11 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
-from apps.accounts.course_access import get_accessible_course, require_writable_course
+from apps.accounts.course_access import (
+    get_accessible_course,
+    lock_writable_course,
+    require_writable_course,
+)
 from apps.accounts.models import User
 from apps.accounts.permissions import role_required
 from apps.audit.services import log_action
@@ -50,11 +54,13 @@ def bank_list(request, course_pk):
         require_writable_course(course)
         form = QuestionBankForm(request.POST)
         if form.is_valid():
-            bank = form.save(commit=False)
-            bank.course = course
-            bank.created_by = request.user
-            bank.save()
-            log_action(request, "question_bank.create", bank, {"course_id": course.pk})
+            with transaction.atomic():
+                course = lock_writable_course(course)
+                bank = form.save(commit=False)
+                bank.course = course
+                bank.created_by = request.user
+                bank.save()
+                log_action(request, "question_bank.create", bank, {"course_id": course.pk})
             messages.success(request, "题库已创建。")
             return redirect("courses:bank_detail", course.pk, bank.pk)
     else:
@@ -427,12 +433,14 @@ def copy_bank(request, course_pk, source_pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     source = get_object_or_404(QuestionBank, pk=source_pk, visibility=QuestionBank.Visibility.SHARED)
-    bank = copy_shared_bank(source, course, request.user)
-    log_action(
-        request,
-        "question_bank.copy",
-        bank,
-        {"source_bank_id": source.pk, "course_id": course.pk},
-    )
+    with transaction.atomic():
+        course = lock_writable_course(course)
+        bank = copy_shared_bank(source, course, request.user)
+        log_action(
+            request,
+            "question_bank.copy",
+            bank,
+            {"source_bank_id": source.pk, "course_id": course.pk},
+        )
     messages.success(request, "共享题库已复制为本课程的独立副本。")
     return redirect("courses:bank_detail", course.pk, bank.pk)
