@@ -1,11 +1,18 @@
 from django.contrib import messages
+from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_POST
 
 from apps.audit.services import log_action
 
-from .course_access import accessible_courses, get_accessible_course, require_course_owner, require_writable_course
+from .course_access import (
+    accessible_courses,
+    get_accessible_course,
+    lock_course,
+    require_course_owner,
+    require_writable_course,
+)
 from .forms import CourseForm, CourseSettingsForm
 from .models import Course, User
 from .permissions import role_required
@@ -120,9 +127,12 @@ def course_settings(request, course_pk):
 def course_archive(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
     require_course_owner(course, request.user)
-    if course.status != Course.Status.ARCHIVED:
-        course.status = Course.Status.ARCHIVED
-        course.save(update_fields=["status", "updated_at"])
-        log_action(request, "course.archive", course)
-        messages.success(request, "课程已归档并切换为只读。")
+    with transaction.atomic():
+        course = lock_course(course)
+        require_course_owner(course, request.user)
+        if course.status != Course.Status.ARCHIVED:
+            course.status = Course.Status.ARCHIVED
+            course.save(update_fields=["status", "updated_at"])
+            log_action(request, "course.archive", course)
+            messages.success(request, "课程已归档并切换为只读。")
     return redirect("courses:detail", course.pk)

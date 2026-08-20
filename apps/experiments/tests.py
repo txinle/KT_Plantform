@@ -236,6 +236,162 @@ class ExperimentFormArchivedBankRaceTests(TestCase):
         self.assertEqual(self.legacy_experiment.question_bank_id, self.legacy_bank.pk)
 
 
+class ExperimentFormPublishedRaceTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="experiment-publish-race-teacher",
+            role=User.Role.TEACHER,
+        )
+        self.student = User.objects.create_user(
+            username="EXPERIMENT-PUBLISH-RACE-STUDENT",
+            student_number="EXPERIMENT-PUBLISH-RACE-STUDENT",
+            role=User.Role.STUDENT,
+        )
+        self.course = Course.objects.create(
+            owner=self.teacher,
+            name="发布竞争课程",
+            code="PUB-RACE",
+            term="2026 秋",
+        )
+        self.course_bank = QuestionBank.objects.create(
+            owner=self.teacher,
+            course=self.course,
+            name="课程发布题库",
+        )
+        self.legacy_bank = QuestionBank.objects.create(
+            owner=self.teacher,
+            name="旧版发布题库",
+        )
+        self.course_question = Question.objects.create(
+            bank=self.course_bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="课程发布题目",
+            correct_answer="课程答案",
+        )
+        self.legacy_question = Question.objects.create(
+            bank=self.legacy_bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="旧版发布题目",
+            correct_answer="旧版答案",
+        )
+        course_concept = Concept.objects.create(course=self.course, name="课程发布 KC")
+        legacy_concept = Concept.objects.create(
+            owner=self.teacher,
+            scope=Concept.Scope.PRIVATE,
+            name="旧版发布 KC",
+            normalized_name="旧版发布 kc",
+        )
+        QuestionConcept.objects.create(
+            question=self.course_question,
+            concept=course_concept,
+            is_primary=True,
+        )
+        QuestionConcept.objects.create(
+            question=self.legacy_question,
+            concept=legacy_concept,
+            is_primary=True,
+        )
+        self.course_experiment = Experiment.objects.create(
+            owner=self.teacher,
+            created_by=self.teacher,
+            course=self.course,
+            question_bank=self.course_bank,
+            name="课程发布草稿",
+        )
+        self.legacy_experiment = Experiment.objects.create(
+            owner=self.teacher,
+            question_bank=self.legacy_bank,
+            name="旧版发布草稿",
+        )
+        for experiment, question in (
+            (self.course_experiment, self.course_question),
+            (self.legacy_experiment, self.legacy_question),
+        ):
+            ExperimentQuestion.objects.create(
+                experiment=experiment,
+                question=question,
+                display_order=1,
+            )
+            ExperimentStudent.objects.create(experiment=experiment, student=self.student)
+        self.client.force_login(self.teacher)
+
+    def payload(self, bank, name):
+        return {
+            "name": name,
+            "description": "",
+            "question_bank": bank.pk,
+            "ordering_mode": Experiment.Ordering.FIXED,
+            "feedback_mode": Experiment.Feedback.NONE,
+            "time_mode": Experiment.TimeMode.NONE,
+            "total_time_limit_minutes": "",
+            "per_question_time_limit_seconds": "",
+            "resume_mode": Experiment.ResumeMode.RESUMABLE,
+        }
+
+    def assert_published_experiment_is_unchanged(self, response, experiment, original_name):
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "实验发布后不能修改配置")
+        experiment.refresh_from_db()
+        self.assertEqual(experiment.status, Experiment.Status.PUBLISHED)
+        self.assertEqual(experiment.name, original_name)
+        self.assertEqual(ExperimentVersion.objects.filter(experiment=experiment).count(), 1)
+        self.assertEqual(
+            QuestionSnapshot.objects.filter(version__experiment=experiment).count(),
+            1,
+        )
+
+    def test_course_edit_rejects_a_stale_draft_after_it_is_published(self):
+        from . import course_views
+
+        original_loader = course_views._experiment
+
+        def load_then_publish(course, pk):
+            stale_experiment = original_loader(course, pk)
+            publish_experiment(stale_experiment, self.teacher)
+            return stale_experiment
+
+        response = None
+        with patch("apps.experiments.course_views._experiment", side_effect=load_then_publish):
+            response = self.client.post(
+                reverse(
+                    "courses:experiment_edit",
+                    args=[self.course.pk, self.course_experiment.pk],
+                ),
+                self.payload(self.course_bank, "不应覆盖已发布课程实验"),
+            )
+
+        self.assert_published_experiment_is_unchanged(
+            response,
+            self.course_experiment,
+            "课程发布草稿",
+        )
+
+    def test_legacy_edit_rejects_a_stale_draft_after_it_is_published(self):
+        from . import views
+
+        original_loader = views._owned
+
+        def load_then_publish(request, pk):
+            stale_experiment = original_loader(request, pk)
+            publish_experiment(stale_experiment, self.teacher)
+            return stale_experiment
+
+        response = None
+        with patch("apps.experiments.views._owned", side_effect=load_then_publish):
+            response = self.client.post(
+                reverse("experiments:edit", args=[self.legacy_experiment.pk]),
+                self.payload(self.legacy_bank, "不应覆盖已发布旧版实验"),
+            )
+
+        self.assert_published_experiment_is_unchanged(
+            response,
+            self.legacy_experiment,
+            "旧版发布草稿",
+        )
+
+
 class LegacyExperimentInactiveClassAssignmentTests(TestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(

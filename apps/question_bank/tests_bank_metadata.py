@@ -1,8 +1,12 @@
+from unittest.mock import patch
+
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import transaction
 from django.test import Client, TestCase
 from django.urls import reverse
 
+from apps.accounts.course_access import lock_writable_course
 from apps.accounts.models import Course, CourseTeacher, User
 from apps.audit.models import AuditLog
 
@@ -179,6 +183,31 @@ class CourseBankMetadataEditTests(TestCase):
         self.bank.refresh_from_db()
         self.assertEqual(self.bank.name, "原始题库名称")
         self.assertEqual(self.bank.visibility, QuestionBank.Visibility.ARCHIVED)
+
+    def test_stale_active_course_cannot_update_bank_metadata_after_archive(self):
+        self.client.force_login(self.owner)
+        stale_course = Course.objects.get(pk=self.course.pk)
+        Course.objects.filter(pk=self.course.pk).update(status=Course.Status.ARCHIVED)
+
+        with patch(
+            "apps.question_bank.course_views.get_accessible_course",
+            return_value=stale_course,
+        ):
+            response = self.client.post(self.update_url, self.metadata_payload())
+
+        self.assertEqual(response.status_code, 403)
+        self.bank.refresh_from_db()
+        self.assertEqual(self.bank.name, "原始题库名称")
+        self.assertEqual(self.bank.description, "原始题库说明")
+        self.assertEqual(self.bank.visibility, QuestionBank.Visibility.ARCHIVED)
+
+    def test_course_lock_rechecks_a_stale_active_course(self):
+        stale_course = Course.objects.get(pk=self.course.pk)
+        Course.objects.filter(pk=self.course.pk).update(status=Course.Status.ARCHIVED)
+
+        with transaction.atomic():
+            with self.assertRaises(PermissionDenied):
+                lock_writable_course(stale_course)
 
     def test_visibility_shortcut_remains_post_only(self):
         self.client.force_login(self.owner)

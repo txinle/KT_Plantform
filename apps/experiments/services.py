@@ -13,11 +13,17 @@ from .models import Experiment, ExperimentQuestion, ExperimentStudent, Experimen
 ARCHIVED_EXPERIMENT_BANK_MESSAGE = "题库已归档，不能同步或发布实验。"
 
 
-def _lock_experiment_question_bank(experiment):
-    bank = lock_question_bank(experiment.question_bank_id)
+def lock_experiment_question_bank(bank_or_pk, course=None):
+    bank = lock_question_bank(bank_or_pk)
     if bank.visibility == QuestionBank.Visibility.ARCHIVED:
         raise ValidationError(ARCHIVED_EXPERIMENT_BANK_MESSAGE)
+    if course is not None and bank.course_id != course.pk:
+        raise ValidationError("实验与题库必须属于同一课程")
     return bank
+
+
+def _lock_experiment_question_bank(experiment):
+    return lock_experiment_question_bank(experiment.question_bank_id, experiment.course)
 
 
 def validate_for_publish(experiment, question_bank=None):

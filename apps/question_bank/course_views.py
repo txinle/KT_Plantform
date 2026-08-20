@@ -15,7 +15,7 @@ from apps.accounts.models import User
 from apps.accounts.permissions import role_required
 from apps.audit.services import log_action
 
-from .access import lock_question_bank, lock_writable_bank_content, require_writable_bank_content
+from .access import lock_writable_course_bank, require_writable_bank_content
 from .audit import bank_metadata_audit_details
 from .forms import CourseConceptForm, QuestionBankForm, QuestionBankVisibilityForm, QuestionEditForm, UploadForm
 from .models import Concept, QuestionBank, QuestionConcept
@@ -155,10 +155,9 @@ def bank_edit(request, course_pk, pk):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def bank_update(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
-    require_writable_course(course)
     bank = _bank(course, pk)
     with transaction.atomic():
-        bank = lock_question_bank(bank)
+        course, bank = lock_writable_course_bank(course, bank)
         _require_bank_metadata_editor(request, course, bank)
         form = QuestionBankForm(request.POST, instance=bank)
         if form.is_valid():
@@ -263,10 +262,9 @@ def concept_search(request, course_pk):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def bank_visibility_update(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
-    require_writable_course(course)
     bank = _bank(course, pk)
     with transaction.atomic():
-        bank = lock_question_bank(bank)
+        course, bank = lock_writable_course_bank(course, bank)
         _require_bank_metadata_editor(request, course, bank)
         form = QuestionBankVisibilityForm(request.POST, instance=bank)
         if form.is_valid():
@@ -289,9 +287,8 @@ def question_edit(request, course_pk, bank_pk, question_pk):
     course = get_accessible_course(request.user, course_pk)
     bank = _bank(course, bank_pk)
     if request.method == "POST":
-        require_writable_course(course)
         with transaction.atomic():
-            bank = lock_writable_bank_content(bank)
+            course, bank = lock_writable_course_bank(course, bank, content=True)
             question = get_object_or_404(bank.questions, pk=question_pk)
             form = QuestionEditForm(request.POST, instance=question, course=course)
             if form.is_valid():
@@ -334,9 +331,11 @@ def question_import(request, course_pk, pk):
             if not parsed:
                 messages.error(request, "导入预览已失效，请重新上传文件。")
             else:
-                import_questions(bank, parsed)
+                with transaction.atomic():
+                    course, bank = lock_writable_course_bank(course, bank, content=True)
+                    import_questions(bank, parsed)
+                    log_action(request, "question.import", bank, {"course_id": course.pk, "count": len(parsed)})
                 request.session.pop(session_key, None)
-                log_action(request, "question.import", bank, {"course_id": course.pk, "count": len(parsed)})
                 messages.success(request, f"已导入 {len(parsed)} 道题。")
                 return redirect("courses:bank_detail", course.pk, bank.pk)
         else:
@@ -386,9 +385,11 @@ def kc_import(request, course_pk, pk):
             if not mappings:
                 messages.error(request, "导入预览已失效，请重新上传文件。")
             else:
-                import_kc_mappings(bank, request.user, mappings)
+                with transaction.atomic():
+                    course, bank = lock_writable_course_bank(course, bank, content=True)
+                    import_kc_mappings(bank, request.user, mappings)
+                    log_action(request, "kc.import", bank, {"course_id": course.pk, "count": len(mappings)})
                 request.session.pop(session_key, None)
-                log_action(request, "kc.import", bank, {"course_id": course.pk, "count": len(mappings)})
                 messages.success(request, f"已更新 {len(mappings)} 道题的 KC 映射。")
                 return redirect("courses:bank_detail", course.pk, bank.pk)
         else:

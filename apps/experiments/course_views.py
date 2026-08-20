@@ -4,7 +4,11 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from apps.accounts.course_access import get_accessible_course, require_writable_course
+from apps.accounts.course_access import (
+    get_accessible_course,
+    lock_writable_course,
+    require_writable_course,
+)
 from apps.accounts.models import User
 from apps.accounts.permissions import role_required
 from apps.audit.services import log_action
@@ -13,7 +17,12 @@ from apps.assessment.models import ExperimentSession
 
 from .forms import ExperimentForm, StudentAssignmentForm
 from .models import Experiment
-from .services import assign_students, publish_experiment, sync_experiment_questions
+from .services import (
+    assign_students,
+    lock_experiment_question_bank,
+    publish_experiment,
+    sync_experiment_questions,
+)
 
 
 def _experiment(course, pk):
@@ -39,7 +48,13 @@ def experiment_create(request, course_pk):
     if request.method == "POST" and form.is_valid():
         try:
             with transaction.atomic():
+                course = lock_writable_course(course)
+                question_bank = lock_experiment_question_bank(
+                    form.cleaned_data["question_bank"],
+                    course,
+                )
                 experiment = form.save(commit=False)
+                experiment.question_bank = question_bank
                 experiment.course = course
                 experiment.created_by = request.user
                 experiment.full_clean()
@@ -89,22 +104,41 @@ def experiment_edit(request, course_pk, pk):
         return redirect("courses:experiment_detail", course.pk, experiment.pk)
     if request.method == "POST":
         require_writable_course(course)
-    original_bank_id = experiment.question_bank_id
     form = ExperimentForm(request.POST or None, instance=experiment, owner=request.user, course=course)
     if request.method == "POST" and form.is_valid():
+        saved = False
         try:
             with transaction.atomic():
-                experiment = form.save(commit=False)
-                experiment.full_clean()
-                experiment.save()
-                if experiment.question_bank_id != original_bank_id:
-                    sync_experiment_questions(experiment)
-                log_action(request, "experiment.update", experiment, {"course_id": course.pk})
+                course = lock_writable_course(course)
+                experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
+                if experiment.status != Experiment.Status.DRAFT:
+                    raise ValidationError("实验发布后不能修改配置。")
+                original_bank_id = experiment.question_bank_id
+                question_bank = lock_experiment_question_bank(
+                    form.cleaned_data["question_bank"],
+                    course,
+                )
+                form = ExperimentForm(
+                    request.POST,
+                    instance=experiment,
+                    owner=request.user,
+                    course=course,
+                )
+                if form.is_valid():
+                    experiment = form.save(commit=False)
+                    experiment.question_bank = question_bank
+                    experiment.full_clean()
+                    experiment.save()
+                    if experiment.question_bank_id != original_bank_id:
+                        sync_experiment_questions(experiment)
+                    log_action(request, "experiment.update", experiment, {"course_id": course.pk})
+                    saved = True
         except ValidationError as exc:
             form.add_error("question_bank", exc)
         else:
-            messages.success(request, "实验配置已保存。")
-            return redirect("courses:experiment_detail", course.pk, experiment.pk)
+            if saved:
+                messages.success(request, "实验配置已保存。")
+                return redirect("courses:experiment_detail", course.pk, experiment.pk)
     return render(
         request,
         "teacher/course_experiment_form.html",

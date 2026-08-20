@@ -28,3 +28,12 @@ def require_writable_course(course):
     if course.status != Course.Status.ACTIVE:
         raise PermissionDenied
     return course
+
+
+def lock_course(course_or_pk):
+    course_pk = getattr(course_or_pk, "pk", course_or_pk)
+    return Course.objects.select_for_update().get(pk=course_pk)
+
+
+def lock_writable_course(course_or_pk):
+    return require_writable_course(lock_course(course_or_pk))
