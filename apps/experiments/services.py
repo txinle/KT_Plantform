@@ -5,17 +5,169 @@ import secrets
 from collections import defaultdict, deque
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from apps.accounts.course_access import lock_course
+from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.accounts.class_lifecycle import lock_active_class_groups
 from apps.question_bank.access import lock_question_bank
 from apps.question_bank.models import Question, QuestionBank
 from apps.question_bank.services.numeric import normalize_finite_decimal
 from apps.question_bank.services.scoring import normalize_true_false_answer
-from .models import Experiment, ExperimentQuestion, ExperimentStudent, ExperimentVersion, QuestionSnapshot
+from .models import (
+    Experiment,
+    ExperimentParticipantClass,
+    ExperimentParticipantOverride,
+    ExperimentQuestion,
+    ExperimentStudent,
+    ExperimentVersion,
+    QuestionSnapshot,
+)
 
 
 ARCHIVED_EXPERIMENT_BANK_MESSAGE = "题库已归档，不能同步或发布实验。"
 SAMPLING_ALGORITHM_VERSION = "v1"
 LEGACY_SAMPLING_ALGORITHM_VERSION = "legacy-v0"
+
+
+def _participant_ids(values, label):
+    ids = set()
+    for value in values or []:
+        value = getattr(value, "pk", value)
+        if isinstance(value, bool):
+            raise ValidationError(f"{label}包含无效对象。")
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            raise ValidationError(f"{label}包含无效对象。")
+        if value <= 0:
+            raise ValidationError(f"{label}包含无效对象。")
+        ids.add(value)
+    return sorted(ids)
+
+
+def _lock_participant_course(experiment):
+    if experiment.course_id is None:
+        raise ValidationError("参与规则仅适用于课程实验。")
+    course = lock_course(experiment.course_id)
+    if course.status != Course.Status.ACTIVE:
+        raise ValidationError("课程已归档，不能修改实验参与规则。")
+    return course
+
+
+def _locked_requested_classes(course, class_ids):
+    class_groups = list(
+        ClassGroup.objects.select_for_update()
+        .filter(pk__in=class_ids)
+        .order_by("pk")
+    )
+    if len(class_groups) != len(class_ids):
+        raise ValidationError("参与班级已变更，请刷新后重试。")
+    for class_group in class_groups:
+        if class_group.course_id != course.pk:
+            raise ValidationError("参与班级必须属于实验所属课程。")
+        if not class_group.is_active:
+            raise ValidationError("不能选择已停用的班级。")
+    return {class_group.pk: class_group for class_group in class_groups}
+
+
+def _active_enrollments(course, student_ids):
+    return {
+        enrollment.student_id: enrollment
+        for enrollment in CourseEnrollment.objects.select_for_update()
+        .select_related("class_group", "student")
+        .filter(
+            course=course,
+            student_id__in=student_ids,
+            is_active=True,
+            student__role=User.Role.STUDENT,
+            student__is_active=True,
+        )
+        .order_by("pk")
+    }
+
+
+@transaction.atomic
+def save_participant_rules(experiment, classes, includes, excludes):
+    """Atomically save a draft's rules and materialize its current roster preview."""
+
+    class_ids = _participant_ids(classes, "参与班级")
+    include_ids = _participant_ids(includes, "显式纳入学生")
+    exclude_ids = _participant_ids(excludes, "排除学生")
+    if set(include_ids) & set(exclude_ids):
+        raise ValidationError("同一学生不能同时显式纳入和排除。")
+
+    course = _lock_participant_course(experiment)
+    selected_classes = _locked_requested_classes(course, class_ids)
+    experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
+    if experiment.status != Experiment.Status.DRAFT:
+        raise ValidationError("发布后不能修改参与规则。")
+    if experiment.course_id != course.pk:
+        raise ValidationError("实验所属课程已变更，请刷新后重试。")
+
+    requested_student_ids = sorted(set(include_ids) | set(exclude_ids))
+    requested_enrollments = _active_enrollments(course, requested_student_ids)
+    if len(requested_enrollments) != len(requested_student_ids):
+        raise ValidationError("学生必须是当前课程可用班级中的在读学生。")
+    if any(not enrollment.class_group.is_active for enrollment in requested_enrollments.values()):
+        raise ValidationError("学生必须是当前课程可用班级中的在读学生。")
+
+    class_enrollments = list(
+        CourseEnrollment.objects.select_for_update()
+        .select_related("class_group", "student")
+        .filter(
+            course=course,
+            class_group_id__in=class_ids,
+            is_active=True,
+            student__role=User.Role.STUDENT,
+            student__is_active=True,
+        )
+        .order_by("pk")
+    )
+    roster = {
+        enrollment.student_id: enrollment
+        for enrollment in class_enrollments
+        if enrollment.class_group_id in selected_classes
+    }
+    roster.update({student_id: requested_enrollments[student_id] for student_id in include_ids})
+    for student_id in exclude_ids:
+        roster.pop(student_id, None)
+
+    ExperimentParticipantClass.objects.filter(experiment=experiment).delete()
+    ExperimentParticipantOverride.objects.filter(experiment=experiment).delete()
+    ExperimentStudent.objects.filter(experiment=experiment).delete()
+    ExperimentParticipantClass.objects.bulk_create(
+        [
+            ExperimentParticipantClass(experiment=experiment, class_group=class_group)
+            for class_group in selected_classes.values()
+        ]
+    )
+    ExperimentParticipantOverride.objects.bulk_create(
+        [
+            ExperimentParticipantOverride(
+                experiment=experiment,
+                student_id=student_id,
+                mode=ExperimentParticipantOverride.Mode.INCLUDE,
+            )
+            for student_id in include_ids
+        ]
+        + [
+            ExperimentParticipantOverride(
+                experiment=experiment,
+                student_id=student_id,
+                mode=ExperimentParticipantOverride.Mode.EXCLUDE,
+            )
+            for student_id in exclude_ids
+        ]
+    )
+    ExperimentStudent.objects.bulk_create(
+        [
+            ExperimentStudent(
+                experiment=experiment,
+                student_id=student_id,
+                class_snapshot_name=str(enrollment.class_group),
+            )
+            for student_id, enrollment in sorted(roster.items())
+        ]
+    )
 
 
 def _choice_answers(value):

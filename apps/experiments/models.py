@@ -156,6 +156,88 @@ class ExperimentStudent(models.Model):
         ).exists():
             raise ValidationError({"student": "学生必须先加入实验所属课程。"})
 
+class ExperimentParticipantClass(models.Model):
+    """A draft rule that includes every currently active student in one class."""
+
+    experiment = models.ForeignKey(
+        Experiment,
+        on_delete=models.CASCADE,
+        related_name="participant_class_links",
+    )
+    class_group = models.ForeignKey(
+        "accounts.ClassGroup",
+        on_delete=models.PROTECT,
+        related_name="experiment_participant_class_links",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["experiment", "class_group"],
+                name="unique_experiment_participant_class",
+            )
+        ]
+
+    def clean(self):
+        super().clean()
+        if not self.experiment_id or not self.class_group_id:
+            return
+        if self.experiment.course_id is None:
+            raise ValidationError({"experiment": "参与班级仅适用于课程实验。"})
+        if self.class_group.course_id != self.experiment.course_id:
+            raise ValidationError({"class_group": "参与班级必须属于实验所属课程。"})
+        if not self.class_group.is_active:
+            raise ValidationError({"class_group": "不能选择已停用的班级。"})
+
+
+class ExperimentParticipantOverride(models.Model):
+    """An explicit inclusion or exclusion layered over participant classes."""
+
+    class Mode(models.TextChoices):
+        INCLUDE = "include", "显式纳入"
+        EXCLUDE = "exclude", "从班级中排除"
+
+    experiment = models.ForeignKey(
+        Experiment,
+        on_delete=models.CASCADE,
+        related_name="participant_override_links",
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="experiment_participant_override_links",
+    )
+    mode = models.CharField(max_length=12, choices=Mode.choices)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["experiment", "student"],
+                name="unique_experiment_participant_override",
+            ),
+            models.CheckConstraint(
+                condition=Q(mode__in=["include", "exclude"]),
+                name="experiment_participant_override_mode",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if not self.experiment_id or not self.student_id:
+            return
+        if self.experiment.course_id is None:
+            raise ValidationError({"experiment": "参与学生规则仅适用于课程实验。"})
+        from apps.accounts.models import CourseEnrollment
+
+        if not CourseEnrollment.objects.filter(
+            course_id=self.experiment.course_id,
+            student_id=self.student_id,
+            is_active=True,
+            class_group__is_active=True,
+        ).exists():
+            raise ValidationError({"student": "学生必须是当前课程可用班级中的在读学生。"})
+
+
 class ExperimentVersion(models.Model):
     experiment = models.ForeignKey(Experiment, on_delete=models.PROTECT, related_name="versions")
     version_number = models.PositiveIntegerField()
