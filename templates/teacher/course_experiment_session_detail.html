@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:detail' course.pk %}">{{ course.name }}</a></li><li><a href="{% url 'courses:experiment_detail' course.pk experiment.pk %}">{{ experiment.name }}</a></li><li><a href="{% url 'courses:experiment_results' course.pk experiment.pk %}">结果</a></li><li class="breadcrumb-item-current" aria-current="page">学生作答详情</li>{% endblock %}
+{% block title %}学生作答详情 | {{ experiment.name }}{% endblock %}
+{% block content %}
+<header class="page-header">
+  <div class="page-header-copy">
+    <p class="page-kicker mono">v{{ report.version_number }} · {{ report.session_status }}</p>
+    <h1 class="page-title">学生作答详情</h1>
+    <p class="page-subtitle">按该学生实际获分配的题目顺序展示；草稿不等同于正式提交。</p>
+  </div>
+  <div class="page-actions"><a class="btn btn-outline-secondary" href="{% url 'courses:experiment_results' course.pk experiment.pk %}">返回结果</a></div>
+</header>
+
+<section class="card mb-4" aria-labelledby="session-identity-title">
+  <div class="card-body">
+    <h2 class="section-title mb-3" id="session-identity-title">会话身份与状态</h2>
+    <dl class="row mb-0">
+      <dt class="col-sm-3">学生姓名</dt><dd class="col-sm-9">{{ report.student_name }}</dd>
+      <dt class="col-sm-3">学号</dt><dd class="col-sm-9 mono">{{ report.student_number }}</dd>
+      <dt class="col-sm-3">发布时班级</dt><dd class="col-sm-9">{{ report.class_snapshot_name }}</dd>
+      <dt class="col-sm-3">实验版本</dt><dd class="col-sm-9 mono">v{{ report.version_number }}</dd>
+      <dt class="col-sm-3">会话状态</dt><dd class="col-sm-9">{{ report.session_status }}</dd>
+    </dl>
+    <p class="mb-0"><strong>实际题数：{{ report.question_count }}</strong></p>
+  </div>
+</section>
+
+<section aria-labelledby="assigned-questions-title">
+  <div class="section-heading"><h2 class="section-title" id="assigned-questions-title">实际分配题目</h2><span class="text-muted numeric">{{ report.question_count }} 题</span></div>
+  {% for question in report.questions %}
+    <article class="card mb-3" aria-labelledby="session-question-{{ question.assigned_sequence_index }}">
+      <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between gap-2 mb-3">
+          <h3 class="section-title mb-0" id="session-question-{{ question.assigned_sequence_index }}">第 {{ question.assigned_sequence_index }} 题 · <span class="mono">{{ question.stable_code }}</span></h3>
+          <span class="status-badge status-neutral">{{ question.question_type_label }}</span>
+        </div>
+        <section class="mb-3" aria-label="题干"><h4 class="h6">题干</h4><div>{{ question.text|linebreaksbr }}</div></section>
+        <section class="mb-3" aria-label="题目选项"><h4 class="h6">选项</h4>
+          {% if question.options %}<ol class="mb-0">{% for option in question.options %}<li>{{ option.display|linebreaksbr }}</li>{% endfor %}</ol>{% else %}<p class="mb-0 text-muted">无</p>{% endif %}
+        </section>
+        <dl class="row mb-0">
+          <dt class="col-md-3">学生答案</dt><dd class="col-md-9">{{ question.student_answer|linebreaksbr }}</dd>
+          <dt class="col-md-3">标准答案</dt><dd class="col-md-9">{{ question.correct_answer|linebreaksbr }}</dd>
+          <dt class="col-md-3">作答状态</dt><dd class="col-md-9"><strong>{{ question.answer_status }}</strong></dd>
+        </dl>
+      </div>
+    </article>
+  {% empty %}
+    <div class="empty-state"><h3 class="empty-state-title">该会话没有实际分配题目</h3><p>此会话的题目数量为 0，因此没有可展示的作答记录。</p></div>
+  {% endfor %}
+</section>
+{% endblock %}

@@ -9,14 +9,15 @@ from apps.accounts.course_access import (
     lock_writable_course,
     require_writable_course,
 )
-from apps.accounts.models import CourseEnrollment, User
+from apps.accounts.models import Course, CourseEnrollment, User
 from apps.accounts.permissions import role_required
 from apps.audit.services import log_action
 from apps.analytics.export_fields import FIELD_GROUPS
-from apps.assessment.models import ExperimentSession
+from apps.assessment.models import ExperimentSession, StudentQuestionAssignment
 
 from .forms import ExperimentForm, ParticipantRuleForm
 from .models import Experiment
+from .presentation import build_session_report_presentation
 from .services import (
     lock_experiment_question_bank,
     publish_experiment,
@@ -28,6 +29,27 @@ from .services import (
 
 def _experiment(course, pk):
     return get_object_or_404(course.experiments, pk=pk)
+
+
+def _session_report_scope(request, course_pk, experiment_pk, session_pk):
+    """Resolve a personal report without exposing cross-course object existence."""
+
+    courses = Course.objects.all()
+    if not (request.user.is_superuser or request.user.role == User.Role.ADMIN):
+        courses = courses.filter(owner=request.user)
+    course = get_object_or_404(courses, pk=course_pk)
+    experiment = get_object_or_404(Experiment.objects.filter(course=course), pk=experiment_pk)
+    session = get_object_or_404(
+        ExperimentSession.objects.select_related("student", "version__experiment"),
+        pk=session_pk,
+        version__experiment=experiment,
+    )
+    assignments = (
+        StudentQuestionAssignment.objects.filter(session=session)
+        .select_related("snapshot", "attempt")
+        .order_by("assigned_sequence_index")
+    )
+    return course, experiment, session, build_session_report_presentation(session, assignments)
 
 
 def _participant_rule_initial(experiment):
@@ -306,5 +328,26 @@ def experiment_results(request, course_pk, pk):
             "session_status_choices": ExperimentSession.Status.choices,
             "selected_status": selected_status,
             "export_field_groups": FIELD_GROUPS,
+        },
+    )
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def experiment_session_detail(request, course_pk, pk, session_pk):
+    course, experiment, session, report = _session_report_scope(
+        request,
+        course_pk,
+        pk,
+        session_pk,
+    )
+    return render(
+        request,
+        "teacher/course_experiment_session_detail.html",
+        {
+            "course": course,
+            "current_course": course,
+            "experiment": experiment,
+            "session": session,
+            "report": report,
         },
     )
