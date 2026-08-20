@@ -433,14 +433,18 @@ def copy_bank(request, course_pk, source_pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     source = get_object_or_404(QuestionBank, pk=source_pk, visibility=QuestionBank.Visibility.SHARED)
-    with transaction.atomic():
-        course = lock_writable_course(course)
-        bank = copy_shared_bank(source, course, request.user)
-        log_action(
-            request,
-            "question_bank.copy",
-            bank,
-            {"source_bank_id": source.pk, "course_id": course.pk},
-        )
+    try:
+        with transaction.atomic():
+            course = lock_writable_course(course)
+            bank = copy_shared_bank(source, course, request.user)
+            log_action(
+                request,
+                "question_bank.copy",
+                bank,
+                {"source_bank_id": source.pk, "course_id": course.pk},
+            )
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect("courses:banks", course.pk)
     messages.success(request, "共享题库已复制为本课程的独立副本。")
     return redirect("courses:bank_detail", course.pk, bank.pk)

@@ -1,6 +1,7 @@
 import re
 from unittest.mock import patch
 
+from django.contrib.messages import get_messages
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError
@@ -54,6 +55,34 @@ class ArchivedCourseBankCreationRaceTests(TestCase):
         self.assertFalse(QuestionBank.objects.filter(course=self.course).exists())
         self.assertEqual(Question.objects.count(), before_question_count)
 
+    def post_after_archiving_the_loaded_source(self, url, patch_target):
+        from django.shortcuts import get_object_or_404
+
+        def load_then_archive(*args, **kwargs):
+            source = get_object_or_404(*args, **kwargs)
+            if isinstance(source, QuestionBank):
+                QuestionBank.objects.filter(pk=source.pk).update(
+                    visibility=QuestionBank.Visibility.ARCHIVED
+                )
+            return source
+
+        original_raise_request_exception = self.client.raise_request_exception
+        self.client.raise_request_exception = False
+        try:
+            with patch(patch_target, side_effect=load_then_archive):
+                return self.client.post(url)
+        finally:
+            self.client.raise_request_exception = original_raise_request_exception
+
+    def assert_stale_source_copy_is_rejected(self, response, expected_location):
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], expected_location)
+        self.assertEqual(
+            [str(message) for message in get_messages(response.wsgi_request)],
+            ["只能复制已共享题库"],
+        )
+        self.assert_no_target_copy(1)
+
     def test_course_bank_create_rejects_a_stale_course_archived_before_save(self):
         stale_course = Course.objects.get(pk=self.course.pk)
         Course.objects.filter(pk=self.course.pk).update(status=Course.Status.ARCHIVED)
@@ -99,6 +128,28 @@ class ArchivedCourseBankCreationRaceTests(TestCase):
             copy_shared_bank(self.source, stale_course, self.teacher)
 
         self.assert_no_target_copy(before_question_count)
+
+    def test_course_copy_redirects_with_an_error_when_its_loaded_source_is_archived(self):
+        response = self.post_after_archiving_the_loaded_source(
+            reverse("courses:copy_bank", args=[self.course.pk, self.source.pk]),
+            "apps.question_bank.course_views.get_object_or_404",
+        )
+
+        self.assert_stale_source_copy_is_rejected(
+            response,
+            reverse("courses:banks", args=[self.course.pk]),
+        )
+
+    def test_legacy_copy_redirects_with_an_error_when_its_loaded_source_is_archived(self):
+        response = self.post_after_archiving_the_loaded_source(
+            reverse("question_bank:copy_bank", args=[self.source.pk]),
+            "apps.question_bank.views.get_object_or_404",
+        )
+
+        self.assert_stale_source_copy_is_rejected(
+            response,
+            reverse("question_bank:bank_list"),
+        )
 
 
 class CourseQuestionBankScopeTests(TestCase):

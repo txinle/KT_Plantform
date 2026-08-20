@@ -226,10 +226,14 @@ def copy_bank(request, pk):
         if len(target_ids) > 1:
             messages.error(request, "请先进入目标课程，再复制共享题库。")
             return redirect("courses:list")
-        with transaction.atomic():
-            target = lock_writable_course(target_ids[0]) if target_ids else None
-            bank = copy_shared_bank(source, target or request.user, request.user if target else None)
-            log_action(request, "question_bank.copy", bank, {"source_bank_id": source.pk})
+        try:
+            with transaction.atomic():
+                target = lock_writable_course(target_ids[0]) if target_ids else None
+                bank = copy_shared_bank(source, target or request.user, request.user if target else None)
+                log_action(request, "question_bank.copy", bank, {"source_bank_id": source.pk})
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("question_bank:bank_list")
         messages.success(request, "共享题库已复制为你的私有副本")
         if bank.course_id:
             return redirect("courses:bank_detail", bank.course_id, bank.pk)
