@@ -1,6 +1,9 @@
 from django.contrib import admin
 from .models import AuditLog
 
+AuditLog._meta.verbose_name = "审计日志"
+AuditLog._meta.verbose_name_plural = "审计日志"
+
 
 @admin.register(AuditLog)
 class AuditLogAdmin(admin.ModelAdmin):

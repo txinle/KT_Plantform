@@ -1,5 +1,15 @@
 from django.contrib import admin
 from .models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
+QuestionBank._meta.verbose_name = "题库"
+QuestionBank._meta.verbose_name_plural = "题库"
+Question._meta.verbose_name = "题目"
+Question._meta.verbose_name_plural = "题目"
+QuestionOption._meta.verbose_name = "题目选项"
+QuestionOption._meta.verbose_name_plural = "题目选项"
+Concept._meta.verbose_name = "知识点"
+Concept._meta.verbose_name_plural = "知识点"
+QuestionConcept._meta.verbose_name = "题目知识点映射"
+QuestionConcept._meta.verbose_name_plural = "题目知识点映射"
 class OptionInline(admin.TabularInline): model = QuestionOption; extra = 0
 class ConceptInline(admin.TabularInline): model = QuestionConcept; extra = 0
 @admin.register(Question)

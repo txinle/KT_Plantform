@@ -92,12 +92,29 @@ class CourseWorkspaceViewTests(TestCase):
         self.assertEqual(created.status, Course.Status.ARCHIVED)
         self.assertTrue(AuditLog.objects.filter(action="course.archive", object_id=str(created.pk)).exists())
 
-    def test_only_owner_can_manage_course_settings_and_collaborators(self):
+    def test_course_collaborator_can_manage_course_settings_and_collaborators(self):
         settings_url = reverse("courses:settings", args=[self.course.pk])
         self.client.force_login(self.collaborator)
-        self.assertEqual(self.client.get(settings_url).status_code, 403)
+        settings_page = self.client.get(settings_url)
+        self.assertEqual(settings_page.status_code, 200)
+        state_token = settings_page.context["form"].initial["state_token"]
+        collaborator_update = self.client.post(
+            settings_url,
+            {
+                "name": self.course.name,
+                "code": self.course.code,
+                "term": self.course.term,
+                "description": "协作教师更新",
+                "teachers": [self.collaborator.pk],
+                "state_token": state_token,
+            },
+        )
+        self.assertRedirects(collaborator_update, settings_url)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.description, "协作教师更新")
 
         self.client.force_login(self.owner)
+        state_token = self.client.get(settings_url).context["form"].initial["state_token"]
         response = self.client.post(
             settings_url,
             {
@@ -106,6 +123,7 @@ class CourseWorkspaceViewTests(TestCase):
                 "term": self.course.term,
                 "description": "更新说明",
                 "teachers": [self.outsider.pk],
+                "state_token": state_token,
             },
         )
         self.assertRedirects(response, settings_url)

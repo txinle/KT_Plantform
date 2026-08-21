@@ -5,7 +5,7 @@
 <header class="page-header"><div class="page-header-copy"><h1 class="page-title">导入题目文件</h1><p class="page-subtitle">新建题目、选项和答案。KC 关联需在题目导入完成后使用独立入口处理。</p></div></header>
 <ol class="step-list" aria-label="导入进度"><li class="{% if not preview %}active{% endif %}">上传文件</li><li class="{% if preview %}active{% endif %}">校验预览</li><li>确认导入</li></ol>
 <div class="card"><div class="card-body p-md-4">
-  <div class="notice-panel mb-4"><strong>模板列：</strong><code>sequence, question, option_a ... option_f, answer</code>。可选增加 <code>question_type / 题型</code> 与 <code>accepted_answers / 可接受答案</code>；缺少题型列时仍按旧规则从选项和答案推断。填空题和判断题必须显式填写题型，判断答案使用“正确/错误”或 <code>true/false</code>。导入前不会写入数据库。<a class="btn btn-sm btn-outline-primary ms-2" href="{% url 'question_bank:question_import_template' %}">下载题目 CSV 示例</a></div>
+  <div class="notice-panel mb-4"><strong>中文列名与英文别名对照：</strong><code>序号 / sequence</code>、<code>题目 / question</code>、<code>题型 / question_type</code>、<code>选项A-F / option_a-option_f</code>、<code>答案 / answer</code>、<code>可接受答案 / accepted_answers</code>。示例完整覆盖单选、多选、数值、简答、填空、判断六种题型；非选择题不要填写选项，多个可接受答案用中文或英文分号分隔。导入前不会写入数据库。<a class="btn btn-sm btn-outline-primary ms-2" href="{% url 'question_bank:question_import_template' %}">下载题目 CSV 示例</a></div>
   {% include 'components/error_summary.html' with form=form %}
   {% if not preview %}
     <form method="post" enctype="multipart/form-data" novalidate>{% csrf_token %}{% include 'components/form_field.html' with field=form.file %}<button class="btn btn-primary" type="submit">校验并生成预览</button></form>

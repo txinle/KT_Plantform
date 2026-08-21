@@ -36,7 +36,7 @@ def can_edit_bank_metadata(user, course, bank):
     return bool(
         user.is_superuser
         or user.role == User.Role.ADMIN
-        or course.owner_id == user.id
+        or course.can_manage(user)
         or bank.owner_id == user.id
     )
 
@@ -44,7 +44,7 @@ def can_edit_bank_metadata(user, course, bank):
 def _require_bank_metadata_editor(request, course, bank):
     if can_edit_bank_metadata(request.user, course, bank):
         return bank
-    raise PermissionDenied("只有课程负责人或题库所有者可以修改题库元数据。")
+    raise PermissionDenied("只有课程共同管理者或题库所有者可以修改题库元数据。")
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)

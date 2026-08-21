@@ -75,7 +75,7 @@ def navigation_export(request, experiment_id):
 
 @role_required("teacher", "admin")
 def identity_export(request, experiment_id):
-    experiment = _experiment(request, experiment_id)
+    experiment = _identified_experiment(request, experiment_id)
     students = experiment.students.select_related("class_group")
     headers = ["anonymous_student_id", "student_number", "student_name", "class_name"]
     rows = [[_anon(s.id, experiment.id), s.student_number, s.shown_name, str(s.class_group or "")] for s in students]

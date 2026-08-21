@@ -352,6 +352,33 @@ class IdentifiedExportTests(TestCase):
         self.assertNotIn("student_number", navigation_rows[0])
         self.assertNotIn("student_name", navigation_rows[0])
 
+    def test_course_collaborator_cannot_download_legacy_identity_mapping(self):
+        course = Course.objects.create(
+            owner=self.teacher,
+            name="身份映射协作课程",
+            code="IDENTITY-COLLAB",
+            term="2026春",
+        )
+        CourseTeacher.objects.create(course=course, teacher=self.other_teacher)
+        bank = QuestionBank.objects.create(
+            course=course,
+            created_by=self.teacher,
+            name="身份映射题库",
+        )
+        experiment = Experiment.objects.create(
+            course=course,
+            created_by=self.teacher,
+            question_bank=bank,
+            name="身份映射实验",
+        )
+        self.client.force_login(self.other_teacher)
+
+        response = self.client.get(
+            reverse("analytics:identity_export", args=[experiment.pk])
+        )
+
+        self.assertEqual(response.status_code, 404)
+
     def test_legacy_anonymous_csv_urls_headers_and_question_code_remain_exactly_compatible(self):
         kt_url = reverse("analytics:kt_export", args=[self.experiment.pk])
         navigation_url = reverse("analytics:navigation_export", args=[self.experiment.pk])

@@ -1,6 +1,7 @@
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count
+from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_POST
 
@@ -10,10 +11,15 @@ from .course_access import (
     accessible_courses,
     get_accessible_course,
     lock_course,
-    require_course_owner,
+    require_course_manager,
     require_writable_course,
 )
-from .forms import CourseForm, CourseSettingsForm
+from .course_revision import course_revision_value
+from .forms import (
+    CourseForm,
+    CourseSettingsForm,
+    course_settings_state_token_matches,
+)
 from .models import Course, User
 from .permissions import role_required
 
@@ -73,6 +79,14 @@ def course_detail(request, course_pk):
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
+def course_revision(request, course_pk):
+    course = get_accessible_course(request.user, course_pk)
+    response = JsonResponse({"revision": course_revision_value(course)})
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
 def course_data(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
     experiments = course.experiments.annotate(
@@ -89,32 +103,54 @@ def course_data(request, course_pk):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def course_settings(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
-    require_course_owner(course, request.user)
-    if request.method == "POST":
-        require_writable_course(course)
+    require_course_manager(course, request.user)
     form = CourseSettingsForm(request.POST or None, instance=course)
     if request.method == "POST" and form.is_valid():
-        previous_teacher_ids = set(course.teacher_links.values_list("teacher_id", flat=True))
-        course = form.save()
-        teacher_ids = set(form.cleaned_data["teachers"].values_list("pk", flat=True))
-        log_action(
-            request,
-            "course.update",
-            course,
-            {"teacher_ids": sorted(teacher_ids)},
-        )
-        if teacher_ids != previous_teacher_ids:
-            log_action(
-                request,
-                "course.collaborators_update",
-                course,
-                {
-                    "added_teacher_ids": sorted(teacher_ids - previous_teacher_ids),
-                    "removed_teacher_ids": sorted(previous_teacher_ids - teacher_ids),
-                },
-            )
-        messages.success(request, "课程设置已保存。")
-        return redirect("courses:settings", course.pk)
+        saved = False
+        with transaction.atomic():
+            course = lock_course(course)
+            require_course_manager(course, request.user)
+            require_writable_course(course)
+            form = CourseSettingsForm(request.POST, instance=course)
+            if not course_settings_state_token_matches(
+                request.POST.get("state_token", ""), course
+            ):
+                form.add_error(
+                    None, "课程设置已被其他管理者更新，请刷新后重新提交。"
+                )
+            elif form.is_valid():
+                previous_teacher_ids = set(
+                    course.teacher_links.values_list("teacher_id", flat=True)
+                )
+                course = form.save()
+                teacher_ids = set(
+                    form.cleaned_data["teachers"].values_list("pk", flat=True)
+                )
+                log_action(
+                    request,
+                    "course.update",
+                    course,
+                    {"course_id": course.pk, "teacher_ids": sorted(teacher_ids)},
+                )
+                if teacher_ids != previous_teacher_ids:
+                    log_action(
+                        request,
+                        "course.collaborators_update",
+                        course,
+                        {
+                            "course_id": course.pk,
+                            "added_teacher_ids": sorted(
+                                teacher_ids - previous_teacher_ids
+                            ),
+                            "removed_teacher_ids": sorted(
+                                previous_teacher_ids - teacher_ids
+                            ),
+                        },
+                    )
+                saved = True
+        if saved:
+            messages.success(request, "课程设置已保存。")
+            return redirect("courses:settings", course.pk)
     return render(
         request,
         "teacher/course_settings.html",
@@ -126,10 +162,10 @@ def course_settings(request, course_pk):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def course_archive(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
-    require_course_owner(course, request.user)
+    require_course_manager(course, request.user)
     with transaction.atomic():
         course = lock_course(course)
-        require_course_owner(course, request.user)
+        require_course_manager(course, request.user)
         if course.status != Course.Status.ARCHIVED:
             course.status = Course.Status.ARCHIVED
             course.save(update_fields=["status", "updated_at"])

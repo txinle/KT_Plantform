@@ -13,6 +13,9 @@ from .models import Attempt, DraftSaveEvent, ExperimentSession, QuestionVisitEve
 
 @transaction.atomic
 def get_or_create_session(experiment, student):
+    experiment = Experiment.objects.select_for_update().select_related("course").get(
+        pk=experiment.pk
+    )
     if experiment.course_id and experiment.course.status != "active":
         raise ValidationError("课程已归档，不能开始或继续实验")
     if experiment.course_id:
@@ -27,7 +30,12 @@ def get_or_create_session(experiment, student):
     enrollment = ExperimentStudent.objects.filter(experiment=experiment, student=student).first()
     if not enrollment: raise ValidationError("你没有参加该实验的权限")
     if experiment.status != Experiment.Status.PUBLISHED: raise ValidationError("实验尚未开放")
-    version = experiment.versions.order_by("-version_number").first()
+    version = (
+        ExperimentVersion.objects.select_for_update()
+        .filter(experiment=experiment)
+        .order_by("-version_number")
+        .first()
+    )
     sampling_seed, ordering_seed, algorithm_version = derive_session_seeds(version, student.id)
     session, created = ExperimentSession.objects.get_or_create(
         version=version,

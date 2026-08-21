@@ -18,6 +18,6 @@ urlpatterns = [
     path("analytics/", include("apps.analytics.urls")),
 ]
 
-admin.site.site_header = "KT Data Lab 管理"
-admin.site.site_title = "KT Data Lab"
-admin.site.index_title = "科研数据平台管理"
+admin.site.site_header = "KT Data Lab 管理后台"
+admin.site.site_title = "KT Data Lab 管理后台"
+admin.site.index_title = "平台数据管理"

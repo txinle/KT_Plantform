@@ -1,5 +1,7 @@
-sequence,primary_kc,secondary_kcs
-1,Arithmetic,Integer addition
-2,Prime numbers,Integers
-3,Arithmetic,Approximation
-4,Knowledge tracing,
+﻿题目序号,主知识点,次知识点
+1,基础运算,整数加法
+2,质数,整数
+3,基础运算,近似值；小数
+4,知识追踪,学习分析；知识状态
+5,知识追踪,术语
+6,实验设计,随机化；个体差异

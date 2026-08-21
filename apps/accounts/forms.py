@@ -9,6 +9,7 @@ from .models import ClassGroup, Course, CourseTeacher, User
 
 
 CLASS_GROUP_STATE_TOKEN_SALT = "accounts.class_group_state"
+COURSE_SETTINGS_STATE_TOKEN_SALT = "accounts.course_settings_state"
 
 
 def _class_group_state_digest(class_group):
@@ -44,6 +45,44 @@ def class_group_state_token_matches(token, class_group):
     )
 
 
+def _course_settings_state_digest(course):
+    teacher_ids = ",".join(
+        str(value)
+        for value in course.teacher_links.order_by("teacher_id").values_list(
+            "teacher_id", flat=True
+        )
+    )
+    serialized_state = "\x1f".join(
+        [
+            str(course.pk),
+            course.name,
+            course.code,
+            course.term,
+            course.description,
+            course.status,
+            teacher_ids,
+        ]
+    )
+    return hashlib.sha256(serialized_state.encode("utf-8")).hexdigest()
+
+
+def course_settings_state_token(course):
+    return signing.dumps(
+        {"course_id": course.pk, "state_digest": _course_settings_state_digest(course)},
+        salt=COURSE_SETTINGS_STATE_TOKEN_SALT,
+    )
+
+
+def course_settings_state_token_matches(token, course):
+    try:
+        payload = signing.loads(token, salt=COURSE_SETTINGS_STATE_TOKEN_SALT)
+    except signing.BadSignature:
+        return False
+    return payload.get("course_id") == course.pk and constant_time_compare(
+        payload.get("state_digest", ""), _course_settings_state_digest(course)
+    )
+
+
 class CourseForm(forms.ModelForm):
     class Meta:
         model = Course
@@ -52,6 +91,11 @@ class CourseForm(forms.ModelForm):
 
 
 class CourseSettingsForm(CourseForm):
+    state_token = forms.CharField(
+        required=True,
+        widget=forms.HiddenInput,
+        error_messages={"required": "页面状态已过期，请刷新后重试。"},
+    )
     teachers = forms.ModelMultipleChoiceField(
         label="协作教师",
         queryset=User.objects.none(),
@@ -70,6 +114,7 @@ class CourseSettingsForm(CourseForm):
                 "teacher_id",
                 flat=True,
             )
+            self.initial["state_token"] = course_settings_state_token(self.instance)
 
     @transaction.atomic
     def save(self, commit=True):

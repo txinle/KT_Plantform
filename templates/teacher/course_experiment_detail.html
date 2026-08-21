@@ -4,7 +4,7 @@
 {% block content %}
 <header class="page-header">
   <div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">{{ experiment.name }}</h1><p class="page-subtitle">{{ experiment.description|default:'未填写实验说明' }}</p><div class="d-flex flex-wrap gap-2 mt-3"><span class="status-badge {% if experiment.status == 'published' %}status-success{% elif experiment.status == 'draft' %}status-warning{% elif experiment.status == 'closed' %}status-danger{% else %}status-neutral{% endif %}">{{ experiment.get_status_display }}</span><span class="cell-meta numeric">更新：{{ experiment.updated_at|date:'Y-m-d H:i' }}</span></div></div>
-  <div class="page-actions"><a class="btn btn-outline-primary" href="{% url 'courses:experiment_results' course.pk experiment.pk %}">结果与导出</a>{% if experiment.status == 'draft' and course.status == 'active' %}<a class="btn btn-secondary" href="{% url 'courses:experiment_edit' course.pk experiment.pk %}">编辑配置</a>{% endif %}</div>
+  <div class="page-actions"><a class="btn btn-outline-primary" href="{% url 'courses:experiment_results' course.pk experiment.pk %}">结果与导出</a>{% if experiment.status == 'draft' and course.status == 'active' %}<a class="btn btn-secondary" href="{% url 'courses:experiment_edit' course.pk experiment.pk %}">编辑配置</a>{% endif %}{% if course.status == 'active' %}<form method="post" action="{% url 'courses:experiment_delete' course.pk experiment.pk %}">{% csrf_token %}<input type="hidden" name="confirmation" value="delete"><button class="btn btn-outline-danger" type="button" data-bs-toggle="modal" data-bs-target="#delete-experiment-dialog" data-confirm-form="#delete-experiment-dialog">删除实验</button></form>{% endif %}</div>
 </header>
 
 <div class="lifecycle mb-4" aria-label="实验生命周期"><span class="lifecycle-step complete">配置草稿</span><span class="lifecycle-step {% if experiment.status != 'draft' %}complete{% else %}current{% endif %}">发布快照</span><span class="lifecycle-step {% if experiment.status == 'closed' or experiment.status == 'archived' %}complete{% endif %}">结束采集</span></div>
@@ -99,4 +99,5 @@
   </div>
 </div>
 {% if experiment.status == 'draft' and course.status == 'active' %}{% include 'components/confirm_dialog.html' with dialog_id='publish-confirm-dialog' dialog_title='确认发布实验' dialog_body='发布后题目、配置和学生分配将锁定为不可变快照，不能继续编辑。' dialog_confirm_label='发布并锁定' dialog_confirm_class='btn-danger' %}{% endif %}
+{% if course.status == 'active' %}{% include 'components/confirm_dialog.html' with dialog_id='delete-experiment-dialog' dialog_title='确认永久删除实验' dialog_body='该操作会永久删除实验、发布版本、学生会话和全部作答记录，且无法恢复。请确认已完成所需数据导出。' dialog_confirm_label='永久删除实验' dialog_confirm_class='btn-danger' %}{% endif %}
 {% endblock %}

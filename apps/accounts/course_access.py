@@ -24,6 +24,12 @@ def require_course_owner(course, user):
     raise PermissionDenied
 
 
+def require_course_manager(course, user):
+    if course.can_manage(user):
+        return course
+    raise PermissionDenied
+
+
 def require_writable_course(course):
     if course.status != Course.Status.ACTIVE:
         raise PermissionDenied

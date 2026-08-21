@@ -107,20 +107,20 @@ class CourseBankMetadataEditTests(TestCase):
         self.bank.refresh_from_db()
         self.assertEqual(self.bank.name, "原始题库名称")
 
-    def test_metadata_edit_is_limited_to_course_owner_or_bank_owner(self):
+    def test_course_collaborator_can_edit_bank_metadata(self):
         self.client.force_login(self.collaborator)
 
-        denied = self.client.post(self.update_url, self.metadata_payload())
-        quick_denied = self.client.post(
+        allowed = self.client.post(self.update_url, self.metadata_payload())
+        quick_allowed = self.client.post(
             self.visibility_url,
             {"visibility": QuestionBank.Visibility.SHARED},
         )
 
-        self.assertEqual(denied.status_code, 403)
-        self.assertEqual(quick_denied.status_code, 403)
+        self.assertEqual(allowed.status_code, 302)
+        self.assertEqual(quick_allowed.status_code, 302)
         self.bank.refresh_from_db()
-        self.assertEqual(self.bank.visibility, QuestionBank.Visibility.ARCHIVED)
-        self.assertEqual(self.bank.name, "原始题库名称")
+        self.assertEqual(self.bank.visibility, QuestionBank.Visibility.SHARED)
+        self.assertEqual(self.bank.name, "修订后题库名称")
 
         self.client.force_login(self.bank_owner)
         allowed = self.client.post(self.update_url, self.metadata_payload())
@@ -139,7 +139,7 @@ class CourseBankMetadataEditTests(TestCase):
             (self.bank_owner, True),
             (self.admin, True),
             (self.superuser, True),
-            (self.collaborator, False),
+            (self.collaborator, True),
         )
 
         for user, can_edit in cases:

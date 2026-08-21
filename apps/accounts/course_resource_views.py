@@ -1,8 +1,9 @@
 from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
 from django.db.models import Q
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
@@ -11,7 +12,12 @@ from urllib.parse import urlencode
 
 from apps.audit.services import log_action
 
-from .course_access import accessible_courses, get_accessible_course, require_writable_course
+from .course_access import (
+    accessible_courses,
+    get_accessible_course,
+    lock_writable_course,
+    require_writable_course,
+)
 from .enrollment_services import (
     copy_class_enrollments,
     enroll_parsed_students,
@@ -135,6 +141,43 @@ def class_rename(request, course_pk, class_pk):
     if query:
         target = f"{target}?{urlencode({'q': query})}"
     return redirect(target)
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_delete(request, course_pk, class_pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_writable_course(course)
+    if request.POST.get("confirmation") != "delete":
+        return HttpResponseBadRequest("请在二次确认后再删除班级。")
+    with transaction.atomic():
+        course = lock_writable_course(course)
+        class_group = get_object_or_404(
+            ClassGroup.objects.select_for_update(),
+            pk=class_pk,
+            course_id=course.pk,
+        )
+        if (
+            class_group.enrollments.exists()
+            or class_group.students.exists()
+            or class_group.experiment_participant_class_links.exists()
+        ):
+            return HttpResponseBadRequest(
+                "班级仍有关联学生或实验参与规则，请先迁移学生并移除参与规则。"
+            )
+        details = {
+            "class_id": class_group.pk,
+            "course_id": course.pk,
+            "name": class_group.name,
+            "academic_year": class_group.academic_year,
+        }
+        try:
+            class_group.delete()
+        except ProtectedError:
+            return HttpResponseBadRequest("班级仍被历史数据引用，不能删除。")
+        log_action(request, "class.delete", details=details)
+    messages.success(request, "班级已删除。")
+    return redirect("courses:classes", course.pk)
 
 
 @require_GET

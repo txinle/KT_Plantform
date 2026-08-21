@@ -12,7 +12,7 @@
     </form>
   </div></article>
   <article class="export-item mb-3"><div><h3>实名导航事件</h3><p>包含原始学号、姓名、班级、进入顺序和服务器接收时间。</p></div><form method="post" action="{% url 'analytics:identified_navigation_export' experiment.pk %}">{% csrf_token %}<button class="btn btn-outline-primary" type="submit">下载实名导航事件 CSV</button></form></article>
-  <details class="card"><summary class="card-header">兼容导出</summary><div class="card-body"><p class="text-muted">以下匿名端点保留既有列结构。</p><div class="d-flex flex-wrap gap-2"><a class="btn btn-sm btn-outline-secondary" href="{% url 'analytics:kt_export' experiment.pk %}">匿名 KT CSV</a><a class="btn btn-sm btn-outline-secondary" href="{% url 'analytics:navigation_export' experiment.pk %}">匿名导航 CSV</a><a class="btn btn-sm btn-outline-danger" href="{% url 'analytics:identity_export' experiment.pk %}">身份对照 CSV</a></div></div></details>
+  <details class="card"><summary class="card-header">兼容导出</summary><div class="card-body"><p class="text-muted">以下匿名端点保留既有列结构。</p><div class="d-flex flex-wrap gap-2"><a class="btn btn-sm btn-outline-secondary" href="{% url 'analytics:kt_export' experiment.pk %}">匿名 KT CSV</a><a class="btn btn-sm btn-outline-secondary" href="{% url 'analytics:navigation_export' experiment.pk %}">匿名导航 CSV</a>{% if can_export_identity %}<a class="btn btn-sm btn-outline-danger" href="{% url 'analytics:identity_export' experiment.pk %}">身份对照 CSV</a>{% endif %}</div></div></details>
 </section>
 <section aria-labelledby="sessions-title">
   <div class="section-heading"><h2 class="section-title" id="sessions-title">学生会话</h2><span class="text-muted numeric">{{ sessions|length }} 条</span></div>

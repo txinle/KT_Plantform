@@ -3,7 +3,7 @@ from urllib.parse import quote
 from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
@@ -24,6 +24,7 @@ from .presentation import build_session_report_presentation
 from .session_report import build_session_report_document
 from .services import (
     lock_experiment_question_bank,
+    delete_experiment as delete_experiment_tree,
     publish_experiment,
     save_participant_rules,
     selection_display_context,
@@ -280,6 +281,7 @@ def experiment_assign(request, course_pk, pk):
                 "experiment.assign_students",
                 experiment,
                 {
+                    "course_id": course.pk,
                     "class_count": len(classes),
                     "include_count": len(includes),
                     "exclude_count": len(excludes),
@@ -309,6 +311,21 @@ def experiment_publish(request, course_pk, pk):
     return redirect("courses:experiment_detail", course.pk, experiment.pk)
 
 
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def experiment_delete(request, course_pk, pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_writable_course(course)
+    experiment = _experiment(course, pk)
+    if request.POST.get("confirmation") != "delete":
+        return HttpResponseBadRequest("请在二次确认后再删除实验。")
+    with transaction.atomic():
+        details = delete_experiment_tree(experiment)
+        log_action(request, "experiment.delete", details=details)
+    messages.success(request, "实验及其发布版本、会话与作答记录已删除。")
+    return redirect("courses:experiments", course.pk)
+
+
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def experiment_results(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
@@ -332,6 +349,11 @@ def experiment_results(request, course_pk, pk):
             "session_status_choices": ExperimentSession.Status.choices,
             "selected_status": selected_status,
             "export_field_groups": FIELD_GROUPS,
+            "can_export_identity": (
+                request.user.is_superuser
+                or request.user.role == User.Role.ADMIN
+                or experiment.owner_id == request.user.id
+            ),
         },
     )
 

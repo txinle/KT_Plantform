@@ -306,5 +306,60 @@
         updateParticipantControls();
       });
     });
+
+    const revisionRoot = document.querySelector('[data-course-revision-url]');
+    if (revisionRoot) {
+      let courseRevision = revisionRoot.dataset.courseRevision;
+      let coursePageDirty = false;
+      let coursePageSubmitting = false;
+      let refreshNotice = null;
+
+      document.querySelectorAll('form').forEach((form) => {
+        form.addEventListener('input', () => { coursePageDirty = true; });
+        form.addEventListener('change', () => { coursePageDirty = true; });
+        form.addEventListener('submit', () => { coursePageSubmitting = true; });
+      });
+
+      const showRefreshNotice = () => {
+        if (refreshNotice) return;
+        refreshNotice = document.createElement('div');
+        refreshNotice.className = 'alert alert-warning course-refresh-notice';
+        refreshNotice.setAttribute('role', 'status');
+        refreshNotice.innerHTML = '<span>其他课程管理者已更新数据。当前表单有未保存内容，请保存后刷新。</span>';
+        const reloadButton = document.createElement('button');
+        reloadButton.className = 'btn btn-sm btn-outline-secondary ms-3';
+        reloadButton.type = 'button';
+        reloadButton.textContent = '立即刷新';
+        reloadButton.addEventListener('click', () => window.location.reload());
+        refreshNotice.append(reloadButton);
+        revisionRoot.prepend(refreshNotice);
+      };
+
+      const checkCourseRevision = async () => {
+        if (document.hidden || coursePageSubmitting) return;
+        try {
+          const response = await fetch(revisionRoot.dataset.courseRevisionUrl, {
+            headers: { Accept: 'application/json' },
+            cache: 'no-store',
+            credentials: 'same-origin',
+          });
+          if (response.status === 404 || response.status === 403) {
+            window.location.reload();
+            return;
+          }
+          if (!response.ok) return;
+          const { revision } = await response.json();
+          if (revision !== courseRevision) {
+            if (coursePageDirty) showRefreshNotice();
+            else window.location.reload();
+          }
+        } catch (_error) {
+          // Network interruptions are retried by the next polling interval.
+        }
+      };
+
+      checkCourseRevision();
+      window.setInterval(checkCourseRevision, 4000);
+    }
   });
 })();

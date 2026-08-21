@@ -6,13 +6,14 @@ import secrets
 from collections import defaultdict, deque
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from apps.accounts.course_access import lock_course
+from apps.accounts.course_access import lock_course, lock_writable_course
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.accounts.class_lifecycle import lock_active_class_groups
 from apps.question_bank.access import lock_question_bank
 from apps.question_bank.models import Question, QuestionBank
 from apps.question_bank.services.numeric import normalize_finite_decimal
 from apps.question_bank.services.scoring import normalize_true_false_answer
+from apps.assessment.models import ExperimentSession
 from .models import (
     Experiment,
     ExperimentParticipantClass,
@@ -32,6 +33,36 @@ LEGACY_SAMPLING_ALGORITHM_VERSION = "legacy-v0"
 @dataclass(frozen=True)
 class ParticipantRuleSaveResult:
     preview_count: int
+
+
+def delete_experiment(experiment):
+    """Delete an experiment and its immutable research tree in dependency order."""
+
+    with transaction.atomic():
+        experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
+        if experiment.course_id is not None:
+            lock_writable_course(experiment.course_id)
+        versions = list(
+            ExperimentVersion.objects.select_for_update()
+            .filter(experiment=experiment)
+            .order_by("pk")
+        )
+        version_ids = [version.pk for version in versions]
+        session_count = ExperimentSession.objects.filter(version_id__in=version_ids).count()
+        snapshot_count = QuestionSnapshot.objects.filter(version_id__in=version_ids).count()
+        ExperimentSession.objects.filter(version_id__in=version_ids).delete()
+        QuestionSnapshot.objects.filter(version_id__in=version_ids).delete()
+        ExperimentVersion.objects.filter(pk__in=version_ids).delete()
+        details = {
+            "experiment_id": experiment.pk,
+            "course_id": experiment.course_id,
+            "status": experiment.status,
+            "version_count": len(version_ids),
+            "session_count": session_count,
+            "snapshot_count": snapshot_count,
+        }
+        experiment.delete()
+        return details
 
 
 def _participant_ids(values, label):

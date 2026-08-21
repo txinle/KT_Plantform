@@ -1,4 +1,4 @@
-{% load static %}
+{% load static course_sync %}
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -63,7 +63,7 @@
                   <a class="nav-link{% if current_name == 'classes' or current_name == 'class_detail' or current_name == 'class_edit' or current_name == 'class_rename' or current_name == 'student_add' or current_name == 'student_add_manual' or current_name == 'student_copy' or current_name == 'student_import' or current_name == 'student_import_template' or current_name == 'move_student' or current_name == 'reset_password' %} active{% endif %}"{% if current_name == 'classes' or current_name == 'class_detail' or current_name == 'class_edit' or current_name == 'class_rename' or current_name == 'student_add' or current_name == 'student_add_manual' or current_name == 'student_copy' or current_name == 'student_import' or current_name == 'student_import_template' or current_name == 'move_student' or current_name == 'reset_password' %} aria-current="page"{% endif %} href="{% url 'courses:classes' current_course.pk %}">班级</a>
                   <a class="nav-link{% if current_name == 'experiments' or current_name == 'experiment_create' or current_name == 'experiment_detail' or current_name == 'experiment_edit' or current_name == 'experiment_assign' or current_name == 'experiment_publish' or current_name == 'experiment_sync_questions' or current_name == 'experiment_results' or current_name == 'experiment_session_detail' or current_name == 'experiment_session_word' %} active{% endif %}"{% if current_name == 'experiments' or current_name == 'experiment_create' or current_name == 'experiment_detail' or current_name == 'experiment_edit' or current_name == 'experiment_assign' or current_name == 'experiment_publish' or current_name == 'experiment_sync_questions' or current_name == 'experiment_results' or current_name == 'experiment_session_detail' or current_name == 'experiment_session_word' %} aria-current="page"{% endif %} href="{% url 'courses:experiments' current_course.pk %}">实验</a>
                   <a class="nav-link{% if current_name == 'data' %} active{% endif %}"{% if current_name == 'data' %} aria-current="page"{% endif %} href="{% url 'courses:data' current_course.pk %}">数据</a>
-                  {% if user.pk == current_course.owner_id or user.role == 'admin' %}<a class="nav-link{% if current_name == 'settings' %} active{% endif %}"{% if current_name == 'settings' %} aria-current="page"{% endif %} href="{% url 'courses:settings' current_course.pk %}">设置</a>{% endif %}
+                  <a class="nav-link{% if current_name == 'settings' %} active{% endif %}"{% if current_name == 'settings' %} aria-current="page"{% endif %} href="{% url 'courses:settings' current_course.pk %}">设置</a>
                 {% endif %}
               </div>
               {% endwith %}
@@ -73,7 +73,8 @@
       </nav>
     {% endif %}{% endif %}
   </header>
-  <main id="main-content" class="container-fluid app-shell page-main" tabindex="-1">
+  {% if current_course %}{% course_revision current_course as initial_course_revision %}{% endif %}
+  <main id="main-content" class="container-fluid app-shell page-main" tabindex="-1"{% if current_course %} data-course-revision-url="{% url 'courses:revision' current_course.pk %}" data-course-revision="{{ initial_course_revision }}"{% endif %}>
     {% if user.is_authenticated %}{% if user.role == 'teacher' or user.role == 'admin' %}
       <nav class="breadcrumb-nav" aria-label="层级目录">
         <ol class="breadcrumb-list">
@@ -96,7 +97,7 @@
     {% block content %}{% endblock %}
   </main>
   <script src="{% static 'vendor/bootstrap/js/bootstrap.bundle.min.js' %}?v=5.3.8"></script>
-  <script src="{% static 'js/app.js' %}?v=20260821.1"></script>
+  <script src="{% static 'js/app.js' %}?v=20260821.2"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

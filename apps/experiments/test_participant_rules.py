@@ -1080,6 +1080,7 @@ class ParticipantRuleViewTests(TestCase):
         self.assertEqual(
             audit.details,
             {
+                "course_id": self.course.pk,
                 "class_count": 1,
                 "include_count": 1,
                 "exclude_count": 1,

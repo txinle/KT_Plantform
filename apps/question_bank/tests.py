@@ -42,31 +42,37 @@ class ImportTemplateDownloadTests(TestCase):
                 finally:
                     response.close()
 
-    def test_import_templates_use_ascii_english_examples_accepted_by_parsers(self):
-        question_text = (settings.BASE_DIR / "fixtures" / "question_import_template.csv").read_bytes().decode("ascii")
+    def test_import_templates_use_utf8_bom_chinese_examples_accepted_by_parsers(self):
+        question_bytes = (settings.BASE_DIR / "fixtures" / "question_import_template.csv").read_bytes()
+        self.assertTrue(question_bytes.startswith(b"\xef\xbb\xbf"))
+        question_text = question_bytes.decode("utf-8-sig")
         question_reader = csv.DictReader(StringIO(question_text))
         question_rows = list(question_reader)
 
         self.assertEqual(
             question_reader.fieldnames,
-            ["sequence", "question", "option_a", "option_b", "option_c", "option_d", "option_e", "option_f", "answer"],
+            ["序号", "题目", "题型", "选项A", "选项B", "选项C", "选项D", "选项E", "选项F", "答案", "可接受答案"],
         )
         parsed_questions = parse_question_rows(question_rows)
-        self.assertEqual(len(parsed_questions), 4)
+        self.assertEqual(len(parsed_questions), 6)
         self.assertEqual(
             [item.question_type for item in parsed_questions],
-            ["single_choice", "multiple_choice", "numeric", "short_answer"],
+            ["single_choice", "multiple_choice", "numeric", "short_answer", "fill_blank", "true_false"],
         )
+        self.assertEqual(parsed_questions[4].accepted_answers, ["知识跟踪", "KT"])
+        self.assertIs(parsed_questions[5].answer, False)
 
-        kc_text = (settings.BASE_DIR / "fixtures" / "kc_mapping_template.csv").read_bytes().decode("ascii")
+        kc_bytes = (settings.BASE_DIR / "fixtures" / "kc_mapping_template.csv").read_bytes()
+        self.assertTrue(kc_bytes.startswith(b"\xef\xbb\xbf"))
+        kc_text = kc_bytes.decode("utf-8-sig")
         kc_reader = csv.DictReader(StringIO(kc_text))
         kc_rows = list(kc_reader)
 
-        self.assertEqual(kc_reader.fieldnames, ["sequence", "primary_kc", "secondary_kcs"])
+        self.assertEqual(kc_reader.fieldnames, ["题目序号", "主知识点", "次知识点"])
         parsed_mappings = parse_kc_rows(kc_rows)
-        self.assertEqual(len(parsed_mappings), 4)
-        self.assertEqual(parsed_mappings[0].primary, "Arithmetic")
-        self.assertEqual(parsed_mappings[0].secondary, ["Integer addition"])
+        self.assertEqual(len(parsed_mappings), 6)
+        self.assertEqual(parsed_mappings[0].primary, "基础运算")
+        self.assertEqual(parsed_mappings[0].secondary, ["整数加法"])
 
     def test_import_template_responses_close_opened_streams(self):
         self.client.force_login(self.teacher)
@@ -140,8 +146,9 @@ class ImportTemplateLinkTests(TestCase):
 
         self.assertInHTML(anchor, response.content.decode())
         self.assertEqual(response.content.decode().count(anchor), 1)
-        self.assertContains(response, "<code>sequence, question, option_a ... option_f, answer</code>", html=True)
-        self.assertContains(response, "填空题和判断题必须显式填写题型")
+        self.assertContains(response, "中文列名与英文别名对照")
+        self.assertContains(response, "六种题型")
+        self.assertContains(response, "非选择题不要填写选项")
         self.assertNotContains(response, "下载 KC CSV 示例")
 
     def test_kc_import_page_links_to_kc_template(self):
@@ -154,7 +161,7 @@ class ImportTemplateLinkTests(TestCase):
 
         self.assertInHTML(anchor, response.content.decode())
         self.assertEqual(response.content.decode().count(anchor), 1)
-        self.assertContains(response, "<code>sequence, primary_kc, secondary_kcs</code>", html=True)
+        self.assertContains(response, "题目序号 / sequence")
         self.assertNotContains(response, "下载题目 CSV 示例")
 
 class QuestionImportTests(TestCase):

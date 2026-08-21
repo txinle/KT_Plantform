@@ -1,7 +1,9 @@
 from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST
 from django.db.models import Q
 from apps.accounts.course_access import accessible_courses, lock_writable_course
 from apps.accounts.permissions import role_required
@@ -12,6 +14,7 @@ from .forms import ExperimentForm, StudentAssignmentForm
 from .models import Experiment
 from .services import (
     assign_students,
+    delete_experiment as delete_experiment_tree,
     lock_experiment_question_bank,
     publish_experiment,
     selection_display_context,
@@ -160,6 +163,25 @@ def experiment_publish(request, pk):
         except ValidationError as exc: messages.error(request, "; ".join(exc.messages))
     return redirect("experiments:detail", pk=experiment.pk)
 
+
+@require_POST
+@role_required("teacher", "admin")
+def experiment_delete(request, pk):
+    experiment = _owned(request, pk)
+    if experiment.course_id:
+        from . import course_views
+
+        return course_views.experiment_delete(
+            request, experiment.course_id, experiment.pk
+        )
+    if request.POST.get("confirmation") != "delete":
+        return HttpResponseBadRequest("请在二次确认后再删除实验。")
+    with transaction.atomic():
+        details = delete_experiment_tree(experiment)
+        log_action(request, "experiment.delete", details=details)
+    messages.success(request, "实验及其发布版本、会话与作答记录已删除。")
+    return redirect("experiments:list")
+
 @role_required("teacher", "admin")
 def experiment_results(request, pk):
     experiment = _owned(request, pk)
@@ -182,6 +204,11 @@ def experiment_results(request, pk):
             "session_status_choices": ExperimentSession.Status.choices,
             "selected_status": selected_status,
             "export_field_groups": FIELD_GROUPS,
+            "can_export_identity": (
+                request.user.is_superuser
+                or request.user.role == "admin"
+                or experiment.owner_id == request.user.id
+            ),
         },
     )
 

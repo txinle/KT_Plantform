@@ -2,6 +2,21 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from .models import ClassGroup, Course, CourseEnrollment, CourseTeacher, User
 
+admin.site.site_header = "KT Data Lab 管理后台"
+admin.site.site_title = "KT Data Lab 管理后台"
+admin.site.index_title = "平台数据管理"
+
+User._meta.verbose_name = "用户账号"
+User._meta.verbose_name_plural = "用户账号"
+Course._meta.verbose_name = "课程"
+Course._meta.verbose_name_plural = "课程"
+CourseTeacher._meta.verbose_name = "协作教师"
+CourseTeacher._meta.verbose_name_plural = "协作教师"
+ClassGroup._meta.verbose_name = "课程班级"
+ClassGroup._meta.verbose_name_plural = "课程班级"
+CourseEnrollment._meta.verbose_name = "课程选课"
+CourseEnrollment._meta.verbose_name_plural = "课程选课"
+
 @admin.register(User)
 class CustomUserAdmin(UserAdmin):
     fieldsets = UserAdmin.fieldsets + (("平台信息", {"fields": ("role", "display_name", "student_number")}),)
@@ -9,6 +24,7 @@ class CustomUserAdmin(UserAdmin):
     list_display = ("username", "display_name", "role", "student_number", "is_active")
     list_filter = ("role", "is_active")
     search_fields = ("username", "display_name", "student_number")
+    ordering = ("username",)
 
 @admin.register(ClassGroup)
 class ClassGroupAdmin(admin.ModelAdmin):
@@ -28,6 +44,7 @@ class CourseAdmin(admin.ModelAdmin):
     list_filter = ("status", "term")
     search_fields = ("name", "code", "owner__username")
     inlines = [CourseTeacherInline]
+    date_hierarchy = "created_at"
 
 
 @admin.register(CourseEnrollment)
