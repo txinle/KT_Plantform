@@ -4,8 +4,8 @@ from collections import Counter
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Prefetch
-from django.http import JsonResponse
+from django.db.models import Count, Prefetch, Q
+from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
@@ -15,7 +15,7 @@ from apps.accounts.course_access import (
     lock_writable_course,
     require_writable_course,
 )
-from apps.accounts.models import User
+from apps.accounts.models import Course, User
 from apps.accounts.permissions import role_required
 from apps.audit.services import log_action
 
@@ -26,6 +26,12 @@ from .models import Concept, QuestionBank, QuestionConcept
 from .services.file_reader import read_uploaded_rows
 from .services.import_parsing import ParsedKCMapping, ParsedQuestion, parse_kc_rows, parse_question_rows
 from .services.import_service import copy_shared_bank, import_kc_mappings, import_questions
+from .services.lifecycle import (
+    ReferencedQuestionBankError,
+    ReferencedQuestionError,
+    delete_question,
+    delete_question_bank,
+)
 
 
 def _bank(course, pk):
@@ -47,12 +53,36 @@ def _require_bank_metadata_editor(request, course, bank):
     raise PermissionDenied("只有课程共同管理者或题库所有者可以修改题库元数据。")
 
 
+ACTIVE_BANK_VISIBILITY_CHOICES = [
+    (QuestionBank.Visibility.PRIVATE, QuestionBank.Visibility.PRIVATE.label),
+    (QuestionBank.Visibility.SHARED, QuestionBank.Visibility.SHARED.label),
+]
+
+
+def _active_question_bank_form(data=None):
+    form = QuestionBankForm(data)
+    form.fields["visibility"].choices = ACTIVE_BANK_VISIBILITY_CHOICES
+    return form
+
+
+def _metadata_question_bank_form(data=None, *, instance):
+    form = QuestionBankForm(data, instance=instance)
+    if instance.visibility == QuestionBank.Visibility.ARCHIVED:
+        form.fields["visibility"].choices = [
+            (QuestionBank.Visibility.ARCHIVED, QuestionBank.Visibility.ARCHIVED.label),
+            (QuestionBank.Visibility.PRIVATE, QuestionBank.Visibility.PRIVATE.label),
+        ]
+    else:
+        form.fields["visibility"].choices = ACTIVE_BANK_VISIBILITY_CHOICES
+    return form
+
+
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def bank_list(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
     if request.method == "POST":
         require_writable_course(course)
-        form = QuestionBankForm(request.POST)
+        form = _active_question_bank_form(request.POST)
         if form.is_valid():
             with transaction.atomic():
                 course = lock_writable_course(course)
@@ -64,14 +94,13 @@ def bank_list(request, course_pk):
             messages.success(request, "题库已创建。")
             return redirect("courses:bank_detail", course.pk, bank.pk)
     else:
-        form = QuestionBankForm()
-    banks = course.question_banks.annotate(question_count=Count("questions"))
-    shared_banks = (
-        QuestionBank.objects.filter(visibility=QuestionBank.Visibility.SHARED)
-        .exclude(course=course)
-        .select_related("course", "created_by", "owner")
-        .annotate(question_count=Count("questions"))
-    )
+        form = _active_question_bank_form()
+    banks = course.question_banks.exclude(
+        visibility=QuestionBank.Visibility.ARCHIVED
+    ).annotate(question_count=Count("questions"))
+    archived_count = course.question_banks.filter(
+        visibility=QuestionBank.Visibility.ARCHIVED
+    ).count()
     concept_queryset = course.concepts.prefetch_related(
         Prefetch(
             "question_links",
@@ -98,11 +127,123 @@ def bank_list(request, course_pk):
             "course": course,
             "current_course": course,
             "banks": banks,
-            "shared_banks": shared_banks,
             "form": form,
-            "visibility_choices": QuestionBank.Visibility.choices,
+            "visibility_choices": ACTIVE_BANK_VISIBILITY_CHOICES,
+            "archived_count": archived_count,
             "course_concepts": course_concepts,
             "concept_form": CourseConceptForm(course=course),
+        },
+    )
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def archived_bank_list(request, course_pk):
+    course = get_accessible_course(request.user, course_pk)
+    banks = course.question_banks.filter(
+        visibility=QuestionBank.Visibility.ARCHIVED
+    ).select_related("created_by", "owner").annotate(question_count=Count("questions"))
+    return render(
+        request,
+        "teacher/course_bank_archive.html",
+        {"course": course, "current_course": course, "banks": banks},
+    )
+
+
+def _shared_banks_for(course):
+    return QuestionBank.objects.filter(
+        visibility=QuestionBank.Visibility.SHARED,
+        course__isnull=False,
+    ).exclude(course=course)
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def shared_source_courses(request, course_pk):
+    course = get_accessible_course(request.user, course_pk)
+    source_courses = (
+        Course.objects.filter(question_banks__in=_shared_banks_for(course))
+        .annotate(
+            shared_bank_count=Count(
+                "question_banks",
+                filter=Q(question_banks__visibility=QuestionBank.Visibility.SHARED),
+                distinct=True,
+            ),
+            shared_creator_count=Count(
+                "question_banks__created_by",
+                filter=Q(question_banks__visibility=QuestionBank.Visibility.SHARED),
+                distinct=True,
+            ),
+        )
+        .distinct()
+    )
+    return render(
+        request,
+        "teacher/course_shared_sources.html",
+        {"course": course, "current_course": course, "source_courses": source_courses},
+    )
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def shared_creators(request, course_pk, source_course_pk):
+    course = get_accessible_course(request.user, course_pk)
+    source_course = get_object_or_404(
+        Course.objects.filter(question_banks__in=_shared_banks_for(course)).distinct(),
+        pk=source_course_pk,
+    )
+    creators = (
+        User.objects.filter(
+            created_question_banks__course=source_course,
+            created_question_banks__visibility=QuestionBank.Visibility.SHARED,
+        )
+        .annotate(
+            shared_bank_count=Count(
+                "created_question_banks",
+                filter=Q(
+                    created_question_banks__course=source_course,
+                    created_question_banks__visibility=QuestionBank.Visibility.SHARED,
+                ),
+            )
+        )
+        .order_by("display_name", "username")
+    )
+    return render(
+        request,
+        "teacher/course_shared_creators.html",
+        {
+            "course": course,
+            "current_course": course,
+            "source_course": source_course,
+            "creators": creators,
+        },
+    )
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def shared_creator_banks(request, course_pk, source_course_pk, creator_pk):
+    course = get_accessible_course(request.user, course_pk)
+    source_course = get_object_or_404(
+        Course.objects.filter(question_banks__in=_shared_banks_for(course)).distinct(),
+        pk=source_course_pk,
+    )
+    creator = get_object_or_404(
+        User.objects.filter(
+            created_question_banks__course=source_course,
+            created_question_banks__visibility=QuestionBank.Visibility.SHARED,
+        ).distinct(),
+        pk=creator_pk,
+    )
+    banks = _shared_banks_for(course).filter(
+        course=source_course,
+        created_by=creator,
+    ).annotate(question_count=Count("questions"))
+    return render(
+        request,
+        "teacher/course_shared_banks.html",
+        {
+            "course": course,
+            "current_course": course,
+            "source_course": source_course,
+            "creator": creator,
+            "banks": banks,
         },
     )
 
@@ -147,7 +288,7 @@ def bank_edit(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     bank = _bank(course, pk)
     _require_bank_metadata_editor(request, course, bank)
-    form = QuestionBankForm(instance=bank)
+    form = _metadata_question_bank_form(instance=bank)
     return render(
         request,
         "teacher/course_bank_edit.html",
@@ -168,7 +309,7 @@ def bank_update(request, course_pk, pk):
     with transaction.atomic():
         course, bank = lock_writable_course_bank(course, bank)
         _require_bank_metadata_editor(request, course, bank)
-        form = QuestionBankForm(request.POST, instance=bank)
+        form = _metadata_question_bank_form(request.POST, instance=bank)
         if form.is_valid():
             changed_fields = form.changed_data
             bank = form.save()
@@ -276,6 +417,7 @@ def bank_visibility_update(request, course_pk, pk):
         course, bank = lock_writable_course_bank(course, bank)
         _require_bank_metadata_editor(request, course, bank)
         form = QuestionBankVisibilityForm(request.POST, instance=bank)
+        form.fields["visibility"].choices = ACTIVE_BANK_VISIBILITY_CHOICES
         if form.is_valid():
             changed_fields = form.changed_data
             form.save()
@@ -289,6 +431,102 @@ def bank_visibility_update(request, course_pk, pk):
         else:
             messages.error(request, "题库可见性更新失败。")
     return redirect("courses:banks", course.pk)
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def bank_archive(request, course_pk, pk):
+    course = get_accessible_course(request.user, course_pk)
+    bank = _bank(course, pk)
+    with transaction.atomic():
+        course, bank = lock_writable_course_bank(course, bank)
+        _require_bank_metadata_editor(request, course, bank)
+        if bank.visibility != QuestionBank.Visibility.ARCHIVED:
+            previous_visibility = bank.visibility
+            bank.visibility = QuestionBank.Visibility.ARCHIVED
+            bank.save(update_fields=["visibility", "updated_at"])
+            log_action(
+                request,
+                "question_bank.archive",
+                bank,
+                {
+                    "bank_id": bank.pk,
+                    "course_id": course.pk,
+                    "previous_visibility": previous_visibility,
+                },
+            )
+    messages.success(request, "题库已归档，可在归档题库页面查看或恢复。")
+    return redirect("courses:banks", course.pk)
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def bank_restore(request, course_pk, pk):
+    course = get_accessible_course(request.user, course_pk)
+    bank = _bank(course, pk)
+    with transaction.atomic():
+        course, bank = lock_writable_course_bank(course, bank)
+        _require_bank_metadata_editor(request, course, bank)
+        if bank.visibility == QuestionBank.Visibility.ARCHIVED:
+            bank.visibility = QuestionBank.Visibility.PRIVATE
+            bank.save(update_fields=["visibility", "updated_at"])
+            log_action(
+                request,
+                "question_bank.restore",
+                bank,
+                {"bank_id": bank.pk, "course_id": course.pk},
+            )
+    messages.success(request, "题库已恢复为私有题库。")
+    return redirect("courses:banks", course.pk)
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def bank_delete(request, course_pk, pk):
+    course = get_accessible_course(request.user, course_pk)
+    bank = _bank(course, pk)
+    if request.POST.get("confirmation") != "delete":
+        return HttpResponseBadRequest("请在二次确认后再永久删除题库。")
+    try:
+        with transaction.atomic():
+            course, bank = lock_writable_course_bank(course, bank)
+            _require_bank_metadata_editor(request, course, bank)
+            details = delete_question_bank(bank)
+            log_action(request, "question_bank.delete", details=details)
+    except ReferencedQuestionBankError:
+        messages.error(
+            request,
+            "题库已被实验或发布快照引用，不能永久删除。请保留并归档，或先处理无研究数据的草稿实验。",
+        )
+        return redirect("courses:bank_detail", course.pk, bank.pk)
+    messages.success(request, "题库及其未被研究数据引用的题目已永久删除。")
+    return redirect("courses:banks", course.pk)
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def question_delete(request, course_pk, bank_pk, question_pk):
+    course = get_accessible_course(request.user, course_pk)
+    bank = _bank(course, bank_pk)
+    if request.POST.get("confirmation") != "delete":
+        return HttpResponseBadRequest("请在二次确认后再永久删除题目。")
+    try:
+        with transaction.atomic():
+            course, bank = lock_writable_course_bank(course, bank, content=True)
+            question = get_object_or_404(
+                bank.questions.select_for_update().select_related("bank"),
+                pk=question_pk,
+            )
+            details = delete_question(question)
+            log_action(request, "question.delete", details=details)
+    except ReferencedQuestionError:
+        messages.error(
+            request,
+            "题目已被实验或发布快照引用，不能永久删除。请保留题目，或先处理无研究数据的草稿实验。",
+        )
+        return redirect("courses:bank_detail", course.pk, bank.pk)
+    messages.success(request, "题目已永久删除，其他题目的序号和稳定课程代码保持不变。")
+    return redirect("courses:bank_detail", course.pk, bank.pk)
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)

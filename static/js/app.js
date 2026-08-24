@@ -56,6 +56,25 @@
       }, { once: true });
     });
 
+    const questionDeleteDialog = document.getElementById('delete-question-dialog');
+    const questionDeleteForm = questionDeleteDialog?.querySelector('[data-question-delete-form]');
+    const questionDeleteLabel = questionDeleteDialog?.querySelector('[data-question-delete-label]');
+    const questionDeleteConfirm = questionDeleteDialog?.querySelector('[data-question-delete-confirm]');
+    questionDeleteDialog?.addEventListener('show.bs.modal', (event) => {
+      const trigger = event.relatedTarget?.closest('[data-question-delete-trigger]');
+      if (!trigger || !questionDeleteForm || !questionDeleteLabel || !questionDeleteConfirm) return;
+      questionDeleteForm.action = trigger.dataset.questionDeleteUrl;
+      questionDeleteLabel.textContent = trigger.dataset.questionDeleteLabel;
+      questionDeleteConfirm.disabled = false;
+      questionDeleteConfirm.textContent = '永久删除题目';
+    });
+    questionDeleteConfirm?.addEventListener('click', () => {
+      if (!questionDeleteForm?.action) return;
+      questionDeleteConfirm.disabled = true;
+      questionDeleteConfirm.textContent = '正在删除';
+      questionDeleteForm.submit();
+    });
+
     const questionType = document.querySelector('[data-question-type-controller]');
     const updateQuestionFields = () => {
       if (!questionType) return;

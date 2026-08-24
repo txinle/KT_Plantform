@@ -78,7 +78,7 @@ def copy_shared_bank(source_bank, target_course, actor=None):
     target = QuestionBank.objects.create(
         course=target_course,
         created_by=actor,
-        name=f"{source_bank.name}（副本）",
+        name=source_bank.name,
         description=source_bank.description,
         visibility=QuestionBank.Visibility.PRIVATE,
     )

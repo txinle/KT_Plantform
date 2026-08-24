@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:detail' course.pk %}">{{ course.name }}</a></li><li><a href="{% url 'courses:banks' course.pk %}">题库</a></li><li class="breadcrumb-item-current" aria-current="page">共享来源课程</li>{% endblock %}
+{% block title %}共享题库 | {{ course.name }}{% endblock %}
+{% block content %}
+<header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">共享题库</h1><p class="page-subtitle">先选择来源课程，再选择创建者和需要复制的题库。</p></div><div class="page-actions"><a class="btn btn-secondary" href="{% url 'courses:banks' course.pk %}">返回课程题库</a></div></header>
+<div class="table-shell"><table class="table"><thead><tr><th scope="col">来源课程</th><th scope="col">创建者</th><th scope="col">共享题库</th><th scope="col"><span class="visually-hidden">操作</span></th></tr></thead><tbody>
+{% for source in source_courses %}<tr><td><strong>{{ source.name }}</strong><div class="cell-meta mono">{{ source.code }} · {{ source.term }}</div></td><td class="numeric">{{ source.shared_creator_count }}</td><td class="numeric">{{ source.shared_bank_count }}</td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'courses:shared_creators' course.pk source.pk %}">选择创建者</a></td></tr>
+{% empty %}<tr><td colspan="4"><div class="empty-state"><h2 class="empty-state-title">暂无可复制的共享题库</h2><p>其他课程将题库设为共享后会显示在这里。</p></div></td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}
