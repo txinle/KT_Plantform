@@ -13,13 +13,13 @@ from .models import Attempt, DraftSaveEvent, ExperimentSession, QuestionVisitEve
 
 @transaction.atomic
 def get_or_create_session(experiment, student):
-    experiment = Experiment.objects.select_for_update().select_related("course").get(
-        pk=experiment.pk
-    )
-    if experiment.course_id and experiment.course.status != "active":
-        raise ValidationError("课程已归档，不能开始或继续实验")
+    experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
     if experiment.course_id:
-        from apps.accounts.models import CourseEnrollment
+        from apps.accounts.models import Course, CourseEnrollment
+
+        course = Course.objects.select_for_update().get(pk=experiment.course_id)
+        if course.status != Course.Status.ACTIVE:
+            raise ValidationError("课程已归档，不能开始或继续实验")
 
         if not CourseEnrollment.objects.select_for_update().filter(
             course_id=experiment.course_id,
@@ -80,9 +80,11 @@ def _validate_course_access(session):
     experiment = session.version.experiment
     if experiment.course_id is None:
         return
-    if experiment.course.status != "active":
+    from apps.accounts.models import Course, CourseEnrollment
+
+    course = Course.objects.select_for_update().get(pk=experiment.course_id)
+    if course.status != Course.Status.ACTIVE:
         raise ValidationError("课程已归档，历史会话只读")
-    from apps.accounts.models import CourseEnrollment
 
     if not CourseEnrollment.objects.select_for_update().filter(
         course_id=experiment.course_id,
@@ -117,7 +119,7 @@ def _validate_session_time(session, attempt=None):
 @transaction.atomic
 def record_visit(session_id, assignment_id, entry_reason="navigation_click", client_time=None):
     session = ExperimentSession.objects.select_for_update().select_related(
-        "current_assignment", "version__experiment__course"
+        "version__experiment"
     ).get(pk=session_id)
     if session.status != ExperimentSession.Status.IN_PROGRESS: raise ValidationError("当前会话不可继续作答")
     _validate_session_time(session)
@@ -147,7 +149,7 @@ def record_visit(session_id, assignment_id, entry_reason="navigation_click", cli
 @transaction.atomic
 def save_draft(attempt_id, answer, client_time=None):
     attempt = Attempt.objects.select_for_update().select_related(
-        "session__version__experiment__course"
+        "session__version__experiment"
     ).get(pk=attempt_id)
     if attempt.status in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
         raise ValidationError("该题当前状态不能修改")
@@ -164,7 +166,7 @@ def save_draft(attempt_id, answer, client_time=None):
 def submit_attempt(attempt_id, token, client_time=None):
     attempt = Attempt.objects.select_for_update().select_related("session", "assignment__snapshot").get(pk=attempt_id)
     session = ExperimentSession.objects.select_for_update().select_related(
-        "version__experiment__course"
+        "version__experiment"
     ).get(pk=attempt.session_id)
     _validate_course_access(session)
     if attempt.status == Attempt.Status.SUBMITTED:
@@ -207,7 +209,7 @@ def submit_attempt(attempt_id, token, client_time=None):
 @transaction.atomic
 def mark_skipped(attempt_id):
     attempt = Attempt.objects.select_for_update().select_related(
-        "session__version__experiment__course"
+        "session__version__experiment"
     ).get(pk=attempt_id)
     _validate_course_access(attempt.session)
     if attempt.session.status != ExperimentSession.Status.IN_PROGRESS:
@@ -221,7 +223,7 @@ def mark_skipped(attempt_id):
 @transaction.atomic
 def finish_session(session_id):
     session = ExperimentSession.objects.select_for_update().select_related(
-        "version__experiment__course"
+        "version__experiment"
     ).get(pk=session_id)
     _validate_course_access(session)
     if session.status != ExperimentSession.Status.IN_PROGRESS: return session

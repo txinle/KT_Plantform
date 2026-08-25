@@ -1,5 +1,6 @@
 from threading import Event, Lock, Thread
 from unittest.mock import patch
+from uuid import uuid4
 
 from django.db import close_old_connections
 from django.test import TransactionTestCase, skipUnlessDBFeature
@@ -14,7 +15,14 @@ from apps.question_bank.services.course_question_identity import (
 )
 
 from .models import DraftSaveEvent, ExperimentSession
-from .services import get_or_create_session, save_draft
+from .services import (
+    finish_session,
+    get_or_create_session,
+    mark_skipped,
+    record_visit,
+    save_draft,
+    submit_attempt,
+)
 
 
 @skipUnlessDBFeature("has_select_for_update_of")
@@ -226,3 +234,18 @@ class PostgreSQLEnrollmentRemovalRaceTests(TransactionTestCase):
         self.assertEqual(commit_order, ["event", "removal"])
         self.assertFalse(CourseEnrollment.objects.filter(pk=self.enrollment.pk).exists())
         self.assertEqual(DraftSaveEvent.objects.filter(attempt=attempt).count(), 1)
+
+    def test_course_session_write_lifecycle_avoids_nullable_outer_join_locks(self):
+        session = get_or_create_session(self.experiment, self.student)
+        assignment = session.assignments.get()
+
+        attempt = record_visit(session.pk, assignment.pk)
+        save_draft(attempt.pk, {"answer": "草稿"})
+        mark_skipped(attempt.pk)
+        record_visit(session.pk, assignment.pk)
+        save_draft(attempt.pk, {"answer": "不能"})
+        submitted = submit_attempt(attempt.pk, uuid4())
+        completed = finish_session(session.pk)
+
+        self.assertEqual(submitted.status, submitted.Status.SUBMITTED)
+        self.assertEqual(completed.status, ExperimentSession.Status.COMPLETED)

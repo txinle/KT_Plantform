@@ -126,8 +126,13 @@ class StudentCourseNavigationTests(TestCase):
 
     def test_start_locks_course_enrollment_before_creating_a_session(self):
         lock_order = []
+        original_course_lock = Course.objects.select_for_update
         original_enrollment_lock = CourseEnrollment.objects.select_for_update
         original_session_write = ExperimentSession.objects.get_or_create
+
+        def lock_course(*args, **kwargs):
+            lock_order.append("course")
+            return original_course_lock(*args, **kwargs)
 
         def lock_enrollment(*args, **kwargs):
             lock_order.append("enrollment")
@@ -139,6 +144,11 @@ class StudentCourseNavigationTests(TestCase):
 
         self.client.force_login(self.student)
         with (
+            patch.object(
+                Course.objects,
+                "select_for_update",
+                side_effect=lock_course,
+            ),
             patch.object(
                 CourseEnrollment.objects,
                 "select_for_update",
@@ -152,7 +162,7 @@ class StudentCourseNavigationTests(TestCase):
         ):
             self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
 
-        self.assertEqual(lock_order[:2], ["enrollment", "session"])
+        self.assertEqual(lock_order[:3], ["course", "enrollment", "session"])
 
     def test_archiving_course_blocks_writes_to_existing_session(self):
         self.client.force_login(self.student)
@@ -194,8 +204,13 @@ class StudentCourseNavigationTests(TestCase):
         self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
         attempt = ExperimentSession.objects.get(student=self.student).attempts.get()
         lock_order = []
+        original_course_lock = Course.objects.select_for_update
         original_enrollment_lock = CourseEnrollment.objects.select_for_update
         original_event_write = DraftSaveEvent.objects.create
+
+        def lock_course(*args, **kwargs):
+            lock_order.append("course")
+            return original_course_lock(*args, **kwargs)
 
         def lock_enrollment(*args, **kwargs):
             lock_order.append("enrollment")
@@ -206,6 +221,11 @@ class StudentCourseNavigationTests(TestCase):
             return original_event_write(*args, **kwargs)
 
         with (
+            patch.object(
+                Course.objects,
+                "select_for_update",
+                side_effect=lock_course,
+            ),
             patch.object(
                 CourseEnrollment.objects,
                 "select_for_update",
@@ -224,4 +244,4 @@ class StudentCourseNavigationTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(lock_order[:2], ["enrollment", "event"])
+        self.assertEqual(lock_order[:3], ["course", "enrollment", "event"])
