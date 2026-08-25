@@ -124,6 +124,7 @@ class EventSchemaRegistryContractTests(SimpleTestCase):
             )
 
         self.assertIn("activity_heartbeat:v1", str(raised.exception))
+        self.assertIn(" at $", str(raised.exception))
         self.assertNotIn("mouse_x", str(raised.exception))
 
     def test_uuid_formats_are_enforced(self):

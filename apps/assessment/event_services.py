@@ -2,17 +2,29 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import IntegrityError, transaction
 from django.db.models import Max
 from django.utils import timezone
 
-from .event_schema_registry import validate_event_payload
+from .event_invariants import validate_event_invariants
+from .event_schema_registry import (
+    event_schema_sha256,
+    get_event_schema,
+    validate_event_payload,
+)
 from .models import (
     AssessmentEvent,
     ClientTimeSync,
+    EventSchemaArtifact,
     ExperimentSession,
+    _assessment_event_append_scope,
+    _event_schema_artifact_append_scope,
     validate_quality_flags,
 )
+
+
+TIME_SYNC_VALIDITY_WINDOW_MS = 20 * 60 * 1000
 
 
 class EventIdempotencyConflict(RuntimeError):
@@ -25,6 +37,39 @@ class EventIdempotencyConflict(RuntimeError):
 
 class EventLinkageError(ValueError):
     pass
+
+
+class EventSchemaDriftError(RuntimeError):
+    pass
+
+
+def _register_schema_artifact(event_type, event_version):
+    current_hash = event_schema_sha256(event_type, event_version)
+    current_document = get_event_schema(event_type, event_version)
+    try:
+        with _event_schema_artifact_append_scope():
+            artifact, created = EventSchemaArtifact.objects.get_or_create(
+                event_type=event_type,
+                event_version=event_version,
+                defaults={
+                    "schema_sha256": current_hash,
+                    "schema_document": current_document,
+                },
+            )
+    except IntegrityError:
+        artifact = EventSchemaArtifact.objects.get(
+            event_type=event_type,
+            event_version=event_version,
+        )
+        created = False
+    if not created and (
+        artifact.schema_sha256 != current_hash
+        or artifact.schema_document != current_document
+    ):
+        raise EventSchemaDriftError(
+            f"Event schema drift detected for {event_type}:v{event_version}."
+        )
+    return artifact
 
 
 def _deduplicate_quality_flags(quality_flags) -> list[str]:
@@ -48,15 +93,23 @@ def _validate_linkage(
     if attempt is not None and assignment is not None:
         if attempt.assignment_id != assignment.pk:
             raise EventLinkageError("Attempt does not belong to the event assignment.")
-    if assignment is not None and question_snapshot is not None:
-        if assignment.snapshot_id != question_snapshot.pk:
+    effective_assignment = assignment
+    if effective_assignment is None and attempt is not None:
+        effective_assignment = attempt.assignment
+    if effective_assignment is not None and question_snapshot is not None:
+        if effective_assignment.snapshot_id != question_snapshot.pk:
             raise EventLinkageError(
                 "Question snapshot does not belong to the event assignment."
             )
-    if assignment is not None and item_instance is not None:
-        if assignment.item_instance_id != item_instance.pk:
+    if effective_assignment is not None and item_instance is not None:
+        if effective_assignment.item_instance_id != item_instance.pk:
             raise EventLinkageError(
                 "Item instance does not belong to the event assignment."
+            )
+    if question_snapshot is not None and item_instance is not None:
+        if item_instance.question_snapshot_id != question_snapshot.pk:
+            raise EventLinkageError(
+                "Item instance does not belong to the event question snapshot."
             )
 
 
@@ -127,12 +180,38 @@ def append_assessment_event(
     quality_flags=(),
     app_version="",
 ) -> AssessmentEvent:
+    received_at = timezone.now()
     validate_event_payload(event_type, event_version, payload)
+    _register_schema_artifact(event_type, event_version)
     if (client_instance_id is None) != (client_sequence_no is None):
         raise ValueError(
             "client_instance_id and client_sequence_no must be supplied together."
         )
+    if attempt is not None and assignment is None:
+        assignment = attempt.assignment
+    if assignment is not None and attempt is None:
+        try:
+            attempt = assignment.attempt
+        except ObjectDoesNotExist:
+            attempt = None
+    if assignment is not None and question_snapshot is None:
+        question_snapshot = assignment.snapshot
+    if assignment is not None and item_instance is None:
+        item_instance = assignment.item_instance
+
     _validate_linkage(
+        session=session,
+        assignment=assignment,
+        attempt=attempt,
+        question_snapshot=question_snapshot,
+        item_instance=item_instance,
+    )
+    validate_event_invariants(
+        event_type=event_type,
+        event_domain=event_domain,
+        actor_source=actor_source,
+        capture_mode=capture_mode,
+        payload=payload,
         session=session,
         assignment=assignment,
         attempt=attempt,
@@ -144,11 +223,32 @@ def append_assessment_event(
     estimated_clock_offset_ms = None
     estimated_rtt_ms = None
     estimated_occurred_at_utc = None
+    if time_sync is not None and (
+        client_instance_id is None
+        or time_sync.client_instance_id != client_instance_id
+    ):
+        raise EventLinkageError(
+            "Time sync sample does not belong to the event client instance."
+        )
+    if (
+        time_sync is not None
+        and client_time_origin is not None
+        and time_sync.client_time_origin != client_time_origin
+    ):
+        raise EventLinkageError(
+            "Time sync sample does not belong to the event time origin."
+        )
+    monotonic_delta_ms = None
+    if time_sync is not None and client_monotonic_ms is not None:
+        monotonic_delta_ms = abs(
+            client_monotonic_ms - time_sync.client_monotonic_ms
+        )
     sync_is_valid = (
         time_sync is not None
         and time_sync.sync_quality == ClientTimeSync.SyncQuality.VALID
-        and client_instance_id is not None
-        and time_sync.client_instance_id == client_instance_id
+        and client_time_origin is not None
+        and client_monotonic_ms is not None
+        and monotonic_delta_ms <= TIME_SYNC_VALIDITY_WINDOW_MS
     )
     if sync_is_valid:
         estimated_clock_offset_ms = time_sync.estimated_clock_offset_ms
@@ -157,8 +257,10 @@ def append_assessment_event(
             estimated_occurred_at_utc = client_wall_time_utc + timedelta(
                 milliseconds=estimated_clock_offset_ms
             )
-    elif client_wall_time_utc is not None and "clock_unsynchronized" not in normalized_flags:
-        normalized_flags.append("clock_unsynchronized")
+    else:
+        time_sync = None
+        if client_wall_time_utc is not None and "clock_unsynchronized" not in normalized_flags:
+            normalized_flags.append("clock_unsynchronized")
 
     values = {
         "event_domain": event_domain,
@@ -191,6 +293,18 @@ def append_assessment_event(
 
     with transaction.atomic():
         ExperimentSession.objects.select_for_update().get(pk=session.pk)
+        validate_event_invariants(
+            event_type=event_type,
+            event_domain=event_domain,
+            actor_source=actor_source,
+            capture_mode=capture_mode,
+            payload=payload,
+            session=session,
+            assignment=assignment,
+            attempt=attempt,
+            question_snapshot=question_snapshot,
+            item_instance=item_instance,
+        )
         replay = _resolve_idempotent_replay(
             client_instance_id=client_instance_id,
             client_sequence_no=client_sequence_no,
@@ -205,7 +319,6 @@ def append_assessment_event(
             )["maximum"]
             or 0
         ) + 1
-        received_at = timezone.now()
         event = AssessmentEvent(
             **values,
             server_ingest_sequence_no=next_ingest_sequence,
@@ -215,7 +328,8 @@ def append_assessment_event(
         event.full_clean(validate_unique=False, validate_constraints=False)
         try:
             with transaction.atomic():
-                event.save(force_insert=True)
+                with _assessment_event_append_scope():
+                    event.save(force_insert=True)
         except IntegrityError:
             replay = _resolve_idempotent_replay(
                 client_instance_id=client_instance_id,

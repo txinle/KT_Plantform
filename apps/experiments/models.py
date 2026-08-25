@@ -1,3 +1,5 @@
+import hashlib
+import json
 import uuid
 
 from django.conf import settings
@@ -5,6 +7,33 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Q
+
+
+def canonical_presentation_hash(
+    *,
+    presentation_variant,
+    option_order,
+    parameter_values,
+    random_seed,
+):
+    canonical = json.dumps(
+        {
+            "option_order": option_order,
+            "parameter_values": parameter_values,
+            "presentation_variant": presentation_variant,
+            "random_seed": random_seed,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def presentation_option_keys(question_snapshot):
+    if question_snapshot.question_type == "true_false":
+        return ["true", "false"]
+    return [option["key"] for option in question_snapshot.options]
 
 class Experiment(models.Model):
     class Status(models.TextChoices):
@@ -122,6 +151,19 @@ class Experiment(models.Model):
                     heartbeat_interval_seconds__lte=120,
                 ),
                 name="experiment_heartbeat_interval_range",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        confidence_mode="sampled",
+                        confidence_probability__isnull=False,
+                    )
+                    | (
+                        ~Q(confidence_mode="sampled")
+                        & Q(confidence_probability__isnull=True)
+                    )
+                ),
+                name="experiment_confidence_mode_probability",
             ),
         ]
     def __str__(self): return self.name
@@ -359,6 +401,21 @@ class QuestionSnapshot(models.Model):
     class Meta: ordering = ["source_sequence", "id"]
 
 
+class ItemInstanceQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError("ItemInstance 呈现内容创建后不可批量修改。")
+
+    def delete(self):
+        raise ValidationError("ItemInstance 呈现内容不能由普通业务流程删除。")
+
+    def bulk_create(self, objs, **kwargs):
+        raise ValidationError("ItemInstance 必须通过受校验的呈现服务创建。")
+
+
+class ItemInstanceManager(models.Manager.from_queryset(ItemInstanceQuerySet)):
+    pass
+
+
 class ItemInstance(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     question_snapshot = models.ForeignKey(
@@ -367,11 +424,13 @@ class ItemInstance(models.Model):
         related_name="item_instances",
     )
     presentation_variant = models.CharField(max_length=64, default="default")
-    option_order = models.JSONField(default=list)
-    parameter_values = models.JSONField(default=dict)
+    option_order = models.JSONField(default=list, blank=True)
+    parameter_values = models.JSONField(default=dict, blank=True)
     random_seed = models.CharField(max_length=128, blank=True, default="")
     presentation_hash = models.CharField(max_length=64)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ItemInstanceManager()
 
     class Meta:
         ordering = ["question_snapshot_id", "created_at", "id"]
@@ -381,3 +440,49 @@ class ItemInstance(models.Model):
                 name="unique_question_presentation_hash",
             )
         ]
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if not isinstance(self.option_order, list):
+            errors["option_order"] = "选项顺序必须是列表。"
+        if not isinstance(self.parameter_values, dict):
+            errors["parameter_values"] = "参数值必须是对象。"
+        if self.question_snapshot_id and isinstance(self.option_order, list):
+            expected_keys = presentation_option_keys(self.question_snapshot)
+            if (
+                any(not isinstance(key, str) for key in self.option_order)
+                or len(self.option_order) != len(expected_keys)
+                or set(self.option_order) != set(expected_keys)
+            ):
+                errors["option_order"] = "选项顺序必须是题目选项的完整无重复排列。"
+        if not errors:
+            expected_hash = canonical_presentation_hash(
+                presentation_variant=self.presentation_variant,
+                option_order=self.option_order,
+                parameter_values=self.parameter_values,
+                random_seed=self.random_seed,
+            )
+            if self.presentation_hash != expected_hash:
+                errors["presentation_hash"] = "呈现哈希与规范化呈现内容不一致。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            original = type(self).objects.get(pk=self.pk)
+            immutable_fields = (
+                "question_snapshot_id",
+                "presentation_variant",
+                "option_order",
+                "parameter_values",
+                "random_seed",
+                "presentation_hash",
+            )
+            if any(
+                getattr(original, field) != getattr(self, field)
+                for field in immutable_fields
+            ):
+                raise ValidationError("ItemInstance 呈现内容创建后不可修改。")
+        self.full_clean(validate_unique=False, validate_constraints=False)
+        return super().save(*args, **kwargs)

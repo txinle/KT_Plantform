@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 from importlib import import_module
 from decimal import Decimal
@@ -14,7 +15,13 @@ from apps.experiments.models import Experiment, ExperimentVersion, QuestionSnaps
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.question_bank.models import Question, QuestionBank
 
-from .models import Attempt, ExperimentSession, StudentQuestionAssignment
+from .models import (
+    AppendOnlyEventError,
+    Attempt,
+    ExperimentSession,
+    StudentQuestionAssignment,
+    _assessment_event_append_scope,
+)
 
 
 def process_model(name):
@@ -141,7 +148,7 @@ class ProcessDataModelTests(TestCase):
     def test_response_snapshot_hash_is_unique_only_within_an_attempt(self):
         ResponseSnapshot = process_model("ResponseSnapshot")
         self.assertIsNotNone(ResponseSnapshot)
-        content_hash = "a" * 64
+        content_hash = hashlib.sha256("第一版回答".encode("utf-8")).hexdigest()
         ResponseSnapshot.objects.create(
             attempt=self.attempt,
             content="第一版回答",
@@ -153,29 +160,70 @@ class ProcessDataModelTests(TestCase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             ResponseSnapshot.objects.create(
                 attempt=self.attempt,
-                content="重复状态",
+                content="第一版回答",
                 content_hash=content_hash,
-                content_length=4,
+                content_length=5,
                 schema_version=1,
             )
+
+    def test_response_snapshot_rejects_false_content_claims_and_updates(self):
+        ResponseSnapshot = process_model("ResponseSnapshot")
+        self.assertIsNotNone(ResponseSnapshot)
+
+        with self.assertRaises(ValidationError):
+            ResponseSnapshot.objects.create(
+                attempt=self.attempt,
+                content="真实内容",
+                content_hash="0" * 64,
+                content_length=999,
+                schema_version=1,
+            )
+
+        content = "可验证内容"
+        snapshot = ResponseSnapshot.objects.create(
+            attempt=self.attempt,
+            content=content,
+            content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            content_length=len(content),
+            schema_version=1,
+        )
+        snapshot.content = "被篡改"
+        with self.assertRaises(AppendOnlyEventError):
+            snapshot.save()
 
     def test_simulation_snapshot_keeps_large_state_outside_event_payload(self):
         SimulationSnapshot = process_model("SimulationSnapshot")
         self.assertIsNotNone(SimulationSnapshot)
+        from .snapshot_services import create_simulation_snapshot
 
-        snapshot = SimulationSnapshot.objects.create(
+        content = b"x" * 2048
+        snapshot = create_simulation_snapshot(
             attempt=self.attempt,
             simulation_version="circuit-v1",
             state_metadata={"component_count": 8},
             blob_storage_key="simulation/2026/08/state.bin",
-            content_hash="b" * 64,
-            content_size=2048,
+            content_bytes=content,
             schema_version=1,
         )
 
         self.assertEqual(snapshot.state_metadata, {"component_count": 8})
         self.assertEqual(snapshot.blob_storage_key, "simulation/2026/08/state.bin")
         self.assertEqual(snapshot.content_size, 2048)
+        self.assertEqual(
+            snapshot.content_hash,
+            hashlib.sha256(content).hexdigest(),
+        )
+
+        with self.assertRaises(AppendOnlyEventError):
+            SimulationSnapshot.objects.create(
+                attempt=self.attempt,
+                simulation_version="circuit-v1",
+                state_metadata={"component_count": 8},
+                blob_storage_key="simulation/2026/08/false.bin",
+                content_hash="b" * 64,
+                content_size=2048,
+                schema_version=1,
+            )
 
     def test_confidence_assignment_distinguishes_assignment_and_response_states(self):
         ConfidenceAssignment = process_model("ConfidenceAssignment")
@@ -236,7 +284,8 @@ class ProcessDataModelTests(TestCase):
             "app_version": "test",
         }
         values.update(overrides)
-        return AssessmentEvent.objects.create(**values)
+        with _assessment_event_append_scope():
+            return AssessmentEvent.objects.create(**values)
 
     def test_event_envelope_keeps_ingest_order_distinct_from_client_order(self):
         event = self.create_event(
@@ -273,6 +322,32 @@ class ProcessDataModelTests(TestCase):
             self.create_event(
                 client_sequence_no=2,
                 server_ingest_sequence_no=8,
+            )
+
+    def test_client_sequence_starts_at_one_when_present(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            self.create_event(client_sequence_no=0)
+
+    def test_database_allows_only_one_committed_event_per_attempt(self):
+        self.create_event(
+            event_type="response_committed",
+            payload={
+                "submission_token": str(uuid.uuid4()),
+                "score": 1,
+                "is_correct": True,
+            },
+        )
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            self.create_event(
+                event_type="response_committed",
+                client_sequence_no=2,
+                server_ingest_sequence_no=2,
+                payload={
+                    "submission_token": str(uuid.uuid4()),
+                    "score": 1,
+                    "is_correct": True,
+                },
             )
 
     def test_quality_flags_reject_unknown_measurement_claims(self):

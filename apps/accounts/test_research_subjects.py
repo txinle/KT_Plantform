@@ -146,6 +146,28 @@ class ResearchSubjectModelTests(TestCase):
             original_uuid,
         )
 
+    def test_new_course_enrollment_materializes_its_stable_subject_immediately(self):
+        CourseSubject = research_model("CourseSubject")
+        class_group = ClassGroup.objects.create(
+            course=self.course_a,
+            owner=self.teacher,
+            name="新生班",
+            academic_year="2026",
+        )
+
+        CourseEnrollment.objects.create(
+            course=self.course_a,
+            student=self.student,
+            class_group=class_group,
+        )
+
+        self.assertTrue(
+            CourseSubject.objects.filter(
+                course=self.course_a,
+                student=self.student,
+            ).exists()
+        )
+
     def test_backfill_includes_course_experiment_participants_and_sessions(self):
         CourseSubject = research_model("CourseSubject")
         self.assertIsNotNone(CourseSubject)

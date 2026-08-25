@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.apps import apps as django_apps
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from apps.accounts.models import User
@@ -85,6 +86,24 @@ class ResearchExperimentConfigurationTests(TestCase):
             experiment.full_clean()
 
         self.assertIn("confidence_probability", raised.exception.message_dict)
+
+    def test_database_rejects_uninterpretable_confidence_mode_probability_pairs(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Experiment.objects.create(
+                owner=self.teacher,
+                question_bank=self.bank,
+                name="缺少抽样概率",
+                confidence_mode="sampled",
+                confidence_probability=None,
+            )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Experiment.objects.create(
+                owner=self.teacher,
+                question_bank=self.bank,
+                name="关闭模式残留概率",
+                confidence_mode="off",
+                confidence_probability=Decimal("0.50"),
+            )
 
     def test_heartbeat_interval_and_probability_boundaries_are_validated(self):
         experiment = Experiment(
@@ -299,3 +318,62 @@ class ItemInstanceContractTests(TestCase):
         )
 
         self.assertNotEqual(first, reordered)
+
+    def test_item_instance_rejects_a_claimed_hash_or_non_permutation(self):
+        ItemInstance = item_instance_model()
+        self.assertIsNotNone(ItemInstance)
+        from .presentation_instances import (
+            canonical_presentation_hash,
+            get_or_create_default_item_instance,
+        )
+
+        with self.assertRaises(ValidationError):
+            ItemInstance.objects.create(
+                question_snapshot=self.snapshot,
+                presentation_variant="default",
+                option_order=["A", "B"],
+                parameter_values={},
+                random_seed="",
+                presentation_hash="0" * 64,
+            )
+
+        invalid_order = ["A", "A"]
+        with self.assertRaises(ValidationError):
+            ItemInstance.objects.create(
+                question_snapshot=self.snapshot,
+                presentation_variant="default",
+                option_order=invalid_order,
+                parameter_values={},
+                random_seed="",
+                presentation_hash=canonical_presentation_hash(
+                    presentation_variant="default",
+                    option_order=invalid_order,
+                    parameter_values={},
+                    random_seed="",
+                ),
+            )
+
+        valid = get_or_create_default_item_instance(self.snapshot)
+        with self.assertRaises(ValidationError):
+            ItemInstance.objects.filter(pk=valid.pk).update(
+                option_order=["B", "A"]
+            )
+
+    def test_true_false_default_instance_freezes_the_visible_option_order(self):
+        judgement = QuestionSnapshot.objects.create(
+            version=self.version,
+            source_question=self.question,
+            source_sequence=2,
+            code="TF1",
+            question_type=Question.Type.TRUE_FALSE,
+            text="判断题",
+            options=[],
+            correct_answer=True,
+            primary_kc="呈现 KC",
+            all_kcs=["呈现 KC"],
+        )
+        from .presentation_instances import get_or_create_default_item_instance
+
+        instance = get_or_create_default_item_instance(judgement)
+
+        self.assertEqual(instance.option_order, ["true", "false"])

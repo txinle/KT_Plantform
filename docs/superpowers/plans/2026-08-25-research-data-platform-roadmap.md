@@ -35,4 +35,3 @@
 ## Completion evidence
 
 The roadmap is complete only when all five detailed plans are checked off, the approved design's requirement matrix has no uncovered row, the full test suite passes, PostgreSQL concurrency tests pass in the Docker deployment, static collection succeeds, JavaScript syntax checks pass, and recorded 1440×900 and 390×844 screenshots show the teacher and student acceptance paths without horizontal overflow.
-

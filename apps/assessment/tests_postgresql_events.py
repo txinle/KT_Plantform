@@ -4,6 +4,7 @@ from unittest import skipUnless
 
 from django.db import close_old_connections, connection
 from django.test import TransactionTestCase
+from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.experiments.models import Experiment, ExperimentVersion, QuestionSnapshot
@@ -16,6 +17,7 @@ from .models import (
     Attempt,
     ExperimentSession,
     StudentQuestionAssignment,
+    SubmissionEvent,
 )
 
 
@@ -140,3 +142,67 @@ class PostgreSQLAssessmentEventConcurrencyTests(TransactionTestCase):
 
         self.assertEqual(len({result[1] for result in results}), 1)
         self.assertEqual(AssessmentEvent.objects.count(), 1)
+
+    def test_concurrent_authoritative_commit_persists_exactly_one_event(self):
+        assignment = StudentQuestionAssignment.objects.select_related(
+            "attempt"
+        ).get(pk=self.assignment_id)
+        submission_token = uuid.uuid4()
+        SubmissionEvent.objects.create(
+            attempt=assignment.attempt,
+            submission_token=submission_token,
+            final_answer="A",
+            is_correct=True,
+            score=1,
+            server_received_at=timezone.now(),
+            committed_at=timezone.now(),
+        )
+        barrier = threading.Barrier(2)
+        results = []
+
+        def append_commit():
+            close_old_connections()
+            try:
+                current_assignment = StudentQuestionAssignment.objects.select_related(
+                    "session", "attempt", "snapshot", "item_instance"
+                ).get(pk=self.assignment_id)
+                barrier.wait(timeout=10)
+                event = append_assessment_event(
+                    event_type="response_committed",
+                    event_version=1,
+                    event_domain="assessment",
+                    actor_source="server",
+                    session=current_assignment.session,
+                    assignment=current_assignment,
+                    attempt=current_assignment.attempt,
+                    question_snapshot=current_assignment.snapshot,
+                    item_instance=current_assignment.item_instance,
+                    payload={
+                        "submission_token": str(submission_token),
+                        "score": 1,
+                        "is_correct": True,
+                    },
+                    correlation_id=submission_token,
+                )
+                results.append(("ok", event.event_id))
+            except BaseException as error:
+                results.append(("error", error))
+            finally:
+                close_old_connections()
+
+        threads = [threading.Thread(target=append_commit) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+            self.assertFalse(thread.is_alive(), "Concurrent commit append deadlocked")
+
+        self.assertEqual(sum(result[0] == "ok" for result in results), 1)
+        self.assertEqual(sum(result[0] == "error" for result in results), 1)
+        self.assertEqual(
+            AssessmentEvent.objects.filter(
+                attempt=assignment.attempt,
+                event_type="response_committed",
+            ).count(),
+            1,
+        )

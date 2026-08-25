@@ -1,4 +1,7 @@
+import hashlib
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -38,6 +41,44 @@ class AppendOnlyEventError(RuntimeError):
     pass
 
 
+_EVENT_APPEND_ALLOWED = ContextVar("assessment_event_append_allowed", default=False)
+_EVENT_SCHEMA_ARTIFACT_APPEND_ALLOWED = ContextVar(
+    "event_schema_artifact_append_allowed",
+    default=False,
+)
+_SIMULATION_SNAPSHOT_APPEND_ALLOWED = ContextVar(
+    "simulation_snapshot_append_allowed",
+    default=False,
+)
+
+
+@contextmanager
+def _assessment_event_append_scope():
+    token = _EVENT_APPEND_ALLOWED.set(True)
+    try:
+        yield
+    finally:
+        _EVENT_APPEND_ALLOWED.reset(token)
+
+
+@contextmanager
+def _event_schema_artifact_append_scope():
+    token = _EVENT_SCHEMA_ARTIFACT_APPEND_ALLOWED.set(True)
+    try:
+        yield
+    finally:
+        _EVENT_SCHEMA_ARTIFACT_APPEND_ALLOWED.reset(token)
+
+
+@contextmanager
+def _simulation_snapshot_append_scope():
+    token = _SIMULATION_SNAPSHOT_APPEND_ALLOWED.set(True)
+    try:
+        yield
+    finally:
+        _SIMULATION_SNAPSHOT_APPEND_ALLOWED.reset(token)
+
+
 class AssessmentEventQuerySet(models.QuerySet):
     def update(self, **kwargs):
         raise AppendOnlyEventError("AssessmentEvent rows are append-only.")
@@ -45,8 +86,32 @@ class AssessmentEventQuerySet(models.QuerySet):
     def delete(self):
         raise AppendOnlyEventError("AssessmentEvent rows are append-only.")
 
+    def bulk_create(self, objs, **kwargs):
+        if not _EVENT_APPEND_ALLOWED.get():
+            raise AppendOnlyEventError(
+                "AssessmentEvent rows must use append_assessment_event()."
+            )
+        return super().bulk_create(objs, **kwargs)
+
 
 class AssessmentEventManager(models.Manager.from_queryset(AssessmentEventQuerySet)):
+    pass
+
+
+class ImmutableArtifactQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise AppendOnlyEventError("Event schema artifacts are immutable.")
+
+    def delete(self):
+        raise AppendOnlyEventError("Event schema artifacts are immutable.")
+
+    def bulk_create(self, objs, **kwargs):
+        raise AppendOnlyEventError(
+            "Immutable process records must use their validated create service."
+        )
+
+
+class ImmutableArtifactManager(models.Manager.from_queryset(ImmutableArtifactQuerySet)):
     pass
 
 class ExperimentSession(models.Model):
@@ -153,6 +218,41 @@ class SubmissionEvent(models.Model):
     committed_at = models.DateTimeField()
 
 
+class EventSchemaArtifact(models.Model):
+    event_type = models.CharField(max_length=64)
+    event_version = models.PositiveSmallIntegerField()
+    schema_sha256 = models.CharField(max_length=64, validators=[HASH_VALIDATOR])
+    schema_document = models.JSONField()
+    registered_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ImmutableArtifactManager()
+
+    class Meta:
+        ordering = ["event_type", "event_version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["event_type", "event_version"],
+                name="unique_event_schema_artifact",
+            ),
+            models.CheckConstraint(
+                condition=Q(event_version__gte=1),
+                name="event_schema_version_positive",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and not _EVENT_SCHEMA_ARTIFACT_APPEND_ALLOWED.get():
+            raise AppendOnlyEventError(
+                "Event schema artifacts must be registered by the append service."
+            )
+        if not self._state.adding:
+            raise AppendOnlyEventError("Event schema artifacts are immutable.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise AppendOnlyEventError("Event schema artifacts are immutable.")
+
+
 class ClientTimeSync(models.Model):
     class SyncQuality(models.TextChoices):
         VALID = "valid", "有效"
@@ -204,6 +304,8 @@ class ResponseSnapshot(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     schema_version = models.PositiveSmallIntegerField(default=1)
 
+    objects = ImmutableArtifactManager()
+
     class Meta:
         ordering = ["attempt_id", "created_at", "snapshot_id"]
         constraints = [
@@ -216,6 +318,26 @@ class ResponseSnapshot(models.Model):
                 name="response_snapshot_schema_positive",
             ),
         ]
+
+    def clean(self):
+        super().clean()
+        expected_hash = hashlib.sha256(self.content.encode("utf-8")).hexdigest()
+        errors = {}
+        if self.content_hash != expected_hash:
+            errors["content_hash"] = "响应哈希与 UTF-8 正文不一致。"
+        if self.content_length != len(self.content):
+            errors["content_length"] = "响应长度与正文字符数不一致。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise AppendOnlyEventError("ResponseSnapshot rows are immutable.")
+        self.full_clean(validate_unique=False, validate_constraints=False)
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise AppendOnlyEventError("ResponseSnapshot rows are immutable.")
 
 
 class SimulationSnapshot(models.Model):
@@ -233,6 +355,8 @@ class SimulationSnapshot(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     schema_version = models.PositiveSmallIntegerField(default=1)
 
+    objects = ImmutableArtifactManager()
+
     class Meta:
         ordering = ["attempt_id", "created_at", "snapshot_id"]
         constraints = [
@@ -245,6 +369,26 @@ class SimulationSnapshot(models.Model):
                 name="simulation_snapshot_schema_positive",
             ),
         ]
+
+    def clean(self):
+        super().clean()
+        if not isinstance(self.state_metadata, dict):
+            raise ValidationError(
+                {"state_metadata": "仿真快照元数据必须是 JSON 对象。"}
+            )
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and not _SIMULATION_SNAPSHOT_APPEND_ALLOWED.get():
+            raise AppendOnlyEventError(
+                "SimulationSnapshot rows must use create_simulation_snapshot()."
+            )
+        if not self._state.adding:
+            raise AppendOnlyEventError("SimulationSnapshot rows are immutable.")
+        self.full_clean(validate_unique=False, validate_constraints=False)
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise AppendOnlyEventError("SimulationSnapshot rows are immutable.")
 
 
 class ConfidenceAssignment(models.Model):
@@ -437,6 +581,14 @@ class AssessmentEvent(models.Model):
                 ),
                 name="unique_client_event_sequence",
             ),
+            models.UniqueConstraint(
+                fields=["attempt"],
+                condition=Q(
+                    attempt__isnull=False,
+                    event_type="response_committed",
+                ),
+                name="unique_attempt_response_commit",
+            ),
             models.CheckConstraint(
                 condition=(
                     Q(client_instance_id__isnull=True, client_sequence_no__isnull=True)
@@ -451,6 +603,11 @@ class AssessmentEvent(models.Model):
             models.CheckConstraint(
                 condition=Q(server_ingest_sequence_no__gte=1),
                 name="event_ingest_sequence_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(client_sequence_no__isnull=True)
+                | Q(client_sequence_no__gte=1),
+                name="event_client_sequence_positive",
             ),
             models.CheckConstraint(
                 condition=Q(server_committed_at__gte=models.F("server_received_at")),
@@ -473,6 +630,10 @@ class AssessmentEvent(models.Model):
         ]
 
     def save(self, *args, **kwargs):
+        if self._state.adding and not _EVENT_APPEND_ALLOWED.get():
+            raise AppendOnlyEventError(
+                "AssessmentEvent rows must use append_assessment_event()."
+            )
         if not self._state.adding:
             raise AppendOnlyEventError("AssessmentEvent rows are append-only.")
         return super().save(*args, **kwargs)

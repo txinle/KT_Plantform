@@ -1,11 +1,14 @@
 import uuid
+from unittest.mock import patch
+
 from django.test import TestCase
 from apps.accounts.models import User
 from apps.experiments.models import Experiment, ExperimentQuestion, ExperimentStudent
 from apps.experiments.services import publish_experiment
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
-from .models import Attempt
+from .models import AssessmentEvent, Attempt, SubmissionEvent
 from .services import get_or_create_session, record_visit, save_draft, submit_attempt
+from .event_services import append_assessment_event
 
 class AssessmentFlowTests(TestCase):
     def setUp(self):
@@ -36,3 +39,55 @@ class AssessmentFlowTests(TestCase):
         repeated = submit_attempt(attempt.id, token)
         self.assertEqual(repeated.id, submitted.id)
         self.assertEqual(Attempt.objects.filter(status=Attempt.Status.SUBMITTED).count(), 1)
+        committed = AssessmentEvent.objects.get(
+            attempt=submitted,
+            event_type="response_committed",
+        )
+        submission = SubmissionEvent.objects.get(attempt=submitted)
+        self.assertEqual(committed.payload["submission_token"], str(submission.submission_token))
+        self.assertEqual(committed.correlation_id, submission.submission_token)
+        self.assertTrue(
+            AssessmentEvent.objects.filter(
+                attempt=submitted,
+                event_type="attempt_closed",
+                payload={"close_reason": "submitted"},
+            ).exists()
+        )
+        with self.assertRaises(ValueError):
+            append_assessment_event(
+                event_type="response_committed",
+                event_version=1,
+                event_domain="assessment",
+                actor_source="server",
+                session=submitted.session,
+                attempt=submitted,
+                payload=committed.payload,
+                correlation_id=submission.submission_token,
+            )
+        self.assertEqual(
+            AssessmentEvent.objects.filter(
+                attempt=submitted,
+                event_type="response_committed",
+            ).count(),
+            1,
+        )
+
+    def test_committed_event_failure_rolls_back_the_business_submission(self):
+        session = get_or_create_session(self.experiment, self.student)
+        assignment = session.assignments.get()
+        attempt = record_visit(session.id, assignment.id)
+        save_draft(attempt.id, "B")
+
+        with patch(
+            "apps.assessment.services.append_assessment_event",
+            side_effect=RuntimeError("event write failed"),
+        ), self.assertRaises(RuntimeError):
+            submit_attempt(attempt.id, uuid.uuid4())
+
+        attempt.refresh_from_db()
+        session.refresh_from_db()
+        self.assertEqual(attempt.status, Attempt.Status.DRAFT)
+        self.assertIsNone(attempt.final_answer)
+        self.assertEqual(session.submission_count, 0)
+        self.assertFalse(SubmissionEvent.objects.filter(attempt=attempt).exists())
+        self.assertFalse(AssessmentEvent.objects.filter(attempt=attempt).exists())

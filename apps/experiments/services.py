@@ -594,6 +594,7 @@ def publish_experiment(experiment, actor):
         experiment,
         error_message="只有草稿实验可以发布",
     )
+    experiment.full_clean()
     course = None
     locked_classes = None
     if experiment.course_id is not None:

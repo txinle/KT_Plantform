@@ -16,7 +16,7 @@
 - Modify: `requirements.txt`
 - Test: `apps/assessment/test_event_schema_registry.py`
 
-- [ ] **Step 1: Write a failing import/version test**
+- [x] **Step 1: Write a failing import/version test**
 
 ```python
 from importlib.metadata import version
@@ -28,12 +28,12 @@ class JsonSchemaDependencyTests(SimpleTestCase):
         self.assertEqual(version("jsonschema"), "4.26.0")
 ```
 
-- [ ] **Step 2: Run the test and verify it fails**
+- [x] **Step 2: Run the test and verify it fails**
 
-Run: `..\\..\\.venv\\Scripts\\python.exe manage.py test apps.assessment.test_event_schema_registry.JsonSchemaDependencyTests -v 2`  
+Run: `..\\..\\.venv\\Scripts\\python.exe manage.py test apps.assessment.test_event_schema_registry.JsonSchemaDependencyTests -v 2`
 Expected: FAIL because `jsonschema` is not installed or has a different version.
 
-- [ ] **Step 3: Add and install the pinned dependency**
+- [x] **Step 3: Add and install the pinned dependency**
 
 Add to `requirements.txt`:
 
@@ -43,11 +43,11 @@ jsonschema==4.26.0
 
 Run: `..\\..\\.venv\\Scripts\\python.exe -m pip install jsonschema==4.26.0`
 
-- [ ] **Step 4: Re-run the test**
+- [x] **Step 4: Re-run the test**
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add requirements.txt apps/assessment/test_event_schema_registry.py
@@ -62,7 +62,7 @@ git commit -m "build: add event schema validation dependency"
 - Create: `apps/assessment/event_schema_registry.py`
 - Modify: `apps/assessment/test_event_schema_registry.py`
 
-- [ ] **Step 1: Add failing registry tests**
+- [x] **Step 1: Add failing registry tests**
 
 Tests must assert that:
 
@@ -84,12 +84,12 @@ self.assertRegex(event_schema_sha256("response_state_changed", 1), r"^[0-9a-f]{6
 
 The test also enumerates every approved event type and requires a v1 schema file.
 
-- [ ] **Step 2: Run tests and verify missing registry failures**
+- [x] **Step 2: Run tests and verify missing registry failures**
 
-Run: `..\\..\\.venv\\Scripts\\python.exe manage.py test apps.assessment.test_event_schema_registry -v 2`  
+Run: `..\\..\\.venv\\Scripts\\python.exe manage.py test apps.assessment.test_event_schema_registry -v 2`
 Expected: FAIL because the registry does not exist.
 
-- [ ] **Step 3: Implement a cached repository registry**
+- [x] **Step 3: Implement a cached repository registry**
 
 `event_schema_registry.py` must expose:
 
@@ -105,7 +105,7 @@ def registered_event_schemas() -> tuple[tuple[str, int], ...]: ...
 
 Use `Draft202012Validator.check_schema`, `Draft202012Validator.iter_errors`, deterministic JSON serialization for hashes, `functools.lru_cache`, and `Path(__file__).with_name("event_schemas")`. Error messages identify the event type/version and the first invalid JSON path without echoing confidential payload values.
 
-- [ ] **Step 4: Add v1 payload schemas**
+- [x] **Step 4: Add v1 payload schemas**
 
 Every file declares Draft 2020-12, object type and `additionalProperties: false`. Empty-payload lifecycle events use no properties. Required structured payloads include:
 
@@ -123,11 +123,11 @@ simulation events: simulation_snapshot_id and the event-specific result/status f
 legacy_draft_observed: answer_hash only
 ```
 
-- [ ] **Step 5: Re-run registry tests**
+- [x] **Step 5: Re-run registry tests**
 
 Expected: PASS with every schema discovered and validated.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/assessment/event_schemas apps/assessment/event_schema_registry.py apps/assessment/test_event_schema_registry.py
@@ -142,7 +142,7 @@ git commit -m "feat: add versioned assessment event schemas"
 - Create: `apps/accounts/test_research_subjects.py`
 - Modify: `apps/accounts/admin.py`
 
-- [ ] **Step 1: Write failing model and stability tests**
+- [x] **Step 1: Write failing model and stability tests**
 
 The tests create one student in two courses and two experiments in one course, then assert:
 
@@ -157,11 +157,11 @@ self.assertNotEqual(str(course_a_first.public_uuid), str(student.pk))
 
 They also assert that `ResearchStudyParticipant` is stable within a study, differs across studies, and `ResearchStudyCourse` prevents duplicate course links.
 
-- [ ] **Step 2: Run tests and verify missing model failures**
+- [x] **Step 2: Run tests and verify missing model failures**
 
 Run: `..\\..\\.venv\\Scripts\\python.exe manage.py test apps.accounts.test_research_subjects -v 2`.
 
-- [ ] **Step 3: Implement the models**
+- [x] **Step 3: Implement the models**
 
 Use `UUIDField(default=uuid.uuid4, editable=False, unique=True)` and these constraints:
 
@@ -173,20 +173,20 @@ UniqueConstraint(fields=["study", "student"], name="unique_research_study_partic
 
 `ResearchStudy` stores UUID primary public identifier, name, description, owner, active flag and timestamps. Courses and users remain protected by `on_delete=PROTECT` where deletion would silently break longitudinal linkage.
 
-- [ ] **Step 4: Generate and inspect migration**
+- [x] **Step 4: Generate and inspect migration**
 
-Run: `..\\..\\.venv\\Scripts\\python.exe manage.py makemigrations accounts --name research_subject_ids`  
+Run: `..\\..\\.venv\\Scripts\\python.exe manage.py makemigrations accounts --name research_subject_ids`
 Then inspect that UUID defaults are callable and no data-dependent values are embedded.
 
-- [ ] **Step 5: Add idempotent CourseSubject backfill**
+- [x] **Step 5: Add idempotent CourseSubject backfill**
 
 The migration creates one random `CourseSubject` for each existing distinct `(course_id, student_id)` in `CourseEnrollment`, `ExperimentStudent`, or `ExperimentSession` through a course experiment. It must use `bulk_create(..., ignore_conflicts=True)` and remain safe when rerun through migration tests.
 
-- [ ] **Step 6: Run model and migration tests**
+- [x] **Step 6: Run model and migration tests**
 
 Run: `..\\..\\.venv\\Scripts\\python.exe manage.py test apps.accounts.test_research_subjects apps.accounts.tests_course_migration -v 2`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/accounts
@@ -206,7 +206,7 @@ git commit -m "feat: add stable pseudonymized subject identifiers"
 - Create: `apps/assessment/migrations/0003_assignment_item_instance.py`
 - Modify: `apps/assessment/tests.py`
 
-- [ ] **Step 1: Add failing validation and snapshot tests**
+- [x] **Step 1: Add failing validation and snapshot tests**
 
 Cover defaults and boundaries:
 
@@ -221,31 +221,31 @@ with self.assertRaises(ValidationError): experiment.full_clean()
 
 Publishing must freeze all Confidence settings and heartbeat interval into `ExperimentVersion.configuration`.
 
-- [ ] **Step 2: Run tests and verify missing-field failures**
+- [x] **Step 2: Run tests and verify missing-field failures**
 
 Run: `..\\..\\.venv\\Scripts\\python.exe manage.py test apps.experiments.test_research_configuration -v 2`.
 
-- [ ] **Step 3: Add validated Experiment fields**
+- [x] **Step 3: Add validated Experiment fields**
 
 Add choices for Confidence mode and sampling unit, decimal probability constrained to `[0, 1]`, randomization seed, assignment/scale/prompt versions, and heartbeat interval with `MinValueValidator(15)` / `MaxValueValidator(120)`. `clean()` requires probability only in sampled mode and clears no values implicitly.
 
-- [ ] **Step 4: Add ItemInstance**
+- [x] **Step 4: Add ItemInstance**
 
 The model uses UUID primary identity and fields from the approved design. Add a unique default presentation per `(question_snapshot, presentation_hash)` and deterministic `presentation_hash` generation in a service helper from canonical JSON containing option order, parameter values and variant.
 
-- [ ] **Step 5: Create default instances during session assignment**
+- [x] **Step 5: Create default instances during session assignment**
 
 Update `get_or_create_session` through a service API so every assignment references a default `ItemInstance`. Do not change assigned, visit or submission ordering semantics. A data migration creates default instances for all existing assignments and then makes the assignment FK non-null.
 
-- [ ] **Step 6: Freeze configuration on publish**
+- [x] **Step 6: Freeze configuration on publish**
 
 Update the existing publish configuration dictionary with the exact Confidence and heartbeat fields. Add regression assertions that later draft edits do not alter an existing `ExperimentVersion`.
 
-- [ ] **Step 7: Run experiment and assessment regression tests**
+- [x] **Step 7: Run experiment and assessment regression tests**
 
 Run: `..\\..\\.venv\\Scripts\\python.exe manage.py test apps.experiments apps.assessment.tests apps.assessment.tests_course_navigation -v 1`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add apps/experiments apps/assessment/services.py apps/assessment/models.py apps/assessment/migrations
@@ -260,7 +260,7 @@ git commit -m "feat: freeze presentation and confidence configuration"
 - Create: `apps/assessment/test_process_data_models.py`
 - Modify: `apps/assessment/admin.py`
 
-- [ ] **Step 1: Write failing model contract tests**
+- [x] **Step 1: Write failing model contract tests**
 
 Tests assert all approved fields, UUID identities, nullable linkage, choices, uniqueness and append-only behavior. They specifically prove:
 
@@ -277,23 +277,23 @@ with self.assertRaises(IntegrityError):
 
 They also assert ResponseSnapshot hash uniqueness per attempt, SimulationSnapshot protected blob metadata, ConfidenceAssignment status distinctions, and ClientTimeSync instance-scoped semantics.
 
-- [ ] **Step 2: Run tests and verify missing-model failures**
+- [x] **Step 2: Run tests and verify missing-model failures**
 
 Run: `..\\..\\.venv\\Scripts\\python.exe manage.py test apps.assessment.test_process_data_models -v 2`.
 
-- [ ] **Step 3: Implement focused model classes**
+- [x] **Step 3: Implement focused model classes**
 
 Define `ClientTimeSync`, `ResponseSnapshot`, `SimulationSnapshot`, `ConfidenceAssignment` and `AssessmentEvent`. Use database checks for positive versions/sequences, valid probability/range values and the documented choices. Foreign keys to business state use `PROTECT` or nullable `SET_NULL` according to purge requirements; event links must never trigger accidental cascades from routine UI deletion.
 
-- [ ] **Step 4: Enforce append-only behavior through managers/services**
+- [x] **Step 4: Enforce append-only behavior through managers/services**
 
 Default managers expose reads but model `save()` rejects updates after initial insert and `delete()` rejects direct deletion. Internal purge uses a narrowly scoped queryset/service not imported by normal views. Bulk update/delete protections are tested; Django admin registers events read-only with no add/change/delete permission.
 
-- [ ] **Step 5: Add portable indexes and PostgreSQL BRIN operation**
+- [x] **Step 5: Add portable indexes and PostgreSQL BRIN operation**
 
 Create the four portable indexes in model metadata. Use `SeparateDatabaseAndState` plus vendor-gated `RunPython` to create the BRIN index only on PostgreSQL and no-op on SQLite. Migration reverse removes the PostgreSQL index.
 
-- [ ] **Step 6: Run migration and model tests on SQLite**
+- [x] **Step 6: Run migration and model tests on SQLite**
 
 Run:
 
@@ -303,7 +303,7 @@ Run:
 ..\\..\\.venv\\Scripts\\python.exe manage.py test apps.assessment.test_process_data_models -v 2
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/assessment
@@ -316,15 +316,15 @@ git commit -m "feat: add immutable process data contracts"
 - Create: `apps/assessment/event_services.py`
 - Create: `apps/assessment/test_event_services.py`
 
-- [ ] **Step 1: Write failing append-service tests**
+- [x] **Step 1: Write failing append-service tests**
 
 Cover payload validation, per-session ingest allocation, client idempotency, nullable time estimation, quality flags and correlation IDs. Two identical client events must return the same persisted row; a conflicting payload at the same `(client_instance_id, client_sequence_no)` must raise a structured conflict without mutating the original.
 
-- [ ] **Step 2: Run tests and verify missing service failures**
+- [x] **Step 2: Run tests and verify missing service failures**
 
 Run: `..\\..\\.venv\\Scripts\\python.exe manage.py test apps.assessment.test_event_services -v 2`.
 
-- [ ] **Step 3: Implement `append_assessment_event`**
+- [x] **Step 3: Implement `append_assessment_event`**
 
 Signature:
 
@@ -344,15 +344,15 @@ def append_assessment_event(
 
 Validate schema before locking. Inside `transaction.atomic`, lock the session row, allocate `server_ingest_sequence_no = max + 1`, compute estimates only from a valid time-sync sample, persist once, and convert uniqueness races into idempotent replay or explicit conflict.
 
-- [ ] **Step 4: Add concurrency tests**
+- [x] **Step 4: Add concurrency tests**
 
 SQLite tests prove sequential allocation and idempotent retry. PostgreSQL-only `TransactionTestCase` uses two connections/threads to prove unique ingest allocation and no duplicate client sequence. Skip PostgreSQL test with an explicit vendor condition on SQLite.
 
-- [ ] **Step 5: Run service and PostgreSQL test modules**
+- [x] **Step 5: Run service and PostgreSQL test modules**
 
 Run SQLite suite locally; record the PostgreSQL command for Docker execution in Phase 5.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/assessment/event_services.py apps/assessment/test_event_services.py apps/assessment/tests_postgresql_events.py
@@ -365,11 +365,11 @@ git commit -m "feat: centralize immutable event appends"
 - Modify: `docs/data-dictionary.md`
 - Modify: `docs/superpowers/plans/2026-08-25-research-data-phase-1-contracts.md`
 
-- [ ] **Step 1: Document raw versus derived semantics**
+- [x] **Step 1: Document raw versus derived semantics**
 
 Document every new table, primary/foreign key, null rule, clock limitation, append-only rule, pseudonym scope and event/schema version. Explicitly state that ingest order is not behavioral order and that pseudonymized data is not anonymous.
 
-- [ ] **Step 2: Run the phase gate**
+- [x] **Step 2: Run the phase gate**
 
 ```text
 ..\\..\\.venv\\Scripts\\python.exe manage.py check
@@ -382,13 +382,17 @@ git diff --check
 
 Expected: 0 failures; existing skips must remain explained.
 
-- [ ] **Step 3: Check off completed plan steps and commit documentation**
+- [x] **Step 3: Check off completed plan steps and commit documentation**
 
 ```bash
 git add docs requirements.txt apps
 git commit -m "docs: record process data contracts"
 ```
 
-- [ ] **Step 4: Review phase boundary**
+- [x] **Step 4: Review phase boundary**
 
 Do not start native browser collection until the Phase 1 model/API review confirms that no event payload, time field, pseudonym scope or migration requirement remains ambiguous.
+
+- [x] **Step 5: Close strict review findings**
+
+Prove direct event inserts are blocked, schema artifacts and snapshots are immutable, event links and time-sync samples are internally consistent, business submissions and process events commit atomically, and authoritative submission events are server-only. Enforce one `response_committed` per attempt at both the locked service boundary and database layer. Keep a PostgreSQL two-connection concurrency test for the row-lock behavior even when the local SQLite gate skips it explicitly.

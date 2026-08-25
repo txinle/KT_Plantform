@@ -10,6 +10,7 @@ from apps.experiments.presentation_instances import get_or_create_default_item_i
 from apps.experiments.services import derive_session_seeds, ordered_snapshots, select_snapshots
 from apps.question_bank.services.numeric import normalize_finite_decimal
 from apps.question_bank.services.scoring import score_payload
+from .event_services import append_assessment_event
 from .models import Attempt, DraftSaveEvent, ExperimentSession, QuestionVisitEvent, StudentQuestionAssignment, SubmissionEvent
 
 @transaction.atomic
@@ -206,6 +207,40 @@ def submit_attempt(attempt_id, token, client_time=None):
         attempt=attempt, submission_token=token_value, final_answer=attempt.final_answer,
         is_correct=correct, score=score, client_clicked_at=client_time,
         server_received_at=now, committed_at=now,
+    )
+    append_assessment_event(
+        event_type="response_committed",
+        event_version=1,
+        event_domain="assessment",
+        actor_source="server",
+        session=session,
+        assignment=attempt.assignment,
+        attempt=attempt,
+        question_snapshot=attempt.assignment.snapshot,
+        item_instance=attempt.assignment.item_instance,
+        correlation_id=token_value,
+        payload={
+            "submission_token": str(token_value),
+            "score": float(score),
+            "is_correct": correct,
+        },
+        capture_mode="native",
+        app_version="server",
+    )
+    append_assessment_event(
+        event_type="attempt_closed",
+        event_version=1,
+        event_domain="assessment",
+        actor_source="server",
+        session=session,
+        assignment=attempt.assignment,
+        attempt=attempt,
+        question_snapshot=attempt.assignment.snapshot,
+        item_instance=attempt.assignment.item_instance,
+        correlation_id=token_value,
+        payload={"close_reason": "submitted"},
+        capture_mode="native",
+        app_version="server",
     )
     return attempt
 

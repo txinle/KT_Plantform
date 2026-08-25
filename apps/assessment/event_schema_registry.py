@@ -90,13 +90,28 @@ def validate_event_payload(event_type: str, event_version: int, payload: dict) -
         Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(payload)
     )
     if errors:
+        first_error = errors[0]
+        json_path = "$"
+        for segment in first_error.absolute_path:
+            if isinstance(segment, int):
+                json_path += f"[{segment}]"
+            elif str(segment).isidentifier():
+                json_path += f".{segment}"
+            else:
+                json_path += f"[{json.dumps(str(segment))}]"
         raise EventPayloadValidationError(
-            f"Payload failed validation for {event_type}:v{event_version}"
+            f"Payload failed validation for {event_type}:v{event_version} at {json_path}"
         )
 
 
 def event_schema_sha256(event_type: str, event_version: int) -> str:
-    return hashlib.sha256(_schema_path(event_type, event_version).read_bytes()).hexdigest()
+    canonical = json.dumps(
+        _load_event_schema(event_type, event_version),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def registered_event_schemas() -> tuple[tuple[str, int], ...]:

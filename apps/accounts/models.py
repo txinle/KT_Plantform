@@ -3,7 +3,7 @@ import uuid
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
-from django.db import models
+from django.db import models, transaction
 
 
 class Course(models.Model):
@@ -165,6 +165,15 @@ class CourseEnrollment(models.Model):
 
     def __str__(self):
         return f"{self.course} / {self.class_group} / {self.student.shown_name}"
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        result = super().save(*args, **kwargs)
+        CourseSubject.objects.get_or_create(
+            course_id=self.course_id,
+            student_id=self.student_id,
+        )
+        return result
 
 
 class CourseSubject(models.Model):

@@ -14,7 +14,13 @@ class CourseQuestionIdentityMigrationTests(TransactionTestCase):
     @staticmethod
     def targets_with_question_bank_at(executor, question_bank_target):
         return [
-            question_bank_target if target[0] == "question_bank" else target
+            question_bank_target
+            if target[0] == "question_bank"
+            else ("experiments", "0005_experiment_participant_rules")
+            if target[0] == "experiments"
+            else ("assessment", "0002_experimentsession_sampling_seeds")
+            if target[0] == "assessment"
+            else target
             for target in executor.loader.graph.leaf_nodes()
         ]
 

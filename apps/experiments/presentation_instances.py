@@ -1,34 +1,14 @@
 from __future__ import annotations
 
-import hashlib
-import json
-
-from .models import ItemInstance
-
-
-def canonical_presentation_hash(
-    *,
-    presentation_variant,
-    option_order,
-    parameter_values,
-    random_seed,
-):
-    canonical = json.dumps(
-        {
-            "option_order": option_order,
-            "parameter_values": parameter_values,
-            "presentation_variant": presentation_variant,
-            "random_seed": random_seed,
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+from .models import (
+    ItemInstance,
+    canonical_presentation_hash,
+    presentation_option_keys,
+)
 
 
 def get_or_create_default_item_instance(question_snapshot):
-    option_order = [option["key"] for option in question_snapshot.options]
+    option_order = presentation_option_keys(question_snapshot)
     presentation = {
         "presentation_variant": "default",
         "option_order": option_order,

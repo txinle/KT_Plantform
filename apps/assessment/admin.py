@@ -5,6 +5,7 @@ from .models import (
     ClientTimeSync,
     ConfidenceAssignment,
     DraftSaveEvent,
+    EventSchemaArtifact,
     ExperimentSession,
     QuestionVisitEvent,
     ResponseSnapshot,
@@ -62,3 +63,4 @@ admin.site.register(ClientTimeSync, ReadOnlyProcessDataAdmin)
 admin.site.register(ResponseSnapshot, ReadOnlyProcessDataAdmin)
 admin.site.register(SimulationSnapshot, ReadOnlyProcessDataAdmin)
 admin.site.register(ConfidenceAssignment, ReadOnlyProcessDataAdmin)
+admin.site.register(EventSchemaArtifact, ReadOnlyProcessDataAdmin)
