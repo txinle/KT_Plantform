@@ -1,3 +1,5 @@
+import uuid
+
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
@@ -163,3 +165,102 @@ class CourseEnrollment(models.Model):
 
     def __str__(self):
         return f"{self.course} / {self.class_group} / {self.student.shown_name}"
+
+
+class CourseSubject(models.Model):
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.PROTECT,
+        related_name="research_subjects",
+    )
+    student = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name="course_subjects",
+        limit_choices_to={"role": User.Role.STUDENT},
+    )
+    public_uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["course_id", "student_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["course", "student"],
+                name="unique_course_subject",
+            )
+        ]
+
+    def __str__(self):
+        return str(self.public_uuid)
+
+
+class ResearchStudy(models.Model):
+    public_uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    name = models.CharField(max_length=180)
+    description = models.TextField(blank=True)
+    owner = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name="owned_research_studies",
+        limit_choices_to={"role": User.Role.TEACHER},
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at", "name"]
+
+    def __str__(self):
+        return self.name
+
+
+class ResearchStudyCourse(models.Model):
+    study = models.ForeignKey(
+        ResearchStudy,
+        on_delete=models.CASCADE,
+        related_name="course_links",
+    )
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.PROTECT,
+        related_name="research_study_links",
+    )
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["study", "course"],
+                name="unique_research_study_course",
+            )
+        ]
+
+
+class ResearchStudyParticipant(models.Model):
+    study = models.ForeignKey(
+        ResearchStudy,
+        on_delete=models.CASCADE,
+        related_name="participants",
+    )
+    student = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name="research_study_participations",
+        limit_choices_to={"role": User.Role.STUDENT},
+    )
+    public_uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["study_id", "student_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["study", "student"],
+                name="unique_research_study_participant",
+            )
+        ]
+
+    def __str__(self):
+        return str(self.public_uuid)

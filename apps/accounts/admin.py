@@ -1,6 +1,16 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import ClassGroup, Course, CourseEnrollment, CourseTeacher, User
+from .models import (
+    ClassGroup,
+    Course,
+    CourseEnrollment,
+    CourseSubject,
+    CourseTeacher,
+    ResearchStudy,
+    ResearchStudyCourse,
+    ResearchStudyParticipant,
+    User,
+)
 
 admin.site.site_header = "KT Data Lab 管理后台"
 admin.site.site_title = "KT Data Lab 管理后台"
@@ -52,3 +62,31 @@ class CourseEnrollmentAdmin(admin.ModelAdmin):
     list_display = ("student", "course", "class_group", "is_active")
     list_filter = ("course", "class_group", "is_active")
     search_fields = ("student__username", "student__student_number", "student__display_name")
+
+
+@admin.register(CourseSubject)
+class CourseSubjectAdmin(admin.ModelAdmin):
+    list_display = ("public_uuid", "course", "student", "created_at")
+    list_filter = ("course",)
+    search_fields = ("public_uuid", "student__student_number", "student__display_name")
+    readonly_fields = ("public_uuid", "created_at")
+
+
+class ResearchStudyCourseInline(admin.TabularInline):
+    model = ResearchStudyCourse
+    extra = 0
+
+
+class ResearchStudyParticipantInline(admin.TabularInline):
+    model = ResearchStudyParticipant
+    extra = 0
+    readonly_fields = ("public_uuid", "created_at")
+
+
+@admin.register(ResearchStudy)
+class ResearchStudyAdmin(admin.ModelAdmin):
+    list_display = ("name", "public_uuid", "owner", "is_active", "updated_at")
+    list_filter = ("is_active",)
+    search_fields = ("name", "public_uuid", "owner__username")
+    readonly_fields = ("public_uuid", "created_at", "updated_at")
+    inlines = (ResearchStudyCourseInline, ResearchStudyParticipantInline)
