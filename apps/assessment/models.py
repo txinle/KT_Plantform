@@ -412,8 +412,12 @@ class AssessmentEvent(models.Model):
         choices=CaptureMode.choices,
         default=CaptureMode.NATIVE,
     )
-    quality_flags = models.JSONField(default=list, validators=[validate_quality_flags])
-    payload = models.JSONField(default=dict)
+    quality_flags = models.JSONField(
+        default=list,
+        blank=True,
+        validators=[validate_quality_flags],
+    )
+    payload = models.JSONField(default=dict, blank=True)
     app_version = models.CharField(max_length=64, blank=True)
 
     objects = AssessmentEventManager()
