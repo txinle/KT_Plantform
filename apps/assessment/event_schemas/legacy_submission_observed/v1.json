@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "legacy_submission_event_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "submission_token": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "score": {
+      "type": "number"
+    },
+    "is_correct": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "legacy_submission_event_id",
+    "submission_token",
+    "score",
+    "is_correct"
+  ],
+  "additionalProperties": false
+}

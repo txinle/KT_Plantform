@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "confidence_assignment_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "scale_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "prompt_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    }
+  },
+  "required": [
+    "confidence_assignment_id",
+    "scale_version",
+    "prompt_version"
+  ],
+  "additionalProperties": false
+}

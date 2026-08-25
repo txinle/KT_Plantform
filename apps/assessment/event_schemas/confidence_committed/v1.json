@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "confidence_assignment_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "probability": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "multipleOf": 10
+    }
+  },
+  "required": [
+    "confidence_assignment_id",
+    "probability"
+  ],
+  "additionalProperties": false
+}

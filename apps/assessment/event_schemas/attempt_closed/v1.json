@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "close_reason": {
+      "type": "string",
+      "enum": [
+        "submitted",
+        "timed_out",
+        "unanswered",
+        "invalidated"
+      ]
+    }
+  },
+  "required": [
+    "close_reason"
+  ],
+  "additionalProperties": false
+}

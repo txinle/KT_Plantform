@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "submission_token": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "score": {
+      "type": "number"
+    },
+    "is_correct": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "submission_token",
+    "score",
+    "is_correct"
+  ],
+  "additionalProperties": false
+}

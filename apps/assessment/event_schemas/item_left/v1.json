@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "leave_reason": {
+      "type": "string",
+      "enum": [
+        "navigation",
+        "skip",
+        "submit",
+        "finish",
+        "pagehide",
+        "timeout"
+      ]
+    }
+  },
+  "required": [
+    "leave_reason"
+  ],
+  "additionalProperties": false
+}

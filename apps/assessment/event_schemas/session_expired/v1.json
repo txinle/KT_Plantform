@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "expiry_reason": {
+      "type": "string",
+      "enum": [
+        "total_time_limit",
+        "session_policy"
+      ]
+    }
+  },
+  "required": [
+    "expiry_reason"
+  ],
+  "additionalProperties": false
+}

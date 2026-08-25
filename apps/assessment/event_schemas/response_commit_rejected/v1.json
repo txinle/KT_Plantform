@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "submission_token": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "reason_code": {
+      "type": "string",
+      "enum": [
+        "already_submitted",
+        "invalid_answer",
+        "session_closed",
+        "time_expired",
+        "conflict",
+        "unauthorized",
+        "server_error"
+      ]
+    }
+  },
+  "required": [
+    "submission_token",
+    "reason_code"
+  ],
+  "additionalProperties": false
+}

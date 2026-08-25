@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "question_type": {
+      "type": "string",
+      "enum": [
+        "single_choice",
+        "multiple_choice",
+        "numeric",
+        "short_answer",
+        "fill_blank",
+        "true_false"
+      ]
+    }
+  },
+  "required": [
+    "question_type"
+  ],
+  "additionalProperties": false
+}

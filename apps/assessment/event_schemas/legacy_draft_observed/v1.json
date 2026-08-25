@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "legacy_draft_event_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "answer_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "legacy_draft_event_id",
+    "answer_hash"
+  ],
+  "additionalProperties": false
+}

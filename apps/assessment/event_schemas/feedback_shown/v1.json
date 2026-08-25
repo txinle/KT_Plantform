@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "feedback_mode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "correctness",
+        "full"
+      ]
+    },
+    "included_correctness": {
+      "type": "boolean"
+    },
+    "included_correct_answer": {
+      "type": "boolean"
+    },
+    "included_explanation": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "feedback_mode",
+    "included_correctness",
+    "included_correct_answer",
+    "included_explanation"
+  ],
+  "additionalProperties": false
+}

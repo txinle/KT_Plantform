@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "entry_reason": {
+      "type": "string",
+      "enum": [
+        "session_start",
+        "navigation_click",
+        "skip_next",
+        "submit_next",
+        "resume"
+      ]
+    },
+    "from_assignment_id": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "entry_reason",
+    "from_assignment_id"
+  ],
+  "additionalProperties": false
+}

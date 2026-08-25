@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "legacy_session_id": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "legacy_session_id"
+  ],
+  "additionalProperties": false
+}

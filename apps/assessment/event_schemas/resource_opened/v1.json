@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "resource_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "resource_type": {
+      "type": "string",
+      "enum": [
+        "video",
+        "document",
+        "knowledge_point",
+        "external_link"
+      ]
+    }
+  },
+  "required": [
+    "resource_id",
+    "resource_type"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "question_type": {
+      "type": "string",
+      "enum": [
+        "single_choice",
+        "multiple_choice",
+        "numeric",
+        "short_answer",
+        "fill_blank",
+        "true_false"
+      ]
+    },
+    "response_state_after": {
+      "type": [
+        "string",
+        "number",
+        "boolean",
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": [
+          "string",
+          "number",
+          "boolean"
+        ]
+      }
+    },
+    "change_source": {
+      "type": "string",
+      "enum": [
+        "student",
+        "restore",
+        "forced_snapshot"
+      ]
+    }
+  },
+  "required": [
+    "question_type",
+    "response_state_after",
+    "change_source"
+  ],
+  "additionalProperties": false
+}
