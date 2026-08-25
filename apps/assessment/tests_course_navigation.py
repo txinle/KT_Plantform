@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.urls import reverse
@@ -123,6 +124,36 @@ class StudentCourseNavigationTests(TestCase):
         self.assertRedirects(response, reverse("assessment:dashboard"))
         self.assertFalse(ExperimentSession.objects.filter(student=self.other_student).exists())
 
+    def test_start_locks_course_enrollment_before_creating_a_session(self):
+        lock_order = []
+        original_enrollment_lock = CourseEnrollment.objects.select_for_update
+        original_session_write = ExperimentSession.objects.get_or_create
+
+        def lock_enrollment(*args, **kwargs):
+            lock_order.append("enrollment")
+            return original_enrollment_lock(*args, **kwargs)
+
+        def write_session(*args, **kwargs):
+            lock_order.append("session")
+            return original_session_write(*args, **kwargs)
+
+        self.client.force_login(self.student)
+        with (
+            patch.object(
+                CourseEnrollment.objects,
+                "select_for_update",
+                side_effect=lock_enrollment,
+            ),
+            patch.object(
+                ExperimentSession.objects,
+                "get_or_create",
+                side_effect=write_session,
+            ),
+        ):
+            self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
+
+        self.assertEqual(lock_order[:2], ["enrollment", "session"])
+
     def test_archiving_course_blocks_writes_to_existing_session(self):
         self.client.force_login(self.student)
         self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
@@ -157,3 +188,40 @@ class StudentCourseNavigationTests(TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertFalse(DraftSaveEvent.objects.exists())
+
+    def test_existing_session_write_locks_enrollment_before_research_event(self):
+        self.client.force_login(self.student)
+        self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
+        attempt = ExperimentSession.objects.get(student=self.student).attempts.get()
+        lock_order = []
+        original_enrollment_lock = CourseEnrollment.objects.select_for_update
+        original_event_write = DraftSaveEvent.objects.create
+
+        def lock_enrollment(*args, **kwargs):
+            lock_order.append("enrollment")
+            return original_enrollment_lock(*args, **kwargs)
+
+        def write_event(*args, **kwargs):
+            lock_order.append("event")
+            return original_event_write(*args, **kwargs)
+
+        with (
+            patch.object(
+                CourseEnrollment.objects,
+                "select_for_update",
+                side_effect=lock_enrollment,
+            ),
+            patch.object(
+                DraftSaveEvent.objects,
+                "create",
+                side_effect=write_event,
+            ),
+        ):
+            response = self.client.post(
+                reverse("assessment:save_draft", args=[attempt.pk]),
+                data=json.dumps({"answer": "2"}),
+                content_type="application/json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(lock_order[:2], ["enrollment", "event"])

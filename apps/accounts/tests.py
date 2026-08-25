@@ -345,6 +345,19 @@ class StudentBatchImportValidationTests(StudentBatchImportCoreTests):
             with self.subTest(expected=expected):
                 self._assert_upload_error(headers, rows, expected)
 
+    def test_multi_class_legacy_import_still_requires_the_full_class_name(self):
+        ClassGroup.objects.create(
+            owner=self.teacher,
+            academic_year="2026",
+            name="第二实验班",
+        )
+
+        self._assert_upload_error(
+            ["学号", "姓名", "班级"],
+            [["STRICT-CLASS", "严格匹配学生", self.class_group.name]],
+            "班级无法匹配",
+        )
+
     def test_rejects_missing_duplicate_unknown_headers_and_non_xlsx_files(self):
         cases = [
             (["学号", "姓名"], [["S1", "甲"]]),

@@ -326,6 +326,26 @@
       });
     });
 
+    const removeStudentDialog = document.querySelector('#remove-student-dialog');
+    if (removeStudentDialog) {
+      const removeStudentForm = removeStudentDialog.querySelector('[data-student-remove-form]');
+      const removeStudentLabel = removeStudentDialog.querySelector('[data-student-remove-label]');
+      const removeStudentConfirm = removeStudentDialog.querySelector('[data-student-remove-confirm]');
+
+      removeStudentDialog.addEventListener('show.bs.modal', (event) => {
+        const trigger = event.relatedTarget;
+        if (!trigger?.matches('[data-student-remove-trigger]')) return;
+        removeStudentForm.action = trigger.dataset.studentRemoveUrl;
+        removeStudentLabel.textContent = trigger.dataset.studentRemoveLabel;
+        removeStudentConfirm.disabled = false;
+        removeStudentConfirm.textContent = '确认移出课程';
+      });
+      removeStudentForm.addEventListener('submit', () => {
+        removeStudentConfirm.disabled = true;
+        removeStudentConfirm.textContent = '正在移出…';
+      });
+    }
+
     const revisionRoot = document.querySelector('[data-course-revision-url]');
     if (revisionRoot) {
       let courseRevision = revisionRoot.dataset.courseRevision;

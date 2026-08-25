@@ -48,6 +48,7 @@ urlpatterns = [
     path("<int:course_pk>/classes/<int:class_pk>/students/import-template.xlsx", course_resource_views.student_import_template, name="student_import_template"),
     path("<int:course_pk>/classes/<int:class_pk>/students/import/", course_resource_views.student_import, name="student_import"),
     path("<int:course_pk>/classes/<int:class_pk>/students/<int:student_pk>/move/", course_resource_views.move_student, name="move_student"),
+    path("<int:course_pk>/classes/<int:class_pk>/students/<int:student_pk>/remove/", course_resource_views.remove_student, name="remove_student"),
     path("<int:course_pk>/classes/<int:class_pk>/students/<int:student_pk>/reset-password/", course_resource_views.reset_student_password, name="reset_password"),
     path("<int:course_pk>/experiments/", experiment_views.experiment_list, name="experiments"),
     path("<int:course_pk>/experiments/create/", experiment_views.experiment_create, name="experiment_create"),

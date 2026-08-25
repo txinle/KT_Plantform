@@ -22,6 +22,7 @@ from .enrollment_services import (
     copy_class_enrollments,
     enroll_parsed_students,
     enroll_single_student,
+    remove_course_enrollment,
     transfer_course_enrollment,
 )
 from .forms import (
@@ -244,7 +245,7 @@ def class_update(request, course_pk, class_pk):
                     ),
                 )
     except IntegrityError:
-        form.add_error(None, "同一课程和学年中已存在该班级名称。")
+        form.add_error(None, "同一课程和年级中已存在该班级名称。")
     if saved_class_group:
         messages.success(request, "班级设置已保存。")
         return redirect("courses:class_detail", course.pk, saved_class_group.pk)
@@ -392,7 +393,7 @@ def student_copy(request, course_pk, class_pk):
 def class_detail(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     class_group = get_object_or_404(course.classes, pk=class_pk)
-    enrollments = class_group.enrollments.select_related("student")
+    enrollments = class_group.enrollments.filter(is_active=True).select_related("student")
     query = request.GET.get("q", "").strip()
     if query:
         enrollments = enrollments.filter(
@@ -466,6 +467,39 @@ def move_student(request, course_pk, class_pk, student_pk):
     )
     messages.success(request, "学生已转入目标班级。")
     return redirect("courses:class_detail", course.pk, target.pk)
+
+
+@require_POST
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def remove_student(request, course_pk, class_pk, student_pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_writable_course(course)
+    class_group = get_object_or_404(course.classes, pk=class_pk)
+    enrollment = get_object_or_404(
+        CourseEnrollment.objects.select_related("student"),
+        course=course,
+        class_group=class_group,
+        student_id=student_pk,
+        is_active=True,
+    )
+    if request.POST.get("confirmation") != "delete":
+        return HttpResponseBadRequest("请在二次确认后再将学生移出课程。")
+
+    student = enrollment.student
+    try:
+        with transaction.atomic():
+            details = remove_course_enrollment(
+                course=course,
+                class_group=class_group,
+                enrollment=enrollment,
+            )
+            log_action(request, "student.course_remove", student, details)
+    except ValidationError as exc:
+        messages.error(request, "; ".join(exc.messages))
+        return redirect("courses:class_detail", course.pk, class_group.pk)
+
+    messages.success(request, "学生已移出当前课程；全局账号和历史研究数据均已保留。")
+    return redirect("courses:class_detail", course.pk, class_group.pk)
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)

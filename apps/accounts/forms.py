@@ -131,6 +131,11 @@ class ClassGroupForm(forms.ModelForm):
     class Meta:
         model = ClassGroup
         fields = ["name", "academic_year"]
+        widgets = {
+            "academic_year": forms.TextInput(
+                attrs={"placeholder": "如：2025", "inputmode": "numeric", "maxlength": 4}
+            )
+        }
 
 
 class ClassGroupRenameForm(forms.ModelForm):
@@ -148,7 +153,7 @@ class ClassGroupRenameForm(forms.ModelForm):
             name=value,
         ).exclude(pk=self.instance.pk)
         if duplicate.exists():
-            raise forms.ValidationError("同一课程和学年中已存在该班级名称。")
+            raise forms.ValidationError("同一课程和年级中已存在该班级名称。")
         return value
 
 
@@ -164,8 +169,13 @@ class ClassGroupUpdateForm(forms.ModelForm):
         fields = ["name", "academic_year", "is_active"]
         labels = {
             "name": "班级名称",
-            "academic_year": "学年",
+            "academic_year": "年级",
             "is_active": "班级可用",
+        }
+        widgets = {
+            "academic_year": forms.TextInput(
+                attrs={"placeholder": "如：2025", "inputmode": "numeric", "maxlength": 4}
+            )
         }
 
     def __init__(self, *args, **kwargs):
@@ -194,7 +204,7 @@ class ClassGroupUpdateForm(forms.ModelForm):
             academic_year=academic_year,
         ).exclude(pk=self.instance.pk)
         if duplicate.exists():
-            raise forms.ValidationError("同一课程和学年中已存在该班级名称。")
+            raise forms.ValidationError("同一课程和年级中已存在该班级名称。")
         return cleaned
 
 

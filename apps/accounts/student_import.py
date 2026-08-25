@@ -37,7 +37,15 @@ def build_student_import_workbook(classes, scope_label=None):
     if scope_label:
         instructions.append([f"适用范围：{scope_label}"])
     instructions.append(["仅支持 .xlsx；学号、姓名、班级均为必填字段。"])
-    instructions.append(["班级必须与下列可用班级完整名称精确一致。"])
+    if len(classes) == 1:
+        instructions.append(
+            [
+                "本页导入可填写当前班级名称或完整名称；"
+                "校验后将统一显示为完整名称。"
+            ]
+        )
+    else:
+        instructions.append(["班级必须与下列可用班级完整名称精确一致。"])
     instructions.append(["新账号初始密码规则：S + 学号；已有账号密码保持不变。"])
     instructions.append([])
     instructions.append(["填写示例（仅供参考，不会从本页导入）"])
@@ -67,7 +75,10 @@ def parse_student_workbook(uploaded_file, classes, *, allow_existing=False):
     if set(headers) != set(EXPECTED_HEADERS) or len(headers) != len(EXPECTED_HEADERS):
         raise StudentImportError("表头必须且只能包含：学号、姓名、班级")
 
+    classes = list(classes)
     class_map = {str(class_group): class_group for class_group in classes}
+    if len(classes) == 1:
+        class_map[classes[0].name] = classes[0]
     parsed = []
     seen_numbers = set()
     for row_number, values in enumerate(rows, start=2):
@@ -89,7 +100,9 @@ def parse_student_workbook(uploaded_file, classes, *, allow_existing=False):
         if class_group is None:
             raise StudentImportError(f"第 {row_number} 行班级无法匹配：{class_name}")
         seen_numbers.add(student_number)
-        parsed.append(ParsedStudent(student_number, display_name, class_group.pk, class_name))
+        parsed.append(
+            ParsedStudent(student_number, display_name, class_group.pk, str(class_group))
+        )
     if not parsed:
         raise StudentImportError("文件中没有可导入的学生")
     if allow_existing:

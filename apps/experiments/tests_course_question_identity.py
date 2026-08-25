@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError
 from django.test import TestCase
+from django.urls import reverse
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
@@ -86,6 +87,24 @@ class CourseQuestionIdentitySnapshotTests(TestCase):
         self.assertEqual(snapshot.source_bank_id, self.bank.pk)
         self.assertEqual(snapshot.source_bank_name, "原题库名称")
         self.assertEqual(snapshot.bank_sequence, 17)
+
+    def test_course_publish_view_reports_missing_primary_kc_without_a_version(self):
+        QuestionConcept.objects.filter(question=self.question, is_primary=True).delete()
+        self.client.force_login(self.teacher)
+
+        response = self.client.post(
+            reverse(
+                "courses:experiment_publish",
+                args=[self.course.pk, self.experiment.pk],
+            ),
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f"以下题目缺少主知识点：{self.question.code}")
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
+        self.assertFalse(self.experiment.versions.exists())
 
     def test_publish_rejects_bulk_created_course_question_without_identity(self):
         bulk_question = Question(

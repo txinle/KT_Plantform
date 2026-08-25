@@ -1,5 +1,6 @@
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db import models
 
 
@@ -65,7 +66,17 @@ class CourseTeacher(models.Model):
 
 class ClassGroup(models.Model):
     name = models.CharField("班级", max_length=120)
-    academic_year = models.CharField("学年", max_length=32, blank=True)
+    academic_year = models.CharField(
+        "年级",
+        max_length=32,
+        blank=True,
+        validators=[
+            RegexValidator(
+                regex=r"^\d{4}$",
+                message="年级必须填写四位年份，如：2025。",
+            )
+        ],
+    )
     owner = models.ForeignKey("User", null=True, blank=True, on_delete=models.SET_NULL, related_name="owned_classes")
     course = models.ForeignKey(
         Course,

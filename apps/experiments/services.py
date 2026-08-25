@@ -417,7 +417,7 @@ def _validate_question_answer_structure(question):
 
 def _publish_candidates(question_bank):
     return list(
-        Question.objects.select_for_update()
+        Question.objects.select_for_update(of=("self",))
         .filter(bank=question_bank, status=Question.Status.ACTIVE)
         .select_related("bank", "course_identity")
         .prefetch_related("options", "concept_links__concept")
@@ -468,7 +468,7 @@ def validate_for_publish(experiment, question_bank=None, participant_count=None)
     # an empty candidate pool.
     linked_questions = [
         link.question
-        for link in experiment.question_links.select_for_update().select_related(
+        for link in experiment.question_links.select_for_update(of=("self",)).select_related(
             "question__bank", "question__course_identity"
         )
     ]

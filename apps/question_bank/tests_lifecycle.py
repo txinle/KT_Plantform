@@ -579,7 +579,7 @@ class QuestionBankLifecycleUITests(TestCase):
             reverse("courses:bank_detail", args=[self.course.pk, self.bank.pk])
         )
 
-        self.assertContains(response, "static/js/app.js?v=20260824.1")
+        self.assertContains(response, "static/js/app.js?v=20260825.1")
 
     def test_main_list_uses_dedicated_archive_action_and_disallows_archived_creation(self):
         response = self.client.get(reverse("courses:banks", args=[self.course.pk]))

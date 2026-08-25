@@ -21,7 +21,7 @@ def get_or_create_session(experiment, student):
     if experiment.course_id:
         from apps.accounts.models import CourseEnrollment
 
-        if not CourseEnrollment.objects.filter(
+        if not CourseEnrollment.objects.select_for_update().filter(
             course_id=experiment.course_id,
             student=student,
             is_active=True,
@@ -84,7 +84,7 @@ def _validate_course_access(session):
         raise ValidationError("课程已归档，历史会话只读")
     from apps.accounts.models import CourseEnrollment
 
-    if not CourseEnrollment.objects.filter(
+    if not CourseEnrollment.objects.select_for_update().filter(
         course_id=experiment.course_id,
         student_id=session.student_id,
         is_active=True,

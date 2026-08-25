@@ -2,12 +2,12 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.core.files.uploadedfile import SimpleUploadedFile
 from io import BytesIO
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from unittest.mock import patch
 
 from apps.audit.models import AuditLog
 
-from .forms import ClassGroupRenameForm, ClassGroupUpdateForm
+from .forms import ClassGroupForm, ClassGroupRenameForm, ClassGroupUpdateForm
 from .models import ClassGroup, Course, CourseEnrollment, CourseTeacher, User
 
 
@@ -219,6 +219,97 @@ class CourseWorkspaceViewTests(TestCase):
         self.assertNotContains(by_year, "认知追踪实验班")
         self.assertContains(by_year, "清除筛选")
 
+    def test_class_grade_uses_four_digit_validation_and_visible_guidance(self):
+        valid = ClassGroupForm({"name": "电子信息工程一班", "academic_year": "2025"})
+        blank = ClassGroupForm({"name": "不设年级班", "academic_year": ""})
+        invalid = ClassGroupForm({"name": "错误年级班", "academic_year": "2026秋"})
+
+        self.assertTrue(valid.is_valid())
+        self.assertTrue(blank.is_valid())
+        self.assertFalse(invalid.is_valid())
+        self.assertEqual(invalid.errors["academic_year"], ["年级必须填写四位年份，如：2025。"])
+        self.assertEqual(valid.fields["academic_year"].label, "年级")
+        self.assertEqual(valid.fields["academic_year"].widget.attrs["placeholder"], "如：2025")
+        self.assertEqual(valid.fields["academic_year"].widget.attrs["inputmode"], "numeric")
+
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("courses:classes", args=[self.course.pk]))
+        self.assertContains(response, "班级名称或年级")
+        self.assertContains(response, "如：2025")
+        self.assertNotContains(response, "班级名称或学年")
+
+        historical = ClassGroup.objects.create(
+            course=self.course,
+            name="历史班级",
+            academic_year="2026秋季学期",
+        )
+        update = ClassGroupUpdateForm(instance=historical)
+        invalid_update = ClassGroupUpdateForm(
+            {
+                "name": historical.name,
+                "academic_year": historical.academic_year,
+                "is_active": "on",
+                "state_token": update.initial["state_token"],
+            },
+            instance=historical,
+        )
+        self.assertEqual(update.fields["academic_year"].label, "年级")
+        self.assertEqual(update.fields["academic_year"].widget.attrs["placeholder"], "如：2025")
+        self.assertFalse(invalid_update.is_valid())
+        historical.refresh_from_db()
+        self.assertEqual(historical.academic_year, "2026秋季学期")
+
+    def test_class_import_accepts_visible_name_through_preview_and_confirmation(self):
+        class_group = ClassGroup.objects.create(
+            course=self.course,
+            name="EDA1班",
+            academic_year="2025",
+        )
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["学号", "姓名", "班级"])
+        sheet.append(["0001", "xss1", "EDA1班"])
+        stream = BytesIO()
+        workbook.save(stream)
+        upload = SimpleUploadedFile(
+            "students.xlsx",
+            stream.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.client.force_login(self.owner)
+        url = reverse("courses:student_import", args=[self.course.pk, class_group.pk])
+        template = self.client.get(
+            reverse(
+                "courses:student_import_template",
+                args=[self.course.pk, class_group.pk],
+            )
+        )
+        template_workbook = load_workbook(BytesIO(template.content), data_only=True)
+        instructions = "\n".join(
+            str(cell.value or "")
+            for row in template_workbook["填写说明"].iter_rows()
+            for cell in row
+        )
+        self.assertIn("当前班级名称或完整名称", instructions)
+
+        preview = self.client.post(url, {"file": upload})
+        self.assertContains(preview, "名单校验通过")
+        self.assertContains(preview, "2025 EDA1班")
+
+        confirmed = self.client.post(url, {"action": "confirm"})
+
+        self.assertRedirects(
+            confirmed,
+            reverse("courses:class_detail", args=[self.course.pk, class_group.pk]),
+        )
+        self.assertTrue(
+            CourseEnrollment.objects.filter(
+                course=self.course,
+                class_group=class_group,
+                student__student_number="0001",
+            ).exists()
+        )
+
     def test_class_name_can_be_trimmed_renamed_and_audited(self):
         class_group = ClassGroup.objects.create(
             course=self.course,
@@ -406,7 +497,7 @@ class CourseWorkspaceViewTests(TestCase):
         form = ClassGroupUpdateForm(payload, instance=class_group)
 
         self.assertFalse(form.is_valid())
-        self.assertIn("同一课程和学年中已存在该班级名称。", form.non_field_errors())
+        self.assertIn("同一课程和年级中已存在该班级名称。", form.non_field_errors())
 
         response = self.client.post(
             self._class_update_url(class_group),
@@ -414,7 +505,7 @@ class CourseWorkspaceViewTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "同一课程和学年中已存在该班级名称。")
+        self.assertContains(response, "同一课程和年级中已存在该班级名称。")
         class_group.refresh_from_db()
         self.assertEqual(class_group.name, "待编辑班级")
         self.assertEqual(class_group.academic_year, "2026")

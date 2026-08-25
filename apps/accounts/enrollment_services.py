@@ -3,7 +3,8 @@ from django.db import transaction
 from django.db.models import Q
 
 from .class_lifecycle import lock_active_class_groups
-from .models import CourseEnrollment, User
+from .course_access import lock_writable_course
+from .models import ClassGroup, CourseEnrollment, User
 from .student_import import StudentImportError
 
 
@@ -173,6 +174,58 @@ def transfer_course_enrollment(enrollment, target_class):
         enrollment.full_clean()
         enrollment.save(update_fields=["class_group"])
         return enrollment
+
+
+@transaction.atomic
+def remove_course_enrollment(*, course, class_group, enrollment):
+    """Remove one course membership without deleting global or published data."""
+    from apps.experiments.models import (
+        Experiment,
+        ExperimentParticipantOverride,
+        ExperimentStudent,
+    )
+
+    draft_experiments = list(
+        Experiment.objects.select_for_update()
+        .filter(course_id=course.pk, status=Experiment.Status.DRAFT)
+        .order_by("pk")
+    )
+    course = lock_writable_course(course)
+    try:
+        class_group = ClassGroup.objects.select_for_update().get(
+            pk=class_group.pk,
+            course_id=course.pk,
+        )
+        enrollment = CourseEnrollment.objects.select_for_update().get(
+            pk=enrollment.pk,
+            course_id=course.pk,
+            class_group_id=class_group.pk,
+            student_id=enrollment.student_id,
+            is_active=True,
+        )
+    except (ClassGroup.DoesNotExist, CourseEnrollment.DoesNotExist) as exc:
+        raise ValidationError("选课关系已被其他操作更新，请刷新后重试。") from exc
+
+    draft_experiment_ids = [experiment.pk for experiment in draft_experiments]
+    draft_student_links_removed, _ = ExperimentStudent.objects.filter(
+        experiment_id__in=draft_experiment_ids,
+        student_id=enrollment.student_id,
+    ).delete()
+    draft_overrides_removed, _ = ExperimentParticipantOverride.objects.filter(
+        experiment_id__in=draft_experiment_ids,
+        student_id=enrollment.student_id,
+    ).delete()
+    details = {
+        "course_id": course.pk,
+        "class_id": class_group.pk,
+        "student_id": enrollment.student_id,
+        "enrollment_id": enrollment.pk,
+        "draft_experiment_ids": draft_experiment_ids,
+        "draft_student_links_removed": draft_student_links_removed,
+        "draft_overrides_removed": draft_overrides_removed,
+    }
+    enrollment.delete()
+    return details
 
 
 @transaction.atomic
