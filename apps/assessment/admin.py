@@ -1,5 +1,17 @@
 from django.contrib import admin
-from .models import Attempt, DraftSaveEvent, ExperimentSession, QuestionVisitEvent, StudentQuestionAssignment, SubmissionEvent
+from .models import (
+    AssessmentEvent,
+    Attempt,
+    ClientTimeSync,
+    ConfidenceAssignment,
+    DraftSaveEvent,
+    ExperimentSession,
+    QuestionVisitEvent,
+    ResponseSnapshot,
+    SimulationSnapshot,
+    StudentQuestionAssignment,
+    SubmissionEvent,
+)
 ExperimentSession._meta.verbose_name = "实验会话"
 ExperimentSession._meta.verbose_name_plural = "实验会话"
 StudentQuestionAssignment._meta.verbose_name = "学生题目分配"
@@ -18,3 +30,35 @@ admin.site.register(Attempt)
 admin.site.register(QuestionVisitEvent)
 admin.site.register(DraftSaveEvent)
 admin.site.register(SubmissionEvent)
+
+
+class ReadOnlyProcessDataAdmin(admin.ModelAdmin):
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(AssessmentEvent)
+class AssessmentEventAdmin(ReadOnlyProcessDataAdmin):
+    list_display = (
+        "event_id",
+        "event_type",
+        "event_version",
+        "session",
+        "server_ingest_sequence_no",
+        "server_received_at",
+        "capture_mode",
+    )
+    list_filter = ("event_domain", "event_type", "event_version", "capture_mode")
+    search_fields = ("event_id", "session__id", "correlation_id")
+
+
+admin.site.register(ClientTimeSync, ReadOnlyProcessDataAdmin)
+admin.site.register(ResponseSnapshot, ReadOnlyProcessDataAdmin)
+admin.site.register(SimulationSnapshot, ReadOnlyProcessDataAdmin)
+admin.site.register(ConfidenceAssignment, ReadOnlyProcessDataAdmin)
