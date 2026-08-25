@@ -11,6 +11,7 @@ from apps.assessment.models import Attempt, ExperimentSession, StudentQuestionAs
 from apps.audit.models import AuditLog
 from apps.experiments.models import Experiment, ExperimentVersion, QuestionSnapshot
 from apps.experiments.presentation import OptionPresentation, display_text, format_answer
+from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.question_bank.models import Question, QuestionBank
 
 
@@ -211,6 +212,7 @@ class CourseExperimentSessionReportTests(TestCase):
         assignment = StudentQuestionAssignment.objects.create(
             session=self.session,
             snapshot=snapshot,
+            item_instance=get_or_create_default_item_instance(snapshot),
             assigned_sequence_index=assigned_sequence_index,
         )
         Attempt.objects.create(

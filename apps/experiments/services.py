@@ -632,6 +632,18 @@ def publish_experiment(experiment, actor):
         "candidate_count": len(questions),
         "sampling_salt": secrets.token_hex(32),
         "sampling_algorithm_version": SAMPLING_ALGORITHM_VERSION,
+        "confidence_mode": experiment.confidence_mode,
+        "confidence_sampling_unit": experiment.confidence_sampling_unit,
+        "confidence_probability": (
+            format(experiment.confidence_probability.normalize(), "f")
+            if experiment.confidence_probability is not None
+            else None
+        ),
+        "randomization_seed": experiment.confidence_randomization_seed or secrets.token_hex(32),
+        "assignment_version": experiment.confidence_assignment_version,
+        "confidence_scale_version": experiment.confidence_scale_version,
+        "confidence_prompt_version": experiment.confidence_prompt_version,
+        "heartbeat_interval_seconds": experiment.heartbeat_interval_seconds,
     }
     course_snapshot = {
         "course_name_snapshot": experiment.course.name if experiment.course_id else "",

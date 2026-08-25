@@ -29,6 +29,11 @@ class ExperimentSession(models.Model):
 class StudentQuestionAssignment(models.Model):
     session = models.ForeignKey(ExperimentSession, on_delete=models.CASCADE, related_name="assignments")
     snapshot = models.ForeignKey("experiments.QuestionSnapshot", on_delete=models.PROTECT)
+    item_instance = models.ForeignKey(
+        "experiments.ItemInstance",
+        on_delete=models.PROTECT,
+        related_name="assignments",
+    )
     assigned_sequence_index = models.PositiveIntegerField()
     random_seed = models.CharField(max_length=64, blank=True)
     class Meta:

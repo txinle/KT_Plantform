@@ -5,15 +5,16 @@ import uuid
 from django.conf import settings
 from django.db import migrations, models
 
-from apps.accounts.research_subjects import backfill_course_subjects, noop_reverse
+from apps.accounts.research_subjects import (
+    backfill_enrollment_course_subjects,
+    noop_reverse,
+)
 
 
 class Migration(migrations.Migration):
 
     dependencies = [
         ('accounts', '0005_alter_classgroup_academic_year'),
-        ('assessment', '0002_experimentsession_sampling_seeds'),
-        ('experiments', '0005_experiment_participant_rules'),
     ]
 
     operations = [
@@ -73,5 +74,5 @@ class Migration(migrations.Migration):
                 'constraints': [models.UniqueConstraint(fields=('study', 'student'), name='unique_research_study_participant')],
             },
         ),
-        migrations.RunPython(backfill_course_subjects, noop_reverse),
+        migrations.RunPython(backfill_enrollment_course_subjects, noop_reverse),
     ]

@@ -9,6 +9,7 @@ from apps.accounts.models import ClassGroup, Course, CourseTeacher, User
 from apps.assessment.models import Attempt, ExperimentSession, QuestionVisitEvent, StudentQuestionAssignment
 from apps.audit.models import AuditLog
 from apps.experiments.models import Experiment, ExperimentVersion, QuestionSnapshot
+from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.question_bank.models import Question, QuestionBank
 
 class ExportPermissionTests(TestCase):
@@ -107,6 +108,7 @@ class IdentifiedExportTests(TestCase):
         assignment = StudentQuestionAssignment.objects.create(
             session=self.session,
             snapshot=self.snapshot,
+            item_instance=get_or_create_default_item_instance(self.snapshot),
             assigned_sequence_index=1,
         )
         self.attempt = Attempt.objects.create(
@@ -226,6 +228,7 @@ class IdentifiedExportTests(TestCase):
             assignment = StudentQuestionAssignment.objects.create(
                 session=self.session,
                 snapshot=snapshot,
+                item_instance=get_or_create_default_item_instance(snapshot),
                 assigned_sequence_index=assigned_index,
             )
             Attempt.objects.create(session=self.session, assignment=assignment)
@@ -244,6 +247,7 @@ class IdentifiedExportTests(TestCase):
         earlier_assignment = StudentQuestionAssignment.objects.create(
             session=earlier_session,
             snapshot=self.snapshot,
+            item_instance=get_or_create_default_item_instance(self.snapshot),
             assigned_sequence_index=1,
         )
         Attempt.objects.create(session=earlier_session, assignment=earlier_assignment)
@@ -459,6 +463,7 @@ class IdentifiedExportTests(TestCase):
                 StudentQuestionAssignment(
                     session=self.session,
                     snapshot=item,
+                    item_instance=get_or_create_default_item_instance(item),
                     assigned_sequence_index=index,
                 )
                 for index, item in enumerate(snapshots, start=2)

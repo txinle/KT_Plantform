@@ -7,6 +7,7 @@ from apps.assessment.models import ExperimentSession, StudentQuestionAssignment
 from apps.audit.models import AuditLog
 
 from .models import Experiment, ExperimentVersion, QuestionSnapshot
+from .presentation_instances import get_or_create_default_item_instance
 
 
 class ExperimentDeletionTests(TestCase):
@@ -80,7 +81,10 @@ class ExperimentDeletionTests(TestCase):
             class_snapshot_name="教师",
         )
         assignment = StudentQuestionAssignment.objects.create(
-            session=session, snapshot=snapshot, assigned_sequence_index=1
+            session=session,
+            snapshot=snapshot,
+            item_instance=get_or_create_default_item_instance(snapshot),
+            assigned_sequence_index=1,
         )
         url = reverse("courses:experiment_delete", args=[self.course.pk, self.experiment.pk])
 

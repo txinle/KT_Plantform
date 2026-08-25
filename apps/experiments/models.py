@@ -1,5 +1,8 @@
+import uuid
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Q
 
@@ -27,6 +30,14 @@ class Experiment(models.Model):
     class ResumeMode(models.TextChoices):
         SINGLE = "single_session", "必须一次完成"
         RESUMABLE = "resumable", "允许断点续答"
+    class ConfidenceMode(models.TextChoices):
+        OFF = "off", "不采集"
+        ALL = "all", "全部采集"
+        SAMPLED = "sampled", "抽样采集"
+    class ConfidenceSamplingUnit(models.TextChoices):
+        STUDENT = "student", "学生"
+        SESSION = "session", "会话"
+        ATTEMPT = "attempt", "作答"
     name = models.CharField(max_length=180)
     description = models.TextField(blank=True)
     course = models.ForeignKey(
@@ -63,17 +74,70 @@ class Experiment(models.Model):
     total_time_limit_minutes = models.PositiveIntegerField(null=True, blank=True)
     per_question_time_limit_seconds = models.PositiveIntegerField(null=True, blank=True)
     resume_mode = models.CharField(max_length=20, choices=ResumeMode.choices, default=ResumeMode.RESUMABLE)
+    confidence_mode = models.CharField(
+        max_length=12,
+        choices=ConfidenceMode.choices,
+        default=ConfidenceMode.OFF,
+    )
+    confidence_sampling_unit = models.CharField(
+        max_length=12,
+        choices=ConfidenceSamplingUnit.choices,
+        default=ConfidenceSamplingUnit.ATTEMPT,
+    )
+    confidence_probability = models.DecimalField(
+        max_digits=4,
+        decimal_places=3,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
+    )
+    confidence_randomization_seed = models.CharField(max_length=128, blank=True, default="")
+    confidence_assignment_version = models.CharField(max_length=64, default="v1")
+    confidence_scale_version = models.CharField(max_length=64, default="v1")
+    confidence_prompt_version = models.CharField(max_length=64, default="v1")
+    heartbeat_interval_seconds = models.PositiveSmallIntegerField(
+        default=30,
+        validators=[MinValueValidator(15), MaxValueValidator(120)],
+    )
     questions = models.ManyToManyField("question_bank.Question", through="ExperimentQuestion", related_name="experiments")
     students = models.ManyToManyField(settings.AUTH_USER_MODEL, through="ExperimentStudent", related_name="assigned_experiments")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    class Meta: ordering = ["-updated_at"]
+    class Meta:
+        ordering = ["-updated_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(
+                    confidence_probability__isnull=True,
+                )
+                | Q(
+                    confidence_probability__gte=0,
+                    confidence_probability__lte=1,
+                ),
+                name="experiment_confidence_probability_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    heartbeat_interval_seconds__gte=15,
+                    heartbeat_interval_seconds__lte=120,
+                ),
+                name="experiment_heartbeat_interval_range",
+            ),
+        ]
     def __str__(self): return self.name
 
     def clean(self):
         super().clean()
+        errors = {}
         if self.course_id and self.question_bank_id and self.question_bank.course_id != self.course_id:
-            raise ValidationError({"question_bank": "实验只能使用同一课程的题库。"})
+            errors["question_bank"] = "实验只能使用同一课程的题库。"
+        if self.confidence_mode == self.ConfidenceMode.SAMPLED:
+            if self.confidence_probability is None:
+                errors["confidence_probability"] = "抽样采集必须设置抽样概率。"
+        elif self.confidence_probability is not None:
+            errors["confidence_probability"] = "仅抽样采集模式可以设置抽样概率。"
+        if errors:
+            raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
         created = self._state.adding
@@ -293,3 +357,27 @@ class QuestionSnapshot(models.Model):
     primary_kc = models.CharField(max_length=160)
     all_kcs = models.JSONField(default=list)
     class Meta: ordering = ["source_sequence", "id"]
+
+
+class ItemInstance(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    question_snapshot = models.ForeignKey(
+        QuestionSnapshot,
+        on_delete=models.CASCADE,
+        related_name="item_instances",
+    )
+    presentation_variant = models.CharField(max_length=64, default="default")
+    option_order = models.JSONField(default=list)
+    parameter_values = models.JSONField(default=dict)
+    random_seed = models.CharField(max_length=128, blank=True, default="")
+    presentation_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["question_snapshot_id", "created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["question_snapshot", "presentation_hash"],
+                name="unique_question_presentation_hash",
+            )
+        ]

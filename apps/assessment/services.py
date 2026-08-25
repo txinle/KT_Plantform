@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 from apps.experiments.models import Experiment, ExperimentStudent, ExperimentVersion
+from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.experiments.services import derive_session_seeds, ordered_snapshots, select_snapshots
 from apps.question_bank.services.numeric import normalize_finite_decimal
 from apps.question_bank.services.scoring import score_payload
@@ -54,9 +55,11 @@ def get_or_create_session(experiment, student):
         selected = select_snapshots(version, student.id, sampling_seed)
         ordered = ordered_snapshots(version, student.id, selected, ordering_seed)
         for index, snapshot in enumerate(ordered, start=1):
+            item_instance = get_or_create_default_item_instance(snapshot)
             assignment = StudentQuestionAssignment.objects.create(
                 session=session, snapshot=snapshot, assigned_sequence_index=index,
                 random_seed=ordering_seed,
+                item_instance=item_instance,
             )
             Attempt.objects.create(session=session, assignment=assignment)
     return session

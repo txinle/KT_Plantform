@@ -142,7 +142,11 @@ class ParticipantRuleMigrationTests(TransactionTestCase):
     @staticmethod
     def targets_with_experiments_at(executor, experiments_target):
         return [
-            experiments_target if target[0] == "experiments" else target
+            experiments_target
+            if target[0] == "experiments"
+            else ("assessment", "0002_experimentsession_sampling_seeds")
+            if target[0] == "assessment"
+            else target
             for target in executor.loader.graph.leaf_nodes()
         ]
 

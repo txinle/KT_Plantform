@@ -7,7 +7,24 @@ from .models import Experiment
 class ExperimentForm(forms.ModelForm):
     class Meta:
         model = Experiment
-        fields = ["name", "description", "question_bank", "selection_mode", "ordering_mode", "feedback_mode", "time_mode", "total_time_limit_minutes", "per_question_time_limit_seconds", "resume_mode"]
+        fields = [
+            "name",
+            "description",
+            "question_bank",
+            "selection_mode",
+            "ordering_mode",
+            "feedback_mode",
+            "time_mode",
+            "total_time_limit_minutes",
+            "per_question_time_limit_seconds",
+            "resume_mode",
+            "confidence_mode",
+            "confidence_sampling_unit",
+            "confidence_probability",
+            "confidence_scale_version",
+            "confidence_prompt_version",
+            "heartbeat_interval_seconds",
+        ]
         labels = {
             "name": "实验名称",
             "description": "实验说明",
@@ -19,10 +36,25 @@ class ExperimentForm(forms.ModelForm):
             "total_time_limit_minutes": "实验总时限（分钟）",
             "per_question_time_limit_seconds": "单题时限（秒）",
             "resume_mode": "续答规则",
+            "confidence_mode": "作答信心采集",
+            "confidence_sampling_unit": "信心抽样单位",
+            "confidence_probability": "信心抽样概率",
+            "confidence_scale_version": "信心量表版本",
+            "confidence_prompt_version": "信心提示版本",
+            "heartbeat_interval_seconds": "活跃心跳间隔（秒）",
         }
         widgets = {"description": forms.Textarea(attrs={"rows": 3})}
     def __init__(self, *args, owner=None, course=None, **kwargs):
         super().__init__(*args, **kwargs)
+        for field_name in (
+            "confidence_mode",
+            "confidence_sampling_unit",
+            "confidence_probability",
+            "confidence_scale_version",
+            "confidence_prompt_version",
+            "heartbeat_interval_seconds",
+        ):
+            self.fields[field_name].required = False
         self.fields["time_mode"].widget.attrs["data-time-mode-controller"] = ""
         self.fields["selection_mode"].widget.attrs["data-selection-mode-controller"] = ""
         self.fields["selection_mode"].required = False
@@ -60,6 +92,16 @@ class ExperimentForm(forms.ModelForm):
                 self.fields["question_bank"].queryset = owner.question_banks.exclude(visibility="archived")
     def clean(self):
         cleaned = super().clean()
+        for field_name in (
+            "confidence_mode",
+            "confidence_sampling_unit",
+            "confidence_probability",
+            "confidence_scale_version",
+            "confidence_prompt_version",
+            "heartbeat_interval_seconds",
+        ):
+            if self.is_bound and field_name not in self.data:
+                cleaned[field_name] = getattr(self.instance, field_name)
         if not cleaned.get("selection_mode"):
             cleaned["selection_mode"] = Experiment.SelectionMode.ALL
         if cleaned.get("time_mode") == Experiment.TimeMode.TOTAL and not cleaned.get("total_time_limit_minutes"):

@@ -12,6 +12,7 @@ from apps.experiments.models import (
     ExperimentVersion,
     QuestionSnapshot,
 )
+from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.question_bank.models import Question, QuestionBank
 
 from .models import ClassGroup, Course, CourseEnrollment, CourseTeacher, User
@@ -191,6 +192,7 @@ class StudentRemovalTests(TestCase):
         assignment = StudentQuestionAssignment.objects.create(
             session=session,
             snapshot=snapshot,
+            item_instance=get_or_create_default_item_instance(snapshot),
             assigned_sequence_index=1,
         )
         attempt = Attempt.objects.create(session=session, assignment=assignment)
