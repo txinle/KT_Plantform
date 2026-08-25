@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from django.conf import settings
-from django.test import RequestFactory, TestCase, override_settings
+from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.urls import resolve, reverse
 from apps.accounts.models import User
 from .models import Question, QuestionBank
@@ -14,7 +14,7 @@ from .services.import_parsing import parse_kc_rows, parse_question_rows
 from .services.import_service import import_kc_mappings, import_questions
 
 
-class ImportTemplateDownloadTests(TestCase):
+class ImportTemplateDownloadTests(TransactionTestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(username="template-teacher", role=User.Role.TEACHER)
         self.student = User.objects.create_user(username="template-student", role=User.Role.STUDENT)
