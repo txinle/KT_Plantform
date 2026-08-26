@@ -155,6 +155,8 @@ class DataCenterContractTests(TestCase):
         request.refresh_from_db()
         self.assertEqual(request.status, DataPurgeRequest.Status.EXECUTED)
         self.assertIn("events", result)
+        request.refresh_from_db()
+        self.assertEqual(request.result_counts["events"], 0)
 
     def test_cleanup_expired_exports_marks_job_and_removes_artifact(self):
         snapshot = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)

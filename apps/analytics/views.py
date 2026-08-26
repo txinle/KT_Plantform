@@ -135,6 +135,7 @@ def purge_request_execute(request, course_pk, purge_request_id):
     require_course_manager(course, request.user)
     purge = get_object_or_404(DataPurgeRequest, purge_request_id=purge_request_id, scope_definition__course_id=course.pk)
     execute_purge_request(purge, executed_by=request.user)
+    log_action(request, "data_purge.execute", course, {"purge_request_id": str(purge.purge_request_id)})
     return redirect("courses:settings", course.pk)
 
 

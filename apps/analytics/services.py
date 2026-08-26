@@ -244,7 +244,14 @@ def execute_purge_request(purge_request, *, executed_by):
             if ids:
                 counts[model.__name__.lower()] = model.objects.filter(**{f"{field}__in": ids}).count() if field != "pk" else len(ids)
                 model.objects.filter(**{f"{field}__in": ids})._raw_delete(using="default")
-        ExportJob.objects.filter(course_id=course_id).update(status=ExportJob.Status.INVALIDATED, artifact_path="", artifact_sha256="")
+        affected_jobs = list(ExportJob.objects.filter(course_id=course_id))
+        for job in affected_jobs:
+            if job.artifact_path and os.path.exists(job.artifact_path):
+                os.remove(job.artifact_path)
+            job.status = ExportJob.Status.INVALIDATED
+            job.artifact_path = ""
+            job.artifact_sha256 = ""
+            job.save(update_fields=["status", "artifact_path", "artifact_sha256"])
         purge_request.status = DataPurgeRequest.Status.EXECUTED
         purge_request.executed_by = executed_by
         purge_request.executed_at = timezone.now()
