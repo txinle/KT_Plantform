@@ -149,8 +149,9 @@ class DataCenterContractTests(TestCase):
         snapshot = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)
         ExportJob.objects.create(course=self.course, experiment=self.experiment, snapshot=snapshot, created_by=self.teacher)
         job = claim_export_job(worker_id="lease-owner")
+        before = job.lease_expires_at
         renewed = renew_export_job_lease(job, worker_id="lease-owner")
-        self.assertGreater(renewed.lease_expires_at, job.lease_expires_at)
+        self.assertGreater(renewed.lease_expires_at, before)
         self.assertIsNone(renew_export_job_lease(job, worker_id="other"))
 
     def test_purge_request_executes_and_invalidates_course_exports(self):
