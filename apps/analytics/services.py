@@ -128,8 +128,8 @@ def run_export_job(job):
     os.makedirs(root, exist_ok=True)
     zip_path = os.path.join(root, f"{job.package}-{job.job_id}.zip")
     study_course_ids = list(job.research_study.course_links.values_list("course_id", flat=True)) if job.research_study_id else []
-    experiment_filter = {"session__version__experiment_id": job.experiment_id} if job.experiment_id else ({"session__version__experiment__course_id__in": study_course_ids} if study_course_ids else {"session__version__experiment__course_id": job.course_id})
-    session_filter = {"version__experiment_id": job.experiment_id} if job.experiment_id else ({"version__experiment__course_id__in": study_course_ids} if study_course_ids else {"version__experiment__course_id": job.course_id})
+    study_student_ids = list(job.research_study.participants.values_list("student_id", flat=True)) if job.research_study_id else []
+    session_filter = {"version__experiment_id": job.experiment_id} if job.experiment_id else ({"version__experiment__course_id__in": study_course_ids, "student_id__in": study_student_ids} if study_course_ids else {"version__experiment__course_id": job.course_id})
     with transaction.atomic():
         if connection_vendor := connection.vendor:
             if connection_vendor == "postgresql":
@@ -137,7 +137,7 @@ def run_export_job(job):
                     cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         sessions = list(ExperimentSession.objects.filter(**session_filter, started_at__lte=snapshot.cutoff_at).select_related("student", "version"))
         session_ids = [s.pk for s in sessions]
-        attempts = list(Attempt.objects.filter(**experiment_filter, session__started_at__lte=snapshot.cutoff_at).filter(models.Q(submitted_at__isnull=True) | models.Q(submitted_at__lte=snapshot.cutoff_at)).select_related("session", "assignment__snapshot", "assignment__item_instance"))
+        attempts = list(Attempt.objects.filter(session_id__in=session_ids, session__started_at__lte=snapshot.cutoff_at).filter(models.Q(submitted_at__isnull=True) | models.Q(submitted_at__lte=snapshot.cutoff_at)).select_related("session", "assignment__snapshot", "assignment__item_instance"))
         events = list(AssessmentEvent.objects.filter(**({"session__in": session_ids}), server_received_at__lte=snapshot.cutoff_at).order_by("session_id", "server_ingest_sequence_no"))
         assignments = list(StudentQuestionAssignment.objects.filter(session_id__in=session_ids).select_related("snapshot", "item_instance"))
         confidence_assignments = list(ConfidenceAssignment.objects.filter(attempt_id__in=[a.pk for a in attempts]))
@@ -156,11 +156,16 @@ def run_export_job(job):
         archive.writestr("01_design_metadata/README.txt", "All identifiers in this package are pseudonymized. Identity linkage is managed separately.\n")
         if job.kind == ExportJob.Kind.IDENTITY:
             students = list(job.experiment.students.select_related("class_group")) if job.experiment_id else []
+            from apps.accounts.models import CourseSubject
+            subject_ids = {
+                student.pk: str(CourseSubject.objects.get_or_create(course_id=job.course_id, student_id=student.pk)[0].public_uuid)
+                for student in students
+            }
             archive.writestr(
                 "01_identity/identity_mapping.csv",
                 _csv_bytes(
                     ["pseudonymized_student_id", "student_number", "student_name", "class_name"],
-                    [[_anon_subject(s.id, job.course_id), s.student_number, s.shown_name, str(s.class_group or "")] for s in students],
+                    [[subject_ids[s.id], s.student_number, s.shown_name, str(s.class_group or "")] for s in students],
                 ),
             )
             return _finalize_export_job(job, zip_path, manifest)
@@ -175,7 +180,23 @@ def run_export_job(job):
 
 
 def _table_rows(job, sessions, assignments, attempts, events, confidence_assignments, simulations):
-    subject_values = [[_subject_uuid(s.student_id, job.course_id, job.research_study_id)] for s in sessions]
+    from apps.accounts.models import CourseSubject, ResearchStudyParticipant
+    student_ids = {s.student_id for s in sessions}
+    if job.research_study_id:
+        subject_map = {
+            row.student_id: str(row.public_uuid)
+            for row in ResearchStudyParticipant.objects.filter(study_id=job.research_study_id, student_id__in=student_ids)
+        }
+    else:
+        subject_map = {
+            row.student_id: str(row.public_uuid)
+            for row in CourseSubject.objects.filter(course_id=job.course_id, student_id__in=student_ids)
+        }
+        missing = student_ids - subject_map.keys()
+        for student_id in missing:
+            subject_map[student_id] = str(CourseSubject.objects.get_or_create(course_id=job.course_id, student_id=student_id)[0].public_uuid)
+    subject_for = lambda student_id: subject_map.get(student_id, "")
+    subject_values = [[subject_for(s.student_id)] for s in sessions]
     attempt_ids = {a.pk for a in attempts}
     event_rows = [[e.event_id, e.event_type, e.event_version, e.session_id, e.attempt_id, e.client_instance_id, e.client_sequence_no, e.server_ingest_sequence_no, e.correlation_id, e.server_received_at.isoformat(), e.capture_mode, json.dumps(e.quality_flags, ensure_ascii=False), json.dumps(e.payload, ensure_ascii=False)] for e in events]
     response_rows = [row for row, event in zip(event_rows, events) if event.event_type in RESPONSE_EVENT_TYPES]
@@ -185,10 +206,10 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
     subject_header = "study_subject_id" if job.research_study_id else "course_subject_id"
     rows = {
         "subjects": ((subject_header,), subject_values),
-        "sessions": (("session_id", "subject_id", "experiment_id", "version", "status", "started_at", "completed_at"), [[s.pk, _subject_uuid(s.student_id, job.course_id, job.research_study_id), s.version.experiment_id, s.version.version_number, s.status, s.started_at.isoformat(), s.completed_at.isoformat() if s.completed_at else ""] for s in sessions]),
+        "sessions": (("session_id", "subject_id", "experiment_id", "version", "status", "started_at", "completed_at"), [[s.pk, subject_for(s.student_id), s.version.experiment_id, s.version.version_number, s.status, s.started_at.isoformat(), s.completed_at.isoformat() if s.completed_at else ""] for s in sessions]),
         "assignments": (("assignment_id", "session_id", "question_snapshot_id", "item_instance_id", "assigned_sequence_index"), [[a.pk, a.session_id, a.snapshot_id, a.item_instance_id, a.assigned_sequence_index] for a in assignments]),
         "item_instances": (("item_instance_id", "question_snapshot_id", "presentation_variant", "option_order", "parameter_values", "random_seed", "presentation_hash"), [[a.item_instance_id, a.snapshot_id, a.item_instance.presentation_variant, json.dumps(a.item_instance.option_order), json.dumps(a.item_instance.parameter_values), a.item_instance.random_seed, a.item_instance.presentation_hash] for a in assignments]),
-        "attempts": (("attempt_id", "session_id", "subject_id", "question_code", "status", "is_correct", "score", "submitted_at"), [[a.pk, a.session_id, _subject_uuid(a.session.student_id, job.course_id, job.research_study_id), a.assignment.snapshot.code, a.status, a.is_correct, a.score, a.submitted_at.isoformat() if a.submitted_at else ""] for a in attempts]),
+        "attempts": (("attempt_id", "session_id", "subject_id", "question_code", "status", "is_correct", "score", "submitted_at"), [[a.pk, a.session_id, subject_for(a.session.student_id), a.assignment.snapshot.code, a.status, a.is_correct, a.score, a.submitted_at.isoformat() if a.submitted_at else ""] for a in attempts]),
         "assessment_events": (("event_id", "event_type", "event_version", "session_id", "attempt_id", "client_instance_id", "client_sequence_no", "server_ingest_sequence_no", "correlation_id", "server_received_at", "capture_mode", "quality_flags", "payload"), event_rows),
         "response_events": (("event_id", "event_type", "session_id", "attempt_id", "server_received_at", "payload"), [[r[0], r[1], r[3], r[4], r[9], r[12]] for r in response_rows]),
         "exposure_events": (("event_id", "event_type", "session_id", "attempt_id", "server_received_at", "payload"), [[r[0], r[1], r[3], r[4], r[9], r[12]] for r in exposure_rows]),

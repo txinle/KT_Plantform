@@ -136,6 +136,8 @@ class CourseWorkspaceUIParityTests(TestCase):
         self.assertContains(response, "班级数量")
         self.assertContains(response, "实验数量")
         self.assertContains(response, "近期实验")
+        self.assertContains(response, "数据中心")
+        self.assertContains(response, reverse("courses:data", args=[self.course.pk]))
         self.assertContains(response, self.draft_experiment.name)
         self.assertContains(response, "最近题库")
         self.assertContains(response, self.bank.name)

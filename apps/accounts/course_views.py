@@ -141,7 +141,9 @@ def course_quality(request, course_pk):
             by_instance.setdefault(instance, set()).add(int(sequence))
     for sequence_set in by_instance.values():
         if sequence_set:
-            gaps += max(sequence_set) - len(sequence_set)
+            # Sequences may start at an arbitrary client value; only missing
+            # values inside the observed range count as gaps.
+            gaps += max(sequence_set) - min(sequence_set) + 1 - len(sequence_set)
     clock_count = sum("clock_unsynchronized" in (flags or []) for flags, *_ in event_rows)
     offline_count = sum("offline_buffered" in (flags or []) for flags, *_ in event_rows)
     native_count = sum(mode == AssessmentEvent.CaptureMode.NATIVE for _flags, mode, *_ in event_rows)
