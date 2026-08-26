@@ -97,6 +97,22 @@ def claim_export_job(*, worker_id, now=None):
         return job
 
 
+def renew_export_job_lease(job, *, worker_id, now=None):
+    now = now or timezone.now()
+    updated = ExportJob.objects.filter(
+        pk=job.pk,
+        status=ExportJob.Status.RUNNING,
+        locked_by=worker_id,
+    ).update(
+        heartbeat_at=now,
+        lease_expires_at=now + timedelta(seconds=90),
+    )
+    if not updated:
+        return None
+    job.refresh_from_db(fields=["heartbeat_at", "lease_expires_at"])
+    return job
+
+
 def _csv_bytes(headers, rows):
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)

@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from apps.accounts.models import Course, User, ResearchStudy, ResearchStudyCourse, ResearchStudyParticipant
 from apps.analytics.models import ExportJob, ExportSnapshot
-from apps.analytics.services import create_export_snapshot, build_export_manifest, claim_export_job, run_export_job, cleanup_expired_exports
+from apps.analytics.services import create_export_snapshot, build_export_manifest, claim_export_job, run_export_job, cleanup_expired_exports, renew_export_job_lease
 from apps.analytics.services import execute_purge_request
 from apps.accounts.models import DataPurgeRequest
 from apps.question_bank.models import QuestionBank
@@ -144,6 +144,14 @@ class DataCenterContractTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(job.status, ExportJob.Status.QUEUED)
         self.assertEqual(job.retry_count, 2)
+
+    def test_worker_can_renew_only_its_own_lease(self):
+        snapshot = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)
+        ExportJob.objects.create(course=self.course, experiment=self.experiment, snapshot=snapshot, created_by=self.teacher)
+        job = claim_export_job(worker_id="lease-owner")
+        renewed = renew_export_job_lease(job, worker_id="lease-owner")
+        self.assertGreater(renewed.lease_expires_at, job.lease_expires_at)
+        self.assertIsNone(renew_export_job_lease(job, worker_id="other"))
 
     def test_purge_request_executes_and_invalidates_course_exports(self):
         request = DataPurgeRequest.objects.create(
