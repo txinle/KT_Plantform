@@ -21,7 +21,7 @@ from .forms import (
     course_settings_state_token_matches,
 )
 from .models import Course, User, DataPurgeRequest
-from apps.assessment.models import AssessmentEvent
+from apps.assessment.models import AssessmentEvent, SubmissionEvent
 from .permissions import role_required
 
 
@@ -103,6 +103,7 @@ def course_data(request, course_pk):
             "current_course": course,
             "experiments": experiments,
             "export_jobs": export_jobs,
+            "longitudinal_studies": course.research_study_links.select_related("study")[:20],
             "data_tree": [
                 {"key": "overview", "label": "数据概览", "items": []},
                 {"key": "quality", "label": "采集质量", "items": []},
@@ -145,6 +146,15 @@ def course_quality(request, course_pk):
     offline_count = sum("offline_buffered" in (flags or []) for flags, *_ in event_rows)
     native_count = sum(mode == AssessmentEvent.CaptureMode.NATIVE for _flags, mode, *_ in event_rows)
     legacy_count = sum(mode == AssessmentEvent.CaptureMode.LEGACY_PROJECTION for _flags, mode, *_ in event_rows)
+    process_events = list(events.values_list("attempt_id", "event_type", "server_ingest_sequence_no"))
+    response_commits = {(attempt, seq) for attempt, event_type, seq in process_events if attempt and event_type == "response_committed"}
+    feedback_violations = sum(
+        1 for attempt, event_type, seq in process_events
+        if attempt and event_type == "feedback_shown" and not any(a == attempt and e == "response_committed" and s < seq for a, e, s in process_events)
+    )
+    committed_attempt_ids = {attempt for attempt, event_type, _seq in process_events if attempt and event_type == "response_committed"}
+    business_committed_ids = set(SubmissionEvent.objects.filter(attempt__session__version__experiment__course=course).values_list("attempt_id", flat=True))
+    commit_mismatch = len(committed_attempt_ids ^ business_committed_ids)
     context = {
         "course": course,
         "current_course": course,
@@ -156,6 +166,8 @@ def course_quality(request, course_pk):
             "offline_rate": round(offline_count / total * 100, 2) if total else 0,
             "native_count": native_count,
             "legacy_count": legacy_count,
+            "feedback_order_violations": feedback_violations,
+            "response_commit_mismatch": commit_mismatch,
         },
     }
     return render(request, "teacher/course_quality.html", context)

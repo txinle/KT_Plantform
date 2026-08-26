@@ -7,7 +7,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.accounts.models import Course, User
+from apps.accounts.models import Course, User, ResearchStudy, ResearchStudyCourse, ResearchStudyParticipant
 from apps.analytics.models import ExportJob, ExportSnapshot
 from apps.analytics.services import create_export_snapshot, build_export_manifest, claim_export_job, run_export_job, cleanup_expired_exports
 from apps.analytics.services import execute_purge_request
@@ -127,6 +127,16 @@ class DataCenterContractTests(TestCase):
         self.assertEqual(reclaimed.pk, job.pk)
         self.assertEqual(reclaimed.locked_by, "reclaimer")
 
+    def test_worker_failure_requeues_until_retry_limit(self):
+        snapshot = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)
+        job = ExportJob.objects.create(course=self.course, experiment=self.experiment, snapshot=snapshot, created_by=self.teacher, status=ExportJob.Status.RUNNING, retry_count=1)
+        from apps.analytics.management.commands.run_export_jobs import Command
+        command = Command()
+        command._handle_job_failure(job, RuntimeError("boom"))
+        job.refresh_from_db()
+        self.assertEqual(job.status, ExportJob.Status.QUEUED)
+        self.assertEqual(job.retry_count, 2)
+
     def test_purge_request_executes_and_invalidates_course_exports(self):
         request = DataPurgeRequest.objects.create(
             scope_type="course", scope_definition={"course_id": self.course.pk},
@@ -144,3 +154,38 @@ class DataCenterContractTests(TestCase):
         cleanup_expired_exports(now=timezone.now())
         job.refresh_from_db()
         self.assertEqual(job.status, ExportJob.Status.EXPIRED)
+
+    def test_package_catalog_produces_distinct_research_files(self):
+        expected = {
+            "kt": {"02_core/subjects.csv", "06_derived/kt_sequences.csv"},
+            "cd": {"01_design_metadata/q_matrix.csv", "06_derived/cd_response_matrix.csv"},
+            "process": {"03_raw_events/assessment_events.csv", "03_raw_events/navigation_events.csv"},
+            "confidence": {"05_self_report/confidence_assignments.csv", "06_derived/calibration_features.csv"},
+            "simulation": {"03_raw_events/simulation_events.csv", "03_raw_events/simulation_snapshots.csv"},
+        }
+        for package, required_names in expected.items():
+            snapshot = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)
+            job = ExportJob.objects.create(course=self.course, experiment=self.experiment, snapshot=snapshot, created_by=self.teacher, package=package)
+            run_export_job(job)
+            job.refresh_from_db()
+            with zipfile.ZipFile(job.artifact_path) as archive:
+                names = set(archive.namelist())
+                self.assertTrue(required_names <= names, (package, names))
+                manifest = json.loads(archive.read("00_manifest/manifest.json"))
+                self.assertTrue(manifest["row_counts"])
+
+    def test_longitudinal_export_uses_study_subject_id(self):
+        study = ResearchStudy.objects.create(name="纵向项目", owner=self.teacher)
+        ResearchStudyCourse.objects.create(study=study, course=self.course)
+        student = User.objects.create_user(username="longitudinal-student", role=User.Role.STUDENT, student_number="LONG-1")
+        ResearchStudyParticipant.objects.create(study=study, student=student)
+        self.client.force_login(self.teacher)
+        response = self.client.post(reverse("analytics:research_study_export_create", args=[study.pk]), {"package": "longitudinal"})
+        self.assertEqual(response.status_code, 302)
+        job = ExportJob.objects.get(research_study=study)
+        self.assertEqual(job.package, "longitudinal")
+        self.assertIsNone(job.experiment_id)
+        run_export_job(job)
+        job.refresh_from_db()
+        with zipfile.ZipFile(job.artifact_path) as archive:
+            self.assertIn("study_subject_id", archive.read("02_core/subjects.csv").decode("utf-8"))

@@ -22,7 +22,7 @@ from apps.experiments.models import Experiment
 from .export_fields import FIELD_LABELS, field_values
 from .models import ExportJob
 from .services import create_export_snapshot, execute_purge_request
-from apps.accounts.models import DataPurgeRequest
+from apps.accounts.models import DataPurgeRequest, ResearchStudy
 from apps.accounts.course_access import get_accessible_course, require_course_manager
 
 def _experiment(request, pk):
@@ -71,6 +71,23 @@ def export_job_create(request, course_pk):
         selected_tables=request.POST.getlist("tables"),
         selected_fields=request.POST.getlist("fields"),
     )
+    if kind == ExportJob.Kind.IDENTITY:
+        log_action(request, "identity.export_job_create", course, {"package": package, "experiment_id": experiment_id})
+    return redirect("courses:data", course.pk)
+
+
+@role_required("teacher", "admin")
+@require_POST
+def research_study_export_create(request, study_id):
+    study = get_object_or_404(ResearchStudy, pk=study_id)
+    if not (request.user.is_superuser or request.user.role == User.Role.ADMIN or study.owner_id == request.user.id):
+        return HttpResponse("无权访问纵向研究项目", status=404)
+    course = study.course_links.select_related("course").first().course if study.course_links.exists() else None
+    if course is None:
+        return HttpResponse("研究项目尚未关联课程", status=400)
+    package = request.POST.get("package", "longitudinal")
+    snapshot = create_export_snapshot(course=course, research_study=study, created_by=request.user)
+    ExportJob.objects.create(course=course, research_study=study, snapshot=snapshot, created_by=request.user, package=package)
     return redirect("courses:data", course.pk)
 
 
@@ -116,6 +133,8 @@ def export_job_download(request, course_pk, job_id):
         return HttpResponse("无权访问身份任务", status=403)
     if not job.artifact_path or not os.path.exists(job.artifact_path) or (job.expires_at and job.expires_at <= timezone.now()):
         return HttpResponse("导出文件已过期", status=410, content_type="text/plain; charset=utf-8")
+    if job.kind == ExportJob.Kind.IDENTITY:
+        log_action(request, "identity.export_job_download", course, {"job_id": str(job.job_id)})
     return FileResponse(open(job.artifact_path, "rb"), as_attachment=True, filename=f"{job.package}-{job.job_id}.zip")
 
 def _anon(student_id, experiment_id):

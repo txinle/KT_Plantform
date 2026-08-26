@@ -22,10 +22,15 @@ class Command(BaseCommand):
                 run_export_job(job)
                 count += 1
             except Exception:
-                job.status = job.Status.FAILED
-                job.retry_count += 1
-                job.save(update_fields=["status", "retry_count"])
-                raise
+                self._handle_job_failure(job, None)
             if options["once"]:
                 break
         self.stdout.write(self.style.SUCCESS(f"processed={count}"))
+
+    def _handle_job_failure(self, job, _error):
+        job.retry_count += 1
+        job.locked_by = ""
+        job.lease_expires_at = None
+        job.heartbeat_at = None
+        job.status = job.Status.QUEUED if job.retry_count < 3 else job.Status.FAILED
+        job.save(update_fields=["retry_count", "locked_by", "lease_expires_at", "heartbeat_at", "status"])
