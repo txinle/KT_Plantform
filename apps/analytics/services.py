@@ -149,7 +149,7 @@ def run_export_job(job):
     else:
         selected_tables = list(PACKAGE_TABLES.get(job.package, PACKAGE_TABLES["complete"]))
     rows = _table_rows(job, sessions, assignments, attempts, events, confidence_assignments, simulations)
-    row_counts = {table: len(rows.get(table, ())) for table in selected_tables if table in rows}
+    row_counts = {table: len(rows[table][1]) for table in selected_tables if table in rows}
     manifest = build_export_manifest(snapshot, selected_tables=selected_tables, row_counts=row_counts)
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("00_manifest/manifest.json", manifest_bytes(manifest))
@@ -196,11 +196,23 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         for student_id in missing:
             subject_map[student_id] = str(CourseSubject.objects.get_or_create(course_id=job.course_id, student_id=student_id)[0].public_uuid)
     subject_for = lambda student_id: subject_map.get(student_id, "")
-    subject_values = [[subject_for(s.student_id)] for s in sessions]
-    attempt_ids = {a.pk for a in attempts}
-    event_rows = [[e.event_id, e.event_type, e.event_version, e.session_id, e.attempt_id, e.client_instance_id, e.client_sequence_no, e.server_ingest_sequence_no, e.correlation_id, e.server_received_at.isoformat(), e.capture_mode, json.dumps(e.quality_flags, ensure_ascii=False), json.dumps(e.payload, ensure_ascii=False)] for e in events]
-    response_rows = [row for row, event in zip(event_rows, events) if event.event_type in RESPONSE_EVENT_TYPES]
-    exposure_rows = [row for row, event in zip(event_rows, events) if event.event_type in EXPOSURE_EVENT_TYPES]
+    subject_values = []
+    seen_subjects = set()
+    for session in sessions:
+        subject_id = subject_for(session.student_id)
+        if subject_id and subject_id not in seen_subjects:
+            subject_values.append([subject_id])
+            seen_subjects.add(subject_id)
+    session_by_id = {s.pk: s for s in sessions}
+    completed_session_ids = {s.pk for s in sessions if s.status == ExperimentSession.Status.COMPLETED}
+    attempt_by_assignment = {a.assignment_id: a for a in attempts}
+    completed_attempt_ids = {a.pk for a in attempts if a.session_id in completed_session_ids}
+    completed_events = [e for e in events if e.session_id in completed_session_ids]
+    completed_confidence = [c for c in confidence_assignments if c.attempt_id in completed_attempt_ids]
+    completed_simulations = [s for s in simulations if s.attempt_id in completed_attempt_ids]
+    event_rows = [[e.event_id, e.event_type, e.event_version, e.session_id, e.attempt_id, e.client_instance_id, e.client_sequence_no, e.server_ingest_sequence_no, e.correlation_id, e.server_received_at.isoformat(), e.capture_mode, json.dumps(e.quality_flags, ensure_ascii=False), json.dumps(e.payload, ensure_ascii=False)] for e in completed_events]
+    response_rows = [row for row, event in zip(event_rows, completed_events) if event.event_type in RESPONSE_EVENT_TYPES]
+    exposure_rows = [row for row, event in zip(event_rows, completed_events) if event.event_type in EXPOSURE_EVENT_TYPES]
     telemetry_rows = [row for row, event in zip(event_rows, events) if event.event_domain == AssessmentEvent.EventDomain.TELEMETRY]
     simulation_event_rows = [row for row, event in zip(event_rows, events) if event.event_type in SIMULATION_EVENT_TYPES]
     subject_header = "study_subject_id" if job.research_study_id else "course_subject_id"
@@ -208,22 +220,42 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         "subjects": ((subject_header,), subject_values),
         "sessions": (("session_id", "subject_id", "experiment_id", "version", "status", "started_at", "completed_at"), [[s.pk, subject_for(s.student_id), s.version.experiment_id, s.version.version_number, s.status, s.started_at.isoformat(), s.completed_at.isoformat() if s.completed_at else ""] for s in sessions]),
         "assignments": (("assignment_id", "session_id", "question_snapshot_id", "item_instance_id", "assigned_sequence_index"), [[a.pk, a.session_id, a.snapshot_id, a.item_instance_id, a.assigned_sequence_index] for a in assignments]),
-        "item_instances": (("item_instance_id", "question_snapshot_id", "presentation_variant", "option_order", "parameter_values", "random_seed", "presentation_hash"), [[a.item_instance_id, a.snapshot_id, a.item_instance.presentation_variant, json.dumps(a.item_instance.option_order), json.dumps(a.item_instance.parameter_values), a.item_instance.random_seed, a.item_instance.presentation_hash] for a in assignments]),
-        "attempts": (("attempt_id", "session_id", "subject_id", "question_code", "status", "is_correct", "score", "submitted_at"), [[a.pk, a.session_id, subject_for(a.session.student_id), a.assignment.snapshot.code, a.status, a.is_correct, a.score, a.submitted_at.isoformat() if a.submitted_at else ""] for a in attempts]),
+        "item_instances": (("item_instance_id", "question_snapshot_id", "presentation_variant", "option_order", "parameter_values", "random_seed", "presentation_hash"), [[a.item_instance_id, a.snapshot_id, a.item_instance.presentation_variant, json.dumps(a.item_instance.option_order), json.dumps(a.item_instance.parameter_values), a.item_instance.random_seed, a.item_instance.presentation_hash] for a in _unique_assignments(assignments, "item_instance_id")]),
+        "attempts": (("attempt_id", "session_id", "subject_id", "question_code", "status", "is_correct", "score", "submitted_at"), [_attempt_export_row(a, attempt_by_assignment.get(a.pk), session_by_id, subject_for) for a in assignments]),
         "assessment_events": (("event_id", "event_type", "event_version", "session_id", "attempt_id", "client_instance_id", "client_sequence_no", "server_ingest_sequence_no", "correlation_id", "server_received_at", "capture_mode", "quality_flags", "payload"), event_rows),
         "response_events": (("event_id", "event_type", "session_id", "attempt_id", "server_received_at", "payload"), [[r[0], r[1], r[3], r[4], r[9], r[12]] for r in response_rows]),
         "exposure_events": (("event_id", "event_type", "session_id", "attempt_id", "server_received_at", "payload"), [[r[0], r[1], r[3], r[4], r[9], r[12]] for r in exposure_rows]),
-        "navigation_events": (("event_id", "event_type", "session_id", "attempt_id", "server_received_at", "payload"), [[r[0], r[1], r[3], r[4], r[9], r[12]] for r in events if r[1] in ("item_entered", "item_left")]),
+        "navigation_events": (("event_id", "event_type", "session_id", "attempt_id", "server_received_at", "payload"), [[r[0], r[1], r[3], r[4], r[9], r[12]] for r in event_rows if r[1] in ("item_entered", "item_left")]),
         "telemetry_events": (("event_id", "event_type", "session_id", "attempt_id", "server_received_at", "payload"), [[r[0], r[1], r[3], r[4], r[9], r[12]] for r in telemetry_rows]),
         "simulation_events": (("event_id", "event_type", "session_id", "attempt_id", "server_received_at", "payload"), [[r[0], r[1], r[3], r[4], r[9], r[12]] for r in simulation_event_rows]),
-        "simulation_snapshots": (("snapshot_id", "attempt_id", "simulation_version", "state_metadata", "content_hash", "content_size", "created_at"), [[s.snapshot_id, s.attempt_id, s.simulation_version, json.dumps(s.state_metadata), s.content_hash, s.content_size, s.created_at.isoformat()] for s in simulations]),
-        "confidence_assignments": (("confidence_assignment_id", "attempt_id", "condition", "assignment_unit", "assignment_version", "response_status", "probability", "assigned_at", "committed_at"), [[c.confidence_assignment_id, c.attempt_id, c.condition, c.assignment_unit, c.assignment_version, c.response_status, c.probability, c.assigned_at.isoformat(), c.committed_at.isoformat() if c.committed_at else ""] for c in confidence_assignments]),
-        "item_snapshots": (("question_snapshot_id", "version_id", "code", "question_type", "primary_kc", "all_kcs"), [[a.snapshot_id, a.snapshot.version_id, a.snapshot.code, a.snapshot.question_type, a.snapshot.primary_kc, json.dumps(a.snapshot.all_kcs, ensure_ascii=False)] for a in assignments]),
-        "item_kc_mapping": (("question_snapshot_id", "primary_kc", "all_kcs"), [[a.snapshot_id, a.snapshot.primary_kc, json.dumps(a.snapshot.all_kcs, ensure_ascii=False)] for a in assignments]),
-        "q_matrix": (("question_snapshot_id", "primary_kc", "all_kcs"), [[a.snapshot_id, a.snapshot.primary_kc, json.dumps(a.snapshot.all_kcs, ensure_ascii=False)] for a in assignments]),
+        "simulation_snapshots": (("snapshot_id", "attempt_id", "simulation_version", "state_metadata", "content_hash", "content_size", "created_at"), [[s.snapshot_id, s.attempt_id, s.simulation_version, json.dumps(s.state_metadata), s.content_hash, s.content_size, s.created_at.isoformat()] for s in completed_simulations]),
+        "confidence_assignments": (("confidence_assignment_id", "attempt_id", "condition", "assignment_unit", "assignment_version", "response_status", "probability", "assigned_at", "committed_at"), [[c.confidence_assignment_id, c.attempt_id, c.condition, c.assignment_unit, c.assignment_version, c.response_status, c.probability, c.assigned_at.isoformat(), c.committed_at.isoformat() if c.committed_at else ""] for c in completed_confidence]),
+        "item_snapshots": (("question_snapshot_id", "version_id", "code", "question_type", "primary_kc", "all_kcs"), [[a.snapshot_id, a.snapshot.version_id, a.snapshot.code, a.snapshot.question_type, a.snapshot.primary_kc, json.dumps(a.snapshot.all_kcs, ensure_ascii=False)] for a in _unique_assignments(assignments, "snapshot_id")]),
+        "item_kc_mapping": (("question_snapshot_id", "primary_kc", "all_kcs"), [[a.snapshot_id, a.snapshot.primary_kc, json.dumps(a.snapshot.all_kcs, ensure_ascii=False)] for a in _unique_assignments(assignments, "snapshot_id")]),
+        "q_matrix": (("question_snapshot_id", "primary_kc", "all_kcs"), [[a.snapshot_id, a.snapshot.primary_kc, json.dumps(a.snapshot.all_kcs, ensure_ascii=False)] for a in _unique_assignments(assignments, "snapshot_id")]),
+        "kc_dictionary": (("kc_id", "kc_name"), [[a.snapshot.primary_kc, a.snapshot.primary_kc] for a in _unique_assignments(assignments, "snapshot_id") if a.snapshot.primary_kc]),
     }
-    rows.update({k: (("attempt_id",), [[a.pk] for a in attempts]) for k in ("attempt_features", "kt_sequences", "cd_response_matrix", "calibration_features")})
+    rows.update({k: (("attempt_id",), [[a.pk] for a in attempts if a.session_id in completed_session_ids]) for k in ("attempt_features", "kt_sequences", "cd_response_matrix", "calibration_features")})
     return rows
+
+
+def _unique_assignments(assignments, field):
+    seen = set()
+    result = []
+    for assignment in assignments:
+        value = getattr(assignment, field)
+        if value not in seen:
+            result.append(assignment)
+            seen.add(value)
+    return result
+
+
+def _attempt_export_row(assignment, attempt, session_by_id, subject_for):
+    session = session_by_id[assignment.session_id]
+    base = [assignment.session_id, subject_for(session.student_id), assignment.snapshot.code]
+    if attempt is None or session.status != ExperimentSession.Status.COMPLETED:
+        return [""] + base + ["", "", "", ""]
+    return [attempt.pk] + base + [attempt.status, attempt.is_correct, attempt.score, attempt.submitted_at.isoformat() if attempt.submitted_at else ""]
 
 
 def _anon_subject(student_id, course_id):

@@ -1,5 +1,4 @@
 import uuid
-from datetime import timedelta
 
 from django.conf import settings
 from django.db import models
@@ -61,6 +60,4 @@ class ExportJob(models.Model):
         ordering = ["-created_at"]
 
     def save(self, *args, **kwargs):
-        if self.expires_at is None:
-            self.expires_at = timezone.now() + timedelta(hours=24 if self.kind == self.Kind.IDENTITY else 24 * 7)
         return super().save(*args, **kwargs)

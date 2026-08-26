@@ -94,7 +94,17 @@ def course_data(request, course_pk):
         version_count=Count("versions", distinct=True),
         session_count=Count("versions__sessions", distinct=True),
     )
-    export_jobs = course.export_jobs.select_related("experiment", "snapshot")[:10]
+    export_jobs = course.export_jobs.filter(status="succeeded").select_related("experiment", "research_study", "snapshot").order_by("-finished_at", "-created_at")
+    latest_jobs = {}
+    for job in export_jobs:
+        key = (job.experiment_id, job.research_study_id, job.kind, job.package)
+        latest_jobs.setdefault(key, job)
+    experiment_exports = {
+        experiment.pk: latest_jobs.get((experiment.pk, None, "research", "complete"))
+        for experiment in experiments
+    }
+    for experiment in experiments:
+        experiment.latest_export_job = experiment_exports[experiment.pk]
     return render(
         request,
         "teacher/course_data.html",
@@ -102,7 +112,7 @@ def course_data(request, course_pk):
             "course": course,
             "current_course": course,
             "experiments": experiments,
-            "export_jobs": export_jobs,
+            "export_jobs": list(latest_jobs.values()),
             "longitudinal_studies": course.research_study_links.select_related("study")[:20],
             "data_tree": [
                 {"key": "overview", "label": "数据概览", "items": []},

@@ -14,6 +14,10 @@ from apps.analytics.services import execute_purge_request
 from apps.accounts.models import DataPurgeRequest
 from apps.question_bank.models import QuestionBank
 from apps.experiments.models import Experiment
+from apps.experiments.models import ExperimentVersion, QuestionSnapshot
+from apps.question_bank.models import Question
+from apps.experiments.presentation_instances import get_or_create_default_item_instance
+from apps.assessment.models import ExperimentSession, StudentQuestionAssignment, Attempt
 
 
 class DataCenterContractTests(TestCase):
@@ -63,7 +67,7 @@ class DataCenterContractTests(TestCase):
         self.assertIn("export_config_hash", manifest)
         self.assertIn("source_cutoff_at", manifest)
 
-    def test_export_job_is_queued_with_snapshot_and_expires(self):
+    def test_export_job_is_generated_with_snapshot_and_no_expiry(self):
         self.client.force_login(self.teacher)
         response = self.client.post(
             reverse("analytics:export_job_create", args=[self.course.pk]),
@@ -71,13 +75,69 @@ class DataCenterContractTests(TestCase):
         )
         self.assertEqual(response.status_code, 302)
         job = ExportJob.objects.get()
-        self.assertEqual(job.status, ExportJob.Status.QUEUED)
+        self.assertEqual(job.status, ExportJob.Status.SUCCEEDED)
         self.assertEqual(job.snapshot.course_id, self.course.pk)
-        self.assertAlmostEqual(
-            (job.expires_at - job.created_at).total_seconds(),
-            timedelta(days=7).total_seconds(),
-            delta=1,
+        self.assertIsNone(job.expires_at)
+
+    def test_export_button_generates_one_reusable_record_without_queue_or_expiry(self):
+        self.client.force_login(self.teacher)
+        url = reverse("analytics:export_job_create", args=[self.course.pk])
+        first = self.client.post(url, {"experiment_id": self.experiment.pk, "package": "complete"})
+        self.assertEqual(first.status_code, 302)
+        job = ExportJob.objects.get(experiment=self.experiment)
+        self.assertEqual(job.status, ExportJob.Status.SUCCEEDED)
+        self.assertIsNone(job.expires_at)
+        self.assertTrue(job.artifact_path)
+        first_job_id = job.job_id
+
+        second = self.client.post(url, {"experiment_id": self.experiment.pk, "package": "complete"})
+        self.assertEqual(second.status_code, 302)
+        self.assertEqual(ExportJob.objects.filter(experiment=self.experiment, package="complete").count(), 1)
+        job.refresh_from_db()
+        self.assertEqual(job.status, ExportJob.Status.SUCCEEDED)
+        self.assertEqual(job.job_id, first_job_id)
+
+    def test_data_center_shows_experiment_name_produce_and_download_not_queue_details(self):
+        self.client.force_login(self.teacher)
+        response = self.client.get(reverse("courses:data", args=[self.course.pk]))
+        body = response.content.decode("utf-8")
+        self.assertIn("实验一", body)
+        self.assertIn("产出", body)
+        self.assertNotIn("排队中", body)
+        self.assertNotIn("过期时间", body)
+
+    def test_delete_removes_only_export_record_and_artifact(self):
+        self.client.force_login(self.teacher)
+        self.client.post(
+            reverse("analytics:export_job_create", args=[self.course.pk]),
+            {"experiment_id": self.experiment.pk, "package": "complete"},
         )
+        job = ExportJob.objects.get(experiment=self.experiment)
+        artifact = job.artifact_path
+        response = self.client.post(reverse("analytics:export_job_delete", args=[self.course.pk, job.job_id]))
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(ExportJob.objects.filter(pk=job.pk).exists())
+        self.assertFalse(os.path.exists(artifact))
+        self.assertTrue(Experiment.objects.filter(pk=self.experiment.pk).exists())
+
+    def test_incomplete_session_keeps_subject_and_question_but_blanks_behavior(self):
+        student = User.objects.create_user(username="unfinished", role=User.Role.STUDENT, student_number="U001")
+        version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)
+        question = Question.objects.create(bank=self.experiment.question_bank, sequence=1, question_type=Question.Type.SHORT, text="题目", correct_answer="答案")
+        snapshot = QuestionSnapshot.objects.create(version=version, source_question=question, source_sequence=1, code="Q1", question_type=Question.Type.SHORT, text="题目", correct_answer="答案", primary_kc="KC1", all_kcs=["KC1"])
+        session = ExperimentSession.objects.create(version=version, student=student, status=ExperimentSession.Status.IN_PROGRESS)
+        assignment = StudentQuestionAssignment.objects.create(session=session, snapshot=snapshot, item_instance=get_or_create_default_item_instance(snapshot), assigned_sequence_index=1)
+        Attempt.objects.create(session=session, assignment=assignment, status=Attempt.Status.SUBMITTED, final_answer="答案", is_correct=True, score=1)
+        snapshot_export = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)
+        job = ExportJob.objects.create(course=self.course, experiment=self.experiment, snapshot=snapshot_export, created_by=self.teacher, package="complete")
+        run_export_job(job)
+        with zipfile.ZipFile(job.artifact_path) as archive:
+            rows = archive.read("02_core/attempts.csv").decode("utf-8-sig").splitlines()
+        self.assertEqual(len(rows), 2)
+        columns = rows[1].split(",")
+        self.assertTrue(columns[2])
+        self.assertEqual(columns[3], "Q1")
+        self.assertEqual(columns[4:], ["", "", "", ""])
 
     def test_other_teacher_cannot_create_course_export_job(self):
         self.client.force_login(self.other)

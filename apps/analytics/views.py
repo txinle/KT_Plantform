@@ -21,7 +21,7 @@ from apps.audit.services import log_action
 from apps.experiments.models import Experiment
 from .export_fields import FIELD_LABELS, field_values
 from .models import ExportJob
-from .services import create_export_snapshot, execute_purge_request
+from .services import create_export_snapshot, execute_purge_request, run_export_job
 from apps.accounts.models import DataPurgeRequest, ResearchStudy
 from apps.accounts.course_access import get_accessible_course, require_course_manager
 
@@ -63,7 +63,7 @@ def export_job_create(request, course_pk):
     ):
         return HttpResponse("身份任务仅限课程负责人或管理员", status=403, content_type="text/plain; charset=utf-8")
     snapshot = create_export_snapshot(course=course, experiment=experiment, created_by=request.user)
-    ExportJob.objects.create(
+    job = _prepare_export_job(
         course=course,
         experiment=experiment,
         snapshot=snapshot,
@@ -73,6 +73,7 @@ def export_job_create(request, course_pk):
         selected_tables=request.POST.getlist("tables"),
         selected_fields=request.POST.getlist("fields"),
     )
+    run_export_job(job)
     if kind == ExportJob.Kind.IDENTITY:
         log_action(request, "identity.export_job_create", course, {"package": package, "experiment_id": experiment_id})
     return redirect("courses:data", course.pk)
@@ -89,7 +90,14 @@ def research_study_export_create(request, study_id):
         return HttpResponse("研究项目尚未关联课程", status=400)
     package = request.POST.get("package", "longitudinal")
     snapshot = create_export_snapshot(course=course, research_study=study, created_by=request.user)
-    ExportJob.objects.create(course=course, research_study=study, snapshot=snapshot, created_by=request.user, package=package)
+    job = _prepare_export_job(
+        course=course,
+        research_study=study,
+        snapshot=snapshot,
+        created_by=request.user,
+        package=package,
+    )
+    run_export_job(job)
     return redirect("courses:data", course.pk)
 
 
@@ -101,7 +109,15 @@ def identity_export_job_create(request, course_pk):
     if not (request.user.is_superuser or request.user.role == User.Role.ADMIN or course.owner_id == request.user.id):
         return HttpResponse("身份任务仅限课程负责人或管理员", status=403)
     snapshot = create_export_snapshot(course=course, experiment=experiment, created_by=request.user)
-    ExportJob.objects.create(course=course, experiment=experiment, snapshot=snapshot, created_by=request.user, kind=ExportJob.Kind.IDENTITY, package="identity")
+    job = _prepare_export_job(
+        course=course,
+        experiment=experiment,
+        snapshot=snapshot,
+        created_by=request.user,
+        kind=ExportJob.Kind.IDENTITY,
+        package="identity",
+    )
+    run_export_job(job)
     log_action(request, "identity.export_job_create", course, {"experiment_id": experiment.pk})
     return redirect("courses:data", course.pk)
 
@@ -147,11 +163,74 @@ def export_job_download(request, course_pk, job_id):
         request.user.is_superuser or request.user.role == User.Role.ADMIN or course.owner_id == request.user.id
     ):
         return HttpResponse("无权访问身份任务", status=403)
-    if not job.artifact_path or not os.path.exists(job.artifact_path) or (job.expires_at and job.expires_at <= timezone.now()):
-        return HttpResponse("导出文件已过期", status=410, content_type="text/plain; charset=utf-8")
+    if not job.artifact_path or not os.path.exists(job.artifact_path):
+        return HttpResponse("导出文件不存在，请重新产出", status=404, content_type="text/plain; charset=utf-8")
     if job.kind == ExportJob.Kind.IDENTITY:
         log_action(request, "identity.export_job_download", course, {"job_id": str(job.job_id)})
     return FileResponse(open(job.artifact_path, "rb"), as_attachment=True, filename=f"{job.package}-{job.job_id}.zip")
+
+
+@role_required("teacher", "admin")
+@require_POST
+def export_job_delete(request, course_pk, job_id):
+    course = get_accessible_course(request.user, course_pk)
+    job = get_object_or_404(ExportJob, course=course, job_id=job_id)
+    if job.kind == ExportJob.Kind.IDENTITY and not (
+        request.user.is_superuser or request.user.role == User.Role.ADMIN or course.owner_id == request.user.id
+    ):
+        return HttpResponse("无权删除身份导出", status=403, content_type="text/plain; charset=utf-8")
+    if job.artifact_path and os.path.exists(job.artifact_path):
+        artifact_dir = os.path.dirname(job.artifact_path)
+        os.remove(job.artifact_path)
+        if artifact_dir and os.path.isdir(artifact_dir) and not os.listdir(artifact_dir):
+            os.rmdir(artifact_dir)
+    log_action(request, "analytics.export_job_delete", course, {"job_id": str(job.job_id), "package": job.package})
+    job.delete()
+    return redirect("courses:data", course.pk)
+
+
+def _prepare_export_job(*, course, snapshot, created_by, experiment=None, research_study=None,
+                        kind=ExportJob.Kind.RESEARCH, package="complete", selected_tables=None,
+                        selected_fields=None):
+    lookup = {
+        "course": course,
+        "experiment": experiment,
+        "research_study": research_study,
+        "kind": kind,
+        "package": package,
+    }
+    job = ExportJob.objects.filter(**lookup).order_by("-created_at").first()
+    if job is None:
+        job = ExportJob.objects.create(
+            **lookup,
+            snapshot=snapshot,
+            created_by=created_by,
+            selected_tables=selected_tables or [],
+            selected_fields=selected_fields or [],
+        )
+    else:
+        if job.artifact_path and os.path.exists(job.artifact_path):
+            os.remove(job.artifact_path)
+        job.snapshot = snapshot
+        job.created_by = created_by
+        job.selected_tables = selected_tables or []
+        job.selected_fields = selected_fields or []
+        job.status = ExportJob.Status.RUNNING
+        job.started_at = timezone.now()
+        job.finished_at = None
+        job.artifact_path = ""
+        job.artifact_sha256 = ""
+        job.progress_stage = "snapshot"
+        job.save(update_fields=[
+            "snapshot", "created_by", "selected_tables", "selected_fields", "status",
+            "started_at", "finished_at", "artifact_path", "artifact_sha256", "progress_stage",
+        ])
+    if job.status != ExportJob.Status.RUNNING:
+        job.status = ExportJob.Status.RUNNING
+        job.started_at = timezone.now()
+        job.progress_stage = "snapshot"
+        job.save(update_fields=["status", "started_at", "progress_stage"])
+    return job
 
 def _anon(student_id, experiment_id):
     return hashlib.sha256(f"kt:{experiment_id}:{student_id}".encode()).hexdigest()[:16]
