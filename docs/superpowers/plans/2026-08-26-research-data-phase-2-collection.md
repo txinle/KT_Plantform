@@ -129,23 +129,23 @@ Record session start/complete/expire/invalidate, item enter, attempt close, resp
 - Modify: `templates/student/question.html`
 - Modify: `static/js/assessment.js`
 
-- [ ] **Step 1: Write failing dependency-free JavaScript tests**
+- [x] **Step 1: Write failing dependency-free JavaScript tests**
 
 Cover UUID instance lifecycle, atomic sequence allocation, queue-before-send, acknowledge-before-delete, identical retry, exponential backoff, online recovery, previous-instance backlog, max batch size and payload redaction.
 
-- [ ] **Step 2: Implement IndexedDB outbox**
+- [x] **Step 2: Implement IndexedDB outbox**
 
 Use a versioned database/store, explicit transaction boundaries and no external dependency. If IndexedDB is unavailable, retain an in-memory fallback with `payload_recovered`/quality reporting; never claim durable offline capture in that mode.
 
-- [ ] **Step 3: Implement synchronization and upload scheduling**
+- [x] **Step 3: Implement synchronization and upload scheduling**
 
 Sync on first load, `online`, and every 15 minutes. Upload while online, page visible or during bounded pagehide best effort. Normal fetch remains authoritative; `sendBeacon` may be used only with a CSRF-safe same-origin contract and must not delete rows without acknowledgement.
 
-- [ ] **Step 4: Capture approved lifecycle and telemetry only**
+- [x] **Step 4: Capture approved lifecycle and telemetry only**
 
 Record rendered/left, visibility, focus, pageshow/pagehide, online/offline and heartbeat. Heartbeat runs only while the document is visible, the attempt is open and the configured interval has elapsed. Stop all timers after attempt close.
 
-- [ ] **Step 5: Capture response events**
+- [x] **Step 5: Capture response events**
 
 Record first input once, direct choice state changes, and returned text snapshot references. Force draft/snapshot completion before navigation, skip and submit. Never record keydown/up or per-keystroke text.
 
@@ -160,25 +160,25 @@ Record first input once, direct choice state changes, and returned text snapshot
 - Modify: existing CSS only as needed
 - Create/modify: focused Django and DOM-contract tests
 
-- [ ] **Step 1: Render teacher configuration fields**
+- [x] **Step 1: Render teacher configuration fields**
 
 Group Confidence mode, sampling unit/probability, versions and heartbeat under an explicit “研究过程采集” section. Explain that Confidence changes the student flow and is not inferred from behavior.
 
-- [ ] **Step 2: Render accessible Confidence prompt**
+- [x] **Step 2: Render accessible Confidence prompt**
 
 Use 0–100% in 10% steps, labelled controls, keyboard operation, a visible skip action and live save/error states. Do not use native `alert` or `confirm`.
 
-- [ ] **Step 3: Render feedback only from the resolved server response**
+- [x] **Step 3: Render feedback only from the resolved server response**
 
 Record shown events after DOM insertion. Maintain feedback mode semantics and preserve correct-answer/explanation escaping.
 
-- [ ] **Step 4: Run 1440×900 and 390×844 visual acceptance**
+- [x] **Step 4: Run 1440×900 and 390×844 visual acceptance**
 
 Verify no horizontal overflow, touch targets, focus order, status not conveyed by color alone, reduced motion and offline local assets.
 
 ## Task 7: Phase 2 release gate
 
-- [ ] **Step 1: Run invariant and endpoint suites**
+- [x] **Step 1: Run invariant and endpoint suites**
 
 Include duplicate submits, duplicate batches, offline backlog/recovery, client ±5 minutes, wall-clock change, refresh/time-origin change, page lifecycle and injected transaction failures.
 

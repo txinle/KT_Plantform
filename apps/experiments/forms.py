@@ -21,6 +21,8 @@ class ExperimentForm(forms.ModelForm):
             "confidence_mode",
             "confidence_sampling_unit",
             "confidence_probability",
+            "confidence_randomization_seed",
+            "confidence_assignment_version",
             "confidence_scale_version",
             "confidence_prompt_version",
             "heartbeat_interval_seconds",
@@ -39,6 +41,8 @@ class ExperimentForm(forms.ModelForm):
             "confidence_mode": "作答信心采集",
             "confidence_sampling_unit": "信心抽样单位",
             "confidence_probability": "信心抽样概率",
+            "confidence_randomization_seed": "随机分配种子（可选）",
+            "confidence_assignment_version": "分配规则版本",
             "confidence_scale_version": "信心量表版本",
             "confidence_prompt_version": "信心提示版本",
             "heartbeat_interval_seconds": "活跃心跳间隔（秒）",
@@ -50,6 +54,8 @@ class ExperimentForm(forms.ModelForm):
             "confidence_mode",
             "confidence_sampling_unit",
             "confidence_probability",
+            "confidence_randomization_seed",
+            "confidence_assignment_version",
             "confidence_scale_version",
             "confidence_prompt_version",
             "heartbeat_interval_seconds",
@@ -57,6 +63,9 @@ class ExperimentForm(forms.ModelForm):
             self.fields[field_name].required = False
         self.fields["time_mode"].widget.attrs["data-time-mode-controller"] = ""
         self.fields["selection_mode"].widget.attrs["data-selection-mode-controller"] = ""
+        self.fields["confidence_mode"].widget.attrs[
+            "data-confidence-mode-controller"
+        ] = ""
         self.fields["selection_mode"].required = False
         quota_values = {}
         if self.instance.pk:
@@ -96,6 +105,8 @@ class ExperimentForm(forms.ModelForm):
             "confidence_mode",
             "confidence_sampling_unit",
             "confidence_probability",
+            "confidence_randomization_seed",
+            "confidence_assignment_version",
             "confidence_scale_version",
             "confidence_prompt_version",
             "heartbeat_interval_seconds",

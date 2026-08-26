@@ -1,7 +1,9 @@
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.urls import reverse
 from apps.accounts.models import User
 from apps.experiments.models import Experiment, ExperimentQuestion, ExperimentStudent
 from apps.experiments.services import publish_experiment
@@ -96,3 +98,50 @@ class AssessmentFlowTests(TestCase):
                 event_type__in=["response_committed", "attempt_closed"],
             ).exists()
         )
+
+    def test_question_page_exposes_versioned_native_collector_contract(self):
+        session = get_or_create_session(self.experiment, self.student)
+        assignment = session.assignments.get()
+        self.client.force_login(self.student)
+
+        response = self.client.get(
+            reverse("assessment:question", args=[session.pk, assignment.pk])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            f'data-process-session-id="{session.pk}"',
+        )
+        self.assertContains(
+            response,
+            f'data-process-attempt-id="{assignment.attempt.pk}"',
+        )
+        self.assertContains(
+            response,
+            f'data-process-event-url="{reverse("assessment_process:event_batch")}"',
+        )
+        self.assertContains(
+            response,
+            f'data-time-sync-create-url="{reverse("assessment_process:time_sync_create")}"',
+        )
+        self.assertContains(response, 'data-heartbeat-interval-seconds="30"')
+        content = response.content.decode("utf-8")
+        self.assertLess(
+            content.index("js/process-event-collector.js"),
+            content.index("js/assessment.js"),
+        )
+
+    def test_native_collector_source_avoids_prohibited_continuous_capture(self):
+        source = (
+            Path(__file__).resolve().parents[2]
+            / "static"
+            / "js"
+            / "process-event-collector.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("keydown", source)
+        self.assertNotIn("keyup", source)
+        self.assertNotIn("mousemove", source)
+        self.assertNotIn("mouse_x", source)
+        self.assertNotIn("mouse_y", source)

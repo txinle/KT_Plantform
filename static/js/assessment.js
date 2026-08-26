@@ -11,12 +11,80 @@
   const feedback = document.getElementById('feedback');
   const submitDialog = document.getElementById('submit-confirm-dialog');
   const submitConfirm = submitDialog?.querySelector('[data-confirm-action]');
+  const confidencePanel = document.getElementById('confidence-panel');
+  const confidenceInput = document.getElementById('confidence-probability');
+  const confidenceValue = document.getElementById('confidence-value');
+  const confidenceStatus = document.getElementById('confidence-status');
+  const confidenceSubmit = document.getElementById('confidence-submit-btn');
+  const confidenceSkip = document.getElementById('confidence-skip-btn');
   const csrf = form.querySelector('[name="csrfmiddlewaretoken"]').value;
   const draft = JSON.parse(document.getElementById('draft-data').textContent || 'null');
+  const pendingConfidence = JSON.parse(
+    document.getElementById('pending-confidence-data')?.textContent || 'null',
+  );
   let debounceTimer = null;
   let lastSerialized = null;
+  let lastQueuedSerialized = null;
   let saving = null;
+  let saveQueue = Promise.resolve();
   let submitting = false;
+  let inputStarted = false;
+  let processLifecycle = null;
+  let confidencePromptPromise = null;
+
+  const processApi = window.KTProcessData;
+  const processReady = (async () => {
+    if (!processApi) return null;
+    const outbox = await processApi.defaultOutbox();
+    const collector = new processApi.ProcessEventCollector({
+      sessionId: Number(form.dataset.processSessionId),
+      attemptId: Number(form.dataset.processAttemptId),
+      endpoint: form.dataset.processEventUrl,
+      csrfToken: csrf,
+      appVersion: form.dataset.processAppVersion,
+      outbox,
+    });
+    const syncUrls = {
+      createUrl: form.dataset.timeSyncCreateUrl,
+      finalizeUrl: form.dataset.timeSyncFinalizeUrl,
+    };
+    processLifecycle = processApi.bindLifecycle(collector, {
+      heartbeatIntervalSeconds: Number(form.dataset.heartbeatIntervalSeconds),
+      attemptOpen: !['submitted', 'timed_out', 'unanswered'].includes(form.dataset.attemptStatus),
+      onlineOptions: { syncUrls },
+    });
+    await processLifecycle.ready;
+    collector.synchronizeClock(syncUrls).then(() => collector.flush());
+    collector.startSynchronization(syncUrls, processApi.DEFAULT_SYNC_INTERVAL_MS, false);
+    return collector;
+  })().catch(() => null);
+
+  async function recordProcessEvent(eventType, payload, options = {}) {
+    try {
+      const collector = await processReady;
+      if (!collector) return null;
+      return await collector.record(eventType, payload, options);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  async function closeProcessAttempt(reason) {
+    try {
+      await processReady;
+      await processLifecycle?.closeAttempt(reason);
+    } catch (_error) {
+      // Process-data capture must never block the authoritative assessment flow.
+    }
+  }
+
+  function hideSubmitDialog() {
+    const modal = window.bootstrap?.Modal.getOrCreateInstance(submitDialog);
+    if (!modal) return;
+    const hideAfterShow = () => modal.hide();
+    submitDialog.addEventListener('shown.bs.modal', hideAfterShow, { once: true });
+    modal.hide();
+  }
 
   const escapeCss = (value) => window.CSS && CSS.escape ? CSS.escape(value) : value.replace(/["']/g, '\\$&');
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -88,35 +156,174 @@
     } catch (error) {
       throw new Error('服务器返回了无法识别的响应，请稍后重试。');
     }
-    if (!response.ok || !data.success) throw new Error(data.error || '请求失败，请稍后重试。');
+    if (!response.ok || !data.success) {
+      const message = typeof data.error === 'string'
+        ? data.error
+        : data.error?.message || '请求失败，请稍后重试。';
+      throw new Error(message);
+    }
     return data;
   }
 
-  async function saveDraft(force = false) {
-    const answer = collect();
-    const serialized = JSON.stringify(answer);
-    if (!force && serialized === lastSerialized) return;
-    setSaveState('正在保存', 'saving');
-    saving = post(form.dataset.saveUrl, { answer, client_occurred_at: new Date().toISOString() });
-    try {
-      await saving;
-      lastSerialized = serialized;
-      setSaveState('草稿已保存', 'saved');
-      clearError();
-    } catch (error) {
-      setSaveState('草稿保存失败', 'error');
-      showError(`${error.message} 当前答案仍保留在本页，请不要关闭页面。`);
-      throw error;
-    } finally {
-      saving = null;
+  function lockAnswerControls() {
+    form.querySelectorAll('[name="answer"]').forEach((element) => {
+      element.disabled = true;
+    });
+    skipBtn?.remove();
+    if (submitBtn) {
+      submitBtn.closest('.sticky-actions')?.remove();
     }
   }
 
-  form.addEventListener('input', () => {
+  async function renderFeedback(data) {
+    let details = '';
+    if (data.correct_answer !== undefined) {
+      details += `<div class="mt-2"><strong>正确答案：</strong>${escapeHtml(formatCorrectAnswer(data.correct_answer))}</div>`;
+    }
+    if (data.explanation) {
+      details += `<div class="mt-2"><strong>解析：</strong>${escapeHtml(data.explanation)}</div>`;
+    }
+    const correctness = data.is_correct === true
+      ? '，回答正确'
+      : data.is_correct === false ? '，回答错误' : '';
+    feedback.innerHTML = `<div class="alert alert-success mb-0">本题已提交并锁定${correctness}${details}</div>`;
+    await recordProcessEvent('feedback_shown', {
+      feedback_mode: data.feedback_mode || 'none',
+      included_correctness: data.is_correct !== undefined,
+      included_correct_answer: data.correct_answer !== undefined,
+      included_explanation: Boolean(data.explanation),
+    });
+    if (data.explanation) {
+      await recordProcessEvent('explanation_shown', {
+        source: 'submission_feedback',
+      });
+    }
+  }
+
+  async function showConfidencePrompt(contract) {
+    if (!confidencePanel || !confidenceInput || !confidenceStatus) {
+      throw new Error('信心评价界面加载失败，请刷新页面后重试。');
+    }
+    confidencePanel.dataset.commitUrl = contract.commit_url;
+    confidencePanel.dataset.skipUrl = contract.skip_url;
+    confidenceInput.min = String(contract.minimum);
+    confidenceInput.max = String(contract.maximum);
+    confidenceInput.step = String(contract.step);
+    confidencePanel.hidden = false;
+    confidenceStatus.textContent = '正在确认评价表已显示';
+    confidenceStatus.className = 'save-status is-saving mt-2';
+    confidenceInput.focus();
+    confidencePanel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    confidencePromptPromise = post(contract.prompt_shown_url, {})
+      .then(() => {
+        confidenceStatus.textContent = '请选择把握程度，或跳过评价';
+        confidenceStatus.className = 'save-status mt-2';
+        return true;
+      })
+      .catch((error) => {
+        confidenceStatus.textContent = '评价表状态同步失败，请重试';
+        confidenceStatus.className = 'save-status is-error mt-2';
+        throw error;
+      });
+    return confidencePromptPromise;
+  }
+
+  async function resolveConfidence(url, payload) {
+    confidenceSubmit.disabled = true;
+    confidenceSkip.disabled = true;
+    confidenceStatus.textContent = '正在保存评价';
+    confidenceStatus.className = 'save-status is-saving mt-2';
+    clearError();
+    try {
+      await confidencePromptPromise;
+      const data = await post(url, payload);
+      confidencePanel.hidden = true;
+      await renderFeedback(data);
+      window.setTimeout(() => { window.location.href = data.next_url; }, 650);
+    } catch (error) {
+      showError(error.message, true);
+      confidenceSubmit.disabled = false;
+      confidenceSkip.disabled = false;
+      confidenceStatus.textContent = '保存失败，可重新提交或跳过';
+      confidenceStatus.className = 'save-status is-error mt-2';
+    }
+  }
+
+  async function recordSavedResponse(data, source) {
+    if (!data) return;
+    const payload = {
+      question_type: form.dataset.questionType,
+      change_source: source,
+    };
+    if (Object.prototype.hasOwnProperty.call(data, 'response_state_after')) {
+      payload.response_state_after = data.response_state_after;
+    } else if (data.response_snapshot_id) {
+      payload.response_snapshot_id = data.response_snapshot_id;
+      payload.content_hash = data.content_hash;
+      payload.content_length = data.content_length;
+    } else {
+      return;
+    }
+    await recordProcessEvent('response_state_changed', payload);
+  }
+
+  function saveDraft(force = false) {
+    const serialized = JSON.stringify(collect());
+    if (!force && serialized === lastQueuedSerialized) return saving || Promise.resolve(null);
+    const answer = JSON.parse(serialized);
+    lastQueuedSerialized = serialized;
+    setSaveState('正在保存', 'saving');
+    const operation = async () => {
+      try {
+        const data = await post(form.dataset.saveUrl, {
+          answer,
+          client_occurred_at: new Date().toISOString(),
+        });
+        lastSerialized = serialized;
+        await recordSavedResponse(data, force ? 'forced_snapshot' : 'student');
+        setSaveState('草稿已保存', 'saved');
+        clearError();
+        return data;
+      } catch (error) {
+        if (lastQueuedSerialized === serialized) lastQueuedSerialized = lastSerialized;
+        setSaveState('草稿保存失败', 'error');
+        showError(`${error.message} 当前答案仍保留在本页，请不要关闭页面。`);
+        throw error;
+      }
+    };
+    const result = saveQueue.then(operation, operation);
+    saveQueue = result.catch(() => {});
+    saving = result;
+    return result.finally(() => {
+      if (saving === result) saving = null;
+    });
+  }
+
+  const choiceQuestion = ['single_choice', 'multiple_choice', 'true_false'].includes(
+    form.dataset.questionType,
+  );
+
+  form.addEventListener('input', (event) => {
+    if (!event.target.matches('[name="answer"]')) return;
+    if (!inputStarted) {
+      inputStarted = true;
+      recordProcessEvent('response_input_started', {
+        question_type: form.dataset.questionType,
+      });
+    }
+    if (choiceQuestion) return;
     window.clearTimeout(debounceTimer);
     setSaveState('等待自动保存');
     debounceTimer = window.setTimeout(() => saveDraft().catch(() => {}), 800);
   });
+
+  if (choiceQuestion) {
+    form.addEventListener('change', (event) => {
+      if (!event.target.matches('[name="answer"]')) return;
+      setSaveState('正在保存', 'saving');
+      saveDraft().catch(() => {});
+    });
+  }
 
   submitConfirm?.addEventListener('click', async () => {
     if (submitting) return;
@@ -126,21 +333,30 @@
     submitBtn.disabled = true;
     form.setAttribute('aria-busy', 'true');
     clearError();
-    window.bootstrap?.Modal.getOrCreateInstance(submitDialog).hide();
+    hideSubmitDialog();
     try {
       await saveDraft(true);
+      const submissionToken = makeToken();
+      await recordProcessEvent(
+        'response_commit_requested',
+        { submission_token: submissionToken },
+        { correlationId: submissionToken },
+      );
       const data = await post(form.dataset.submitUrl, {
-        submission_token: makeToken(),
+        submission_token: submissionToken,
         client_clicked_at: new Date().toISOString()
       });
-      let details = '';
-      if (data.correct_answer !== undefined) details += `<div class="mt-2"><strong>正确答案：</strong>${escapeHtml(formatCorrectAnswer(data.correct_answer))}</div>`;
-      if (data.explanation) details += `<div class="mt-2"><strong>解析：</strong>${escapeHtml(data.explanation)}</div>`;
-      const correctness = data.is_correct === true ? '，回答正确' : data.is_correct === false ? '，回答错误' : '';
-      feedback.innerHTML = `<div class="alert alert-success mb-0">本题已提交并锁定${correctness}${details}</div>`;
-      form.querySelectorAll('input, textarea').forEach((element) => { element.disabled = true; });
-      skipBtn?.remove();
-      submitBtn.textContent = '已提交';
+      lockAnswerControls();
+      await closeProcessAttempt('submit');
+      form.removeAttribute('aria-busy');
+      if (data.confidence_required) {
+        showConfidencePrompt(data.confidence).catch((error) => {
+          showError(error.message, true);
+        });
+        submitting = false;
+        return;
+      }
+      await renderFeedback(data);
       window.setTimeout(() => { window.location.href = data.next_url; }, 650);
     } catch (error) {
       showError(error.message, true);
@@ -159,6 +375,7 @@
     try {
       await saveDraft(true);
       const data = await post(form.dataset.skipUrl, {});
+      await closeProcessAttempt('skip');
       window.location.href = data.next_url;
     } catch (error) {
       showError(error.message, true);
@@ -173,6 +390,7 @@
     clearError();
     try {
       if (submitBtn) await saveDraft(true);
+      await closeProcessAttempt('navigation');
       window.location.href = link.href;
     } catch (error) {
       showError('草稿保存失败，尚未切换题目。请检查网络后重试。', true);
@@ -181,6 +399,46 @@
 
   restore();
   lastSerialized = JSON.stringify(collect());
+  lastQueuedSerialized = lastSerialized;
+  if (pendingConfidence) {
+    lockAnswerControls();
+    showConfidencePrompt(pendingConfidence).catch((error) => {
+      showError(error.message, true);
+    });
+  }
+
+  const finishForm = document.querySelector('[data-finish-form]');
+  finishForm?.addEventListener('assessment:finish-requested', async (event) => {
+    event.preventDefault();
+    try {
+      if (submitBtn) await saveDraft(true);
+      await closeProcessAttempt('finish');
+      finishForm.submit();
+    } catch (_error) {
+      const finishConfirm = document.querySelector(
+        '#finish-confirm-dialog [data-confirm-action]',
+      );
+      if (finishConfirm) {
+        finishConfirm.disabled = false;
+        finishConfirm.textContent = '结束实验';
+      }
+      showError('草稿保存失败，实验尚未结束。请检查网络后重试。', true);
+    }
+  });
+
+  confidenceInput?.addEventListener('input', () => {
+    confidenceValue.textContent = `${confidenceInput.value}%`;
+  });
+
+  confidenceSubmit?.addEventListener('click', () => resolveConfidence(
+    confidencePanel.dataset.commitUrl,
+    { probability: Number(confidenceInput.value) },
+  ));
+
+  confidenceSkip?.addEventListener('click', () => resolveConfidence(
+    confidencePanel.dataset.skipUrl,
+    {},
+  ));
 
   const timerElement = document.getElementById('countdown');
   if (timerElement) {
@@ -194,7 +452,9 @@
         window.clearInterval(clock);
         form.querySelectorAll('input, textarea, button').forEach((element) => { element.disabled = true; });
         showError('本题或实验时间已结束，页面将刷新并同步服务器状态。', true);
-        window.setTimeout(() => window.location.reload(), 1200);
+        closeProcessAttempt('timeout').finally(() => {
+          window.setTimeout(() => window.location.reload(), 1200);
+        });
       }
     }, 1000);
   }

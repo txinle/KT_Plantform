@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import timezone as datetime_timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import uuid
 
 from django.db import transaction
@@ -20,6 +20,7 @@ from .models import Attempt, ClientTimeSync
 
 MAX_BATCH_EVENTS = 100
 MAX_CLIENT_MONOTONIC_MS = Decimal("99999999999999999.999")
+MONOTONIC_QUANTUM_MS = Decimal("0.001")
 
 CLIENT_BATCH_EVENT_TYPES = frozenset(
     {
@@ -117,7 +118,7 @@ def parse_finite_decimal(value, *, code="invalid_request"):
         or result > MAX_CLIENT_MONOTONIC_MS
     ):
         raise ProcessRequestError(code)
-    return result
+    return result.quantize(MONOTONIC_QUANTUM_MS, rounding=ROUND_HALF_UP)
 
 
 def parse_aware_datetime(value, *, code="invalid_request"):

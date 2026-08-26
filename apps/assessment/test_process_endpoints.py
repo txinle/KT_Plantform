@@ -1,6 +1,7 @@
 import json
 import uuid
 from datetime import timedelta
+from decimal import Decimal
 
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -185,6 +186,29 @@ class ProcessEndpointContractTests(TestCase):
             [1, 2],
         )
         self.assertEqual(AssessmentEvent.objects.count(), 2)
+
+    def test_browser_monotonic_precision_is_normalized_to_storage_contract(self):
+        sync_response = self.post_json(
+            self.sync_create_url,
+            self.sync_create_payload(client_monotonic_ms="1000.1234567"),
+        )
+        event_response = self.post_json(
+            self.batch_url,
+            self.batch(
+                events=[self.event(client_monotonic_ms="1250.9876543")]
+            ),
+        )
+
+        self.assertEqual(sync_response.status_code, 201)
+        self.assertEqual(event_response.status_code, 200)
+        self.assertEqual(
+            ClientTimeSync.objects.get().client_monotonic_ms,
+            Decimal("1000.123"),
+        )
+        self.assertEqual(
+            AssessmentEvent.objects.get().client_monotonic_ms,
+            Decimal("1250.988"),
+        )
 
     def test_batch_resolves_links_from_authenticated_student(self):
         response = self.post_json(

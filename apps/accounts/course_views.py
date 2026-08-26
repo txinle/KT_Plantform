@@ -21,6 +21,7 @@ from .forms import (
     course_settings_state_token_matches,
 )
 from .models import Course, User
+from apps.assessment.models import AssessmentEvent
 from .permissions import role_required
 
 
@@ -93,11 +94,56 @@ def course_data(request, course_pk):
         version_count=Count("versions", distinct=True),
         session_count=Count("versions__sessions", distinct=True),
     )
+    export_jobs = course.export_jobs.select_related("experiment", "snapshot")[:10]
     return render(
         request,
         "teacher/course_data.html",
-        {"course": course, "current_course": course, "experiments": experiments},
+        {
+            "course": course,
+            "current_course": course,
+            "experiments": experiments,
+            "export_jobs": export_jobs,
+            "data_tree": [
+                {"key": "overview", "label": "数据概览", "items": []},
+                {"key": "quality", "label": "采集质量", "items": []},
+                {"key": "quick", "label": "快速导出", "items": [
+                    ("complete", "完整去标识化研究包"),
+                    ("kt", "标准 KT 包"),
+                    ("cd", "CD 包"),
+                    ("process", "作答过程包"),
+                    ("confidence", "Confidence / 元认知包"),
+                    ("simulation", "仿真包"),
+                ]},
+                {"key": "core", "label": "核心表", "items": [(k, k) for k in ("subjects", "sessions", "assignments", "item_instances", "attempts")]},
+                {"key": "raw", "label": "原始过程", "items": [(k, k) for k in ("assessment_events", "response_events", "navigation_events", "exposure_events", "telemetry_events")]},
+                {"key": "design", "label": "测量设计", "items": [(k, k) for k in ("item_snapshots", "kc_dictionary", "item_kc_mapping", "q_matrix")]},
+                {"key": "derived", "label": "派生数据", "items": [(k, k) for k in ("attempt_features", "kt_sequences", "cd_response_matrix", "calibration_features")]},
+                {"key": "compat", "label": "兼容导出", "items": [("legacy_kt", "旧匿名 KT CSV"), ("legacy_navigation", "旧匿名导航 CSV"), ("legacy_identified", "旧实名可选字段 Excel")]},
+                {"key": "longitudinal", "label": "纵向研究项目", "items": []},
+                {"key": "jobs", "label": "导出任务", "items": []},
+            ],
+        },
     )
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def course_quality(request, course_pk):
+    course = get_accessible_course(request.user, course_pk)
+    events = AssessmentEvent.objects.filter(session__version__experiment__course=course)
+    total = events.count()
+    context = {
+        "course": course,
+        "current_course": course,
+        "quality": {
+            "event_count": total,
+            "duplicate_count": 0,
+            "clock_unsynchronized_rate": round(events.filter(quality_flags__contains=["clock_unsynchronized"]).count() / total * 100, 2) if total else 0,
+            "offline_rate": round(events.filter(quality_flags__contains=["offline_buffered"]).count() / total * 100, 2) if total else 0,
+            "native_count": events.filter(capture_mode=AssessmentEvent.CaptureMode.NATIVE).count(),
+            "legacy_count": events.filter(capture_mode=AssessmentEvent.CaptureMode.LEGACY_PROJECTION).count(),
+        },
+    }
+    return render(request, "teacher/course_quality.html", context)
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)

@@ -9,7 +9,12 @@ from django.views.decorators.http import require_POST
 from apps.accounts.permissions import role_required
 from apps.accounts.models import Course, CourseEnrollment
 from apps.experiments.models import Experiment
-from .models import Attempt, ExperimentSession, StudentQuestionAssignment
+from .models import (
+    Attempt,
+    ConfidenceAssignment,
+    ExperimentSession,
+    StudentQuestionAssignment,
+)
 from .confidence_services import (
     confidence_prompt_contract,
     ensure_confidence_assignment,
@@ -61,6 +66,24 @@ def _next_url_after_attempt(attempt, *, finish_if_last):
     if finish_if_last:
         finish_session(attempt.session_id)
     return reverse("assessment:complete", args=[attempt.session_id])
+
+
+def _confidence_client_contract(attempt, confidence):
+    return {
+        **confidence_prompt_contract(confidence),
+        "prompt_shown_url": reverse(
+            "assessment_process:confidence_prompt_shown",
+            args=[attempt.pk],
+        ),
+        "commit_url": reverse(
+            "assessment_process:confidence_commit",
+            args=[attempt.pk],
+        ),
+        "skip_url": reverse(
+            "assessment_process:confidence_skip",
+            args=[attempt.pk],
+        ),
+    }
 
 
 @role_required("student")
@@ -116,6 +139,29 @@ def start_experiment(request, experiment_id):
 @role_required("student")
 def question_page(request, session_id, assignment_id):
     session = get_object_or_404(ExperimentSession.objects.select_related("version__experiment"), pk=session_id, student=request.user)
+    pending_confidence = (
+        ConfidenceAssignment.objects.select_related("attempt__assignment")
+        .filter(
+            attempt__session=session,
+            attempt__status=Attempt.Status.SUBMITTED,
+            condition=ConfidenceAssignment.Condition.PROMPT,
+            response_status__in=(
+                ConfidenceAssignment.ResponseStatus.ASSIGNED,
+                ConfidenceAssignment.ResponseStatus.PROMPT_SHOWN,
+            ),
+        )
+        .order_by("attempt__submitted_at", "attempt_id")
+        .first()
+    )
+    if (
+        pending_confidence is not None
+        and pending_confidence.attempt.assignment_id != assignment_id
+    ):
+        return redirect(
+            "assessment:question",
+            session_id=session.pk,
+            assignment_id=pending_confidence.attempt.assignment_id,
+        )
     assignment = get_object_or_404(StudentQuestionAssignment.objects.select_related("snapshot"), pk=assignment_id, session=session)
     reason = request.GET.get("reason", "navigation_click")
     try:
@@ -142,6 +188,11 @@ def question_page(request, session_id, assignment_id):
         "snapshot": assignment.snapshot,
         "remaining_seconds": remaining,
         "fallback_next_url": fallback_next_url,
+        "pending_confidence": (
+            _confidence_client_contract(attempt, pending_confidence)
+            if pending_confidence is not None
+            else None
+        ),
     })
 
 
@@ -201,21 +252,10 @@ def submit_api(request, attempt_id):
             "confidence_required": prompt_pending,
         }
         if prompt_pending:
-            response["confidence"] = {
-                **confidence_prompt_contract(confidence),
-                "prompt_shown_url": reverse(
-                    "assessment_process:confidence_prompt_shown",
-                    args=[attempt.pk],
-                ),
-                "commit_url": reverse(
-                    "assessment_process:confidence_commit",
-                    args=[attempt.pk],
-                ),
-                "skip_url": reverse(
-                    "assessment_process:confidence_skip",
-                    args=[attempt.pk],
-                ),
-            }
+            response["confidence"] = _confidence_client_contract(
+                attempt,
+                confidence,
+            )
         else:
             response.update(frozen_feedback_payload(attempt))
         return JsonResponse(response)

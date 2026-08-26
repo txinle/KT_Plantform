@@ -35,13 +35,35 @@
       });
     });
 
+    const confidenceMode = document.querySelector('[data-confidence-mode-controller]');
+    const updateConfidenceFields = () => {
+      if (!confidenceMode) return;
+      const sampled = confidenceMode.value === 'sampled';
+      document.querySelectorAll('[data-confidence-sampling-fields]').forEach((group) => {
+        group.hidden = !sampled;
+      });
+      const probability = document.getElementById('id_confidence_probability');
+      if (probability) {
+        probability.required = sampled;
+        probability.setAttribute('aria-required', sampled ? 'true' : 'false');
+        if (!sampled) probability.value = '';
+      }
+    };
+    confidenceMode?.addEventListener('change', updateConfidenceFields);
+    updateConfidenceFields();
+
     const finishDialog = document.getElementById('finish-confirm-dialog');
     const finishForm = document.querySelector('[data-finish-form]');
     const finishConfirm = finishDialog?.querySelector('[data-confirm-action]');
     finishConfirm?.addEventListener('click', () => {
       finishConfirm.disabled = true;
       finishConfirm.textContent = '正在结束';
-      finishForm?.submit();
+      if (!finishForm) return;
+      const request = new CustomEvent('assessment:finish-requested', {
+        bubbles: true,
+        cancelable: true,
+      });
+      if (finishForm.dispatchEvent(request)) finishForm.submit();
     });
 
     document.querySelectorAll('[data-confirm-form]').forEach((button) => {

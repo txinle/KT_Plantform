@@ -118,6 +118,25 @@ class ConfidenceFlowTests(TestCase):
             all(item.assignment_version == "assign-v1" for item in assignments)
         )
 
+    def test_question_page_contains_accessible_deferred_confidence_controls(self):
+        assignment = self.session.assignments.order_by("assigned_sequence_index").first()
+
+        response = self.client.get(
+            reverse(
+                "assessment:question",
+                args=[self.session.pk, assignment.pk],
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="confidence-panel"')
+        self.assertContains(response, 'aria-labelledby="confidence-title"')
+        self.assertContains(response, 'id="confidence-probability"')
+        self.assertContains(response, 'min="0" max="100" step="10"')
+        self.assertContains(response, 'id="confidence-submit-btn"')
+        self.assertContains(response, 'id="confidence-skip-btn"')
+        self.assertContains(response, 'id="confidence-status"')
+
     def test_prompt_submit_withholds_feedback_until_confidence_commit(self):
         assignment = self.session.assignments.order_by("assigned_sequence_index").first()
         submitted = self.submit_assignment(assignment)
@@ -134,6 +153,38 @@ class ConfidenceFlowTests(TestCase):
         self.assertEqual(
             confidence.response_status,
             ConfidenceAssignment.ResponseStatus.ASSIGNED,
+        )
+
+        other_assignment = self.session.assignments.order_by(
+            "assigned_sequence_index"
+        )[1]
+        bypass = self.client.get(
+            reverse(
+                "assessment:question",
+                args=[self.session.pk, other_assignment.pk],
+            )
+        )
+        self.assertRedirects(
+            bypass,
+            reverse(
+                "assessment:question",
+                args=[self.session.pk, assignment.pk],
+            ),
+            fetch_redirect_response=False,
+        )
+        restored = self.client.get(
+            reverse(
+                "assessment:question",
+                args=[self.session.pk, assignment.pk],
+            )
+        )
+        self.assertContains(restored, 'id="pending-confidence-data"')
+        self.assertContains(
+            restored,
+            reverse(
+                "assessment_process:confidence_prompt_shown",
+                args=[assignment.attempt.pk],
+            ),
         )
 
         shown = self.post_process("confidence_prompt_shown", assignment.attempt)

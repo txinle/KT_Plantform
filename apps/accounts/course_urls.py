@@ -13,6 +13,7 @@ urlpatterns = [
     path("<int:course_pk>/", course_views.course_detail, name="detail"),
     path("<int:course_pk>/revision/", course_views.course_revision, name="revision"),
     path("<int:course_pk>/data/", course_views.course_data, name="data"),
+    path("<int:course_pk>/data/quality/", course_views.course_quality, name="quality"),
     path("<int:course_pk>/settings/", course_views.course_settings, name="settings"),
     path("<int:course_pk>/archive/", course_views.course_archive, name="archive"),
     path("<int:course_pk>/banks/", bank_views.bank_list, name="banks"),

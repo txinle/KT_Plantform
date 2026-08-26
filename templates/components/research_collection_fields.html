@@ -1,0 +1,22 @@
+<section class="form-section" aria-labelledby="experiment-research-title">
+  <h2 class="form-section-title" id="experiment-research-title">研究过程采集</h2>
+  <p class="form-help mb-3">这里配置直接观测数据。作答信心会改变学生提交流程，不从停留时长或修改行为中推断；发布后配置、随机种子和版本会随实验快照冻结。</p>
+  <div class="row g-3">
+    <div class="col-md-6">{% include 'components/form_field.html' with field=form.confidence_mode %}</div>
+    <div class="col-md-6">{% include 'components/form_field.html' with field=form.heartbeat_interval_seconds %}</div>
+  </div>
+  <div class="row g-3 mt-0" data-confidence-sampling-fields>
+    <div class="col-md-6">{% include 'components/form_field.html' with field=form.confidence_sampling_unit %}</div>
+    <div class="col-md-6">{% include 'components/form_field.html' with field=form.confidence_probability %}</div>
+  </div>
+  <details class="mt-3">
+    <summary class="form-label">版本与可复现配置</summary>
+    <p class="form-help mt-2">随机种子留空时会在发布时安全生成；版本号用于区分分配算法、量表和提示语义。</p>
+    <div class="row g-3">
+      <div class="col-md-6">{% include 'components/form_field.html' with field=form.confidence_randomization_seed %}</div>
+      <div class="col-md-6">{% include 'components/form_field.html' with field=form.confidence_assignment_version %}</div>
+      <div class="col-md-6">{% include 'components/form_field.html' with field=form.confidence_scale_version %}</div>
+      <div class="col-md-6">{% include 'components/form_field.html' with field=form.confidence_prompt_version %}</div>
+    </div>
+  </details>
+</section>

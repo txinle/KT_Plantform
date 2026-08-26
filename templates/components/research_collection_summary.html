@@ -1,0 +1,18 @@
+<section class="card mb-4" aria-labelledby="research-collection-title">
+  <div class="card-header" id="research-collection-title">研究过程采集</div>
+  <div class="card-body">
+    <dl class="definition-grid">
+      <dt>作答信心</dt><dd>{{ experiment.get_confidence_mode_display }}</dd>
+      {% if experiment.confidence_mode == 'sampled' %}
+        <dt>抽样单位</dt><dd>{{ experiment.get_confidence_sampling_unit_display }}</dd>
+        <dt>抽样概率</dt><dd class="numeric">{{ experiment.confidence_probability }}</dd>
+      {% endif %}
+      <dt>分配规则版本</dt><dd class="mono">{{ experiment.confidence_assignment_version }}</dd>
+      <dt>量表版本</dt><dd class="mono">{{ experiment.confidence_scale_version }}</dd>
+      <dt>提示版本</dt><dd class="mono">{{ experiment.confidence_prompt_version }}</dd>
+      <dt>随机种子</dt><dd class="mono">{{ experiment.confidence_randomization_seed|default:'发布时自动生成' }}</dd>
+      <dt>活跃心跳</dt><dd class="numeric">{{ experiment.heartbeat_interval_seconds }} 秒</dd>
+    </dl>
+    <p class="form-help mb-0">这些是直接观测配置；行为特征与不确定性指标在导出后的版本化派生层计算。</p>
+  </div>
+</section>

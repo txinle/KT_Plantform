@@ -1,11 +1,14 @@
 import csv
 import hashlib
+import os
 from io import BytesIO
 from urllib.parse import quote
 
-from django.http import HttpResponse
+from django.http import FileResponse, HttpResponse
 from django.db.models import F, Q
 from django.shortcuts import get_object_or_404
+from django.shortcuts import redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_POST
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
@@ -17,6 +20,10 @@ from apps.assessment.models import Attempt, QuestionVisitEvent
 from apps.audit.services import log_action
 from apps.experiments.models import Experiment
 from .export_fields import FIELD_LABELS, field_values
+from .models import ExportJob
+from .services import create_export_snapshot
+from apps.accounts.models import DataPurgeRequest
+from apps.accounts.course_access import get_accessible_course, require_course_manager
 
 def _experiment(request, pk):
     if request.user.is_superuser or request.user.role == User.Role.ADMIN:
@@ -35,6 +42,56 @@ def _identified_experiment(request, pk):
     else:
         qs = Experiment.objects.filter(owner=request.user)
     return get_object_or_404(qs, pk=pk)
+
+
+@role_required("teacher", "admin")
+@require_POST
+def export_job_create(request, course_pk):
+    course = get_accessible_course(request.user, course_pk)
+    experiment = None
+    experiment_id = request.POST.get("experiment_id")
+    if experiment_id:
+        experiment = get_object_or_404(course.experiments, pk=experiment_id)
+    package = request.POST.get("package", "complete")
+    kind = ExportJob.Kind.IDENTITY if package == "identity" else ExportJob.Kind.RESEARCH
+    snapshot = create_export_snapshot(course=course, experiment=experiment, created_by=request.user)
+    ExportJob.objects.create(
+        course=course,
+        experiment=experiment,
+        snapshot=snapshot,
+        created_by=request.user,
+        kind=kind,
+        package=package,
+        selected_tables=request.POST.getlist("tables"),
+        selected_fields=request.POST.getlist("fields"),
+    )
+    return redirect("courses:data", course.pk)
+
+
+@role_required("teacher", "admin")
+@require_POST
+def purge_request_create(request, course_pk):
+    course = get_accessible_course(request.user, course_pk)
+    require_course_manager(course, request.user)
+    if request.POST.get("confirmation") != "PURGE":
+        return HttpResponse("请输入确认短语 PURGE", status=400, content_type="text/plain; charset=utf-8")
+    DataPurgeRequest.objects.create(
+        scope_type="course",
+        scope_definition={"course_id": course.pk},
+        reason_code=request.POST.get("reason_code", "administrative_correction"),
+        requested_by=request.user,
+        preview_counts={"course_id": course.pk},
+    )
+    return redirect("courses:settings", course.pk)
+
+
+@role_required("teacher", "admin")
+def export_job_download(request, course_pk, job_id):
+    course = get_accessible_course(request.user, course_pk)
+    job = get_object_or_404(ExportJob, course=course, job_id=job_id, status=ExportJob.Status.SUCCEEDED)
+    if not job.artifact_path or not os.path.exists(job.artifact_path) or (job.expires_at and job.expires_at <= timezone.now()):
+        return HttpResponse("导出文件已过期", status=410, content_type="text/plain; charset=utf-8")
+    return FileResponse(open(job.artifact_path, "rb"), as_attachment=True, filename=f"{job.package}-{job.job_id}.zip")
 
 def _anon(student_id, experiment_id):
     return hashlib.sha256(f"kt:{experiment_id}:{student_id}".encode()).hexdigest()[:16]

@@ -273,3 +273,26 @@ class ResearchStudyParticipant(models.Model):
 
     def __str__(self):
         return str(self.public_uuid)
+
+
+class DataPurgeRequest(models.Model):
+    class Status(models.TextChoices):
+        PREVIEW = "preview", "待确认"
+        APPROVED = "approved", "已确认"
+        EXECUTED = "executed", "已执行"
+        FAILED = "failed", "失败"
+
+    purge_request_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    scope_type = models.CharField(max_length=32, default="course")
+    scope_definition = models.JSONField(default=dict)
+    reason_code = models.CharField(max_length=64)
+    requested_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="data_purge_requests")
+    requested_at = models.DateTimeField(auto_now_add=True)
+    preview_counts = models.JSONField(default=dict)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PREVIEW)
+    executed_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.PROTECT, related_name="executed_data_purges")
+    executed_at = models.DateTimeField(null=True, blank=True)
+    result_counts = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["-requested_at"]
