@@ -20,7 +20,7 @@ from .forms import (
     CourseSettingsForm,
     course_settings_state_token_matches,
 )
-from .models import Course, User
+from .models import Course, User, DataPurgeRequest
 from apps.assessment.models import AssessmentEvent
 from .permissions import role_required
 
@@ -215,7 +215,7 @@ def course_settings(request, course_pk):
     return render(
         request,
         "teacher/course_settings.html",
-        {"course": course, "current_course": course, "form": form, "is_course_owner": True},
+        {"course": course, "current_course": course, "form": form, "is_course_owner": True, "purge_requests": DataPurgeRequest.objects.filter(scope_definition__course_id=course.pk)[:10]},
     )
 
 

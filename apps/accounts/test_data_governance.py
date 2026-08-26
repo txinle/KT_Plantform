@@ -32,3 +32,10 @@ class DataGovernanceTests(TestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertEqual(DataPurgeRequest.objects.count(), 1)
+
+    def test_settings_lists_preview_and_exposes_execute_action(self):
+        DataPurgeRequest.objects.create(scope_type="course", scope_definition={"course_id": self.course.pk}, reason_code="collection_error", requested_by=self.teacher, preview_counts={"sessions": 2, "events": 4})
+        self.client.force_login(self.teacher)
+        body = self.client.get(reverse("courses:settings", args=[self.course.pk])).content.decode("utf-8")
+        self.assertIn("待确认", body)
+        self.assertIn("/execute/", body)
