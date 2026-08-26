@@ -11,6 +11,13 @@ from apps.experiments.services import derive_session_seeds, ordered_snapshots, s
 from apps.question_bank.services.numeric import normalize_finite_decimal
 from apps.question_bank.services.scoring import score_payload
 from .event_services import append_assessment_event
+from .response_snapshot_services import (
+    CHOICE_QUESTION_TYPES,
+    TEXT_LIKE_QUESTION_TYPES,
+    canonical_choice_response_state,
+    create_response_snapshot,
+    response_snapshot_content,
+)
 from .models import Attempt, DraftSaveEvent, ExperimentSession, QuestionVisitEvent, StudentQuestionAssignment, SubmissionEvent
 
 @transaction.atomic
@@ -153,7 +160,8 @@ def record_visit(session_id, assignment_id, entry_reason="navigation_click", cli
 @transaction.atomic
 def save_draft(attempt_id, answer, client_time=None):
     attempt = Attempt.objects.select_for_update().select_related(
-        "session__version__experiment"
+        "session__version__experiment",
+        "assignment__snapshot",
     ).get(pk=attempt_id)
     if attempt.status in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
         raise ValidationError("该题当前状态不能修改")
@@ -164,6 +172,19 @@ def save_draft(attempt_id, answer, client_time=None):
     attempt.save(update_fields=["draft_answer", "draft_saved_at", "status"])
     digest = hashlib.sha256(repr(answer).encode()).hexdigest()
     DraftSaveEvent.objects.create(attempt=attempt, answer_hash=digest, client_occurred_at=client_time)
+    attempt.saved_response_snapshot = None
+    attempt.saved_response_state = None
+    question_type = attempt.assignment.snapshot.question_type
+    if question_type in TEXT_LIKE_QUESTION_TYPES:
+        attempt.saved_response_snapshot = create_response_snapshot(
+            attempt=attempt,
+            content=response_snapshot_content(answer),
+        )
+    elif question_type in CHOICE_QUESTION_TYPES:
+        attempt.saved_response_state = canonical_choice_response_state(
+            question_type,
+            answer,
+        )
     return attempt
 
 @transaction.atomic

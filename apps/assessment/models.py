@@ -343,7 +343,7 @@ class ResponseSnapshot(models.Model):
         on_delete=models.PROTECT,
         related_name="response_snapshots",
     )
-    content = models.TextField()
+    content = models.TextField(blank=True)
     content_hash = models.CharField(max_length=64, validators=[HASH_VALIDATOR])
     content_length = models.PositiveIntegerField()
     created_at = models.DateTimeField(auto_now_add=True)

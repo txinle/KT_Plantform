@@ -126,7 +126,24 @@ def save_draft_api(request, attempt_id):
     data = _json(request)
     try:
         attempt = save_draft(attempt.id, data.get("answer"), _client_time(data.get("client_occurred_at")))
-        return JsonResponse({"success": True, "saved_at": attempt.draft_saved_at.isoformat()})
+        response = {"success": True, "saved_at": attempt.draft_saved_at.isoformat()}
+        if attempt.saved_response_snapshot is not None:
+            response.update(
+                {
+                    "response_snapshot_id": str(attempt.saved_response_snapshot.pk),
+                    "content_hash": attempt.saved_response_snapshot.content_hash,
+                    "content_length": attempt.saved_response_snapshot.content_length,
+                }
+            )
+        elif attempt.saved_response_state is not None:
+            response["response_state_after"] = attempt.saved_response_state
+        elif attempt.assignment.snapshot.question_type in {
+            "single_choice",
+            "multiple_choice",
+            "true_false",
+        }:
+            response["response_state_after"] = None
+        return JsonResponse(response)
     except ValidationError as exc:
         return JsonResponse({"success": False, "error": "; ".join(exc.messages)}, status=409)
 

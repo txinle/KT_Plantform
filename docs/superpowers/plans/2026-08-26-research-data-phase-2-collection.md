@@ -83,15 +83,15 @@ Bind samples to the authenticated browser instance and return server receive/res
 - Modify: `apps/assessment/test_question_types.py`
 - Create: `apps/assessment/test_response_snapshots.py`
 
-- [ ] **Step 1: Write failing snapshot tests**
+- [x] **Step 1: Write failing snapshot tests**
 
 Cover UTF-8 SHA-256, exact character length, same-attempt deduplication, cross-attempt separation, numeric/fill/short types, empty drafts, repeated 800 ms saves and forced saves before navigation/submit.
 
-- [ ] **Step 2: Create snapshots inside the existing draft transaction**
+- [x] **Step 2: Create snapshots inside the existing draft transaction**
 
 Do not convert a snapshot into a submission and do not change `DraftSaveEvent` compatibility semantics. Return snapshot ID/hash/length from the existing draft endpoint for text-like response event construction.
 
-- [ ] **Step 3: Keep choice response states canonical**
+- [x] **Step 3: Keep choice response states canonical**
 
 Single/true-false states are scalar; multiple-choice states are sorted unique arrays. No duplicate derived answer-change counters are stored.
 
