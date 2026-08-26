@@ -1,4 +1,5 @@
 import importlib
+import uuid
 from importlib.metadata import PackageNotFoundError, version
 
 from django.test import SimpleTestCase
@@ -105,6 +106,77 @@ class EventSchemaRegistryContractTests(SimpleTestCase):
                 "change_source": "student",
             },
         )
+
+    def test_response_state_payload_accepts_snapshot_references_for_text_like_items(self):
+        registry = load_registry_module()
+        self.assertIsNotNone(registry)
+
+        registry.validate_event_payload(
+            "response_state_changed",
+            1,
+            {
+                "question_type": "short_answer",
+                "response_snapshot_id": str(uuid.uuid4()),
+                "content_hash": "a" * 64,
+                "content_length": 12,
+                "change_source": "student",
+            },
+        )
+
+    def test_response_state_payload_rejects_raw_text_and_key_level_data(self):
+        registry = load_registry_module()
+        self.assertIsNotNone(registry)
+
+        for forbidden_payload in (
+            {
+                "question_type": "short_answer",
+                "response_snapshot_id": str(uuid.uuid4()),
+                "content_hash": "a" * 64,
+                "content_length": 12,
+                "change_source": "student",
+                "raw_text": "private answer",
+            },
+            {
+                "question_type": "single_choice",
+                "response_state_after": "A",
+                "change_source": "student",
+                "key_pressed": "A",
+            },
+        ):
+            with self.subTest(payload_keys=tuple(forbidden_payload)):
+                with self.assertRaises(registry.EventPayloadValidationError):
+                    registry.validate_event_payload(
+                        "response_state_changed",
+                        1,
+                        forbidden_payload,
+                    )
+
+    def test_response_state_payload_requires_the_shape_for_its_question_type(self):
+        registry = load_registry_module()
+        self.assertIsNotNone(registry)
+
+        invalid_payloads = (
+            {
+                "question_type": "short_answer",
+                "response_state_after": "raw answer",
+                "change_source": "student",
+            },
+            {
+                "question_type": "single_choice",
+                "response_snapshot_id": str(uuid.uuid4()),
+                "content_hash": "a" * 64,
+                "content_length": 1,
+                "change_source": "student",
+            },
+        )
+        for payload in invalid_payloads:
+            with self.subTest(question_type=payload["question_type"]):
+                with self.assertRaises(registry.EventPayloadValidationError):
+                    registry.validate_event_payload(
+                        "response_state_changed",
+                        1,
+                        payload,
+                    )
 
     def test_heartbeat_rejects_undeclared_tracking_fields(self):
         registry = load_registry_module()

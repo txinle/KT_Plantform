@@ -13,21 +13,18 @@
         "true_false"
       ]
     },
-    "response_state_after": {
-      "type": [
-        "string",
-        "number",
-        "boolean",
-        "array",
-        "null"
-      ],
-      "items": {
-        "type": [
-          "string",
-          "number",
-          "boolean"
-        ]
-      }
+    "response_state_after": {},
+    "response_snapshot_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "content_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "content_length": {
+      "type": "integer",
+      "minimum": 0
     },
     "change_source": {
       "type": "string",
@@ -40,8 +37,77 @@
   },
   "required": [
     "question_type",
-    "response_state_after",
     "change_source"
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "question_type": {
+          "enum": [
+            "single_choice",
+            "multiple_choice",
+            "true_false"
+          ]
+        }
+      },
+      "required": ["response_state_after"],
+      "not": {
+        "anyOf": [
+          {"required": ["response_snapshot_id"]},
+          {"required": ["content_hash"]},
+          {"required": ["content_length"]}
+        ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"question_type": {"const": "single_choice"}}
+          },
+          "then": {
+            "properties": {
+              "response_state_after": {"type": ["string", "null"]}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"question_type": {"const": "multiple_choice"}}
+          },
+          "then": {
+            "properties": {
+              "response_state_after": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"question_type": {"const": "true_false"}}
+          },
+          "then": {
+            "properties": {
+              "response_state_after": {"enum": ["true", "false", null]}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "properties": {
+        "question_type": {
+          "enum": ["numeric", "short_answer", "fill_blank"]
+        }
+      },
+      "required": [
+        "response_snapshot_id",
+        "content_hash",
+        "content_length"
+      ],
+      "not": {"required": ["response_state_after"]}
+    }
   ],
   "additionalProperties": false
 }

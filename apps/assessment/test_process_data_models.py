@@ -1,5 +1,6 @@
 import hashlib
 import uuid
+from datetime import timedelta
 from importlib import import_module
 from decimal import Decimal
 from types import SimpleNamespace
@@ -52,6 +53,67 @@ class ProcessDataMigrationTests(SimpleTestCase):
         migration.create_event_received_brin(None, postgres_editor)
         self.assertEqual(len(executed), 1)
         self.assertIn("USING BRIN (server_received_at)", executed[0])
+
+    def test_time_sync_migration_invalidates_pre_round_trip_estimates(self):
+        migration = import_module(
+            "apps.assessment.migrations.0008_time_sync_pending_state"
+        )
+        calls = []
+
+        class RecordingManager:
+            def __init__(self, model_name):
+                self.model_name = model_name
+
+            def filter(self, **kwargs):
+                calls.append((self.model_name, "filter", kwargs))
+                return self
+
+            def update(self, **kwargs):
+                calls.append((self.model_name, "update", kwargs))
+
+        fake_models = {
+            "ClientTimeSync": SimpleNamespace(
+                objects=RecordingManager("ClientTimeSync")
+            ),
+            "AssessmentEvent": SimpleNamespace(
+                objects=RecordingManager("AssessmentEvent")
+            ),
+        }
+        fake_apps = SimpleNamespace(
+            get_model=lambda app_label, model_name: fake_models[model_name]
+        )
+
+        migration.invalidate_pre_round_trip_estimates(fake_apps, None)
+
+        self.assertIn(
+            ("AssessmentEvent", "filter", {"time_sync__isnull": False}),
+            calls,
+        )
+        self.assertIn(
+            (
+                "AssessmentEvent",
+                "update",
+                {
+                    "time_sync": None,
+                    "estimated_clock_offset_ms": None,
+                    "estimated_rtt_ms": None,
+                    "estimated_occurred_at_utc": None,
+                },
+            ),
+            calls,
+        )
+        self.assertIn(
+            (
+                "ClientTimeSync",
+                "update",
+                {
+                    "sync_quality": "pending",
+                    "estimated_clock_offset_ms": None,
+                    "estimated_rtt_ms": None,
+                },
+            ),
+            calls,
+        )
 
 
 class ProcessDataModelTests(TestCase):
@@ -136,14 +198,33 @@ class ProcessDataModelTests(TestCase):
             client_time_origin=now,
             server_received_at=now,
             server_responded_at=now,
+            client_received_wall_time_utc=now + timedelta(milliseconds=30),
+            client_received_monotonic_ms=Decimal("1560.250"),
             estimated_clock_offset_ms=125,
             estimated_rtt_ms=20,
             sync_quality="valid",
+            finalized_at=now + timedelta(milliseconds=40),
         )
 
         self.assertEqual(sync.client_instance_id, client_instance_id)
         self.assertEqual(sync.estimated_clock_offset_ms, 125)
         self.assertEqual(sync.estimated_rtt_ms, 20)
+
+    def test_time_sync_database_rejects_valid_state_without_round_trip_observation(self):
+        now = timezone.now()
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            process_model("ClientTimeSync").objects.create(
+                client_instance_id=uuid.uuid4(),
+                client_wall_time_utc=now,
+                client_monotonic_ms=Decimal("1500.250"),
+                client_time_origin=now,
+                server_received_at=now,
+                server_responded_at=now,
+                estimated_clock_offset_ms=125,
+                estimated_rtt_ms=20,
+                sync_quality="valid",
+            )
 
     def test_response_snapshot_hash_is_unique_only_within_an_attempt(self):
         ResponseSnapshot = process_model("ResponseSnapshot")

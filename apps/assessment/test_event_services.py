@@ -200,9 +200,12 @@ class AssessmentEventAppendServiceTests(TestCase):
             client_time_origin=now - timedelta(seconds=10),
             server_received_at=now,
             server_responded_at=now + timedelta(milliseconds=20),
+            client_received_wall_time_utc=now + timedelta(milliseconds=30),
+            client_received_monotonic_ms=Decimal("40.000"),
             estimated_clock_offset_ms=125,
             estimated_rtt_ms=20,
             sync_quality=ClientTimeSync.SyncQuality.VALID,
+            finalized_at=now + timedelta(milliseconds=40),
         )
 
         event = self.append(
@@ -229,9 +232,12 @@ class AssessmentEventAppendServiceTests(TestCase):
             client_time_origin=now,
             server_received_at=now,
             server_responded_at=now,
+            client_received_wall_time_utc=now + timedelta(milliseconds=30),
+            client_received_monotonic_ms=Decimal("40.000"),
             estimated_clock_offset_ms=125,
             estimated_rtt_ms=20,
             sync_quality=ClientTimeSync.SyncQuality.VALID,
+            finalized_at=now + timedelta(milliseconds=40),
         )
 
         with self.assertRaises(ValueError):
@@ -249,9 +255,12 @@ class AssessmentEventAppendServiceTests(TestCase):
             client_time_origin=origin,
             server_received_at=now,
             server_responded_at=now,
+            client_received_wall_time_utc=now + timedelta(milliseconds=30),
+            client_received_monotonic_ms=Decimal("40.000"),
             estimated_clock_offset_ms=125,
             estimated_rtt_ms=20,
             sync_quality=ClientTimeSync.SyncQuality.VALID,
+            finalized_at=now + timedelta(milliseconds=40),
         )
 
         event = self.append(

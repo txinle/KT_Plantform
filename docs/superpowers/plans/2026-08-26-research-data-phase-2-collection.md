@@ -34,19 +34,19 @@
 - Modify: `apps/assessment/test_event_schema_registry.py`
 - Create: `apps/assessment/test_time_sync_services.py`
 
-- [ ] **Step 1: Write failing schema and time-sync tests**
+- [x] **Step 1: Write failing schema and time-sync tests**
 
 Prove that choice responses accept the direct state form, text-like responses require `response_snapshot_id + content_hash + content_length + change_source`, and neither form accepts undeclared key-level data. Prove that a new time-sync sample is `pending` with null estimates and that only a valid finalize operation fills estimates.
 
-- [ ] **Step 2: Add pending/valid/invalid/clock_changed sync states**
+- [x] **Step 2: Add pending/valid/invalid/clock_changed sync states**
 
 Make `estimated_clock_offset_ms` and `estimated_rtt_ms` nullable until finalization. Preserve the exact raw timestamps; do not silently replace invalid samples.
 
-- [ ] **Step 3: Implement two-step time-sync service**
+- [x] **Step 3: Implement two-step time-sync service**
 
 Compute network RTT as client monotonic round trip minus server processing duration. Compute offset from client/server midpoints. Reject negative, implausibly large or cross-instance observations. Mark a client wall-clock discontinuity when wall time and monotonic extrapolation differ beyond the documented threshold.
 
-- [ ] **Step 4: Verify migration reversibility and schema hashes**
+- [x] **Step 4: Verify migration reversibility and schema hashes**
 
 Run schema registry, model and migration tests. Record that changing a v1 schema is permitted only because native collection has not yet shipped; after this phase, changes require v2.
 

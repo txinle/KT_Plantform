@@ -255,6 +255,7 @@ class EventSchemaArtifact(models.Model):
 
 class ClientTimeSync(models.Model):
     class SyncQuality(models.TextChoices):
+        PENDING = "pending", "等待客户端完成往返观测"
         VALID = "valid", "有效"
         INVALID = "invalid", "无效"
         CLOCK_CHANGED = "clock_changed", "客户端时钟突变"
@@ -266,13 +267,21 @@ class ClientTimeSync(models.Model):
     client_time_origin = models.DateTimeField()
     server_received_at = models.DateTimeField()
     server_responded_at = models.DateTimeField()
-    estimated_clock_offset_ms = models.BigIntegerField()
-    estimated_rtt_ms = models.PositiveBigIntegerField()
+    client_received_wall_time_utc = models.DateTimeField(null=True, blank=True)
+    client_received_monotonic_ms = models.DecimalField(
+        max_digits=20,
+        decimal_places=3,
+        null=True,
+        blank=True,
+    )
+    estimated_clock_offset_ms = models.BigIntegerField(null=True, blank=True)
+    estimated_rtt_ms = models.PositiveBigIntegerField(null=True, blank=True)
     sync_quality = models.CharField(
         max_length=20,
         choices=SyncQuality.choices,
-        default=SyncQuality.VALID,
+        default=SyncQuality.PENDING,
     )
+    finalized_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -287,7 +296,36 @@ class ClientTimeSync(models.Model):
             models.CheckConstraint(
                 condition=Q(server_responded_at__gte=models.F("server_received_at")),
                 name="client_sync_response_after_receive",
-            )
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        sync_quality="pending",
+                        client_received_wall_time_utc__isnull=True,
+                        client_received_monotonic_ms__isnull=True,
+                        estimated_clock_offset_ms__isnull=True,
+                        estimated_rtt_ms__isnull=True,
+                        finalized_at__isnull=True,
+                    )
+                    | Q(
+                        sync_quality="valid",
+                        client_received_wall_time_utc__isnull=False,
+                        client_received_monotonic_ms__isnull=False,
+                        estimated_clock_offset_ms__isnull=False,
+                        estimated_rtt_ms__isnull=False,
+                        finalized_at__isnull=False,
+                    )
+                    | Q(
+                        sync_quality__in=("invalid", "clock_changed"),
+                        client_received_wall_time_utc__isnull=False,
+                        client_received_monotonic_ms__isnull=False,
+                        estimated_clock_offset_ms__isnull=True,
+                        estimated_rtt_ms__isnull=True,
+                        finalized_at__isnull=False,
+                    )
+                ),
+                name="client_sync_state_complete",
+            ),
         ]
 
 
