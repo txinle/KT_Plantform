@@ -4,6 +4,7 @@ app_name = "analytics"
 urlpatterns = [
     path("courses/<int:course_pk>/export-jobs/create/", views.export_job_create, name="export_job_create"),
     path("research-studies/<int:study_id>/export-jobs/create/", views.research_study_export_create, name="research_study_export_create"),
+    path("courses/<int:course_pk>/identity-export-jobs/create/", views.identity_export_job_create, name="identity_export_job_create"),
     path("courses/<int:course_pk>/purge-requests/create/", views.purge_request_create, name="purge_request_create"),
     path("courses/<int:course_pk>/purge-requests/<uuid:purge_request_id>/execute/", views.purge_request_execute, name="purge_request_execute"),
     path("courses/<int:course_pk>/export-jobs/<uuid:job_id>/download/", views.export_job_download, name="export_job_download"),

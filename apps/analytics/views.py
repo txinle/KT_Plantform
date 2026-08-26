@@ -53,6 +53,8 @@ def export_job_create(request, course_pk):
     if experiment_id:
         experiment = get_object_or_404(course.experiments, pk=experiment_id)
     package = request.POST.get("package", "complete")
+    if package == "identity":
+        return HttpResponse("身份任务必须通过独立端点创建", status=400, content_type="text/plain; charset=utf-8")
     kind = ExportJob.Kind.IDENTITY if package == "identity" else ExportJob.Kind.RESEARCH
     if kind == ExportJob.Kind.IDENTITY and not (
         request.user.is_superuser
@@ -88,6 +90,19 @@ def research_study_export_create(request, study_id):
     package = request.POST.get("package", "longitudinal")
     snapshot = create_export_snapshot(course=course, research_study=study, created_by=request.user)
     ExportJob.objects.create(course=course, research_study=study, snapshot=snapshot, created_by=request.user, package=package)
+    return redirect("courses:data", course.pk)
+
+
+@role_required("teacher", "admin")
+@require_POST
+def identity_export_job_create(request, course_pk):
+    experiment = get_object_or_404(Experiment.objects.select_related("course").filter(course_id=course_pk), pk=request.POST.get("experiment_id"))
+    course = experiment.course
+    if not (request.user.is_superuser or request.user.role == User.Role.ADMIN or course.owner_id == request.user.id):
+        return HttpResponse("身份任务仅限课程负责人或管理员", status=403)
+    snapshot = create_export_snapshot(course=course, experiment=experiment, created_by=request.user)
+    ExportJob.objects.create(course=course, experiment=experiment, snapshot=snapshot, created_by=request.user, kind=ExportJob.Kind.IDENTITY, package="identity")
+    log_action(request, "identity.export_job_create", course, {"experiment_id": experiment.pk})
     return redirect("courses:data", course.pk)
 
 

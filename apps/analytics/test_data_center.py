@@ -87,6 +87,14 @@ class DataCenterContractTests(TestCase):
         )
         self.assertEqual(response.status_code, 404)
 
+    def test_generic_research_endpoint_rejects_identity_package(self):
+        self.client.force_login(self.teacher)
+        response = self.client.post(
+            reverse("analytics:export_job_create", args=[self.course.pk]),
+            {"package": "identity", "experiment_id": self.experiment.pk},
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_collection_quality_page_reports_process_metrics(self):
         self.client.force_login(self.teacher)
         response = self.client.get(reverse("courses:quality", args=[self.course.pk]))
