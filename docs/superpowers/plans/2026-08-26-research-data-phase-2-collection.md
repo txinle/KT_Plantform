@@ -105,19 +105,19 @@ Single/true-false states are scalar; multiple-choice states are sorted unique ar
 - Create: `apps/assessment/test_transactional_process_events.py`
 - Create: `apps/assessment/test_confidence_flow.py`
 
-- [ ] **Step 1: Write failing business/event invariant tests**
+- [x] **Step 1: Write failing business/event invariant tests**
 
 Prove `response_committed` implies one `Attempt` and one `SubmissionEvent`, shares `correlation_id`, and rolls back with business state on injected event-write failure. Prove invalid submit attempts produce typed `response_commit_rejected` without a committed event.
 
-- [ ] **Step 2: Materialize deterministic Confidence assignments**
+- [x] **Step 2: Materialize deterministic Confidence assignments**
 
 Use frozen experiment mode, sampling unit, probability, seed and assignment version. Student-level assignment is identical across that student's attempts, session-level is identical within a session, attempt-level varies by deterministic attempt key. Create explicit rows for off/control/prompt conditions.
 
-- [ ] **Step 3: Enforce feedback ordering**
+- [x] **Step 3: Enforce feedback ordering**
 
 For prompt assignments, submit returns the Confidence prompt contract and withholds correctness/answer/explanation. Confidence commit/skip updates the projection and then returns feedback according to the published experiment configuration. Control/not-assigned flows retain existing feedback timing.
 
-- [ ] **Step 4: Append server lifecycle events from authoritative transactions**
+- [x] **Step 4: Append server lifecycle events from authoritative transactions**
 
 Record session start/complete/expire/invalidate, item enter, attempt close, response commit and rejection without changing first-open, last-open, visit, draft, skip, timeout or unanswered semantics.
 

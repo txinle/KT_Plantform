@@ -90,4 +90,9 @@ class AssessmentFlowTests(TestCase):
         self.assertIsNone(attempt.final_answer)
         self.assertEqual(session.submission_count, 0)
         self.assertFalse(SubmissionEvent.objects.filter(attempt=attempt).exists())
-        self.assertFalse(AssessmentEvent.objects.filter(attempt=attempt).exists())
+        self.assertFalse(
+            AssessmentEvent.objects.filter(
+                attempt=attempt,
+                event_type__in=["response_committed", "attempt_closed"],
+            ).exists()
+        )

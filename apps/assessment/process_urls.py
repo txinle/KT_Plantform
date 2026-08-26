@@ -17,4 +17,19 @@ urlpatterns = [
         process_views.time_sync_finalize,
         name="time_sync_finalize",
     ),
+    path(
+        "attempts/<int:attempt_id>/confidence/prompt-shown/",
+        process_views.confidence_prompt_shown,
+        name="confidence_prompt_shown",
+    ),
+    path(
+        "attempts/<int:attempt_id>/confidence/commit/",
+        process_views.confidence_commit,
+        name="confidence_commit",
+    ),
+    path(
+        "attempts/<int:attempt_id>/confidence/skip/",
+        process_views.confidence_skip,
+        name="confidence_skip",
+    ),
 ]

@@ -634,6 +634,52 @@ class AssessmentEvent(models.Model):
                 ),
                 name="unique_attempt_response_commit",
             ),
+            models.UniqueConstraint(
+                fields=["attempt"],
+                condition=Q(
+                    attempt__isnull=False,
+                    event_type="confidence_prompt_shown",
+                ),
+                name="unique_attempt_confidence_prompt",
+            ),
+            models.UniqueConstraint(
+                fields=["attempt"],
+                condition=Q(
+                    attempt__isnull=False,
+                    event_type__in=("confidence_committed", "confidence_skipped"),
+                ),
+                name="unique_attempt_confidence_result",
+            ),
+            models.UniqueConstraint(
+                fields=["session"],
+                condition=Q(event_type="session_started"),
+                name="unique_session_started_event",
+            ),
+            models.UniqueConstraint(
+                fields=["session"],
+                condition=Q(
+                    event_type__in=(
+                        "session_completed",
+                        "session_expired",
+                        "session_invalidated",
+                    )
+                ),
+                name="unique_session_terminal_event",
+            ),
+            models.UniqueConstraint(
+                fields=["attempt"],
+                condition=Q(attempt__isnull=False, event_type="attempt_closed"),
+                name="unique_attempt_closed_event",
+            ),
+            models.UniqueConstraint(
+                fields=["attempt", "correlation_id"],
+                condition=Q(
+                    attempt__isnull=False,
+                    correlation_id__isnull=False,
+                    event_type="response_commit_rejected",
+                ),
+                name="unique_attempt_rejection_correlation",
+            ),
             models.CheckConstraint(
                 condition=(
                     Q(client_instance_id__isnull=True, client_sequence_no__isnull=True)

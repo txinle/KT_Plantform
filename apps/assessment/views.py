@@ -10,7 +10,21 @@ from apps.accounts.permissions import role_required
 from apps.accounts.models import Course, CourseEnrollment
 from apps.experiments.models import Experiment
 from .models import Attempt, ExperimentSession, StudentQuestionAssignment
-from .services import finish_session, get_or_create_session, mark_skipped, record_visit, save_draft, submit_attempt
+from .confidence_services import (
+    confidence_prompt_contract,
+    ensure_confidence_assignment,
+    frozen_feedback_payload,
+)
+from .services import (
+    SubmissionValidationError,
+    finish_session,
+    get_or_create_session,
+    mark_skipped,
+    record_submission_rejection,
+    record_visit,
+    save_draft,
+    submit_attempt,
+)
 
 
 def _client_time(value):
@@ -35,6 +49,18 @@ def _next_assignment(session, current_id=None):
         if item.id != current_id and item.attempt.status not in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
             return item
     return None
+
+
+def _next_url_after_attempt(attempt, *, finish_if_last):
+    next_assignment = _next_assignment(attempt.session, attempt.assignment_id)
+    if next_assignment:
+        return reverse(
+            "assessment:question",
+            args=[attempt.session_id, next_assignment.id],
+        )
+    if finish_if_last:
+        finish_session(attempt.session_id)
+    return reverse("assessment:complete", args=[attempt.session_id])
 
 
 @role_required("student")
@@ -155,19 +181,54 @@ def submit_api(request, attempt_id):
     data = _json(request)
     try:
         attempt = submit_attempt(attempt.id, data.get("submission_token"), _client_time(data.get("client_clicked_at")))
-        experiment = attempt.session.version.experiment
-        next_assignment = _next_assignment(attempt.session, attempt.assignment_id)
-        if next_assignment:
-            next_url = reverse("assessment:question", args=[attempt.session_id, next_assignment.id])
+        confidence = ensure_confidence_assignment(attempt)
+        prompt_pending = (
+            confidence.condition == confidence.Condition.PROMPT
+            and confidence.response_status
+            not in {
+                confidence.ResponseStatus.COMMITTED,
+                confidence.ResponseStatus.SKIPPED,
+            }
+        )
+        next_url = _next_url_after_attempt(
+            attempt,
+            finish_if_last=not prompt_pending,
+        )
+        response = {
+            "success": True,
+            "status": attempt.status,
+            "next_url": next_url,
+            "confidence_required": prompt_pending,
+        }
+        if prompt_pending:
+            response["confidence"] = {
+                **confidence_prompt_contract(confidence),
+                "prompt_shown_url": reverse(
+                    "assessment_process:confidence_prompt_shown",
+                    args=[attempt.pk],
+                ),
+                "commit_url": reverse(
+                    "assessment_process:confidence_commit",
+                    args=[attempt.pk],
+                ),
+                "skip_url": reverse(
+                    "assessment_process:confidence_skip",
+                    args=[attempt.pk],
+                ),
+            }
         else:
-            finish_session(attempt.session_id)
-            next_url = reverse("assessment:complete", args=[attempt.session_id])
-        response = {"success": True, "status": attempt.status, "next_url": next_url}
-        if experiment.feedback_mode in {Experiment.Feedback.CORRECTNESS, Experiment.Feedback.FULL}:
-            response["is_correct"] = attempt.is_correct
-        if experiment.feedback_mode == Experiment.Feedback.FULL:
-            response.update({"correct_answer": attempt.assignment.snapshot.correct_answer, "explanation": attempt.assignment.snapshot.explanation})
+            response.update(frozen_feedback_payload(attempt))
         return JsonResponse(response)
+    except SubmissionValidationError as exc:
+        record_submission_rejection(
+            attempt_id=attempt.pk,
+            submission_token=data.get("submission_token"),
+            reason_code=exc.reason_code,
+        )
+        return JsonResponse(
+            {"success": False, "error": "; ".join(exc.messages)},
+            status=400,
+        )
     except ValidationError as exc:
         return JsonResponse({"success": False, "error": "; ".join(exc.messages)}, status=400)
 

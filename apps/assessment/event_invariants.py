@@ -117,6 +117,28 @@ def _validate_payload_links(*, event_type, payload, session, attempt):
             raise EventInvariantError(
                 "Confidence event does not match the attempt assignment."
             )
+        if event_type == "confidence_prompt_shown" and assignment.response_status not in {
+            ConfidenceAssignment.ResponseStatus.PROMPT_SHOWN,
+            ConfidenceAssignment.ResponseStatus.COMMITTED,
+            ConfidenceAssignment.ResponseStatus.SKIPPED,
+        }:
+            raise EventInvariantError(
+                "confidence_prompt_shown requires a displayed prompt projection."
+            )
+        if event_type == "confidence_committed" and (
+            assignment.response_status != ConfidenceAssignment.ResponseStatus.COMMITTED
+            or assignment.probability != payload["probability"]
+        ):
+            raise EventInvariantError(
+                "confidence_committed differs from the committed projection."
+            )
+        if (
+            event_type == "confidence_skipped"
+            and assignment.response_status != ConfidenceAssignment.ResponseStatus.SKIPPED
+        ):
+            raise EventInvariantError(
+                "confidence_skipped requires a skipped projection."
+            )
     if event_type in SIMULATION_EVENTS:
         if not SimulationSnapshot.objects.filter(
             pk=payload["simulation_snapshot_id"],
@@ -163,6 +185,19 @@ def _validate_submission_invariants(*, event_type, actor_source, payload, attemp
         ).exists():
             raise EventInvariantError(
                 f"{event_type} requires a prior response_committed event."
+            )
+        confidence = ConfidenceAssignment.objects.filter(attempt=attempt).first()
+        if (
+            confidence is not None
+            and confidence.condition == ConfidenceAssignment.Condition.PROMPT
+            and confidence.response_status
+            not in {
+                ConfidenceAssignment.ResponseStatus.COMMITTED,
+                ConfidenceAssignment.ResponseStatus.SKIPPED,
+            }
+        ):
+            raise EventInvariantError(
+                f"{event_type} requires the assigned Confidence step to resolve."
             )
     if event_type == "attempt_closed" and payload["close_reason"] == "submitted":
         if actor_source != "server":

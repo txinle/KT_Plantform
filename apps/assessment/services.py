@@ -11,6 +11,10 @@ from apps.experiments.services import derive_session_seeds, ordered_snapshots, s
 from apps.question_bank.services.numeric import normalize_finite_decimal
 from apps.question_bank.services.scoring import score_payload
 from .event_services import append_assessment_event
+from .confidence_services import (
+    ensure_confidence_assignment,
+    materialize_confidence_assignments,
+)
 from .response_snapshot_services import (
     CHOICE_QUESTION_TYPES,
     TEXT_LIKE_QUESTION_TYPES,
@@ -18,7 +22,84 @@ from .response_snapshot_services import (
     create_response_snapshot,
     response_snapshot_content,
 )
-from .models import Attempt, DraftSaveEvent, ExperimentSession, QuestionVisitEvent, StudentQuestionAssignment, SubmissionEvent
+from .models import (
+    AssessmentEvent,
+    Attempt,
+    DraftSaveEvent,
+    ExperimentSession,
+    QuestionVisitEvent,
+    StudentQuestionAssignment,
+    SubmissionEvent,
+)
+
+
+class SubmissionValidationError(ValidationError):
+    def __init__(self, message, *, reason_code):
+        self.reason_code = reason_code
+        super().__init__(message)
+
+
+def _append_session_event(session, *, event_type, payload):
+    existing = AssessmentEvent.objects.filter(
+        session=session,
+        event_type=event_type,
+    ).first()
+    if existing is not None:
+        return existing
+    return append_assessment_event(
+        event_type=event_type,
+        event_version=1,
+        event_domain="assessment",
+        actor_source="server",
+        session=session,
+        payload=payload,
+        capture_mode="native",
+        app_version="server",
+    )
+
+
+def _append_attempt_closed(attempt, *, close_reason):
+    existing = AssessmentEvent.objects.filter(
+        attempt=attempt,
+        event_type="attempt_closed",
+    ).first()
+    if existing is not None:
+        return existing
+    return append_assessment_event(
+        event_type="attempt_closed",
+        event_version=1,
+        event_domain="assessment",
+        actor_source="server",
+        session=attempt.session,
+        assignment=attempt.assignment,
+        attempt=attempt,
+        question_snapshot=attempt.assignment.snapshot,
+        item_instance=attempt.assignment.item_instance,
+        payload={"close_reason": close_reason},
+        capture_mode="native",
+        app_version="server",
+    )
+
+
+def _close_open_attempts(session, *, status, close_reason):
+    attempts = list(
+        session.attempts.select_for_update()
+        .filter(
+            status__in=[
+                Attempt.Status.UNVISITED,
+                Attempt.Status.VISITED,
+                Attempt.Status.DRAFT,
+                Attempt.Status.SKIPPED,
+            ]
+        )
+        .select_related("assignment__snapshot", "assignment__item_instance")
+    )
+    for attempt in attempts:
+        attempt.status = status
+        attempt.is_correct = None
+        attempt.save(update_fields=["status", "is_correct"])
+        _append_attempt_closed(attempt, close_reason=close_reason)
+    return attempts
 
 @transaction.atomic
 def get_or_create_session(experiment, student):
@@ -70,6 +151,13 @@ def get_or_create_session(experiment, student):
                 item_instance=item_instance,
             )
             Attempt.objects.create(session=session, assignment=assignment)
+    materialize_confidence_assignments(session)
+    if created:
+        _append_session_event(
+            session,
+            event_type="session_started",
+            payload={},
+        )
     return session
 
 def _close_previous(session, now):
@@ -85,6 +173,8 @@ def _close_previous(session, now):
             attempt.status = Attempt.Status.TIMED_OUT
             attempt.is_correct = None
         attempt.save(update_fields=["active_seconds", "status", "is_correct"])
+        if attempt.status == Attempt.Status.TIMED_OUT:
+            _append_attempt_closed(attempt, close_reason="timed_out")
 
 
 def _validate_course_access(session):
@@ -111,13 +201,20 @@ def _validate_session_time(session, attempt=None):
     if session.status != ExperimentSession.Status.IN_PROGRESS:
         raise ValidationError("当前会话不可继续作答")
     if session.deadline_at and now >= session.deadline_at:
-        session.attempts.exclude(status=Attempt.Status.SUBMITTED).filter(
-            status__in=[Attempt.Status.UNVISITED, Attempt.Status.VISITED, Attempt.Status.DRAFT, Attempt.Status.SKIPPED]
-        ).update(status=Attempt.Status.UNANSWERED, is_correct=None)
+        _close_open_attempts(
+            session,
+            status=Attempt.Status.UNANSWERED,
+            close_reason="unanswered",
+        )
         session.status = ExperimentSession.Status.EXPIRED
         session.completed_at = now
         session.save(update_fields=["status", "completed_at"])
-        raise ValidationError("实验总时间已结束")
+        _append_session_event(
+            session,
+            event_type="session_expired",
+            payload={"expiry_reason": "total_time_limit"},
+        )
+        return "实验总时间已结束"
     if attempt and session.version.configuration.get("time_mode") == "per_question":
         limit = session.version.configuration.get("per_question_time_limit_seconds")
         elapsed = attempt.active_seconds
@@ -125,15 +222,19 @@ def _validate_session_time(session, attempt=None):
         if limit and elapsed >= int(limit):
             attempt.status = Attempt.Status.TIMED_OUT; attempt.is_correct = None
             attempt.save(update_fields=["status", "is_correct"])
-            raise ValidationError("本题作答时间已结束")
+            _append_attempt_closed(attempt, close_reason="timed_out")
+            return "本题作答时间已结束"
+    return None
 
 @transaction.atomic
-def record_visit(session_id, assignment_id, entry_reason="navigation_click", client_time=None):
+def _record_visit_transaction(session_id, assignment_id, entry_reason="navigation_click", client_time=None):
     session = ExperimentSession.objects.select_for_update().select_related(
         "version__experiment"
     ).get(pk=session_id)
     if session.status != ExperimentSession.Status.IN_PROGRESS: raise ValidationError("当前会话不可继续作答")
-    _validate_session_time(session)
+    time_error = _validate_session_time(session)
+    if time_error:
+        return None, time_error
     assignment = StudentQuestionAssignment.objects.select_related("snapshot").get(pk=assignment_id, session=session)
     now = timezone.now(); from_assignment = session.current_assignment
     _close_previous(session, now)
@@ -155,10 +256,41 @@ def record_visit(session_id, assignment_id, entry_reason="navigation_click", cli
     )
     session.current_assignment = assignment
     session.save(update_fields=["current_assignment", "first_open_count", "visit_event_count", "last_activity_at"])
+    append_assessment_event(
+        event_type="item_entered",
+        event_version=1,
+        event_domain="assessment",
+        actor_source="server",
+        session=session,
+        assignment=assignment,
+        attempt=attempt,
+        question_snapshot=assignment.snapshot,
+        item_instance=assignment.item_instance,
+        payload={
+            "entry_reason": entry_reason,
+            "from_assignment_id": (
+                from_assignment.pk if from_assignment is not None else None
+            ),
+        },
+        capture_mode="native",
+        app_version="server",
+    )
+    return attempt, None
+
+
+def record_visit(session_id, assignment_id, entry_reason="navigation_click", client_time=None):
+    attempt, time_error = _record_visit_transaction(
+        session_id,
+        assignment_id,
+        entry_reason,
+        client_time,
+    )
+    if time_error:
+        raise ValidationError(time_error)
     return attempt
 
 @transaction.atomic
-def save_draft(attempt_id, answer, client_time=None):
+def _save_draft_transaction(attempt_id, answer, client_time=None):
     attempt = Attempt.objects.select_for_update().select_related(
         "session__version__experiment",
         "assignment__snapshot",
@@ -167,7 +299,9 @@ def save_draft(attempt_id, answer, client_time=None):
         raise ValidationError("该题当前状态不能修改")
     if attempt.session.status != ExperimentSession.Status.IN_PROGRESS:
         raise ValidationError("当前会话不可继续作答")
-    _validate_session_time(attempt.session, attempt)
+    time_error = _validate_session_time(attempt.session, attempt)
+    if time_error:
+        return None, time_error
     attempt.draft_answer = answer; attempt.draft_saved_at = timezone.now(); attempt.status = Attempt.Status.DRAFT
     attempt.save(update_fields=["draft_answer", "draft_saved_at", "status"])
     digest = hashlib.sha256(repr(answer).encode()).hexdigest()
@@ -185,31 +319,67 @@ def save_draft(attempt_id, answer, client_time=None):
             question_type,
             answer,
         )
+    return attempt, None
+
+
+def save_draft(attempt_id, answer, client_time=None):
+    attempt, time_error = _save_draft_transaction(attempt_id, answer, client_time)
+    if time_error:
+        raise ValidationError(time_error)
     return attempt
 
 @transaction.atomic
-def submit_attempt(attempt_id, token, client_time=None):
+def _submit_attempt_transaction(attempt_id, token, client_time=None):
     attempt = Attempt.objects.select_for_update().select_related("session", "assignment__snapshot").get(pk=attempt_id)
     session = ExperimentSession.objects.select_for_update().select_related(
         "version__experiment"
     ).get(pk=attempt.session_id)
-    _validate_course_access(session)
+    try:
+        _validate_course_access(session)
+    except ValidationError as error:
+        raise SubmissionValidationError(
+            error.messages,
+            reason_code="unauthorized",
+        ) from error
     if attempt.status == Attempt.Status.SUBMITTED:
         if str(attempt.submission_token) == str(token):
-            return attempt
-        raise ValidationError("该题已经提交")
+            return attempt, None
+        raise SubmissionValidationError(
+            "该题已经提交",
+            reason_code="already_submitted",
+        )
     if attempt.status in {Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
-        raise ValidationError("该题当前状态不能提交")
-    _validate_session_time(session, attempt)
-    if attempt.draft_answer in (None, "", []): raise ValidationError("请先填写答案")
+        raise SubmissionValidationError(
+            "该题当前状态不能提交",
+            reason_code=(
+                "time_expired"
+                if attempt.status == Attempt.Status.TIMED_OUT
+                else "session_closed"
+            ),
+        )
+    time_error = _validate_session_time(session, attempt)
+    if time_error:
+        return None, time_error
+    if attempt.draft_answer in (None, "", []):
+        raise SubmissionValidationError(
+            "请先填写答案",
+            reason_code="invalid_answer",
+        )
     try: token_value = uuid.UUID(str(token))
-    except ValueError: raise ValidationError("提交令牌无效") from None
+    except ValueError:
+        raise SubmissionValidationError(
+            "提交令牌无效",
+            reason_code="conflict",
+        ) from None
     snapshot = attempt.assignment.snapshot
     if snapshot.question_type == "numeric":
         try:
             normalize_finite_decimal(attempt.draft_answer)
         except ValueError:
-            raise ValidationError("数值题答案必须是有效数字") from None
+            raise SubmissionValidationError(
+                "数值题答案必须是有效数字",
+                reason_code="invalid_answer",
+            ) from None
     correct, score = score_payload(
         snapshot.question_type, snapshot.correct_answer, attempt.draft_answer,
         accepted_answers=snapshot.accepted_answers,
@@ -263,20 +433,38 @@ def submit_attempt(attempt_id, token, client_time=None):
         capture_mode="native",
         app_version="server",
     )
+    ensure_confidence_assignment(attempt)
+    return attempt, None
+
+
+def submit_attempt(attempt_id, token, client_time=None):
+    attempt, time_error = _submit_attempt_transaction(attempt_id, token, client_time)
+    if time_error:
+        raise SubmissionValidationError(time_error, reason_code="time_expired")
     return attempt
 
 @transaction.atomic
-def mark_skipped(attempt_id):
+def _mark_skipped_transaction(attempt_id):
     attempt = Attempt.objects.select_for_update().select_related(
         "session__version__experiment"
     ).get(pk=attempt_id)
     _validate_course_access(attempt.session)
     if attempt.session.status != ExperimentSession.Status.IN_PROGRESS:
         raise ValidationError("当前会话不可继续作答")
+    time_error = _validate_session_time(attempt.session, attempt)
+    if time_error:
+        return None, time_error
     if attempt.status in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
         raise ValidationError("该题当前状态不能跳过")
     attempt.status = Attempt.Status.SKIPPED
     attempt.save(update_fields=["status"])
+    return attempt, None
+
+
+def mark_skipped(attempt_id):
+    attempt, time_error = _mark_skipped_transaction(attempt_id)
+    if time_error:
+        raise ValidationError(time_error)
     return attempt
 
 @transaction.atomic
@@ -286,7 +474,88 @@ def finish_session(session_id):
     ).get(pk=session_id)
     _validate_course_access(session)
     if session.status != ExperimentSession.Status.IN_PROGRESS: return session
+    time_error = _validate_session_time(session)
+    if time_error:
+        return session
     now = timezone.now(); _close_previous(session, now)
-    session.attempts.filter(status__in=[Attempt.Status.UNVISITED, Attempt.Status.VISITED, Attempt.Status.DRAFT]).update(status=Attempt.Status.UNANSWERED, is_correct=None)
+    _close_open_attempts(
+        session,
+        status=Attempt.Status.UNANSWERED,
+        close_reason="unanswered",
+    )
     session.status = ExperimentSession.Status.COMPLETED; session.completed_at = now; session.save(update_fields=["status", "completed_at"])
+    _append_session_event(
+        session,
+        event_type="session_completed",
+        payload={"completion_reason": "student_finished"},
+    )
     return session
+
+
+@transaction.atomic
+def invalidate_session(session_id, *, reason_code):
+    session = ExperimentSession.objects.select_for_update().get(pk=session_id)
+    if session.status == ExperimentSession.Status.INVALIDATED:
+        event = AssessmentEvent.objects.get(
+            session=session,
+            event_type="session_invalidated",
+        )
+        if event.payload.get("reason_code") != reason_code:
+            raise ValidationError("会话已使用不同原因作废")
+        return session
+    if session.status != ExperimentSession.Status.IN_PROGRESS:
+        raise ValidationError("只有进行中的会话可以作废")
+    _close_open_attempts(
+        session,
+        status=Attempt.Status.UNANSWERED,
+        close_reason="invalidated",
+    )
+    session.status = ExperimentSession.Status.INVALIDATED
+    session.completed_at = timezone.now()
+    session.save(update_fields=["status", "completed_at"])
+    _append_session_event(
+        session,
+        event_type="session_invalidated",
+        payload={"reason_code": reason_code},
+    )
+    return session
+
+
+@transaction.atomic
+def record_submission_rejection(*, attempt_id, submission_token, reason_code):
+    try:
+        token_value = uuid.UUID(str(submission_token))
+    except (TypeError, ValueError):
+        return None
+    attempt = Attempt.objects.select_related(
+        "session",
+        "assignment__snapshot",
+        "assignment__item_instance",
+    ).get(pk=attempt_id)
+    existing = AssessmentEvent.objects.filter(
+        attempt=attempt,
+        event_type="response_commit_rejected",
+        correlation_id=token_value,
+    ).first()
+    if existing is not None:
+        if existing.payload.get("reason_code") != reason_code:
+            raise ValidationError("同一提交令牌的拒绝原因发生冲突")
+        return existing
+    return append_assessment_event(
+        event_type="response_commit_rejected",
+        event_version=1,
+        event_domain="assessment",
+        actor_source="server",
+        session=attempt.session,
+        assignment=attempt.assignment,
+        attempt=attempt,
+        question_snapshot=attempt.assignment.snapshot,
+        item_instance=attempt.assignment.item_instance,
+        correlation_id=token_value,
+        payload={
+            "submission_token": str(token_value),
+            "reason_code": reason_code,
+        },
+        capture_mode="native",
+        app_version="server",
+    )

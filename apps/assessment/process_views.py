@@ -3,6 +3,7 @@ import json
 from django.core.exceptions import ValidationError
 from django.views.decorators.http import require_POST
 from django.http import JsonResponse
+from django.urls import reverse
 
 from apps.accounts.permissions import role_required
 
@@ -17,6 +18,14 @@ from .event_batch_services import (
     require_exact_mapping,
 )
 from .models import ClientTimeSync, ExperimentSession
+from .confidence_services import (
+    ConfidenceFlowError,
+    commit_confidence,
+    frozen_feedback_payload,
+    mark_confidence_prompt_shown,
+    skip_confidence,
+)
+from .services import finish_session
 from .time_sync_services import create_pending_time_sync, finalize_time_sync
 
 
@@ -172,3 +181,84 @@ def time_sync_finalize(request):
     except (ValueError, ValidationError):
         return _error("time_sync_conflict", status=409)
     return JsonResponse(_sync_document(sample))
+
+
+def _resolved_confidence_document(assignment):
+    attempt = assignment.attempt
+    from .views import _next_assignment
+
+    next_assignment = _next_assignment(attempt.session, attempt.assignment_id)
+    if next_assignment is None:
+        finish_session(attempt.session_id)
+        next_url = reverse("assessment:complete", args=[attempt.session_id])
+    else:
+        next_url = reverse(
+            "assessment:question",
+            args=[attempt.session_id, next_assignment.pk],
+        )
+    return {
+        "success": True,
+        "confidence_required": False,
+        "next_url": next_url,
+        **frozen_feedback_payload(attempt),
+    }
+
+
+@role_required("student")
+@require_POST
+def confidence_prompt_shown(request, attempt_id):
+    try:
+        document = _json_document(request)
+        require_exact_mapping(document, allowed=frozenset())
+        assignment = mark_confidence_prompt_shown(
+            attempt_id=attempt_id,
+            student=request.user,
+        )
+    except ProcessRequestError as error:
+        return _error(error.code, status=error.status)
+    except ConfidenceFlowError:
+        return _error("confidence_conflict", status=409)
+    return JsonResponse(
+        {
+            "success": True,
+            "response_status": assignment.response_status,
+        }
+    )
+
+
+@role_required("student")
+@require_POST
+def confidence_commit(request, attempt_id):
+    try:
+        document = _json_document(request)
+        require_exact_mapping(
+            document,
+            allowed=frozenset({"probability"}),
+        )
+        assignment = commit_confidence(
+            attempt_id=attempt_id,
+            student=request.user,
+            probability=document["probability"],
+        )
+    except ProcessRequestError as error:
+        return _error(error.code, status=error.status)
+    except ConfidenceFlowError:
+        return _error("confidence_conflict", status=409)
+    return JsonResponse(_resolved_confidence_document(assignment))
+
+
+@role_required("student")
+@require_POST
+def confidence_skip(request, attempt_id):
+    try:
+        document = _json_document(request)
+        require_exact_mapping(document, allowed=frozenset())
+        assignment = skip_confidence(
+            attempt_id=attempt_id,
+            student=request.user,
+        )
+    except ProcessRequestError as error:
+        return _error(error.code, status=error.status)
+    except ConfidenceFlowError:
+        return _error("confidence_conflict", status=409)
+    return JsonResponse(_resolved_confidence_document(assignment))
