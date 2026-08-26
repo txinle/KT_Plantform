@@ -13,6 +13,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('accounts', '0006_research_subject_ids'),
+        ('experiments', '0001_initial'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

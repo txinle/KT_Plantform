@@ -8,7 +8,7 @@ import zipfile
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils import timezone
 
@@ -68,7 +68,10 @@ def claim_export_job(*, worker_id, now=None):
     with transaction.atomic():
         job = (
             ExportJob.objects.select_for_update()
-            .filter(status=ExportJob.Status.QUEUED)
+            .filter(
+                models.Q(status=ExportJob.Status.QUEUED)
+                | models.Q(status=ExportJob.Status.RUNNING, lease_expires_at__lt=now)
+            )
             .order_by("created_at")
             .first()
         )
@@ -99,16 +102,18 @@ def run_export_job(job):
     os.makedirs(root, exist_ok=True)
     zip_path = os.path.join(root, f"{job.package}-{job.job_id}.zip")
     experiment_filter = {"session__version__experiment_id": job.experiment_id} if job.experiment_id else {"session__version__experiment__course_id": job.course_id}
-    attempts = Attempt.objects.filter(**experiment_filter, session__started_at__lte=snapshot.cutoff_at).select_related("session", "assignment__snapshot")
+    attempts = Attempt.objects.filter(**experiment_filter, session__started_at__lte=snapshot.cutoff_at).filter(models.Q(submitted_at__isnull=True) | models.Q(submitted_at__lte=snapshot.cutoff_at)).select_related("session", "assignment__snapshot")
     sessions = ExperimentSession.objects.filter(**{"version__experiment_id": job.experiment_id} if job.experiment_id else {"version__experiment__course_id": job.course_id}, started_at__lte=snapshot.cutoff_at).select_related("student", "version")
     events = AssessmentEvent.objects.filter(**({"session__version__experiment_id": job.experiment_id} if job.experiment_id else {"session__version__experiment__course_id": job.course_id}), server_received_at__lte=snapshot.cutoff_at).order_by("session_id", "server_ingest_sequence_no")
     manifest = build_export_manifest(snapshot, selected_tables=["subjects", "sessions", "attempts", "assessment_events"])
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("00_manifest/manifest.json", manifest_bytes(manifest))
         archive.writestr("01_design_metadata/README.txt", "All identifiers in this package are pseudonymized. Identity linkage is managed separately.\n")
-        archive.writestr("02_core/sessions.csv", _csv_bytes(["session_id", "course_subject_id", "experiment_id", "version", "status", "started_at", "completed_at"], [[s.pk, _subject_uuid(s.student_id, job.course_id), s.version.experiment_id, s.version.version_number, s.status, s.started_at.isoformat(), s.completed_at.isoformat() if s.completed_at else ""] for s in sessions]))
-        archive.writestr("02_core/attempts.csv", _csv_bytes(["attempt_id", "session_id", "course_subject_id", "question_code", "status", "is_correct", "score", "submitted_at"], [[a.pk, a.session_id, _subject_uuid(a.session.student_id, job.course_id), a.assignment.snapshot.code, a.status, a.is_correct, a.score, a.submitted_at.isoformat() if a.submitted_at else ""] for a in attempts]))
-        archive.writestr("03_raw_events/assessment_events.csv", _csv_bytes(["event_id", "event_type", "event_version", "session_id", "attempt_id", "client_instance_id", "client_sequence_no", "server_ingest_sequence_no", "correlation_id", "server_received_at", "capture_mode", "quality_flags", "payload"], [[e.event_id, e.event_type, e.event_version, e.session_id, e.attempt_id, e.client_instance_id, e.client_sequence_no, e.server_ingest_sequence_no, e.correlation_id, e.server_received_at.isoformat(), e.capture_mode, json.dumps(e.quality_flags, ensure_ascii=False), json.dumps(e.payload, ensure_ascii=False)] for e in events]))
+        if job.package in ("complete", "kt", "cd", "process", "confidence", "simulation"):
+            archive.writestr("02_core/sessions.csv", _csv_bytes(["session_id", "course_subject_id", "experiment_id", "version", "status", "started_at", "completed_at"], [[s.pk, _subject_uuid(s.student_id, job.course_id), s.version.experiment_id, s.version.version_number, s.status, s.started_at.isoformat(), s.completed_at.isoformat() if s.completed_at else ""] for s in sessions]))
+            archive.writestr("02_core/attempts.csv", _csv_bytes(["attempt_id", "session_id", "course_subject_id", "question_code", "status", "is_correct", "score", "submitted_at"], [[a.pk, a.session_id, _subject_uuid(a.session.student_id, job.course_id), a.assignment.snapshot.code, a.status, a.is_correct, a.score, a.submitted_at.isoformat() if a.submitted_at else ""] for a in attempts]))
+        if job.package in ("complete", "process", "confidence", "simulation"):
+            archive.writestr("03_raw_events/assessment_events.csv", _csv_bytes(["event_id", "event_type", "event_version", "session_id", "attempt_id", "client_instance_id", "client_sequence_no", "server_ingest_sequence_no", "correlation_id", "server_received_at", "capture_mode", "quality_flags", "payload"], [[e.event_id, e.event_type, e.event_version, e.session_id, e.attempt_id, e.client_instance_id, e.client_sequence_no, e.server_ingest_sequence_no, e.correlation_id, e.server_received_at.isoformat(), e.capture_mode, json.dumps(e.quality_flags, ensure_ascii=False), json.dumps(e.payload, ensure_ascii=False)] for e in events]))
     digest = hashlib.sha256(open(zip_path, "rb").read()).hexdigest()
     job.status = ExportJob.Status.SUCCEEDED
     job.finished_at = timezone.now()

@@ -54,6 +54,12 @@ def export_job_create(request, course_pk):
         experiment = get_object_or_404(course.experiments, pk=experiment_id)
     package = request.POST.get("package", "complete")
     kind = ExportJob.Kind.IDENTITY if package == "identity" else ExportJob.Kind.RESEARCH
+    if kind == ExportJob.Kind.IDENTITY and not (
+        request.user.is_superuser
+        or request.user.role == User.Role.ADMIN
+        or course.owner_id == request.user.id
+    ):
+        return HttpResponse("身份任务仅限课程负责人或管理员", status=403, content_type="text/plain; charset=utf-8")
     snapshot = create_export_snapshot(course=course, experiment=experiment, created_by=request.user)
     ExportJob.objects.create(
         course=course,
@@ -75,12 +81,17 @@ def purge_request_create(request, course_pk):
     require_course_manager(course, request.user)
     if request.POST.get("confirmation") != "PURGE":
         return HttpResponse("请输入确认短语 PURGE", status=400, content_type="text/plain; charset=utf-8")
+    from apps.assessment.models import AssessmentEvent, ExperimentSession
+    preview = {
+        "sessions": ExperimentSession.objects.filter(version__experiment__course=course).count(),
+        "events": AssessmentEvent.objects.filter(session__version__experiment__course=course).count(),
+    }
     DataPurgeRequest.objects.create(
         scope_type="course",
         scope_definition={"course_id": course.pk},
         reason_code=request.POST.get("reason_code", "administrative_correction"),
         requested_by=request.user,
-        preview_counts={"course_id": course.pk},
+        preview_counts=preview,
     )
     return redirect("courses:settings", course.pk)
 
@@ -89,6 +100,10 @@ def purge_request_create(request, course_pk):
 def export_job_download(request, course_pk, job_id):
     course = get_accessible_course(request.user, course_pk)
     job = get_object_or_404(ExportJob, course=course, job_id=job_id, status=ExportJob.Status.SUCCEEDED)
+    if job.kind == ExportJob.Kind.IDENTITY and not (
+        request.user.is_superuser or request.user.role == User.Role.ADMIN or course.owner_id == request.user.id
+    ):
+        return HttpResponse("无权访问身份任务", status=403)
     if not job.artifact_path or not os.path.exists(job.artifact_path) or (job.expires_at and job.expires_at <= timezone.now()):
         return HttpResponse("导出文件已过期", status=410, content_type="text/plain; charset=utf-8")
     return FileResponse(open(job.artifact_path, "rb"), as_attachment=True, filename=f"{job.package}-{job.job_id}.zip")
