@@ -60,6 +60,8 @@ class DataCenterContractTests(TestCase):
         self.assertEqual(manifest["cutoff_at"], snapshot.cutoff_at.isoformat())
         self.assertIn("event_schema_hashes", manifest)
         self.assertIn("application_git_commit_sha", manifest)
+        self.assertIn("export_config_hash", manifest)
+        self.assertIn("source_cutoff_at", manifest)
 
     def test_export_job_is_queued_with_snapshot_and_expires(self):
         self.client.force_login(self.teacher)

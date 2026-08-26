@@ -41,16 +41,20 @@ def build_export_manifest(snapshot, *, selected_tables):
         f"{row.event_type}:v{row.event_version}": row.schema_sha256
         for row in EventSchemaArtifact.objects.all()
     }
+    config = {"selected_tables": list(selected_tables), "selected_versions": snapshot.selected_versions}
     return {
         "manifest_version": 1,
         "export_snapshot_id": str(snapshot.snapshot_id),
         "course_id": snapshot.course_id,
         "experiment_id": snapshot.experiment_id,
         "cutoff_at": snapshot.cutoff_at.isoformat(),
+        "source_cutoff_at": snapshot.cutoff_at.isoformat(),
         "database_snapshot_strategy": snapshot.database_snapshot_strategy,
         "selected_tables": list(selected_tables),
         "event_schema_hashes": schemas,
         "application_git_commit_sha": _git_commit(),
+        "export_config_hash": hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest(),
+        "row_counts": {},
     }
 
 
