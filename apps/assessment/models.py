@@ -261,6 +261,13 @@ class ClientTimeSync(models.Model):
         CLOCK_CHANGED = "clock_changed", "客户端时钟突变"
 
     time_sync_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        ExperimentSession,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="client_time_syncs",
+    )
     client_instance_id = models.UUIDField()
     client_wall_time_utc = models.DateTimeField()
     client_monotonic_ms = models.DecimalField(max_digits=20, decimal_places=3)

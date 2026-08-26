@@ -245,6 +245,43 @@ class AssessmentEventAppendServiceTests(TestCase):
 
         self.assertEqual(AssessmentEvent.objects.count(), 0)
 
+    def test_cross_session_sync_is_rejected_even_for_the_same_client_instance(self):
+        now = timezone.now()
+        other_student = User.objects.create_user(
+            username="EVENT-SERVICE-S3",
+            student_number="EVENT-SERVICE-S3",
+            role=User.Role.STUDENT,
+        )
+        other_session = ExperimentSession.objects.create(
+            version=self.session.version,
+            student=other_student,
+        )
+        sync = ClientTimeSync.objects.create(
+            session=other_session,
+            client_instance_id=self.client_instance_id,
+            client_wall_time_utc=now,
+            client_monotonic_ms=Decimal("10.000"),
+            client_time_origin=now,
+            server_received_at=now,
+            server_responded_at=now,
+            client_received_wall_time_utc=now + timedelta(milliseconds=30),
+            client_received_monotonic_ms=Decimal("40.000"),
+            estimated_clock_offset_ms=125,
+            estimated_rtt_ms=20,
+            sync_quality=ClientTimeSync.SyncQuality.VALID,
+            finalized_at=now + timedelta(milliseconds=40),
+        )
+
+        with self.assertRaises(ValueError):
+            self.append(
+                client_wall_time_utc=now,
+                client_monotonic_ms=Decimal("50.000"),
+                client_time_origin=now,
+                time_sync=sync,
+            )
+
+        self.assertEqual(AssessmentEvent.objects.count(), 0)
+
     def test_stale_sync_is_not_linked_or_used_for_precision(self):
         now = timezone.now()
         origin = now - timedelta(hours=1)

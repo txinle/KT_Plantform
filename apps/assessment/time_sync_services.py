@@ -35,6 +35,7 @@ def create_pending_time_sync(
     client_wall_time_utc,
     client_monotonic_ms,
     client_time_origin,
+    session=None,
 ):
     monotonic_ms = _as_finite_decimal(
         client_monotonic_ms,
@@ -45,6 +46,7 @@ def create_pending_time_sync(
     server_received_at = timezone.now()
     server_responded_at = timezone.now()
     sample = ClientTimeSync(
+        session=session,
         client_instance_id=client_instance_id,
         client_wall_time_utc=client_wall_time_utc,
         client_monotonic_ms=monotonic_ms,

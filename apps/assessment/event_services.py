@@ -230,6 +230,13 @@ def append_assessment_event(
         raise EventLinkageError(
             "Time sync sample does not belong to the event client instance."
         )
+    if time_sync is not None and (
+        time_sync.session_id is not None
+        and time_sync.session_id != session.pk
+    ):
+        raise EventLinkageError(
+            "Time sync sample does not belong to the event session."
+        )
     if (
         time_sync is not None
         and client_time_origin is not None

@@ -58,19 +58,19 @@ Run schema registry, model and migration tests. Record that changing a v1 schema
 - Create: `apps/assessment/event_batch_services.py`
 - Create: `apps/assessment/test_process_endpoints.py`
 
-- [ ] **Step 1: Write failing authorization and contract tests**
+- [x] **Step 1: Write failing authorization and contract tests**
 
 Cover CSRF, non-student rejection, cross-student session/attempt/assignment references, malformed UUID/time/decimal values, unknown schemas, over-100 batches and payload size limits. A valid batch must preserve client order but allocate ingest order independently.
 
-- [ ] **Step 2: Implement strict envelope parsing**
+- [x] **Step 2: Implement strict envelope parsing**
 
 Resolve all foreign keys from the authenticated student session rather than trusting submitted relationships. Reject inconsistent links before appending any batch row. Return structured per-event conflict/validation errors without echoing confidential payload values.
 
-- [ ] **Step 3: Implement batch idempotency**
+- [x] **Step 3: Implement batch idempotency**
 
 Repeated identical batches acknowledge existing rows. A conflicting event at the same client key returns HTTP 409 and leaves every original event unchanged. Define whether the batch is atomic; the selected default is all-or-nothing for validation/linkage and per-event idempotent for already persisted rows.
 
-- [ ] **Step 4: Implement create/finalize time-sync endpoints**
+- [x] **Step 4: Implement create/finalize time-sync endpoints**
 
 Bind samples to the authenticated browser instance and return server receive/respond timestamps. Finalization is idempotent only for identical observations and rejects attempts to rewrite a finalized sample.
 
