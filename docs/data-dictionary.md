@@ -166,4 +166,29 @@ Word 报告禁止包含 KC、教师或经验难度、任何用时字段、访问
 
 ## 兼容导出
 
+## 研究数据中心与导出任务
+
+课程数据中心使用“数据概览 → 采集质量 → 实验数据 → 导出任务”的导航。研究导出统一称为**去标识化研究包**，不使用“匿名研究包”。
+
+每个 `ExportSnapshot` 固定课程、实验（可选）和 `cutoff_at`；同一 `ExportJob` 的 sessions、attempts 与 assessment events 均不得读取截止时间之后的记录。`ExportJob.kind=research` 的文件位于受保护导出目录，默认七天过期；`kind=identity` 仅课程负责人或管理员可创建和下载，默认二十四小时过期，且永不写入研究包目录。
+
+研究包目录固定为：
+
+```text
+00_manifest/manifest.json
+01_design_metadata/
+02_core/
+03_raw_events/
+04_learning_exposure/
+05_self_report/
+06_derived/
+99_audit/
+```
+
+Manifest 至少包含 `export_snapshot_id`、`cutoff_at`、实际选择的表、事件 schema SHA-256 和应用 Git 提交号。原始事件表的主键/关联键由系统固定，字段选择不能跨观测粒度混用。身份映射只能出现在独立的 `01_identity/identity_mapping.csv` 任务中。
+
+导出任务使用数据库租约：`queued` 任务领取后进入 `running`，租约过期可被其他 worker 回收；文件生成成功进入 `succeeded`，超过 `expires_at` 后由清理命令标记 `expired` 并删除文件。失败任务不得被伪装为成功，也不得绕过下载视图直接暴露媒体路径。
+
+质量页的指标只描述采集事实，包括客户端序号缺口/重复、时钟未同步比例、离线上传比例及 native/legacy projection 覆盖，不把这些指标解释为不确定性或心理状态。
+
 旧版界面所称“匿名 KT”和“匿名导航”仅是兼容名称，方法学上应解释为**实验内去标识化 CSV**。URL 和 headers 暂时保持不变：`/analytics/experiments/{experiment_id}/kt.csv` 与 `/analytics/experiments/{experiment_id}/navigation.csv` 继续以 `anonymous_student_id` 标识学生，不新增学号、姓名、课程永久编号或其他实名列。身份对照 CSV 暂时仍在 `/analytics/experiments/{experiment_id}/identity.csv` 单独提供既有映射 headers；它属于受限身份数据，不得与研究 CSV 合并或同包共享。后续数据中心会把身份映射迁入独立权限与审计域。兼容 CSV 使用 UTF-8 BOM。
