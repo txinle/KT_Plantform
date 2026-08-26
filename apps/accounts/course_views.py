@@ -130,17 +130,32 @@ def course_data(request, course_pk):
 def course_quality(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
     events = AssessmentEvent.objects.filter(session__version__experiment__course=course)
-    total = events.count()
+    event_rows = list(events.values_list("quality_flags", "capture_mode", "client_instance_id", "client_sequence_no"))
+    total = len(event_rows)
+    duplicate_keys = len(event_rows) - len({(instance, sequence) for _flags, _mode, instance, sequence in event_rows if instance and sequence})
+    gaps = 0
+    by_instance = {}
+    for _flags, _mode, instance, sequence in event_rows:
+        if instance and sequence:
+            by_instance.setdefault(instance, set()).add(int(sequence))
+    for sequence_set in by_instance.values():
+        if sequence_set:
+            gaps += max(sequence_set) - len(sequence_set)
+    clock_count = sum("clock_unsynchronized" in (flags or []) for flags, *_ in event_rows)
+    offline_count = sum("offline_buffered" in (flags or []) for flags, *_ in event_rows)
+    native_count = sum(mode == AssessmentEvent.CaptureMode.NATIVE for _flags, mode, *_ in event_rows)
+    legacy_count = sum(mode == AssessmentEvent.CaptureMode.LEGACY_PROJECTION for _flags, mode, *_ in event_rows)
     context = {
         "course": course,
         "current_course": course,
         "quality": {
             "event_count": total,
-            "duplicate_count": 0,
-            "clock_unsynchronized_rate": round(events.filter(quality_flags__contains=["clock_unsynchronized"]).count() / total * 100, 2) if total else 0,
-            "offline_rate": round(events.filter(quality_flags__contains=["offline_buffered"]).count() / total * 100, 2) if total else 0,
-            "native_count": events.filter(capture_mode=AssessmentEvent.CaptureMode.NATIVE).count(),
-            "legacy_count": events.filter(capture_mode=AssessmentEvent.CaptureMode.LEGACY_PROJECTION).count(),
+            "duplicate_count": duplicate_keys,
+            "sequence_gap_count": gaps,
+            "clock_unsynchronized_rate": round(clock_count / total * 100, 2) if total else 0,
+            "offline_rate": round(offline_count / total * 100, 2) if total else 0,
+            "native_count": native_count,
+            "legacy_count": legacy_count,
         },
     }
     return render(request, "teacher/course_quality.html", context)

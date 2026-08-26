@@ -21,7 +21,7 @@ from apps.audit.services import log_action
 from apps.experiments.models import Experiment
 from .export_fields import FIELD_LABELS, field_values
 from .models import ExportJob
-from .services import create_export_snapshot
+from .services import create_export_snapshot, execute_purge_request
 from apps.accounts.models import DataPurgeRequest
 from apps.accounts.course_access import get_accessible_course, require_course_manager
 
@@ -93,6 +93,16 @@ def purge_request_create(request, course_pk):
         requested_by=request.user,
         preview_counts=preview,
     )
+    return redirect("courses:settings", course.pk)
+
+
+@role_required("teacher", "admin")
+@require_POST
+def purge_request_execute(request, course_pk, purge_request_id):
+    course = get_accessible_course(request.user, course_pk)
+    require_course_manager(course, request.user)
+    purge = get_object_or_404(DataPurgeRequest, purge_request_id=purge_request_id, scope_definition__course_id=course.pk)
+    execute_purge_request(purge, executed_by=request.user)
     return redirect("courses:settings", course.pk)
 
 

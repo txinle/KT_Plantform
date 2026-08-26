@@ -1,4 +1,6 @@
 import json
+import os
+import zipfile
 from datetime import timedelta
 
 from django.test import TestCase
@@ -7,7 +9,9 @@ from django.utils import timezone
 
 from apps.accounts.models import Course, User
 from apps.analytics.models import ExportJob, ExportSnapshot
-from apps.analytics.services import create_export_snapshot, build_export_manifest, claim_export_job, run_export_job
+from apps.analytics.services import create_export_snapshot, build_export_manifest, claim_export_job, run_export_job, cleanup_expired_exports
+from apps.analytics.services import execute_purge_request
+from apps.accounts.models import DataPurgeRequest
 from apps.question_bank.models import QuestionBank
 from apps.experiments.models import Experiment
 
@@ -103,3 +107,38 @@ class DataCenterContractTests(TestCase):
         with zipfile.ZipFile(claimed.artifact_path) as archive:
             manifest = json.loads(archive.read("00_manifest/manifest.json"))
         self.assertEqual(manifest["export_snapshot_id"], str(snapshot.pk))
+
+    def test_identity_package_is_separate_and_contains_only_identity_mapping(self):
+        snapshot = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)
+        job = ExportJob.objects.create(course=self.course, experiment=self.experiment, snapshot=snapshot, created_by=self.teacher, kind=ExportJob.Kind.IDENTITY, package="identity")
+        run_export_job(claim_export_job(worker_id="identity-worker"))
+        job.refresh_from_db()
+        with zipfile.ZipFile(job.artifact_path) as archive:
+            names = set(archive.namelist())
+            self.assertIn("01_identity/identity_mapping.csv", names)
+            self.assertNotIn("02_core/attempts.csv", names)
+
+    def test_expired_running_job_can_be_reclaimed(self):
+        snapshot = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)
+        job = ExportJob.objects.create(course=self.course, experiment=self.experiment, snapshot=snapshot, created_by=self.teacher, status=ExportJob.Status.RUNNING, lease_expires_at=timezone.now() - timedelta(minutes=1))
+        reclaimed = claim_export_job(worker_id="reclaimer")
+        self.assertEqual(reclaimed.pk, job.pk)
+        self.assertEqual(reclaimed.locked_by, "reclaimer")
+
+    def test_purge_request_executes_and_invalidates_course_exports(self):
+        request = DataPurgeRequest.objects.create(
+            scope_type="course", scope_definition={"course_id": self.course.pk},
+            reason_code="collection_error", requested_by=self.teacher,
+            preview_counts={"sessions": 0, "events": 0},
+        )
+        result = execute_purge_request(request, executed_by=self.teacher)
+        request.refresh_from_db()
+        self.assertEqual(request.status, DataPurgeRequest.Status.EXECUTED)
+        self.assertIn("events", result)
+
+    def test_cleanup_expired_exports_marks_job_and_removes_artifact(self):
+        snapshot = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)
+        job = ExportJob.objects.create(course=self.course, experiment=self.experiment, snapshot=snapshot, created_by=self.teacher, expires_at=timezone.now() - timedelta(minutes=1), status=ExportJob.Status.SUCCEEDED, artifact_path="missing.zip")
+        cleanup_expired_exports(now=timezone.now())
+        job.refresh_from_db()
+        self.assertEqual(job.status, ExportJob.Status.EXPIRED)
