@@ -51,6 +51,72 @@ class DataCenterContractTests(TestCase):
             self.assertIn(text, body)
         self.assertNotIn("完整匿名研究包", body)
 
+    def test_data_navigation_links_to_experiment_scoped_table_preview(self):
+        self.client.force_login(self.teacher)
+        response = self.client.get(
+            reverse("courses:data", args=[self.course.pk]),
+            {"table": "attempts", "experiment_id": self.experiment.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode("utf-8")
+        self.assertIn("单题作答", body)
+        self.assertIn("attempt_id", body)
+        self.assertIn("作答记录唯一标识", body)
+        self.assertIn("选择实验", body)
+        self.assertIn("导出当前表", body)
+
+    def test_data_center_exposes_unified_quality_navigation(self):
+        self.client.force_login(self.teacher)
+        response = self.client.get(reverse("courses:data", args=[self.course.pk]))
+        body = response.content.decode("utf-8")
+        self.assertIn("view=quality", body)
+        quality = self.client.get(
+            reverse("courses:data", args=[self.course.pk]), {"view": "quality"}
+        )
+        self.assertEqual(quality.status_code, 200)
+        self.assertIn("客户端序号缺口 / 重复", quality.content.decode("utf-8"))
+
+    def test_multiple_versions_require_explicit_version_scope(self):
+        ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)
+        ExperimentVersion.objects.create(experiment=self.experiment, version_number=2, published_by=self.teacher)
+        self.client.force_login(self.teacher)
+        response = self.client.get(
+            reverse("courses:data", args=[self.course.pk]),
+            {"table": "attempts", "experiment_id": self.experiment.pk},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("请先选择实验版本", response.content.decode("utf-8"))
+
+    def test_table_export_uses_selected_table_and_scope(self):
+        self.client.force_login(self.teacher)
+        response = self.client.post(
+            reverse("analytics:table_export_create", args=[self.course.pk]),
+            {"table": "attempts", "experiment_id": self.experiment.pk},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        job = ExportJob.objects.get()
+        self.assertEqual(job.selected_tables, ["attempts"])
+        self.assertEqual(job.package, "table_attempts")
+        self.assertIsNone(job.expires_at)
+
+    def test_table_export_manifest_and_csv_use_english_contract(self):
+        self.client.force_login(self.teacher)
+        response = self.client.post(
+            reverse("analytics:table_export_create", args=[self.course.pk]),
+            {"table": "attempts", "experiment_id": self.experiment.pk},
+        )
+        self.assertEqual(response.status_code, 302)
+        job = ExportJob.objects.get()
+        with zipfile.ZipFile(job.artifact_path) as archive:
+            manifest = json.loads(archive.read("00_manifest/manifest.json"))
+            header = archive.read("02_core/attempts.csv").decode("utf-8-sig").splitlines()[0]
+        self.assertEqual(manifest["selected_tables"], ["attempts"])
+        self.assertIn("experiment_name", manifest)
+        self.assertIn("question_snapshot_id", header)
+        self.assertNotIn("作答", header)
+
     def test_snapshot_freezes_cutoff_and_manifest_has_schema_lineage(self):
         before = timezone.now()
         snapshot = create_export_snapshot(
@@ -97,6 +163,17 @@ class DataCenterContractTests(TestCase):
         self.assertEqual(job.status, ExportJob.Status.SUCCEEDED)
         self.assertEqual(job.job_id, first_job_id)
 
+    def test_reused_export_record_clears_legacy_expiry(self):
+        self.client.force_login(self.teacher)
+        url = reverse("analytics:export_job_create", args=[self.course.pk])
+        self.client.post(url, {"experiment_id": self.experiment.pk, "package": "complete"})
+        job = ExportJob.objects.get(experiment=self.experiment, package="complete")
+        job.expires_at = timezone.now() + timedelta(days=1)
+        job.save(update_fields=["expires_at"])
+        self.client.post(url, {"experiment_id": self.experiment.pk, "package": "complete"})
+        job.refresh_from_db()
+        self.assertIsNone(job.expires_at)
+
     def test_data_center_shows_experiment_name_produce_and_download_not_queue_details(self):
         self.client.force_login(self.teacher)
         response = self.client.get(reverse("courses:data", args=[self.course.pk]))
@@ -120,7 +197,7 @@ class DataCenterContractTests(TestCase):
         self.assertFalse(os.path.exists(artifact))
         self.assertTrue(Experiment.objects.filter(pk=self.experiment.pk).exists())
 
-    def test_incomplete_session_keeps_subject_and_question_but_blanks_behavior(self):
+    def test_incomplete_session_keeps_subject_and_completed_attempt_behavior(self):
         student = User.objects.create_user(username="unfinished", role=User.Role.STUDENT, student_number="U001")
         version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)
         question = Question.objects.create(bank=self.experiment.question_bank, sequence=1, question_type=Question.Type.SHORT, text="题目", correct_answer="答案")
@@ -136,8 +213,11 @@ class DataCenterContractTests(TestCase):
         self.assertEqual(len(rows), 2)
         columns = rows[1].split(",")
         self.assertTrue(columns[2])
-        self.assertEqual(columns[3], "Q1")
-        self.assertEqual(columns[4:], ["", "", "", ""])
+        self.assertEqual(columns[3], str(snapshot.pk))
+        self.assertEqual(columns[5], "Q1")
+        self.assertEqual(columns[6], "submitted")
+        self.assertEqual(columns[16], "True")
+        self.assertEqual(columns[17], "1.00")
 
     def test_other_teacher_cannot_create_course_export_job(self):
         self.client.force_login(self.other)

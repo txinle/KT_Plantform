@@ -13,6 +13,7 @@ class ExportSnapshot(models.Model):
     cutoff_at = models.DateTimeField(default=timezone.now)
     database_snapshot_strategy = models.CharField(max_length=32, default="single_read_transaction")
     selected_versions = models.JSONField(default=list, blank=True)
+    filter_definition = models.JSONField(default=dict, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="created_export_snapshots")
     created_at = models.DateTimeField(auto_now_add=True)
 

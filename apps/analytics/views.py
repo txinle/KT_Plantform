@@ -2,12 +2,13 @@ import csv
 import hashlib
 import os
 from io import BytesIO
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from django.http import FileResponse, HttpResponse
 from django.db.models import F, Q
 from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from openpyxl import Workbook
@@ -22,6 +23,7 @@ from apps.experiments.models import Experiment
 from .export_fields import FIELD_LABELS, field_values
 from .models import ExportJob
 from .services import create_export_snapshot, execute_purge_request, run_export_job
+from .export_catalog import TABLE_PATHS
 from apps.accounts.models import DataPurgeRequest, ResearchStudy
 from apps.accounts.course_access import get_accessible_course, require_course_manager
 
@@ -77,6 +79,38 @@ def export_job_create(request, course_pk):
     if kind == ExportJob.Kind.IDENTITY:
         log_action(request, "identity.export_job_create", course, {"package": package, "experiment_id": experiment_id})
     return redirect("courses:data", course.pk)
+
+
+@role_required("teacher", "admin")
+@require_POST
+def table_export_create(request, course_pk):
+    course = get_accessible_course(request.user, course_pk)
+    table = request.POST.get("table", "").strip()
+    if table not in TABLE_PATHS:
+        return HttpResponse("不支持的导出表", status=400, content_type="text/plain; charset=utf-8")
+    experiment = get_object_or_404(course.experiments, pk=request.POST.get("experiment_id"))
+    filter_definition = {
+        key: request.POST.get(key)
+        for key in ("version_id", "student_id", "session_id", "status")
+        if request.POST.get(key)
+    }
+    snapshot = create_export_snapshot(
+        course=course,
+        experiment=experiment,
+        created_by=request.user,
+        filter_definition=filter_definition,
+    )
+    job = _prepare_export_job(
+        course=course,
+        experiment=experiment,
+        snapshot=snapshot,
+        created_by=request.user,
+        package=f"table_{table}",
+        selected_tables=[table],
+    )
+    run_export_job(job)
+    query = {"table": table, "experiment_id": experiment.pk, **filter_definition}
+    return redirect(f"{reverse('courses:data', args=[course.pk])}?{urlencode(query)}")
 
 
 @role_required("teacher", "admin")
@@ -220,10 +254,15 @@ def _prepare_export_job(*, course, snapshot, created_by, experiment=None, resear
         job.finished_at = None
         job.artifact_path = ""
         job.artifact_sha256 = ""
+        job.expires_at = None
+        job.lease_expires_at = None
+        job.locked_by = ""
+        job.heartbeat_at = None
         job.progress_stage = "snapshot"
         job.save(update_fields=[
             "snapshot", "created_by", "selected_tables", "selected_fields", "status",
-            "started_at", "finished_at", "artifact_path", "artifact_sha256", "progress_stage",
+            "started_at", "finished_at", "artifact_path", "artifact_sha256", "expires_at",
+            "lease_expires_at", "locked_by", "heartbeat_at", "progress_stage",
         ])
     if job.status != ExportJob.Status.RUNNING:
         job.status = ExportJob.Status.RUNNING
