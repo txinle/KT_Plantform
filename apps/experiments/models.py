@@ -124,6 +124,7 @@ class Experiment(models.Model):
     confidence_assignment_version = models.CharField(max_length=64, default="v1")
     confidence_scale_version = models.CharField(max_length=64, default="v1")
     confidence_prompt_version = models.CharField(max_length=64, default="v1")
+    assignment_unit_type = models.CharField(max_length=16, choices=(("subject", "Subject"), ("session", "Session")), default="subject")
     heartbeat_interval_seconds = models.PositiveSmallIntegerField(
         default=30,
         validators=[MinValueValidator(15), MaxValueValidator(120)],
@@ -365,9 +366,39 @@ class ExperimentVersion(models.Model):
     course_term_snapshot = models.CharField(max_length=64, blank=True)
     published_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     published_at = models.DateTimeField(auto_now_add=True)
+    assignment_unit_type = models.CharField(max_length=16, choices=(("subject", "Subject"), ("session", "Session")), default="subject")
     class Meta:
         constraints = [models.UniqueConstraint(fields=["experiment", "version_number"], name="unique_experiment_version")]
     def __str__(self): return f"{self.experiment} v{self.version_number}"
+
+
+class Condition(models.Model):
+    experiment = models.ForeignKey(Experiment, on_delete=models.CASCADE, related_name="conditions")
+    key = models.CharField(max_length=64)
+    label = models.CharField(max_length=160, blank=True)
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["experiment", "key"], name="unique_experiment_condition")]
+
+
+class ConditionAssignment(models.Model):
+    condition = models.ForeignKey(Condition, on_delete=models.PROTECT, related_name="assignments")
+    subject = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name="condition_assignments")
+    session = models.ForeignKey("assessment.ExperimentSession", null=True, blank=True, on_delete=models.PROTECT, related_name="condition_assignments")
+    algorithm = models.CharField(max_length=64)
+    algorithm_version = models.CharField(max_length=64)
+    seed = models.CharField(max_length=256)
+    draw = models.DecimalField(max_digits=20, decimal_places=10)
+    stratum = models.CharField(max_length=160, blank=True, default="")
+    probability = models.DecimalField(max_digits=10, decimal_places=8)
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(probability__gte=0, probability__lte=1), name="condition_probability_range"),
+            models.CheckConstraint(condition=Q(draw__gte=0, draw__lte=1), name="condition_draw_range"),
+            models.CheckConstraint(condition=(Q(subject__isnull=False, session__isnull=True) | Q(subject__isnull=True, session__isnull=False)), name="condition_assignment_subject_or_session"),
+            models.UniqueConstraint(fields=["condition", "subject"], condition=Q(subject__isnull=False), name="unique_condition_subject_assignment"),
+            models.UniqueConstraint(fields=["condition", "session"], condition=Q(session__isnull=False), name="unique_condition_session_assignment"),
+        ]
 
 class QuestionSnapshot(models.Model):
     version = models.ForeignKey(ExperimentVersion, on_delete=models.CASCADE, related_name="question_snapshots")

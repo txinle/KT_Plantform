@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from .event_invariants import TELEMETRY_EVENTS
+from .event_invariants import TELEMETRY_EVENTS, SESSION_ONLY_EVENTS
 from .event_schema_registry import (
     EventPayloadValidationError,
     EventSchemaNotFound,
@@ -49,12 +49,13 @@ CLIENT_BATCH_EVENT_TYPES = frozenset(
         "simulation_run_completed",
         "simulation_error_returned",
     }
-)
+) | SESSION_ONLY_EVENTS
 
 BATCH_FIELDS = frozenset({"client_instance_id", "events"})
 EVENT_FIELDS = frozenset(
     {
         "event_type",
+        "event_id",
         "event_version",
         "session_id",
         "attempt_id",
@@ -69,7 +70,7 @@ EVENT_FIELDS = frozenset(
         "app_version",
     }
 )
-EVENT_REQUIRED_FIELDS = EVENT_FIELDS - frozenset({"correlation_id", "time_sync_id"})
+EVENT_REQUIRED_FIELDS = EVENT_FIELDS - frozenset({"correlation_id", "time_sync_id", "event_id", "attempt_id"})
 
 
 class ProcessRequestError(ValueError):
@@ -146,6 +147,7 @@ class ParsedClientEvent:
     payload: dict
     quality_flags: tuple
     app_version: str
+    event_id: object = None
 
 
 def _parse_event(*, student, client_instance_id, document, prior_sequence):
@@ -177,8 +179,15 @@ def _parse_event(*, student, client_instance_id, document, prior_sequence):
     if prior_sequence is not None and sequence <= prior_sequence:
         raise ProcessRequestError("invalid_event_order")
     session_id = parse_positive_integer(document["session_id"], code="invalid_event")
-    attempt_id = parse_positive_integer(document["attempt_id"], code="invalid_event")
-    attempt = (
+    attempt_id = None
+    if document.get("attempt_id") is not None:
+        attempt_id = parse_positive_integer(document["attempt_id"], code="invalid_event")
+    if event_type in SESSION_ONLY_EVENTS and attempt_id is None:
+        attempt = None
+    else:
+        if attempt_id is None:
+            raise ProcessRequestError("invalid_event")
+        attempt = (
         Attempt.objects.select_related(
             "session",
             "assignment__snapshot",
@@ -191,7 +200,10 @@ def _parse_event(*, student, client_instance_id, document, prior_sequence):
         )
         .first()
     )
-    if attempt is None:
+        if attempt is None:
+            raise ProcessRequestError("invalid_event_link")
+    session = attempt.session if attempt is not None else __import__("apps.assessment.models", fromlist=["ExperimentSession"]).ExperimentSession.objects.filter(pk=session_id, student=student).first()
+    if session is None:
         raise ProcessRequestError("invalid_event_link")
 
     correlation_id = None
@@ -224,8 +236,8 @@ def _parse_event(*, student, client_instance_id, document, prior_sequence):
     return ParsedClientEvent(
         event_type=event_type,
         event_version=event_version,
-        session=attempt.session,
-        assignment=attempt.assignment,
+        session=session,
+        assignment=attempt.assignment if attempt is not None else None,
         attempt=attempt,
         client_sequence_no=sequence,
         correlation_id=correlation_id,
@@ -245,6 +257,7 @@ def _parse_event(*, student, client_instance_id, document, prior_sequence):
         payload=payload,
         quality_flags=tuple(quality_flags),
         app_version=app_version,
+        event_id=parse_uuid(document["event_id"], code="invalid_event") if document.get("event_id") is not None else None,
     )
 
 
@@ -294,8 +307,8 @@ def append_event_batch(*, student, document):
                 session=parsed.session,
                 assignment=parsed.assignment,
                 attempt=parsed.attempt,
-                question_snapshot=parsed.assignment.snapshot,
-                item_instance=parsed.assignment.item_instance,
+                question_snapshot=parsed.assignment.snapshot if parsed.assignment is not None else None,
+                item_instance=parsed.assignment.item_instance if parsed.assignment is not None else None,
                 client_instance_id=client_instance_id,
                 client_sequence_no=parsed.client_sequence_no,
                 correlation_id=parsed.correlation_id,
@@ -307,6 +320,8 @@ def append_event_batch(*, student, document):
                 quality_flags=parsed.quality_flags,
                 payload=parsed.payload,
                 app_version=parsed.app_version,
+                event_id=parsed.event_id,
+                envelope_version=2 if parsed.event_id is not None else 1,
             )
             acknowledgements.append(
                 {

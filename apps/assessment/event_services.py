@@ -179,7 +179,19 @@ def append_assessment_event(
     capture_mode="native",
     quality_flags=(),
     app_version="",
+    event_id=None,
+    envelope_version=1,
+    version=None,
+    domain=None,
+    actor=None,
 ) -> AssessmentEvent:
+    # v2 envelope names are accepted alongside the historical names.
+    if version is not None:
+        event_version = version
+    if domain is not None:
+        event_domain = domain
+    if actor is not None:
+        actor_source = actor
     received_at = timezone.now()
     validate_event_payload(event_type, event_version, payload)
     _register_schema_artifact(event_type, event_version)
@@ -269,11 +281,26 @@ def append_assessment_event(
         if client_wall_time_utc is not None and "clock_unsynchronized" not in normalized_flags:
             normalized_flags.append("clock_unsynchronized")
 
+    interval_quality = "unknown"
+    if client_instance_id is not None and client_sequence_no is not None:
+        previous = AssessmentEvent.objects.filter(
+            session_id=session.pk,
+            client_instance_id=client_instance_id,
+            client_sequence_no__lt=client_sequence_no,
+        ).order_by("-client_sequence_no").first()
+        if previous is not None:
+            interval_quality = "synchronized_estimate" if sync_is_valid else "exact_monotonic"
+        elif AssessmentEvent.objects.filter(session_id=session.pk).exists():
+            interval_quality = "degraded"
+    elif sync_is_valid:
+        interval_quality = "synchronized_estimate"
+
     values = {
+        "event_id": event_id or __import__("uuid").uuid4(),
         "event_domain": event_domain,
         "event_type": event_type,
         "event_version": event_version,
-        "envelope_version": 1,
+        "envelope_version": envelope_version,
         "actor_source": actor_source,
         "session_id": session.pk,
         "assignment_id": assignment.pk if assignment is not None else None,
@@ -292,6 +319,7 @@ def append_assessment_event(
         "estimated_clock_offset_ms": estimated_clock_offset_ms,
         "estimated_rtt_ms": estimated_rtt_ms,
         "estimated_occurred_at_utc": estimated_occurred_at_utc,
+        "interval_quality": interval_quality,
         "capture_mode": capture_mode,
         "quality_flags": normalized_flags,
         "payload": payload,

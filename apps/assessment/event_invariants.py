@@ -119,6 +119,21 @@ SIMULATION_EVENTS = frozenset(
 )
 
 
+def interval_quality(previous, current):
+    """Classify an interval without comparing monotonic clocks across tabs."""
+    if previous is None or current is None:
+        return "unknown"
+    if previous.client_instance_id and previous.client_instance_id == current.client_instance_id:
+        if previous.client_time_origin == current.client_time_origin:
+            return "exact_monotonic"
+    if getattr(previous, "estimated_occurred_at_utc", None) and getattr(current, "estimated_occurred_at_utc", None):
+        return "synchronized_estimate"
+    return "degraded"
+
+
+classify_interval_quality = interval_quality
+
+
 def _require_attempt_links(
     *, event_type, session, assignment, attempt, question_snapshot, item_instance
 ):

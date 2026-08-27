@@ -135,8 +135,16 @@ class ExperimentSession(models.Model):
     sampling_seed = models.CharField(max_length=64, blank=True, default="")
     ordering_seed = models.CharField(max_length=64, blank=True, default="")
     sampling_algorithm_version = models.CharField(max_length=32, blank=True, default="")
+    assignment_unit_type = models.CharField(max_length=16, choices=(("subject", "Subject"), ("session", "Session")), default="subject")
+    condition = models.ForeignKey("experiments.Condition", null=True, blank=True, on_delete=models.PROTECT, related_name="sessions")
+    condition_assigned_at = models.DateTimeField(null=True, blank=True)
     class Meta:
         constraints = [models.UniqueConstraint(fields=["version", "student"], name="unique_student_version_session")]
+
+    def save(self, *args, **kwargs):
+        if self.pk and self.condition_id != type(self).objects.only("condition_id").get(pk=self.pk).condition_id:
+            raise ValidationError("session condition is immutable")
+        return super().save(*args, **kwargs)
 
 class StudentQuestionAssignment(models.Model):
     session = models.ForeignKey(ExperimentSession, on_delete=models.CASCADE, related_name="assignments")
@@ -199,6 +207,9 @@ class Attempt(models.Model):
     is_correct = models.BooleanField(null=True, blank=True)
     score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     submission_token = models.UUIDField(null=True, blank=True, unique=True)
+    writer_lease_token = models.UUIDField(null=True, blank=True, editable=False)
+    writer_client_instance_id = models.UUIDField(null=True, blank=True, editable=False)
+    writer_lease_expires_at = models.DateTimeField(null=True, blank=True, editable=False)
     class Meta:
         constraints = [
             models.UniqueConstraint(
@@ -747,6 +758,17 @@ class AssessmentEvent(models.Model):
     estimated_clock_offset_ms = models.BigIntegerField(null=True, blank=True)
     estimated_rtt_ms = models.PositiveBigIntegerField(null=True, blank=True)
     estimated_occurred_at_utc = models.DateTimeField(null=True, blank=True)
+    class IntervalQuality(models.TextChoices):
+        EXACT_MONOTONIC = "exact_monotonic", "同一客户端单调时钟"
+        SYNCHRONIZED_ESTIMATE = "synchronized_estimate", "同步估计"
+        DEGRADED = "degraded", "降级估计"
+        UNKNOWN = "unknown", "未知"
+
+    interval_quality = models.CharField(
+        max_length=24,
+        choices=IntervalQuality.choices,
+        default=IntervalQuality.UNKNOWN,
+    )
 
     capture_mode = models.CharField(
         max_length=24,
@@ -883,3 +905,19 @@ class AssessmentEvent(models.Model):
 
     def delete(self, *args, **kwargs):
         raise AppendOnlyEventError("AssessmentEvent rows are append-only.")
+
+    @property
+    def version(self):
+        return self.event_version
+
+    @property
+    def domain(self):
+        return self.event_domain
+
+    @property
+    def actor(self):
+        return self.actor_source
+
+    @property
+    def sequence(self):
+        return self.client_sequence_no
