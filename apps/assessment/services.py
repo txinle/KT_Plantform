@@ -138,6 +138,7 @@ def get_or_create_session(experiment, student):
             "sampling_seed": sampling_seed,
             "ordering_seed": ordering_seed,
             "sampling_algorithm_version": algorithm_version,
+            "assignment_unit_type": version.assignment_unit_type,
         },
     )
     if created:

@@ -7,7 +7,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Max
 from django.utils import timezone
 
-from .event_invariants import validate_event_invariants
+from .event_invariants import validate_event_invariants, validate_response_state_chain
 from .event_schema_registry import (
     event_schema_sha256,
     get_event_schema,
@@ -180,7 +180,7 @@ def append_assessment_event(
     quality_flags=(),
     app_version="",
     event_id=None,
-    envelope_version=1,
+    envelope_version=2,
     version=None,
     domain=None,
     actor=None,
@@ -230,6 +230,16 @@ def append_assessment_event(
         question_snapshot=question_snapshot,
         item_instance=item_instance,
     )
+    if event_type == "response_state_changed" and "response_state_before" in payload:
+        prior_payloads = list(
+            AssessmentEvent.objects.filter(
+                attempt=attempt,
+                event_type="response_state_changed",
+            )
+            .order_by("server_ingest_sequence_no")
+            .values_list("payload", flat=True)
+        )
+        validate_response_state_chain([*prior_payloads, payload])
 
     normalized_flags = _deduplicate_quality_flags(quality_flags)
     estimated_clock_offset_ms = None

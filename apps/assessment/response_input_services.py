@@ -8,17 +8,23 @@ from .models import ResponseInputObservation, _response_observation_append_scope
 
 
 def replay_stable_input(observations):
-    """Replay observations while excluding IME composition intermediates.
+    """Replay the metadata stream while excluding IME composition states.
 
-    Observations are metadata envelopes; only the final non-composing value is
-    returned. This helper never emits a composing buffer as a response state.
+    The return value is intentionally metadata-only. Text checkpoints must be
+    supplied separately through ``ResponseSnapshot``; this function never
+    reconstructs or returns raw text from an edit observation.
     """
-    stable = ""
+    stable = []
     for observation in observations:
         if not isinstance(observation, dict) or observation.get("is_composing"):
             continue
-        if "text" in observation and isinstance(observation["text"], str):
-            stable = observation["text"]
+        stable.append(
+            {
+                key: value
+                for key, value in observation.items()
+                if key != "text"
+            }
+        )
     return stable
 
 

@@ -627,6 +627,7 @@ def publish_experiment(experiment, actor):
         "time_mode": experiment.time_mode, "total_time_limit_minutes": experiment.total_time_limit_minutes,
         "per_question_time_limit_seconds": experiment.per_question_time_limit_seconds,
         "resume_mode": experiment.resume_mode,
+        "assignment_unit_type": experiment.assignment_unit_type,
         "selection_mode": experiment.selection_mode,
         "quota_map": quota_map,
         "candidate_inventory": inventory,
@@ -655,6 +656,7 @@ def publish_experiment(experiment, actor):
         experiment=experiment,
         version_number=version_number,
         configuration=config,
+        assignment_unit_type=experiment.assignment_unit_type,
         published_by=actor,
         **course_snapshot,
     )

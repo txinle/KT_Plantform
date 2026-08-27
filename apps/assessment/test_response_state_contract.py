@@ -80,4 +80,7 @@ class ResponseStateContractTests(SimpleTestCase):
             {"text": "你", "is_composing": True},
             {"text": "你好", "is_composing": False},
         ]
-        self.assertEqual(replay_stable_input(observations), "你好")
+        replayed = replay_stable_input(observations)
+        self.assertEqual(len(replayed), 1)
+        self.assertNotIn("text", replayed[0])
+        self.assertFalse(replayed[0]["is_composing"])

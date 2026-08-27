@@ -60,6 +60,14 @@
 
 ## 不可变过程事件
 
+## v2 提交、快照、评分与导出字段
+
+- `SubmissionEvent`（兼容名称 `Submission`）只表示服务器接受最终答案；`final_response_snapshot_id` 是最终答案引用，`grading_status` 可为 `pending`、`completed` 或 `regrade`。
+- `GradeRecord` 是评分事实的版本化记录；同一提交可以有多个版本，重新评分通过 `supersedes_grade_id` 形成链，不回写原始提交事件。
+- `ResponseSnapshot.state_json` 与 `state_hash` 表示不含 UUID 的逻辑状态；`ResponseStateRef.snapshot_id` 仅用于定位存储对象。数值 raw 字符串不在采集层归一化。
+- `ResponseInputObservation` 只含前后 hash、长度、编辑类型、输入方式和客户端时间，不含文本正文。
+- `ExportSnapshot.source_cutoff_at`、`event_high_watermark`、`schema_manifest_hash` 和 `filter_definition` 创建后冻结；`manifest.json` 与 `derivation_runs.json` 必须携带 `export_snapshot_id`、schema hashes、derivation version、代码提交和来源模型。
+
 ### AssessmentEvent 主键与关联
 
 - `event_id`：随机 UUID 主键。

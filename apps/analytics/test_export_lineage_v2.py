@@ -41,6 +41,9 @@ class ExportLineageV2Tests(TestCase):
         self.assertEqual(snapshot.source_cutoff_at, snapshot.cutoff_at)
         self.assertIsNotNone(snapshot.event_high_watermark)
         self.assertTrue(snapshot.schema_manifest_hash)
+        snapshot.event_high_watermark += 1
+        with self.assertRaises(ValueError):
+            snapshot.save(update_fields=["event_high_watermark"])
 
     def test_export_contains_deterministic_derived_tables_and_provenance(self):
         self._session("S1")

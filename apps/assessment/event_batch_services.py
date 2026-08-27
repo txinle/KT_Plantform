@@ -321,7 +321,7 @@ def append_event_batch(*, student, document):
                 payload=parsed.payload,
                 app_version=parsed.app_version,
                 event_id=parsed.event_id,
-                envelope_version=2 if parsed.event_id is not None else 1,
+                envelope_version=2,
             )
             acknowledgements.append(
                 {

@@ -185,6 +185,8 @@ def _csv_bytes(headers, rows):
 def run_export_job(job):
     """Build a deterministic, identified ZIP from the job's frozen cutoff."""
     snapshot = job.snapshot
+    if snapshot.invalidated_at is not None:
+        raise ExportContractError("ExportSnapshot has been invalidated and cannot be rerun.")
     root = os.path.join(settings.MEDIA_ROOT, "exports", str(job.job_id))
     os.makedirs(root, exist_ok=True)
     zip_path = os.path.join(root, f"{job.package}-{job.job_id}.zip")
