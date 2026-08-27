@@ -13,6 +13,43 @@ class EventInvariantError(ValueError):
     pass
 
 
+class ResponseStateChainError(EventInvariantError):
+    """Raised when response_state_before/after observations are not a chain."""
+
+
+def _state_identity(value):
+    if isinstance(value, dict):
+        # Text refs identify logical state by hash, deliberately ignoring UUID.
+        if value.get("state_hash"):
+            return ("hash", value["state_hash"])
+        if value.get("content_hash"):
+            return ("content", value["content_hash"])
+    return ("value", value)
+
+
+def validate_response_state_chain(events):
+    """Validate contiguous response state observations in local event order.
+
+    ``events`` may be payload dictionaries or AssessmentEvent-like objects.
+    The first state's ``before`` must be null; each subsequent ``before`` must
+    equal the preceding ``after``. Snapshot UUIDs are ignored for text refs.
+    """
+    previous_after = None
+    for index, event in enumerate(events):
+        payload = event if isinstance(event, dict) else event.payload
+        if "response_state_after" not in payload:
+            continue
+        before = payload.get("response_state_before")
+        if index == 0 and before is not None:
+            raise ResponseStateChainError("First response state must have null before state.")
+        if index > 0 and _state_identity(before) != _state_identity(previous_after):
+            raise ResponseStateChainError(
+                f"Response state chain break at observation {index}."
+            )
+        previous_after = payload.get("response_state_after")
+
+
+
 TELEMETRY_EVENTS = frozenset(
     {
         "document_visible",

@@ -267,6 +267,23 @@ test('payload sanitization retains declared fields and drops tracking detail', (
   );
 });
 
+test('response state payload retains before/after refs and stable observation', () => {
+  assert.deepEqual(
+    sanitizePayload('response_state_changed', {
+      question_type: 'short_answer',
+      response_state_before: null,
+      response_state_after: { snapshot_id: 's', state_hash: 'h', content_length: 2 },
+      stable_input_observation: { is_composing: false, text_length: 2 },
+    }),
+    {
+      question_type: 'short_answer',
+      response_state_before: null,
+      response_state_after: { snapshot_id: 's', state_hash: 'h', content_length: 2 },
+      stable_input_observation: { is_composing: false, text_length: 2 },
+    },
+  );
+});
+
 test('lifecycle capture emits approved events and heartbeat stops after close', async () => {
   class Target {
     constructor() { this.listeners = new Map(); }

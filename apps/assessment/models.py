@@ -472,6 +472,15 @@ class ResponseSnapshot(models.Model):
     content = models.TextField(blank=True)
     content_hash = models.CharField(max_length=64, validators=[HASH_VALIDATOR])
     content_length = models.PositiveIntegerField()
+    # Canonical logical state, independent from snapshot_id.  ``content`` and
+    # ``content_hash`` remain for backwards-compatible consumers.
+    state_json = models.JSONField(null=True, blank=True)
+    state_hash = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        validators=[HASH_VALIDATOR],
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     schema_version = models.PositiveSmallIntegerField(default=1)
 
@@ -492,6 +501,23 @@ class ResponseSnapshot(models.Model):
 
     def clean(self):
         super().clean()
+        if self.state_json is None:
+            question_type = "short_answer"
+            try:
+                question_type = self.attempt.assignment.snapshot.question_type
+            except Exception:
+                pass
+            self.state_json = {"question_type": question_type, "value": self.content}
+        if self.state_hash is None:
+            import json
+
+            canonical = json.dumps(
+                self.state_json,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            self.state_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         expected_hash = hashlib.sha256(self.content.encode("utf-8")).hexdigest()
         errors = {}
         if self.content_hash != expected_hash:

@@ -18,11 +18,14 @@
     response_input_started: ['question_type'],
     response_state_changed: [
       'question_type',
+      'response_state_before',
       'response_state_after',
       'response_snapshot_id',
       'content_hash',
       'content_length',
+      'state_hash',
       'change_source',
+      'stable_input_observation',
     ],
     response_commit_requested: ['submission_token'],
     feedback_shown: [

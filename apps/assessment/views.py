@@ -210,6 +210,7 @@ def save_draft_api(request, attempt_id):
                     "response_snapshot_id": str(attempt.saved_response_snapshot.pk),
                     "content_hash": attempt.saved_response_snapshot.content_hash,
                     "content_length": attempt.saved_response_snapshot.content_length,
+                    "state_hash": attempt.saved_response_snapshot.state_hash,
                 }
             )
         elif attempt.saved_response_state is not None:
