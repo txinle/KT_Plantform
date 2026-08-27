@@ -103,7 +103,7 @@ ATTEMPT_EVENTS = frozenset(
         "legacy_draft_observed",
         "legacy_submission_observed",
     }
-) | TELEMETRY_EVENTS
+)
 
 CONFIDENCE_EVENTS = frozenset(
     {"confidence_prompt_shown", "confidence_committed", "confidence_skipped"}
@@ -159,7 +159,9 @@ def _validate_payload_links(*, event_type, payload, session, attempt):
             raise EventInvariantError(
                 "item_entered.from_assignment_id is outside the event session."
             )
-    if event_type == "activity_heartbeat" and payload["attempt_id"] != attempt.pk:
+    if event_type == "activity_heartbeat" and (
+        attempt is None or payload["attempt_id"] != attempt.pk
+    ):
         raise EventInvariantError(
             "activity_heartbeat.attempt_id does not match the event attempt."
         )

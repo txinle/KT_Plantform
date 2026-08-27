@@ -235,9 +235,10 @@ COMMON_FIELD_DESCRIPTIONS = {
     "snapshot_id": "快照唯一标识",
 }
 
-PLACEHOLDER_TABLES = {
-    "attempt_features", "kt_sequences", "cd_response_matrix", "calibration_features",
-}
+# All advertised derived tables are now deterministic projections.  A table
+# with no qualifying source rows is reported as ``no_observation`` rather than
+# being mislabeled as a placeholder.
+PLACEHOLDER_TABLES = frozenset()
 
 RESPONSE_EVENT_TYPES = {
     "response_input_started", "response_state_changed", "response_commit_requested",

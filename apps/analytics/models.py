@@ -11,6 +11,13 @@ class ExportSnapshot(models.Model):
     experiment = models.ForeignKey("experiments.Experiment", null=True, blank=True, on_delete=models.PROTECT, related_name="export_snapshots")
     research_study = models.ForeignKey("accounts.ResearchStudy", null=True, blank=True, on_delete=models.PROTECT, related_name="export_snapshots")
     cutoff_at = models.DateTimeField(default=timezone.now)
+    # Frozen source boundary. ``cutoff_at`` remains as a compatibility alias;
+    # all new exports use the explicit source boundary fields below.
+    source_cutoff_at = models.DateTimeField(default=timezone.now)
+    event_high_watermark = models.PositiveBigIntegerField(default=0)
+    schema_manifest_hash = models.CharField(max_length=64, blank=True, default="")
+    invalidated_at = models.DateTimeField(null=True, blank=True)
+    invalidated_reason = models.CharField(max_length=255, blank=True, default="")
     database_snapshot_strategy = models.CharField(max_length=32, default="single_read_transaction")
     selected_versions = models.JSONField(default=list, blank=True)
     filter_definition = models.JSONField(default=dict, blank=True)
@@ -19,6 +26,29 @@ class ExportSnapshot(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+    _FROZEN_FIELDS = frozenset({
+        "course_id", "experiment_id", "research_study_id", "cutoff_at",
+        "source_cutoff_at", "event_high_watermark", "schema_manifest_hash",
+        "database_snapshot_strategy", "selected_versions", "filter_definition",
+        "created_by_id",
+    })
+
+    def save(self, *args, **kwargs):
+        """Keep the source boundary immutable after creation.
+
+        Invalidation is the sole normal mutation and is performed by the
+        governance service, so a rerun can never silently change provenance.
+        """
+        if not self._state.adding:
+            update_fields = kwargs.get("update_fields")
+            fields = set(update_fields) if update_fields is not None else set()
+            if not fields or fields & self._FROZEN_FIELDS:
+                previous = type(self).objects.only(*self._FROZEN_FIELDS).get(pk=self.pk)
+                for field in self._FROZEN_FIELDS:
+                    if getattr(previous, field) != getattr(self, field):
+                        raise ValueError(f"ExportSnapshot.{field} is immutable")
+        return super().save(*args, **kwargs)
 
 
 class ExportJob(models.Model):
