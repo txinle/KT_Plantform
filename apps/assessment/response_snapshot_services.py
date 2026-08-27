@@ -160,5 +160,7 @@ def create_response_snapshot(*, attempt, content, schema_version=1):
         ).first()
         if existing is None:
             raise
+        if existing.state_hash != logical_state.state_hash:
+            raise ValueError("Existing response state hash has conflicting snapshot metadata.")
         return existing
     return snapshot
