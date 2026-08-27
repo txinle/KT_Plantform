@@ -5,8 +5,6 @@ cd /d "%~dp0"
 set "APP_URL=http://127.0.0.1:8000/"
 set "VENV_PYTHON=.venv\Scripts\python.exe"
 set "REQUIREMENTS_STAMP=.venv\.requirements.sha256"
-set "FIRST_RUN=0"
-if not exist db.sqlite3 set "FIRST_RUN=1"
 
 powershell.exe -NoProfile -Command "if (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue) { exit 1 }"
 if errorlevel 1 (
@@ -54,9 +52,18 @@ if /I "!CURRENT_REQUIREMENTS_HASH!"=="!INSTALLED_REQUIREMENTS_HASH!" (
 echo [3/4] Checking the database...
 "%VENV_PYTHON%" manage.py migrate --noinput
 if errorlevel 1 goto :fail
-if "%FIRST_RUN%"=="1" (
+set "DEMO_READY=1"
+"%VENV_PYTHON%" manage.py shell -c "from django.contrib.auth import get_user_model; U=get_user_model(); required={'admin':'admin123','teacher':'teacher123','S001':'student123','S002':'student123','S003':'student123'}; bad=[name for name,password in required.items() if not (U.objects.filter(username=name,is_active=True).exists() and U.objects.get(username=name).check_password(password))]; raise SystemExit(1 if bad else 0)"
+if errorlevel 1 set "DEMO_READY=0"
+if "!DEMO_READY!"=="0" (
+    echo Demo accounts are missing or unusable; initializing demo data...
     "%VENV_PYTHON%" manage.py seed_demo
     if errorlevel 1 goto :fail
+    "%VENV_PYTHON%" manage.py shell -c "from django.contrib.auth import get_user_model; U=get_user_model(); required={'admin':'admin123','teacher':'teacher123','S001':'student123','S002':'student123','S003':'student123'}; bad=[name for name,password in required.items() if not (U.objects.filter(username=name,is_active=True).exists() and U.objects.get(username=name).check_password(password))]; raise SystemExit(1 if bad else 0)"
+    if errorlevel 1 (
+        echo [ERROR] Demo accounts were not initialized correctly.
+        goto :fail
+    )
 )
 
 echo [4/4] Starting the local website...

@@ -11,9 +11,9 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args, **options):
         admin, _ = User.objects.get_or_create(username="admin", defaults={"role": User.Role.ADMIN, "display_name": "系统管理员", "is_staff": True, "is_superuser": True})
-        admin.set_password("admin123"); admin.is_staff = True; admin.is_superuser = True; admin.save()
+        admin.set_password("admin123"); admin.is_active = True; admin.is_staff = True; admin.is_superuser = True; admin.save()
         teacher, _ = User.objects.get_or_create(username="teacher", defaults={"role": User.Role.TEACHER, "display_name": "演示教师"})
-        teacher.set_password("teacher123"); teacher.save()
+        teacher.set_password("teacher123"); teacher.is_active = True; teacher.save()
         course, _ = Course.objects.get_or_create(
             owner=teacher,
             code="KT101",
@@ -30,7 +30,7 @@ class Command(BaseCommand):
         for index in range(1, 4):
             number = f"S{index:03d}"
             student, _ = User.objects.get_or_create(username=number, defaults={"role": User.Role.STUDENT, "student_number": number, "display_name": f"学生{index}"})
-            student.role = User.Role.STUDENT; student.student_number = number; student.set_password("student123"); student.save(); students.append(student)
+            student.role = User.Role.STUDENT; student.student_number = number; student.set_password("student123"); student.is_active = True; student.save(); students.append(student)
         bank, created = QuestionBank.objects.get_or_create(
             course=course,
             name="演示题库",
