@@ -27,6 +27,12 @@ from .confidence_services import (
 )
 from .services import finish_session
 from .time_sync_services import create_pending_time_sync, finalize_time_sync
+from .writer_lease_services import (
+    WriterLeaseConflict,
+    acquire_attempt_writer_lease,
+    renew_attempt_writer_lease,
+    release_attempt_writer_lease,
+)
 
 
 MAX_PROCESS_REQUEST_BYTES = 256 * 1024
@@ -181,6 +187,92 @@ def time_sync_finalize(request):
     except (ValueError, ValidationError):
         return _error("time_sync_conflict", status=409)
     return JsonResponse(_sync_document(sample))
+
+
+def _owned_attempt(attempt_id, student):
+    from .models import Attempt
+
+    attempt = Attempt.objects.filter(pk=attempt_id, session__student=student).first()
+    if attempt is None:
+        raise ProcessRequestError("invalid_writer_lease_link")
+    return attempt
+
+
+@role_required("student")
+@require_POST
+def writer_lease_acquire(request, attempt_id):
+    try:
+        document = _json_document(request)
+        require_exact_mapping(document, allowed=frozenset({"client_instance_id"}))
+        attempt = _owned_attempt(attempt_id, request.user)
+        lease = acquire_attempt_writer_lease(
+            attempt,
+            client_instance_id=parse_uuid(document["client_instance_id"]),
+        )
+    except ProcessRequestError as error:
+        return _error(error.code, status=error.status)
+    except (ValueError, WriterLeaseConflict):
+        return _error("writer_lease_conflict", status=409)
+    return JsonResponse(
+        {
+            "success": True,
+            "lease_token": str(lease.token),
+            "client_instance_id": str(lease.client_instance_id),
+            "expires_at": lease.expires_at.isoformat(),
+        },
+        status=201,
+    )
+
+
+@role_required("student")
+@require_POST
+def writer_lease_renew(request, attempt_id):
+    try:
+        document = _json_document(request)
+        require_exact_mapping(
+            document,
+            allowed=frozenset({"lease_token", "client_instance_id"}),
+        )
+        attempt = _owned_attempt(attempt_id, request.user)
+        lease = renew_attempt_writer_lease(
+            attempt,
+            lease_token=parse_uuid(document["lease_token"]),
+            client_instance_id=parse_uuid(document["client_instance_id"]),
+        )
+    except ProcessRequestError as error:
+        return _error(error.code, status=error.status)
+    except (ValueError, WriterLeaseConflict):
+        return _error("writer_lease_conflict", status=409)
+    return JsonResponse(
+        {
+            "success": True,
+            "lease_token": str(lease.token),
+            "client_instance_id": str(lease.client_instance_id),
+            "expires_at": lease.expires_at.isoformat(),
+        }
+    )
+
+
+@role_required("student")
+@require_POST
+def writer_lease_release(request, attempt_id):
+    try:
+        document = _json_document(request)
+        require_exact_mapping(
+            document,
+            allowed=frozenset({"lease_token", "client_instance_id"}),
+        )
+        attempt = _owned_attempt(attempt_id, request.user)
+        release_attempt_writer_lease(
+            attempt,
+            lease_token=parse_uuid(document["lease_token"]),
+            client_instance_id=parse_uuid(document["client_instance_id"]),
+        )
+    except ProcessRequestError as error:
+        return _error(error.code, status=error.status)
+    except (ValueError, WriterLeaseConflict):
+        return _error("writer_lease_conflict", status=409)
+    return JsonResponse({"success": True})
 
 
 def _resolved_confidence_document(assignment):

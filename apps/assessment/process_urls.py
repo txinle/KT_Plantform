@@ -18,6 +18,21 @@ urlpatterns = [
         name="time_sync_finalize",
     ),
     path(
+        "attempts/<int:attempt_id>/writer-lease/acquire/",
+        process_views.writer_lease_acquire,
+        name="writer_lease_acquire",
+    ),
+    path(
+        "attempts/<int:attempt_id>/writer-lease/renew/",
+        process_views.writer_lease_renew,
+        name="writer_lease_renew",
+    ),
+    path(
+        "attempts/<int:attempt_id>/writer-lease/release/",
+        process_views.writer_lease_release,
+        name="writer_lease_release",
+    ),
+    path(
         "attempts/<int:attempt_id>/confidence/prompt-shown/",
         process_views.confidence_prompt_shown,
         name="confidence_prompt_shown",

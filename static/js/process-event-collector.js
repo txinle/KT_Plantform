@@ -372,7 +372,9 @@
     };
 
     return {
-      ready: record('item_rendered', {}),
+      // item_rendered is the compatibility event name; the payload makes its
+      // measurement boundary explicit: stem and controls are interactive.
+      ready: record('item_rendered', { presentation_state: 'interactive' }),
       closeAttempt,
       dispose,
       isAttemptOpen: () => attemptOpen,

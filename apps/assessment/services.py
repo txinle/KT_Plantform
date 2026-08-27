@@ -529,7 +529,7 @@ def grade_submission(
     latest = submission.grade_records.order_by("-version").first()
     version = (latest.version + 1) if latest else 1
     now = timezone.now() if status == GradeRecord.Status.COMPLETED else None
-    supersedes = latest if status == GradeRecord.Status.REGRADE else None
+    supersedes = latest if latest is not None else None
     record = GradeRecord.objects.create(
         submission=submission,
         version=version,
