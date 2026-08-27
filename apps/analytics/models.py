@@ -31,8 +31,8 @@ class ExportJob(models.Model):
         INVALIDATED = "invalidated", "已失效"
 
     class Kind(models.TextChoices):
-        RESEARCH = "research", "去标识化研究包"
-        IDENTITY = "identity", "身份映射"
+        RESEARCH = "research", "实名研究数据包"
+        IDENTITY = "identity", "学生名册"
 
     job_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     course = models.ForeignKey("accounts.Course", on_delete=models.PROTECT, related_name="export_jobs")

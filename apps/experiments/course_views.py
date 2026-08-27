@@ -349,11 +349,7 @@ def experiment_results(request, course_pk, pk):
             "session_status_choices": ExperimentSession.Status.choices,
             "selected_status": selected_status,
             "export_field_groups": FIELD_GROUPS,
-            "can_export_identity": (
-                request.user.is_superuser
-                or request.user.role == User.Role.ADMIN
-                or experiment.owner_id == request.user.id
-            ),
+            "can_export_identity": True,
         },
     )
 

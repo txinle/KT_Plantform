@@ -33,7 +33,7 @@ FIELD_GROUPS = (
     (
         "题目与知识点",
         (
-            ("question_code", "题目标识"),
+            ("question_code", "题库唯一编号"),
             ("question_type", "题型"),
             ("primary_kc", "主 KC"),
             ("all_kcs", "全部 KC"),

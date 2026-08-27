@@ -204,11 +204,7 @@ def experiment_results(request, pk):
             "session_status_choices": ExperimentSession.Status.choices,
             "selected_status": selected_status,
             "export_field_groups": FIELD_GROUPS,
-            "can_export_identity": (
-                request.user.is_superuser
-                or request.user.role == "admin"
-                or experiment.owner_id == request.user.id
-            ),
+            "can_export_identity": True,
         },
     )
 

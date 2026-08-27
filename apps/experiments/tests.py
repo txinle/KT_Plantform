@@ -676,7 +676,7 @@ class ExperimentResultStatusFilterTests(TestCase):
 
         self.assertEqual(self.client.get(self.url, {"status": "completed"}).status_code, 404)
 
-    def test_results_page_makes_identified_exports_primary_and_keeps_legacy_links(self):
+    def test_results_page_makes_identified_exports_primary_and_preserves_csv_paths(self):
         response = self.client.get(self.url)
         html = response.content.decode("utf-8")
 
@@ -685,7 +685,7 @@ class ExperimentResultStatusFilterTests(TestCase):
         self.assertContains(response, f'action="{identified_url}"')
         self.assertContains(response, f'action="{navigation_url}"')
         self.assertContains(response, "实名可选字段 Excel")
-        self.assertContains(response, "兼容导出")
+        self.assertContains(response, "实名 CSV 导出")
         self.assertEqual(len(FIELD_LABELS), 34)
         self.assertEqual(html.count('type="checkbox" name="fields"'), 34)
         for field in FIELD_LABELS:

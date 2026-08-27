@@ -32,11 +32,11 @@ class LoginPresentationTests(TestCase):
         response = self.client.get(reverse("login"))
         self.assertNotContains(response, "teacher / teacher123")
 
-    def test_login_page_explains_identified_and_legacy_export_boundary(self):
+    def test_login_page_explains_identified_export_boundary(self):
         response = self.client.get(reverse("login"))
 
         self.assertContains(response, "实名主导出仅限授权场景")
-        self.assertContains(response, "匿名导出保留兼容")
+        self.assertContains(response, "导出文件均包含学生学号和姓名")
         self.assertNotContains(response, "研究导出默认使用匿名编号")
 
 

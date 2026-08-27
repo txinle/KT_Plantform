@@ -1,5 +1,4 @@
 import csv
-import hashlib
 import os
 from io import BytesIO
 from urllib.parse import quote, urlencode
@@ -22,10 +21,13 @@ from apps.audit.services import log_action
 from apps.experiments.models import Experiment
 from .export_fields import FIELD_LABELS, field_values
 from .models import ExportJob
-from .services import create_export_snapshot, execute_purge_request, run_export_job
+from .services import ExportContractError, create_export_snapshot, execute_purge_request, run_export_job
 from .export_catalog import TABLE_PATHS
 from apps.accounts.models import DataPurgeRequest, ResearchStudy
 from apps.accounts.course_access import get_accessible_course, require_course_manager
+
+REQUIRED_IDENTIFIED_EXCEL_FIELDS = ("student_number", "student_name", "question_code")
+
 
 def _experiment(request, pk):
     if request.user.is_superuser or request.user.role == User.Role.ADMIN:
@@ -35,14 +37,6 @@ def _experiment(request, pk):
             Q(course__in=accessible_courses(request.user))
             | Q(course__isnull=True, owner=request.user)
         )
-    return get_object_or_404(qs, pk=pk)
-
-
-def _identified_experiment(request, pk):
-    if request.user.is_superuser or request.user.role == User.Role.ADMIN:
-        qs = Experiment.objects.all()
-    else:
-        qs = Experiment.objects.filter(owner=request.user)
     return get_object_or_404(qs, pk=pk)
 
 
@@ -75,9 +69,12 @@ def export_job_create(request, course_pk):
         selected_tables=request.POST.getlist("tables"),
         selected_fields=request.POST.getlist("fields"),
     )
-    run_export_job(job)
-    if kind == ExportJob.Kind.IDENTITY:
-        log_action(request, "identity.export_job_create", course, {"package": package, "experiment_id": experiment_id})
+    error_response = _run_export_job_or_bad_request(job)
+    if error_response:
+        return error_response
+    log_action(request, "analytics.identified_export_job_create", course, {
+        "job_id": str(job.job_id), "package": package, "experiment_id": experiment.pk if experiment else None,
+    })
     return redirect("courses:data", course.pk)
 
 
@@ -91,7 +88,7 @@ def table_export_create(request, course_pk):
     experiment = get_object_or_404(course.experiments, pk=request.POST.get("experiment_id"))
     filter_definition = {
         key: request.POST.get(key)
-        for key in ("version_id", "student_id", "session_id", "status")
+        for key in ("version_id", "class_name", "student_number", "session_id", "status")
         if request.POST.get(key)
     }
     snapshot = create_export_snapshot(
@@ -108,7 +105,12 @@ def table_export_create(request, course_pk):
         package=f"table_{table}",
         selected_tables=[table],
     )
-    run_export_job(job)
+    error_response = _run_export_job_or_bad_request(job)
+    if error_response:
+        return error_response
+    log_action(request, "analytics.identified_export_job_create", course, {
+        "job_id": str(job.job_id), "package": job.package, "experiment_id": experiment.pk,
+    })
     query = {"table": table, "experiment_id": experiment.pk, **filter_definition}
     return redirect(f"{reverse('courses:data', args=[course.pk])}?{urlencode(query)}")
 
@@ -131,17 +133,20 @@ def research_study_export_create(request, study_id):
         created_by=request.user,
         package=package,
     )
-    run_export_job(job)
+    error_response = _run_export_job_or_bad_request(job)
+    if error_response:
+        return error_response
+    log_action(request, "analytics.identified_export_job_create", course, {
+        "job_id": str(job.job_id), "package": package, "research_study_id": study.pk,
+    })
     return redirect("courses:data", course.pk)
 
 
 @role_required("teacher", "admin")
 @require_POST
 def identity_export_job_create(request, course_pk):
-    experiment = get_object_or_404(Experiment.objects.select_related("course").filter(course_id=course_pk), pk=request.POST.get("experiment_id"))
-    course = experiment.course
-    if not (request.user.is_superuser or request.user.role == User.Role.ADMIN or course.owner_id == request.user.id):
-        return HttpResponse("身份任务仅限课程负责人或管理员", status=403)
+    course = get_accessible_course(request.user, course_pk)
+    experiment = get_object_or_404(course.experiments, pk=request.POST.get("experiment_id"))
     snapshot = create_export_snapshot(course=course, experiment=experiment, created_by=request.user)
     job = _prepare_export_job(
         course=course,
@@ -151,8 +156,12 @@ def identity_export_job_create(request, course_pk):
         kind=ExportJob.Kind.IDENTITY,
         package="identity",
     )
-    run_export_job(job)
-    log_action(request, "identity.export_job_create", course, {"experiment_id": experiment.pk})
+    error_response = _run_export_job_or_bad_request(job)
+    if error_response:
+        return error_response
+    log_action(request, "analytics.identified_export_job_create", course, {
+        "job_id": str(job.job_id), "package": job.package, "experiment_id": experiment.pk,
+    })
     return redirect("courses:data", course.pk)
 
 
@@ -193,14 +202,11 @@ def purge_request_execute(request, course_pk, purge_request_id):
 def export_job_download(request, course_pk, job_id):
     course = get_accessible_course(request.user, course_pk)
     job = get_object_or_404(ExportJob, course=course, job_id=job_id, status=ExportJob.Status.SUCCEEDED)
-    if job.kind == ExportJob.Kind.IDENTITY and not (
-        request.user.is_superuser or request.user.role == User.Role.ADMIN or course.owner_id == request.user.id
-    ):
-        return HttpResponse("无权访问身份任务", status=403)
     if not job.artifact_path or not os.path.exists(job.artifact_path):
         return HttpResponse("导出文件不存在，请重新产出", status=404, content_type="text/plain; charset=utf-8")
-    if job.kind == ExportJob.Kind.IDENTITY:
-        log_action(request, "identity.export_job_download", course, {"job_id": str(job.job_id)})
+    log_action(request, "analytics.identified_export_job_download", course, {
+        "job_id": str(job.job_id), "package": job.package,
+    })
     return FileResponse(open(job.artifact_path, "rb"), as_attachment=True, filename=f"{job.package}-{job.job_id}.zip")
 
 
@@ -209,10 +215,6 @@ def export_job_download(request, course_pk, job_id):
 def export_job_delete(request, course_pk, job_id):
     course = get_accessible_course(request.user, course_pk)
     job = get_object_or_404(ExportJob, course=course, job_id=job_id)
-    if job.kind == ExportJob.Kind.IDENTITY and not (
-        request.user.is_superuser or request.user.role == User.Role.ADMIN or course.owner_id == request.user.id
-    ):
-        return HttpResponse("无权删除身份导出", status=403, content_type="text/plain; charset=utf-8")
     if job.artifact_path and os.path.exists(job.artifact_path):
         artifact_dir = os.path.dirname(job.artifact_path)
         os.remove(job.artifact_path)
@@ -271,8 +273,17 @@ def _prepare_export_job(*, course, snapshot, created_by, experiment=None, resear
         job.save(update_fields=["status", "started_at", "progress_stage"])
     return job
 
-def _anon(student_id, experiment_id):
-    return hashlib.sha256(f"kt:{experiment_id}:{student_id}".encode()).hexdigest()[:16]
+
+def _run_export_job_or_bad_request(job):
+    try:
+        run_export_job(job)
+    except ExportContractError as error:
+        job.status = ExportJob.Status.FAILED
+        job.progress_stage = "contract_error"
+        job.finished_at = timezone.now()
+        job.save(update_fields=["status", "progress_stage", "finished_at"])
+        return HttpResponse(str(error), status=400, content_type="text/plain; charset=utf-8")
+    return None
 
 def _csv(name, headers, rows):
     response = HttpResponse(content_type="text/csv; charset=utf-8")
@@ -293,27 +304,30 @@ def _attachment(response, ascii_name, unicode_name):
 def kt_export(request, experiment_id):
     experiment = _experiment(request, experiment_id)
     attempts = Attempt.objects.filter(session__version__experiment=experiment).select_related("session__student", "session__version", "assignment__snapshot").order_by("session_id", "submission_sequence_index", "assignment__assigned_sequence_index")
-    headers = ["anonymous_student_id", "experiment_id", "experiment_version", "session_id", "question_code", "primary_kc", "all_kcs", "question_type", "assigned_sequence_index", "first_open_sequence_index", "submission_sequence_index", "first_opened_at", "last_opened_at", "submitted_at", "visit_count", "first_to_submit_duration_ms", "last_visit_to_submission_ms", "final_answer", "is_correct", "score", "status", "teacher_difficulty", "empirical_difficulty", "class_name"]
+    headers = ["student_number", "student_name", "experiment_id", "experiment_version", "session_id", "question_code", "primary_kc", "all_kcs", "question_type", "assigned_sequence_index", "first_open_sequence_index", "submission_sequence_index", "first_opened_at", "last_opened_at", "submitted_at", "visit_count", "first_to_submit_duration_ms", "last_visit_to_submission_ms", "final_answer", "is_correct", "score", "status", "teacher_difficulty", "empirical_difficulty", "class_name"]
     rows = []
     for a in attempts:
         s = a.assignment.snapshot
-        rows.append([_anon(a.session.student_id, experiment.id), experiment.id, a.session.version.version_number, a.session_id, s.code, s.primary_kc, ";".join(s.all_kcs), s.question_type, a.assignment.assigned_sequence_index, a.first_open_sequence_index, a.submission_sequence_index, a.first_opened_at, a.last_opened_at, a.submitted_at, a.visit_count, a.first_to_submit_duration_ms, a.last_visit_to_submission_ms, a.final_answer, a.is_correct, a.score, a.status, s.teacher_difficulty, s.empirical_difficulty, a.session.class_snapshot_name])
+        rows.append([a.session.student.student_number, a.session.student.shown_name, experiment.id, a.session.version.version_number, a.session_id, s.code, s.primary_kc, ";".join(s.all_kcs), s.question_type, a.assignment.assigned_sequence_index, a.first_open_sequence_index, a.submission_sequence_index, a.first_opened_at, a.last_opened_at, a.submitted_at, a.visit_count, a.first_to_submit_duration_ms, a.last_visit_to_submission_ms, a.final_answer, a.is_correct, a.score, a.status, s.teacher_difficulty, s.empirical_difficulty, a.session.class_snapshot_name])
+    log_action(request, "experiment.identified_kt_export", experiment, {"row_count": len(rows)})
     return _csv(f"experiment_{experiment.id}_kt.csv", headers, rows)
 
 @role_required("teacher", "admin")
 def navigation_export(request, experiment_id):
     experiment = _experiment(request, experiment_id)
     events = QuestionVisitEvent.objects.filter(session__version__experiment=experiment).select_related("session__student", "attempt__assignment__snapshot", "from_assignment__snapshot").order_by("session_id", "event_sequence")
-    headers = ["anonymous_student_id", "experiment_id", "session_id", "event_sequence", "from_question", "to_question", "visit_index", "entry_reason", "client_occurred_at", "server_received_at"]
-    rows = [[_anon(e.session.student_id, experiment.id), experiment.id, e.session_id, e.event_sequence, e.from_assignment.snapshot.code if e.from_assignment else "", e.attempt.assignment.snapshot.code, e.visit_index, e.entry_reason, e.client_occurred_at, e.server_received_at] for e in events]
+    headers = ["student_number", "student_name", "experiment_id", "session_id", "event_sequence", "from_question_code", "to_question_code", "visit_index", "entry_reason", "client_occurred_at", "server_received_at"]
+    rows = [[e.session.student.student_number, e.session.student.shown_name, experiment.id, e.session_id, e.event_sequence, e.from_assignment.snapshot.code if e.from_assignment else "", e.attempt.assignment.snapshot.code, e.visit_index, e.entry_reason, e.client_occurred_at, e.server_received_at] for e in events]
+    log_action(request, "experiment.identified_navigation_legacy_export", experiment, {"row_count": len(rows)})
     return _csv(f"experiment_{experiment.id}_navigation.csv", headers, rows)
 
 @role_required("teacher", "admin")
 def identity_export(request, experiment_id):
-    experiment = _identified_experiment(request, experiment_id)
+    experiment = _experiment(request, experiment_id)
     students = experiment.students.select_related("class_group")
-    headers = ["anonymous_student_id", "student_number", "student_name", "class_name"]
-    rows = [[_anon(s.id, experiment.id), s.student_number, s.shown_name, str(s.class_group or "")] for s in students]
+    headers = ["student_number", "student_name", "class_name"]
+    rows = [[s.student_number, s.shown_name, str(s.class_group or "")] for s in students]
+    log_action(request, "experiment.student_roster_export", experiment, {"row_count": len(rows)})
     return _csv(f"experiment_{experiment.id}_identity.csv", headers, rows)
 
 
@@ -328,12 +342,15 @@ def _literal_cell(sheet, value):
 @role_required("teacher", "admin")
 @require_POST
 def identified_export(request, experiment_id):
-    experiment = _identified_experiment(request, experiment_id)
+    experiment = _experiment(request, experiment_id)
     requested = request.POST.getlist("fields")
     if not requested or any(key not in FIELD_LABELS for key in requested):
         return HttpResponse("请选择有效的导出字段", status=400, content_type="text/plain; charset=utf-8")
     requested_set = set(requested)
-    selected = [key for key in FIELD_LABELS if key in requested_set]
+    selected = [
+        *REQUIRED_IDENTIFIED_EXCEL_FIELDS,
+        *(key for key in FIELD_LABELS if key not in REQUIRED_IDENTIFIED_EXCEL_FIELDS and key in requested_set),
+    ]
     attempts = (
         Attempt.objects.filter(session__version__experiment=experiment)
         .select_related(
@@ -378,7 +395,7 @@ def identified_export(request, experiment_id):
 @role_required("teacher", "admin")
 @require_POST
 def identified_navigation_export(request, experiment_id):
-    experiment = _identified_experiment(request, experiment_id)
+    experiment = _experiment(request, experiment_id)
     events = (
         QuestionVisitEvent.objects.filter(session__version__experiment=experiment)
         .select_related(
@@ -390,7 +407,7 @@ def identified_navigation_export(request, experiment_id):
     )
     headers = [
         "student_number", "student_name", "class_name", "experiment_id", "session_id",
-        "event_sequence", "from_question", "to_question", "visit_index", "entry_reason",
+        "event_sequence", "from_question_code", "to_question_code", "visit_index", "entry_reason",
         "client_occurred_at", "server_received_at",
     ]
     rows = [

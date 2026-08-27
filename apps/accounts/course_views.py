@@ -24,7 +24,7 @@ from .models import Course, User, DataPurgeRequest
 from apps.assessment.models import AssessmentEvent, SubmissionEvent
 from apps.assessment.models import Attempt, ExperimentSession, StudentQuestionAssignment
 from apps.analytics.export_catalog import COMMON_FIELD_DESCRIPTIONS, PLACEHOLDER_TABLES, TABLE_FIELD_DESCRIPTIONS, TABLE_LABELS, TABLE_PATHS
-from apps.analytics.services import preview_export_table
+from apps.analytics.services import UNRECORDED_CLASS_FILTER, preview_export_table
 from .permissions import role_required
 
 
@@ -125,7 +125,8 @@ def course_data(request, course_pk):
     else:
         versions = []
     version_required = selected_experiment is not None and versions.count() > 1 and selected_version is None
-    selected_student_id = request.GET.get("student_id", "")
+    selected_class_name = request.GET.get("class_name", "")
+    selected_student_number = request.GET.get("student_number", "")
     selected_session_id = request.GET.get("session_id", "")
     selected_status = request.GET.get("status", "")
     preview = None
@@ -135,7 +136,8 @@ def course_data(request, course_pk):
             experiment=selected_experiment,
             table=selected_table,
             version_id=selected_version.pk if selected_version else version_id,
-            student_id=selected_student_id,
+            class_name=selected_class_name,
+            student_number=selected_student_number,
             session_id=selected_session_id,
             status=selected_status,
             page=request.GET.get("page", 1),
@@ -148,17 +150,30 @@ def course_data(request, course_pk):
             for header in preview["headers"]
         ]
     preview_students = []
+    class_snapshot_names = []
     preview_sessions = []
     if selected_experiment is not None:
         session_queryset = ExperimentSession.objects.filter(version__experiment=selected_experiment)
         if selected_version is not None:
             session_queryset = session_queryset.filter(version=selected_version)
         preview_sessions = list(session_queryset.select_related("student").order_by("pk"))
-        seen_students = set()
+        seen_student_class_snapshots = set()
+        seen_class_snapshot_values = set()
         for session in preview_sessions:
-            if session.student_id not in seen_students:
-                preview_students.append(session.student)
-                seen_students.add(session.student_id)
+            class_filter_value = session.class_snapshot_name or UNRECORDED_CLASS_FILTER
+            if class_filter_value not in seen_class_snapshot_values:
+                class_snapshot_names.append({
+                    "value": class_filter_value,
+                    "label": session.class_snapshot_name or "未记录班级",
+                })
+                seen_class_snapshot_values.add(class_filter_value)
+            student_class_snapshot = (session.student_id, session.class_snapshot_name)
+            if student_class_snapshot not in seen_student_class_snapshots:
+                preview_students.append({
+                    "student": session.student,
+                    "class_name": session.class_snapshot_name,
+                })
+                seen_student_class_snapshots.add(student_class_snapshot)
     table_groups = [
         {"key": "core", "label": "核心数据", "items": [(key, TABLE_LABELS[key]) for key in ("subjects", "sessions", "assignments", "item_instances", "attempts")]},
         {"key": "raw", "label": "原始过程", "items": [(key, TABLE_LABELS[key]) for key in ("assessment_events", "response_events", "navigation_events", "exposure_events", "telemetry_events")]},
@@ -167,7 +182,7 @@ def course_data(request, course_pk):
         {"key": "derived", "label": "派生数据", "items": [(key, TABLE_LABELS[key]) for key in ("attempt_features", "kt_sequences", "cd_response_matrix", "calibration_features")]},
     ]
     quick_exports = [
-        ("complete", "完整去标识化研究包"),
+        ("complete", "完整实名研究包"),
         ("kt", "标准 KT 包"),
         ("cd", "CD 包"),
         ("process", "作答过程包"),
@@ -211,9 +226,11 @@ def course_data(request, course_pk):
             "version_required": version_required,
             "versions": versions,
             "preview_students": preview_students,
+            "class_snapshot_names": class_snapshot_names,
             "preview_sessions": preview_sessions,
             "status_options": status_options,
-            "selected_student_id": selected_student_id,
+            "selected_class_name": selected_class_name,
+            "selected_student_number": selected_student_number,
             "selected_session_id": selected_session_id,
             "selected_status": selected_status,
             "preview": preview,

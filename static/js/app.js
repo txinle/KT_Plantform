@@ -35,6 +35,30 @@
       });
     });
 
+    const classStudentFilter = document.querySelector('[data-class-student-filter]');
+    const classStudentSelect = document.querySelector('[data-class-student-select]');
+    const classStudentStatus = document.getElementById('student-filter-status');
+    const updateClassStudentOptions = () => {
+      if (!classStudentFilter || !classStudentSelect) return;
+      const selectedClass = classStudentFilter.value;
+      let visibleCount = 0;
+      Array.from(classStudentSelect.options).forEach((option) => {
+        if (!option.value) return;
+        const visible = !selectedClass || option.dataset.studentClass === selectedClass;
+        option.hidden = !visible;
+        option.disabled = !visible;
+        if (visible) visibleCount += 1;
+      });
+      if (classStudentSelect.selectedOptions[0]?.disabled) classStudentSelect.value = '';
+      if (classStudentStatus) {
+        classStudentStatus.textContent = selectedClass
+          ? `当前班级可选择 ${visibleCount} 名学生`
+          : `当前可选择 ${visibleCount} 名学生`;
+      }
+    };
+    classStudentFilter?.addEventListener('change', updateClassStudentOptions);
+    updateClassStudentOptions();
+
     const confidenceMode = document.querySelector('[data-confidence-mode-controller]');
     const updateConfidenceFields = () => {
       if (!confidenceMode) return;

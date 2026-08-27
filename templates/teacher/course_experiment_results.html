@@ -2,7 +2,7 @@
 {% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:detail' course.pk %}">{{ course.name }}</a></li><li><a href="{% url 'courses:experiment_detail' course.pk experiment.pk %}">{{ experiment.name }}</a></li><li class="breadcrumb-item-current" aria-current="page">数据</li>{% endblock %}
 {% block title %}{{ experiment.name }}结果 | {{ course.name }}{% endblock %}
 {% block content %}
-<header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">{{ experiment.name }}结果</h1><p class="page-subtitle">实名导出可选择课程发布快照字段；匿名兼容 CSV 的字段结构保持不变。</p></div></header>
+<header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">{{ experiment.name }}结果</h1><p class="page-subtitle">所有导出均以学生学号、姓名和题库唯一编号组织；题目快照编号保留为辅助追溯字段。</p></div></header>
 <section class="export-layout mb-5" aria-labelledby="exports-title"><h2 class="section-title mb-3" id="exports-title">数据导出</h2>
   <article class="card mb-3"><div class="card-body"><h3 class="section-title mb-2">实名可选字段 Excel</h3><p>每名学生每道题一行；课程名称、代码和学期取自实验发布快照。</p>
     <form method="post" action="{% url 'analytics:identified_export' experiment.pk %}">{% csrf_token %}
@@ -12,7 +12,7 @@
     </form>
   </div></article>
   <article class="export-item mb-3"><div><h3>实名导航事件</h3><p>包含原始学号、姓名、班级、进入顺序和服务器接收时间。</p></div><form method="post" action="{% url 'analytics:identified_navigation_export' experiment.pk %}">{% csrf_token %}<button class="btn btn-outline-primary" type="submit">下载实名导航事件 CSV</button></form></article>
-  <details class="card"><summary class="card-header">兼容导出</summary><div class="card-body"><p class="text-muted">以下匿名端点保留既有列结构。</p><div class="d-flex flex-wrap gap-2"><a class="btn btn-sm btn-outline-secondary" href="{% url 'analytics:kt_export' experiment.pk %}">匿名 KT CSV</a><a class="btn btn-sm btn-outline-secondary" href="{% url 'analytics:navigation_export' experiment.pk %}">匿名导航 CSV</a>{% if can_export_identity %}<a class="btn btn-sm btn-outline-danger" href="{% url 'analytics:identity_export' experiment.pk %}">身份对照 CSV</a>{% endif %}</div></div></details>
+  <details class="card"><summary class="card-header">实名 CSV 导出</summary><div class="card-body"><p class="text-muted">以下既有路径继续提供统一的实名字段与题库唯一编号。</p><div class="d-flex flex-wrap gap-2"><a class="btn btn-sm btn-outline-secondary" href="{% url 'analytics:kt_export' experiment.pk %}">实名 KT CSV</a><a class="btn btn-sm btn-outline-secondary" href="{% url 'analytics:navigation_export' experiment.pk %}">实名导航 CSV</a>{% if can_export_identity %}<a class="btn btn-sm btn-outline-danger" href="{% url 'analytics:identity_export' experiment.pk %}">学生名册 CSV</a>{% endif %}</div></div></details>
 </section>
 <section aria-labelledby="sessions-title">
   <div class="section-heading"><h2 class="section-title" id="sessions-title">学生会话</h2><span class="text-muted numeric">{{ sessions|length }} 条</span></div>

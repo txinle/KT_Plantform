@@ -127,7 +127,11 @@ class StudentQuestionTypeFlowTests(TestCase):
         )
         self.assertEqual(exported.status_code, 200)
         rows = list(load_workbook(BytesIO(exported.content), data_only=True).active.values)
-        self.assertIn((Question.Type.TRUE_FALSE, "false", True), rows)
+        self.assertEqual(rows[0][:3], ("学号", "姓名", "题库唯一编号"))
+        self.assertIn(
+            (Question.Type.TRUE_FALSE, "false", True),
+            [row[-3:] for row in rows[1:]],
+        )
 
     def test_numeric_nonfinite_draft_submit_returns_400_without_mutating_submission_state(self):
         self.client.raise_request_exception = False

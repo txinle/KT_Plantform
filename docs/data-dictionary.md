@@ -16,7 +16,7 @@
 - `CourseQuestionIdentity`：课程题目的永久身份。课程内 `course_sequence` 从 1 起严格递增、唯一且不复用；`stable_code` 形如 `C000001-Q000001`。同课程内更换题库不改变身份，跨课程移动被拒绝；删除题目后身份保留、题目关联置空，后续题目不会占用旧序号。
 - `QuestionSnapshot.course_sequence` 与 `stable_code`：发布时冻结的课程级永久编号，用于跨题库追溯。
 - `QuestionSnapshot.source_bank_id`、`source_bank_name` 与 `bank_sequence`：发布时来源题库及其本地序号，只解释题目在该题库中的位置。
-- `QuestionSnapshot.code`：题目作者或导入时的题目标识，保留给显示和兼容旧导出，不替代课程永久编号。
+- `QuestionSnapshot.code`：题库唯一编号（导出列名 `question_code`）。它是所有导出中的主题目标识；同一实验版本内不得重复。`question_snapshot_id`、`stable_code` 与课程永久编号仅用于辅助追溯。
 - `QuestionSnapshot`：还会冻结题干、题型、选项、计分答案、容差、解析、KC 和难度；课程、题库、题目或 KC 后续修改不回写已发布快照。
 
 题型枚举为 `single_choice`（单选）、`multiple_choice`（多选）、`numeric`（数值）、`short_answer`（简答）、`fill_blank`（填空）和 `true_false`（判断）。选择题只使用 A–F 选项；数值答案必须为有限数值；填空和简答可有其他可接受答案；判断题标准答案为布尔值。
@@ -44,7 +44,7 @@
 - `ResearchStudyParticipant.public_uuid`：同一学生在同一显式研究项目中的稳定随机 UUID；跨研究项目不同。
 - `ResearchStudyCourse`：研究项目与课程的显式纳入关系，不表示自动授权访问课程身份数据。
 
-这些标识只构成**去标识化（pseudonymized）**数据，不构成匿名数据。稳定纵向轨迹、时间戳和课程上下文本身仍可能产生再识别风险。用户主键、学号、姓名与上述 UUID 的关系只能保存在身份安全域，不能与去标识化研究包同包导出。
+这些 UUID 是内部稳定关联对象，不再作为任何学生相关导出文件的学生标识。导出统一写出 `student_number` 与 `student_name`；稳定纵向轨迹、时间戳和课程上下文本身仍属于直接身份数据，须在课程授权范围内处理。
 
 ## 呈现实例与实验采集配置
 
@@ -150,8 +150,9 @@ server_ingest_sequence_no != 学生真实行为顺序
 - 身份：`student_number`（学号）、`student_name`（姓名）、`class_name`（会话发布时记录的班级）。
 - 课程快照：`course_name`、`course_code`、`course_term`。
 - 实验与会话：`experiment_id`、`experiment_version`、`session_id`、`session_status`。
-- 课程题目标识：`course_sequence`、`stable_code`、`source_bank_id`、`source_bank_name`、`bank_sequence`。
-- 题目与知识点：`question_code`、`question_type`、`primary_kc`、`all_kcs`、`teacher_difficulty`、`empirical_difficulty`。
+- 题目主标识：`question_code`（题库唯一编号）。
+- 课程题目辅助追溯：`course_sequence`、`stable_code`、`source_bank_id`、`source_bank_name`、`bank_sequence`。
+- 题目与知识点：`question_type`、`primary_kc`、`all_kcs`、`teacher_difficulty`、`empirical_difficulty`。
 - 顺序与行为：`assigned_sequence_index`、`first_open_sequence_index`、`submission_sequence_index`、`visit_count`。
 - 时间：`first_opened_at`、`last_opened_at`、`submitted_at`、`first_to_submit_duration_ms`、`last_visit_to_submission_ms`。
 - 作答结果：`final_answer`、`is_correct`、`score`、`attempt_status`。
@@ -164,13 +165,11 @@ server_ingest_sequence_no != 学生真实行为顺序
 
 Word 报告禁止包含 KC、教师或经验难度、任何用时字段、访问/导航事件和解析；它是单个学生的作答核对材料，不是过程数据或心理测量报告。配额模式下不同学生可能收到不同的题目集合，不得把跨学生的原始得分总和或百分比直接解释为可比较的能力差异。
 
-## 兼容导出
-
 ## 研究数据中心与导出任务
 
-课程数据中心使用“数据概览 → 采集质量 → 实验数据 → 导出任务”的导航。研究导出统一称为**去标识化研究包**，不使用“匿名研究包”。
+课程数据中心使用“数据概览 → 采集质量 → 实验数据 → 导出任务”的导航。数据范围按“实验 → 版本 → 班级快照 → 学生（学号 · 姓名）→ 会话 → 状态”筛选；班级使用会话创建时的快照名称，空值明确显示为“未记录班级”。
 
-每个 `ExportSnapshot` 固定课程、实验（可选）和 `cutoff_at`；同一 `ExportJob` 的 sessions、attempts 与 assessment events 均不得读取截止时间之后的记录。`ExportJob.kind=research` 的文件位于受保护导出目录，默认七天过期；`kind=identity` 仅课程负责人或管理员可创建和下载，默认二十四小时过期，且永不写入研究包目录。
+每个 `ExportSnapshot` 固定课程、实验（可选）和 `cutoff_at`；同一 `ExportJob` 的 sessions、attempts 与 assessment events 均不得读取截止时间之后的记录。所有导出文件都属于实名研究数据，课程负责人、协作教师和管理员可在课程权限范围内创建与下载。
 
 研究包目录固定为：
 
@@ -185,10 +184,10 @@ Word 报告禁止包含 KC、教师或经验难度、任何用时字段、访问
 99_audit/
 ```
 
-Manifest 至少包含 `export_snapshot_id`、`cutoff_at`、实际选择的表、事件 schema SHA-256 和应用 Git 提交号。原始事件表的主键/关联键由系统固定，字段选择不能跨观测粒度混用。身份映射只能出现在独立的 `01_identity/identity_mapping.csv` 任务中。
+Manifest 版本为 2，至少包含 `export_snapshot_id`、`cutoff_at`、实际选择的表、事件 schema SHA-256、应用 Git 提交号、`identity_columns=[student_number, student_name]` 和 `primary_question_identifier=question_code`。学生相关表均以学号、姓名开头；`question_code` 是主题目标识，`question_snapshot_id` 保留为辅助追溯。学生名册任务位于 `01_identity/student_roster.csv`。
 
-导出任务使用数据库租约：`queued` 任务领取后进入 `running`，租约过期可被其他 worker 回收；文件生成成功进入 `succeeded`，超过 `expires_at` 后由清理命令标记 `expired` 并删除文件。失败任务不得被伪装为成功，也不得绕过下载视图直接暴露媒体路径。
+导出任务使用数据库租约：`queued` 任务领取后进入 `running`，租约过期可被其他 worker 回收；文件生成成功进入 `succeeded`。失败任务不得被伪装为成功，也不得绕过下载视图直接暴露媒体路径。所有实名导出的生成与下载均产生审计记录。
 
 质量页的指标只描述采集事实，包括客户端序号缺口/重复、时钟未同步比例、离线上传比例及 native/legacy projection 覆盖，不把这些指标解释为不确定性或心理状态。
 
-旧版界面所称“匿名 KT”和“匿名导航”仅是兼容名称，方法学上应解释为**实验内去标识化 CSV**。URL 和 headers 暂时保持不变：`/analytics/experiments/{experiment_id}/kt.csv` 与 `/analytics/experiments/{experiment_id}/navigation.csv` 继续以 `anonymous_student_id` 标识学生，不新增学号、姓名、课程永久编号或其他实名列。身份对照 CSV 暂时仍在 `/analytics/experiments/{experiment_id}/identity.csv` 单独提供既有映射 headers；它属于受限身份数据，不得与研究 CSV 合并或同包共享。后续数据中心会把身份映射迁入独立权限与审计域。兼容 CSV 使用 UTF-8 BOM。
+既有 CSV URL 保持不变：`/analytics/experiments/{experiment_id}/kt.csv`、`/analytics/experiments/{experiment_id}/navigation.csv` 和 `/analytics/experiments/{experiment_id}/identity.csv`。它们的列语义已统一为实名：学生相关行以 `student_number,student_name` 开头，题目使用 `question_code`；`identity.csv` 是 `student_number,student_name,class_name` 的学生名册。CSV 使用 UTF-8 BOM。

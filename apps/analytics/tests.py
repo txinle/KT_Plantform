@@ -148,14 +148,14 @@ class IdentifiedExportTests(TestCase):
         workbook = load_workbook(BytesIO(response.content), data_only=False)
         self.assertEqual(workbook.sheetnames, ["KT数据"])
         sheet = workbook["KT数据"]
-        self.assertEqual([cell.value for cell in sheet[1]], ["学号", "姓名", "最终答案"])
-        self.assertEqual([cell.value for cell in sheet[2]], ["00123", "林晓雨", "=1+1"])
+        self.assertEqual([cell.value for cell in sheet[1]], ["学号", "姓名", "题库唯一编号", "最终答案"])
+        self.assertEqual([cell.value for cell in sheet[2]], ["00123", "林晓雨", "Q1", "=1+1"])
         self.assertEqual(sheet["A2"].data_type, "s")
         self.assertEqual(sheet["C2"].data_type, "s")
         log = AuditLog.objects.get(action="experiment.identified_export")
         self.assertEqual(
             log.details,
-            {"fields": ["student_number", "student_name", "final_answer"], "row_count": 1},
+            {"fields": ["student_number", "student_name", "question_code", "final_answer"], "row_count": 1},
         )
 
     def test_course_fields_come_from_publish_snapshot(self):
@@ -167,8 +167,8 @@ class IdentifiedExportTests(TestCase):
         self.assertEqual(response.status_code, 200)
         workbook = load_workbook(BytesIO(response.content), data_only=False)
         rows = list(workbook["KT数据"].iter_rows(values_only=True))
-        self.assertEqual(rows[0], ("课程名称", "课程代码", "学期"))
-        self.assertEqual(rows[1], ("认知诊断导论", "CD101", "2026春"))
+        self.assertEqual(rows[0], ("学号", "姓名", "题库唯一编号", "课程名称", "课程代码", "学期"))
+        self.assertEqual(rows[1], ("00123", "林晓雨", "Q1", "认知诊断导论", "CD101", "2026春"))
 
     def test_course_question_identity_fields_use_the_fixed_allowlist_order_and_literal_stable_code(self):
         response = self.client.post(
@@ -189,11 +189,11 @@ class IdentifiedExportTests(TestCase):
         sheet = workbook["KT数据"]
         self.assertEqual(
             [cell.value for cell in sheet[1]],
-            ["课程永久题号", "稳定课程代码", "题库 ID", "题库名称快照", "题库内序号"],
+            ["学号", "姓名", "题库唯一编号", "课程永久题号", "稳定课程代码", "题库 ID", "题库名称快照", "题库内序号"],
         )
         self.assertEqual(
             [cell.value for cell in sheet[2]],
-            [42, "C000001-Q000042", 7, "题库名称快照", 1],
+            ["00123", "林晓雨", "Q1", 42, "C000001-Q000042", 7, "题库名称快照", 1],
         )
         self.assertEqual(sheet["B2"].data_type, "s")
 
@@ -262,10 +262,10 @@ class IdentifiedExportTests(TestCase):
         self.assertEqual(
             rows[1:],
             [
-                ("00002", 42, "Q1"),
-                ("00123", 1, "Q-early"),
-                ("00123", 42, "Q1"),
-                ("00123", None, "Q-legacy"),
+                ("00002", "前置学生", "Q1", 42),
+                ("00123", "林晓雨", "Q-early", 1),
+                ("00123", "林晓雨", "Q1", 42),
+                ("00123", "林晓雨", "Q-legacy", None),
             ],
         )
 
@@ -277,6 +277,14 @@ class IdentifiedExportTests(TestCase):
             400,
         )
         self.assertFalse(AuditLog.objects.filter(action="experiment.identified_export").exists())
+
+    def test_excel_export_forces_student_identity_and_primary_question_code(self):
+        response = self.client.post(self.export_url, {"fields": ["score"]})
+
+        self.assertEqual(response.status_code, 200)
+        rows = list(load_workbook(BytesIO(response.content), data_only=True)["KT数据"].iter_rows(values_only=True))
+        self.assertEqual(rows[0], ("学号", "姓名", "题库唯一编号", "得分"))
+        self.assertEqual(rows[1], ("00123", "林晓雨", "Q1", 1))
 
     def test_enforces_owner_and_csrf(self):
         self.client.force_login(self.other_teacher)
@@ -292,7 +300,7 @@ class IdentifiedExportTests(TestCase):
             403,
         )
 
-    def test_course_collaborator_cannot_download_identified_exports(self):
+    def test_course_collaborator_can_download_identified_exports(self):
         course = Course.objects.create(
             owner=self.teacher,
             name="协作课程",
@@ -321,9 +329,9 @@ class IdentifiedExportTests(TestCase):
             reverse("analytics:identified_navigation_export", args=[experiment.pk]),
         )
 
-        self.assertEqual(identified.status_code, 404)
-        self.assertEqual(navigation.status_code, 404)
-        self.assertFalse(
+        self.assertEqual(identified.status_code, 200)
+        self.assertEqual(navigation.status_code, 200)
+        self.assertTrue(
             AuditLog.objects.filter(
                 action__in=[
                     "experiment.identified_export",
@@ -332,6 +340,12 @@ class IdentifiedExportTests(TestCase):
             ).exists()
         )
 
+        results = self.client.get(
+            reverse("courses:experiment_results", args=[course.pk, experiment.pk])
+        )
+        self.assertEqual(results.status_code, 200)
+        self.assertContains(results, "学生名册 CSV")
+
     def test_identified_navigation_contains_original_identity_and_audit(self):
         response = self.client.post(self.navigation_url)
 
@@ -339,24 +353,27 @@ class IdentifiedExportTests(TestCase):
         text = response.content.decode("utf-8-sig")
         rows = list(csv.reader(StringIO(text)))
         self.assertEqual(rows[0][:3], ["student_number", "student_name", "class_name"])
+        self.assertEqual(rows[0][6:8], ["from_question_code", "to_question_code"])
         self.assertEqual(rows[1][:3], ["00123", "林晓雨", "2026 中文实验班"])
         log = AuditLog.objects.get(action="experiment.identified_navigation_export")
         self.assertEqual(log.details, {"row_count": 1})
 
-    def test_legacy_anonymous_exports_keep_their_identity_boundary(self):
+    def test_legacy_urls_export_direct_identity_and_record_audit(self):
         kt = self.client.get(reverse("analytics:kt_export", args=[self.experiment.pk]))
         navigation = self.client.get(reverse("analytics:navigation_export", args=[self.experiment.pk]))
 
         kt_rows = list(csv.reader(StringIO(kt.content.decode("utf-8-sig"))))
         navigation_rows = list(csv.reader(StringIO(navigation.content.decode("utf-8-sig"))))
-        self.assertEqual(kt_rows[0][0], "anonymous_student_id")
-        self.assertNotIn("student_number", kt_rows[0])
-        self.assertNotIn("student_name", kt_rows[0])
-        self.assertEqual(navigation_rows[0][0], "anonymous_student_id")
-        self.assertNotIn("student_number", navigation_rows[0])
-        self.assertNotIn("student_name", navigation_rows[0])
+        self.assertEqual(kt_rows[0][:3], ["student_number", "student_name", "experiment_id"])
+        self.assertEqual(kt_rows[1][:2], ["00123", "林晓雨"])
+        self.assertEqual(navigation_rows[0][:3], ["student_number", "student_name", "experiment_id"])
+        self.assertEqual(navigation_rows[1][:2], ["00123", "林晓雨"])
+        self.assertNotIn("anonymous_student_id", kt_rows[0])
+        self.assertNotIn("anonymous_student_id", navigation_rows[0])
+        self.assertEqual(AuditLog.objects.get(action="experiment.identified_kt_export").details, {"row_count": 1})
+        self.assertEqual(AuditLog.objects.get(action="experiment.identified_navigation_legacy_export").details, {"row_count": 1})
 
-    def test_course_collaborator_cannot_download_legacy_identity_mapping(self):
+    def test_course_collaborator_can_download_student_roster_from_legacy_identity_url(self):
         course = Course.objects.create(
             owner=self.teacher,
             name="身份映射协作课程",
@@ -381,9 +398,9 @@ class IdentifiedExportTests(TestCase):
             reverse("analytics:identity_export", args=[experiment.pk])
         )
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 200)
 
-    def test_legacy_anonymous_csv_urls_headers_and_question_code_remain_exactly_compatible(self):
+    def test_legacy_csv_urls_keep_paths_but_use_identified_headers_and_snapshot_code(self):
         kt_url = reverse("analytics:kt_export", args=[self.experiment.pk])
         navigation_url = reverse("analytics:navigation_export", args=[self.experiment.pk])
         identity_url = reverse("analytics:identity_export", args=[self.experiment.pk])
@@ -401,7 +418,7 @@ class IdentifiedExportTests(TestCase):
         self.assertEqual(
             kt_rows[0],
             [
-                "anonymous_student_id", "experiment_id", "experiment_version", "session_id",
+                "student_number", "student_name", "experiment_id", "experiment_version", "session_id",
                 "question_code", "primary_kc", "all_kcs", "question_type",
                 "assigned_sequence_index", "first_open_sequence_index",
                 "submission_sequence_index", "first_opened_at", "last_opened_at",
@@ -413,17 +430,17 @@ class IdentifiedExportTests(TestCase):
         self.assertEqual(
             navigation_rows[0],
             [
-                "anonymous_student_id", "experiment_id", "session_id", "event_sequence",
-                "from_question", "to_question", "visit_index", "entry_reason",
+                "student_number", "student_name", "experiment_id", "session_id", "event_sequence",
+                "from_question_code", "to_question_code", "visit_index", "entry_reason",
                 "client_occurred_at", "server_received_at",
             ],
         )
         self.assertEqual(
             identity_rows[0],
-            ["anonymous_student_id", "student_number", "student_name", "class_name"],
+            ["student_number", "student_name", "class_name"],
         )
-        self.assertEqual(kt_rows[1][4], "Q1")
-        self.assertEqual(navigation_rows[1][5], "Q1")
+        self.assertEqual(kt_rows[1][5], "Q1")
+        self.assertEqual(navigation_rows[1][6], "Q1")
 
     def test_all_allowed_fields_export_as_one_question_level_sheet(self):
         response = self.client.post(self.export_url, {"fields": self.all_fields})
@@ -433,9 +450,9 @@ class IdentifiedExportTests(TestCase):
         rows = list(workbook["KT数据"].iter_rows(values_only=True))
         self.assertEqual(len(rows[0]), 34)
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0][:7], ("学号", "姓名", "班级", "课程名称", "课程代码", "学期", "实验 ID"))
-        self.assertEqual(rows[1][:3], ("00123", "林晓雨", "2026 中文实验班"))
-        self.assertEqual(rows[1][9], ExperimentSession.Status.COMPLETED)
+        self.assertEqual(rows[0][:7], ("学号", "姓名", "题库唯一编号", "班级", "课程名称", "课程代码", "学期"))
+        self.assertEqual(rows[1][:3], ("00123", "林晓雨", "Q1"))
+        self.assertEqual(rows[1][10], ExperimentSession.Status.COMPLETED)
         self.assertEqual(rows[1][-1], Attempt.Status.SUBMITTED)
 
     def test_exports_large_attempt_set_without_changing_row_grain(self):

@@ -1,13 +1,16 @@
 import json
 import os
 import zipfile
+import csv
 from datetime import timedelta
+from io import StringIO
 
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import Course, User, ResearchStudy, ResearchStudyCourse, ResearchStudyParticipant
+from apps.audit.models import AuditLog
 from apps.analytics.models import ExportJob, ExportSnapshot
 from apps.analytics.services import create_export_snapshot, build_export_manifest, claim_export_job, run_export_job, cleanup_expired_exports, renew_export_job_lease
 from apps.analytics.services import execute_purge_request
@@ -41,15 +44,15 @@ class DataCenterContractTests(TestCase):
             name="实验一",
         )
 
-    def test_course_data_uses_research_navigation_tree_and_identity_boundary(self):
+    def test_course_data_uses_identified_navigation_tree_and_identity_notice(self):
         self.client.force_login(self.teacher)
         response = self.client.get(reverse("courses:data", args=[self.course.pk]))
 
         self.assertEqual(response.status_code, 200)
         body = response.content.decode("utf-8")
-        for text in ("数据中心", "完整去标识化研究包", "原始过程", "身份与数据治理", "不与研究数据包合并"):
+        for text in ("数据中心", "完整实名研究包", "原始过程", "身份与数据治理", "直接身份数据"):
             self.assertIn(text, body)
-        self.assertNotIn("完整匿名研究包", body)
+        self.assertNotIn("去标识化研究包", body)
 
     def test_data_navigation_links_to_experiment_scoped_table_preview(self):
         self.client.force_login(self.teacher)
@@ -65,6 +68,10 @@ class DataCenterContractTests(TestCase):
         self.assertIn("作答记录唯一标识", body)
         self.assertIn("选择实验", body)
         self.assertIn("导出当前表", body)
+        self.assertIn("student_number", body)
+        self.assertIn("question_code", body)
+        self.assertIn("平台学生学号", body)
+        self.assertIn("题库唯一编号", body)
 
     def test_data_center_exposes_unified_quality_navigation(self):
         self.client.force_login(self.teacher)
@@ -112,9 +119,17 @@ class DataCenterContractTests(TestCase):
         with zipfile.ZipFile(job.artifact_path) as archive:
             manifest = json.loads(archive.read("00_manifest/manifest.json"))
             header = archive.read("02_core/attempts.csv").decode("utf-8-sig").splitlines()[0]
+        self.assertEqual(manifest["manifest_version"], 2)
+        self.assertTrue(manifest["contains_direct_identifiers"])
+        self.assertEqual(manifest["identity_columns"], ["student_number", "student_name"])
+        self.assertEqual(manifest["primary_question_identifier"], "question_code")
         self.assertEqual(manifest["selected_tables"], ["attempts"])
         self.assertIn("experiment_name", manifest)
+        self.assertIn("student_number", header)
+        self.assertIn("student_name", header)
+        self.assertIn("question_code", header)
         self.assertIn("question_snapshot_id", header)
+        self.assertNotIn("subject_id", header)
         self.assertNotIn("作答", header)
 
     def test_snapshot_freezes_cutoff_and_manifest_has_schema_lineage(self):
@@ -144,6 +159,26 @@ class DataCenterContractTests(TestCase):
         self.assertEqual(job.status, ExportJob.Status.SUCCEEDED)
         self.assertEqual(job.snapshot.course_id, self.course.pk)
         self.assertIsNone(job.expires_at)
+
+    def test_identified_export_job_creation_and_download_are_audited(self):
+        self.client.force_login(self.teacher)
+        response = self.client.post(
+            reverse("analytics:export_job_create", args=[self.course.pk]),
+            {"experiment_id": self.experiment.pk, "package": "process"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        job = ExportJob.objects.get()
+        self.assertEqual(
+            AuditLog.objects.get(action="analytics.identified_export_job_create").details,
+            {"job_id": str(job.job_id), "package": "process", "experiment_id": self.experiment.pk},
+        )
+        download = self.client.get(reverse("analytics:export_job_download", args=[self.course.pk, job.job_id]))
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(
+            AuditLog.objects.get(action="analytics.identified_export_job_download").details,
+            {"job_id": str(job.job_id), "package": "process"},
+        )
 
     def test_export_button_generates_one_reusable_record_without_queue_or_expiry(self):
         self.client.force_login(self.teacher)
@@ -197,8 +232,8 @@ class DataCenterContractTests(TestCase):
         self.assertFalse(os.path.exists(artifact))
         self.assertTrue(Experiment.objects.filter(pk=self.experiment.pk).exists())
 
-    def test_incomplete_session_keeps_subject_and_completed_attempt_behavior(self):
-        student = User.objects.create_user(username="unfinished", role=User.Role.STUDENT, student_number="U001")
+    def test_attempt_export_uses_student_identity_and_snapshot_question_code(self):
+        student = User.objects.create_user(username="unfinished", display_name="未完成学生", role=User.Role.STUDENT, student_number="U001")
         version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)
         question = Question.objects.create(bank=self.experiment.question_bank, sequence=1, question_type=Question.Type.SHORT, text="题目", correct_answer="答案")
         snapshot = QuestionSnapshot.objects.create(version=version, source_question=question, source_sequence=1, code="Q1", question_type=Question.Type.SHORT, text="题目", correct_answer="答案", primary_kc="KC1", all_kcs=["KC1"])
@@ -209,15 +244,119 @@ class DataCenterContractTests(TestCase):
         job = ExportJob.objects.create(course=self.course, experiment=self.experiment, snapshot=snapshot_export, created_by=self.teacher, package="complete")
         run_export_job(job)
         with zipfile.ZipFile(job.artifact_path) as archive:
-            rows = archive.read("02_core/attempts.csv").decode("utf-8-sig").splitlines()
+            rows = list(csv.reader(StringIO(archive.read("02_core/attempts.csv").decode("utf-8-sig"))))
         self.assertEqual(len(rows), 2)
-        columns = rows[1].split(",")
-        self.assertTrue(columns[2])
-        self.assertEqual(columns[3], str(snapshot.pk))
-        self.assertEqual(columns[5], "Q1")
-        self.assertEqual(columns[6], "submitted")
-        self.assertEqual(columns[16], "True")
-        self.assertEqual(columns[17], "1.00")
+        headers, values = rows
+        self.assertEqual(headers[:3], ["student_number", "student_name", "question_code"])
+        self.assertEqual(values[:3], ["U001", "未完成学生", "Q1"])
+        self.assertNotIn("subject_id", headers)
+        self.assertEqual(values[headers.index("question_snapshot_id")], str(snapshot.pk))
+        self.assertEqual(values[headers.index("status")], "submitted")
+        self.assertEqual(values[headers.index("is_correct")], "True")
+        self.assertEqual(values[headers.index("score")], "1.00")
+
+    def test_class_snapshot_and_student_number_scope_preview_and_export(self):
+        version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)
+        question = Question.objects.create(bank=self.experiment.question_bank, sequence=1, question_type=Question.Type.SHORT, text="题目", correct_answer="答案")
+        snapshot = QuestionSnapshot.objects.create(version=version, source_question=question, source_sequence=1, code="Q1", question_type=Question.Type.SHORT, text="题目", correct_answer="答案", primary_kc="KC1", all_kcs=["KC1"])
+        first = User.objects.create_user(username="class-a", display_name="甲同学", role=User.Role.STUDENT, student_number="A001")
+        second = User.objects.create_user(username="class-b", display_name="乙同学", role=User.Role.STUDENT, student_number="B001")
+        first_session = ExperimentSession.objects.create(version=version, student=first, class_snapshot_name="历史一班")
+        second_session = ExperimentSession.objects.create(version=version, student=second, class_snapshot_name="历史二班")
+        for session in (first_session, second_session):
+            StudentQuestionAssignment.objects.create(session=session, snapshot=snapshot, item_instance=get_or_create_default_item_instance(snapshot), assigned_sequence_index=1)
+
+        self.client.force_login(self.teacher)
+        response = self.client.get(reverse("courses:data", args=[self.course.pk]), {
+            "table": "assignments", "experiment_id": self.experiment.pk, "class_name": "历史一班", "student_number": "A001",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="class_name"')
+        self.assertContains(response, 'name="student_number"')
+        self.assertContains(response, "A001 · 甲同学")
+        self.assertContains(response, 'data-student-class="历史一班"')
+        self.assertContains(response, 'data-student-class="历史二班"')
+        self.assertContains(response, "共 1 条记录")
+        export = self.client.post(reverse("analytics:table_export_create", args=[self.course.pk]), {
+            "table": "assignments", "experiment_id": self.experiment.pk, "class_name": "历史一班", "student_number": "A001",
+        })
+        self.assertEqual(export.status_code, 302)
+        job = ExportJob.objects.get(package="table_assignments")
+        self.assertEqual(job.snapshot.filter_definition, {"class_name": "历史一班", "student_number": "A001"})
+        with zipfile.ZipFile(job.artifact_path) as archive:
+            rows = list(csv.reader(StringIO(archive.read("02_core/assignments.csv").decode("utf-8-sig"))))
+        self.assertEqual(rows[0][:3], ["student_number", "student_name", "question_code"])
+        self.assertEqual(rows[1][:3], ["A001", "甲同学", "Q1"])
+        self.assertEqual(len(rows), 2)
+
+    def test_unrecorded_class_is_a_distinct_filterable_snapshot_value(self):
+        version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)
+        question = Question.objects.create(bank=self.experiment.question_bank, sequence=1, question_type=Question.Type.SHORT, text="题目", correct_answer="答案")
+        snapshot = QuestionSnapshot.objects.create(version=version, source_question=question, source_sequence=1, code="Q1", question_type=Question.Type.SHORT, text="题目", correct_answer="答案", primary_kc="KC1", all_kcs=["KC1"])
+        unrecorded = User.objects.create_user(username="no-class", display_name="未记录同学", role=User.Role.STUDENT, student_number="N001")
+        recorded = User.objects.create_user(username="has-class", display_name="已记录同学", role=User.Role.STUDENT, student_number="C001")
+        for student, class_name in ((unrecorded, ""), (recorded, "历史一班")):
+            session = ExperimentSession.objects.create(version=version, student=student, class_snapshot_name=class_name)
+            StudentQuestionAssignment.objects.create(session=session, snapshot=snapshot, item_instance=get_or_create_default_item_instance(snapshot), assigned_sequence_index=1)
+
+        self.client.force_login(self.teacher)
+        response = self.client.get(reverse("courses:data", args=[self.course.pk]), {
+            "table": "assignments", "experiment_id": self.experiment.pk, "class_name": "__unrecorded__",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<option value="__unrecorded__" selected>未记录班级</option>', html=True)
+        self.assertContains(response, "N001 · 未记录同学")
+        self.assertContains(response, 'value="N001" data-student-class="__unrecorded__"')
+        self.assertContains(response, "共 1 条记录")
+        export = self.client.post(reverse("analytics:table_export_create", args=[self.course.pk]), {
+            "table": "assignments", "experiment_id": self.experiment.pk, "class_name": "__unrecorded__",
+        })
+        self.assertEqual(export.status_code, 302)
+        job = ExportJob.objects.get(package="table_assignments")
+        self.assertEqual(job.snapshot.filter_definition, {"class_name": "__unrecorded__"})
+        with zipfile.ZipFile(job.artifact_path) as archive:
+            rows = list(csv.reader(StringIO(archive.read("02_core/assignments.csv").decode("utf-8-sig"))))
+        self.assertEqual(rows[1][:2], ["N001", "未记录同学"])
+        self.assertEqual(len(rows), 2)
+
+    def test_class_student_menu_keeps_each_student_class_snapshot_pair(self):
+        first_version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)
+        second_version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=2, published_by=self.teacher)
+        question = Question.objects.create(bank=self.experiment.question_bank, sequence=1, question_type=Question.Type.SHORT, text="题目", correct_answer="答案")
+        first_snapshot = QuestionSnapshot.objects.create(version=first_version, source_question=question, source_sequence=1, code="Q1", question_type=Question.Type.SHORT, text="题目", correct_answer="答案", primary_kc="KC1", all_kcs=["KC1"])
+        second_snapshot = QuestionSnapshot.objects.create(version=second_version, source_question=question, source_sequence=1, code="Q2", question_type=Question.Type.SHORT, text="题目", correct_answer="答案", primary_kc="KC1", all_kcs=["KC1"])
+        student = User.objects.create_user(username="historical-class", display_name="历史同学", role=User.Role.STUDENT, student_number="H001")
+        first_session = ExperimentSession.objects.create(version=first_version, student=student, class_snapshot_name="历史一班")
+        second_session = ExperimentSession.objects.create(version=second_version, student=student, class_snapshot_name="历史二班")
+        StudentQuestionAssignment.objects.create(session=first_session, snapshot=first_snapshot, item_instance=get_or_create_default_item_instance(first_snapshot), assigned_sequence_index=1)
+        StudentQuestionAssignment.objects.create(session=second_session, snapshot=second_snapshot, item_instance=get_or_create_default_item_instance(second_snapshot), assigned_sequence_index=1)
+
+        self.client.force_login(self.teacher)
+        response = self.client.get(reverse("courses:data", args=[self.course.pk]), {
+            "table": "assignments", "experiment_id": self.experiment.pk,
+        })
+
+        self.assertContains(response, 'value="H001" data-student-class="历史一班"')
+        self.assertContains(response, 'value="H001" data-student-class="历史二班"')
+
+    def test_table_export_rejects_duplicate_question_code_within_one_version(self):
+        version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)
+        student = User.objects.create_user(username="duplicate-code", role=User.Role.STUDENT, student_number="D001")
+        session = ExperimentSession.objects.create(version=version, student=student)
+        for sequence in (1, 2):
+            question = Question.objects.create(bank=self.experiment.question_bank, sequence=sequence, question_type=Question.Type.SHORT, text=f"题目{sequence}", correct_answer="答案")
+            snapshot = QuestionSnapshot.objects.create(version=version, source_question=question, source_sequence=sequence, code="DUPLICATE", question_type=Question.Type.SHORT, text=f"题目{sequence}", correct_answer="答案", primary_kc="KC1", all_kcs=["KC1"])
+            StudentQuestionAssignment.objects.create(session=session, snapshot=snapshot, item_instance=get_or_create_default_item_instance(snapshot), assigned_sequence_index=sequence)
+
+        self.client.force_login(self.teacher)
+        response = self.client.post(reverse("analytics:table_export_create", args=[self.course.pk]), {
+            "table": "assignments", "experiment_id": self.experiment.pk,
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertContains(response, "同一实验版本题目编码重复：DUPLICATE", status_code=400)
 
     def test_other_teacher_cannot_create_course_export_job(self):
         self.client.force_login(self.other)
@@ -258,15 +397,17 @@ class DataCenterContractTests(TestCase):
             manifest = json.loads(archive.read("00_manifest/manifest.json"))
         self.assertEqual(manifest["export_snapshot_id"], str(snapshot.pk))
 
-    def test_identity_package_is_separate_and_contains_only_identity_mapping(self):
+    def test_student_roster_package_uses_direct_identity_without_pseudonymous_identifier(self):
         snapshot = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)
         job = ExportJob.objects.create(course=self.course, experiment=self.experiment, snapshot=snapshot, created_by=self.teacher, kind=ExportJob.Kind.IDENTITY, package="identity")
         run_export_job(claim_export_job(worker_id="identity-worker"))
         job.refresh_from_db()
         with zipfile.ZipFile(job.artifact_path) as archive:
             names = set(archive.namelist())
-            self.assertIn("01_identity/identity_mapping.csv", names)
+            self.assertIn("01_identity/student_roster.csv", names)
             self.assertNotIn("02_core/attempts.csv", names)
+            header = archive.read("01_identity/student_roster.csv").decode("utf-8-sig").splitlines()[0]
+        self.assertEqual(header, "student_number,student_name,class_name")
 
     def test_expired_running_job_can_be_reclaimed(self):
         snapshot = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)
@@ -333,7 +474,7 @@ class DataCenterContractTests(TestCase):
                 manifest = json.loads(archive.read("00_manifest/manifest.json"))
                 self.assertTrue(manifest["row_counts"])
 
-    def test_longitudinal_export_uses_study_subject_id(self):
+    def test_longitudinal_export_uses_direct_student_identity(self):
         study = ResearchStudy.objects.create(name="纵向项目", owner=self.teacher)
         ResearchStudyCourse.objects.create(study=study, course=self.course)
         student = User.objects.create_user(username="longitudinal-student", role=User.Role.STUDENT, student_number="LONG-1")
@@ -347,4 +488,5 @@ class DataCenterContractTests(TestCase):
         run_export_job(job)
         job.refresh_from_db()
         with zipfile.ZipFile(job.artifact_path) as archive:
-            self.assertIn("study_subject_id", archive.read("02_core/subjects.csv").decode("utf-8"))
+            headers = archive.read("02_core/subjects.csv").decode("utf-8-sig").splitlines()[0]
+        self.assertEqual(headers, "student_number,student_name")
