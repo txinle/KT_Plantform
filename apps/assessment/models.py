@@ -175,7 +175,24 @@ class Attempt(models.Model):
     active_seconds = models.PositiveIntegerField(default=0)
     draft_answer = models.JSONField(null=True, blank=True)
     draft_saved_at = models.DateTimeField(null=True, blank=True)
+    # Durable pointers to immutable response snapshots.  These are the sole
+    # source of truth for text responses across requests; draft_answer/final_answer
+    # remain compatibility projections for existing callers.
+    current_response_snapshot = models.ForeignKey(
+        "ResponseSnapshot",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="current_for_attempts",
+    )
     final_answer = models.JSONField(null=True, blank=True)
+    final_response_snapshot = models.ForeignKey(
+        "ResponseSnapshot",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="final_for_attempts",
+    )
     submitted_at = models.DateTimeField(null=True, blank=True)
     first_to_submit_duration_ms = models.BigIntegerField(null=True, blank=True)
     last_visit_to_submission_ms = models.BigIntegerField(null=True, blank=True)
@@ -190,6 +207,29 @@ class Attempt(models.Model):
                 name="unique_session_submission_sequence",
             )
         ]
+
+    @property
+    def saved_response_snapshot(self):
+        """Backward-compatible name for the durable current snapshot pointer."""
+        return self.current_response_snapshot
+
+    @property
+    def submission(self):
+        """Canonical relationship name retained alongside submission_event."""
+        return self.submission_event
+
+    @property
+    def saved_response_state(self):
+        """Compatibility projection for choice drafts, derived from draft_answer."""
+        if self.draft_answer is None:
+            return None
+        question_type = self.assignment.snapshot.question_type
+        if question_type in {"single_choice", "multiple_choice", "true_false"}:
+            # Import lazily to avoid model/service import cycles.
+            from .response_snapshot_services import canonical_choice_response_state
+
+            return canonical_choice_response_state(question_type, self.draft_answer)
+        return None
 
 class QuestionVisitEvent(models.Model):
     session = models.ForeignKey(ExperimentSession, on_delete=models.CASCADE, related_name="visit_events")
@@ -208,14 +248,100 @@ class DraftSaveEvent(models.Model):
     server_received_at = models.DateTimeField(auto_now_add=True)
 
 class SubmissionEvent(models.Model):
+    class GradingStatus(models.TextChoices):
+        PENDING = "pending", "等待评分"
+        COMPLETED = "completed", "评分完成"
+        REGRADE = "regrade", "待重新评分"
+
     attempt = models.OneToOneField(Attempt, on_delete=models.CASCADE, related_name="submission_event")
     submission_token = models.UUIDField(unique=True)
     final_answer = models.JSONField(null=True, blank=True)
-    is_correct = models.BooleanField()
-    score = models.DecimalField(max_digits=5, decimal_places=2)
+    final_response_snapshot = models.ForeignKey(
+        "ResponseSnapshot",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="submissions",
+    )
+    grading_status = models.CharField(
+        max_length=16,
+        choices=GradingStatus.choices,
+        default=GradingStatus.COMPLETED,
+    )
+    # Compatibility projections. Canonical grade values live in GradeRecord.
+    is_correct = models.BooleanField(null=True, blank=True)
+    score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     client_clicked_at = models.DateTimeField(null=True, blank=True)
     server_received_at = models.DateTimeField()
     committed_at = models.DateTimeField()
+
+    def clean(self):
+        super().clean()
+        if (
+            self.final_response_snapshot_id
+            and self.attempt_id
+            and self.final_response_snapshot
+            and self.final_response_snapshot.attempt_id != self.attempt_id
+        ):
+            raise ValidationError(
+                {"final_response_snapshot": "最终响应快照必须属于同一作答。"}
+            )
+
+
+# Canonical domain name; SubmissionEvent remains an import-compatible alias.
+Submission = SubmissionEvent
+
+
+class GradeRecord(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "等待评分"
+        COMPLETED = "completed", "评分完成"
+        REGRADE = "regrade", "待重新评分"
+
+    submission = models.ForeignKey(
+        SubmissionEvent,
+        on_delete=models.CASCADE,
+        related_name="grade_records",
+    )
+    version = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    is_correct = models.BooleanField(null=True, blank=True)
+    score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    max_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    normalized_response = models.JSONField(null=True, blank=True)
+    grading_method = models.CharField(max_length=32, default="automatic")
+    grading_version = models.CharField(max_length=64, blank=True, default="")
+    grader_version = models.CharField(max_length=64, blank=True, default="")
+    graded_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    supersedes_grade = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="superseding_grades",
+    )
+
+    class Meta:
+        ordering = ["submission_id", "-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["submission", "version"],
+                name="unique_submission_grade_version",
+            ),
+            models.CheckConstraint(
+                condition=Q(version__gte=1),
+                name="grade_record_version_positive",
+            ),
+        ]
+
+    @property
+    def grading_status(self):
+        return self.status
+
+    @grading_status.setter
+    def grading_status(self, value):
+        self.status = value
 
 
 class EventSchemaArtifact(models.Model):

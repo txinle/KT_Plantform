@@ -170,13 +170,24 @@ def _validate_submission_invariants(*, event_type, actor_source, payload, attemp
             raise EventInvariantError(
                 "response_committed requires the authoritative SubmissionEvent."
             )
-        try:
-            payload_score = Decimal(str(payload["score"]))
-        except (InvalidOperation, TypeError, ValueError) as error:
-            raise EventInvariantError("response_committed score is invalid.") from error
-        if payload_score != submission.score or payload["is_correct"] != submission.is_correct:
+        if "grading_status" in payload and payload["grading_status"] != submission.grading_status:
             raise EventInvariantError(
-                "response_committed outcome differs from the authoritative submission."
+                "response_committed grading status differs from the authoritative submission."
+            )
+        # Grade values are optional while grading is pending/regrade.  When
+        # present, they remain a strict projection of the canonical submission.
+        if "score" in payload:
+            try:
+                payload_score = Decimal(str(payload["score"]))
+            except (InvalidOperation, TypeError, ValueError) as error:
+                raise EventInvariantError("response_committed score is invalid.") from error
+            if payload_score != submission.score:
+                raise EventInvariantError(
+                    "response_committed score differs from the authoritative submission."
+                )
+        if "is_correct" in payload and payload["is_correct"] != submission.is_correct:
+            raise EventInvariantError(
+                "response_committed correctness differs from the authoritative submission."
             )
     if event_type in {"feedback_shown", "explanation_shown"}:
         if not AssessmentEvent.objects.filter(

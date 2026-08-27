@@ -14,12 +14,14 @@
         "boolean",
         "null"
       ]
+    },
+    "grading_status": {
+      "type": "string",
+      "enum": ["pending", "completed", "regrade"]
     }
   },
   "required": [
-    "submission_token",
-    "score",
-    "is_correct"
+    "submission_token"
   ],
   "additionalProperties": false
 }

@@ -27,6 +27,7 @@ from .models import (
     Attempt,
     DraftSaveEvent,
     ExperimentSession,
+    GradeRecord,
     QuestionVisitEvent,
     StudentQuestionAssignment,
     SubmissionEvent,
@@ -303,22 +304,24 @@ def _save_draft_transaction(attempt_id, answer, client_time=None):
     if time_error:
         return None, time_error
     attempt.draft_answer = answer; attempt.draft_saved_at = timezone.now(); attempt.status = Attempt.Status.DRAFT
-    attempt.save(update_fields=["draft_answer", "draft_saved_at", "status"])
+    # Clear stale pointer before creating a replacement snapshot.  The whole
+    # transaction rolls back if snapshot persistence fails.
+    attempt.current_response_snapshot = None
+    attempt.save(update_fields=["draft_answer", "draft_saved_at", "status", "current_response_snapshot"])
     digest = hashlib.sha256(repr(answer).encode()).hexdigest()
     DraftSaveEvent.objects.create(attempt=attempt, answer_hash=digest, client_occurred_at=client_time)
-    attempt.saved_response_snapshot = None
-    attempt.saved_response_state = None
     question_type = attempt.assignment.snapshot.question_type
     if question_type in TEXT_LIKE_QUESTION_TYPES:
-        attempt.saved_response_snapshot = create_response_snapshot(
+        snapshot = create_response_snapshot(
             attempt=attempt,
             content=response_snapshot_content(answer),
         )
+        attempt.current_response_snapshot = snapshot
+        attempt.save(update_fields=["current_response_snapshot"])
     elif question_type in CHOICE_QUESTION_TYPES:
-        attempt.saved_response_state = canonical_choice_response_state(
-            question_type,
-            answer,
-        )
+        # Choice state is derived from durable draft_answer; no second mutable
+        # response-state column is maintained.
+        canonical_choice_response_state(question_type, answer)
     return attempt, None
 
 
@@ -388,16 +391,27 @@ def _submit_attempt_transaction(attempt_id, token, client_time=None):
     )
     now = timezone.now(); session.submission_count += 1
     attempt.status = Attempt.Status.SUBMITTED; attempt.final_answer = attempt.draft_answer
+    attempt.final_response_snapshot = attempt.current_response_snapshot
     attempt.submitted_at = now; attempt.submission_sequence_index = session.submission_count
     attempt.is_correct = correct; attempt.score = score; attempt.submission_token = token_value
     if attempt.first_opened_at: attempt.first_to_submit_duration_ms = int((now - attempt.first_opened_at).total_seconds() * 1000)
     if attempt.last_opened_at: attempt.last_visit_to_submission_ms = int((now - attempt.last_opened_at).total_seconds() * 1000)
     attempt.save()
     session.save(update_fields=["submission_count", "last_activity_at"])
-    SubmissionEvent.objects.create(
+    submission = SubmissionEvent.objects.create(
         attempt=attempt, submission_token=token_value, final_answer=attempt.final_answer,
+        final_response_snapshot=attempt.final_response_snapshot,
+        grading_status=SubmissionEvent.GradingStatus.COMPLETED,
         is_correct=correct, score=score, client_clicked_at=client_time,
         server_received_at=now, committed_at=now,
+    )
+    GradeRecord.objects.create(
+        submission=submission,
+        version=1,
+        status=GradeRecord.Status.COMPLETED,
+        is_correct=correct,
+        score=score,
+        graded_at=now,
     )
     append_assessment_event(
         event_type="response_committed",
@@ -412,6 +426,7 @@ def _submit_attempt_transaction(attempt_id, token, client_time=None):
         correlation_id=token_value,
         payload={
             "submission_token": str(token_value),
+            "grading_status": submission.grading_status,
             "score": float(score),
             "is_correct": correct,
         },
@@ -435,6 +450,57 @@ def _submit_attempt_transaction(attempt_id, token, client_time=None):
     )
     ensure_confidence_assignment(attempt)
     return attempt, None
+
+
+@transaction.atomic
+def grade_submission(
+    submission_id,
+    *,
+    score=None,
+    is_correct=None,
+    status="completed",
+    max_score=None,
+    normalized_response=None,
+    grading_method="automatic",
+    grading_version="",
+    grader_version="",
+):
+    """Append a versioned grade and project its completed value onto legacy fields."""
+    submission = SubmissionEvent.objects.select_for_update().select_related("attempt").get(pk=submission_id)
+    try:
+        status = GradeRecord.Status(status)
+    except ValueError:
+        raise ValidationError("无效的评分状态") from None
+    latest = submission.grade_records.order_by("-version").first()
+    version = (latest.version + 1) if latest else 1
+    now = timezone.now() if status == GradeRecord.Status.COMPLETED else None
+    supersedes = latest if status == GradeRecord.Status.REGRADE else None
+    record = GradeRecord.objects.create(
+        submission=submission,
+        version=version,
+        status=status,
+        score=score,
+        is_correct=is_correct,
+        grader_version=grader_version,
+        grading_version=grading_version or grader_version,
+        max_score=max_score,
+        normalized_response=normalized_response,
+        grading_method=grading_method,
+        graded_at=now,
+        supersedes_grade=supersedes,
+    )
+    submission.grading_status = status
+    if status == GradeRecord.Status.COMPLETED:
+        submission.score = score
+        submission.is_correct = is_correct
+        submission.save(update_fields=["grading_status", "score", "is_correct"])
+        attempt = submission.attempt
+        attempt.score = score
+        attempt.is_correct = is_correct
+        attempt.save(update_fields=["score", "is_correct"])
+    else:
+        submission.save(update_fields=["grading_status"])
+    return record
 
 
 def submit_attempt(attempt_id, token, client_time=None):
