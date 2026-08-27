@@ -14,6 +14,31 @@ class WriterLeaseConflict(RuntimeError):
     """Another client currently owns the attempt writer lease."""
 
 
+def assert_attempt_writer_lease(
+    attempt,
+    *,
+    lease_token=None,
+    client_instance_id=None,
+    now=None,
+):
+    """Require the active writer lease when one has been acquired.
+
+    Existing pilots with no lease continue to work. Once a lease is present,
+    every mutating request must present the matching token and client instance.
+    """
+    now = now or timezone.now()
+    if not attempt.writer_lease_expires_at or attempt.writer_lease_expires_at <= now:
+        return True
+    try:
+        token = uuid.UUID(str(lease_token)) if lease_token is not None else None
+        client = uuid.UUID(str(client_instance_id)) if client_instance_id is not None else None
+    except (TypeError, ValueError):
+        raise WriterLeaseConflict("writer lease token is invalid") from None
+    if token != attempt.writer_lease_token or client != attempt.writer_client_instance_id:
+        raise WriterLeaseConflict("attempt is read-only for this client")
+    return True
+
+
 @dataclass(frozen=True)
 class WriterLease:
     token: uuid.UUID
@@ -58,4 +83,3 @@ def release_attempt_writer_lease(attempt, *, lease_token, client_instance_id):
             raise WriterLeaseConflict("writer lease is not owned by client")
         current.writer_lease_token = None; current.writer_client_instance_id = None; current.writer_lease_expires_at = None
         current.save(update_fields=["writer_lease_token", "writer_client_instance_id", "writer_lease_expires_at"])
-

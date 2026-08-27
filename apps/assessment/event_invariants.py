@@ -224,6 +224,17 @@ def _validate_submission_invariants(*, event_type, actor_source, payload, attemp
             raise EventInvariantError(
                 "response_committed requires the authoritative SubmissionEvent."
             )
+        if "submission_id" in payload and payload["submission_id"] != submission.pk:
+            raise EventInvariantError(
+                "response_committed submission reference differs from the authoritative submission."
+            )
+        if "final_response_snapshot_id" in payload and (
+            str(payload["final_response_snapshot_id"] or "")
+            != str(submission.final_response_snapshot_id or "")
+        ):
+            raise EventInvariantError(
+                "response_committed final snapshot differs from the authoritative submission."
+            )
         if "grading_status" in payload and payload["grading_status"] != submission.grading_status:
             raise EventInvariantError(
                 "response_committed grading status differs from the authoritative submission."

@@ -118,12 +118,15 @@ def canonical_response_state(question_type, answer):
 
 
 @transaction.atomic
-def create_response_snapshot(*, attempt, content, schema_version=1):
+def create_response_snapshot(*, attempt, content, schema_version=1, response_state=None):
     if not isinstance(content, str):
         raise TypeError("Response snapshot content must be text.")
     question_type = getattr(getattr(attempt, "assignment", None), "snapshot", None)
     question_type = getattr(question_type, "question_type", "short_answer")
-    logical_state = ResponseState(question_type, canonical_response_state(question_type, content))
+    logical_state = response_state or ResponseState(
+        question_type,
+        canonical_response_state(question_type, content),
+    )
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     existing = ResponseSnapshot.objects.filter(
         attempt=attempt,

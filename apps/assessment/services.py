@@ -18,10 +18,12 @@ from .confidence_services import (
 from .response_snapshot_services import (
     CHOICE_QUESTION_TYPES,
     TEXT_LIKE_QUESTION_TYPES,
+    ResponseState,
     canonical_choice_response_state,
     create_response_snapshot,
     response_snapshot_content,
 )
+from .writer_lease_services import assert_attempt_writer_lease
 from .models import (
     AssessmentEvent,
     Attempt,
@@ -291,11 +293,22 @@ def record_visit(session_id, assignment_id, entry_reason="navigation_click", cli
     return attempt
 
 @transaction.atomic
-def _save_draft_transaction(attempt_id, answer, client_time=None):
+def _save_draft_transaction(
+    attempt_id,
+    answer,
+    client_time=None,
+    writer_lease_token=None,
+    writer_client_instance_id=None,
+):
     attempt = Attempt.objects.select_for_update().select_related(
         "session__version__experiment",
         "assignment__snapshot",
     ).get(pk=attempt_id)
+    assert_attempt_writer_lease(
+        attempt,
+        lease_token=writer_lease_token,
+        client_instance_id=writer_client_instance_id,
+    )
     if attempt.status in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
         raise ValidationError("该题当前状态不能修改")
     if attempt.session.status != ExperimentSession.Status.IN_PROGRESS:
@@ -325,15 +338,39 @@ def _save_draft_transaction(attempt_id, answer, client_time=None):
     return attempt, None
 
 
-def save_draft(attempt_id, answer, client_time=None):
-    attempt, time_error = _save_draft_transaction(attempt_id, answer, client_time)
+def save_draft(
+    attempt_id,
+    answer,
+    client_time=None,
+    *,
+    writer_lease_token=None,
+    writer_client_instance_id=None,
+):
+    attempt, time_error = _save_draft_transaction(
+        attempt_id,
+        answer,
+        client_time,
+        writer_lease_token,
+        writer_client_instance_id,
+    )
     if time_error:
         raise ValidationError(time_error)
     return attempt
 
 @transaction.atomic
-def _submit_attempt_transaction(attempt_id, token, client_time=None):
+def _submit_attempt_transaction(
+    attempt_id,
+    token,
+    client_time=None,
+    writer_lease_token=None,
+    writer_client_instance_id=None,
+):
     attempt = Attempt.objects.select_for_update().select_related("session", "assignment__snapshot").get(pk=attempt_id)
+    assert_attempt_writer_lease(
+        attempt,
+        lease_token=writer_lease_token,
+        client_instance_id=writer_client_instance_id,
+    )
     session = ExperimentSession.objects.select_for_update().select_related(
         "version__experiment"
     ).get(pk=attempt.session_id)
@@ -391,6 +428,18 @@ def _submit_attempt_transaction(attempt_id, token, client_time=None):
     )
     now = timezone.now(); session.submission_count += 1
     attempt.status = Attempt.Status.SUBMITTED; attempt.final_answer = attempt.draft_answer
+    if attempt.current_response_snapshot is None:
+        question_type = snapshot.question_type
+        if question_type in CHOICE_QUESTION_TYPES:
+            canonical_state = canonical_choice_response_state(
+                question_type,
+                attempt.draft_answer,
+            )
+            attempt.current_response_snapshot = create_response_snapshot(
+                attempt=attempt,
+                content=response_snapshot_content(canonical_state),
+                response_state=ResponseState(question_type, canonical_state),
+            )
     attempt.final_response_snapshot = attempt.current_response_snapshot
     attempt.submitted_at = now; attempt.submission_sequence_index = session.submission_count
     attempt.is_correct = correct; attempt.score = score; attempt.submission_token = token_value
@@ -426,9 +475,14 @@ def _submit_attempt_transaction(attempt_id, token, client_time=None):
         correlation_id=token_value,
         payload={
             "submission_token": str(token_value),
+            "submission_id": submission.pk,
             "grading_status": submission.grading_status,
-            "score": float(score),
-            "is_correct": correct,
+            "final_response_snapshot_id": (
+                str(submission.final_response_snapshot_id)
+                if submission.final_response_snapshot_id is not None
+                else None
+            ),
+            "committed_at": now.isoformat(),
         },
         capture_mode="native",
         app_version="server",
@@ -503,8 +557,21 @@ def grade_submission(
     return record
 
 
-def submit_attempt(attempt_id, token, client_time=None):
-    attempt, time_error = _submit_attempt_transaction(attempt_id, token, client_time)
+def submit_attempt(
+    attempt_id,
+    token,
+    client_time=None,
+    *,
+    writer_lease_token=None,
+    writer_client_instance_id=None,
+):
+    attempt, time_error = _submit_attempt_transaction(
+        attempt_id,
+        token,
+        client_time,
+        writer_lease_token,
+        writer_client_instance_id,
+    )
     if time_error:
         raise SubmissionValidationError(time_error, reason_code="time_expired")
     return attempt

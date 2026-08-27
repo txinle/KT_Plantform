@@ -288,6 +288,15 @@ def append_assessment_event(
             client_instance_id=client_instance_id,
             client_sequence_no__lt=client_sequence_no,
         ).order_by("-client_sequence_no").first()
+        if (
+            previous is not None
+            and client_monotonic_ms is not None
+            and previous.client_monotonic_ms is not None
+            and client_monotonic_ms < previous.client_monotonic_ms
+        ):
+            raise ValueError(
+                "client_monotonic_ms must not move backwards within a client instance."
+            )
         if previous is not None:
             interval_quality = "synchronized_estimate" if sync_is_valid else "exact_monotonic"
         elif AssessmentEvent.objects.filter(session_id=session.pk).exists():

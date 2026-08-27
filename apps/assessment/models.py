@@ -50,6 +50,10 @@ _SIMULATION_SNAPSHOT_APPEND_ALLOWED = ContextVar(
     "simulation_snapshot_append_allowed",
     default=False,
 )
+_RESPONSE_OBSERVATION_APPEND_ALLOWED = ContextVar(
+    "response_observation_append_allowed",
+    default=False,
+)
 
 
 @contextmanager
@@ -77,6 +81,15 @@ def _simulation_snapshot_append_scope():
         yield
     finally:
         _SIMULATION_SNAPSHOT_APPEND_ALLOWED.reset(token)
+
+
+@contextmanager
+def _response_observation_append_scope():
+    token = _RESPONSE_OBSERVATION_APPEND_ALLOWED.set(True)
+    try:
+        yield
+    finally:
+        _RESPONSE_OBSERVATION_APPEND_ALLOWED.reset(token)
 
 
 class AssessmentEventQuerySet(models.QuerySet):
@@ -257,6 +270,58 @@ class DraftSaveEvent(models.Model):
     answer_hash = models.CharField(max_length=64)
     client_occurred_at = models.DateTimeField(null=True, blank=True)
     server_received_at = models.DateTimeField(auto_now_add=True)
+
+
+class ResponseInputObservation(models.Model):
+    """Privacy-preserving stable-input metadata, never the text itself."""
+
+    class EditOperation(models.TextChoices):
+        INSERT = "insert", "插入"
+        DELETE = "delete", "删除"
+        REPLACE = "replace", "替换"
+        PASTE = "paste", "粘贴"
+        UNKNOWN = "unknown", "未知"
+
+    observation_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    attempt = models.ForeignKey(Attempt, on_delete=models.PROTECT, related_name="input_observations")
+    client_instance_id = models.UUIDField()
+    client_sequence_no = models.PositiveBigIntegerField()
+    client_monotonic_ms = models.DecimalField(max_digits=20, decimal_places=3)
+    edit_operation = models.CharField(max_length=16, choices=EditOperation.choices)
+    content_hash_before = models.CharField(max_length=64, validators=[HASH_VALIDATOR])
+    content_hash_after = models.CharField(max_length=64, validators=[HASH_VALIDATOR])
+    content_length_before = models.PositiveIntegerField()
+    content_length_after = models.PositiveIntegerField()
+    input_method = models.CharField(max_length=16, default="unknown")
+    observed_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ImmutableArtifactManager()
+
+    class Meta:
+        ordering = ["attempt_id", "client_instance_id", "client_sequence_no", "observation_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["attempt", "client_instance_id", "client_sequence_no"],
+                name="unique_attempt_input_observation_sequence",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_length_before__gte=0, content_length_after__gte=0),
+                name="input_observation_lengths_nonnegative",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise AppendOnlyEventError("ResponseInputObservation rows are immutable.")
+        if not _RESPONSE_OBSERVATION_APPEND_ALLOWED.get():
+            raise AppendOnlyEventError(
+                "ResponseInputObservation rows must use record_stable_input_observation()."
+            )
+        self.full_clean(validate_unique=False, validate_constraints=False)
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise AppendOnlyEventError("ResponseInputObservation rows are immutable.")
 
 class SubmissionEvent(models.Model):
     class GradingStatus(models.TextChoices):

@@ -400,6 +400,43 @@ class ConditionAssignment(models.Model):
             models.UniqueConstraint(fields=["condition", "session"], condition=Q(session__isnull=False), name="unique_condition_session_assignment"),
         ]
 
+    def __init__(self, *args, **kwargs):
+        # Accept the canonical research-contract names while retaining the
+        # compact field names used by the first database migration.
+        aliases = {
+            "randomization_seed": "seed",
+            "randomization_draw": "draw",
+            "assignment_probability": "probability",
+        }
+        for canonical, legacy in aliases.items():
+            if canonical in kwargs and legacy not in kwargs:
+                kwargs[legacy] = kwargs.pop(canonical)
+        super().__init__(*args, **kwargs)
+
+    @property
+    def randomization_seed(self):
+        return self.seed
+
+    @randomization_seed.setter
+    def randomization_seed(self, value):
+        self.seed = value
+
+    @property
+    def randomization_draw(self):
+        return self.draw
+
+    @randomization_draw.setter
+    def randomization_draw(self, value):
+        self.draw = value
+
+    @property
+    def assignment_probability(self):
+        return self.probability
+
+    @assignment_probability.setter
+    def assignment_probability(self, value):
+        self.probability = value
+
 class QuestionSnapshot(models.Model):
     version = models.ForeignKey(ExperimentVersion, on_delete=models.CASCADE, related_name="question_snapshots")
     source_question = models.ForeignKey("question_bank.Question", on_delete=models.PROTECT)

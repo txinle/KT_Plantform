@@ -6,6 +6,18 @@
       "type": "string",
       "format": "uuid"
     },
+    "submission_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "final_response_snapshot_id": {
+      "type": ["string", "null"],
+      "format": "uuid"
+    },
+    "committed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "score": {
       "type": "number"
     },
