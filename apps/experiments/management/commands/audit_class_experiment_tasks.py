@@ -36,7 +36,7 @@ def _table_value(value):
     return "".join(
         r"\|" if character == "|" else character
         for character in str(value)
-        if ord(character) >= 32 and ord(character) != 127
+        if character.isprintable()
     )
 
 

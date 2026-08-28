@@ -575,6 +575,6 @@ class ClassExperimentTaskAuditTests(TransactionTestCase):
 
     def test_table_cells_escape_separators_and_remove_control_characters(self):
         self.assertEqual(
-            _table_value("班|级\x00\n\t\x7f保留😀"),
+            _table_value("班|级\x00\n\t\x7f\x9b\u202e\u200b保留😀"),
             r"班\|级保留😀",
         )
