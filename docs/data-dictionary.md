@@ -35,7 +35,7 @@
 - `CourseEnrollment`：学生在单门课程中的唯一选课关系，`class_group` 表示该课程下的班级归属。
 - 手动添加和 Excel 导入复用同学号、同姓名的既有账号；新账号密码规则为 `S + 原始学号`。
 - 从其他课程班级复制时只复制有效 `CourseEnrollment`；目标课程已有选课的学生被跳过，不复制账号、不改密码、不自动转班。
-- `ExperimentClassSnapshot.class_snapshot_id`：实验版本发布/分配时冻结的班级身份，是统计、导出和 `DataScope` 的唯一班级筛选真值；班级名称只作展示，后续改名不回写快照。
+- `ExperimentClassSnapshot.class_snapshot_id`：实验版本发布/分配时冻结的班级身份，是单版本研究范围的精确班级筛选真值；班级名称只作展示，后续改名不回写快照。普通 `TeachingScope.class_id` 通过 `source_class_group_id` 与一个或多个冻结快照取交集，不按名称匹配。
 - `ExperimentVersionParticipantSnapshot`：把参与者与不可变班级快照绑定。旧的 `class_snapshot_name` 仅保留为兼容展示投影，不能作为科研范围筛选键。
 
 ## 稳定研究对象标识
@@ -176,11 +176,11 @@ Word 报告禁止包含 KC、教师或经验难度、任何用时字段、访问
 
 ## 研究数据中心与导出任务
 
-课程数据中心固定为“概览 → 教学数据 → 导出 → 数据质量 → 导出记录 → 高级数据工具”。数据范围按“实验 → 版本 → 班级快照 → 学生 → 会话 → 条件 → 状态 → 时间”严格取交集；班级仅使用 `class_snapshot_id`，空值明确显示为“未记录班级”。旧 `class_name` 与 `student_number` URL 参数只能先被唯一解析为该范围实体，歧义或冲突会拒绝请求。
+课程数据中心固定为“概览 → 教学数据 → 导出 → 数据质量 → 导出记录 → 高级数据工具”。普通教学范围只包含实验与实时课程班级；完整研究范围按“实验 → 版本 → 班级/班级快照 → 学生 → 会话 → 条件 → 状态 → 时间”严格取交集。`class_id` 只通过冻结快照的 `source_class_group_id` 过滤历史会话；没有匹配快照时结果为空，绝不退化成实验全量。旧 `class_name` 与 `student_number` URL 参数只能先被唯一解析为范围实体，歧义或冲突会拒绝请求。
 
 ### 数据中心 v2 范围、时长、质量与导出
 
-- `DataScope` 是概览、教学数据、导出、质量与高级数据工具的唯一范围服务。`experiment_id`、`version_id`、`class_snapshot_id`、`student_id`、`session_id`、`condition_id`、会话/作答状态和 UTC 时间边界同时存在时必须全部成立；不会由某个过滤条件覆盖另一个条件。
+- `TeachingScope` 是普通概览和教学数据的范围服务；`DataScope` 是导出、质量与高级数据工具的完整研究范围服务。`experiment_id`、`version_id`、`class_id`、`class_snapshot_id`、`student_id`、`session_id`、`condition_id`、会话/作答状态和 UTC 时间边界同时存在时必须全部成立；切换表或导出用途时必须原样保留，不会由某个过滤条件覆盖另一个条件。
 - 教学汇总、KT 与 CD 导出必须选择单一实验版本；包含多个版本时页面阻断并要求选择版本，禁止静默混合不同题目或评分语义。
 - `TimingSummary` 同时记录 `active_duration_ms`、`wall_clock_duration_ms`、`display_duration_ms`、`display_kind` 与 `interval_quality`。教学页面与教学成绩工作簿调用同一计算服务；没有足够原生过程观测时只显示总历时或“不可用”，不伪造活跃时长。
 - 五类质量不变量为 `identity`、`state_chain`、`submission`、`ordering_time`、`provenance`。每项结果只能是 `PASS`、`WARN`、`FAIL`、`NOT_EVALUABLE` 或 `NOT_APPLICABLE`，并带有规则版本、实体类型/ID、来源模式、原因码和证据摘要。历史投影数据缺少原生字段时应为 `NOT_EVALUABLE`，不应伪造质量失败。

@@ -112,6 +112,11 @@ TABLE_ROLES = {
         "分类视图",
         "从 assessment_events 按仿真事件类型筛选得到。",
     ),
+    "response_input_observations": (
+        "classified_view",
+        "事件投影视图",
+        "由 assessment_events 中的 text_edit_observed 物化得到的结构化投影。",
+    ),
 }
 
 
@@ -141,7 +146,7 @@ SOURCE_LAYERS = {
 DEFAULT_ROLE = ("research_table", "研究数据表", "当前范围内的结构化研究数据。")
 
 
-def _enabled_extension_tables(experiment):
+def enabled_extension_tables(experiment):
     if experiment is None:
         return set()
     enabled = set()
@@ -157,7 +162,7 @@ def _enabled_extension_tables(experiment):
 
 def build_advanced_catalog(*, experiment, selected_table):
     """Return six stable groups, hiding disabled optional observation modules."""
-    enabled_extensions = _enabled_extension_tables(experiment)
+    enabled_extensions = enabled_extension_tables(experiment)
     visible_keys = {
         table_key
         for group in GROUP_DEFINITIONS

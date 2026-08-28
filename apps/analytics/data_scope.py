@@ -10,7 +10,7 @@ from uuid import UUID
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from apps.accounts.models import CourseEnrollment, CourseSubject, User
+from apps.accounts.models import ClassGroup, CourseEnrollment, CourseSubject, User
 from apps.assessment.models import AssessmentEvent, Attempt, ExperimentSession
 from apps.experiments.models import (
     Condition,
@@ -149,6 +149,7 @@ class DataScope:
     experiment_id: int | None = None
     version_mode: str = "all"
     version_id: int | None = None
+    class_id: int | None = None
     class_snapshot_id: UUID | None = None
     student_id: int | None = None
     session_id: int | None = None
@@ -182,6 +183,7 @@ class DataScope:
             experiment_id=_optional_positive_int(values, "experiment_id"),
             version_mode=version_mode,
             version_id=version_id,
+            class_id=_optional_positive_int(values, "class_id"),
             class_snapshot_id=_optional_uuid(values, "class_snapshot_id"),
             student_id=_optional_positive_int(values, "student_id"),
             session_id=_optional_positive_int(values, "session_id"),
@@ -212,6 +214,7 @@ class DataScope:
 
         experiment = self._course_experiment(self.experiment_id)
         version = self._course_version(self.version_id)
+        class_group = self._course_class_group(self.class_id)
         class_snapshot = self._course_class_snapshot(self.class_snapshot_id)
         condition = self._course_condition(self.condition_id)
         session = self._course_session(self.session_id)
@@ -221,6 +224,8 @@ class DataScope:
             raise ScopeValidationError("实验与版本不属于同一范围")
         if experiment and class_snapshot and class_snapshot.version.experiment_id != experiment.pk:
             raise ScopeValidationError("实验与班级快照不属于同一范围")
+        if class_group and class_snapshot and class_snapshot.source_class_group_id != class_group.pk:
+            raise ScopeValidationError("课程班级与班级快照不属于同一范围")
         if version and class_snapshot and class_snapshot.version_id != version.pk:
             raise ScopeValidationError("版本与班级快照不属于同一范围")
         if experiment and condition and condition.experiment_id != experiment.pk:
@@ -235,6 +240,11 @@ class DataScope:
                 raise ScopeValidationError("版本与会话不属于同一范围")
             if class_snapshot and session.class_snapshot_id != class_snapshot.pk:
                 raise ScopeValidationError("班级快照与会话不属于同一范围")
+            if class_group and (
+                session.class_snapshot is None
+                or session.class_snapshot.source_class_group_id != class_group.pk
+            ):
+                raise ScopeValidationError("课程班级与会话不属于同一范围")
             if self.student_id and session.student_id != self.student_id:
                 raise ScopeValidationError("学生与会话不属于同一范围")
             if condition and session.condition_id != condition.pk:
@@ -271,6 +281,14 @@ class DataScope:
         if snapshot is None or snapshot.version.experiment.course_id != self.course.pk:
             raise ScopeNotFound("班级快照不属于当前课程")
         return snapshot
+
+    def _course_class_group(self, class_id):
+        if class_id is None:
+            return None
+        class_group = ClassGroup.objects.filter(pk=class_id).first()
+        if class_group is None or class_group.course_id != self.course.pk:
+            raise ScopeNotFound("班级不属于当前课程")
+        return class_group
 
     def _course_condition(self, condition_id):
         if condition_id is None:
@@ -324,6 +342,8 @@ class DataScope:
             filters["version__experiment_id"] = self.experiment_id
         if self.version_id is not None:
             filters["version_id"] = self.version_id
+        if self.class_id is not None:
+            filters["class_snapshot__source_class_group_id"] = self.class_id
         if self.class_snapshot_id is not None:
             filters["class_snapshot_id"] = self.class_snapshot_id
         if self.student_id is not None:
@@ -362,6 +382,7 @@ class DataScope:
             ("experiment_id", self.experiment_id),
             ("version_mode", self.version_mode),
             ("version_id", self.version_id),
+            ("class_id", self.class_id),
             ("class_snapshot_id", self.class_snapshot_id),
             ("student_id", self.student_id),
             ("session_id", self.session_id),

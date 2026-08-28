@@ -22,6 +22,7 @@ from apps.experiments.models import Experiment
 from .export_fields import FIELD_LABELS, field_values
 from .models import ExportJob
 from .data_scope import DataScope, ScopeNotFound, ScopeValidationError
+from .advanced_catalog import enabled_extension_tables
 from .services import (
     ExportContractError,
     create_export_job,
@@ -58,6 +59,11 @@ def export_job_create(request, course_pk):
     package = request.POST.get("package", "complete")
     if package not in PACKAGE_TABLES:
         return HttpResponse("不支持的数据包类型", status=400, content_type="text/plain; charset=utf-8")
+    enabled_extensions = enabled_extension_tables(experiment)
+    if package == "confidence" and "confidence_assignments" not in enabled_extensions:
+        return HttpResponse("当前实验未启用 Confidence 采集", status=400, content_type="text/plain; charset=utf-8")
+    if package == "simulation" and "simulation_events" not in enabled_extensions:
+        return HttpResponse("当前实验未启用 Simulation 采集", status=400, content_type="text/plain; charset=utf-8")
     if request.POST.get("confirm_identified") != "yes":
         return HttpResponse(
             "请确认该导出包含实名数据后再生成",

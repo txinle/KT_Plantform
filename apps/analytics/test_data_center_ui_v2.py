@@ -11,6 +11,7 @@ from apps.experiments.models import (
 )
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.question_bank.models import Question, QuestionBank
+from apps.analytics.export_catalog import RESPONSE_EVENT_TYPES
 
 
 class DataCenterUiV2Tests(TestCase):
@@ -266,3 +267,77 @@ class DataCenterUiV2Tests(TestCase):
         self.assertContains(enabled, "Confidence信心")
         self.assertContains(enabled, "仿真事件")
         self.assertContains(enabled, "仿真快照")
+
+    def test_research_scope_survives_advanced_table_and_export_package_links(self):
+        research_scope = {
+            "experiment_id": self.experiment.pk,
+            "version_mode": "single",
+            "version_id": self.version.pk,
+            "class_snapshot_id": self.class_snapshot.pk,
+            "student_id": self.student.pk,
+            "session_id": self.attempt.session_id,
+        }
+        advanced = self.client.get(
+            reverse("courses:data_advanced", args=[self.course.pk]),
+            {**research_scope, "table": "assessment_events"},
+        )
+        export_page = self.client.get(
+            reverse("courses:data_exports", args=[self.course.pk]), research_scope
+        )
+
+        for response in (advanced, export_page):
+            self.assertEqual(response.status_code, 200)
+            query = response.context["scope_query"]
+            for key, value in research_scope.items():
+                self.assertIn(f"{key}={value}", query)
+
+    def test_advanced_invalid_page_falls_back_to_first_page(self):
+        response = self.client.get(
+            reverse("courses:data_advanced", args=[self.course.pk]),
+            {
+                "experiment_id": self.experiment.pk,
+                "table": "attempts",
+                "page": "not-a-number",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["preview"]["page"], 1)
+
+    def test_disabled_extension_exports_are_hidden_until_enabled(self):
+        url = reverse("courses:data_exports", args=[self.course.pk])
+        hidden = self.client.get(url, {"experiment_id": self.experiment.pk})
+        self.assertNotContains(hidden, "Confidence")
+        self.assertNotContains(hidden, "Simulation")
+        rejected = self.client.post(
+            reverse("analytics:export_job_create", args=[self.course.pk]),
+            {
+                "experiment_id": self.experiment.pk,
+                "package": "confidence",
+                "confirm_identified": "yes",
+            },
+        )
+        self.assertEqual(rejected.status_code, 400)
+
+        self.experiment.confidence_mode = Experiment.ConfidenceMode.ALL
+        self.experiment.save(update_fields=["confidence_mode"])
+        self.version.configuration = {"simulation_enabled": True}
+        self.version.save(update_fields=["configuration"])
+        enabled = self.client.get(url, {"experiment_id": self.experiment.pk})
+        self.assertContains(enabled, "Confidence")
+        self.assertContains(enabled, "Simulation")
+
+    def test_text_edit_is_in_response_view_and_stable_observation_is_a_projection(self):
+        self.assertIn("text_edit_observed", RESPONSE_EVENT_TYPES)
+        response = self.client.get(
+            reverse("courses:data_advanced", args=[self.course.pk]),
+            {"experiment_id": self.experiment.pk},
+        )
+        items = {
+            item["key"]: item
+            for group in response.context["advanced_groups"]
+            for item in group["tables"]
+        }
+        self.assertEqual(
+            items["response_input_observations"]["role"], "classified_view"
+        )

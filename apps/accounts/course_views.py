@@ -27,7 +27,7 @@ from .models import ClassGroup, Course, User, DataPurgeRequest
 from apps.assessment.models import AssessmentEvent, SubmissionEvent
 from apps.assessment.models import Attempt, ExperimentSession, StudentQuestionAssignment
 from apps.analytics.export_catalog import COMMON_FIELD_DESCRIPTIONS, PLACEHOLDER_TABLES, TABLE_FIELD_DESCRIPTIONS, TABLE_LABELS, TABLE_PATHS
-from apps.analytics.advanced_catalog import build_advanced_catalog
+from apps.analytics.advanced_catalog import build_advanced_catalog, enabled_extension_tables
 from apps.analytics.services import UNRECORDED_CLASS_FILTER, preview_export_table
 from apps.analytics.data_scope import DataScope, ScopeNotFound, ScopeValidationError
 from apps.analytics.quality_reports import EvaluationState, build_quality_report
@@ -329,6 +329,7 @@ _DATA_SCOPE_KEYS = (
     "experiment_id",
     "version_mode",
     "version_id",
+    "class_id",
     "class_snapshot_id",
     "student_id",
     "session_id",
@@ -342,10 +343,6 @@ _LEGACY_SCOPE_KEYS = ("class_name", "student_number", "status")
 
 
 def _scope_from_request(request, course):
-    if request.GET.get("class_id") not in (None, ""):
-        return _research_scope_for_teaching(
-            TeachingScope.from_mapping(course, request.GET)
-        )
     temporary_values = {
         key: request.GET.get(key)
         for key in (*_DATA_SCOPE_KEYS, *_LEGACY_SCOPE_KEYS)
@@ -406,24 +403,8 @@ def _research_scope_for_teaching(teaching_scope):
     values = {}
     if teaching_scope.experiment_id is not None:
         values["experiment_id"] = teaching_scope.experiment_id
-    if teaching_scope.is_complete:
-        latest_snapshot = (
-            ExperimentClassSnapshot.objects.filter(
-                version__experiment_id=teaching_scope.experiment_id,
-                source_class_group_id=teaching_scope.class_id,
-            )
-            .select_related("version")
-            .order_by("-version__version_number", "-created_at")
-            .first()
-        )
-        if latest_snapshot is not None:
-            values.update(
-                {
-                    "version_mode": "single",
-                    "version_id": latest_snapshot.version_id,
-                    "class_snapshot_id": str(latest_snapshot.pk),
-                }
-            )
+    if teaching_scope.class_id is not None:
+        values["class_id"] = teaching_scope.class_id
     return DataScope.from_mapping(teaching_scope.course, values)
 
 
@@ -447,6 +428,10 @@ def _scope_display(scope):
         snapshot = ExperimentClassSnapshot.objects.filter(pk=scope.class_snapshot_id).first()
         if snapshot:
             parts.append(snapshot.display_name or "未记录班级")
+    elif scope.class_id:
+        class_group = scope.course.classes.filter(pk=scope.class_id).first()
+        if class_group:
+            parts.append(class_group.name)
     if scope.student_id:
         student = User.objects.filter(pk=scope.student_id).first()
         if student:
@@ -509,9 +494,17 @@ def _data_center_context(
         ],
         "scope": scope,
         "teaching_scope": teaching_scope,
-        "scope_display": _teaching_scope_display(teaching_scope),
+        "scope_display": (
+            _scope_display(scope)
+            if research_scope and isinstance(scope, DataScope)
+            else _teaching_scope_display(teaching_scope)
+        ),
         "scope_values": list(scope.serialize().items()),
-        "scope_query": urlencode(teaching_scope.serialize()),
+        "scope_query": urlencode(
+            scope.serialize()
+            if research_scope and isinstance(scope, DataScope)
+            else teaching_scope.serialize()
+        ),
         "scope_is_temporary": temporary_scope,
         "scope_has_remembered_default": bool(remembered_scope),
         "research_scope": research_scope,
@@ -735,9 +728,17 @@ def course_data_exports(request, course_pk):
         ("process", "作答过程", "原始事件、响应快照与稳定输入观测"),
         ("kt", "KT", "知识追踪所需数据"),
         ("cd", "CD", "认知诊断所需数据"),
-        ("confidence", "Confidence", "信心采集及校准数据"),
-        ("simulation", "Simulation", "仿真事件和快照"),
     ]
+    selected_experiment = (
+        course.experiments.filter(pk=scope.experiment_id).first()
+        if scope.experiment_id
+        else None
+    )
+    extensions = enabled_extension_tables(selected_experiment)
+    if "confidence_assignments" in extensions:
+        packages.append(("confidence", "Confidence", "信心采集及校准数据"))
+    if "simulation_events" in extensions:
+        packages.append(("simulation", "Simulation", "仿真事件和快照"))
     package_rows = [
         {
             "key": key,
@@ -758,6 +759,7 @@ def course_data_exports(request, course_pk):
         scope,
         active="exports",
         teaching_scope=teaching_scope,
+        research_scope=True,
         packages=package_rows,
         selected_package=selected_package,
     )
@@ -776,6 +778,7 @@ def course_data_quality(request, course_pk):
         scope,
         active="quality",
         teaching_scope=teaching_scope,
+        research_scope=True,
         report=report,
         states=EvaluationState,
     )

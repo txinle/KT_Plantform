@@ -104,7 +104,12 @@ def _observed_active_duration(events):
     return total_ms, quality
 
 
-def summarize_attempt_timing(attempt, events=None, submission=None):
+_SUBMISSION_NOT_LOADED = object()
+
+
+def summarize_attempt_timing(
+    attempt, events=None, submission=_SUBMISSION_NOT_LOADED
+):
     """Return the strongest defensible duration without reading active_seconds."""
     if events is None:
         events = list(
@@ -113,12 +118,14 @@ def summarize_attempt_timing(attempt, events=None, submission=None):
             )
         )
     observed_ms, quality = _observed_active_duration(events)
-    if submission is None and attempt.pk:
+    if submission is _SUBMISSION_NOT_LOADED and attempt.pk:
         submission = (
             SubmissionEvent.objects.filter(attempt=attempt)
             .only("committed_at")
             .first()
         )
+    elif submission is _SUBMISSION_NOT_LOADED:
+        submission = None
     wall_clock_ms = None
     if attempt.first_opened_at is not None and submission is not None:
         wall_clock_ms = int(

@@ -1,5 +1,7 @@
 import os
+import tempfile
 import zipfile
+from unittest.mock import patch
 
 from openpyxl import load_workbook
 
@@ -15,6 +17,7 @@ from .data_scope import DataScope
 from .models import ExportJob
 from .services import (
     ExportContractError,
+    _write_teaching_workbook,
     create_export_job,
     create_export_snapshot,
     run_export_job,
@@ -210,3 +213,46 @@ class ExportScopeV2Tests(TestCase):
         workbook = load_workbook(job.artifact_path, read_only=True)
         self.assertEqual(workbook.sheetnames, ["教学成绩", "导出血缘"])
         self.assertIn("grade_score", [cell.value for cell in next(workbook["教学成绩"].iter_rows())])
+
+    def test_teaching_workbook_uses_only_records_frozen_by_export_snapshot(self):
+        attempt = Attempt.objects.get()
+        headers = (
+            "attempt_id",
+            "student_number",
+            "student_name",
+            "question_code",
+            "session_id",
+            "status",
+            "grade_score",
+            "grade_max_score",
+            "grade_is_correct",
+            "submission_grade_status",
+            "graded_at",
+        )
+        rows = [[attempt.pk, "EXV2-1", "学生", "EXPORT-Q1", attempt.session_id, "unvisited", None, None, None, "pending", None]]
+        manifest = {
+            "export_snapshot_id": "snapshot",
+            "source_cutoff_at": "2026-08-28T00:00:00+00:00",
+            "event_high_watermark": 0,
+            "schema_manifest_hash": "hash",
+            "scope_hash": "scope",
+            "contains_direct_identifiers": True,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "teaching.xlsx")
+            with patch(
+                "apps.analytics.services.AssessmentEvent.objects.filter",
+                side_effect=AssertionError("must not query live events"),
+            ), patch(
+                "apps.analytics.services.SubmissionEvent.objects.filter",
+                side_effect=AssertionError("must not query live submissions"),
+            ):
+                _write_teaching_workbook(
+                    path,
+                    (headers, rows),
+                    manifest,
+                    [attempt],
+                    events=[],
+                    submissions=[],
+                )
+            self.assertTrue(os.path.exists(path))

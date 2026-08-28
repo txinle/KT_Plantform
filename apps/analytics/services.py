@@ -447,7 +447,14 @@ def run_export_job(job):
         version_number=selected_version_number,
     )
     if job.package == "teaching":
-        _write_teaching_workbook(artifact_path, rows["attempts"], manifest, attempts)
+        _write_teaching_workbook(
+            artifact_path,
+            rows["attempts"],
+            manifest,
+            attempts,
+            events=events,
+            submissions=submissions,
+        )
         return _finalize_export_job(job, artifact_path, manifest)
     with zipfile.ZipFile(artifact_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("00_manifest/manifest.json", manifest_bytes(manifest))
@@ -480,7 +487,9 @@ def run_export_job(job):
     return _finalize_export_job(job, artifact_path, manifest)
 
 
-def _write_teaching_workbook(artifact_path, attempt_table, manifest, attempts):
+def _write_teaching_workbook(
+    artifact_path, attempt_table, manifest, attempts, *, events, submissions
+):
     """Write the teaching-facing grade workbook from the same frozen rows.
 
     The source is the canonical attempts export table, whose grade columns are
@@ -497,15 +506,11 @@ def _write_teaching_workbook(artifact_path, attempt_table, manifest, attempts):
     positions = [headers.index(column) for column in requested if column in headers]
     attempt_id_position = headers.index("attempt_id")
     events_by_attempt = {}
-    for event in AssessmentEvent.objects.filter(
-        attempt_id__in=[attempt.pk for attempt in attempts]
-    ).order_by("attempt_id", "server_ingest_sequence_no"):
+    for event in events:
         events_by_attempt.setdefault(event.attempt_id, []).append(event)
     submissions_by_attempt = {
         submission.attempt_id: submission
-        for submission in SubmissionEvent.objects.filter(
-            attempt_id__in=[attempt.pk for attempt in attempts]
-        ).only("attempt_id", "committed_at")
+        for submission in submissions
     }
     from .teaching_data import summarize_attempt_timing
 
@@ -687,8 +692,14 @@ def preview_export_table(*, course, experiment, table, version_id=None,
     )
     headers, values = rows.get(table, ((), []))
     total = len(values)
-    page = max(1, int(page or 1))
-    page_size = max(1, min(100, int(page_size or 20)))
+    try:
+        page = max(1, int(page or 1))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = max(1, min(100, int(page_size or 20)))
+    except (TypeError, ValueError):
+        page_size = 20
     start = (page - 1) * page_size
     return {
         "table": table,
@@ -699,6 +710,8 @@ def preview_export_table(*, course, experiment, table, version_id=None,
         "page_size": page_size,
         "has_previous": page > 1,
         "has_next": start + page_size < total,
+        "previous_page": max(1, page - 1),
+        "next_page": page + 1,
         "filter_definition": filter_definition,
         "data_status": "placeholder" if table in PLACEHOLDER_TABLES else ("no_observation" if total == 0 else "observed"),
     }

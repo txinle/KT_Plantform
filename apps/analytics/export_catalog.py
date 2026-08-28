@@ -261,7 +261,7 @@ COMMON_FIELD_DESCRIPTIONS = {
 PLACEHOLDER_TABLES = frozenset()
 
 RESPONSE_EVENT_TYPES = {
-    "response_input_started", "response_state_changed", "response_commit_requested",
+    "response_input_started", "text_edit_observed", "response_state_changed", "response_commit_requested",
     "response_committed", "response_commit_rejected", "attempt_closed",
 }
 EXPOSURE_EVENT_TYPES = {

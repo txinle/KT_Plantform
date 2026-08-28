@@ -3,7 +3,7 @@ from datetime import timedelta
 from django.test import TestCase
 from django.utils import timezone
 
-from apps.accounts.models import Course, User
+from apps.accounts.models import ClassGroup, Course, User
 from apps.assessment.models import Attempt, ExperimentSession, StudentQuestionAssignment
 from apps.experiments.models import (
     Experiment,
@@ -37,6 +37,9 @@ class DataScopeTests(TestCase):
         self.other_course = Course.objects.create(
             owner=self.teacher, name="其他范围课程", code="SCOPE102", term="2026 秋"
         )
+        self.class_group = ClassGroup.objects.create(
+            course=self.course, name="电子2301班", academic_year="2023"
+        )
         self.bank = QuestionBank.objects.create(
             course=self.course, created_by=self.teacher, name="范围题库"
         )
@@ -60,6 +63,7 @@ class DataScopeTests(TestCase):
         )
         self.class_snapshot = ExperimentClassSnapshot.objects.create(
             version=self.version,
+            source_class_group=self.class_group,
             name_snapshot="电子2301班",
             academic_year_snapshot="2023",
             capture_mode=ExperimentClassSnapshot.CaptureMode.LEGACY_LABEL_PROJECTION,
@@ -95,6 +99,47 @@ class DataScopeTests(TestCase):
             assigned_sequence_index=1,
         )
         self.attempt = Attempt.objects.create(session=self.session, assignment=self.assignment)
+
+    def test_live_class_scope_intersects_all_matching_published_snapshots(self):
+        version_two = ExperimentVersion.objects.create(
+            experiment=self.experiment, version_number=2, published_by=self.teacher
+        )
+        snapshot_two = ExperimentClassSnapshot.objects.create(
+            version=version_two,
+            source_class_group=self.class_group,
+            name_snapshot=self.class_group.name,
+            academic_year_snapshot=self.class_group.academic_year,
+            capture_mode=ExperimentClassSnapshot.CaptureMode.NATIVE,
+        )
+        second_session = ExperimentSession.objects.create(
+            version=version_two,
+            student=self.student,
+            class_snapshot=snapshot_two,
+            class_snapshot_name=snapshot_two.display_name,
+        )
+
+        scope = DataScope.from_mapping(
+            self.course,
+            {"experiment_id": self.experiment.pk, "class_id": self.class_group.pk},
+        )
+
+        self.assertEqual(
+            set(scope.sessions().values_list("pk", flat=True)),
+            {self.session.pk, second_session.pk},
+        )
+        self.assertEqual(scope.serialize()["class_id"], self.class_group.pk)
+
+    def test_live_class_without_experiment_snapshot_is_empty_not_experiment_wide(self):
+        unrelated_class = ClassGroup.objects.create(
+            course=self.course, name="未参与实验班", academic_year="2023"
+        )
+        scope = DataScope.from_mapping(
+            self.course,
+            {"experiment_id": self.experiment.pk, "class_id": unrelated_class.pk},
+        )
+
+        self.assertFalse(scope.sessions().exists())
+        self.assertFalse(scope.attempts().exists())
 
     def test_scope_serializes_immutable_class_snapshot_and_intersects_filters(self):
         scope = DataScope.from_mapping(
