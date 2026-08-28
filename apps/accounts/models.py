@@ -91,12 +91,15 @@ class ClassGroupQuerySet(models.QuerySet):
         with transaction.atomic(using=using):
             target_ids = locked_scope._locked_course_write_target_ids()
             if not target_ids:
+                self._result_cache = None
                 return 0
             locked_targets = locked_scope.filter(pk__in=target_ids)
             if locked_targets.filter(experiment_tasks__isnull=False).exists():
                 raise ValidationError("已存在正式班级实验任务，班级所属课程不可变更。")
             # Update only the rows whose original queryset scope was locked.
-            return models.QuerySet.update(locked_targets, **kwargs)
+            rows = models.QuerySet.update(locked_targets, **kwargs)
+            self._result_cache = None
+            return rows
 
     def bulk_create(
         self,

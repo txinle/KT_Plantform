@@ -1070,6 +1070,35 @@ class ClassExperimentTaskTests(TestCase):
                     other_course.pk,
                 )
 
+    def test_successful_course_queryset_update_clears_the_original_cache(self):
+        other_course = self._other_course()
+        cases = (
+            ("experiment", Experiment.objects, self.experiment.pk),
+            ("class group", ClassGroup.objects, self.class_a.pk),
+        )
+
+        for label, manager, primary_key in cases:
+            with self.subTest(label=label):
+                queryset = manager.filter(pk=primary_key)
+                self.assertEqual(list(queryset)[0].course_id, self.course.pk)
+
+                self.assertEqual(queryset.update(course=other_course), 1)
+
+                self.assertEqual(list(queryset)[0].course_id, other_course.pk)
+
+    def test_empty_course_queryset_update_clears_the_original_cache(self):
+        other_course = self._other_course()
+        cases = (Experiment.objects, ClassGroup.objects)
+
+        for manager in cases:
+            with self.subTest(model=manager.model.__name__):
+                queryset = manager.none()
+                self.assertEqual(list(queryset), [])
+
+                self.assertEqual(queryset.update(course=other_course), 0)
+
+                self.assertIsNone(queryset._result_cache)
+
     def test_empty_queryset_course_bulk_update_is_a_noop(self):
         _version, _snapshot, task = self._publish_class_a_task()
         cases = (
