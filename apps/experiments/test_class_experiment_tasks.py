@@ -21,6 +21,7 @@ from .models import (
     ExperimentVersion,
 )
 from .services import (
+    _class_experiment_task_publication_scope,
     _create_class_experiment_tasks,
     delete_experiment,
     publish_experiment,
@@ -590,6 +591,107 @@ class ClassExperimentTaskTests(TestCase):
         self.assertFalse(model_admin.has_change_permission(request, version))
         self.assertFalse(model_admin.has_delete_permission(request, version))
 
+    def _other_course(self):
+        return Course.objects.create(
+            owner=self.teacher,
+            name="其他任务归属课程",
+            code="TASK103",
+            term="2026 秋",
+        )
+
+    def test_task_backed_experiment_rejects_instance_course_change(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        other_course = self._other_course()
+        self.experiment.course = other_course
+
+        with self.assertRaisesMessage(ValidationError, "实验所属课程不可变更"):
+            self.experiment.save(update_fields=["course"])
+
+        task.refresh_from_db()
+        self.assertEqual(task.experiment.course_id, task.class_group.course_id)
+
+    def test_task_backed_experiment_rejects_default_manager_course_change(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        other_course = self._other_course()
+
+        with self.assertRaisesMessage(ValidationError, "实验所属课程不可变更"):
+            Experiment.objects.filter(pk=self.experiment.pk).update(course=other_course)
+
+        task.refresh_from_db()
+        self.assertEqual(task.experiment.course_id, task.class_group.course_id)
+
+    def test_task_backed_experiment_rejects_base_manager_course_change(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        other_course = self._other_course()
+
+        with self.assertRaisesMessage(ValidationError, "实验所属课程不可变更"):
+            Experiment._base_manager.filter(pk=self.experiment.pk).update(
+                course_id=other_course.pk
+            )
+
+        task.refresh_from_db()
+        self.assertEqual(task.experiment.course_id, task.class_group.course_id)
+
+    def test_task_backed_class_group_rejects_instance_course_change(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        other_course = self._other_course()
+        self.class_a.course = other_course
+
+        with self.assertRaisesMessage(ValidationError, "班级所属课程不可变更"):
+            self.class_a.save(update_fields=["course"])
+
+        task.refresh_from_db()
+        self.assertEqual(task.experiment.course_id, task.class_group.course_id)
+
+    def test_task_backed_class_group_rejects_default_manager_course_change(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        other_course = self._other_course()
+
+        with self.assertRaisesMessage(ValidationError, "班级所属课程不可变更"):
+            ClassGroup.objects.filter(pk=self.class_a.pk).update(course=other_course)
+
+        task.refresh_from_db()
+        self.assertEqual(task.experiment.course_id, task.class_group.course_id)
+
+    def test_task_backed_class_group_rejects_base_manager_course_change(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        other_course = self._other_course()
+
+        with self.assertRaisesMessage(ValidationError, "班级所属课程不可变更"):
+            ClassGroup._base_manager.filter(pk=self.class_a.pk).update(
+                course_id=other_course.pk
+            )
+
+        task.refresh_from_db()
+        self.assertEqual(task.experiment.course_id, task.class_group.course_id)
+
+    def test_task_backed_class_group_keeps_non_course_fields_mutable(self):
+        self._publish_class_a_task()
+
+        ClassGroup.objects.filter(pk=self.class_a.pk).update(is_active=False)
+        self.class_a.refresh_from_db()
+        self.assertFalse(self.class_a.is_active)
+        self.class_a.is_active = True
+        self.class_a.save(update_fields=["is_active"])
+        self.class_a.refresh_from_db()
+        self.assertTrue(self.class_a.is_active)
+
+    def test_admin_makes_task_backed_parent_courses_read_only(self):
+        self._publish_class_a_task()
+        request = RequestFactory().get("/admin/")
+
+        experiment_admin = admin.site._registry[Experiment]
+        class_group_admin = admin.site._registry[ClassGroup]
+
+        self.assertIn(
+            "course",
+            experiment_admin.get_readonly_fields(request, self.experiment),
+        )
+        self.assertIn(
+            "course",
+            class_group_admin.get_readonly_fields(request, self.class_a),
+        )
+
     def test_publish_view_returns_to_experiment_when_a_task_conflicts(self):
         save_participant_rules(self.experiment, [self.class_a], [], [])
         existing_version, existing_snapshot = self._version_and_snapshot(
@@ -690,3 +792,10 @@ class ClassExperimentTaskCreationBoundaryTests(TransactionTestCase):
                 ClassExperimentTask(**self._task_kwargs()).save(force_insert=True)
             with self.assertRaises(ValidationError):
                 ClassExperimentTask.objects.create(**self._task_kwargs())
+
+    def test_task_creation_requires_atomic_even_with_publication_scope(self):
+        self.assertFalse(connection.in_atomic_block)
+
+        with self.assertRaisesMessage(ValidationError, "发布事务"):
+            with _class_experiment_task_publication_scope():
+                ClassExperimentTask(**self._task_kwargs()).save(force_insert=True)

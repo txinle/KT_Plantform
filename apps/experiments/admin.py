@@ -25,6 +25,12 @@ class ExperimentAdmin(admin.ModelAdmin):
     list_filter = ("course", "status")
     inlines = [QuestionInline, StudentInline]
 
+    def get_readonly_fields(self, request, obj=None):
+        readonly_fields = tuple(super().get_readonly_fields(request, obj))
+        if obj is not None and obj.class_tasks.exists() and "course" not in readonly_fields:
+            return (*readonly_fields, "course")
+        return readonly_fields
+
 @admin.register(ExperimentVersion)
 class ExperimentVersionAdmin(admin.ModelAdmin):
     list_display = ("experiment", "version_number", "published_at", "published_by")

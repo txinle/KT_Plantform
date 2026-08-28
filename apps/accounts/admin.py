@@ -42,6 +42,16 @@ class ClassGroupAdmin(admin.ModelAdmin):
     list_filter = ("course", "is_active")
     search_fields = ("name", "academic_year", "course__name", "course__code")
 
+    def get_readonly_fields(self, request, obj=None):
+        readonly_fields = tuple(super().get_readonly_fields(request, obj))
+        if (
+            obj is not None
+            and obj.experiment_tasks.exists()
+            and "course" not in readonly_fields
+        ):
+            return (*readonly_fields, "course")
+        return readonly_fields
+
 
 class CourseTeacherInline(admin.TabularInline):
     model = CourseTeacher

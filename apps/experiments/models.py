@@ -5,7 +5,7 @@ import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
 
 
@@ -34,6 +34,31 @@ def presentation_option_keys(question_snapshot):
     if question_snapshot.question_type == "true_false":
         return ["true", "false"]
     return [option["key"] for option in question_snapshot.options]
+
+_COURSE_UPDATE_UNSET = object()
+
+
+class ExperimentQuerySet(models.QuerySet):
+    def _assert_task_backed_course_unchanged(self, kwargs):
+        course_value = kwargs.get(
+            "course_id",
+            kwargs.get("course", _COURSE_UPDATE_UNSET),
+        )
+        if course_value is _COURSE_UPDATE_UNSET:
+            return
+        if self.filter(class_tasks__isnull=False).exclude(
+            course_id=course_value
+        ).exists():
+            raise ValidationError("已存在正式班级实验任务，实验所属课程不可变更。")
+
+    def update(self, **kwargs):
+        self._assert_task_backed_course_unchanged(kwargs)
+        return super().update(**kwargs)
+
+
+class ExperimentManager(models.Manager.from_queryset(ExperimentQuerySet)):
+    pass
+
 
 class Experiment(models.Model):
     class Status(models.TextChoices):
@@ -133,6 +158,8 @@ class Experiment(models.Model):
     students = models.ManyToManyField(settings.AUTH_USER_MODEL, through="ExperimentStudent", related_name="assigned_experiments")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    objects = ExperimentManager()
+
     class Meta:
         ordering = ["-updated_at"]
         constraints = [
@@ -167,6 +194,9 @@ class Experiment(models.Model):
                 name="experiment_confidence_mode_probability",
             ),
         ]
+        base_manager_name = "objects"
+        default_manager_name = "objects"
+
     def __str__(self): return self.name
 
     def clean(self):
@@ -182,7 +212,21 @@ class Experiment(models.Model):
         if errors:
             raise ValidationError(errors)
 
+    def _task_backed_course_is_changing(self, update_fields):
+        if self._state.adding:
+            return False
+        if update_fields is not None and not {"course", "course_id"}.intersection(
+            update_fields
+        ):
+            return False
+        current_course_id = self.__class__._base_manager.filter(
+            pk=self.pk
+        ).values_list("course_id", flat=True).get()
+        return current_course_id != self.course_id and self.class_tasks.exists()
+
     def save(self, *args, **kwargs):
+        if self._task_backed_course_is_changing(kwargs.get("update_fields")):
+            raise ValidationError("已存在正式班级实验任务，实验所属课程不可变更。")
         created = self._state.adding
         if self.created_by_id is None and self.owner_id is not None:
             self.created_by_id = self.owner_id
@@ -530,7 +574,10 @@ class ClassExperimentTask(models.Model):
             raise ValidationError("班级实验任务不可修改。")
         from .services import _class_experiment_task_creation_is_active
 
-        if not _class_experiment_task_creation_is_active():
+        if (
+            not transaction.get_connection().in_atomic_block
+            or not _class_experiment_task_creation_is_active()
+        ):
             raise ValidationError("班级实验任务只能在实验发布事务中创建。")
         self.full_clean(validate_constraints=False)
         return super().save(*args, **kwargs)

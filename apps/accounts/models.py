@@ -66,6 +66,31 @@ class CourseTeacher(models.Model):
             raise ValidationError({"teacher": "课程负责人无需重复添加为协作教师。"})
 
 
+_COURSE_UPDATE_UNSET = object()
+
+
+class ClassGroupQuerySet(models.QuerySet):
+    def _assert_task_backed_course_unchanged(self, kwargs):
+        course_value = kwargs.get(
+            "course_id",
+            kwargs.get("course", _COURSE_UPDATE_UNSET),
+        )
+        if course_value is _COURSE_UPDATE_UNSET:
+            return
+        if self.filter(experiment_tasks__isnull=False).exclude(
+            course_id=course_value
+        ).exists():
+            raise ValidationError("已存在正式班级实验任务，班级所属课程不可变更。")
+
+    def update(self, **kwargs):
+        self._assert_task_backed_course_unchanged(kwargs)
+        return super().update(**kwargs)
+
+
+class ClassGroupManager(models.Manager.from_queryset(ClassGroupQuerySet)):
+    pass
+
+
 class ClassGroup(models.Model):
     name = models.CharField("班级", max_length=120)
     academic_year = models.CharField(
@@ -89,6 +114,7 @@ class ClassGroup(models.Model):
     )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    objects = ClassGroupManager()
 
     class Meta:
         ordering = ["academic_year", "name"]
@@ -104,6 +130,28 @@ class ClassGroup(models.Model):
                 name="unique_legacy_class_year",
             ),
         ]
+        base_manager_name = "objects"
+        default_manager_name = "objects"
+
+    def _task_backed_course_is_changing(self, update_fields):
+        if self._state.adding:
+            return False
+        if update_fields is not None and not {"course", "course_id"}.intersection(
+            update_fields
+        ):
+            return False
+        current_course_id = self.__class__._base_manager.filter(
+            pk=self.pk
+        ).values_list("course_id", flat=True).get()
+        return (
+            current_course_id != self.course_id
+            and self.experiment_tasks.exists()
+        )
+
+    def save(self, *args, **kwargs):
+        if self._task_backed_course_is_changing(kwargs.get("update_fields")):
+            raise ValidationError("已存在正式班级实验任务，班级所属课程不可变更。")
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.academic_year} {self.name}".strip()
