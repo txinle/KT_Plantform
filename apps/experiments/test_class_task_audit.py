@@ -5,6 +5,7 @@ from io import StringIO
 from django.core.management import call_command
 from django.db import connection
 from django.test import TransactionTestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
@@ -18,6 +19,7 @@ from apps.assessment.models import (
 from apps.question_bank.models import Question, QuestionBank
 
 from .class_task_audit import audit_class_experiment_tasks
+from .management.commands.audit_class_experiment_tasks import _table_value
 from .models import (
     ClassExperimentTask,
     Experiment,
@@ -133,6 +135,19 @@ class ClassExperimentTaskAuditTests(TransactionTestCase):
             experiment=self.multi_experiment,
             version=self.multi_first_version,
             snapshot=self.multi_first_snapshot,
+        )
+        cross_version_session = ExperimentSession.objects.create(
+            version=self.multi_second_version,
+            student=self.student,
+            class_snapshot=self.multi_first_snapshot,
+            status=ExperimentSession.Status.COMPLETED,
+        )
+        self._add_scoped_facts(
+            version=self.multi_second_version,
+            class_snapshot=self.multi_first_snapshot,
+            experiment=self.multi_experiment,
+            student=self.student,
+            session=cross_version_session,
         )
 
         self.null_experiment, self.null_version, self.null_snapshot = (
@@ -270,19 +285,28 @@ class ClassExperimentTaskAuditTests(TransactionTestCase):
                 ],
             )
 
-    def _add_scoped_facts(self, *, version, class_snapshot, experiment, student=None):
+    def _add_scoped_facts(
+        self,
+        *,
+        version,
+        class_snapshot,
+        experiment,
+        student=None,
+        session=None,
+    ):
         student = student or self.student
         ExperimentVersionParticipantSnapshot.objects.create(
             version=version,
             student=student,
             class_snapshot=class_snapshot,
         )
-        session = ExperimentSession.objects.create(
-            version=version,
-            student=student,
-            class_snapshot=class_snapshot,
-            status=ExperimentSession.Status.COMPLETED,
-        )
+        if session is None:
+            session = ExperimentSession.objects.create(
+                version=version,
+                student=student,
+                class_snapshot=class_snapshot,
+                status=ExperimentSession.Status.COMPLETED,
+            )
         sequence = Question.objects.filter(bank=experiment.question_bank).count() + 1
         source_question = Question.objects.create(
             bank=experiment.question_bank,
@@ -382,6 +406,10 @@ class ClassExperimentTaskAuditTests(TransactionTestCase):
         self.assertEqual(multi.experiment_id, self.multi_experiment.pk)
         self.assertEqual(multi.release_snapshot_count, 2)
         self.assertEqual(multi.class_snapshot_count, 2)
+        self.assertEqual(multi.participant_count, 0)
+        self.assertEqual(multi.session_count, 0)
+        self.assertEqual(multi.attempt_count, 0)
+        self.assertEqual(multi.grade_record_count, 0)
         self.assertEqual(multi.reason_codes, ("multiple_release_snapshots",))
 
         source_null = self._row_for_reason("source_class_missing")
@@ -509,3 +537,44 @@ class ClassExperimentTaskAuditTests(TransactionTestCase):
 
         after = {model._meta.label: model.objects.count() for model in count_models}
         self.assertEqual(after, before)
+
+    def test_audit_uses_a_constant_query_budget_for_many_historical_snapshots(self):
+        experiment = self._experiment("大量历史标签")
+        version = ExperimentVersion.objects.create(
+            experiment=experiment,
+            version_number=1,
+            published_by=self.teacher,
+        )
+        ExperimentClassSnapshot.objects.bulk_create(
+            [
+                ExperimentClassSnapshot(
+                    version=version,
+                    name_snapshot=f"历史标签 {index}",
+                    academic_year_snapshot="",
+                    capture_mode=(
+                        ExperimentClassSnapshot.CaptureMode.LEGACY_LABEL_PROJECTION
+                    ),
+                )
+                for index in range(1000)
+            ]
+        )
+
+        with CaptureQueriesContext(connection) as queries:
+            rows = audit_class_experiment_tasks()
+
+        self.assertLessEqual(len(queries), 6)
+        self.assertGreaterEqual(
+            sum(
+                1
+                for row in rows
+                if row.experiment_id == experiment.pk
+                and row.reason_codes == ("source_class_missing",)
+            ),
+            1000,
+        )
+
+    def test_table_cells_escape_separators_and_remove_control_characters(self):
+        self.assertEqual(
+            _table_value("班|级\x00\n\t\x7f保留😀"),
+            r"班\|级保留😀",
+        )

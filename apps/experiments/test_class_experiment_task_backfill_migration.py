@@ -1,3 +1,7 @@
+from importlib import import_module
+from types import SimpleNamespace
+from unittest.mock import patch
+
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
@@ -282,6 +286,30 @@ class ClassExperimentTaskBackfillMigrationTests(TransactionTestCase):
             self.inconsistent["published_at"],
         )
 
+        migration_module = import_module(
+            "apps.experiments.migrations.0014_backfill_class_experiment_tasks"
+        )
+        with (
+            patch.object(
+                ClassExperimentTask.objects,
+                "using",
+                wraps=ClassExperimentTask.objects.using,
+            ) as task_using,
+            patch.object(
+                self.apps.get_model("experiments", "ExperimentClassSnapshot").objects,
+                "using",
+                wraps=self.apps.get_model(
+                    "experiments", "ExperimentClassSnapshot"
+                ).objects.using,
+            ) as snapshot_using,
+        ):
+            migration_module.backfill_class_experiment_tasks(
+                self.apps,
+                SimpleNamespace(connection=SimpleNamespace(alias="default")),
+            )
+        task_using.assert_any_call("default")
+        snapshot_using.assert_any_call("default")
+
         executor = MigrationExecutor(connection)
         executor.migrate(self.old_targets)
         old_apps = executor.loader.project_state(self.old_targets).apps
@@ -292,4 +320,98 @@ class ClassExperimentTaskBackfillMigrationTests(TransactionTestCase):
         )
         self.assertTrue(
             HistoricalTask.objects.filter(pk=self.inconsistent["task_id"]).exists()
+        )
+
+    def test_backfill_uses_schema_alias_for_snapshot_reads_and_task_writes(self):
+        aliases = []
+        created_tasks = []
+
+        class TaskQuerySet:
+            def order_by(self, *fields):
+                return self
+
+            def values_list(self, *fields):
+                return ()
+
+            def bulk_create(self, objects, batch_size):
+                created_tasks.extend(objects)
+
+        task_query_set = TaskQuerySet()
+
+        class TaskManager:
+            def using(self, alias):
+                aliases.append(("task", alias))
+                return task_query_set
+
+        class HistoricalTask:
+            objects = TaskManager()
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class SnapshotQuerySet:
+            def exclude(self, **kwargs):
+                return self
+
+            def order_by(self, *fields):
+                return self
+
+            def values(self, *fields):
+                return self
+
+            def iterator(self):
+                return iter(
+                    [
+                        {
+                            "version_id": 17,
+                            "class_snapshot_id": "snapshot-17",
+                            "source_class_group_id": 11,
+                            "source_class_group__course_id": 3,
+                            "version__experiment_id": 5,
+                            "version__experiment__course_id": 3,
+                            "version__published_at": "2026-08-28T00:00:00Z",
+                        }
+                    ]
+                )
+
+        snapshot_query_set = SnapshotQuerySet()
+
+        class SnapshotManager:
+            def using(self, alias):
+                aliases.append(("snapshot", alias))
+                return snapshot_query_set
+
+        class HistoricalSnapshot:
+            objects = SnapshotManager()
+
+        class HistoricalApps:
+            @staticmethod
+            def get_model(app_label, model_name):
+                return {
+                    "ClassExperimentTask": HistoricalTask,
+                    "ExperimentClassSnapshot": HistoricalSnapshot,
+                }[model_name]
+
+        migration_module = import_module(
+            "apps.experiments.migrations.0014_backfill_class_experiment_tasks"
+        )
+        migration_module.backfill_class_experiment_tasks(
+            HistoricalApps(),
+            SimpleNamespace(connection=SimpleNamespace(alias="historical")),
+        )
+
+        self.assertEqual(
+            aliases,
+            [("task", "historical"), ("snapshot", "historical"), ("task", "historical")],
+        )
+        self.assertEqual(len(created_tasks), 1)
+        self.assertEqual(
+            created_tasks[0].kwargs,
+            {
+                "class_group_id": 11,
+                "experiment_id": 5,
+                "release_snapshot_id": 17,
+                "class_snapshot_id": "snapshot-17",
+                "published_at": "2026-08-28T00:00:00Z",
+            },
         )

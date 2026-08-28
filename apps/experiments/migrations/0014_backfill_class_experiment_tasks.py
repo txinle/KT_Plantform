@@ -1,4 +1,4 @@
-from collections import defaultdict
+from itertools import groupby
 
 from django.db import migrations
 
@@ -18,64 +18,78 @@ def backfill_class_experiment_tasks(apps, schema_editor):
         "ExperimentClassSnapshot",
     )
 
-    snapshots_by_pair = defaultdict(list)
+    database_alias = schema_editor.connection.alias
+    existing_task_pairs = set(
+        ClassExperimentTask.objects.using(database_alias)
+        .order_by("class_group_id", "experiment_id")
+        .values_list("class_group_id", "experiment_id")
+    )
     snapshots = (
-        ExperimentClassSnapshot.objects.exclude(source_class_group_id__isnull=True)
-        .select_related("version__experiment", "source_class_group")
+        ExperimentClassSnapshot.objects.using(database_alias)
+        .exclude(source_class_group_id__isnull=True)
         .order_by(
-            "version__experiment_id",
             "source_class_group_id",
+            "version__experiment_id",
             "version_id",
             "class_snapshot_id",
         )
-    )
-    for snapshot in snapshots.iterator():
-        experiment_id = snapshot.version.experiment_id
-        snapshots_by_pair[(snapshot.source_class_group_id, experiment_id)].append(
-            snapshot
-        )
-
-    existing_task_pairs = set(
-        ClassExperimentTask.objects.order_by("class_group_id", "experiment_id").values_list(
-            "class_group_id",
-            "experiment_id",
+        .values(
+            "version_id",
+            "class_snapshot_id",
+            "source_class_group_id",
+            "source_class_group__course_id",
+            "version__experiment_id",
+            "version__experiment__course_id",
+            "version__published_at",
         )
     )
-
-    for (class_group_id, experiment_id), pair_snapshots in sorted(
-        snapshots_by_pair.items()
+    pending_tasks = []
+    for (class_group_id, experiment_id), pair_snapshots_iterator in groupby(
+        snapshots.iterator(),
+        key=lambda snapshot: (
+            snapshot["source_class_group_id"],
+            snapshot["version__experiment_id"],
+        ),
     ):
+        snapshot = None
+        snapshot_count = 0
+        version_ids = set()
+        for pair_snapshot in pair_snapshots_iterator:
+            snapshot_count += 1
+            version_ids.add(pair_snapshot["version_id"])
+            if snapshot is None:
+                snapshot = pair_snapshot
         if (class_group_id, experiment_id) in existing_task_pairs:
             continue
 
-        version_ids = {snapshot.version_id for snapshot in pair_snapshots}
         if len(version_ids) != 1:
             continue
-        version_id = next(iter(version_ids))
-        version = pair_snapshots[0].version
-        class_group = pair_snapshots[0].source_class_group
-
-        if class_group.course_id != version.experiment.course_id:
+        if snapshot_count != 1:
             continue
-
-        matching_snapshots = list(
-            ExperimentClassSnapshot.objects.filter(
-                version_id=version_id,
-                source_class_group_id=class_group_id,
+        if (
+            snapshot["source_class_group__course_id"]
+            != snapshot["version__experiment__course_id"]
+        ):
+            continue
+        pending_tasks.append(
+            ClassExperimentTask(
+                class_group_id=class_group_id,
+                experiment_id=experiment_id,
+                release_snapshot_id=snapshot["version_id"],
+                class_snapshot_id=snapshot["class_snapshot_id"],
+                published_at=snapshot["version__published_at"],
             )
-            .order_by("class_snapshot_id")
-            .iterator()
         )
-        if len(matching_snapshots) != 1:
-            continue
-        class_snapshot = matching_snapshots[0]
-
-        ClassExperimentTask.objects.create(
-            class_group_id=class_group_id,
-            experiment_id=experiment_id,
-            release_snapshot_id=version_id,
-            class_snapshot_id=class_snapshot.pk,
-            published_at=version.published_at,
+        if len(pending_tasks) == 500:
+            ClassExperimentTask.objects.using(database_alias).bulk_create(
+                pending_tasks,
+                batch_size=500,
+            )
+            pending_tasks.clear()
+    if pending_tasks:
+        ClassExperimentTask.objects.using(database_alias).bulk_create(
+            pending_tasks,
+            batch_size=500,
         )
 
 
