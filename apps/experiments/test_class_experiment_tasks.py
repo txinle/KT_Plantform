@@ -2,9 +2,10 @@ from datetime import timedelta
 
 from django.contrib import admin
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
-from django.test import RequestFactory, TestCase
+from django.db import IntegrityError, connection, transaction
+from django.test import RequestFactory, TestCase, TransactionTestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
@@ -19,7 +20,12 @@ from .models import (
     ExperimentQuestion,
     ExperimentVersion,
 )
-from .services import delete_experiment, publish_experiment, save_participant_rules
+from .services import (
+    _create_class_experiment_tasks,
+    delete_experiment,
+    publish_experiment,
+    save_participant_rules,
+)
 
 
 class ClassExperimentTaskTests(TestCase):
@@ -106,12 +112,35 @@ class ClassExperimentTaskTests(TestCase):
         return version, snapshot
 
     def _create_task_for_publication(self, *, class_group, version, snapshot):
-        return ClassExperimentTask._create_for_publication(
+        return self._insert_historical_task(
+            class_group=class_group,
+            version=version,
+            snapshot=snapshot,
+        )
+
+    def _insert_historical_task(self, *, class_group, version, snapshot):
+        """Seed a pre-contract row without using the current model write API."""
+        table = connection.ops.quote_name(ClassExperimentTask._meta.db_table)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO {table}
+                    (class_group_id, experiment_id, release_snapshot_id,
+                     class_snapshot_id, published_at, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    class_group.pk,
+                    self.experiment.pk,
+                    version.pk,
+                    snapshot.pk.hex,
+                    version.published_at,
+                    timezone.now(),
+                ],
+            )
+        return ClassExperimentTask.objects.get(
             class_group=class_group,
             experiment=self.experiment,
-            release_snapshot=version,
-            class_snapshot=snapshot,
-            published_at=version.published_at,
         )
 
     def test_same_class_and_experiment_can_have_only_one_permanent_task(self):
@@ -381,3 +410,283 @@ class ClassExperimentTaskTests(TestCase):
             ClassExperimentTask.objects.filter(experiment=self.experiment).count(),
             1,
         )
+
+    def _publish_class_a_task(self):
+        save_participant_rules(self.experiment, [self.class_a], [], [])
+        version = publish_experiment(self.experiment, self.teacher)
+        task = ClassExperimentTask.objects.get(
+            experiment=self.experiment,
+            class_group=self.class_a,
+        )
+        return version, task.class_snapshot, task
+
+    def _assert_selected_empty_class_is_frozen(self, version):
+        snapshots = ExperimentClassSnapshot.objects.filter(version=version)
+        self.assertEqual(
+            set(snapshots.values_list("source_class_group_id", flat=True)),
+            {self.class_a.pk, self.class_b.pk},
+        )
+        snapshot_b = snapshots.get(source_class_group=self.class_b)
+        self.assertEqual(snapshot_b.participant_snapshots.count(), 0)
+        self.assertEqual(
+            ClassExperimentTask.objects.filter(
+                experiment=self.experiment,
+                class_group=self.class_b,
+                release_snapshot=version,
+                class_snapshot=snapshot_b,
+            ).count(),
+            1,
+        )
+
+    def test_publish_freezes_an_empty_selected_class(self):
+        CourseEnrollment.objects.filter(
+            course=self.course,
+            student=self.student_b,
+        ).update(is_active=False)
+        save_participant_rules(
+            self.experiment,
+            [self.class_a, self.class_b],
+            [],
+            [],
+        )
+
+        version = publish_experiment(self.experiment, self.teacher)
+
+        self._assert_selected_empty_class_is_frozen(version)
+
+    def test_publish_freezes_a_selected_class_with_all_students_excluded(self):
+        save_participant_rules(
+            self.experiment,
+            [self.class_a, self.class_b],
+            [],
+            [self.student_b],
+        )
+
+        version = publish_experiment(self.experiment, self.teacher)
+
+        self._assert_selected_empty_class_is_frozen(version)
+
+    def test_base_manager_rejects_task_update(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+
+        with self.assertRaises(ValidationError):
+            ClassExperimentTask._base_manager.filter(pk=task.pk).update(
+                published_at=task.published_at
+            )
+
+    def test_base_manager_rejects_task_bulk_create(self):
+        version, _snapshot_a, _task = self._publish_class_a_task()
+        snapshot_b = ExperimentClassSnapshot.objects.create(
+            version=version,
+            source_class_group=self.class_b,
+            name_snapshot=self.class_b.name,
+            academic_year_snapshot=self.class_b.academic_year,
+            capture_mode=ExperimentClassSnapshot.CaptureMode.NATIVE,
+        )
+        candidate = ClassExperimentTask(
+            class_group=self.class_b,
+            experiment=self.experiment,
+            release_snapshot=version,
+            class_snapshot=snapshot_b,
+            published_at=version.published_at,
+        )
+
+        with self.assertRaises(ValidationError):
+            ClassExperimentTask._base_manager.bulk_create([candidate])
+
+    def test_base_manager_rejects_task_delete(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+
+        with self.assertRaises(ValidationError):
+            ClassExperimentTask._base_manager.filter(pk=task.pk).delete()
+
+    def test_task_model_exposes_no_publication_creation_api(self):
+        self.assertFalse(hasattr(ClassExperimentTask, "_publication_creation_context"))
+        self.assertFalse(hasattr(ClassExperimentTask, "_create_for_publication"))
+
+    def test_task_creator_rejects_normal_service_calls_without_publish_scope(self):
+        version, _snapshot_a = self._version_and_snapshot(
+            version_number=1,
+            class_group=self.class_a,
+        )
+        snapshot_b = ExperimentClassSnapshot.objects.create(
+            version=version,
+            source_class_group=self.class_b,
+            name_snapshot=self.class_b.name,
+            academic_year_snapshot=self.class_b.academic_year,
+            capture_mode=ExperimentClassSnapshot.CaptureMode.NATIVE,
+        )
+
+        with self.assertRaises(ValidationError):
+            _create_class_experiment_tasks(
+                self.experiment,
+                version,
+                {self.class_b.pk: snapshot_b},
+            )
+
+    def test_task_backed_release_and_class_snapshots_cannot_be_mutated(self):
+        version, snapshot, task = self._publish_class_a_task()
+        original_published_at = version.published_at
+        original_class_group_id = snapshot.source_class_group_id
+
+        version.published_at = version.published_at + timedelta(seconds=1)
+        with self.assertRaises(ValidationError):
+            version.save(update_fields=["published_at"])
+        with self.assertRaises(ValidationError):
+            ExperimentVersion.objects.filter(pk=version.pk).update(
+                published_at=version.published_at
+            )
+        with self.assertRaises(ValidationError):
+            ExperimentVersion._base_manager.filter(pk=version.pk).update(
+                published_at=version.published_at
+            )
+        with self.assertRaises(ValidationError):
+            ExperimentVersion._base_manager.bulk_update(
+                [version], ["published_at"]
+            )
+        with self.assertRaises(ValidationError):
+            version.delete()
+        with self.assertRaises(ValidationError):
+            ExperimentVersion.objects.filter(pk=version.pk).delete()
+        with self.assertRaises(ValidationError):
+            ExperimentVersion._base_manager.filter(pk=version.pk).delete()
+
+        snapshot.source_class_group = self.class_b
+        with self.assertRaises(ValidationError):
+            snapshot.save(update_fields=["source_class_group"])
+        with self.assertRaises(ValidationError):
+            ExperimentClassSnapshot.objects.filter(pk=snapshot.pk).update(
+                source_class_group=self.class_b
+            )
+        with self.assertRaises(ValidationError):
+            ExperimentClassSnapshot._base_manager.filter(pk=snapshot.pk).update(
+                source_class_group=self.class_b
+            )
+        with self.assertRaises(ValidationError):
+            ExperimentClassSnapshot._base_manager.bulk_update(
+                [snapshot], ["source_class_group"]
+            )
+        with self.assertRaises(ValidationError):
+            snapshot.delete()
+        with self.assertRaises(ValidationError):
+            ExperimentClassSnapshot.objects.filter(pk=snapshot.pk).delete()
+        with self.assertRaises(ValidationError):
+            ExperimentClassSnapshot._base_manager.filter(pk=snapshot.pk).delete()
+
+        version.refresh_from_db()
+        snapshot.refresh_from_db()
+        task.refresh_from_db()
+        self.assertEqual(version.published_at, original_published_at)
+        self.assertEqual(snapshot.source_class_group_id, original_class_group_id)
+        self.assertEqual(task.release_snapshot_id, version.pk)
+        self.assertEqual(task.class_snapshot_id, snapshot.pk)
+        self.assertEqual(task.published_at, version.published_at)
+
+    def test_admin_disallows_version_writes_after_a_task_is_created(self):
+        version, _snapshot, _task = self._publish_class_a_task()
+        model_admin = admin.site._registry[ExperimentVersion]
+        request = RequestFactory().get("/admin/")
+
+        self.assertFalse(model_admin.has_change_permission(request, version))
+        self.assertFalse(model_admin.has_delete_permission(request, version))
+
+    def test_publish_view_returns_to_experiment_when_a_task_conflicts(self):
+        save_participant_rules(self.experiment, [self.class_a], [], [])
+        existing_version, existing_snapshot = self._version_and_snapshot(
+            version_number=1,
+            class_group=self.class_a,
+        )
+        self._insert_historical_task(
+            class_group=self.class_a,
+            version=existing_version,
+            snapshot=existing_snapshot,
+        )
+        self.client.force_login(self.teacher)
+
+        response = self.client.post(
+            reverse(
+                "courses:experiment_publish",
+                args=[self.course.pk, self.experiment.pk],
+            ),
+        )
+
+        self.assertRedirects(
+            response,
+            reverse(
+                "courses:experiment_detail",
+                args=[self.course.pk, self.experiment.pk],
+            ),
+        )
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
+        self.assertEqual(
+            ExperimentVersion.objects.filter(experiment=self.experiment).count(),
+            1,
+        )
+
+
+class ClassExperimentTaskCreationBoundaryTests(TransactionTestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="task-creation-boundary-teacher",
+            role=User.Role.TEACHER,
+        )
+        self.course = Course.objects.create(
+            owner=self.teacher,
+            name="任务创建边界课程",
+            code="TASK102",
+            term="2026 秋",
+        )
+        self.class_group = ClassGroup.objects.create(
+            course=self.course,
+            name="创建边界班",
+            academic_year="2023",
+        )
+        bank = QuestionBank.objects.create(
+            course=self.course,
+            created_by=self.teacher,
+            name="任务创建边界题库",
+        )
+        self.experiment = Experiment.objects.create(
+            course=self.course,
+            created_by=self.teacher,
+            question_bank=bank,
+            name="任务创建边界实验",
+        )
+        self.version = ExperimentVersion.objects.create(
+            experiment=self.experiment,
+            version_number=1,
+            published_by=self.teacher,
+        )
+        self.snapshot = ExperimentClassSnapshot.objects.create(
+            version=self.version,
+            source_class_group=self.class_group,
+            name_snapshot=self.class_group.name,
+            academic_year_snapshot=self.class_group.academic_year,
+            capture_mode=ExperimentClassSnapshot.CaptureMode.NATIVE,
+        )
+
+    def _task_kwargs(self):
+        return {
+            "class_group": self.class_group,
+            "experiment": self.experiment,
+            "release_snapshot": self.version,
+            "class_snapshot": self.snapshot,
+            "published_at": self.version.published_at,
+        }
+
+    def test_direct_task_creation_fails_without_an_atomic_block(self):
+        self.assertFalse(connection.in_atomic_block)
+
+        with self.assertRaises(ValidationError):
+            ClassExperimentTask(**self._task_kwargs()).save(force_insert=True)
+        with self.assertRaises(ValidationError):
+            ClassExperimentTask.objects.create(**self._task_kwargs())
+
+    def test_direct_task_creation_fails_inside_an_unscoped_atomic_block(self):
+        with transaction.atomic():
+            self.assertTrue(connection.in_atomic_block)
+            with self.assertRaises(ValidationError):
+                ClassExperimentTask(**self._task_kwargs()).save(force_insert=True)
+            with self.assertRaises(ValidationError):
+                ClassExperimentTask.objects.create(**self._task_kwargs())

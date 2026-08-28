@@ -1,20 +1,12 @@
 import hashlib
 import json
 import uuid
-from contextlib import contextmanager
-from contextvars import ContextVar
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models, transaction
+from django.db import models
 from django.db.models import Q
-
-
-_class_experiment_task_creation_allowed = ContextVar(
-    "class_experiment_task_creation_allowed",
-    default=False,
-)
 
 
 def canonical_presentation_hash(
@@ -365,6 +357,33 @@ class ExperimentParticipantOverride(models.Model):
             raise ValidationError({"student": "学生必须是当前课程可用班级中的在读学生。"})
 
 
+class ExperimentVersionQuerySet(models.QuerySet):
+    def _assert_not_task_backed(self):
+        if self.filter(class_tasks__isnull=False).exists():
+            raise ValidationError("已用于班级实验任务的发布快照不可修改或删除。")
+
+    def update(self, **kwargs):
+        self._assert_not_task_backed()
+        return super().update(**kwargs)
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        task_backed_ids = [obj.pk for obj in objs if obj.pk is not None]
+        if task_backed_ids:
+            self.model.objects.filter(
+                pk__in=task_backed_ids,
+                class_tasks__isnull=False,
+            )._assert_not_task_backed()
+        return super().bulk_update(objs, fields, batch_size=batch_size)
+
+    def delete(self):
+        self._assert_not_task_backed()
+        return super().delete()
+
+
+class ExperimentVersionManager(models.Manager.from_queryset(ExperimentVersionQuerySet)):
+    pass
+
+
 class ExperimentVersion(models.Model):
     experiment = models.ForeignKey(Experiment, on_delete=models.PROTECT, related_name="versions")
     version_number = models.PositiveIntegerField()
@@ -375,8 +394,26 @@ class ExperimentVersion(models.Model):
     published_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     published_at = models.DateTimeField(auto_now_add=True)
     assignment_unit_type = models.CharField(max_length=16, choices=(("subject", "Subject"), ("session", "Session")), default="subject")
+    objects = ExperimentVersionManager()
+
     class Meta:
         constraints = [models.UniqueConstraint(fields=["experiment", "version_number"], name="unique_experiment_version")]
+        base_manager_name = "objects"
+        default_manager_name = "objects"
+
+    def _is_task_backed(self):
+        return self.pk is not None and self.class_tasks.exists()
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding and self._is_task_backed():
+            raise ValidationError("已用于班级实验任务的发布快照不可修改。")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self._is_task_backed():
+            raise ValidationError("已用于班级实验任务的发布快照不可删除。")
+        return super().delete(*args, **kwargs)
+
     def __str__(self): return f"{self.experiment} v{self.version_number}"
 
 
@@ -449,24 +486,8 @@ class ClassExperimentTask(models.Model):
                 name="class_task_class_pub_idx",
             ),
         ]
-
-    @classmethod
-    @contextmanager
-    def _publication_creation_context(cls):
-        token = _class_experiment_task_creation_allowed.set(True)
-        try:
-            yield
-        finally:
-            _class_experiment_task_creation_allowed.reset(token)
-
-    @classmethod
-    def _create_for_publication(cls, **kwargs):
-        if not transaction.get_connection().in_atomic_block:
-            raise ValidationError("班级实验任务只能在实验发布事务中创建。")
-        task = cls(**kwargs)
-        with cls._publication_creation_context():
-            task.save(force_insert=True)
-        return task
+        base_manager_name = "objects"
+        default_manager_name = "objects"
 
     def clean(self):
         super().clean()
@@ -507,13 +528,44 @@ class ClassExperimentTask(models.Model):
     def save(self, *args, **kwargs):
         if not self._state.adding:
             raise ValidationError("班级实验任务不可修改。")
-        if not _class_experiment_task_creation_allowed.get():
+        from .services import _class_experiment_task_creation_is_active
+
+        if not _class_experiment_task_creation_is_active():
             raise ValidationError("班级实验任务只能在实验发布事务中创建。")
         self.full_clean(validate_constraints=False)
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
         raise ValidationError("班级实验任务不可删除。")
+
+
+class ExperimentClassSnapshotQuerySet(models.QuerySet):
+    def _assert_not_task_backed(self):
+        if self.filter(class_task__isnull=False).exists():
+            raise ValidationError("已用于班级实验任务的班级快照不可修改或删除。")
+
+    def update(self, **kwargs):
+        self._assert_not_task_backed()
+        return super().update(**kwargs)
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        task_backed_ids = [obj.pk for obj in objs if obj.pk is not None]
+        if task_backed_ids:
+            self.model.objects.filter(
+                pk__in=task_backed_ids,
+                class_task__isnull=False,
+            )._assert_not_task_backed()
+        return super().bulk_update(objs, fields, batch_size=batch_size)
+
+    def delete(self):
+        self._assert_not_task_backed()
+        return super().delete()
+
+
+class ExperimentClassSnapshotManager(
+    models.Manager.from_queryset(ExperimentClassSnapshotQuerySet)
+):
+    pass
 
 
 class ExperimentClassSnapshot(models.Model):
@@ -548,6 +600,7 @@ class ExperimentClassSnapshot(models.Model):
         choices=CaptureMode.choices,
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    objects = ExperimentClassSnapshotManager()
 
     class Meta:
         ordering = ["academic_year_snapshot", "name_snapshot", "class_snapshot_id"]
@@ -558,6 +611,8 @@ class ExperimentClassSnapshot(models.Model):
                 name="unique_version_source_class_snapshot",
             ),
         ]
+        base_manager_name = "objects"
+        default_manager_name = "objects"
 
     @property
     def display_name(self):
@@ -567,6 +622,11 @@ class ExperimentClassSnapshot(models.Model):
         if self.pk and not self._state.adding:
             raise ValidationError("实验班级快照不可修改。")
         return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.pk and ClassExperimentTask.objects.filter(class_snapshot_id=self.pk).exists():
+            raise ValidationError("已用于班级实验任务的班级快照不可删除。")
+        return super().delete(*args, **kwargs)
 
 
 class ExperimentVersionParticipantSnapshot(models.Model):

@@ -24,7 +24,22 @@ class ExperimentAdmin(admin.ModelAdmin):
     list_display = ("name", "course", "created_by", "status", "ordering_mode", "feedback_mode", "time_mode")
     list_filter = ("course", "status")
     inlines = [QuestionInline, StudentInline]
-admin.site.register(ExperimentVersion)
+
+@admin.register(ExperimentVersion)
+class ExperimentVersionAdmin(admin.ModelAdmin):
+    list_display = ("experiment", "version_number", "published_at", "published_by")
+
+    def has_change_permission(self, request, obj=None):
+        if obj is not None and obj.class_tasks.exists():
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and obj.class_tasks.exists():
+            return False
+        return super().has_delete_permission(request, obj)
+
+
 admin.site.register(QuestionSnapshot)
 
 

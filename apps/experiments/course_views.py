@@ -2,7 +2,7 @@ from urllib.parse import quote
 
 from django.contrib import messages
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
@@ -34,6 +34,15 @@ from .services import (
 
 def _experiment(course, pk):
     return get_object_or_404(course.experiments, pk=pk)
+
+
+def _is_class_experiment_task_unique_conflict(error):
+    message = str(error)
+    return (
+        "unique_class_experiment_task" in message
+        or "experiments_classexperimenttask.class_group_id, "
+        "experiments_classexperimenttask.experiment_id" in message
+    )
 
 
 def _session_report_scope(request, course_pk, experiment_pk, session_pk):
@@ -308,6 +317,10 @@ def experiment_publish(request, course_pk, pk):
         messages.success(request, f"实验已发布为 v{version.version_number}。")
     except ValidationError as exc:
         messages.error(request, "; ".join(exc.messages))
+    except IntegrityError as exc:
+        if not _is_class_experiment_task_unique_conflict(exc):
+            raise
+        messages.error(request, "该班级已存在此实验的正式任务；请新建或克隆实验后再发布。")
     return redirect("courses:experiment_detail", course.pk, experiment.pk)
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import random
 import secrets
@@ -31,6 +33,23 @@ from .models import (
 ARCHIVED_EXPERIMENT_BANK_MESSAGE = "题库已归档，不能同步或发布实验。"
 SAMPLING_ALGORITHM_VERSION = "v1"
 LEGACY_SAMPLING_ALGORITHM_VERSION = "legacy-v0"
+_class_experiment_task_creation_scope = ContextVar(
+    "class_experiment_task_creation_scope",
+    default=False,
+)
+
+
+@contextmanager
+def _class_experiment_task_publication_scope():
+    token = _class_experiment_task_creation_scope.set(True)
+    try:
+        yield
+    finally:
+        _class_experiment_task_creation_scope.reset(token)
+
+
+def _class_experiment_task_creation_is_active():
+    return _class_experiment_task_creation_scope.get()
 
 
 @dataclass(frozen=True)
@@ -229,14 +248,12 @@ def _replace_experiment_students(experiment, roster):
     )
 
 
-def _create_version_participant_snapshots(version, roster):
+def _create_version_participant_snapshots(version, roster, published_class_groups):
     """Freeze native class membership at the same transaction boundary as publish."""
     class_snapshots = {}
-    for enrollment in sorted(roster.values(), key=lambda value: value.class_group_id):
-        if enrollment.class_group_id in class_snapshots:
-            continue
-        class_group = enrollment.class_group
-        class_snapshots[class_group.pk] = ExperimentClassSnapshot.objects.create(
+    for class_group_id in sorted(published_class_groups):
+        class_group = published_class_groups[class_group_id]
+        class_snapshots[class_group_id] = ExperimentClassSnapshot.objects.create(
             version=version,
             source_class_group=class_group,
             name_snapshot=class_group.name,
@@ -257,14 +274,17 @@ def _create_version_participant_snapshots(version, roster):
 
 
 def _create_class_experiment_tasks(experiment, version, class_snapshots):
+    if not _class_experiment_task_creation_is_active():
+        raise ValidationError("班级实验任务只能在实验发布事务中创建。")
     for class_group_id in sorted(class_snapshots):
-        ClassExperimentTask._create_for_publication(
+        task = ClassExperimentTask(
             class_group_id=class_group_id,
             experiment=experiment,
             release_snapshot=version,
             class_snapshot=class_snapshots[class_group_id],
             published_at=version.published_at,
         )
+        task.save(force_insert=True)
 
 
 def _create_legacy_version_participant_snapshots(version, experiment):
@@ -336,7 +356,7 @@ def _publish_participant_roster(experiment, course, locked_classes):
         for student_id, mode in overrides
         if mode == ExperimentParticipantOverride.Mode.EXCLUDE
     )
-    return _current_rule_roster(
+    roster = _current_rule_roster(
         course,
         locked_classes,
         class_ids,
@@ -345,6 +365,13 @@ def _publish_participant_roster(experiment, course, locked_classes):
         include_error="显式纳入学生已退出当前课程或所在班级不可用，不能发布实验。",
         validate_excludes=False,
     )
+    published_class_groups = {
+        class_id: locked_classes[class_id]
+        for class_id in class_ids
+    }
+    for enrollment in roster.values():
+        published_class_groups[enrollment.class_group_id] = enrollment.class_group
+    return roster, published_class_groups
 
 
 def _locked_legacy_participant_count(experiment):
@@ -676,8 +703,13 @@ def publish_experiment(experiment, actor):
         course = _lock_participant_course(experiment, action="发布实验")
         locked_classes = _lock_course_classes(course)
     roster = None
+    published_class_groups = None
     if course is not None:
-        roster = _publish_participant_roster(experiment, course, locked_classes)
+        roster, published_class_groups = _publish_participant_roster(
+            experiment,
+            course,
+            locked_classes,
+        )
         participant_count = len(roster)
     else:
         participant_count = _locked_legacy_participant_count(experiment)
@@ -736,8 +768,13 @@ def publish_experiment(experiment, actor):
         **course_snapshot,
     )
     if roster is not None:
-        class_snapshots = _create_version_participant_snapshots(version, roster)
-        _create_class_experiment_tasks(experiment, version, class_snapshots)
+        class_snapshots = _create_version_participant_snapshots(
+            version,
+            roster,
+            published_class_groups,
+        )
+        with _class_experiment_task_publication_scope():
+            _create_class_experiment_tasks(experiment, version, class_snapshots)
     else:
         _create_legacy_version_participant_snapshots(version, experiment)
     for q in questions:
