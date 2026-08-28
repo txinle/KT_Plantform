@@ -313,7 +313,6 @@ def experiment_publish(request, course_pk, pk):
     experiment = _experiment(course, pk)
     try:
         version = publish_experiment(experiment, request.user)
-        log_action(request, "experiment.publish", experiment, {"version": version.version_number})
         messages.success(request, f"实验已发布为 v{version.version_number}。")
     except ValidationError as exc:
         messages.error(request, "; ".join(exc.messages))

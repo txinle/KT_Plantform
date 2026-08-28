@@ -158,7 +158,6 @@ def experiment_publish(request, pk):
     if request.method == "POST":
         try:
             version = publish_experiment(experiment, request.user)
-            log_action(request, "experiment.publish", experiment, {"version": version.version_number})
             messages.success(request, f"实验已发布为 v{version.version_number}")
         except ValidationError as exc: messages.error(request, "; ".join(exc.messages))
     return redirect("experiments:detail", pk=experiment.pk)

@@ -11,6 +11,7 @@ from django.db import transaction
 from apps.accounts.course_access import lock_course, lock_writable_course
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.accounts.class_lifecycle import lock_active_class_groups
+from apps.audit.models import AuditLog
 from apps.question_bank.access import lock_question_bank
 from apps.question_bank.models import Question, QuestionBank
 from apps.question_bank.services.numeric import normalize_finite_decimal
@@ -276,6 +277,7 @@ def _create_version_participant_snapshots(version, roster, published_class_group
 def _create_class_experiment_tasks(experiment, version, class_snapshots):
     if not _class_experiment_task_creation_is_active():
         raise ValidationError("班级实验任务只能在实验发布事务中创建。")
+    tasks = []
     for class_group_id in sorted(class_snapshots):
         task = ClassExperimentTask(
             class_group_id=class_group_id,
@@ -285,6 +287,8 @@ def _create_class_experiment_tasks(experiment, version, class_snapshots):
             published_at=version.published_at,
         )
         task.save(force_insert=True)
+        tasks.append(task)
+    return tasks
 
 
 def _create_legacy_version_participant_snapshots(version, experiment):
@@ -767,6 +771,7 @@ def publish_experiment(experiment, actor):
         published_by=actor,
         **course_snapshot,
     )
+    class_tasks = []
     if roster is not None:
         class_snapshots = _create_version_participant_snapshots(
             version,
@@ -774,7 +779,11 @@ def publish_experiment(experiment, actor):
             published_class_groups,
         )
         with _class_experiment_task_publication_scope():
-            _create_class_experiment_tasks(experiment, version, class_snapshots)
+            class_tasks = _create_class_experiment_tasks(
+                experiment,
+                version,
+                class_snapshots,
+            )
     else:
         _create_legacy_version_participant_snapshots(version, experiment)
     for q in questions:
@@ -801,6 +810,32 @@ def publish_experiment(experiment, actor):
         )
     experiment.status = Experiment.Status.PUBLISHED
     experiment.save(update_fields=["status", "updated_at"])
+    audit_db = version._state.db or "default"
+    AuditLog.objects.using(audit_db).create(
+        actor=actor,
+        action="experiment.publish",
+        object_type="Experiment",
+        object_id=str(experiment.pk),
+        details={
+            "course_id": experiment.course_id,
+            "experiment_id": experiment.pk,
+            "release_snapshot_id": version.pk,
+            "class_tasks": [
+                {
+                    "course_id": experiment.course_id,
+                    "class_group_id": task.class_group_id,
+                    "experiment_id": experiment.pk,
+                    "task_id": task.pk,
+                    "release_snapshot_id": version.pk,
+                    "class_snapshot_id": str(task.class_snapshot_id),
+                }
+                for task in sorted(
+                    class_tasks,
+                    key=lambda task: (task.class_group_id, task.pk),
+                )
+            ],
+        },
+    )
     return version
 
 
