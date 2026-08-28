@@ -203,6 +203,36 @@ class DataCenterUiV2Tests(TestCase):
         )
         self.assertEqual(rejected.status_code, 400)
 
+    def test_export_page_offers_a_transient_single_version_picker(self):
+        response = self.client.get(
+            reverse("courses:data_exports", args=[self.course.pk]),
+            {
+                "experiment_id": self.experiment.pk,
+                "class_id": self.class_group.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "选择本次导出使用的版本")
+        self.assertContains(response, 'name="version_id"')
+        self.assertContains(response, f'value="{self.version.pk}"')
+        self.assertContains(response, "不会改变普通教学范围")
+
+        versioned_response = self.client.get(
+            reverse("courses:data_exports", args=[self.course.pk]),
+            {
+                "experiment_id": self.experiment.pk,
+                "class_id": self.class_group.pk,
+                "version_mode": "single",
+                "version_id": self.version.pk,
+                "package": "teaching",
+            },
+        )
+        self.assertContains(versioned_response, "确认导出：教学成绩（XLSX）")
+        self.assertNotContains(versioned_response, "需要单版本")
+        self.assertContains(versioned_response, "本次导出版本：Version 1")
+        self.assertContains(versioned_response, "更换版本")
+
     def test_advanced_tools_use_six_semantic_groups_and_one_open_group(self):
         response = self.client.get(
             reverse("courses:data_advanced", args=[self.course.pk]),

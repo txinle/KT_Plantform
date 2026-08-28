@@ -742,6 +742,21 @@ def course_data_exports(request, course_pk):
         if scope.experiment_id
         else None
     )
+    export_versions = (
+        selected_experiment.versions.order_by("version_number")
+        if selected_experiment is not None
+        else []
+    )
+    export_version_base_values = [
+        (key, value)
+        for key, value in scope.serialize().items()
+        if key not in {"version_mode", "version_id"}
+    ]
+    selected_export_version = (
+        selected_experiment.versions.filter(pk=scope.version_id).first()
+        if selected_experiment is not None and scope.is_single_version
+        else None
+    )
     extensions = enabled_extension_tables(selected_experiment)
     if "confidence_assignments" in extensions:
         packages.append(("confidence", "Confidence", "信心采集及校准数据"))
@@ -768,8 +783,14 @@ def course_data_exports(request, course_pk):
         active="exports",
         teaching_scope=teaching_scope,
         research_scope=True,
+        scope_display=_teaching_scope_display(teaching_scope),
         packages=package_rows,
         selected_package=selected_package,
+        export_versions=export_versions,
+        export_version_base_values=export_version_base_values,
+        export_version_base_query=urlencode(export_version_base_values),
+        selected_export_version=selected_export_version,
+        export_scope_display=_scope_display(scope),
     )
 
 
