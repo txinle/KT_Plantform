@@ -37,12 +37,15 @@ class Course(models.Model):
     def __str__(self):
         return f"{self.code} · {self.name} · {self.term}"
 
-    def can_manage(self, user):
+    def can_manage(self, user, *, using=None):
         if not getattr(user, "is_authenticated", False):
             return False
         if user.is_superuser or user.role == User.Role.ADMIN or self.owner_id == user.id:
             return True
-        return self.teacher_links.filter(teacher=user).exists()
+        teacher_links = self.teacher_links
+        if using is not None:
+            teacher_links = teacher_links.using(using)
+        return teacher_links.filter(teacher=user).exists()
 
 
 class CourseTeacher(models.Model):
@@ -204,6 +207,46 @@ class ClassGroup(models.Model):
 
     def __str__(self):
         return f"{self.academic_year} {self.name}".strip()
+
+
+class ClassStudentAnalyticsPolicy(models.Model):
+    class RankMode(models.TextChoices):
+        NONE = "none", "不展示"
+        SELF = "self", "仅本人"
+
+    class_group = models.OneToOneField(
+        ClassGroup,
+        on_delete=models.PROTECT,
+        related_name="student_analytics_policy",
+    )
+    show_scores = models.BooleanField("展示分数", default=True)
+    show_correct_rate = models.BooleanField("展示正确率", default=True)
+    show_item_results = models.BooleanField("展示题目结果", default=True)
+    show_class_average = models.BooleanField("展示班级均值", default=True)
+    rank_mode = models.CharField(
+        "排名展示方式",
+        max_length=16,
+        choices=RankMode.choices,
+        default=RankMode.SELF,
+    )
+    show_kc_rates = models.BooleanField("展示知识点正确率", default=True)
+    show_trend = models.BooleanField("展示学习趋势", default=True)
+    updated_by = models.ForeignKey(
+        "User",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="updated_student_analytics_policies",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "班级学生分析策略"
+        verbose_name_plural = "班级学生分析策略"
+
+    def __str__(self):
+        return f"班级 #{self.class_group_id} 学生分析策略"
+
 
 class User(AbstractUser):
     class Role(models.TextChoices):

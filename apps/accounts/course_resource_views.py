@@ -35,7 +35,7 @@ from .forms import (
     StudentClassCopyForm,
     class_group_state_token_matches,
 )
-from .models import ClassGroup, CourseEnrollment, User
+from .models import ClassGroup, ClassStudentAnalyticsPolicy, CourseEnrollment, User
 from .permissions import role_required
 from .student_import import (
     ParsedStudent,
@@ -173,7 +173,11 @@ def class_delete(request, course_pk, class_pk):
             "academic_year": class_group.academic_year,
         }
         try:
-            class_group.delete()
+            with transaction.atomic():
+                ClassStudentAnalyticsPolicy.objects.filter(
+                    class_group_id=class_group.pk
+                ).delete()
+                class_group.delete()
         except ProtectedError:
             return HttpResponseBadRequest("班级仍被历史数据引用，不能删除。")
         log_action(request, "class.delete", details=details)

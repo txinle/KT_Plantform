@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from .models import (
     ClassGroup,
+    ClassStudentAnalyticsPolicy,
     Course,
     CourseEnrollment,
     CourseSubject,
@@ -24,6 +25,8 @@ CourseTeacher._meta.verbose_name = "协作教师"
 CourseTeacher._meta.verbose_name_plural = "协作教师"
 ClassGroup._meta.verbose_name = "课程班级"
 ClassGroup._meta.verbose_name_plural = "课程班级"
+ClassStudentAnalyticsPolicy._meta.verbose_name = "班级学生分析策略"
+ClassStudentAnalyticsPolicy._meta.verbose_name_plural = "班级学生分析策略"
 CourseEnrollment._meta.verbose_name = "课程选课"
 CourseEnrollment._meta.verbose_name_plural = "课程选课"
 
@@ -51,6 +54,45 @@ class ClassGroupAdmin(admin.ModelAdmin):
         ):
             return (*readonly_fields, "course")
         return readonly_fields
+
+
+@admin.register(ClassStudentAnalyticsPolicy)
+class ClassStudentAnalyticsPolicyAdmin(admin.ModelAdmin):
+    list_display = (
+        "class_group",
+        "show_scores",
+        "show_correct_rate",
+        "show_item_results",
+        "show_class_average",
+        "rank_mode",
+        "show_kc_rates",
+        "show_trend",
+        "updated_by",
+        "updated_at",
+    )
+    list_filter = ("rank_mode",)
+    search_fields = ("class_group__name", "class_group__academic_year")
+    readonly_fields = (
+        "class_group",
+        "show_scores",
+        "show_correct_rate",
+        "show_item_results",
+        "show_class_average",
+        "rank_mode",
+        "show_kc_rates",
+        "show_trend",
+        "updated_by",
+        "updated_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 class CourseTeacherInline(admin.TabularInline):
