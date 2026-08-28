@@ -155,17 +155,17 @@ def _row(*, course, class_group, experiment, class_label, snapshots, reason_code
     )
 
 
-def _task_is_aligned(task, *, class_group, experiment, snapshot):
+def _task_is_aligned(task, *, class_group, experiment, pair_snapshots):
+    pair_snapshot_ids = {snapshot.pk for snapshot in pair_snapshots}
     return (
         task.class_group_id == class_group.pk
         and task.experiment_id == experiment.pk
         and class_group.course_id == experiment.course_id
-        and task.release_snapshot_id == snapshot.version_id
-        and task.class_snapshot_id == snapshot.pk
+        and task.class_snapshot_id in pair_snapshot_ids
         and task.release_snapshot.experiment_id == experiment.pk
-        and task.class_snapshot.version_id == snapshot.version_id
+        and task.class_snapshot.version_id == task.release_snapshot_id
         and task.class_snapshot.source_class_group_id == class_group.pk
-        and task.published_at == snapshot.version.published_at
+        and task.published_at == task.release_snapshot.published_at
     )
 
 
@@ -259,7 +259,6 @@ def audit_class_experiment_tasks():
             if len(version_ids) != 1:
                 reasons.append("multiple_release_snapshots")
 
-            expected_snapshot = None
             if len(version_ids) == 1:
                 version_id = next(iter(version_ids))
                 matching_snapshots = [
@@ -269,18 +268,15 @@ def audit_class_experiment_tasks():
                 ]
                 if len(matching_snapshots) != 1:
                     reasons.append("snapshot_count_mismatch")
-                else:
-                    expected_snapshot = matching_snapshots[0]
 
             if pair_tasks:
                 if (
                     len(pair_tasks) != 1
-                    or expected_snapshot is None
                     or not _task_is_aligned(
                         pair_tasks[0],
                         class_group=class_group,
                         experiment=experiment,
-                        snapshot=expected_snapshot,
+                        pair_snapshots=pair_snapshots,
                     )
                 ):
                     reasons.append("task_alignment_mismatch")

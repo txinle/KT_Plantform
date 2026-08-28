@@ -128,6 +128,12 @@ class ClassExperimentTaskAuditTests(TransactionTestCase):
             self.multi_experiment,
             class_group=self.class_group,
         )
+        self._insert_historical_task(
+            class_group=self.class_group,
+            experiment=self.multi_experiment,
+            version=self.multi_first_version,
+            snapshot=self.multi_first_snapshot,
+        )
 
         self.null_experiment, self.null_version, self.null_snapshot = (
             self._experiment_version_snapshot(
@@ -376,6 +382,7 @@ class ClassExperimentTaskAuditTests(TransactionTestCase):
         self.assertEqual(multi.experiment_id, self.multi_experiment.pk)
         self.assertEqual(multi.release_snapshot_count, 2)
         self.assertEqual(multi.class_snapshot_count, 2)
+        self.assertEqual(multi.reason_codes, ("multiple_release_snapshots",))
 
         source_null = self._row_for_reason("source_class_missing")
         self.assertEqual(source_null.experiment_id, self.null_experiment.pk)
@@ -406,6 +413,12 @@ class ClassExperimentTaskAuditTests(TransactionTestCase):
         duplicate_experiment, version, snapshot = self._experiment_version_snapshot(
             "重复班级快照"
         )
+        self._insert_historical_task(
+            class_group=self.class_group,
+            experiment=duplicate_experiment,
+            version=version,
+            snapshot=snapshot,
+        )
         constraint = next(
             constraint
             for constraint in ExperimentClassSnapshot._meta.constraints
@@ -427,6 +440,7 @@ class ClassExperimentTaskAuditTests(TransactionTestCase):
             self.assertEqual(snapshot_mismatch.experiment_id, duplicate_experiment.pk)
             self.assertEqual(snapshot_mismatch.release_snapshot_count, 1)
             self.assertEqual(snapshot_mismatch.class_snapshot_count, 2)
+            self.assertEqual(snapshot_mismatch.reason_codes, ("snapshot_count_mismatch",))
         finally:
             if duplicate is not None:
                 ExperimentClassSnapshot.objects.filter(pk=duplicate.pk).delete()
