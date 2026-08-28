@@ -3,7 +3,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
-from .models import ClassGroup, User
+from .models import ClassGroup, Course, CourseTeacher, User
 
 
 def optional_model(name):
@@ -45,6 +45,44 @@ class CourseModelTests(TestCase):
         duplicate = Course(name="另一个名称", code="MATH101", term="2026春", owner=self.owner)
         with self.assertRaises(ValidationError):
             duplicate.validate_constraints()
+
+    def test_can_manage_requires_an_active_teacher_or_active_privileged_user(self):
+        course = Course.objects.create(
+            name="授权状态课程",
+            code="AUTH101",
+            term="2026春",
+            owner=self.owner,
+        )
+        CourseTeacher.objects.create(course=course, teacher=self.collaborator)
+
+        self.owner.role = User.Role.STUDENT
+        self.owner.save(update_fields=["role"])
+        self.assertFalse(course.can_manage(self.owner))
+
+        self.collaborator.role = User.Role.STUDENT
+        self.collaborator.save(update_fields=["role"])
+        self.assertFalse(course.can_manage(self.collaborator))
+
+        self.collaborator.role = User.Role.TEACHER
+        self.collaborator.is_active = False
+        self.collaborator.save(update_fields=["role", "is_active"])
+        self.assertFalse(course.can_manage(self.collaborator))
+
+        inactive_admin = User.objects.create_user(
+            username="inactive-course-admin",
+            role=User.Role.ADMIN,
+            is_active=False,
+        )
+        inactive_superuser = User.objects.create_superuser(
+            username="inactive-course-superuser",
+            password="password123",
+            role=User.Role.TEACHER,
+        )
+        inactive_superuser.is_active = False
+        inactive_superuser.save(update_fields=["is_active"])
+
+        self.assertFalse(course.can_manage(inactive_admin))
+        self.assertFalse(course.can_manage(inactive_superuser))
 
     def test_enrollment_supports_different_classes_per_course_and_rejects_cross_course_class(self):
         Course = optional_model("Course")

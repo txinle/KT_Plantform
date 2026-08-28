@@ -140,7 +140,11 @@ def update_class_student_analytics_policy(*, class_group, actor, changes):
             raise ValidationError({"class_group": "班级所属课程已变更，请刷新后重试。"})
         if locked_course.status != Course.Status.ACTIVE:
             raise PermissionDenied("课程已归档，不能更新学生分析策略。")
-        if not locked_course.can_manage(fresh_actor, using=using):
+        if not locked_course.can_manage(
+            fresh_actor,
+            using=using,
+            lock_teacher_link=True,
+        ):
             raise PermissionDenied("没有管理该课程学生分析策略的权限。")
 
         before = _policy_values(policy)

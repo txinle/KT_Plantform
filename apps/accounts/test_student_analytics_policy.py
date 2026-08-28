@@ -4,7 +4,8 @@ from unittest.mock import Mock, patch
 from django.contrib import admin
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import connection, connections
+from django.db import IntegrityError, connection, connections
+from django.db.models.deletion import ProtectedError
 from django.db.migrations.executor import MigrationExecutor
 from django.db.models import QuerySet
 from django.db.models.signals import post_save
@@ -21,7 +22,13 @@ from apps.experiments.models import (
 )
 from apps.question_bank.models import QuestionBank
 
-from .models import ClassGroup, ClassStudentAnalyticsPolicy, Course, User
+from .models import (
+    ClassGroup,
+    ClassStudentAnalyticsPolicy,
+    Course,
+    CourseTeacher,
+    User,
+)
 from .student_analytics_policy import (
     POLICY_FIELD_NAMES,
     update_class_student_analytics_policy,
@@ -195,6 +202,49 @@ class ClassStudentAnalyticsPolicyBulkCreateTests(TestCase):
                 class_group__name="策略忽略冲突班",
             ).count(),
             0,
+        )
+
+
+class ClassStudentAnalyticsPolicySaveTransactionTests(TransactionTestCase):
+    def test_new_class_save_rolls_back_when_default_policy_creation_fails(self):
+        owner = User.objects.create_user(
+            username="policy-save-transaction-owner",
+            role=User.Role.TEACHER,
+        )
+        course = Course.objects.create(
+            name="策略普通保存事务课程",
+            code="POLSAVE",
+            term="2026秋",
+            owner=owner,
+        )
+        policy_manager = SimpleNamespace(
+            get_or_create=Mock(side_effect=IntegrityError("policy insert failed"))
+        )
+
+        with patch.object(
+            ClassStudentAnalyticsPolicy.objects,
+            "using",
+            return_value=policy_manager,
+        ):
+            with self.assertRaises(IntegrityError):
+                ClassGroup.objects.create(
+                    course=course,
+                    owner=owner,
+                    name="策略普通保存回滚班",
+                    academic_year="2026",
+                )
+
+        self.assertFalse(
+            ClassGroup.objects.filter(
+                course=course,
+                name="策略普通保存回滚班",
+            ).exists()
+        )
+        self.assertFalse(
+            ClassStudentAnalyticsPolicy.objects.filter(
+                class_group__course=course,
+                class_group__name="策略普通保存回滚班",
+            ).exists()
         )
 
 
@@ -446,6 +496,33 @@ class ClassStudentAnalyticsPolicyServiceTests(
             update_class_student_analytics_policy(
                 class_group=self.class_group,
                 actor=stale_admin,
+                changes={"show_item_results": False},
+            )
+
+        self.policy.refresh_from_db()
+        self.assertTrue(self.policy.show_item_results)
+        self.assertEqual(AuditLog.objects.count(), 0)
+
+    def test_stale_collaborator_is_rejected_after_role_or_active_drift(self):
+        stale_collaborator = User.objects.get(pk=self.collaborator.pk)
+        User.objects.filter(pk=self.collaborator.pk).update(role=User.Role.STUDENT)
+
+        with self.assertRaises(PermissionDenied):
+            update_class_student_analytics_policy(
+                class_group=self.class_group,
+                actor=stale_collaborator,
+                changes={"show_item_results": False},
+            )
+
+        User.objects.filter(pk=self.collaborator.pk).update(
+            role=User.Role.TEACHER,
+            is_active=False,
+        )
+        stale_collaborator = User.objects.get(pk=self.collaborator.pk)
+        with self.assertRaises(PermissionDenied):
+            update_class_student_analytics_policy(
+                class_group=self.class_group,
+                actor=stale_collaborator,
                 changes={"show_item_results": False},
             )
 
@@ -723,6 +800,26 @@ class ClassStudentAnalyticsPolicyTransactionTests(
         self.assertIsNone(self.policy.updated_by_id)
         self.assertEqual(AuditLog.objects.count(), 0)
 
+    def test_collaborator_update_locks_teacher_link_after_actor(self):
+        locked_models = []
+        original_select_for_update = QuerySet.select_for_update
+
+        def capture_select_for_update(queryset, *args, **kwargs):
+            locked_models.append(queryset.model)
+            return original_select_for_update(queryset, *args, **kwargs)
+
+        with patch.object(QuerySet, "select_for_update", new=capture_select_for_update):
+            update_class_student_analytics_policy(
+                class_group=self.class_group,
+                actor=self.collaborator,
+                changes={"show_item_results": False},
+            )
+
+        self.assertEqual(
+            locked_models[:5],
+            [Course, ClassGroup, ClassStudentAnalyticsPolicy, User, CourseTeacher],
+        )
+
 
 class ClassStudentAnalyticsPolicyAdminTests(TestCase):
     def test_policy_admin_is_registered_and_cannot_write_directly(self):
@@ -744,8 +841,45 @@ class ClassStudentAnalyticsPolicyAdminTests(TestCase):
             },
         )
 
+    def test_course_collaborator_inline_and_class_group_delete_are_disabled(self):
+        from .admin import ClassGroupAdmin, CourseAdmin
+
+        class_group_admin = admin.site._registry[ClassGroup]
+
+        self.assertIsInstance(class_group_admin, ClassGroupAdmin)
+        self.assertFalse(class_group_admin.has_delete_permission(None))
+        self.assertFalse(CourseAdmin.inlines)
+
 
 class ClassStudentAnalyticsPolicyDeletionIntegrationTests(TestCase):
+    def test_direct_class_deletion_is_blocked_by_the_policy_fk(self):
+        owner = User.objects.create_user(
+            username="policy-direct-delete-owner",
+            role=User.Role.TEACHER,
+        )
+        course = Course.objects.create(
+            name="策略直接删除课程",
+            code="POLDIRECT",
+            term="2026秋",
+            owner=owner,
+        )
+        class_group = ClassGroup.objects.create(
+            course=course,
+            owner=owner,
+            name="策略直接删除一班",
+            academic_year="2026",
+        )
+
+        with self.assertRaises(ProtectedError):
+            class_group.delete()
+        with self.assertRaises(ProtectedError):
+            ClassGroup.objects.filter(pk=class_group.pk).delete()
+
+        self.assertTrue(ClassGroup.objects.filter(pk=class_group.pk).exists())
+        self.assertTrue(
+            ClassStudentAnalyticsPolicy.objects.filter(class_group=class_group).exists()
+        )
+
     def test_class_delete_removes_its_protected_policy_with_the_class(self):
         owner = User.objects.create_user(
             username="policy-delete-owner",

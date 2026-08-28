@@ -37,15 +37,22 @@ class Course(models.Model):
     def __str__(self):
         return f"{self.code} · {self.name} · {self.term}"
 
-    def can_manage(self, user, *, using=None):
-        if not getattr(user, "is_authenticated", False):
+    def can_manage(self, user, *, using=None, lock_teacher_link=False):
+        if not getattr(user, "is_authenticated", False) or not user.is_active:
             return False
-        if user.is_superuser or user.role == User.Role.ADMIN or self.owner_id == user.id:
+        if user.is_superuser or user.role == User.Role.ADMIN:
+            return True
+        if user.role != User.Role.TEACHER:
+            return False
+        if self.owner_id == user.id:
             return True
         teacher_links = self.teacher_links
         if using is not None:
             teacher_links = teacher_links.using(using)
-        return teacher_links.filter(teacher=user).exists()
+        teacher_link = teacher_links.filter(teacher_id=user.pk)
+        if lock_teacher_link:
+            return teacher_link.select_for_update().first() is not None
+        return teacher_link.exists()
 
 
 class CourseTeacher(models.Model):
@@ -207,6 +214,9 @@ class ClassGroup(models.Model):
     def save(self, *args, **kwargs):
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         save_kwargs = {**kwargs, "using": using}
+        if self._state.adding:
+            with transaction.atomic(using=using):
+                return super().save(*args, **save_kwargs)
         if not self._task_backed_course_is_changing(
             save_kwargs.get("update_fields"),
             using=using,

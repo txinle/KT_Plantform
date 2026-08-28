@@ -45,6 +45,9 @@ class ClassGroupAdmin(admin.ModelAdmin):
     list_filter = ("course", "is_active")
     search_fields = ("name", "academic_year", "course__name", "course__code")
 
+    def has_delete_permission(self, request, obj=None):
+        return False
+
     def get_readonly_fields(self, request, obj=None):
         readonly_fields = tuple(super().get_readonly_fields(request, obj))
         if (
@@ -95,17 +98,11 @@ class ClassStudentAnalyticsPolicyAdmin(admin.ModelAdmin):
         return False
 
 
-class CourseTeacherInline(admin.TabularInline):
-    model = CourseTeacher
-    extra = 0
-
-
 @admin.register(Course)
 class CourseAdmin(admin.ModelAdmin):
     list_display = ("name", "code", "term", "owner", "status")
     list_filter = ("status", "term")
     search_fields = ("name", "code", "owner__username")
-    inlines = [CourseTeacherInline]
     date_hierarchy = "created_at"
 
 
