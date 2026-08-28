@@ -15,6 +15,7 @@ from .event_schema_registry import (
     validate_event_payload,
 )
 from .event_services import EventIdempotencyConflict, append_assessment_event
+from .response_input_services import record_stable_input_observation
 from .models import Attempt, ClientTimeSync
 
 
@@ -27,6 +28,7 @@ CLIENT_BATCH_EVENT_TYPES = frozenset(
         "item_rendered",
         "item_left",
         "response_input_started",
+        "text_edit_observed",
         "response_state_changed",
         "response_commit_requested",
         "feedback_shown",
@@ -330,6 +332,20 @@ def append_event_batch(*, student, document):
                     "server_ingest_sequence_no": event.server_ingest_sequence_no,
                 }
             )
+            if parsed.event_type == "text_edit_observed":
+                observation = parsed.payload
+                record_stable_input_observation(
+                    attempt=parsed.attempt,
+                    client_instance_id=client_instance_id,
+                    client_sequence_no=parsed.client_sequence_no,
+                    client_monotonic_ms=parsed.client_monotonic_ms,
+                    edit_operation=observation["edit_operation"],
+                    content_hash_before=observation["content_hash_before"],
+                    content_hash_after=observation["content_hash_after"],
+                    content_length_before=observation["content_length_before"],
+                    content_length_after=observation["content_length_after"],
+                    input_method=observation["input_method"],
+                )
     except EventIdempotencyConflict as error:
         raise ProcessConflictError() from error
     except (ValueError, ValidationError) as error:

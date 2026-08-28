@@ -11,13 +11,21 @@ from types import SimpleNamespace
 from django.conf import settings
 from django.db import connection, models, transaction
 from django.utils import timezone
+from openpyxl import Workbook
 
 from apps.assessment.models import (
     AssessmentEvent, Attempt, ExperimentSession, EventSchemaArtifact,
     StudentQuestionAssignment, ConfidenceAssignment, SimulationSnapshot,
-    GradeRecord,
+    GradeRecord, ResponseInputObservation, ResponseSnapshot, SubmissionEvent,
 )
-from apps.experiments.models import ItemInstance, QuestionSnapshot
+from apps.experiments.models import (
+    ConditionAssignment,
+    ExperimentClassSnapshot,
+    ExperimentVersion,
+    ExperimentVersionParticipantSnapshot,
+    ItemInstance,
+    QuestionSnapshot,
+)
 from .export_catalog import (
     EXPOSURE_EVENT_TYPES,
     PACKAGE_TABLES,
@@ -28,6 +36,7 @@ from .export_catalog import (
 )
 
 from .models import ExportJob, ExportSnapshot
+from .data_scope import DataScope
 
 
 class ExportContractError(ValueError):
@@ -41,11 +50,34 @@ def _class_snapshot_filter_value(class_name):
     return "" if class_name == UNRECORDED_CLASS_FILTER else class_name
 
 
+def _validate_export_scope(scope, package):
+    if package in {"teaching", "kt", "cd"} and not scope.is_single_version:
+        raise ExportContractError(f"{package.upper()} 导出必须选择单一实验版本")
+
+
 def create_export_snapshot(*, course=None, experiment=None, research_study=None,
-                           created_by, filter_definition=None):
+                           created_by, filter_definition=None, scope=None,
+                           package=None):
+    if scope is not None:
+        if scope.course.pk != course.pk:
+            raise ExportContractError("导出范围不属于当前课程")
+        if experiment is not None and scope.experiment_id not in {None, experiment.pk}:
+            raise ExportContractError("导出范围与实验不一致")
+        _validate_export_scope(scope, package)
+        filter_definition = scope.serialize()
     versions = []
+    version_queryset = ExperimentVersion.objects.none()
     if experiment is not None:
-        versions = list(experiment.versions.order_by("version_number").values_list("pk", "version_number"))
+        version_queryset = experiment.versions.order_by("version_number")
+    elif course is not None:
+        version_queryset = ExperimentVersion.objects.filter(
+            experiment__course=course
+        ).order_by("experiment_id", "version_number")
+    if scope is not None and scope.version_id is not None:
+        version_queryset = version_queryset.filter(pk=scope.version_id)
+    if scope is not None and scope.experiment_id is not None:
+        version_queryset = version_queryset.filter(experiment_id=scope.experiment_id)
+    versions = list(version_queryset.values_list("pk", "version_number"))
     cutoff = timezone.now()
     scope = {"session__version__experiment_id": experiment.pk} if experiment is not None else {"session__version__experiment__course_id": course.pk}
     if research_study is not None:
@@ -57,6 +89,10 @@ def create_export_snapshot(*, course=None, experiment=None, research_study=None,
         for row in EventSchemaArtifact.objects.all().order_by("event_type", "event_version")
     }
     schema_manifest_hash = hashlib.sha256(json.dumps(schema_hashes, sort_keys=True).encode()).hexdigest()
+    canonical_filter_definition = filter_definition or {}
+    scope_hash = hashlib.sha256(
+        json.dumps(canonical_filter_definition, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
     return ExportSnapshot.objects.create(
         course=course,
         experiment=experiment,
@@ -67,8 +103,47 @@ def create_export_snapshot(*, course=None, experiment=None, research_study=None,
         event_high_watermark=watermark,
         schema_manifest_hash=schema_manifest_hash,
         selected_versions=[{"id": pk, "version": version} for pk, version in versions],
-        filter_definition=filter_definition or {},
+        filter_definition=canonical_filter_definition,
+        scope_hash=scope_hash,
     )
+
+
+def create_export_job(*, course, snapshot, created_by, experiment=None,
+                      research_study=None, kind=ExportJob.Kind.RESEARCH,
+                      package="complete", selected_tables=None,
+                      selected_fields=None):
+    """Create, never reuse, an auditable export request."""
+    return ExportJob.objects.create(
+        course=course,
+        experiment=experiment,
+        research_study=research_study,
+        snapshot=snapshot,
+        created_by=created_by,
+        kind=kind,
+        package=package,
+        selected_tables=selected_tables or [],
+        selected_fields=selected_fields or [],
+        status=ExportJob.Status.RUNNING,
+        started_at=timezone.now(),
+        progress_stage="snapshot",
+    )
+
+
+def remove_export_artifact(job, *, reason, invalidated=False):
+    """Remove a materialized artifact while retaining its audit identity."""
+    if job.artifact_path and os.path.exists(job.artifact_path):
+        artifact_dir = os.path.dirname(job.artifact_path)
+        os.remove(job.artifact_path)
+        if artifact_dir and os.path.isdir(artifact_dir) and not os.listdir(artifact_dir):
+            os.rmdir(artifact_dir)
+    job.status = ExportJob.Status.INVALIDATED if invalidated else ExportJob.Status.EXPIRED
+    job.artifact_path = ""
+    job.artifact_removed_at = timezone.now()
+    job.artifact_removal_reason = reason
+    job.save(update_fields=[
+        "status", "artifact_path", "artifact_removed_at", "artifact_removal_reason"
+    ])
+    return job
 
 
 def _git_commit():
@@ -113,6 +188,7 @@ def build_export_manifest(snapshot, *, selected_tables, row_counts=None, data_st
         "source_cutoff_at": snapshot.source_cutoff_at.isoformat(),
         "event_high_watermark": snapshot.event_high_watermark,
         "schema_manifest_hash": snapshot.schema_manifest_hash,
+        "scope_hash": snapshot.scope_hash,
         "database_snapshot_strategy": snapshot.database_snapshot_strategy,
         "filter_definition": snapshot.filter_definition,
         "filter_display": filter_display,
@@ -189,39 +265,71 @@ def run_export_job(job):
         raise ExportContractError("ExportSnapshot has been invalidated and cannot be rerun.")
     root = os.path.join(settings.MEDIA_ROOT, "exports", str(job.job_id))
     os.makedirs(root, exist_ok=True)
-    zip_path = os.path.join(root, f"{job.package}-{job.job_id}.zip")
+    artifact_extension = "xlsx" if job.package == "teaching" else "zip"
+    artifact_path = os.path.join(root, f"{job.package}-{job.job_id}.{artifact_extension}")
     study_course_ids = list(job.research_study.course_links.values_list("course_id", flat=True)) if job.research_study_id else []
     study_student_ids = list(job.research_study.participants.values_list("student_id", flat=True)) if job.research_study_id else []
     filter_definition = snapshot.filter_definition or {}
-    session_filter = {"version__experiment_id": job.experiment_id} if job.experiment_id else ({"version__experiment__course_id__in": study_course_ids, "student_id__in": study_student_ids} if study_course_ids else {"version__experiment__course_id": job.course_id})
-    if filter_definition.get("version_id"):
-        session_filter["version_id"] = int(filter_definition["version_id"])
-    if filter_definition.get("class_name"):
-        session_filter["class_snapshot_name"] = _class_snapshot_filter_value(filter_definition["class_name"])
-    if filter_definition.get("student_number"):
-        session_filter["student__student_number"] = filter_definition["student_number"]
-    if filter_definition.get("session_id"):
-        session_filter["pk"] = int(filter_definition["session_id"])
-    if filter_definition.get("status") in {choice for choice, _label in ExperimentSession.Status.choices}:
-        session_filter["status"] = filter_definition["status"]
+    scope = None
+    if filter_definition.get("scope_version"):
+        try:
+            scope = DataScope.from_mapping(snapshot.course, filter_definition)
+        except (LookupError, ValueError) as error:
+            raise ExportContractError(f"冻结的数据范围无效：{error}") from error
+        session_queryset = scope.sessions()
+    else:
+        session_filter = {"version__experiment_id": job.experiment_id} if job.experiment_id else ({"version__experiment__course_id__in": study_course_ids, "student_id__in": study_student_ids} if study_course_ids else {"version__experiment__course_id": job.course_id})
+        if filter_definition.get("version_id"):
+            session_filter["version_id"] = int(filter_definition["version_id"])
+        if filter_definition.get("class_name"):
+            session_filter["class_snapshot_name"] = _class_snapshot_filter_value(filter_definition["class_name"])
+        if filter_definition.get("student_number"):
+            session_filter["student__student_number"] = filter_definition["student_number"]
+        if filter_definition.get("session_id"):
+            session_filter["pk"] = int(filter_definition["session_id"])
+        if filter_definition.get("status") in {choice for choice, _label in ExperimentSession.Status.choices}:
+            session_filter["status"] = filter_definition["status"]
+        session_queryset = ExperimentSession.objects.filter(**session_filter)
     with transaction.atomic():
         if connection_vendor := connection.vendor:
             if connection_vendor == "postgresql":
                 with connection.cursor() as cursor:
                     cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        sessions = list(ExperimentSession.objects.filter(**session_filter, started_at__lte=snapshot.source_cutoff_at).select_related("student", "version"))
+        sessions = list(
+            session_queryset.filter(started_at__lte=snapshot.source_cutoff_at)
+            .select_related("student", "version")
+        )
         session_ids = [s.pk for s in sessions]
-        attempt_queryset = Attempt.objects.filter(session_id__in=session_ids, session__started_at__lte=snapshot.source_cutoff_at).filter(models.Q(submitted_at__isnull=True) | models.Q(submitted_at__lte=snapshot.source_cutoff_at))
-        if filter_definition.get("status") in {choice for choice, _label in Attempt.Status.choices}:
+        attempt_queryset = (
+            scope.attempts() if scope is not None else Attempt.objects.filter(session_id__in=session_ids)
+        )
+        attempt_queryset = attempt_queryset.filter(
+            session_id__in=session_ids,
+            session__started_at__lte=snapshot.source_cutoff_at,
+        ).filter(
+            models.Q(submitted_at__isnull=True)
+            | models.Q(submitted_at__lte=snapshot.source_cutoff_at)
+        )
+        legacy_attempt_status = filter_definition.get("status") in {
+            choice for choice, _label in Attempt.Status.choices
+        }
+        if scope is None and legacy_attempt_status:
             attempt_queryset = attempt_queryset.filter(status=filter_definition["status"])
         attempts = list(attempt_queryset.select_related("session", "assignment__snapshot", "assignment__item_instance"))
-        if filter_definition.get("status") in {choice for choice, _label in Attempt.Status.choices}:
+        if (scope is not None and scope.attempt_status is not None) or legacy_attempt_status:
             selected_session_ids = {attempt.session_id for attempt in attempts}
             sessions = [session for session in sessions if session.pk in selected_session_ids]
             session_ids = [session.pk for session in sessions]
-        events = list(AssessmentEvent.objects.filter(**({"session__in": session_ids}), server_received_at__lte=snapshot.source_cutoff_at, server_ingest_sequence_no__lte=snapshot.event_high_watermark).order_by("session_id", "server_ingest_sequence_no"))
+        event_queryset = scope.events() if scope is not None else AssessmentEvent.objects.all()
+        events = list(
+            event_queryset.filter(
+                session_id__in=session_ids,
+                server_received_at__lte=snapshot.source_cutoff_at,
+                server_ingest_sequence_no__lte=snapshot.event_high_watermark,
+            ).order_by("session_id", "server_ingest_sequence_no")
+        )
         assignments_queryset = StudentQuestionAssignment.objects.filter(session_id__in=session_ids).select_related("snapshot", "item_instance")
-        if filter_definition.get("status") in {choice for choice, _label in Attempt.Status.choices}:
+        if (scope is not None and scope.attempt_status is not None) or legacy_attempt_status:
             assignments_queryset = assignments_queryset.filter(attempt__in=attempts)
         assignments = list(assignments_queryset)
         _validate_question_codes(assignments)
@@ -237,6 +345,56 @@ def run_export_job(job):
                 created_at__lte=snapshot.source_cutoff_at,
             )
         )
+        response_snapshots = list(
+            ResponseSnapshot.objects.filter(
+                attempt_id__in=[a.pk for a in attempts],
+                created_at__lte=snapshot.source_cutoff_at,
+            ).order_by("attempt_id", "created_at", "snapshot_id")
+        )
+        input_observations = list(
+            ResponseInputObservation.objects.filter(
+                attempt_id__in=[a.pk for a in attempts],
+                observed_at__lte=snapshot.source_cutoff_at,
+            ).order_by("attempt_id", "client_instance_id", "client_sequence_no")
+        )
+        submissions = list(
+            SubmissionEvent.objects.filter(
+                attempt_id__in=[a.pk for a in attempts],
+                server_received_at__lte=snapshot.source_cutoff_at,
+            )
+        )
+        grade_records = list(
+            GradeRecord.objects.filter(
+                submission__attempt_id__in=[a.pk for a in attempts],
+                created_at__lte=snapshot.source_cutoff_at,
+            ).select_related("submission")
+        )
+        version_ids = {session.version_id for session in sessions}
+        class_snapshots = list(
+            ExperimentClassSnapshot.objects.filter(
+                version_id__in=version_ids,
+                created_at__lte=snapshot.source_cutoff_at,
+            ).order_by("version_id", "created_at")
+        )
+        participant_snapshots = list(
+            ExperimentVersionParticipantSnapshot.objects.filter(
+                version_id__in=version_ids,
+                student_id__in=[session.student_id for session in sessions],
+                created_at__lte=snapshot.source_cutoff_at,
+            ).order_by("version_id", "student_id")
+        )
+        condition_assignments = list(
+            ConditionAssignment.objects.filter(
+                models.Q(session_id__in=session_ids)
+                | models.Q(
+                    subject_id__in=[session.student_id for session in sessions],
+                    condition__experiment_id__in=[
+                        session.version.experiment_id for session in sessions
+                    ],
+                ),
+                assigned_at__lte=snapshot.source_cutoff_at,
+            ).select_related("condition")
+        )
     roster_rows = []
     if job.kind == ExportJob.Kind.IDENTITY:
         selected_tables = ["student_roster"]
@@ -246,7 +404,23 @@ def run_export_job(job):
         selected_tables = list(job.selected_tables)
     else:
         selected_tables = list(PACKAGE_TABLES.get(job.package, PACKAGE_TABLES["complete"]))
-    rows = _table_rows(job, sessions, assignments, attempts, events, confidence_assignments, simulations, snapshot=snapshot)
+    rows = _table_rows(
+        job,
+        sessions,
+        assignments,
+        attempts,
+        events,
+        confidence_assignments,
+        simulations,
+        response_snapshots=response_snapshots,
+        input_observations=input_observations,
+        submissions=submissions,
+        grade_records=grade_records,
+        condition_assignments=condition_assignments,
+        class_snapshots=class_snapshots,
+        participant_snapshots=participant_snapshots,
+        snapshot=snapshot,
+    )
     row_counts = {
         table: len(roster_rows) if table == "student_roster" else len(rows[table][1])
         for table in selected_tables
@@ -272,7 +446,17 @@ def run_export_job(job):
         experiment_name=job.experiment.name if job.experiment_id else None,
         version_number=selected_version_number,
     )
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    if job.package == "teaching":
+        _write_teaching_workbook(
+            artifact_path,
+            rows["attempts"],
+            manifest,
+            attempts,
+            events=events,
+            submissions=submissions,
+        )
+        return _finalize_export_job(job, artifact_path, manifest)
+    with zipfile.ZipFile(artifact_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("00_manifest/manifest.json", manifest_bytes(manifest))
         archive.writestr("00_manifest/derivation_runs.json", manifest_bytes({
             "derivation_version": "v1",
@@ -292,7 +476,7 @@ def run_export_job(job):
                     roster_rows,
                 ),
             )
-            return _finalize_export_job(job, zip_path, manifest)
+            return _finalize_export_job(job, artifact_path, manifest)
         for table in selected_tables:
             if table == "identity_mapping" or table not in rows:
                 continue
@@ -300,7 +484,66 @@ def run_export_job(job):
             if path:
                 headers, values = rows[table]
                 archive.writestr(path, _csv_bytes(headers, values))
-    return _finalize_export_job(job, zip_path, manifest)
+    return _finalize_export_job(job, artifact_path, manifest)
+
+
+def _write_teaching_workbook(
+    artifact_path, attempt_table, manifest, attempts, *, events, submissions
+):
+    """Write the teaching-facing grade workbook from the same frozen rows.
+
+    The source is the canonical attempts export table, whose grade columns are
+    already restricted to the effective GradeRecord.  The second sheet keeps
+    the snapshot provenance with the downloadable workbook rather than
+    requiring a separate, mutable dashboard lookup.
+    """
+    headers, rows = attempt_table
+    requested = (
+        "student_number", "student_name", "question_code", "session_id",
+        "status", "grade_score", "grade_max_score", "grade_is_correct",
+        "submission_grade_status", "graded_at",
+    )
+    positions = [headers.index(column) for column in requested if column in headers]
+    attempt_id_position = headers.index("attempt_id")
+    events_by_attempt = {}
+    for event in events:
+        events_by_attempt.setdefault(event.attempt_id, []).append(event)
+    submissions_by_attempt = {
+        submission.attempt_id: submission
+        for submission in submissions
+    }
+    from .teaching_data import summarize_attempt_timing
+
+    timing_by_attempt = {
+        attempt.pk: summarize_attempt_timing(
+            attempt,
+            events=events_by_attempt.get(attempt.pk, []),
+            submission=submissions_by_attempt.get(attempt.pk),
+        )
+        for attempt in attempts
+    }
+    workbook = Workbook(write_only=True)
+    sheet = workbook.create_sheet("教学成绩")
+    sheet.append([
+        *[headers[position] for position in positions],
+        "display_duration_ms", "display_kind", "interval_quality",
+    ])
+    for row in rows:
+        timing = timing_by_attempt.get(row[attempt_id_position])
+        sheet.append([
+            *[row[position] for position in positions],
+            timing.display_duration_ms if timing else None,
+            timing.display_kind if timing else "unavailable",
+            timing.interval_quality if timing else "unknown",
+        ])
+    lineage = workbook.create_sheet("导出血缘")
+    lineage.append(["field", "value"])
+    for key in (
+        "export_snapshot_id", "source_cutoff_at", "event_high_watermark",
+        "schema_manifest_hash", "scope_hash", "contains_direct_identifiers",
+    ):
+        lineage.append([key, json.dumps(manifest.get(key), ensure_ascii=False)])
+    workbook.save(artifact_path)
 
 
 def _validate_question_codes(assignments):
@@ -318,43 +561,64 @@ def _validate_question_codes(assignments):
 
 def preview_export_table(*, course, experiment, table, version_id=None,
                          class_name=None, student_number=None, session_id=None, status=None,
-                         page=1, page_size=20):
-    """Return a paginated, experiment-scoped preview using export row logic."""
-    filter_definition = {
-        key: value
-        for key, value in {
-            "version_id": version_id,
-            "class_name": class_name,
-            "student_number": student_number,
-            "session_id": session_id,
-            "status": status,
-        }.items()
-        if value not in (None, "")
-    }
-    session_filter = {"version__experiment_id": experiment.pk}
-    if version_id:
-        session_filter["version_id"] = int(version_id)
-    if class_name:
-        session_filter["class_snapshot_name"] = _class_snapshot_filter_value(class_name)
-    if student_number:
-        session_filter["student__student_number"] = student_number
-    if session_id:
-        session_filter["pk"] = int(session_id)
-    if status in {choice for choice, _label in ExperimentSession.Status.choices}:
-        session_filter["status"] = status
-    sessions = list(
-        ExperimentSession.objects.filter(**session_filter)
-        .select_related("student", "version")
-        .order_by("pk")
-    )
+                         page=1, page_size=20, scope=None):
+    """Return a paginated export preview.
+
+    ``scope`` is the data-center path and is deliberately preferred over the
+    legacy scalar parameters.  Keeping the preview on the same ``DataScope``
+    as teaching, quality, and ZIP export prevents a table view from showing a
+    wider population than the visible range bar claims.
+    """
+    if scope is not None:
+        if scope.course.pk != course.pk:
+            raise ExportContractError("预览范围不属于当前课程")
+        if experiment is not None and scope.experiment_id not in {None, experiment.pk}:
+            raise ExportContractError("预览范围与实验不一致")
+        filter_definition = scope.serialize()
+        sessions = list(
+            scope.sessions().select_related("student", "version").order_by("pk")
+        )
+    else:
+        filter_definition = {
+            key: value
+            for key, value in {
+                "version_id": version_id,
+                "class_name": class_name,
+                "student_number": student_number,
+                "session_id": session_id,
+                "status": status,
+            }.items()
+            if value not in (None, "")
+        }
+        session_filter = {"version__experiment_id": experiment.pk}
+        if version_id:
+            session_filter["version_id"] = int(version_id)
+        if class_name:
+            session_filter["class_snapshot_name"] = _class_snapshot_filter_value(class_name)
+        if student_number:
+            session_filter["student__student_number"] = student_number
+        if session_id:
+            session_filter["pk"] = int(session_id)
+        if status in {choice for choice, _label in ExperimentSession.Status.choices}:
+            session_filter["status"] = status
+        sessions = list(
+            ExperimentSession.objects.filter(**session_filter)
+            .select_related("student", "version")
+            .order_by("pk")
+        )
     session_ids = [session.pk for session in sessions]
-    attempt_queryset = Attempt.objects.filter(session_id__in=session_ids).select_related(
+    attempt_queryset = (scope.attempts() if scope is not None else Attempt.objects.filter(
+        session_id__in=session_ids
+    )).select_related(
         "session", "assignment__snapshot", "assignment__item_instance"
     )
-    if status in {choice for choice, _label in Attempt.Status.choices}:
+    has_attempt_status = (
+        scope is not None and scope.attempt_status is not None
+    ) or (scope is None and status in {choice for choice, _label in Attempt.Status.choices})
+    if scope is None and status in {choice for choice, _label in Attempt.Status.choices}:
         attempt_queryset = attempt_queryset.filter(status=status)
     attempts = list(attempt_queryset.order_by("pk"))
-    if status in {choice for choice, _label in Attempt.Status.choices}:
+    if has_attempt_status:
         selected_session_ids = {attempt.session_id for attempt in attempts}
         sessions = [session for session in sessions if session.pk in selected_session_ids]
         session_ids = [session.pk for session in sessions]
@@ -364,23 +628,78 @@ def preview_export_table(*, course, experiment, table, version_id=None,
         .select_related("snapshot", "item_instance")
         .order_by("session_id", "assigned_sequence_index")
     )
-    if status in {choice for choice, _label in Attempt.Status.choices}:
+    if has_attempt_status:
         assignment_ids = {attempt.assignment_id for attempt in attempts}
         assignments = [assignment for assignment in assignments if assignment.pk in assignment_ids]
     events = list(
-        AssessmentEvent.objects.filter(
+        (scope.events() if scope is not None else AssessmentEvent.objects.all()).filter(
             session_id__in=session_ids,
             server_received_at__lte=timezone.now(),
         ).order_by("session_id", "server_ingest_sequence_no")
     )
     confidence_assignments = list(ConfidenceAssignment.objects.filter(attempt_id__in=attempt_ids))
     simulations = list(SimulationSnapshot.objects.filter(attempt_id__in=attempt_ids))
+    response_snapshots = list(
+        ResponseSnapshot.objects.filter(attempt_id__in=attempt_ids).order_by(
+            "attempt_id", "created_at", "snapshot_id"
+        )
+    )
+    input_observations = list(
+        ResponseInputObservation.objects.filter(attempt_id__in=attempt_ids).order_by(
+            "attempt_id", "client_instance_id", "client_sequence_no"
+        )
+    )
+    submissions = list(SubmissionEvent.objects.filter(attempt_id__in=attempt_ids))
+    grade_records = list(
+        GradeRecord.objects.filter(submission__attempt_id__in=attempt_ids).select_related("submission")
+    )
+    version_ids = {session.version_id for session in sessions}
+    class_snapshots = ExperimentClassSnapshot.objects.filter(version_id__in=version_ids)
+    if scope is not None and scope.class_snapshot_id is not None:
+        class_snapshots = class_snapshots.filter(pk=scope.class_snapshot_id)
+    class_snapshots = list(class_snapshots.order_by("version_id", "created_at"))
+    participant_snapshots = list(
+        ExperimentVersionParticipantSnapshot.objects.filter(
+            version_id__in=version_ids,
+            student_id__in=[session.student_id for session in sessions],
+        ).order_by("version_id", "student_id")
+    )
+    condition_assignments = list(
+        ConditionAssignment.objects.filter(
+            models.Q(session_id__in=session_ids)
+            | models.Q(
+                subject_id__in=[session.student_id for session in sessions],
+                condition__experiment_id__in=[session.version.experiment_id for session in sessions],
+            )
+        ).select_related("condition")
+    )
     fake_job = SimpleNamespace(course_id=course.pk, research_study_id=None)
-    rows = _table_rows(fake_job, sessions, assignments, attempts, events, confidence_assignments, simulations)
+    rows = _table_rows(
+        fake_job,
+        sessions,
+        assignments,
+        attempts,
+        events,
+        confidence_assignments,
+        simulations,
+        response_snapshots=response_snapshots,
+        input_observations=input_observations,
+        submissions=submissions,
+        grade_records=grade_records,
+        condition_assignments=condition_assignments,
+        class_snapshots=class_snapshots,
+        participant_snapshots=participant_snapshots,
+    )
     headers, values = rows.get(table, ((), []))
     total = len(values)
-    page = max(1, int(page or 1))
-    page_size = max(1, min(100, int(page_size or 20)))
+    try:
+        page = max(1, int(page or 1))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = max(1, min(100, int(page_size or 20)))
+    except (TypeError, ValueError):
+        page_size = 20
     start = (page - 1) * page_size
     return {
         "table": table,
@@ -391,12 +710,17 @@ def preview_export_table(*, course, experiment, table, version_id=None,
         "page_size": page_size,
         "has_previous": page > 1,
         "has_next": start + page_size < total,
+        "previous_page": max(1, page - 1),
+        "next_page": page + 1,
         "filter_definition": filter_definition,
         "data_status": "placeholder" if table in PLACEHOLDER_TABLES else ("no_observation" if total == 0 else "observed"),
     }
 
 
-def _table_rows(job, sessions, assignments, attempts, events, confidence_assignments, simulations, snapshot=None):
+def _table_rows(job, sessions, assignments, attempts, events, confidence_assignments, simulations,
+                *, response_snapshots=(), input_observations=(), submissions=(),
+                grade_records=(), condition_assignments=(), class_snapshots=(),
+                participant_snapshots=(), snapshot=None):
     identity_headers = ("student_number", "student_name")
     session_by_id = {session.pk: session for session in sessions}
     attempt_by_assignment = {attempt.assignment_id: attempt for attempt in attempts}
@@ -470,12 +794,15 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         return [*identity_for_session(attempt.session_id), attempt.assignment.snapshot.code]
 
     grade_by_attempt = {}
-    if selected_attempt_ids:
-        for grade in GradeRecord.objects.filter(
+    if not grade_records and selected_attempt_ids:
+        grade_records = GradeRecord.objects.filter(
             submission__attempt_id__in=selected_attempt_ids,
             created_at__lte=(snapshot.source_cutoff_at if snapshot is not None else timezone.now()),
-        ).select_related("submission").order_by("submission_id", "-version"):
-            grade_by_attempt.setdefault(grade.submission.attempt_id, grade)
+        ).select_related("submission")
+    for grade in grade_records:
+        if grade.validity_status == GradeRecord.ValidityStatus.EFFECTIVE:
+            grade_by_attempt[grade.submission.attempt_id] = grade
+    submission_by_attempt = {submission.attempt_id: submission for submission in submissions}
     rows = {
         "subjects": (identity_headers, subject_values),
         "sessions": ((*identity_headers, "session_id", "experiment_id", "version", "status", "started_at", "completed_at"), [[*identity_for_session(session.pk), session.pk, session.version.experiment_id, session.version.version_number, session.status, session.started_at.isoformat(), session.completed_at.isoformat() if session.completed_at else ""] for session in sessions]),
@@ -494,6 +821,136 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         "item_kc_mapping": (("question_code", "question_snapshot_id", "primary_kc", "all_kcs"), [[assignment.snapshot.code, assignment.snapshot_id, assignment.snapshot.primary_kc, json.dumps(assignment.snapshot.all_kcs, ensure_ascii=False)] for assignment in _unique_assignments(assignments, "snapshot_id")]),
         "q_matrix": (("question_code", "question_snapshot_id", "primary_kc", "all_kcs"), [[assignment.snapshot.code, assignment.snapshot_id, assignment.snapshot.primary_kc, json.dumps(assignment.snapshot.all_kcs, ensure_ascii=False)] for assignment in _unique_assignments(assignments, "snapshot_id")]),
         "kc_dictionary": (("kc_id", "kc_name"), [[assignment.snapshot.primary_kc, assignment.snapshot.primary_kc] for assignment in _unique_assignments(assignments, "snapshot_id") if assignment.snapshot.primary_kc]),
+        "response_snapshots": (
+            (*identity_headers, "question_code", "snapshot_id", "attempt_id", "content", "content_hash", "content_length", "state_json", "state_hash", "schema_version", "created_at"),
+            [
+                [
+                    *identity_and_question_for_attempt(item.attempt_id),
+                    item.snapshot_id,
+                    item.attempt_id,
+                    item.content,
+                    item.content_hash,
+                    item.content_length,
+                    json.dumps(item.state_json, ensure_ascii=False),
+                    item.state_hash,
+                    item.schema_version,
+                    item.created_at.isoformat(),
+                ]
+                for item in response_snapshots
+                if item.attempt_id in attempt_by_id
+            ],
+        ),
+        "response_input_observations": (
+            (*identity_headers, "question_code", "observation_id", "attempt_id", "client_instance_id", "client_sequence_no", "client_monotonic_ms", "edit_operation", "content_hash_before", "content_hash_after", "content_length_before", "content_length_after", "input_method", "observed_at"),
+            [
+                [
+                    *identity_and_question_for_attempt(item.attempt_id),
+                    item.observation_id,
+                    item.attempt_id,
+                    item.client_instance_id,
+                    item.client_sequence_no,
+                    item.client_monotonic_ms,
+                    item.edit_operation,
+                    item.content_hash_before,
+                    item.content_hash_after,
+                    item.content_length_before,
+                    item.content_length_after,
+                    item.input_method,
+                    item.observed_at.isoformat(),
+                ]
+                for item in input_observations
+                if item.attempt_id in attempt_by_id
+            ],
+        ),
+        "submissions": (
+            (*identity_headers, "question_code", "submission_id", "attempt_id", "submission_token", "final_response_snapshot_id", "grading_status", "score", "is_correct", "client_clicked_at", "server_received_at", "committed_at"),
+            [
+                [
+                    *identity_and_question_for_attempt(item.attempt_id),
+                    item.pk,
+                    item.attempt_id,
+                    item.submission_token,
+                    item.final_response_snapshot_id,
+                    item.grading_status,
+                    item.score,
+                    item.is_correct,
+                    item.client_clicked_at.isoformat() if item.client_clicked_at else "",
+                    item.server_received_at.isoformat(),
+                    item.committed_at.isoformat(),
+                ]
+                for item in submissions
+                if item.attempt_id in attempt_by_id
+            ],
+        ),
+        "grade_records": (
+            (*identity_headers, "question_code", "grade_id", "submission_id", "attempt_id", "version", "status", "validity_status", "score", "max_score", "is_correct", "grading_method", "grading_version", "graded_at", "supersedes_grade_id", "voided_at", "void_reason"),
+            [
+                [
+                    *identity_and_question_for_attempt(item.submission.attempt_id),
+                    item.pk,
+                    item.submission_id,
+                    item.submission.attempt_id,
+                    item.version,
+                    item.status,
+                    item.validity_status,
+                    item.score,
+                    item.max_score,
+                    item.is_correct,
+                    item.grading_method,
+                    item.grading_version,
+                    item.graded_at.isoformat() if item.graded_at else "",
+                    item.supersedes_grade_id or "",
+                    item.voided_at.isoformat() if item.voided_at else "",
+                    item.void_reason,
+                ]
+                for item in grade_records
+                if item.submission.attempt_id in attempt_by_id
+            ],
+        ),
+        "condition_assignments": (
+            ("condition_assignment_id", "condition_id", "condition_key", "condition_label", "subject_id", "session_id", "assignment_unit_type", "assignment_algorithm", "assignment_version", "randomization_seed", "randomization_draw", "stratum", "assignment_probability", "assigned_at"),
+            [
+                [
+                    item.pk,
+                    item.condition_id,
+                    item.condition.key,
+                    item.condition.label,
+                    item.subject_id or "",
+                    item.session_id or "",
+                    "subject" if item.subject_id else "session",
+                    item.algorithm,
+                    item.algorithm_version,
+                    item.seed,
+                    item.draw,
+                    item.stratum,
+                    item.probability,
+                    item.assigned_at.isoformat(),
+                ]
+                for item in condition_assignments
+            ],
+        ),
+        "class_snapshots": (
+            ("class_snapshot_id", "version_id", "source_class_group_id", "name_snapshot", "academic_year_snapshot", "capture_mode", "created_at"),
+            [
+                [
+                    item.class_snapshot_id,
+                    item.version_id,
+                    item.source_class_group_id or "",
+                    item.name_snapshot,
+                    item.academic_year_snapshot,
+                    item.capture_mode,
+                    item.created_at.isoformat(),
+                ]
+                for item in class_snapshots
+            ],
+        ),
+        "participant_snapshots": (
+            ("participant_snapshot_id", "version_id", "student_id", "class_snapshot_id", "created_at"),
+            [
+                [item.pk, item.version_id, item.student_id, item.class_snapshot_id or "", item.created_at.isoformat()]
+                for item in participant_snapshots
+            ],
+        ),
     }
     derivation_id = str(getattr(snapshot, "snapshot_id", "preview"))
     base = (*identity_headers, "question_code", "attempt_id", "derivation_run_id", "derivation_version")
@@ -588,7 +1045,7 @@ def execute_purge_request(purge_request, *, executed_by):
     from apps.accounts.models import DataPurgeRequest
     from apps.assessment.models import (
         AssessmentEvent, Attempt, ClientTimeSync, ConfidenceAssignment,
-        DraftSaveEvent, ExperimentSession, QuestionVisitEvent, ResponseSnapshot,
+        DraftSaveEvent, ExperimentSession, QuestionVisitEvent, ResponseInputObservation, ResponseSnapshot,
         SimulationSnapshot, StudentQuestionAssignment, SubmissionEvent, GradeRecord,
     )
     course_id = purge_request.scope_definition.get("course_id")
@@ -601,14 +1058,23 @@ def execute_purge_request(purge_request, *, executed_by):
         session_ids = list(ExperimentSession.objects.filter(version__experiment__course_id=course_id).values_list("pk", flat=True))
         attempt_ids = list(Attempt.objects.filter(session_id__in=session_ids).values_list("pk", flat=True))
         counts = {"sessions": len(session_ids), "attempts": len(attempt_ids), "events": AssessmentEvent.objects.filter(session_id__in=session_ids).count()}
+        # Clear durable pointers before removing immutable snapshots that they
+        # intentionally protect during ordinary operation.
+        Attempt.objects.filter(pk__in=attempt_ids).update(
+            current_response_snapshot_id=None,
+            final_response_snapshot_id=None,
+        )
         for model, field, ids in (
             (AssessmentEvent, "session_id", session_ids),
             (ConfidenceAssignment, "attempt_id", attempt_ids),
             (SimulationSnapshot, "attempt_id", attempt_ids),
+            (ResponseInputObservation, "attempt_id", attempt_ids),
             (DraftSaveEvent, "attempt_id", attempt_ids),
             (QuestionVisitEvent, "session_id", session_ids),
             (GradeRecord, "submission__attempt_id", attempt_ids),
             (SubmissionEvent, "attempt_id", attempt_ids),
+            # The durable snapshot pointers must be nulled before their
+            # referenced immutable records can be physically erased.
             (ResponseSnapshot, "attempt_id", attempt_ids),
             (Attempt, "pk", attempt_ids),
             (StudentQuestionAssignment, "session_id", session_ids),
@@ -624,14 +1090,16 @@ def execute_purge_request(purge_request, *, executed_by):
             ExportSnapshot.objects.filter(pk=snapshot.pk).update(
                 invalidated_at=invalidated_at,
                 invalidated_reason=f"purge:{purge_request.reason_code}",
+                filter_definition={"scope_redacted": True},
+                scope_hash="",
+                redacted_at=invalidated_at,
             )
         for job in affected_jobs:
-            if job.artifact_path and os.path.exists(job.artifact_path):
-                os.remove(job.artifact_path)
-            job.status = ExportJob.Status.INVALIDATED
-            job.artifact_path = ""
-            job.artifact_sha256 = ""
-            job.save(update_fields=["status", "artifact_path", "artifact_sha256"])
+            remove_export_artifact(
+                job,
+                reason=f"purge:{purge_request.reason_code}",
+                invalidated=True,
+            )
         purge_request.status = DataPurgeRequest.Status.EXECUTED
         purge_request.executed_by = executed_by
         purge_request.executed_at = timezone.now()
@@ -645,10 +1113,6 @@ def cleanup_expired_exports(*, now=None):
     removed = 0
     for job in ExportJob.objects.filter(expires_at__lte=now).exclude(status=ExportJob.Status.EXPIRED):
         if job.artifact_path and os.path.exists(job.artifact_path):
-            os.remove(job.artifact_path)
             removed += 1
-        job.status = ExportJob.Status.EXPIRED
-        job.artifact_path = ""
-        job.artifact_sha256 = ""
-        job.save(update_fields=["status", "artifact_path", "artifact_sha256"])
+        remove_export_artifact(job, reason="retention_expired")
     return removed

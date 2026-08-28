@@ -21,8 +21,16 @@ from apps.audit.services import log_action
 from apps.experiments.models import Experiment
 from .export_fields import FIELD_LABELS, field_values
 from .models import ExportJob
-from .services import ExportContractError, create_export_snapshot, execute_purge_request, run_export_job
-from .export_catalog import TABLE_PATHS
+from .data_scope import DataScope, ScopeNotFound, ScopeValidationError
+from .advanced_catalog import enabled_extension_tables
+from .services import (
+    ExportContractError,
+    create_export_job,
+    create_export_snapshot,
+    execute_purge_request,
+    run_export_job,
+)
+from .export_catalog import PACKAGE_TABLES, TABLE_PATHS
 from apps.accounts.models import DataPurgeRequest, ResearchStudy
 from apps.accounts.course_access import get_accessible_course, require_course_manager
 
@@ -49,6 +57,19 @@ def export_job_create(request, course_pk):
     if experiment_id:
         experiment = get_object_or_404(course.experiments, pk=experiment_id)
     package = request.POST.get("package", "complete")
+    if package not in PACKAGE_TABLES:
+        return HttpResponse("不支持的数据包类型", status=400, content_type="text/plain; charset=utf-8")
+    enabled_extensions = enabled_extension_tables(experiment)
+    if package == "confidence" and "confidence_assignments" not in enabled_extensions:
+        return HttpResponse("当前实验未启用 Confidence 采集", status=400, content_type="text/plain; charset=utf-8")
+    if package == "simulation" and "simulation_events" not in enabled_extensions:
+        return HttpResponse("当前实验未启用 Simulation 采集", status=400, content_type="text/plain; charset=utf-8")
+    if request.POST.get("confirm_identified") != "yes":
+        return HttpResponse(
+            "请确认该导出包含实名数据后再生成",
+            status=400,
+            content_type="text/plain; charset=utf-8",
+        )
     if package == "identity":
         return HttpResponse("身份任务必须通过独立端点创建", status=400, content_type="text/plain; charset=utf-8")
     kind = ExportJob.Kind.IDENTITY if package == "identity" else ExportJob.Kind.RESEARCH
@@ -58,7 +79,22 @@ def export_job_create(request, course_pk):
         or course.owner_id == request.user.id
     ):
         return HttpResponse("身份任务仅限课程负责人或管理员", status=403, content_type="text/plain; charset=utf-8")
-    snapshot = create_export_snapshot(course=course, experiment=experiment, created_by=request.user)
+    try:
+        scope = DataScope.from_mapping(course, request.POST)
+    except ScopeNotFound:
+        return HttpResponse("导出范围不属于当前课程", status=404, content_type="text/plain; charset=utf-8")
+    except ScopeValidationError as error:
+        return HttpResponse(str(error), status=400, content_type="text/plain; charset=utf-8")
+    try:
+        snapshot = create_export_snapshot(
+            course=course,
+            experiment=experiment,
+            created_by=request.user,
+            scope=scope,
+            package=package,
+        )
+    except ExportContractError as error:
+        return HttpResponse(str(error), status=400, content_type="text/plain; charset=utf-8")
     job = _prepare_export_job(
         course=course,
         experiment=experiment,
@@ -75,7 +111,7 @@ def export_job_create(request, course_pk):
     log_action(request, "analytics.identified_export_job_create", course, {
         "job_id": str(job.job_id), "package": package, "experiment_id": experiment.pk if experiment else None,
     })
-    return redirect("courses:data", course.pk)
+    return redirect("courses:data_export_history", course.pk)
 
 
 @role_required("teacher", "admin")
@@ -85,17 +121,17 @@ def table_export_create(request, course_pk):
     table = request.POST.get("table", "").strip()
     if table not in TABLE_PATHS:
         return HttpResponse("不支持的导出表", status=400, content_type="text/plain; charset=utf-8")
+    if request.POST.get("confirm_identified") != "yes":
+        return HttpResponse("请确认该导出包含实名数据后再生成", status=400, content_type="text/plain; charset=utf-8")
     experiment = get_object_or_404(course.experiments, pk=request.POST.get("experiment_id"))
-    filter_definition = {
-        key: request.POST.get(key)
-        for key in ("version_id", "class_name", "student_number", "session_id", "status")
-        if request.POST.get(key)
-    }
+    try:
+        scope = DataScope.from_mapping(course, request.POST)
+    except ScopeNotFound:
+        return HttpResponse("导出范围不属于当前课程", status=404, content_type="text/plain; charset=utf-8")
+    except ScopeValidationError as error:
+        return HttpResponse(str(error), status=400, content_type="text/plain; charset=utf-8")
     snapshot = create_export_snapshot(
-        course=course,
-        experiment=experiment,
-        created_by=request.user,
-        filter_definition=filter_definition,
+        course=course, experiment=experiment, created_by=request.user, scope=scope,
     )
     job = _prepare_export_job(
         course=course,
@@ -111,8 +147,8 @@ def table_export_create(request, course_pk):
     log_action(request, "analytics.identified_export_job_create", course, {
         "job_id": str(job.job_id), "package": job.package, "experiment_id": experiment.pk,
     })
-    query = {"table": table, "experiment_id": experiment.pk, **filter_definition}
-    return redirect(f"{reverse('courses:data', args=[course.pk])}?{urlencode(query)}")
+    query = {"table": table, **scope.serialize()}
+    return redirect(f"{reverse('courses:data_advanced', args=[course.pk])}?{urlencode(query)}")
 
 
 @role_required("teacher", "admin")
@@ -207,7 +243,12 @@ def export_job_download(request, course_pk, job_id):
     log_action(request, "analytics.identified_export_job_download", course, {
         "job_id": str(job.job_id), "package": job.package,
     })
-    return FileResponse(open(job.artifact_path, "rb"), as_attachment=True, filename=f"{job.package}-{job.job_id}.zip")
+    extension = "xlsx" if job.artifact_path.lower().endswith(".xlsx") else "zip"
+    return FileResponse(
+        open(job.artifact_path, "rb"),
+        as_attachment=True,
+        filename=f"{job.package}-{job.job_id}.{extension}",
+    )
 
 
 @role_required("teacher", "admin")
@@ -215,63 +256,25 @@ def export_job_download(request, course_pk, job_id):
 def export_job_delete(request, course_pk, job_id):
     course = get_accessible_course(request.user, course_pk)
     job = get_object_or_404(ExportJob, course=course, job_id=job_id)
-    if job.artifact_path and os.path.exists(job.artifact_path):
-        artifact_dir = os.path.dirname(job.artifact_path)
-        os.remove(job.artifact_path)
-        if artifact_dir and os.path.isdir(artifact_dir) and not os.listdir(artifact_dir):
-            os.rmdir(artifact_dir)
+    job.expire_artifact(reason="user_requested_removal")
     log_action(request, "analytics.export_job_delete", course, {"job_id": str(job.job_id), "package": job.package})
-    job.delete()
-    return redirect("courses:data", course.pk)
+    return redirect("courses:data_export_history", course.pk)
 
 
 def _prepare_export_job(*, course, snapshot, created_by, experiment=None, research_study=None,
                         kind=ExportJob.Kind.RESEARCH, package="complete", selected_tables=None,
                         selected_fields=None):
-    lookup = {
-        "course": course,
-        "experiment": experiment,
-        "research_study": research_study,
-        "kind": kind,
-        "package": package,
-    }
-    job = ExportJob.objects.filter(**lookup).order_by("-created_at").first()
-    if job is None:
-        job = ExportJob.objects.create(
-            **lookup,
-            snapshot=snapshot,
-            created_by=created_by,
-            selected_tables=selected_tables or [],
-            selected_fields=selected_fields or [],
-        )
-    else:
-        if job.artifact_path and os.path.exists(job.artifact_path):
-            os.remove(job.artifact_path)
-        job.snapshot = snapshot
-        job.created_by = created_by
-        job.selected_tables = selected_tables or []
-        job.selected_fields = selected_fields or []
-        job.status = ExportJob.Status.RUNNING
-        job.started_at = timezone.now()
-        job.finished_at = None
-        job.artifact_path = ""
-        job.artifact_sha256 = ""
-        job.expires_at = None
-        job.lease_expires_at = None
-        job.locked_by = ""
-        job.heartbeat_at = None
-        job.progress_stage = "snapshot"
-        job.save(update_fields=[
-            "snapshot", "created_by", "selected_tables", "selected_fields", "status",
-            "started_at", "finished_at", "artifact_path", "artifact_sha256", "expires_at",
-            "lease_expires_at", "locked_by", "heartbeat_at", "progress_stage",
-        ])
-    if job.status != ExportJob.Status.RUNNING:
-        job.status = ExportJob.Status.RUNNING
-        job.started_at = timezone.now()
-        job.progress_stage = "snapshot"
-        job.save(update_fields=["status", "started_at", "progress_stage"])
-    return job
+    return create_export_job(
+        course=course,
+        experiment=experiment,
+        research_study=research_study,
+        snapshot=snapshot,
+        created_by=created_by,
+        kind=kind,
+        package=package,
+        selected_tables=selected_tables,
+        selected_fields=selected_fields,
+    )
 
 
 def _run_export_job_or_bad_request(job):

@@ -372,6 +372,96 @@ class ExperimentVersion(models.Model):
     def __str__(self): return f"{self.experiment} v{self.version_number}"
 
 
+class ExperimentClassSnapshot(models.Model):
+    """The immutable class membership label used by one published version."""
+
+    class CaptureMode(models.TextChoices):
+        NATIVE = "native", "发布时课程班级快照"
+        LEGACY_LABEL_PROJECTION = "legacy_label_projection", "历史班级标签投影"
+        UNRECORDED = "unrecorded", "未记录"
+
+    class_snapshot_id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+    version = models.ForeignKey(
+        ExperimentVersion,
+        on_delete=models.CASCADE,
+        related_name="class_snapshots",
+    )
+    source_class_group = models.ForeignKey(
+        "accounts.ClassGroup",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="experiment_class_snapshots",
+    )
+    name_snapshot = models.CharField(max_length=120, blank=True)
+    academic_year_snapshot = models.CharField(max_length=32, blank=True)
+    capture_mode = models.CharField(
+        max_length=32,
+        choices=CaptureMode.choices,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["academic_year_snapshot", "name_snapshot", "class_snapshot_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["version", "source_class_group"],
+                condition=Q(source_class_group__isnull=False),
+                name="unique_version_source_class_snapshot",
+            ),
+        ]
+
+    @property
+    def display_name(self):
+        return f"{self.academic_year_snapshot} {self.name_snapshot}".strip()
+
+    def save(self, *args, **kwargs):
+        if self.pk and not self._state.adding:
+            raise ValidationError("实验班级快照不可修改。")
+        return super().save(*args, **kwargs)
+
+
+class ExperimentVersionParticipantSnapshot(models.Model):
+    """The student-to-class assignment frozen with an experiment version."""
+
+    version = models.ForeignKey(
+        ExperimentVersion,
+        on_delete=models.CASCADE,
+        related_name="participant_snapshots",
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="experiment_version_participant_snapshots",
+    )
+    class_snapshot = models.ForeignKey(
+        ExperimentClassSnapshot,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="participant_snapshots",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["version_id", "student_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["version", "student"],
+                name="unique_version_participant_snapshot",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk and not self._state.adding:
+            raise ValidationError("实验参与者快照不可修改。")
+        return super().save(*args, **kwargs)
+
+
 class Condition(models.Model):
     experiment = models.ForeignKey(Experiment, on_delete=models.CASCADE, related_name="conditions")
     key = models.CharField(max_length=64)

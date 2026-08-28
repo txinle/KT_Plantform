@@ -29,6 +29,8 @@
   let saveQueue = Promise.resolve();
   let submitting = false;
   let inputStarted = false;
+  let lastStableText = '';
+  let textEditQueue = Promise.resolve();
   let processLifecycle = null;
   let confidencePromptPromise = null;
 
@@ -67,6 +69,50 @@
     } catch (_error) {
       return null;
     }
+  }
+
+  async function sha256Text(value) {
+    if (!window.crypto?.subtle || typeof TextEncoder === 'undefined') return null;
+    const bytes = new TextEncoder().encode(value);
+    const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  function editOperation(inputType) {
+    if (inputType === 'insertFromPaste') return 'paste';
+    if (String(inputType || '').startsWith('delete')) return 'delete';
+    if (inputType === 'insertReplacementText' || inputType === 'insertFromDrop') return 'replace';
+    if (String(inputType || '').startsWith('insert')) return 'insert';
+    return 'unknown';
+  }
+
+  function inputMethod(inputType, composing) {
+    if (composing || String(inputType || '').includes('Composition')) return 'ime';
+    if (inputType === 'insertFromPaste') return 'paste';
+    return inputType ? 'keyboard' : 'unknown';
+  }
+
+  function queueStableTextObservation(element, event = {}) {
+    if (!element || event.isComposing) return;
+    const after = String(element.value ?? '');
+    const before = lastStableText;
+    if (after === before) return;
+    lastStableText = after;
+    const operation = editOperation(event.inputType);
+    const method = inputMethod(event.inputType, event.isComposing);
+    textEditQueue = textEditQueue.then(async () => {
+      const [beforeHash, afterHash] = await Promise.all([sha256Text(before), sha256Text(after)]);
+      if (!beforeHash || !afterHash) return;
+      await recordProcessEvent('text_edit_observed', {
+        question_type: form.dataset.questionType,
+        edit_operation: operation,
+        content_hash_before: beforeHash,
+        content_hash_after: afterHash,
+        content_length_before: before.length,
+        content_length_after: after.length,
+        input_method: method,
+      });
+    }).catch(() => {});
   }
 
   async function closeProcessAttempt(reason) {
@@ -312,6 +358,7 @@
       });
     }
     if (choiceQuestion) return;
+    queueStableTextObservation(event.target, event);
     window.clearTimeout(debounceTimer);
     setSaveState('等待自动保存');
     debounceTimer = window.setTimeout(() => saveDraft().catch(() => {}), 800);
@@ -324,6 +371,11 @@
       saveDraft().catch(() => {});
     });
   }
+
+  form.addEventListener('compositionend', (event) => {
+    if (!event.target.matches('[name="answer"]') || choiceQuestion) return;
+    queueStableTextObservation(event.target, { inputType: 'insertCompositionText' });
+  });
 
   submitConfirm?.addEventListener('click', async () => {
     if (submitting) return;
@@ -400,6 +452,7 @@
   restore();
   lastSerialized = JSON.stringify(collect());
   lastQueuedSerialized = lastSerialized;
+  if (!choiceQuestion) lastStableText = String(collect() ?? '');
   if (pendingConfidence) {
     lockAnswerControls();
     showConfidencePrompt(pendingConfidence).catch((error) => {

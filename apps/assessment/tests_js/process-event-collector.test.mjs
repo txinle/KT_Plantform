@@ -284,6 +284,30 @@ test('response state payload retains before/after refs and stable observation', 
   );
 });
 
+test('text edit payload never retains answer text', () => {
+  assert.deepEqual(
+    sanitizePayload('text_edit_observed', {
+      question_type: 'short_answer',
+      edit_operation: 'insert',
+      content_hash_before: 'a'.repeat(64),
+      content_hash_after: 'b'.repeat(64),
+      content_length_before: 0,
+      content_length_after: 3,
+      input_method: 'keyboard',
+      raw_text: 'private answer',
+    }),
+    {
+      question_type: 'short_answer',
+      edit_operation: 'insert',
+      content_hash_before: 'a'.repeat(64),
+      content_hash_after: 'b'.repeat(64),
+      content_length_before: 0,
+      content_length_after: 3,
+      input_method: 'keyboard',
+    },
+  );
+});
+
 test('lifecycle capture emits approved events and heartbeat stops after close', async () => {
   class Target {
     constructor() { this.listeners = new Map(); }

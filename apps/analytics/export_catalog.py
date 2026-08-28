@@ -1,18 +1,24 @@
 PACKAGE_TABLES = {
+    "teaching": ("attempts",),
     "complete": (
         "subjects", "sessions", "assignments", "item_instances", "attempts",
         "assessment_events", "response_events", "navigation_events",
-        "exposure_events", "telemetry_events", "item_snapshots",
+        "exposure_events", "telemetry_events", "simulation_events",
+        "simulation_snapshots", "item_snapshots",
         "kc_dictionary", "item_kc_mapping", "q_matrix",
         "confidence_assignments", "attempt_features", "kt_sequences",
-        "cd_response_matrix", "calibration_features",
+        "cd_response_matrix", "calibration_features", "response_snapshots",
+        "response_input_observations", "submissions", "grade_records",
+        "condition_assignments", "class_snapshots", "participant_snapshots",
     ),
     "kt": ("subjects", "attempts", "item_kc_mapping", "kt_sequences"),
     "cd": ("subjects", "attempts", "q_matrix", "cd_response_matrix"),
     "process": (
         "subjects", "sessions", "assignments", "item_instances", "attempts",
         "assessment_events", "response_events", "navigation_events",
-        "exposure_events", "telemetry_events",
+        "exposure_events", "telemetry_events", "response_snapshots",
+        "response_input_observations", "submissions", "grade_records",
+        "condition_assignments", "class_snapshots", "participant_snapshots",
     ),
     "confidence": (
         "subjects", "attempts", "confidence_assignments", "calibration_features",
@@ -34,6 +40,13 @@ TABLE_PATHS = {
     "telemetry_events": "03_raw_events/telemetry_events.csv",
     "simulation_events": "03_raw_events/simulation_events.csv",
     "simulation_snapshots": "03_raw_events/simulation_snapshots.csv",
+    "response_snapshots": "03_raw_events/response_snapshots.csv",
+    "response_input_observations": "03_raw_events/response_input_observations.csv",
+    "submissions": "02_core/submissions.csv",
+    "grade_records": "02_core/grade_records.csv",
+    "condition_assignments": "01_design_metadata/condition_assignments.csv",
+    "class_snapshots": "01_design_metadata/class_snapshots.csv",
+    "participant_snapshots": "01_design_metadata/participant_snapshots.csv",
     "item_snapshots": "01_design_metadata/item_snapshots.csv",
     "kc_dictionary": "01_design_metadata/kc_dictionary.csv",
     "item_kc_mapping": "01_design_metadata/item_kc_mapping.csv",
@@ -51,7 +64,7 @@ TABLE_LABELS = {
     "assignments": "题目分配",
     "item_instances": "题目呈现实例",
     "attempts": "单题作答",
-    "assessment_events": "全部事件",
+    "assessment_events": "全部行为事件",
     "response_events": "作答事件",
     "navigation_events": "导航事件",
     "exposure_events": "暴露事件",
@@ -63,6 +76,13 @@ TABLE_LABELS = {
     "confidence_assignments": "Confidence信心",
     "simulation_events": "仿真事件",
     "simulation_snapshots": "仿真快照",
+    "response_snapshots": "答案快照",
+    "response_input_observations": "稳定输入观测",
+    "submissions": "提交记录",
+    "grade_records": "评分记录",
+    "condition_assignments": "实验条件分配",
+    "class_snapshots": "班级快照",
+    "participant_snapshots": "版本参与者快照",
     "attempt_features": "作答特征",
     "kt_sequences": "KT序列",
     "cd_response_matrix": "CD响应矩阵",
@@ -241,7 +261,7 @@ COMMON_FIELD_DESCRIPTIONS = {
 PLACEHOLDER_TABLES = frozenset()
 
 RESPONSE_EVENT_TYPES = {
-    "response_input_started", "response_state_changed", "response_commit_requested",
+    "response_input_started", "text_edit_observed", "response_state_changed", "response_commit_requested",
     "response_committed", "response_commit_rejected", "attempt_closed",
 }
 EXPOSURE_EVENT_TYPES = {

@@ -130,7 +130,7 @@ def create_response_snapshot(*, attempt, content, schema_version=1, response_sta
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     existing = ResponseSnapshot.objects.filter(
         attempt=attempt,
-        content_hash=content_hash,
+        state_hash=logical_state.state_hash,
     ).first()
     if existing is not None:
         if (
@@ -159,7 +159,7 @@ def create_response_snapshot(*, attempt, content, schema_version=1, response_sta
     except IntegrityError:
         existing = ResponseSnapshot.objects.filter(
             attempt=attempt,
-            content_hash=content_hash,
+            state_hash=logical_state.state_hash,
         ).first()
         if existing is None:
             raise

@@ -35,7 +35,8 @@
 - `CourseEnrollment`：学生在单门课程中的唯一选课关系，`class_group` 表示该课程下的班级归属。
 - 手动添加和 Excel 导入复用同学号、同姓名的既有账号；新账号密码规则为 `S + 原始学号`。
 - 从其他课程班级复制时只复制有效 `CourseEnrollment`；目标课程已有选课的学生被跳过，不复制账号、不改密码、不自动转班。
-- 实验分配时保存 `ExperimentStudent.class_snapshot_name`；班级后续改名不改变该快照。
+- `ExperimentClassSnapshot.class_snapshot_id`：实验版本发布/分配时冻结的班级身份，是单版本研究范围的精确班级筛选真值；班级名称只作展示，后续改名不回写快照。普通 `TeachingScope.class_id` 通过 `source_class_group_id` 与一个或多个冻结快照取交集，不按名称匹配。
+- `ExperimentVersionParticipantSnapshot`：把参与者与不可变班级快照绑定。旧的 `class_snapshot_name` 仅保留为兼容展示投影，不能作为科研范围筛选键。
 
 ## 稳定研究对象标识
 
@@ -116,7 +117,7 @@ server_ingest_sequence_no != 学生真实行为顺序
 ## 时间同步与状态快照
 
 - `ClientTimeSync.time_sync_id`：时间同步样本 UUID；保存客户端实例、壁钟、单调时钟、时间起点、服务器接收/响应时间、估计偏移、RTT 与 `sync_quality`。偏移和 RTT 是估计量。
-- `ResponseSnapshot.snapshot_id`：长文本响应状态 UUID。按 `attempt_id + content_hash` 去重，保存正文、长度、SHA-256、schema 版本与创建时间。事件 payload 只引用快照 ID、长度和哈希。
+- `ResponseSnapshot.snapshot_id`：长文本响应状态 UUID。逻辑 `state_json` 不包含该 UUID，按 `attempt_id + state_hash` 去重；正文内容哈希、长度、schema 版本与创建时间只描述该状态。事件 payload 通过 `ResponseStateRef` 引用快照 ID、状态哈希和内容元数据，避免 UUID 进入状态 hash。
 - `SimulationSnapshot.snapshot_id`：仿真状态 UUID。保存小型结构化元数据、外部 blob 键、内容 SHA-256、字节数、仿真版本和 schema 版本；完整电路、波形或文件不进入事件 JSON。
 
 快照与其引用事件都是原始观测层。统计用的答案修改次数、首次选择、首次选择时间、决策时间、修改时间、不同答案数、回访次数和累计活跃时长均从事件流派生，不作为并行的“原始事实字段”重复采集。
@@ -175,7 +176,16 @@ Word 报告禁止包含 KC、教师或经验难度、任何用时字段、访问
 
 ## 研究数据中心与导出任务
 
-课程数据中心使用“数据概览 → 采集质量 → 实验数据 → 导出任务”的导航。数据范围按“实验 → 版本 → 班级快照 → 学生（学号 · 姓名）→ 会话 → 状态”筛选；班级使用会话创建时的快照名称，空值明确显示为“未记录班级”。
+课程数据中心固定为“概览 → 教学数据 → 导出 → 数据质量 → 导出记录 → 高级数据工具”。普通教学范围只包含实验与实时课程班级；完整研究范围按“实验 → 版本 → 班级/班级快照 → 学生 → 会话 → 条件 → 状态 → 时间”严格取交集。`class_id` 只通过冻结快照的 `source_class_group_id` 过滤历史会话；没有匹配快照时结果为空，绝不退化成实验全量。旧 `class_name` 与 `student_number` URL 参数只能先被唯一解析为范围实体，歧义或冲突会拒绝请求。
+
+### 数据中心 v2 范围、时长、质量与导出
+
+- `TeachingScope` 是普通概览和教学数据的范围服务；`DataScope` 是导出、质量与高级数据工具的完整研究范围服务。`experiment_id`、`version_id`、`class_id`、`class_snapshot_id`、`student_id`、`session_id`、`condition_id`、会话/作答状态和 UTC 时间边界同时存在时必须全部成立；切换表或导出用途时必须原样保留，不会由某个过滤条件覆盖另一个条件。
+- 教学汇总、KT 与 CD 导出必须选择单一实验版本；包含多个版本时页面阻断并要求选择版本，禁止静默混合不同题目或评分语义。
+- `TimingSummary` 同时记录 `active_duration_ms`、`wall_clock_duration_ms`、`display_duration_ms`、`display_kind` 与 `interval_quality`。教学页面与教学成绩工作簿调用同一计算服务；没有足够原生过程观测时只显示总历时或“不可用”，不伪造活跃时长。
+- 五类质量不变量为 `identity`、`state_chain`、`submission`、`ordering_time`、`provenance`。每项结果只能是 `PASS`、`WARN`、`FAIL`、`NOT_EVALUABLE` 或 `NOT_APPLICABLE`，并带有规则版本、实体类型/ID、来源模式、原因码和证据摘要。历史投影数据缺少原生字段时应为 `NOT_EVALUABLE`，不应伪造质量失败。
+- 导出在确认页明确标明实名范围。每次确认都会创建新的 `ExportJob` 与 `ExportSnapshot`；快照冻结 source cutoff、事件 high-watermark、schema manifest hash、范围 hash 与血缘。教学成绩导出为 XLSX，其余研究包为 ZIP。
+- 依法 purge 会物理清除范围内原始记录和文件，导出任务仅留下最小审计 tombstone：文件删除、可识别 scope/manifest 内容与范围 hash 清除，任务标记为已失效，保留任务 ID、创建/失效时间、创建者、包类型与文件摘要。
 
 每个 `ExportSnapshot` 固定课程、实验（可选）和 `cutoff_at`；同一 `ExportJob` 的 sessions、attempts 与 assessment events 均不得读取截止时间之后的记录。所有导出文件都属于实名研究数据，课程负责人、协作教师和管理员可在课程权限范围内创建与下载。
 

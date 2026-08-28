@@ -21,6 +21,8 @@ class ExportSnapshot(models.Model):
     database_snapshot_strategy = models.CharField(max_length=32, default="single_read_transaction")
     selected_versions = models.JSONField(default=list, blank=True)
     filter_definition = models.JSONField(default=dict, blank=True)
+    scope_hash = models.CharField(max_length=64, blank=True, default="")
+    redacted_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="created_export_snapshots")
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -31,7 +33,7 @@ class ExportSnapshot(models.Model):
         "course_id", "experiment_id", "research_study_id", "cutoff_at",
         "source_cutoff_at", "event_high_watermark", "schema_manifest_hash",
         "database_snapshot_strategy", "selected_versions", "filter_definition",
-        "created_by_id",
+        "scope_hash", "created_by_id",
     })
 
     def save(self, *args, **kwargs):
@@ -83,6 +85,8 @@ class ExportJob(models.Model):
     progress_stage = models.CharField(max_length=64, blank=True)
     artifact_path = models.CharField(max_length=512, blank=True)
     artifact_sha256 = models.CharField(max_length=64, blank=True)
+    artifact_removed_at = models.DateTimeField(null=True, blank=True)
+    artifact_removal_reason = models.CharField(max_length=64, blank=True, default="")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="created_export_jobs")
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField(null=True, blank=True)
@@ -92,3 +96,8 @@ class ExportJob(models.Model):
 
     def save(self, *args, **kwargs):
         return super().save(*args, **kwargs)
+
+    def expire_artifact(self, *, reason="user_requested_removal"):
+        from .services import remove_export_artifact
+
+        return remove_export_artifact(self, reason=reason)

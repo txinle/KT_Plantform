@@ -20,6 +20,7 @@ REGISTERED_EVENT_TYPES = (
     "item_rendered",
     "item_left",
     "response_input_started",
+    "text_edit_observed",
     "response_state_changed",
     "response_commit_requested",
     "response_committed",

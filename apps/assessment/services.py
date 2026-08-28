@@ -5,7 +5,12 @@ from datetime import timedelta
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
-from apps.experiments.models import Experiment, ExperimentStudent, ExperimentVersion
+from apps.experiments.models import (
+    Experiment,
+    ExperimentStudent,
+    ExperimentVersion,
+    ExperimentVersionParticipantSnapshot,
+)
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.experiments.services import derive_session_seeds, ordered_snapshots, select_snapshots
 from apps.question_bank.services.numeric import normalize_finite_decimal
@@ -129,12 +134,37 @@ def get_or_create_session(experiment, student):
         .order_by("-version_number")
         .first()
     )
+    participant_snapshot = (
+        ExperimentVersionParticipantSnapshot.objects.select_related("class_snapshot")
+        .filter(version=version, student=student)
+        .first()
+    )
+    # A published v2 course experiment freezes an explicit roster and must
+    # never admit a student outside it.  Older/no-roster experiments have no
+    # participant snapshot rows at all; retain their historical admission
+    # semantics instead of retroactively making their sessions impossible.
+    participant_snapshot_enabled = (
+        experiment.course_id is not None
+        and ExperimentVersionParticipantSnapshot.objects.filter(version=version).exists()
+    )
+    if participant_snapshot_enabled and participant_snapshot is None:
+        raise ValidationError("该实验版本缺少参与者快照，不能开始作答")
     sampling_seed, ordering_seed, algorithm_version = derive_session_seeds(version, student.id)
     session, created = ExperimentSession.objects.get_or_create(
         version=version,
         student=student,
         defaults={
-            "class_snapshot_name": enrollment.class_snapshot_name,
+            "class_snapshot": (
+                participant_snapshot.class_snapshot
+                if participant_snapshot is not None
+                else None
+            ),
+            "class_snapshot_name": (
+                participant_snapshot.class_snapshot.display_name
+                if participant_snapshot is not None
+                and participant_snapshot.class_snapshot_id is not None
+                else ""
+            ),
             "sampling_seed": sampling_seed,
             "ordering_seed": ordering_seed,
             "sampling_algorithm_version": algorithm_version,
@@ -459,8 +489,10 @@ def _submit_attempt_transaction(
         submission=submission,
         version=1,
         status=GradeRecord.Status.COMPLETED,
+        validity_status=GradeRecord.ValidityStatus.EFFECTIVE,
         is_correct=correct,
         score=score,
+        max_score=1,
         graded_at=now,
     )
     append_assessment_event(
@@ -526,14 +558,27 @@ def grade_submission(
         status = GradeRecord.Status(status)
     except ValueError:
         raise ValidationError("无效的评分状态") from None
-    latest = submission.grade_records.order_by("-version").first()
+    grades = submission.grade_records.select_for_update()
+    latest = grades.order_by("-version").first()
+    effective = grades.filter(
+        validity_status=GradeRecord.ValidityStatus.EFFECTIVE
+    ).first()
     version = (latest.version + 1) if latest else 1
     now = timezone.now() if status == GradeRecord.Status.COMPLETED else None
     supersedes = latest if latest is not None else None
+    validity_status = (
+        GradeRecord.ValidityStatus.EFFECTIVE
+        if status == GradeRecord.Status.COMPLETED
+        else GradeRecord.ValidityStatus.CANDIDATE
+    )
+    if status == GradeRecord.Status.COMPLETED and effective is not None:
+        effective.validity_status = GradeRecord.ValidityStatus.SUPERSEDED
+        effective.save(update_fields=["validity_status"])
     record = GradeRecord.objects.create(
         submission=submission,
         version=version,
         status=status,
+        validity_status=validity_status,
         score=score,
         is_correct=is_correct,
         grader_version=grader_version,
@@ -555,6 +600,39 @@ def grade_submission(
         attempt.save(update_fields=["score", "is_correct"])
     else:
         submission.save(update_fields=["grading_status"])
+    return record
+
+
+@transaction.atomic
+def void_grade_record(grade_record_id, *, reason, actor=None):
+    """Void a grade without deleting the audit record or reviving an older score."""
+    if not reason or not str(reason).strip():
+        raise ValidationError("撤销评分必须说明原因")
+    record = (
+        GradeRecord.objects.select_for_update()
+        .select_related("submission__attempt")
+        .get(pk=grade_record_id)
+    )
+    if record.validity_status == GradeRecord.ValidityStatus.VOIDED:
+        return record
+    was_effective = record.validity_status == GradeRecord.ValidityStatus.EFFECTIVE
+    record.validity_status = GradeRecord.ValidityStatus.VOIDED
+    record.voided_at = timezone.now()
+    record.voided_by = actor
+    record.void_reason = str(reason).strip()
+    record.save(
+        update_fields=["validity_status", "voided_at", "voided_by", "void_reason"]
+    )
+    if was_effective:
+        submission = record.submission
+        submission.grading_status = SubmissionEvent.GradingStatus.REGRADE
+        submission.score = None
+        submission.is_correct = None
+        submission.save(update_fields=["grading_status", "score", "is_correct"])
+        attempt = submission.attempt
+        attempt.score = None
+        attempt.is_correct = None
+        attempt.save(update_fields=["score", "is_correct"])
     return record
 
 
