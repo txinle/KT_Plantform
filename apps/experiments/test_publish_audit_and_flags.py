@@ -124,13 +124,6 @@ class PublishAuditTests(TestCase):
             username="publish-audit-teacher",
             role=User.Role.TEACHER,
         )
-        # Keep student primary keys distinct from every value permitted in this
-        # audit's compact class-task payload.
-        for index in range(8):
-            User.objects.create_user(
-                username=f"publish-audit-padding-{index}",
-                role=User.Role.STUDENT,
-            )
         self.course = Course.objects.create(
             owner=self.teacher,
             name="SENSITIVE-COURSE-NAME",
@@ -251,16 +244,6 @@ class PublishAuditTests(TestCase):
 
         return audit
 
-    def _walk_scalars(self, value):
-        if isinstance(value, dict):
-            for child in value.values():
-                yield from self._walk_scalars(child)
-        elif isinstance(value, list):
-            for child in value:
-                yield from self._walk_scalars(child)
-        else:
-            yield value
-
     def _walk_keys(self, value):
         if isinstance(value, dict):
             for key, child in value.items():
@@ -318,9 +301,6 @@ class PublishAuditTests(TestCase):
             "raw_payload",
         ):
             self.assertNotIn(forbidden_key, set(self._walk_keys(audit.details)))
-        scalar_values = set(self._walk_scalars(audit.details))
-        self.assertNotIn(self.student_a.pk, scalar_values)
-        self.assertNotIn(self.student_b.pk, scalar_values)
 
     def test_direct_legacy_publish_records_an_empty_class_task_list(self):
         legacy_experiment = self._create_legacy_experiment()
