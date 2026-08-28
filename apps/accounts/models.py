@@ -113,19 +113,37 @@ class ClassGroupQuerySet(models.QuerySet):
         update_fields=None,
         unique_fields=None,
     ):
+        objs = list(objs)
         update_fields = tuple(update_fields) if update_fields is not None else None
+        if ignore_conflicts:
+            raise ValidationError("班级批量创建不支持忽略冲突。")
         # Non-course conflict upserts remain a public write surface; course
         # field upserts are rejected. No current application caller uses it.
         if update_conflicts and self._writes_course(update_fields or ()):
             raise ValidationError("班级不支持批量冲突更新。")
-        return super().bulk_create(
-            objs,
-            batch_size=batch_size,
-            ignore_conflicts=ignore_conflicts,
-            update_conflicts=update_conflicts,
-            update_fields=update_fields,
-            unique_fields=unique_fields,
-        )
+        self._for_write = True
+        using = self.db
+        with transaction.atomic(using=using):
+            created = super().bulk_create(
+                objs,
+                batch_size=batch_size,
+                ignore_conflicts=ignore_conflicts,
+                update_conflicts=update_conflicts,
+                update_fields=update_fields,
+                unique_fields=unique_fields,
+            )
+            class_group_ids = [class_group.pk for class_group in created]
+            if any(class_group_id is None for class_group_id in class_group_ids):
+                raise ValidationError("班级批量创建未返回稳定标识。")
+            if class_group_ids:
+                ClassStudentAnalyticsPolicy.objects.using(using).bulk_create(
+                    [
+                        ClassStudentAnalyticsPolicy(class_group_id=class_group_id)
+                        for class_group_id in class_group_ids
+                    ],
+                    ignore_conflicts=True,
+                )
+            return created
 
 
 class ClassGroupManager(models.Manager.from_queryset(ClassGroupQuerySet)):

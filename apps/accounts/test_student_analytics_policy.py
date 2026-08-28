@@ -1,4 +1,5 @@
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from django.contrib import admin
 from django.contrib.auth.models import AnonymousUser
@@ -72,6 +73,128 @@ class ClassStudentAnalyticsPolicyModelTests(TestCase):
         self.assertEqual(
             ClassStudentAnalyticsPolicy.objects.filter(class_group=class_group).count(),
             1,
+        )
+
+
+class ClassStudentAnalyticsPolicyBulkCreateTests(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="policy-bulk-owner",
+            role=User.Role.TEACHER,
+        )
+        self.course = Course.objects.create(
+            name="策略批量课程",
+            code="POLBULK",
+            term="2026秋",
+            owner=self.owner,
+        )
+
+    def test_normal_bulk_create_immediately_creates_default_policies(self):
+        class_groups = ClassGroup.objects.bulk_create(
+            [
+                ClassGroup(
+                    course=self.course,
+                    owner=self.owner,
+                    name="策略批量一班",
+                    academic_year="2026",
+                ),
+                ClassGroup(
+                    course=self.course,
+                    owner=self.owner,
+                    name="策略批量二班",
+                    academic_year="2026",
+                ),
+            ]
+        )
+
+        self.assertTrue(all(class_group.pk for class_group in class_groups))
+        self.assertEqual(
+            ClassStudentAnalyticsPolicy.objects.filter(
+                class_group_id__in=[class_group.pk for class_group in class_groups]
+            ).count(),
+            2,
+        )
+
+    def test_policy_creation_failure_rolls_back_bulk_created_classes(self):
+        policy_manager = SimpleNamespace(
+            bulk_create=Mock(side_effect=RuntimeError("policy insert failed"))
+        )
+
+        with patch.object(
+            ClassStudentAnalyticsPolicy.objects,
+            "using",
+            return_value=policy_manager,
+        ):
+            with self.assertRaises(RuntimeError):
+                ClassGroup.objects.bulk_create(
+                    [
+                        ClassGroup(
+                            course=self.course,
+                            owner=self.owner,
+                            name="策略回滚班",
+                            academic_year="2026",
+                        )
+                    ]
+                )
+
+        self.assertFalse(
+            ClassGroup.objects.filter(course=self.course, name="策略回滚班").exists()
+        )
+        self.assertEqual(
+            ClassStudentAnalyticsPolicy.objects.filter(
+                class_group__course=self.course,
+                class_group__name="策略回滚班",
+            ).count(),
+            0,
+        )
+
+    def test_existing_non_course_upsert_never_duplicates_its_policy(self):
+        class_group = ClassGroup.objects.create(
+            course=self.course,
+            owner=self.owner,
+            name="策略上突班",
+            academic_year="2026",
+        )
+        candidate = ClassGroup.objects.get(pk=class_group.pk)
+        candidate.is_active = False
+
+        ClassGroup.objects.bulk_create(
+            [candidate],
+            update_conflicts=True,
+            update_fields=["is_active"],
+            unique_fields=["pk"],
+        )
+
+        class_group.refresh_from_db()
+        self.assertFalse(class_group.is_active)
+        self.assertEqual(
+            ClassStudentAnalyticsPolicy.objects.filter(class_group=class_group).count(),
+            1,
+        )
+
+    def test_ignore_conflicts_is_rejected_without_creating_a_class_or_policy(self):
+        with self.assertRaises(ValidationError):
+            ClassGroup.objects.bulk_create(
+                [
+                    ClassGroup(
+                        course=self.course,
+                        owner=self.owner,
+                        name="策略忽略冲突班",
+                        academic_year="2026",
+                    )
+                ],
+                ignore_conflicts=True,
+            )
+
+        self.assertFalse(
+            ClassGroup.objects.filter(course=self.course, name="策略忽略冲突班").exists()
+        )
+        self.assertEqual(
+            ClassStudentAnalyticsPolicy.objects.filter(
+                class_group__course=self.course,
+                class_group__name="策略忽略冲突班",
+            ).count(),
+            0,
         )
 
 
@@ -315,6 +438,77 @@ class ClassStudentAnalyticsPolicyServiceTests(
         self.assertEqual(self.policy_state(), before)
         self.assertEqual(AuditLog.objects.count(), 0)
 
+    def test_stale_admin_is_rejected_after_its_persisted_role_is_revoked(self):
+        stale_admin = User.objects.get(pk=self.role_admin.pk)
+        User.objects.filter(pk=self.role_admin.pk).update(role=User.Role.STUDENT)
+
+        with self.assertRaises(PermissionDenied):
+            update_class_student_analytics_policy(
+                class_group=self.class_group,
+                actor=stale_admin,
+                changes={"show_item_results": False},
+            )
+
+        self.policy.refresh_from_db()
+        self.assertTrue(self.policy.show_item_results)
+        self.assertEqual(AuditLog.objects.count(), 0)
+
+    def test_unsaved_forged_admin_actor_is_rejected_without_writes(self):
+        forged_actor = User(pk=self.student.pk, role=User.Role.ADMIN)
+
+        with self.assertRaises(PermissionDenied):
+            update_class_student_analytics_policy(
+                class_group=self.class_group,
+                actor=forged_actor,
+                changes={"show_item_results": False},
+            )
+
+        self.policy.refresh_from_db()
+        self.assertTrue(self.policy.show_item_results)
+        self.assertEqual(AuditLog.objects.count(), 0)
+
+    def test_cross_database_actor_state_is_rejected_without_writes(self):
+        cross_database_actor = User.objects.get(pk=self.owner.pk)
+        cross_database_actor._state.db = "other"
+
+        with self.assertRaises(PermissionDenied):
+            update_class_student_analytics_policy(
+                class_group=self.class_group,
+                actor=cross_database_actor,
+                changes={"show_item_results": False},
+            )
+
+        self.policy.refresh_from_db()
+        self.assertTrue(self.policy.show_item_results)
+        self.assertEqual(AuditLog.objects.count(), 0)
+
+    def test_class_group_alias_mismatch_is_rejected_without_writes(self):
+        with patch("django.db.router.db_for_write", return_value="other"):
+            with self.assertRaises(ValidationError):
+                update_class_student_analytics_policy(
+                    class_group=self.class_group,
+                    actor=self.owner,
+                    changes={"show_item_results": False},
+                )
+
+        self.policy.refresh_from_db()
+        self.assertTrue(self.policy.show_item_results)
+        self.assertEqual(AuditLog.objects.count(), 0)
+
+    def test_unsaved_forged_class_group_is_rejected_without_writes(self):
+        forged_class_group = ClassGroup(pk=self.class_group.pk)
+
+        with self.assertRaises(ValidationError):
+            update_class_student_analytics_policy(
+                class_group=forged_class_group,
+                actor=self.owner,
+                changes={"show_item_results": False},
+            )
+
+        self.policy.refresh_from_db()
+        self.assertTrue(self.policy.show_item_results)
+        self.assertEqual(AuditLog.objects.count(), 0)
+
     def test_archived_course_is_rejected_after_locked_reload(self):
         Course.objects.filter(pk=self.course.pk).update(status=Course.Status.ARCHIVED)
 
@@ -494,8 +688,8 @@ class ClassStudentAnalyticsPolicyTransactionTests(
             {Course, ClassGroup, ClassStudentAnalyticsPolicy}.issubset(set(locked_models))
         )
         self.assertEqual(
-            locked_models[:3],
-            [Course, ClassGroup, ClassStudentAnalyticsPolicy],
+            locked_models[:4],
+            [Course, ClassGroup, ClassStudentAnalyticsPolicy, User],
         )
         self.assertEqual(atomic_states, [True])
 
