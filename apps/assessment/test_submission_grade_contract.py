@@ -14,6 +14,7 @@ from .services import (
     record_visit,
     save_draft,
     submit_attempt,
+    void_grade_record,
 )
 from .event_services import append_assessment_event
 
@@ -73,9 +74,61 @@ class SubmissionGradeContractTests(TestCase):
 
         self.assertEqual(record.version, 2)
         self.assertEqual(record.status, GradeRecord.Status.COMPLETED)
+        self.assertEqual(record.validity_status, GradeRecord.ValidityStatus.EFFECTIVE)
         submitted.refresh_from_db()
         self.assertEqual(str(submitted.score), "1.00")
         self.assertTrue(submitted.is_correct)
+
+    def test_candidate_regrade_does_not_replace_effective_grade(self):
+        save_draft(self.attempt.pk, "a")
+        submitted_attempt = submit_attempt(self.attempt.pk, uuid.uuid4())
+        submitted = Submission.objects.get(attempt=submitted_attempt)
+        initial = submitted.grade_records.get(version=1)
+
+        candidate = grade_submission(submitted.pk, status="regrade")
+
+        initial.refresh_from_db()
+        self.assertEqual(initial.validity_status, GradeRecord.ValidityStatus.EFFECTIVE)
+        self.assertEqual(candidate.validity_status, GradeRecord.ValidityStatus.CANDIDATE)
+        self.assertEqual(
+            submitted.grade_records.get(
+                validity_status=GradeRecord.ValidityStatus.EFFECTIVE
+            ).pk,
+            initial.pk,
+        )
+
+    def test_completed_regrade_supersedes_effective_grade(self):
+        save_draft(self.attempt.pk, "a")
+        submitted_attempt = submit_attempt(self.attempt.pk, uuid.uuid4())
+        submitted = Submission.objects.get(attempt=submitted_attempt)
+        initial = submitted.grade_records.get(version=1)
+
+        replacement = grade_submission(submitted.pk, score="0.50", is_correct=False)
+
+        initial.refresh_from_db()
+        self.assertEqual(initial.validity_status, GradeRecord.ValidityStatus.SUPERSEDED)
+        self.assertEqual(replacement.validity_status, GradeRecord.ValidityStatus.EFFECTIVE)
+        submitted.refresh_from_db()
+        self.assertEqual(str(submitted.score), "0.50")
+        self.assertFalse(submitted.is_correct)
+
+    def test_voiding_effective_grade_clears_compatibility_projection(self):
+        save_draft(self.attempt.pk, "a")
+        submitted_attempt = submit_attempt(self.attempt.pk, uuid.uuid4())
+        submitted = Submission.objects.get(attempt=submitted_attempt)
+        effective = submitted.grade_records.get(version=1)
+
+        void_grade_record(effective.pk, reason="人工复核发现评分配置错误")
+
+        effective.refresh_from_db()
+        submitted.refresh_from_db()
+        submitted.attempt.refresh_from_db()
+        self.assertEqual(effective.validity_status, GradeRecord.ValidityStatus.VOIDED)
+        self.assertIsNone(submitted.score)
+        self.assertIsNone(submitted.is_correct)
+        self.assertEqual(submitted.grading_status, SubmissionEvent.GradingStatus.REGRADE)
+        self.assertIsNone(submitted.attempt.score)
+        self.assertIsNone(submitted.attempt.is_correct)
 
     def test_grading_status_supports_pending_and_regrade_versions(self):
         save_draft(self.attempt.pk, "a")

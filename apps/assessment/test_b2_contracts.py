@@ -8,7 +8,11 @@ from django.utils import timezone
 
 from apps.assessment.event_batch_services import append_event_batch
 from apps.assessment.event_services import append_assessment_event
-from apps.assessment.models import AssessmentEvent, ExperimentSession
+from apps.assessment.models import (
+    AssessmentEvent,
+    ExperimentSession,
+    ResponseInputObservation,
+)
 from apps.assessment.writer_lease_services import (
     WriterLeaseConflict,
     acquire_attempt_writer_lease,
@@ -81,3 +85,44 @@ class B2ContractsTests(TestCase):
         condition = Condition.objects.create(experiment=self.experiment, key="control", label="Control")
         assignment = ConditionAssignment.objects.create(condition=condition, session=self.session, algorithm="rand", algorithm_version="v1", seed="s", draw=Decimal("0.2"), stratum="all", probability=Decimal("0.5"))
         self.assertEqual(assignment.session_id, self.session.pk)
+
+    def test_stable_text_edit_event_creates_metadata_only_observation(self):
+        before_hash = "a" * 64
+        after_hash = "b" * 64
+        payload = {
+            "client_instance_id": str(uuid.uuid4()),
+            "events": [{
+                "event_type": "text_edit_observed",
+                "event_version": 1,
+                "session_id": self.session.pk,
+                "attempt_id": Attempt.objects.create(
+                    session=self.session,
+                    assignment=self.assignment,
+                ).pk,
+                "client_sequence_no": 1,
+                "correlation_id": None,
+                "client_wall_time_utc": timezone.now().isoformat(),
+                "client_monotonic_ms": "25.000",
+                "client_time_origin": timezone.now().isoformat(),
+                "time_sync_id": None,
+                "payload": {
+                    "question_type": "short_answer",
+                    "edit_operation": "insert",
+                    "content_hash_before": before_hash,
+                    "content_hash_after": after_hash,
+                    "content_length_before": 0,
+                    "content_length_after": 2,
+                    "input_method": "keyboard",
+                },
+                "quality_flags": [],
+                "app_version": "test",
+            }],
+        }
+
+        append_event_batch(student=self.student, document=payload)
+
+        observation = ResponseInputObservation.objects.get()
+        self.assertEqual(observation.content_hash_before, before_hash)
+        self.assertEqual(observation.content_hash_after, after_hash)
+        self.assertEqual(observation.content_length_after, 2)
+        self.assertFalse(hasattr(observation, "content"))

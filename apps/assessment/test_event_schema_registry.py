@@ -14,6 +14,7 @@ EXPECTED_EVENT_TYPES = (
     "item_rendered",
     "item_left",
     "response_input_started",
+    "text_edit_observed",
     "response_state_changed",
     "response_commit_requested",
     "response_committed",
@@ -120,6 +121,22 @@ class EventSchemaRegistryContractTests(SimpleTestCase):
                 "content_hash": "a" * 64,
                 "content_length": 12,
                 "change_source": "student",
+            },
+        )
+
+    def test_text_edit_payload_carries_only_hashes_and_lengths(self):
+        registry = load_registry_module()
+        registry.validate_event_payload(
+            "text_edit_observed",
+            1,
+            {
+                "question_type": "short_answer",
+                "edit_operation": "paste",
+                "content_hash_before": "a" * 64,
+                "content_hash_after": "b" * 64,
+                "content_length_before": 2,
+                "content_length_after": 9,
+                "input_method": "paste",
             },
         )
 

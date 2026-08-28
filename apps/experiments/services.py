@@ -20,7 +20,9 @@ from .models import (
     ExperimentParticipantOverride,
     ExperimentQuestion,
     ExperimentStudent,
+    ExperimentClassSnapshot,
     ExperimentVersion,
+    ExperimentVersionParticipantSnapshot,
     QuestionSnapshot,
 )
 
@@ -218,6 +220,60 @@ def _replace_experiment_students(experiment, roster):
             for student_id, enrollment in sorted(roster.items())
         ]
     )
+
+
+def _create_version_participant_snapshots(version, roster):
+    """Freeze native class membership at the same transaction boundary as publish."""
+    class_snapshots = {}
+    for enrollment in sorted(roster.values(), key=lambda value: value.class_group_id):
+        if enrollment.class_group_id in class_snapshots:
+            continue
+        class_group = enrollment.class_group
+        class_snapshots[class_group.pk] = ExperimentClassSnapshot.objects.create(
+            version=version,
+            source_class_group=class_group,
+            name_snapshot=class_group.name,
+            academic_year_snapshot=class_group.academic_year,
+            capture_mode=ExperimentClassSnapshot.CaptureMode.NATIVE,
+        )
+    ExperimentVersionParticipantSnapshot.objects.bulk_create(
+        [
+            ExperimentVersionParticipantSnapshot(
+                version=version,
+                student_id=student_id,
+                class_snapshot=class_snapshots[enrollment.class_group_id],
+            )
+            for student_id, enrollment in sorted(roster.items())
+        ]
+    )
+
+
+def _create_legacy_version_participant_snapshots(version, experiment):
+    """Preserve the old label exactly; do not infer a source ClassGroup."""
+    snapshots_by_label = {}
+    participants = ExperimentStudent.objects.filter(experiment=experiment).order_by("student_id")
+    rows = []
+    for participant in participants:
+        label = participant.class_snapshot_name
+        if label not in snapshots_by_label:
+            snapshots_by_label[label] = ExperimentClassSnapshot.objects.create(
+                version=version,
+                name_snapshot=label,
+                academic_year_snapshot="",
+                capture_mode=(
+                    ExperimentClassSnapshot.CaptureMode.LEGACY_LABEL_PROJECTION
+                    if label
+                    else ExperimentClassSnapshot.CaptureMode.UNRECORDED
+                ),
+            )
+        rows.append(
+            ExperimentVersionParticipantSnapshot(
+                version=version,
+                student_id=participant.student_id,
+                class_snapshot=snapshots_by_label[label],
+            )
+        )
+    ExperimentVersionParticipantSnapshot.objects.bulk_create(rows)
 
 
 def _lock_materialized_participants(experiment):
@@ -660,6 +716,10 @@ def publish_experiment(experiment, actor):
         published_by=actor,
         **course_snapshot,
     )
+    if roster is not None:
+        _create_version_participant_snapshots(version, roster)
+    else:
+        _create_legacy_version_participant_snapshots(version, experiment)
     for q in questions:
         identity = getattr(q, "course_identity", None)
         kc_links = list(q.concept_links.all())

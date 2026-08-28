@@ -16,6 +16,15 @@
     item_rendered: [],
     item_left: ['leave_reason'],
     response_input_started: ['question_type'],
+    text_edit_observed: [
+      'question_type',
+      'edit_operation',
+      'content_hash_before',
+      'content_hash_after',
+      'content_length_before',
+      'content_length_after',
+      'input_method',
+    ],
     response_state_changed: [
       'question_type',
       'response_state_before',

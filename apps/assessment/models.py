@@ -135,6 +135,13 @@ class ExperimentSession(models.Model):
         INVALIDATED = "invalidated", "已作废"
     version = models.ForeignKey("experiments.ExperimentVersion", on_delete=models.PROTECT, related_name="sessions")
     student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="assessment_sessions")
+    class_snapshot = models.ForeignKey(
+        "experiments.ExperimentClassSnapshot",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="sessions",
+    )
     class_snapshot_name = models.CharField(max_length=160, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.IN_PROGRESS)
     started_at = models.DateTimeField(auto_now_add=True)
@@ -374,6 +381,12 @@ class GradeRecord(models.Model):
         COMPLETED = "completed", "评分完成"
         REGRADE = "regrade", "待重新评分"
 
+    class ValidityStatus(models.TextChoices):
+        CANDIDATE = "candidate", "候选评分"
+        EFFECTIVE = "effective", "当前有效"
+        SUPERSEDED = "superseded", "已被替代"
+        VOIDED = "voided", "已撤销"
+
     submission = models.ForeignKey(
         SubmissionEvent,
         on_delete=models.CASCADE,
@@ -381,6 +394,11 @@ class GradeRecord(models.Model):
     )
     version = models.PositiveIntegerField(default=1)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    validity_status = models.CharField(
+        max_length=16,
+        choices=ValidityStatus.choices,
+        default=ValidityStatus.CANDIDATE,
+    )
     is_correct = models.BooleanField(null=True, blank=True)
     score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     max_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -389,6 +407,15 @@ class GradeRecord(models.Model):
     grading_version = models.CharField(max_length=64, blank=True, default="")
     grader_version = models.CharField(max_length=64, blank=True, default="")
     graded_at = models.DateTimeField(null=True, blank=True)
+    voided_at = models.DateTimeField(null=True, blank=True)
+    voided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="voided_grade_records",
+    )
+    void_reason = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     supersedes_grade = models.ForeignKey(
         "self",
@@ -408,6 +435,18 @@ class GradeRecord(models.Model):
             models.CheckConstraint(
                 condition=Q(version__gte=1),
                 name="grade_record_version_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    ~Q(validity_status="effective")
+                    | Q(status="completed")
+                ),
+                name="effective_grade_must_be_completed",
+            ),
+            models.UniqueConstraint(
+                fields=["submission"],
+                condition=Q(validity_status="effective"),
+                name="unique_submission_effective_grade",
             ),
         ]
 
@@ -566,8 +605,8 @@ class ResponseSnapshot(models.Model):
         ordering = ["attempt_id", "created_at", "snapshot_id"]
         constraints = [
             models.UniqueConstraint(
-                fields=["attempt", "content_hash"],
-                name="unique_attempt_response_hash",
+                fields=["attempt", "state_hash"],
+                name="unique_attempt_response_state_hash",
             ),
             models.CheckConstraint(
                 condition=Q(schema_version__gte=1),

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "question_type": {"type": "string", "enum": ["numeric", "short_answer", "fill_blank"]},
+    "edit_operation": {"type": "string", "enum": ["insert", "delete", "replace", "paste", "unknown"]},
+    "content_hash_before": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "content_hash_after": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "content_length_before": {"type": "integer", "minimum": 0},
+    "content_length_after": {"type": "integer", "minimum": 0},
+    "input_method": {"type": "string", "enum": ["keyboard", "ime", "paste", "unknown"]}
+  },
+  "required": [
+    "question_type", "edit_operation", "content_hash_before", "content_hash_after",
+    "content_length_before", "content_length_after", "input_method"
+  ],
+  "additionalProperties": false
+}
