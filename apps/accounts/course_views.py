@@ -474,6 +474,12 @@ def _data_center_context(
     teaching_scope = teaching_scope or (
         scope if isinstance(scope, TeachingScope) else _teaching_scope_from_request(request, course)
     )
+    serialized_scope = (
+        scope.serialize()
+        if research_scope and isinstance(scope, DataScope)
+        else teaching_scope.serialize()
+    )
+    scope_query = urlencode(serialized_scope)
     temporary_scope = any(
         request.GET.get(key) not in (None, "") for key in _TEACHING_SCOPE_KEYS
     )
@@ -487,7 +493,13 @@ def _data_center_context(
             {
                 "key": key,
                 "label": label,
-                "url": reverse(url_name, args=[course.pk]),
+                "url": (
+                    f"{reverse(url_name, args=[course.pk])}?{scope_query}"
+                    if research_scope
+                    and scope_query
+                    and key in {"exports", "quality", "advanced"}
+                    else reverse(url_name, args=[course.pk])
+                ),
                 "active": key == active,
             }
             for key, label, url_name in navigation
@@ -500,11 +512,7 @@ def _data_center_context(
             else _teaching_scope_display(teaching_scope)
         ),
         "scope_values": list(scope.serialize().items()),
-        "scope_query": urlencode(
-            scope.serialize()
-            if research_scope and isinstance(scope, DataScope)
-            else teaching_scope.serialize()
-        ),
+        "scope_query": scope_query,
         "scope_is_temporary": temporary_scope,
         "scope_has_remembered_default": bool(remembered_scope),
         "research_scope": research_scope,

@@ -291,6 +291,13 @@ class DataCenterUiV2Tests(TestCase):
             for key, value in research_scope.items():
                 self.assertIn(f"{key}={value}", query)
 
+        navigation = {item["key"]: item["url"] for item in advanced.context["data_navigation"]}
+        for target in ("advanced", "exports", "quality"):
+            for key, value in research_scope.items():
+                self.assertIn(f"{key}={value}", navigation[target])
+        self.assertNotIn("student_id", navigation["teaching"])
+        self.assertNotIn("session_id", navigation["overview"])
+
     def test_advanced_invalid_page_falls_back_to_first_page(self):
         response = self.client.get(
             reverse("courses:data_advanced", args=[self.course.pk]),
