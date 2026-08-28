@@ -3,7 +3,7 @@ import uuid
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
-from django.db import models, transaction
+from django.db import models, router, transaction
 
 
 class Course(models.Model):
@@ -67,25 +67,35 @@ class CourseTeacher(models.Model):
 
 
 class ClassGroupQuerySet(models.QuerySet):
-    def _assert_task_backed_course_not_written(self, kwargs):
-        if not {"course", "course_id"}.intersection(kwargs):
-            return
-        if self.filter(experiment_tasks__isnull=False).exists():
-            raise ValidationError("已存在正式班级实验任务，班级所属课程不可变更。")
+    _course_field_names = frozenset({"course", "course_id"})
+
+    def _writes_course(self, values):
+        return bool(self._course_field_names.intersection(values))
+
+    def _locked_course_write_target_ids(self):
+        return list(
+            self.select_for_update()
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
 
     def update(self, **kwargs):
-        self._assert_task_backed_course_not_written(kwargs)
-        return super().update(**kwargs)
-
-    def bulk_update(self, objs, fields, batch_size=None):
-        objs = tuple(objs)
-        if {"course", "course_id"}.intersection(fields):
-            if self.model.objects.filter(
-                pk__in=[obj.pk for obj in objs if obj.pk is not None],
-                experiment_tasks__isnull=False,
-            ).exists():
+        if not self._writes_course(kwargs):
+            return super().update(**kwargs)
+        self._not_support_combined_queries("update")
+        if self.query.is_sliced:
+            raise TypeError("Cannot update a query once a slice has been taken.")
+        with transaction.atomic(using=self.db):
+            target_ids = self._locked_course_write_target_ids()
+            if not target_ids:
+                return 0
+            locked_targets = self.model._base_manager.using(self.db).filter(
+                pk__in=target_ids
+            )
+            if locked_targets.filter(experiment_tasks__isnull=False).exists():
                 raise ValidationError("已存在正式班级实验任务，班级所属课程不可变更。")
-        return super().bulk_update(objs, fields, batch_size=batch_size)
+            # Update only the rows whose original queryset scope was locked.
+            return models.QuerySet.update(locked_targets, **kwargs)
 
     def bulk_create(
         self,
@@ -96,7 +106,10 @@ class ClassGroupQuerySet(models.QuerySet):
         update_fields=None,
         unique_fields=None,
     ):
-        if update_conflicts:
+        update_fields = tuple(update_fields) if update_fields is not None else None
+        # Non-course conflict upserts remain a public write surface; course
+        # field upserts are rejected. No current application caller uses it.
+        if update_conflicts and self._writes_course(update_fields or ()):
             raise ValidationError("班级不支持批量冲突更新。")
         return super().bulk_create(
             objs,
@@ -154,25 +167,36 @@ class ClassGroup(models.Model):
         base_manager_name = "objects"
         default_manager_name = "objects"
 
-    def _task_backed_course_is_changing(self, update_fields):
+    def _task_backed_course_is_changing(self, update_fields, *, using):
         if self._state.adding:
             return False
         if update_fields is not None and not {"course", "course_id"}.intersection(
             update_fields
         ):
             return False
-        current_course_id = self.__class__._base_manager.filter(
+        current_course_id = self.__class__._base_manager.using(using).filter(
             pk=self.pk
         ).values_list("course_id", flat=True).get()
-        return (
-            current_course_id != self.course_id
-            and self.experiment_tasks.exists()
-        )
+        return current_course_id != self.course_id
 
     def save(self, *args, **kwargs):
-        if self._task_backed_course_is_changing(kwargs.get("update_fields")):
-            raise ValidationError("已存在正式班级实验任务，班级所属课程不可变更。")
-        return super().save(*args, **kwargs)
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        save_kwargs = {**kwargs, "using": using}
+        if not self._task_backed_course_is_changing(
+            save_kwargs.get("update_fields"),
+            using=using,
+        ):
+            return super().save(*args, **save_kwargs)
+        with transaction.atomic(using=using):
+            locked = (
+                self.__class__._base_manager.using(using)
+                .filter(pk=self.pk)
+                .select_for_update()
+                .get()
+            )
+            if locked.course_id != self.course_id and locked.experiment_tasks.exists():
+                raise ValidationError("已存在正式班级实验任务，班级所属课程不可变更。")
+            return super().save(*args, **save_kwargs)
 
     def __str__(self):
         return f"{self.academic_year} {self.name}".strip()

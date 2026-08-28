@@ -1,4 +1,5 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib import admin
 from django.core.exceptions import ValidationError
@@ -885,6 +886,153 @@ class ClassExperimentTaskTests(TestCase):
                     Experiment.objects.get(pk=task.experiment_id).course_id,
                     ClassGroup.objects.get(pk=task.class_group_id).course_id,
                 )
+
+    def test_draft_experiment_upsert_allows_description_update(self):
+        candidate = Experiment.objects.get(pk=self.experiment.pk)
+        candidate.description = "允许的草稿说明更新"
+
+        Experiment.objects.bulk_create(
+            [candidate],
+            update_conflicts=True,
+            update_fields=["description"],
+            unique_fields=["pk"],
+        )
+
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.description, "允许的草稿说明更新")
+
+    def test_non_task_class_group_upsert_allows_is_active_update(self):
+        candidate = ClassGroup.objects.get(pk=self.class_b.pk)
+        candidate.is_active = False
+
+        ClassGroup.objects.bulk_create(
+            [candidate],
+            update_conflicts=True,
+            update_fields=["is_active"],
+            unique_fields=["pk"],
+        )
+
+        self.class_b.refresh_from_db()
+        self.assertFalse(self.class_b.is_active)
+
+    def test_task_backed_class_group_upsert_allows_is_active_update(self):
+        self._publish_class_a_task()
+        candidate = ClassGroup.objects.get(pk=self.class_a.pk)
+        candidate.is_active = False
+
+        ClassGroup.objects.bulk_create(
+            [candidate],
+            update_conflicts=True,
+            update_fields=["is_active"],
+            unique_fields=["pk"],
+        )
+
+        self.class_a.refresh_from_db()
+        self.assertFalse(self.class_a.is_active)
+
+    def test_course_queryset_update_locks_its_original_scope(self):
+        other_course = self._other_course()
+        cases = (
+            ("experiment", Experiment.objects.filter(pk=self.experiment.pk), self.experiment.pk),
+            ("class group", ClassGroup.objects.filter(pk=self.class_a.pk), self.class_a.pk),
+        )
+
+        for label, queryset, primary_key in cases:
+            with self.subTest(label=label):
+                queryset_class = type(queryset)
+                original_select_for_update = queryset_class.select_for_update
+                with patch.object(
+                    queryset_class,
+                    "select_for_update",
+                    autospec=True,
+                    side_effect=original_select_for_update,
+                ) as select_for_update:
+                    updated = queryset.update(course=other_course)
+
+                self.assertEqual(updated, 1)
+                select_for_update.assert_called_once()
+                locked_queryset = select_for_update.call_args.args[0]
+                self.assertEqual(
+                    list(locked_queryset.values_list("pk", flat=True)),
+                    [primary_key],
+                )
+
+    def test_course_changing_instance_save_locks_parent_before_task_check(self):
+        self._publish_class_a_task()
+        other_course = self._other_course()
+        cases = (
+            ("experiment", self.experiment),
+            ("class group", self.class_a),
+        )
+
+        for label, parent in cases:
+            with self.subTest(label=label):
+                parent.course = other_course
+                queryset_class = type(parent.__class__.objects.all())
+                original_select_for_update = queryset_class.select_for_update
+                with patch.object(
+                    queryset_class,
+                    "select_for_update",
+                    autospec=True,
+                    side_effect=original_select_for_update,
+                ) as select_for_update:
+                    with self.assertRaises(ValidationError):
+                        parent.save(update_fields=["course"])
+
+                select_for_update.assert_called_once()
+                locked_queryset = select_for_update.call_args.args[0]
+                self.assertEqual(
+                    list(locked_queryset.values_list("pk", flat=True)),
+                    [parent.pk],
+                )
+
+    def test_default_non_course_parent_save_does_not_lock_course_row(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        cases = (
+            (
+                "experiment",
+                Experiment,
+                task.experiment_id,
+                "description",
+                "不应触发课程行锁的说明更新",
+            ),
+            (
+                "class group",
+                ClassGroup,
+                task.class_group_id,
+                "is_active",
+                False,
+            ),
+        )
+
+        for label, model, primary_key, field_name, value in cases:
+            with self.subTest(label=label):
+                parent = model.objects.get(pk=primary_key)
+                setattr(parent, field_name, value)
+                queryset_class = type(model.objects.all())
+                original_select_for_update = queryset_class.select_for_update
+                with patch.object(
+                    queryset_class,
+                    "select_for_update",
+                    autospec=True,
+                    side_effect=original_select_for_update,
+                ) as select_for_update:
+                    parent.save()
+
+                select_for_update.assert_not_called()
+                parent.refresh_from_db()
+                self.assertEqual(getattr(parent, field_name), value)
+
+    def test_empty_queryset_course_bulk_update_is_a_noop(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        cases = (
+            ("experiment", Experiment.objects, task.experiment),
+            ("class group", ClassGroup.objects, task.class_group),
+        )
+
+        for label, manager, parent in cases:
+            with self.subTest(label=label):
+                self.assertEqual(manager.none().bulk_update([parent], ["course"]), 0)
 
     def test_restricted_querysets_allow_plain_bulk_create(self):
         plain_class = ClassGroup(

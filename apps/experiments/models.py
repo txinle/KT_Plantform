@@ -5,7 +5,7 @@ import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models import Q
 
 
@@ -36,25 +36,35 @@ def presentation_option_keys(question_snapshot):
     return [option["key"] for option in question_snapshot.options]
 
 class ExperimentQuerySet(models.QuerySet):
-    def _assert_task_backed_course_not_written(self, kwargs):
-        if not {"course", "course_id"}.intersection(kwargs):
-            return
-        if self.filter(class_tasks__isnull=False).exists():
-            raise ValidationError("已存在正式班级实验任务，实验所属课程不可变更。")
+    _course_field_names = frozenset({"course", "course_id"})
+
+    def _writes_course(self, values):
+        return bool(self._course_field_names.intersection(values))
+
+    def _locked_course_write_target_ids(self):
+        return list(
+            self.select_for_update()
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
 
     def update(self, **kwargs):
-        self._assert_task_backed_course_not_written(kwargs)
-        return super().update(**kwargs)
-
-    def bulk_update(self, objs, fields, batch_size=None):
-        objs = tuple(objs)
-        if {"course", "course_id"}.intersection(fields):
-            if self.model.objects.filter(
-                pk__in=[obj.pk for obj in objs if obj.pk is not None],
-                class_tasks__isnull=False,
-            ).exists():
+        if not self._writes_course(kwargs):
+            return super().update(**kwargs)
+        self._not_support_combined_queries("update")
+        if self.query.is_sliced:
+            raise TypeError("Cannot update a query once a slice has been taken.")
+        with transaction.atomic(using=self.db):
+            target_ids = self._locked_course_write_target_ids()
+            if not target_ids:
+                return 0
+            locked_targets = self.model._base_manager.using(self.db).filter(
+                pk__in=target_ids
+            )
+            if locked_targets.filter(class_tasks__isnull=False).exists():
                 raise ValidationError("已存在正式班级实验任务，实验所属课程不可变更。")
-        return super().bulk_update(objs, fields, batch_size=batch_size)
+            # Update only the rows whose original queryset scope was locked.
+            return models.QuerySet.update(locked_targets, **kwargs)
 
     def bulk_create(
         self,
@@ -65,7 +75,10 @@ class ExperimentQuerySet(models.QuerySet):
         update_fields=None,
         unique_fields=None,
     ):
-        if update_conflicts:
+        update_fields = tuple(update_fields) if update_fields is not None else None
+        # Non-course conflict upserts remain a public write surface; course
+        # field upserts are rejected. No current application caller uses it.
+        if update_conflicts and self._writes_course(update_fields or ()):
             raise ValidationError("实验不支持批量冲突更新。")
         return super().bulk_create(
             objs,
@@ -233,21 +246,19 @@ class Experiment(models.Model):
         if errors:
             raise ValidationError(errors)
 
-    def _task_backed_course_is_changing(self, update_fields):
+    def _task_backed_course_is_changing(self, update_fields, *, using):
         if self._state.adding:
             return False
         if update_fields is not None and not {"course", "course_id"}.intersection(
             update_fields
         ):
             return False
-        current_course_id = self.__class__._base_manager.filter(
+        current_course_id = self.__class__._base_manager.using(using).filter(
             pk=self.pk
         ).values_list("course_id", flat=True).get()
-        return current_course_id != self.course_id and self.class_tasks.exists()
+        return current_course_id != self.course_id
 
-    def save(self, *args, **kwargs):
-        if self._task_backed_course_is_changing(kwargs.get("update_fields")):
-            raise ValidationError("已存在正式班级实验任务，实验所属课程不可变更。")
+    def _save_with_owner_defaults(self, *args, **kwargs):
         created = self._state.adding
         if self.created_by_id is None and self.owner_id is not None:
             self.created_by_id = self.owner_id
@@ -262,6 +273,25 @@ class Experiment(models.Model):
                 ],
                 ignore_conflicts=True,
             )
+
+    def save(self, *args, **kwargs):
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        save_kwargs = {**kwargs, "using": using}
+        if not self._task_backed_course_is_changing(
+            save_kwargs.get("update_fields"),
+            using=using,
+        ):
+            return self._save_with_owner_defaults(*args, **save_kwargs)
+        with transaction.atomic(using=using):
+            locked = (
+                self.__class__._base_manager.using(using)
+                .filter(pk=self.pk)
+                .select_for_update()
+                .get()
+            )
+            if locked.course_id != self.course_id and locked.class_tasks.exists():
+                raise ValidationError("已存在正式班级实验任务，实验所属课程不可变更。")
+            return self._save_with_owner_defaults(*args, **save_kwargs)
 
 class ExperimentQuestion(models.Model):
     experiment = models.ForeignKey(Experiment, on_delete=models.CASCADE, related_name="question_links")
@@ -449,6 +479,8 @@ class ExperimentVersionQuerySet(models.QuerySet):
         update_fields=None,
         unique_fields=None,
     ):
+        # Release facts are created by publication or migrations, never by a
+        # public conflict-upsert path.
         if update_conflicts:
             raise ValidationError("实验发布快照不支持批量冲突更新。")
         return super().bulk_create(
@@ -654,6 +686,8 @@ class ExperimentClassSnapshotQuerySet(models.QuerySet):
         update_fields=None,
         unique_fields=None,
     ):
+        # Release facts are created by publication or migrations, never by a
+        # public conflict-upsert path.
         if update_conflicts:
             raise ValidationError("实验班级快照不支持批量冲突更新。")
         return super().bulk_create(
