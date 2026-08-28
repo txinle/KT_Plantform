@@ -4,7 +4,7 @@ from unittest.mock import patch
 from django.contrib import admin
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
-from django.db.models import Case, Value, When
+from django.db.models import Case, F, Value, When
 from django.test import RequestFactory, TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -543,10 +543,11 @@ class ClassExperimentTaskTests(TestCase):
             ExperimentVersion._base_manager.filter(pk=version.pk).update(
                 published_at=version.published_at
             )
-        with self.assertRaises(ValidationError):
-            ExperimentVersion._base_manager.bulk_update(
-                [version], ["published_at"]
-            )
+        with transaction.atomic():
+            with self.assertRaises(ValidationError):
+                ExperimentVersion._base_manager.bulk_update(
+                    [version], ["published_at"]
+                )
         with self.assertRaises(ValidationError):
             version.delete()
         with self.assertRaises(ValidationError):
@@ -565,10 +566,11 @@ class ClassExperimentTaskTests(TestCase):
             ExperimentClassSnapshot._base_manager.filter(pk=snapshot.pk).update(
                 source_class_group=self.class_b
             )
-        with self.assertRaises(ValidationError):
-            ExperimentClassSnapshot._base_manager.bulk_update(
-                [snapshot], ["source_class_group"]
-            )
+        with transaction.atomic():
+            with self.assertRaises(ValidationError):
+                ExperimentClassSnapshot._base_manager.bulk_update(
+                    [snapshot], ["source_class_group"]
+                )
         with self.assertRaises(ValidationError):
             snapshot.delete()
         with self.assertRaises(ValidationError):
@@ -1023,6 +1025,51 @@ class ClassExperimentTaskTests(TestCase):
                 parent.refresh_from_db()
                 self.assertEqual(getattr(parent, field_name), value)
 
+    def test_course_queryset_update_uses_write_database_alias(self):
+        other_course = self._other_course()
+        cases = (
+            ("experiment default manager", Experiment.objects, self.experiment.pk),
+            ("experiment base manager", Experiment._base_manager, self.experiment.pk),
+            ("class group default manager", ClassGroup.objects, self.class_a.pk),
+            ("class group base manager", ClassGroup._base_manager, self.class_a.pk),
+        )
+
+        for label, manager, primary_key in cases:
+            with self.subTest(label=label):
+                with (
+                    patch(
+                        "django.db.router.db_for_read",
+                        side_effect=AssertionError("课程写入不能路由到 reader"),
+                    ) as db_for_read,
+                    patch("django.db.router.db_for_write", return_value="default") as db_for_write,
+                ):
+                    updated = manager.filter(pk=primary_key).update(course=other_course)
+
+                self.assertEqual(updated, 1)
+                db_for_write.assert_called()
+                db_for_read.assert_not_called()
+
+    def test_course_queryset_update_preserves_annotations(self):
+        other_course = self._other_course()
+        cases = (
+            ("experiment", Experiment.objects, self.experiment.pk, Experiment),
+            ("class group", ClassGroup.objects, self.class_a.pk, ClassGroup),
+        )
+
+        for label, manager, primary_key, model in cases:
+            with self.subTest(label=label):
+                updated = (
+                    manager.filter(pk=primary_key)
+                    .annotate(target_course_id=Value(other_course.pk))
+                    .update(course_id=F("target_course_id"))
+                )
+
+                self.assertEqual(updated, 1)
+                self.assertEqual(
+                    model.objects.get(pk=primary_key).course_id,
+                    other_course.pk,
+                )
+
     def test_empty_queryset_course_bulk_update_is_a_noop(self):
         _version, _snapshot, task = self._publish_class_a_task()
         cases = (
@@ -1033,6 +1080,32 @@ class ClassExperimentTaskTests(TestCase):
         for label, manager, parent in cases:
             with self.subTest(label=label):
                 self.assertEqual(manager.none().bulk_update([parent], ["course"]), 0)
+
+    def test_empty_snapshot_bulk_update_accepts_a_generator_and_is_a_noop(self):
+        version, snapshot, _task = self._publish_class_a_task()
+        cases = (
+            ("version default manager", ExperimentVersion.objects, version, ["configuration"]),
+            ("version base manager", ExperimentVersion._base_manager, version, ["configuration"]),
+            (
+                "class snapshot default manager",
+                ExperimentClassSnapshot.objects,
+                snapshot,
+                ["name_snapshot"],
+            ),
+            (
+                "class snapshot base manager",
+                ExperimentClassSnapshot._base_manager,
+                snapshot,
+                ["name_snapshot"],
+            ),
+        )
+
+        for label, manager, snapshot_model, fields in cases:
+            with self.subTest(label=label):
+                self.assertEqual(
+                    manager.none().bulk_update((item for item in [snapshot_model]), fields),
+                    0,
+                )
 
     def test_restricted_querysets_allow_plain_bulk_create(self):
         plain_class = ClassGroup(

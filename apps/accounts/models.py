@@ -85,13 +85,14 @@ class ClassGroupQuerySet(models.QuerySet):
         self._not_support_combined_queries("update")
         if self.query.is_sliced:
             raise TypeError("Cannot update a query once a slice has been taken.")
-        with transaction.atomic(using=self.db):
-            target_ids = self._locked_course_write_target_ids()
+        self._for_write = True
+        using = self.db
+        locked_scope = self.using(using)
+        with transaction.atomic(using=using):
+            target_ids = locked_scope._locked_course_write_target_ids()
             if not target_ids:
                 return 0
-            locked_targets = self.model._base_manager.using(self.db).filter(
-                pk__in=target_ids
-            )
+            locked_targets = locked_scope.filter(pk__in=target_ids)
             if locked_targets.filter(experiment_tasks__isnull=False).exists():
                 raise ValidationError("已存在正式班级实验任务，班级所属课程不可变更。")
             # Update only the rows whose original queryset scope was locked.

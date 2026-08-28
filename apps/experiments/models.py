@@ -54,13 +54,14 @@ class ExperimentQuerySet(models.QuerySet):
         self._not_support_combined_queries("update")
         if self.query.is_sliced:
             raise TypeError("Cannot update a query once a slice has been taken.")
-        with transaction.atomic(using=self.db):
-            target_ids = self._locked_course_write_target_ids()
+        self._for_write = True
+        using = self.db
+        locked_scope = self.using(using)
+        with transaction.atomic(using=using):
+            target_ids = locked_scope._locked_course_write_target_ids()
             if not target_ids:
                 return 0
-            locked_targets = self.model._base_manager.using(self.db).filter(
-                pk__in=target_ids
-            )
+            locked_targets = locked_scope.filter(pk__in=target_ids)
             if locked_targets.filter(class_tasks__isnull=False).exists():
                 raise ValidationError("已存在正式班级实验任务，实验所属课程不可变更。")
             # Update only the rows whose original queryset scope was locked.
@@ -461,15 +462,6 @@ class ExperimentVersionQuerySet(models.QuerySet):
         self._assert_not_task_backed()
         return super().update(**kwargs)
 
-    def bulk_update(self, objs, fields, batch_size=None):
-        task_backed_ids = [obj.pk for obj in objs if obj.pk is not None]
-        if task_backed_ids:
-            self.model.objects.filter(
-                pk__in=task_backed_ids,
-                class_tasks__isnull=False,
-            )._assert_not_task_backed()
-        return super().bulk_update(objs, fields, batch_size=batch_size)
-
     def bulk_create(
         self,
         objs,
@@ -667,15 +659,6 @@ class ExperimentClassSnapshotQuerySet(models.QuerySet):
     def update(self, **kwargs):
         self._assert_not_task_backed()
         return super().update(**kwargs)
-
-    def bulk_update(self, objs, fields, batch_size=None):
-        task_backed_ids = [obj.pk for obj in objs if obj.pk is not None]
-        if task_backed_ids:
-            self.model.objects.filter(
-                pk__in=task_backed_ids,
-                class_task__isnull=False,
-            )._assert_not_task_backed()
-        return super().bulk_update(objs, fields, batch_size=batch_size)
 
     def bulk_create(
         self,
