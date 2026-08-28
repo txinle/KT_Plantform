@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.contrib import admin
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
+from django.db.models import Case, Value, When
 from django.test import RequestFactory, TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -664,6 +665,277 @@ class ClassExperimentTaskTests(TestCase):
 
         task.refresh_from_db()
         self.assertEqual(task.experiment.course_id, task.class_group.course_id)
+
+    def test_task_backed_parents_reject_course_bulk_updates(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        other_course = self._other_course()
+        cases = (
+            ("experiment default manager", Experiment.objects, Experiment, task.experiment_id),
+            ("experiment base manager", Experiment._base_manager, Experiment, task.experiment_id),
+            ("class group default manager", ClassGroup.objects, ClassGroup, task.class_group_id),
+            ("class group base manager", ClassGroup._base_manager, ClassGroup, task.class_group_id),
+        )
+
+        for label, manager, model, primary_key in cases:
+            for target_label, target_course in (
+                ("different course", other_course),
+                ("same course", self.course),
+            ):
+                with self.subTest(label=label, target=target_label):
+                    parent = model.objects.get(pk=primary_key)
+                    parent.course = target_course
+
+                    with transaction.atomic():
+                        with self.assertRaises(ValidationError):
+                            manager.bulk_update([parent], ["course"])
+
+                    experiment_course_id = Experiment.objects.get(
+                        pk=task.experiment_id
+                    ).course_id
+                    class_course_id = ClassGroup.objects.get(
+                        pk=task.class_group_id
+                    ).course_id
+                    self.assertEqual(experiment_course_id, class_course_id)
+
+    def test_task_backed_parents_reject_none_course_bulk_updates(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        cases = (
+            ("experiment default manager", Experiment.objects, Experiment, task.experiment_id),
+            ("experiment base manager", Experiment._base_manager, Experiment, task.experiment_id),
+            ("class group default manager", ClassGroup.objects, ClassGroup, task.class_group_id),
+            ("class group base manager", ClassGroup._base_manager, ClassGroup, task.class_group_id),
+        )
+
+        for label, manager, model, primary_key in cases:
+            with self.subTest(label=label):
+                parent = model.objects.get(pk=primary_key)
+                parent.course = None
+
+                with transaction.atomic():
+                    with self.assertRaises(ValidationError):
+                        manager.bulk_update([parent], ["course"])
+
+                self.assertEqual(
+                    Experiment.objects.get(pk=task.experiment_id).course_id,
+                    ClassGroup.objects.get(pk=task.class_group_id).course_id,
+                )
+
+    def test_task_backed_parents_reject_null_expression_course_updates(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        cases = (
+            ("experiment default manager", Experiment.objects, Experiment, task.experiment_id),
+            ("experiment base manager", Experiment._base_manager, Experiment, task.experiment_id),
+            ("class group default manager", ClassGroup.objects, ClassGroup, task.class_group_id),
+            ("class group base manager", ClassGroup._base_manager, ClassGroup, task.class_group_id),
+        )
+
+        for label, manager, model, primary_key in cases:
+            with self.subTest(label=label):
+                null_course = Case(
+                    When(pk=primary_key, then=Value(None)),
+                    output_field=model._meta.get_field("course"),
+                )
+
+                with transaction.atomic():
+                    with self.assertRaises(ValidationError):
+                        manager.filter(pk=primary_key).update(course=null_course)
+
+                self.assertEqual(
+                    Experiment.objects.get(pk=task.experiment_id).course_id,
+                    ClassGroup.objects.get(pk=task.class_group_id).course_id,
+                )
+
+    def test_task_backed_versions_and_snapshots_reject_conflict_bulk_create(self):
+        version, snapshot, _task = self._publish_class_a_task()
+        original_configuration = dict(version.configuration)
+        original_name = snapshot.name_snapshot
+        cases = (
+            (
+                "version default manager",
+                ExperimentVersion.objects,
+                ExperimentVersion(
+                    experiment=self.experiment,
+                    version_number=version.version_number,
+                    configuration={"tampered": True},
+                    published_by=self.teacher,
+                ),
+                ["configuration"],
+                ["experiment", "version_number"],
+            ),
+            (
+                "version base manager",
+                ExperimentVersion._base_manager,
+                ExperimentVersion(
+                    experiment=self.experiment,
+                    version_number=version.version_number,
+                    configuration={"tampered": True},
+                    published_by=self.teacher,
+                ),
+                ["configuration"],
+                ["experiment", "version_number"],
+            ),
+            (
+                "class snapshot default manager",
+                ExperimentClassSnapshot.objects,
+                ExperimentClassSnapshot(
+                    class_snapshot_id=snapshot.pk,
+                    version=version,
+                    source_class_group=self.class_a,
+                    name_snapshot="被篡改的班级快照",
+                    academic_year_snapshot=self.class_a.academic_year,
+                    capture_mode=ExperimentClassSnapshot.CaptureMode.NATIVE,
+                ),
+                ["name_snapshot"],
+                ["class_snapshot_id"],
+            ),
+            (
+                "class snapshot base manager",
+                ExperimentClassSnapshot._base_manager,
+                ExperimentClassSnapshot(
+                    class_snapshot_id=snapshot.pk,
+                    version=version,
+                    source_class_group=self.class_a,
+                    name_snapshot="被篡改的班级快照",
+                    academic_year_snapshot=self.class_a.academic_year,
+                    capture_mode=ExperimentClassSnapshot.CaptureMode.NATIVE,
+                ),
+                ["name_snapshot"],
+                ["class_snapshot_id"],
+            ),
+        )
+
+        for label, manager, candidate, update_fields, unique_fields in cases:
+            with self.subTest(label=label):
+                with transaction.atomic():
+                    with self.assertRaises(ValidationError):
+                        manager.bulk_create(
+                            [candidate],
+                            update_conflicts=True,
+                            update_fields=update_fields,
+                            unique_fields=unique_fields,
+                        )
+
+                version.refresh_from_db()
+                snapshot.refresh_from_db()
+                self.assertEqual(version.configuration, original_configuration)
+                self.assertEqual(snapshot.name_snapshot, original_name)
+
+    def test_task_backed_parents_reject_course_conflict_bulk_create(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        other_course = self._other_course()
+        cases = (
+            (
+                "experiment default manager",
+                Experiment.objects,
+                Experiment(
+                    pk=self.experiment.pk,
+                    course=other_course,
+                    created_by=self.teacher,
+                    owner=self.teacher,
+                    question_bank=self.bank,
+                    name=self.experiment.name,
+                ),
+            ),
+            (
+                "experiment base manager",
+                Experiment._base_manager,
+                Experiment(
+                    pk=self.experiment.pk,
+                    course=other_course,
+                    created_by=self.teacher,
+                    owner=self.teacher,
+                    question_bank=self.bank,
+                    name=self.experiment.name,
+                ),
+            ),
+            (
+                "class group default manager",
+                ClassGroup.objects,
+                ClassGroup(
+                    pk=self.class_a.pk,
+                    course=other_course,
+                    name=self.class_a.name,
+                    academic_year=self.class_a.academic_year,
+                ),
+            ),
+            (
+                "class group base manager",
+                ClassGroup._base_manager,
+                ClassGroup(
+                    pk=self.class_a.pk,
+                    course=other_course,
+                    name=self.class_a.name,
+                    academic_year=self.class_a.academic_year,
+                ),
+            ),
+        )
+
+        for label, manager, candidate in cases:
+            with self.subTest(label=label):
+                with transaction.atomic():
+                    with self.assertRaises(ValidationError):
+                        manager.bulk_create(
+                            [candidate],
+                            update_conflicts=True,
+                            update_fields=["course"],
+                            unique_fields=["pk"],
+                        )
+
+                self.assertEqual(
+                    Experiment.objects.get(pk=task.experiment_id).course_id,
+                    ClassGroup.objects.get(pk=task.class_group_id).course_id,
+                )
+
+    def test_restricted_querysets_allow_plain_bulk_create(self):
+        plain_class = ClassGroup(
+            course=self.course,
+            name="普通批量创建班",
+            academic_year="2024",
+        )
+        ClassGroup.objects.bulk_create([plain_class])
+        plain_experiment = Experiment(
+            course=self.course,
+            created_by=self.teacher,
+            owner=self.teacher,
+            question_bank=self.bank,
+            name="普通批量创建实验",
+        )
+        Experiment.objects.bulk_create([plain_experiment])
+        plain_version = ExperimentVersion(
+            experiment=plain_experiment,
+            version_number=1,
+            published_by=self.teacher,
+        )
+        ExperimentVersion.objects.bulk_create([plain_version])
+        plain_snapshot = ExperimentClassSnapshot(
+            version=plain_version,
+            source_class_group=plain_class,
+            name_snapshot=plain_class.name,
+            academic_year_snapshot=plain_class.academic_year,
+            capture_mode=ExperimentClassSnapshot.CaptureMode.NATIVE,
+        )
+        ExperimentClassSnapshot.objects.bulk_create([plain_snapshot])
+
+        self.assertTrue(ClassGroup.objects.filter(pk=plain_class.pk).exists())
+        self.assertTrue(Experiment.objects.filter(pk=plain_experiment.pk).exists())
+        self.assertTrue(ExperimentVersion.objects.filter(pk=plain_version.pk).exists())
+        self.assertTrue(
+            ExperimentClassSnapshot.objects.filter(pk=plain_snapshot.pk).exists()
+        )
+
+    def test_task_backed_class_group_allows_non_course_bulk_update(self):
+        _version, _snapshot, task = self._publish_class_a_task()
+        self.class_a.is_active = False
+
+        updated = ClassGroup.objects.bulk_update([self.class_a], ["is_active"])
+
+        self.assertEqual(updated, 1)
+        self.class_a.refresh_from_db()
+        self.assertFalse(self.class_a.is_active)
+        self.assertEqual(
+            Experiment.objects.get(pk=task.experiment_id).course_id,
+            ClassGroup.objects.get(pk=task.class_group_id).course_id,
+        )
 
     def test_task_backed_class_group_keeps_non_course_fields_mutable(self):
         self._publish_class_a_task()

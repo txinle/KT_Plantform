@@ -35,25 +35,46 @@ def presentation_option_keys(question_snapshot):
         return ["true", "false"]
     return [option["key"] for option in question_snapshot.options]
 
-_COURSE_UPDATE_UNSET = object()
-
-
 class ExperimentQuerySet(models.QuerySet):
-    def _assert_task_backed_course_unchanged(self, kwargs):
-        course_value = kwargs.get(
-            "course_id",
-            kwargs.get("course", _COURSE_UPDATE_UNSET),
-        )
-        if course_value is _COURSE_UPDATE_UNSET:
+    def _assert_task_backed_course_not_written(self, kwargs):
+        if not {"course", "course_id"}.intersection(kwargs):
             return
-        if self.filter(class_tasks__isnull=False).exclude(
-            course_id=course_value
-        ).exists():
+        if self.filter(class_tasks__isnull=False).exists():
             raise ValidationError("已存在正式班级实验任务，实验所属课程不可变更。")
 
     def update(self, **kwargs):
-        self._assert_task_backed_course_unchanged(kwargs)
+        self._assert_task_backed_course_not_written(kwargs)
         return super().update(**kwargs)
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        objs = tuple(objs)
+        if {"course", "course_id"}.intersection(fields):
+            if self.model.objects.filter(
+                pk__in=[obj.pk for obj in objs if obj.pk is not None],
+                class_tasks__isnull=False,
+            ).exists():
+                raise ValidationError("已存在正式班级实验任务，实验所属课程不可变更。")
+        return super().bulk_update(objs, fields, batch_size=batch_size)
+
+    def bulk_create(
+        self,
+        objs,
+        batch_size=None,
+        ignore_conflicts=False,
+        update_conflicts=False,
+        update_fields=None,
+        unique_fields=None,
+    ):
+        if update_conflicts:
+            raise ValidationError("实验不支持批量冲突更新。")
+        return super().bulk_create(
+            objs,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
 
 
 class ExperimentManager(models.Manager.from_queryset(ExperimentQuerySet)):
@@ -419,6 +440,26 @@ class ExperimentVersionQuerySet(models.QuerySet):
             )._assert_not_task_backed()
         return super().bulk_update(objs, fields, batch_size=batch_size)
 
+    def bulk_create(
+        self,
+        objs,
+        batch_size=None,
+        ignore_conflicts=False,
+        update_conflicts=False,
+        update_fields=None,
+        unique_fields=None,
+    ):
+        if update_conflicts:
+            raise ValidationError("实验发布快照不支持批量冲突更新。")
+        return super().bulk_create(
+            objs,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
+
     def delete(self):
         self._assert_not_task_backed()
         return super().delete()
@@ -603,6 +644,26 @@ class ExperimentClassSnapshotQuerySet(models.QuerySet):
                 class_task__isnull=False,
             )._assert_not_task_backed()
         return super().bulk_update(objs, fields, batch_size=batch_size)
+
+    def bulk_create(
+        self,
+        objs,
+        batch_size=None,
+        ignore_conflicts=False,
+        update_conflicts=False,
+        update_fields=None,
+        unique_fields=None,
+    ):
+        if update_conflicts:
+            raise ValidationError("实验班级快照不支持批量冲突更新。")
+        return super().bulk_create(
+            objs,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
 
     def delete(self):
         self._assert_not_task_backed()

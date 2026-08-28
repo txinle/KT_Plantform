@@ -66,25 +66,46 @@ class CourseTeacher(models.Model):
             raise ValidationError({"teacher": "课程负责人无需重复添加为协作教师。"})
 
 
-_COURSE_UPDATE_UNSET = object()
-
-
 class ClassGroupQuerySet(models.QuerySet):
-    def _assert_task_backed_course_unchanged(self, kwargs):
-        course_value = kwargs.get(
-            "course_id",
-            kwargs.get("course", _COURSE_UPDATE_UNSET),
-        )
-        if course_value is _COURSE_UPDATE_UNSET:
+    def _assert_task_backed_course_not_written(self, kwargs):
+        if not {"course", "course_id"}.intersection(kwargs):
             return
-        if self.filter(experiment_tasks__isnull=False).exclude(
-            course_id=course_value
-        ).exists():
+        if self.filter(experiment_tasks__isnull=False).exists():
             raise ValidationError("已存在正式班级实验任务，班级所属课程不可变更。")
 
     def update(self, **kwargs):
-        self._assert_task_backed_course_unchanged(kwargs)
+        self._assert_task_backed_course_not_written(kwargs)
         return super().update(**kwargs)
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        objs = tuple(objs)
+        if {"course", "course_id"}.intersection(fields):
+            if self.model.objects.filter(
+                pk__in=[obj.pk for obj in objs if obj.pk is not None],
+                experiment_tasks__isnull=False,
+            ).exists():
+                raise ValidationError("已存在正式班级实验任务，班级所属课程不可变更。")
+        return super().bulk_update(objs, fields, batch_size=batch_size)
+
+    def bulk_create(
+        self,
+        objs,
+        batch_size=None,
+        ignore_conflicts=False,
+        update_conflicts=False,
+        update_fields=None,
+        unique_fields=None,
+    ):
+        if update_conflicts:
+            raise ValidationError("班级不支持批量冲突更新。")
+        return super().bulk_create(
+            objs,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
 
 
 class ClassGroupManager(models.Manager.from_queryset(ClassGroupQuerySet)):
