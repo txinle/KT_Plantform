@@ -1,5 +1,12 @@
 from django.contrib import admin
-from .models import Experiment, ExperimentQuestion, ExperimentStudent, ExperimentVersion, QuestionSnapshot
+from .models import (
+    ClassExperimentTask,
+    Experiment,
+    ExperimentQuestion,
+    ExperimentStudent,
+    ExperimentVersion,
+    QuestionSnapshot,
+)
 Experiment._meta.verbose_name = "实验"
 Experiment._meta.verbose_name_plural = "实验"
 ExperimentQuestion._meta.verbose_name = "实验题目"
@@ -19,3 +26,25 @@ class ExperimentAdmin(admin.ModelAdmin):
     inlines = [QuestionInline, StudentInline]
 admin.site.register(ExperimentVersion)
 admin.site.register(QuestionSnapshot)
+
+
+@admin.register(ClassExperimentTask)
+class ClassExperimentTaskAdmin(admin.ModelAdmin):
+    list_display = ("class_group", "experiment", "published_at")
+    readonly_fields = (
+        "class_group",
+        "experiment",
+        "release_snapshot",
+        "class_snapshot",
+        "published_at",
+        "created_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

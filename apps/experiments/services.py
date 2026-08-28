@@ -15,6 +15,7 @@ from apps.question_bank.services.numeric import normalize_finite_decimal
 from apps.question_bank.services.scoring import normalize_true_false_answer
 from apps.assessment.models import ExperimentSession
 from .models import (
+    ClassExperimentTask,
     Experiment,
     ExperimentParticipantClass,
     ExperimentParticipantOverride,
@@ -44,6 +45,12 @@ def delete_experiment(experiment):
         experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
         if experiment.course_id is not None:
             lock_writable_course(experiment.course_id)
+        if (
+            ClassExperimentTask.objects.select_for_update()
+            .filter(experiment=experiment)
+            .exists()
+        ):
+            raise ValidationError("已存在正式班级实验任务，不能删除实验。")
         versions = list(
             ExperimentVersion.objects.select_for_update()
             .filter(experiment=experiment)
@@ -246,6 +253,18 @@ def _create_version_participant_snapshots(version, roster):
             for student_id, enrollment in sorted(roster.items())
         ]
     )
+    return class_snapshots
+
+
+def _create_class_experiment_tasks(experiment, version, class_snapshots):
+    for class_group_id in sorted(class_snapshots):
+        ClassExperimentTask._create_for_publication(
+            class_group_id=class_group_id,
+            experiment=experiment,
+            release_snapshot=version,
+            class_snapshot=class_snapshots[class_group_id],
+            published_at=version.published_at,
+        )
 
 
 def _create_legacy_version_participant_snapshots(version, experiment):
@@ -717,7 +736,8 @@ def publish_experiment(experiment, actor):
         **course_snapshot,
     )
     if roster is not None:
-        _create_version_participant_snapshots(version, roster)
+        class_snapshots = _create_version_participant_snapshots(version, roster)
+        _create_class_experiment_tasks(experiment, version, class_snapshots)
     else:
         _create_legacy_version_participant_snapshots(version, experiment)
     for q in questions:

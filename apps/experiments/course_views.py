@@ -319,9 +319,13 @@ def experiment_delete(request, course_pk, pk):
     experiment = _experiment(course, pk)
     if request.POST.get("confirmation") != "delete":
         return HttpResponseBadRequest("请在二次确认后再删除实验。")
-    with transaction.atomic():
-        details = delete_experiment_tree(experiment)
-        log_action(request, "experiment.delete", details=details)
+    try:
+        with transaction.atomic():
+            details = delete_experiment_tree(experiment)
+            log_action(request, "experiment.delete", details=details)
+    except ValidationError as exc:
+        messages.error(request, "; ".join(exc.messages))
+        return redirect("courses:experiment_detail", course.pk, experiment.pk)
     messages.success(request, "实验及其发布版本、会话与作答记录已删除。")
     return redirect("courses:experiments", course.pk)
 

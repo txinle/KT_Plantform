@@ -1,12 +1,20 @@
 import hashlib
 import json
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
+
+
+_class_experiment_task_creation_allowed = ContextVar(
+    "class_experiment_task_creation_allowed",
+    default=False,
+)
 
 
 def canonical_presentation_hash(
@@ -370,6 +378,142 @@ class ExperimentVersion(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=["experiment", "version_number"], name="unique_experiment_version")]
     def __str__(self): return f"{self.experiment} v{self.version_number}"
+
+
+class ClassExperimentTaskQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError("班级实验任务不可批量修改。")
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise ValidationError("班级实验任务不可批量修改。")
+
+    def bulk_create(
+        self,
+        objs,
+        batch_size=None,
+        ignore_conflicts=False,
+        update_conflicts=False,
+        update_fields=None,
+        unique_fields=None,
+    ):
+        raise ValidationError("班级实验任务只能在实验发布事务中创建。")
+
+    def delete(self):
+        raise ValidationError("班级实验任务不可删除。")
+
+
+class ClassExperimentTaskManager(
+    models.Manager.from_queryset(ClassExperimentTaskQuerySet)
+):
+    pass
+
+
+class ClassExperimentTask(models.Model):
+    """One permanent formal experiment task for a class and experiment pair."""
+
+    class_group = models.ForeignKey(
+        "accounts.ClassGroup",
+        on_delete=models.PROTECT,
+        related_name="experiment_tasks",
+    )
+    experiment = models.ForeignKey(
+        Experiment,
+        on_delete=models.PROTECT,
+        related_name="class_tasks",
+    )
+    release_snapshot = models.ForeignKey(
+        ExperimentVersion,
+        on_delete=models.PROTECT,
+        related_name="class_tasks",
+    )
+    class_snapshot = models.OneToOneField(
+        "ExperimentClassSnapshot",
+        on_delete=models.PROTECT,
+        related_name="class_task",
+    )
+    published_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ClassExperimentTaskManager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["class_group", "experiment"],
+                name="unique_class_experiment_task",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["class_group", "-published_at"],
+                name="class_task_class_pub_idx",
+            ),
+        ]
+
+    @classmethod
+    @contextmanager
+    def _publication_creation_context(cls):
+        token = _class_experiment_task_creation_allowed.set(True)
+        try:
+            yield
+        finally:
+            _class_experiment_task_creation_allowed.reset(token)
+
+    @classmethod
+    def _create_for_publication(cls, **kwargs):
+        if not transaction.get_connection().in_atomic_block:
+            raise ValidationError("班级实验任务只能在实验发布事务中创建。")
+        task = cls(**kwargs)
+        with cls._publication_creation_context():
+            task.save(force_insert=True)
+        return task
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if (
+            self.class_group_id
+            and self.experiment_id
+            and self.class_group.course_id != self.experiment.course_id
+        ):
+            errors["class_group"] = "班级必须属于实验所属课程。"
+        if (
+            self.release_snapshot_id
+            and self.experiment_id
+            and self.release_snapshot.experiment_id != self.experiment_id
+        ):
+            errors["release_snapshot"] = "发布快照必须属于同一实验。"
+        if (
+            self.class_snapshot_id
+            and self.release_snapshot_id
+            and self.class_snapshot.version_id != self.release_snapshot_id
+        ):
+            errors["class_snapshot"] = "班级快照必须属于发布快照。"
+        if (
+            self.class_snapshot_id
+            and self.class_group_id
+            and self.class_snapshot.source_class_group_id != self.class_group_id
+        ):
+            errors["class_snapshot"] = "班级快照必须对应同一班级。"
+        if (
+            self.published_at is not None
+            and self.release_snapshot_id
+            and self.published_at != self.release_snapshot.published_at
+        ):
+            errors["published_at"] = "任务发布时间必须与发布快照一致。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("班级实验任务不可修改。")
+        if not _class_experiment_task_creation_allowed.get():
+            raise ValidationError("班级实验任务只能在实验发布事务中创建。")
+        self.full_clean(validate_constraints=False)
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("班级实验任务不可删除。")
 
 
 class ExperimentClassSnapshot(models.Model):
