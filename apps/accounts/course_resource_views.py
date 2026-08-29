@@ -1,9 +1,10 @@
 from django.contrib import messages
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models import Q
-from django.http import HttpResponse, HttpResponseBadRequest
+from django.http import Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
@@ -405,17 +406,59 @@ def class_detail(request, course_pk, class_pk):
             | Q(student__display_name__icontains=query)
             | Q(student__username__icontains=query)
         )
+    context = {
+        "course": course,
+        "current_course": course,
+        "class_group": class_group,
+        "enrollments": enrollments,
+        "course_classes": course.classes.filter(is_active=True),
+        "query": query,
+    }
+    if settings.CLASS_CENTER_ENABLED:
+        active_section = request.GET.get("section", "overview")
+        if active_section not in {"overview", "students", "experiments", "manage"}:
+            raise Http404
+        experiment_id = None
+        raw_experiment_id = request.GET.get("experiment_id", "").strip()
+        if raw_experiment_id:
+            try:
+                experiment_id = int(raw_experiment_id)
+            except (TypeError, ValueError) as error:
+                raise Http404 from error
+            if experiment_id <= 0:
+                raise Http404
+        class_center = None
+        if active_section != "manage":
+            from apps.analytics.teaching.metrics import build_class_center_snapshot
+
+            try:
+                page = int(request.GET.get("page", "1"))
+            except (TypeError, ValueError):
+                page = 1
+            class_center = build_class_center_snapshot(
+                class_group,
+                experiment_id=experiment_id,
+                query=query if active_section == "students" else "",
+                sort=request.GET.get("sort", "student_number"),
+                status=request.GET.get("status"),
+                page=page,
+            )
+            if experiment_id is not None and class_center.scope.task_count == 0:
+                raise Http404
+        context.update(
+            {
+                "active_section": active_section,
+                "class_center": class_center,
+                "selected_experiment_id": experiment_id,
+                "student_sort": request.GET.get("sort", "student_number"),
+                "student_status": request.GET.get("status", ""),
+            }
+        )
+        return render(request, "teacher/course_class_center.html", context)
     return render(
         request,
         "teacher/course_class_detail.html",
-        {
-            "course": course,
-            "current_course": course,
-            "class_group": class_group,
-            "enrollments": enrollments,
-            "course_classes": course.classes.filter(is_active=True),
-            "query": query,
-        },
+        context,
     )
 
 
