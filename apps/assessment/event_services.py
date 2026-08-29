@@ -121,6 +121,7 @@ def _event_matches(existing, values) -> bool:
         "envelope_version",
         "actor_source",
         "session_id",
+        "student_id",
         "assignment_id",
         "attempt_id",
         "question_snapshot_id",
@@ -230,16 +231,9 @@ def append_assessment_event(
         question_snapshot=question_snapshot,
         item_instance=item_instance,
     )
-    if event_type == "response_state_changed" and "response_state_before" in payload:
-        prior_payloads = list(
-            AssessmentEvent.objects.filter(
-                attempt=attempt,
-                event_type="response_state_changed",
-            )
-            .order_by("server_ingest_sequence_no")
-            .values_list("payload", flat=True)
-        )
-        validate_response_state_chain([*prior_payloads, payload])
+    # State-chain continuity is a coverage conclusion, not an ingestion gate.
+    # A legal observation after a missing event must remain appendable so the
+    # gap can be reported rather than erasing everything after it.
 
     normalized_flags = _deduplicate_quality_flags(quality_flags)
     estimated_clock_offset_ms = None
@@ -322,6 +316,7 @@ def append_assessment_event(
         "envelope_version": envelope_version,
         "actor_source": actor_source,
         "session_id": session.pk,
+        "student_id": session.student_id,
         "assignment_id": assignment.pk if assignment is not None else None,
         "attempt_id": attempt.pk if attempt is not None else None,
         "question_snapshot_id": (

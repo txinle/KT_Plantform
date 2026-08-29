@@ -7,6 +7,7 @@ app_name = "assessment_process"
 
 urlpatterns = [
     path("events/batch/", process_views.event_batch, name="event_batch"),
+    path("capture-checkpoints/", process_views.capture_checkpoint, name="capture_checkpoint"),
     path(
         "time-sync/create/",
         process_views.time_sync_create,

@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"capture_contract_id":{"type":"string","format":"uuid"},"capture_contract_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"required":["capture_contract_id","capture_contract_sha256"],"additionalProperties":false}

@@ -1,5 +1,23 @@
 # 数据中心全量记录与全过程行为采集审计
 
+> 2026-08-29 v1.2 实施更新：本报告前半部分保留的是改造前审计快照，不应再作为当前代码能力说明。当前分支已新增 `capture-v1`、事件 schema v2、事件学生锚点、`terminal_at`、持久 checkpoint/dead-letter、连续 ACK 高水位、不可变 CoverageRun、33 表过程包、完整分类时序信封及教师质量重放。历史数据不合成过程事实，仍为 `legacy_unknown`；客户端行为仍是带完整性证明的尽力采集，不宣称 100% 无遗漏。
+
+## 0. v1.2 整改状态（当前代码）
+
+| 原审计缺口 | 状态 | 当前证据 |
+|---|---|---|
+| 状态变化缺 `before_state` | 已修复 | schema v2 强制 before/after；正式页面在草稿请求前入 outbox。 |
+| 切题缺目标题目和时间 | 已修复 | `item_left.v2.to_assignment_id`；导航链接冻结 assignment ID；事件保留 sequence/monotonic/sync/server time。 |
+| 无连续 ACK/尾部证据 | 已修复 | outbox 分离 max ACK 与 contiguous ACK；独立持久 checkpoint 上报 emitted/acked/pending/failed。 |
+| 单坏事件阻塞整批 | 已修复 | 批内按 sequence 处理，合法事件 ACK，永久错误进入 rejection/dead letter。 |
+| 分类表压掉时序字段 | 已修复 | response/navigation/exposure/telemetry 共用完整事件信封；导航覆盖 enter/render/left。 |
+| 无采集契约与完整性结果 | 已修复 | Session 冻结 `capture-v1`；CoverageRun/Session/Attempt 只追加，输出 gap、tail、原因码与分析资格。 |
+| 过程包缺校时/checkpoint/coverage | 已修复 | complete/process 包由 28 表增至 33 表，新增五张计划表。 |
+| 教师只看答案链 | 已修复 | 重放合并进入、呈现、离开、提交请求、服务器提交、关闭，并展示 Coverage 和时间来源。 |
+| 历史数据是否补造 | 明确不修复 | 不伪造历史行为；无契约锚点统一 `legacy_unknown`。 |
+
+工程验证、双数据库门禁、300 Session/15,000 event 性能和教师浏览器预演见 `recording-coverage-v1-validation.md`。仍需真实课堂 Pilot 估计 300 秒终态宽限期覆盖率；任何参数调整必须发布新的 coverage version/parameter hash，不能覆盖历史 run。
+
 > 审计日期：2026-08-29
 > 代码分支：`feat/class-teaching-analytics-center`
 > 审计代码基线：`d6efe709f3e6c1ae93d8609496f0dff69c69366e`

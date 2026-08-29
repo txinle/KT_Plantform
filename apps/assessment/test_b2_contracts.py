@@ -125,4 +125,7 @@ class B2ContractsTests(TestCase):
         self.assertEqual(observation.content_hash_before, before_hash)
         self.assertEqual(observation.content_hash_after, after_hash)
         self.assertEqual(observation.content_length_after, 2)
+        self.assertIsNone(observation.batch_start_client_monotonic_ms)
+        self.assertIsNone(observation.batch_end_client_monotonic_ms)
+        self.assertFalse(observation.is_ime)
         self.assertFalse(hasattr(observation, "content"))

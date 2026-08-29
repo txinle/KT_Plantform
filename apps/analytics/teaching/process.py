@@ -26,6 +26,8 @@ class ProcessStep:
     value: str | None = None
     length_before: int | None = None
     length_after: int | None = None
+    time_source: str = "server_received_at"
+    interval_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,40 @@ _EDIT_LABELS = {
     "paste": "粘贴",
     "unknown": "编辑",
 }
+
+
+def order_process_records(records, *, fallback_time_field):
+    """Preserve receive positions while restoring each client sequence.
+
+    Cross-instance order remains a Coverage concern.  This helper only applies
+    the order that is exact inside one client instance and otherwise leaves the
+    server-observed positions unchanged.
+    """
+    ordered = sorted(
+        records,
+        key=lambda item: (
+            getattr(item, fallback_time_field),
+            str(getattr(item, "event_id", getattr(item, "observation_id", ""))),
+        ),
+    )
+    positions_by_instance = {}
+    for index, item in enumerate(ordered):
+        instance_id = getattr(item, "client_instance_id", None)
+        if instance_id is not None:
+            positions_by_instance.setdefault(str(instance_id), []).append(index)
+    for positions in positions_by_instance.values():
+        members = sorted(
+            (ordered[index] for index in positions),
+            key=lambda item: (
+                getattr(item, "client_sequence_no", None)
+                if getattr(item, "client_sequence_no", None) is not None
+                else getattr(item, fallback_time_field),
+                getattr(item, fallback_time_field),
+            ),
+        )
+        for index, item in zip(positions, members):
+            ordered[index] = item
+    return tuple(ordered)
 
 
 def _event_time(event):
@@ -88,14 +124,9 @@ def _project_choice(
     *, generated_at, attempt_id, question_type, events, final_answer, submitted_at
 ):
     response_events = tuple(
-        sorted(
-            (
-                event
-                for event in events
-                if event.event_type == "response_state_changed"
-            ),
-            key=lambda event: event.server_ingest_sequence_no,
-        )
+        event
+        for event in events
+        if event.event_type == "response_state_changed"
     )
     if (
         not response_events
@@ -188,14 +219,9 @@ def _project_value_chain(
     submitted_at,
 ):
     response_events = tuple(
-        sorted(
-            (
-                event
-                for event in events
-                if event.event_type == "response_state_changed"
-            ),
-            key=lambda event: event.server_ingest_sequence_no,
-        )
+        event
+        for event in events
+        if event.event_type == "response_state_changed"
     )
     if not response_events or submitted_at is None or final_snapshot_id is None:
         return _incomplete(generated_at, question_type, final_answer)
@@ -209,23 +235,44 @@ def _project_value_chain(
         return _incomplete(generated_at, question_type, final_answer)
 
     snapshot_by_id = _snapshot_index(snapshots)
+    final_snapshot = snapshot_by_id.get(str(final_snapshot_id))
+    if final_snapshot is None or final_snapshot.attempt_id != attempt_id:
+        return _incomplete(generated_at, question_type, final_answer)
+    final_state = final_snapshot.state_json
+    if (
+        not isinstance(final_state, dict)
+        or final_state.get("question_type") != question_type
+        or display_text(final_state.get("value")) != display_text(final_answer)
+    ):
+        return _incomplete(generated_at, question_type, final_answer)
     values = []
     steps = []
     last_ref = None
+    uses_snapshot_refs = None
     for event in response_events:
         payload = event.payload
         if payload.get("question_type") != question_type:
             return _incomplete(generated_at, question_type, final_answer)
         ref = payload.get("response_state_after")
-        value = _resolve_state_ref(
-            ref=ref,
-            snapshot_by_id=snapshot_by_id,
-            attempt_id=attempt_id,
-            question_type=question_type,
-        )
-        if value is None:
+        is_snapshot_ref = isinstance(ref, dict)
+        if uses_snapshot_refs is None:
+            uses_snapshot_refs = is_snapshot_ref
+        elif uses_snapshot_refs != is_snapshot_ref:
             return _incomplete(generated_at, question_type, final_answer)
-        last_ref = ref
+        if is_snapshot_ref:
+            value = _resolve_state_ref(
+                ref=ref,
+                snapshot_by_id=snapshot_by_id,
+                attempt_id=attempt_id,
+                question_type=question_type,
+            )
+            if value is None:
+                return _incomplete(generated_at, question_type, final_answer)
+            last_ref = ref
+        else:
+            if ref is not None and not isinstance(ref, str):
+                return _incomplete(generated_at, question_type, final_answer)
+            value = "" if ref is None else ref
         values.append(value)
         steps.append(
             ProcessStep(
@@ -237,11 +284,9 @@ def _project_value_chain(
             )
         )
     final_value = display_text(final_answer)
-    if (
-        str(last_ref.get("snapshot_id")) != str(final_snapshot_id)
-        or not values
-        or values[-1] != final_value
-    ):
+    if uses_snapshot_refs and str(last_ref.get("snapshot_id")) != str(final_snapshot_id):
+        return _incomplete(generated_at, question_type, final_answer)
+    if not values or values[-1] != final_value:
         return _incomplete(generated_at, question_type, final_answer)
     steps.append(
         ProcessStep(
@@ -274,7 +319,9 @@ def _project_long_text(
     final_snapshot_id,
     submitted_at,
 ):
-    ordered = tuple(sorted(observations, key=lambda item: item.observed_at))
+    ordered = order_process_records(
+        observations, fallback_time_field="observed_at"
+    )
     snapshot = _snapshot_index(snapshots).get(str(final_snapshot_id))
     final_value = display_text(final_answer)
     if (
@@ -342,6 +389,9 @@ def project_attempt_process(
     submitted_at,
 ):
     """Project one attempt into a privacy-bounded teacher-facing process."""
+    events = order_process_records(
+        events, fallback_time_field="server_ingest_sequence_no"
+    )
     if question_type in _CHOICE_TYPES:
         return _project_choice(
             generated_at=generated_at,

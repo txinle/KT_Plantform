@@ -227,7 +227,7 @@ class ProcessEndpointContractTests(TestCase):
         self.assertEqual(response.json()["error"]["code"], "invalid_event_link")
         self.assertEqual(AssessmentEvent.objects.count(), 0)
 
-    def test_batch_validation_is_atomic_and_does_not_echo_payload_values(self):
+    def test_invalid_event_does_not_block_later_or_earlier_legal_events(self):
         secret = "student-private-answer"
         response = self.post_json(
             self.batch_url,
@@ -239,10 +239,78 @@ class ProcessEndpointContractTests(TestCase):
             ),
         )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["error"]["code"], "invalid_event")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["acknowledgements"]), 1)
+        self.assertEqual(response.json()["rejections"][0]["client_sequence_no"], 2)
+        self.assertEqual(response.json()["rejections"][0]["code"], "invalid_event")
         self.assertNotIn(secret, response.content.decode("utf-8"))
-        self.assertEqual(AssessmentEvent.objects.count(), 0)
+        self.assertEqual(AssessmentEvent.objects.count(), 1)
+
+    def test_v2_response_requires_explicit_before_and_valid_assigned_options(self):
+        valid = {
+            "question_type": "single_choice",
+            "response_state_before": None,
+            "response_state_after": "A",
+            "change_source": "student",
+        }
+        accepted = self.post_json(
+            self.batch_url,
+            self.batch(events=[self.event(
+                event_type="response_state_changed",
+                event_version=2,
+                payload=valid,
+            )]),
+        )
+        self.assertEqual(accepted.status_code, 200)
+
+        for sequence, payload in (
+            (2, {key: value for key, value in valid.items() if key != "response_state_before"}),
+            (3, {**valid, "response_state_before": "A", "response_state_after": "Z"}),
+        ):
+            with self.subTest(payload=payload):
+                rejected = self.post_json(
+                    self.batch_url,
+                    self.batch(events=[self.event(
+                        sequence,
+                        event_type="response_state_changed",
+                        event_version=2,
+                        payload=payload,
+                    )]),
+                )
+                self.assertEqual(rejected.status_code, 400)
+
+    def test_v2_response_chain_break_is_preserved_for_coverage_instead_of_rejected(self):
+        response = self.post_json(
+            self.batch_url,
+            self.batch(events=[
+                self.event(
+                    1,
+                    event_type="response_state_changed",
+                    event_version=2,
+                    payload={
+                        "question_type": "single_choice",
+                        "response_state_before": None,
+                        "response_state_after": "A",
+                        "change_source": "student",
+                    },
+                ),
+                self.event(
+                    2,
+                    event_type="response_state_changed",
+                    event_version=2,
+                    payload={
+                        "question_type": "single_choice",
+                        "response_state_before": "B",
+                        "response_state_after": "A",
+                        "change_source": "student",
+                    },
+                ),
+            ]),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["acknowledgements"]), 2)
+        self.assertEqual(AssessmentEvent.objects.count(), 2)
 
     def test_identical_batch_replays_and_conflicting_client_key_is_409(self):
         payload = self.batch()
@@ -276,7 +344,7 @@ class ProcessEndpointContractTests(TestCase):
         self.assertEqual(conflict.json()["error"]["code"], "event_conflict")
         self.assertEqual(AssessmentEvent.objects.count(), 1)
 
-    def test_conflict_rolls_back_new_events_earlier_in_the_same_batch(self):
+    def test_conflict_does_not_roll_back_a_different_legal_event(self):
         existing = self.post_json(
             self.batch_url,
             self.batch(events=[self.event(7)]),
@@ -301,9 +369,10 @@ class ProcessEndpointContractTests(TestCase):
             ),
         )
 
-        self.assertEqual(conflict.status_code, 409)
-        self.assertEqual(AssessmentEvent.objects.count(), 1)
-        self.assertFalse(
+        self.assertEqual(conflict.status_code, 200)
+        self.assertEqual(conflict.json()["rejections"][0]["client_sequence_no"], 7)
+        self.assertEqual(AssessmentEvent.objects.count(), 2)
+        self.assertTrue(
             AssessmentEvent.objects.filter(
                 client_instance_id=self.client_instance_id,
                 client_sequence_no=3,
@@ -321,7 +390,6 @@ class ProcessEndpointContractTests(TestCase):
                 400,
             ),
             (self.batch(events=[self.event(event_version=99)]), 400),
-            (self.batch(events=[self.event(2), self.event(1)]), 400),
             (
                 self.batch(
                     events=[
@@ -343,6 +411,17 @@ class ProcessEndpointContractTests(TestCase):
                 response = self.post_json(self.batch_url, payload)
                 self.assertEqual(response.status_code, expected_status)
         self.assertEqual(AssessmentEvent.objects.count(), 0)
+
+    def test_batch_is_processed_in_client_sequence_order(self):
+        response = self.post_json(
+            self.batch_url,
+            self.batch(events=[self.event(2), self.event(1)]),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [row["client_sequence_no"] for row in response.json()["acknowledgements"]],
+            [1, 2],
+        )
 
     def test_time_sync_endpoints_reject_malformed_measurements(self):
         invalid_create_documents = (

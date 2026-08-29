@@ -15,6 +15,7 @@
         <div class="question-grid">
           {% for item in assignments %}
             <a class="question-number js-question-nav {{ item.attempt.status }} {% if item.id == assignment.id %}current{% endif %}"
+               data-assignment-id="{{ item.id }}"
                href="{% url 'assessment:question' session.id item.id %}?reason=navigation_click"
                title="第 {{ item.assigned_sequence_index }} 题，{{ item.attempt.get_status_display }}"
                {% if item.id == assignment.id %}aria-current="step"{% endif %}>
@@ -62,9 +63,10 @@
             data-process-attempt-id="{{ attempt.id }}"
             data-attempt-status="{{ attempt.status }}"
             data-process-event-url="{% url 'assessment_process:event_batch' %}"
+            data-capture-checkpoint-url="{% url 'assessment_process:capture_checkpoint' %}"
             data-time-sync-create-url="{% url 'assessment_process:time_sync_create' %}"
             data-time-sync-finalize-url="{% url 'assessment_process:time_sync_finalize' %}"
-            data-process-app-version="2026.08.26.1"
+            data-process-app-version="2026.08.29.2"
             data-heartbeat-interval-seconds="{{ session.version.configuration.heartbeat_interval_seconds|default:30 }}">
         {% csrf_token %}
         {% if snapshot.question_type == 'single_choice' %}
@@ -97,7 +99,7 @@
         {% elif snapshot.question_type == 'numeric' %}
           <div class="form-field">
             <label class="form-label" for="answer-input">数值答案</label>
-            <input id="answer-input" type="number" inputmode="decimal" step="any" name="answer" class="form-control form-control-lg" aria-describedby="numeric-guidance" {% if attempt.status == 'submitted' %}disabled{% endif %}>
+            <input id="answer-input" type="text" inputmode="decimal" name="answer" class="form-control form-control-lg" aria-describedby="numeric-guidance" {% if attempt.status == 'submitted' %}disabled{% endif %}>
             <div class="form-help" id="numeric-guidance">可输入整数或小数，请使用数字格式。</div>
           </div>
         {% elif snapshot.question_type == 'fill_blank' %}
@@ -149,6 +151,7 @@
         {% endif %}
       </form>
       {{ attempt.draft_answer|json_script:'draft-data' }}
+      {{ initial_response_state|json_script:'initial-response-state-data' }}
       {{ pending_confidence|json_script:'pending-confidence-data' }}
     </div>
   </section>
@@ -158,6 +161,6 @@
 {% include 'components/confirm_dialog.html' with dialog_id='finish-confirm-dialog' dialog_title='确认结束实验' dialog_body='未正式提交的题目将记录为未作答。此操作会结束当前会话。' dialog_confirm_label='结束实验' dialog_confirm_class='btn-danger' %}
 {% endblock %}
 {% block scripts %}
-<script src="{% static 'js/process-event-collector.js' %}?v=20260826.1"></script>
-<script src="{% static 'js/assessment.js' %}?v=20260826.1"></script>
+<script src="{% static 'js/process-event-collector.js' %}?v=20260829.2"></script>
+<script src="{% static 'js/assessment.js' %}?v=20260829.2"></script>
 {% endblock %}

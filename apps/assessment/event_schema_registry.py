@@ -116,6 +116,8 @@ def event_schema_sha256(event_type: str, event_version: int) -> str:
 
 
 def registered_event_schemas() -> tuple[tuple[str, int], ...]:
+    # Compatibility API: this registry historically enumerates the frozen v1
+    # baseline. New versions are addressed explicitly through get_event_schema.
     registrations = tuple((event_type, 1) for event_type in REGISTERED_EVENT_TYPES)
     for event_type, event_version in registrations:
         _load_event_schema(event_type, event_version)

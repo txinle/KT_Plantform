@@ -29,6 +29,7 @@ from .response_snapshot_services import (
     response_snapshot_content,
 )
 from .writer_lease_services import assert_attempt_writer_lease
+from .recording_capture_services import ensure_capture_contract_v1
 from .models import (
     AssessmentEvent,
     Attempt,
@@ -56,7 +57,7 @@ def _append_session_event(session, *, event_type, payload):
         return existing
     return append_assessment_event(
         event_type=event_type,
-        event_version=1,
+        event_version=2 if session.capture_contract_id else 1,
         event_domain="assessment",
         actor_source="server",
         session=session,
@@ -169,6 +170,7 @@ def get_or_create_session(experiment, student):
             "ordering_seed": ordering_seed,
             "sampling_algorithm_version": algorithm_version,
             "assignment_unit_type": version.assignment_unit_type,
+            "capture_contract": ensure_capture_contract_v1(),
         },
     )
     if created:
@@ -190,7 +192,10 @@ def get_or_create_session(experiment, student):
         _append_session_event(
             session,
             event_type="session_started",
-            payload={},
+            payload={
+                "capture_contract_id": str(session.capture_contract_id),
+                "capture_contract_sha256": session.capture_contract.schema_sha256,
+            },
         )
     return session
 
@@ -242,11 +247,15 @@ def _validate_session_time(session, attempt=None):
         )
         session.status = ExperimentSession.Status.EXPIRED
         session.completed_at = now
-        session.save(update_fields=["status", "completed_at"])
+        session.terminal_at = now
+        session.save(update_fields=["status", "completed_at", "terminal_at"])
         _append_session_event(
             session,
             event_type="session_expired",
-            payload={"expiry_reason": "total_time_limit"},
+            payload={
+                "expiration_reason": "total_time_limit",
+                "terminal_at": now.isoformat(),
+            },
         )
         return "实验总时间已结束"
     if attempt and session.version.configuration.get("time_mode") == "per_question":
@@ -292,7 +301,7 @@ def _record_visit_transaction(session_id, assignment_id, entry_reason="navigatio
     session.save(update_fields=["current_assignment", "first_open_count", "visit_event_count", "last_activity_at"])
     append_assessment_event(
         event_type="item_entered",
-        event_version=1,
+        event_version=2 if session.capture_contract_id else 1,
         event_domain="assessment",
         actor_source="server",
         session=session,
@@ -695,11 +704,14 @@ def finish_session(session_id):
         status=Attempt.Status.UNANSWERED,
         close_reason="unanswered",
     )
-    session.status = ExperimentSession.Status.COMPLETED; session.completed_at = now; session.save(update_fields=["status", "completed_at"])
+    session.status = ExperimentSession.Status.COMPLETED
+    session.completed_at = now
+    session.terminal_at = now
+    session.save(update_fields=["status", "completed_at", "terminal_at"])
     _append_session_event(
         session,
         event_type="session_completed",
-        payload={"completion_reason": "student_finished"},
+        payload={"completion_reason": "student_finished", "terminal_at": now.isoformat()},
     )
     return session
 
@@ -724,11 +736,12 @@ def invalidate_session(session_id, *, reason_code):
     )
     session.status = ExperimentSession.Status.INVALIDATED
     session.completed_at = timezone.now()
-    session.save(update_fields=["status", "completed_at"])
+    session.terminal_at = session.completed_at
+    session.save(update_fields=["status", "completed_at", "terminal_at"])
     _append_session_event(
         session,
         event_type="session_invalidated",
-        payload={"reason_code": reason_code},
+        payload={"reason_code": reason_code, "terminal_at": session.terminal_at.isoformat()},
     )
     return session
 

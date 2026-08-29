@@ -18,6 +18,8 @@ from .event_batch_services import (
     require_exact_mapping,
 )
 from .models import ClientTimeSync, ExperimentSession
+from .models import AssessmentEvent
+from .recording_capture_services import record_client_capture_checkpoint
 from .confidence_services import (
     ConfidenceFlowError,
     commit_confidence,
@@ -89,19 +91,109 @@ def _sync_document(sample):
 def event_batch(request):
     try:
         document = _json_document(request)
-        acknowledgements = append_event_batch(
-            student=request.user,
-            document=document,
+        require_exact_mapping(
+            document,
+            allowed=frozenset({"client_instance_id", "events"}),
         )
-    except ProcessConflictError as error:
-        return _error(error.code, status=error.status)
+        event_documents = document["events"]
+        if not isinstance(event_documents, list) or not 1 <= len(event_documents) <= 100:
+            raise ProcessRequestError("invalid_batch_size")
     except ProcessRequestError as error:
         return _error(error.code, status=error.status)
+    acknowledgements = []
+    rejections = []
+    first_error = None
+    ordered_documents = sorted(
+        event_documents,
+        key=lambda item: (
+            item.get("client_sequence_no", 0)
+            if isinstance(item, dict)
+            and isinstance(item.get("client_sequence_no"), int)
+            else 0
+        ),
+    )
+    for event_document in ordered_documents:
+        sequence_no = (
+            event_document.get("client_sequence_no")
+            if isinstance(event_document, dict)
+            else None
+        )
+        try:
+            acknowledgements.extend(
+                append_event_batch(
+                    student=request.user,
+                    document={
+                        "client_instance_id": document["client_instance_id"],
+                        "events": [event_document],
+                    },
+                )
+            )
+        except (ProcessConflictError, ProcessRequestError) as error:
+            first_error = first_error or error
+            rejections.append(
+                {
+                    "client_sequence_no": sequence_no,
+                    "code": error.code,
+                    "permanent": error.status < 500,
+                }
+            )
+    if not acknowledgements and first_error is not None:
+        return _error(first_error.code, status=first_error.status)
+    client_instance_id = document.get("client_instance_id")
+    received = list(
+        AssessmentEvent.objects.filter(
+            client_instance_id=client_instance_id,
+            student=request.user,
+        )
+        .order_by("client_sequence_no")
+        .values_list("client_sequence_no", flat=True)
+    )
+    received_set = set(received)
+    highest = max(received, default=0)
+    contiguous = 0
+    while contiguous + 1 in received_set:
+        contiguous += 1
+    missing = []
+    start = None
+    for sequence in range(1, highest + 1):
+        if sequence not in received_set and start is None:
+            start = sequence
+        if sequence in received_set and start is not None:
+            missing.append([start, sequence - 1])
+            start = None
+    if start is not None:
+        missing.append([start, highest])
     return JsonResponse(
         {
             "success": True,
             "acknowledgements": acknowledgements,
+            "rejections": rejections,
+            "highest_received_sequence_no": highest,
+            "highest_contiguous_received_sequence_no": contiguous,
+            "missing_sequence_ranges": missing,
         }
+    )
+
+
+@role_required("student")
+@require_POST
+def capture_checkpoint(request):
+    try:
+        checkpoint = record_client_capture_checkpoint(
+            student=request.user,
+            document=_json_document(request),
+        )
+    except ProcessRequestError as error:
+        return _error(error.code, status=error.status)
+    except (KeyError, ValueError, ValidationError):
+        return _error("invalid_checkpoint", status=400)
+    return JsonResponse(
+        {
+            "success": True,
+            "checkpoint_id": str(checkpoint.pk),
+            "server_received_at": checkpoint.server_received_at.isoformat(),
+        },
+        status=201,
     )
 
 

@@ -21,6 +21,7 @@ from .confidence_services import (
     ensure_confidence_assignment,
     frozen_feedback_payload,
 )
+from .response_snapshot_services import canonical_response_state
 from .services import (
     SubmissionValidationError,
     finish_session,
@@ -300,6 +301,21 @@ def question_page(request, session_id, assignment_id):
         remaining = max(0, int((session.deadline_at - timezone.now()).total_seconds()))
     next_assignment = _next_assignment(session, assignment.id)
     fallback_next_url = reverse("assessment:question", args=[session.id, next_assignment.id]) if next_assignment else reverse("assessment:complete", args=[session.id])
+    initial_response_state = None
+    question_type = assignment.snapshot.question_type
+    if question_type == "short_answer" and attempt.saved_response_snapshot is not None:
+        saved = attempt.saved_response_snapshot
+        initial_response_state = {
+            "snapshot_id": str(saved.pk),
+            "state_hash": saved.state_hash,
+            "content_hash": saved.content_hash,
+            "content_length": saved.content_length,
+            "schema_version": saved.schema_version,
+        }
+    elif attempt.draft_answer is not None:
+        initial_response_state = canonical_response_state(
+            question_type, attempt.draft_answer
+        )
     return render(request, "student/question.html", {
         "session": session,
         "assignment": assignment,
@@ -308,6 +324,7 @@ def question_page(request, session_id, assignment_id):
         "snapshot": assignment.snapshot,
         "remaining_seconds": remaining,
         "fallback_next_url": fallback_next_url,
+        "initial_response_state": initial_response_state,
         "pending_confidence": (
             _confidence_client_contract(attempt, pending_confidence)
             if pending_confidence is not None

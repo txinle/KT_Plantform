@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -19,6 +20,7 @@ from apps.assessment.models import (
 from apps.assessment.response_snapshot_services import canonical_response_state
 from apps.experiments.models import ExperimentVersionParticipantSnapshot, QuestionSnapshot
 from apps.experiments.presentation import display_text, format_answer, options_for_snapshot
+from apps.analytics.models import RecordingCoverageAttempt
 
 from .comparisons import competition_ranks
 from .contracts import MetricValue, StudentComparison
@@ -26,6 +28,7 @@ from .kc_time import QuestionTimingSummary, summarize_question_timing
 from .process import (
     AttemptProcessProjection,
     ProcessCompleteness,
+    order_process_records,
     project_attempt_process,
 )
 from .scope import analytics_read_transaction, resolve_task_facts
@@ -104,6 +107,11 @@ class AttemptProcessDetail:
     result_label: str
     score_display: str
     process: AttemptProcessProjection
+    coverage_status: str
+    coverage_status_label: str
+    coverage_time_quality: str
+    coverage_run_id: str
+    coverage_missing_reasons: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -322,9 +330,20 @@ def _process_map(generated_at, attempts, submission_by_attempt):
     events_by_attempt = {attempt_id: [] for attempt_id in attempt_ids}
     for event in AssessmentEvent.objects.filter(
         attempt_id__in=attempt_ids,
-        event_type="response_state_changed",
+        event_type__in=(
+            "item_entered", "item_rendered", "item_left",
+            "response_state_changed", "text_edit_observed",
+            "response_commit_requested",
+            "response_committed", "response_commit_rejected", "attempt_closed",
+        ),
     ).order_by("attempt_id", "server_ingest_sequence_no"):
         events_by_attempt[event.attempt_id].append(event)
+    for attempt_id, rows in events_by_attempt.items():
+        events_by_attempt[attempt_id] = list(
+            order_process_records(
+                rows, fallback_time_field="server_ingest_sequence_no"
+            )
+        )
     snapshots_by_attempt = {attempt_id: [] for attempt_id in attempt_ids}
     for snapshot in ResponseSnapshot.objects.filter(attempt_id__in=attempt_ids).order_by(
         "attempt_id", "created_at"
@@ -333,7 +352,7 @@ def _process_map(generated_at, attempts, submission_by_attempt):
     observations_by_attempt = {attempt_id: [] for attempt_id in attempt_ids}
     for observation in ResponseInputObservation.objects.filter(
         attempt_id__in=attempt_ids
-    ).order_by("attempt_id", "observed_at"):
+    ).select_related("source_event").order_by("attempt_id", "observed_at"):
         observations_by_attempt[observation.attempt_id].append(observation)
 
     projections = {}
@@ -341,7 +360,7 @@ def _process_map(generated_at, attempts, submission_by_attempt):
         submission = submission_by_attempt.get(attempt.pk)
         if submission is None:
             continue
-        projections[attempt.pk] = project_attempt_process(
+        projection = project_attempt_process(
             generated_at=generated_at,
             attempt_id=attempt.pk,
             question_type=attempt.assignment.snapshot.question_type,
@@ -351,6 +370,108 @@ def _process_map(generated_at, attempts, submission_by_attempt):
             final_answer=submission.final_answer,
             final_snapshot_id=submission.final_response_snapshot_id,
             submitted_at=submission.committed_at,
+        )
+        fact_labels = {
+            "item_entered": "进入题目",
+            "item_rendered": "题目可交互",
+            "item_left": "离开题目",
+            "response_commit_requested": "请求提交",
+            "response_committed": "服务器提交成功",
+            "response_commit_rejected": "服务器拒绝提交",
+            "attempt_closed": "作答关闭",
+        }
+        ordered_events = events_by_attempt[attempt.pk]
+        event_rank = {id(event): index for index, event in enumerate(ordered_events)}
+        response_events = iter(
+            event for event in ordered_events
+            if event.event_type == "response_state_changed"
+        )
+        text_events = iter(
+            event for event in ordered_events
+            if event.event_type == "text_edit_observed"
+        )
+        committed_event = next(
+            (event for event in ordered_events if event.event_type == "response_committed"),
+            None,
+        )
+        ranked_steps = []
+        for step in projection.steps:
+            source_event = None
+            if step.kind == "response":
+                source_event = next(response_events, None)
+            elif step.kind in {"insert", "delete", "replace", "paste", "unknown"}:
+                source_event = next(text_events, None)
+            if source_event is not None:
+                rank = event_rank[id(source_event)] + 0.1
+            elif step.kind == "submit" and committed_event is not None:
+                rank = event_rank[id(committed_event)] - 0.1
+            else:
+                rank = len(ordered_events) + len(ranked_steps)
+            ranked_steps.append((rank, step, source_event))
+
+        visit_number = 0
+        for event in ordered_events:
+            if event.event_type in {"response_state_changed", "text_edit_observed"}:
+                continue
+            value = None
+            if event.event_type == "item_left" and event.payload.get("to_assignment_id"):
+                value = f"目标分配 {event.payload['to_assignment_id']}"
+            elif event.event_type == "attempt_closed":
+                value = event.payload.get("close_reason")
+            label = fact_labels[event.event_type]
+            if event.event_type == "item_entered":
+                visit_number += 1
+                label = f"{label}（Visit {visit_number}）"
+            fact_step = ProcessStep(
+                generated_at=generated_at,
+                kind=event.event_type,
+                label=label,
+                occurred_at=event.estimated_occurred_at_utc or event.server_received_at,
+                value=value,
+                time_source=("synchronized_estimate" if event.estimated_occurred_at_utc else "server_received_at"),
+                interval_ms=None,
+            )
+            ranked_steps.append((event_rank[id(event)], fact_step, event))
+
+        merged_steps = []
+        prior_source_event = None
+        for _rank, step, source_event in sorted(
+            ranked_steps, key=lambda row: (row[0], row[1].kind)
+        ):
+            interval_ms = step.interval_ms
+            time_source = step.time_source
+            if source_event is not None:
+                time_source = (
+                    "synchronized_estimate"
+                    if source_event.estimated_occurred_at_utc
+                    else "server_received_at"
+                )
+                if (
+                    prior_source_event is not None
+                    and source_event.client_instance_id
+                    and source_event.client_instance_id
+                    == prior_source_event.client_instance_id
+                    and source_event.client_time_origin
+                    == prior_source_event.client_time_origin
+                    and source_event.client_monotonic_ms is not None
+                    and prior_source_event.client_monotonic_ms is not None
+                ):
+                    interval_ms = int(
+                        source_event.client_monotonic_ms
+                        - prior_source_event.client_monotonic_ms
+                    )
+                    time_source += "；间隔=exact_monotonic"
+                prior_source_event = source_event
+            merged_steps.append(
+                replace(
+                    step,
+                    time_source=time_source,
+                    interval_ms=interval_ms,
+                )
+            )
+        projections[attempt.pk] = replace(
+            projection,
+            steps=tuple(merged_steps),
         )
     return projections
 
@@ -576,6 +697,35 @@ def build_attempt_process_detail(
         if grade is not None and grade.score is not None and grade.max_score is not None:
             score_display = f"{grade.score} / {grade.max_score}"
         student = student_by_id[student_id]
+        coverage = (
+            RecordingCoverageAttempt.objects.filter(
+                attempt=attempt,
+                run__run_status="completed",
+            ).select_related("run").order_by("-run__generated_at").first()
+        )
+        coverage_labels = {
+            "complete": "完整",
+            "partial": "部分",
+            "insufficient": "证据不足",
+            "invalid": "无效",
+            "not_applicable": "不适用",
+            "legacy_unknown": "历史未知",
+        }
+        pending_finalization = coverage is None and (
+            session.status == ExperimentSession.Status.IN_PROGRESS
+            or (
+                session.terminal_at is not None
+                and (generated_at - session.terminal_at).total_seconds() < 300
+            )
+        )
+        fallback_status = (
+            "pending_finalization" if pending_finalization else "legacy_unknown"
+        )
+        fallback_label = "等待最终确认" if pending_finalization else "尚未生成"
+        fallback_reasons = (
+            ("pending_finalization",)
+            if pending_finalization else ("coverage_run_missing",)
+        )
         return AttemptProcessDetail(
             generated_at=generated_at,
             experiment_id=task.experiment_id,
@@ -590,6 +740,11 @@ def build_attempt_process_detail(
             result_label=_result_label(grade),
             score_display=score_display,
             process=process,
+            coverage_status=coverage.overall_status if coverage else fallback_status,
+            coverage_status_label=coverage_labels.get(coverage.overall_status, coverage.overall_status) if coverage else fallback_label,
+            coverage_time_quality=coverage.time_quality if coverage else "unknown",
+            coverage_run_id=str(coverage.run_id) if coverage else "",
+            coverage_missing_reasons=tuple(coverage.missing_reasons) if coverage else fallback_reasons,
         )
 
 

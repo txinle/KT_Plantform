@@ -336,15 +336,28 @@ def append_event_batch(*, student, document):
                 observation = parsed.payload
                 record_stable_input_observation(
                     attempt=parsed.attempt,
+                    source_event=event,
                     client_instance_id=client_instance_id,
                     client_sequence_no=parsed.client_sequence_no,
                     client_monotonic_ms=parsed.client_monotonic_ms,
+                    # v1 outbox rows predate stable batch boundaries.  Keep
+                    # accepting them without inventing timestamps; v2 rows
+                    # are schema-required to carry both boundaries.
+                    batch_start_client_monotonic_ms=observation.get(
+                        "batch_start_client_monotonic_ms"
+                    ),
+                    batch_end_client_monotonic_ms=observation.get(
+                        "batch_end_client_monotonic_ms"
+                    ),
                     edit_operation=observation["edit_operation"],
                     content_hash_before=observation["content_hash_before"],
                     content_hash_after=observation["content_hash_after"],
                     content_length_before=observation["content_length_before"],
                     content_length_after=observation["content_length_after"],
                     input_method=observation["input_method"],
+                    is_ime=observation.get(
+                        "is_ime", observation.get("input_method") == "ime"
+                    ),
                 )
     except EventIdempotencyConflict as error:
         raise ProcessConflictError() from error

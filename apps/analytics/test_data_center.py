@@ -2,10 +2,11 @@ import json
 import os
 import zipfile
 import csv
+import uuid
 from datetime import timedelta
 from io import StringIO
 
-from django.test import TestCase
+from django.test import TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
 
@@ -20,10 +21,15 @@ from apps.experiments.models import Experiment
 from apps.experiments.models import ExperimentClassSnapshot, ExperimentVersion, QuestionSnapshot
 from apps.question_bank.models import Question
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
-from apps.assessment.models import ExperimentSession, StudentQuestionAssignment, Attempt
+from apps.assessment.models import (
+    Attempt,
+    ClientCaptureCheckpoint,
+    ExperimentSession,
+    StudentQuestionAssignment,
+)
 
 
-class DataCenterContractTests(TestCase):
+class DataCenterContractTests(TransactionTestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(
             username="dc-teacher", password="x", role=User.Role.TEACHER
@@ -145,6 +151,95 @@ class DataCenterContractTests(TestCase):
         self.assertIn("application_git_commit_sha", manifest)
         self.assertIn("export_config_hash", manifest)
         self.assertIn("source_cutoff_at", manifest)
+
+    def test_manifest_counts_latest_dead_letter_state_per_client_instance(self):
+        version = ExperimentVersion.objects.create(
+            experiment=self.experiment,
+            version_number=1,
+            published_by=self.teacher,
+        )
+        student = User.objects.create_user(
+            username="manifest-checkpoint-student",
+            role=User.Role.STUDENT,
+            student_number="MCP-1",
+        )
+        session = ExperimentSession.objects.create(
+            version=version,
+            student=student,
+        )
+        instance_id = uuid.uuid4()
+        origin = timezone.now() - timedelta(minutes=1)
+        for sequence, failed in ((1, 1), (2, 2)):
+            ClientCaptureCheckpoint.objects.create(
+                session=session,
+                student=student,
+                client_instance_id=instance_id,
+                highest_emitted_sequence_no=sequence,
+                highest_acked_sequence_no=sequence,
+                highest_contiguous_acked_sequence_no=sequence,
+                pending_event_count=0,
+                failed_event_count=failed,
+                missing_local_sequence_ranges=[],
+                client_monotonic_ms=sequence,
+                client_wall_time_utc=origin,
+                client_time_origin=origin,
+                trigger="ack_progress",
+                quality_flags=[],
+                app_version="test",
+                server_received_at=origin + timedelta(seconds=sequence),
+            )
+        snapshot = create_export_snapshot(
+            course=self.course,
+            experiment=self.experiment,
+            created_by=self.teacher,
+        )
+
+        manifest = build_export_manifest(
+            snapshot,
+            selected_tables=["client_capture_checkpoints"],
+            session_ids=[session.pk],
+        )
+
+        self.assertEqual(manifest["dead_letter_count"], 2)
+
+    def test_research_snapshot_binds_one_immutable_coverage_run(self):
+        version = ExperimentVersion.objects.create(
+            experiment=self.experiment,
+            version_number=1,
+            published_by=self.teacher,
+        )
+        student = User.objects.create_user(
+            username="coverage-bound-student",
+            role=User.Role.STUDENT,
+            student_number="CB-1",
+        )
+        terminal_at = timezone.now() - timedelta(minutes=10)
+        session = ExperimentSession.objects.create(
+            version=version,
+            student=student,
+            status=ExperimentSession.Status.COMPLETED,
+            completed_at=terminal_at,
+            terminal_at=terminal_at,
+        )
+
+        snapshot = create_export_snapshot(
+            course=self.course,
+            experiment=self.experiment,
+            created_by=self.teacher,
+        )
+        manifest = build_export_manifest(
+            snapshot,
+            selected_tables=["recording_coverage_sessions"],
+            session_ids=[session.pk],
+        )
+
+        self.assertIsNotNone(snapshot.coverage_run_id)
+        self.assertEqual(
+            manifest["coverage_run_id"], str(snapshot.coverage_run_id)
+        )
+        self.assertEqual(
+            manifest["coverage_run_ids"], [str(snapshot.coverage_run_id)]
+        )
 
     def test_export_job_is_generated_with_snapshot_and_no_expiry(self):
         self.client.force_login(self.teacher)
@@ -480,6 +575,46 @@ class DataCenterContractTests(TestCase):
                 self.assertTrue(required_names <= names, (package, names))
                 manifest = json.loads(archive.read("00_manifest/manifest.json"))
                 self.assertTrue(manifest["row_counts"])
+
+    def test_process_exports_keep_student_anchor_and_full_input_event_envelope(self):
+        snapshot = create_export_snapshot(
+            course=self.course,
+            experiment=self.experiment,
+            created_by=self.teacher,
+        )
+        job = ExportJob.objects.create(
+            course=self.course,
+            experiment=self.experiment,
+            snapshot=snapshot,
+            created_by=self.teacher,
+            package="process",
+        )
+        run_export_job(job)
+        with zipfile.ZipFile(job.artifact_path) as archive:
+            event_header = archive.read(
+                "03_raw_events/assessment_events.csv"
+            ).decode("utf-8-sig").splitlines()[0].split(",")
+            observation_header = archive.read(
+                "03_raw_events/response_input_observations.csv"
+            ).decode("utf-8-sig").splitlines()[0].split(",")
+
+        self.assertIn("student_id", event_header)
+        for field in (
+            "source_event_id",
+            "client_sequence_no",
+            "client_monotonic_ms",
+            "client_time_origin",
+            "estimated_occurred_at_utc",
+            "derived_occurred_at_utc",
+            "server_received_at",
+            "server_ingest_sequence_no",
+            "actor_source",
+            "capture_mode",
+            "quality_flags",
+            "time_quality",
+            "coverage_run_id",
+        ):
+            self.assertIn(field, observation_header)
 
     def test_longitudinal_export_uses_direct_student_identity(self):
         study = ResearchStudy.objects.create(name="纵向项目", owner=self.teacher)

@@ -1,6 +1,7 @@
 from dataclasses import asdict
 from datetime import timedelta
 from types import SimpleNamespace
+import uuid
 
 from django.test import SimpleTestCase
 from django.utils import timezone
@@ -12,12 +13,19 @@ class AttemptProcessProjectionTests(SimpleTestCase):
     def setUp(self):
         self.generated_at = timezone.now()
 
-    def _event(self, sequence, payload, *, attempt_id=7):
+    def _event(
+        self, sequence, payload, *, attempt_id=7,
+        client_sequence=None, client_instance_id=None
+    ):
         return SimpleNamespace(
             attempt_id=attempt_id,
             event_type="response_state_changed",
             payload=payload,
             server_ingest_sequence_no=sequence,
+            client_instance_id=client_instance_id or "instance-1",
+            client_sequence_no=client_sequence or sequence,
+            client_monotonic_ms=(client_sequence or sequence) * 100,
+            client_time_origin=self.generated_at,
             estimated_occurred_at_utc=None,
             server_received_at=self.generated_at + timedelta(seconds=sequence),
         )
@@ -167,6 +175,56 @@ class AttemptProcessProjectionTests(SimpleTestCase):
         )
         self.assertIsNone(projection.revision_count)
 
+    def test_numeric_projects_lexical_v2_states_and_checks_final_snapshot(self):
+        final_snapshot = self._snapshot("s3", "12.5", "h3")
+        events = (
+            self._event(
+                1,
+                {
+                    "question_type": "numeric",
+                    "response_state_before": None,
+                    "response_state_after": "12",
+                    "change_source": "student",
+                },
+            ),
+            self._event(
+                2,
+                {
+                    "question_type": "numeric",
+                    "response_state_before": "12",
+                    "response_state_after": "120",
+                    "change_source": "student",
+                },
+            ),
+            self._event(
+                3,
+                {
+                    "question_type": "numeric",
+                    "response_state_before": "120",
+                    "response_state_after": "12.5",
+                    "change_source": "student",
+                },
+            ),
+        )
+
+        projection = project_attempt_process(
+            generated_at=self.generated_at,
+            attempt_id=7,
+            question_type="numeric",
+            events=events,
+            snapshots=(final_snapshot,),
+            observations=(),
+            final_answer="12.5",
+            final_snapshot_id="s3",
+            submitted_at=self.generated_at + timedelta(seconds=5),
+        )
+
+        self.assertEqual(projection.completeness, ProcessCompleteness.COMPLETE)
+        self.assertEqual(
+            [step.value for step in projection.steps],
+            ["12", "120", "12.5", "12.5"],
+        )
+
     def test_long_text_returns_operations_lengths_and_final_answer_only(self):
         observations = (
             SimpleNamespace(
@@ -251,3 +309,45 @@ class AttemptProcessProjectionTests(SimpleTestCase):
 
         self.assertEqual(projection.completeness, ProcessCompleteness.INCOMPLETE)
         self.assertEqual(projection.steps, ())
+
+    def test_late_arrival_replays_by_client_sequence_not_server_receive_order(self):
+        instance_id = uuid.uuid4()
+        events = (
+            self._event(
+                1,
+                {
+                    "question_type": "single_choice",
+                    "response_state_before": "A",
+                    "response_state_after": "B",
+                },
+                client_sequence=2,
+                client_instance_id=instance_id,
+            ),
+            self._event(
+                2,
+                {
+                    "question_type": "single_choice",
+                    "response_state_before": None,
+                    "response_state_after": "A",
+                },
+                client_sequence=1,
+                client_instance_id=instance_id,
+            ),
+        )
+
+        projection = project_attempt_process(
+            generated_at=self.generated_at,
+            attempt_id=7,
+            question_type="single_choice",
+            events=events,
+            snapshots=(),
+            observations=(),
+            final_answer="B",
+            final_snapshot_id=None,
+            submitted_at=self.generated_at + timedelta(seconds=3),
+        )
+
+        self.assertEqual(projection.completeness, ProcessCompleteness.COMPLETE)
+        self.assertEqual(
+            [step.value for step in projection.steps], ["A", "B", "B"]
+        )

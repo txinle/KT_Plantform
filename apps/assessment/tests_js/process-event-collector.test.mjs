@@ -70,6 +70,20 @@ test('concurrent records allocate unique sequences in the same atomic enqueue', 
   assert.equal(await outbox.count(), 20);
 });
 
+test('checkpoint state reports locally missing sequence ranges', async () => {
+  const outbox = new MemoryOutbox();
+  const collector = new ProcessEventCollector(eventPayload({ outbox }));
+  await collector.record('document_visible', {});
+  await collector.record('window_focused', {});
+  await collector.record('item_rendered', {});
+  outbox.records = outbox.records.filter((row) => row.client_sequence_no !== 2);
+
+  const state = await outbox.captureState(INSTANCE_A);
+
+  assert.equal(state.highestEmitted, 3);
+  assert.deepEqual(state.missingLocalRanges, [[2, 2]]);
+});
+
 test('an event is durably queued before upload starts', async () => {
   const outbox = new MemoryOutbox();
   let observedCount = 0;
@@ -122,6 +136,62 @@ test('failed or incomplete acknowledgement never deletes an outbox row', async (
   });
   await collector.flush();
   assert.equal(await outbox.count(), 0);
+});
+
+test('an all-invalid 4xx batch moves every event to dead letter', async () => {
+  const outbox = new MemoryOutbox();
+  const collector = new ProcessEventCollector(eventPayload({
+    outbox,
+    fetch: async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        success: false,
+        error: { code: 'invalid_event' },
+      }),
+    }),
+  }));
+  await collector.record('item_rendered', { presentation_state: 'interactive' });
+
+  await collector.flush();
+  const state = await outbox.captureState(INSTANCE_A);
+
+  assert.equal(await outbox.count(), 0);
+  assert.equal(state.failed, 1);
+});
+
+test('ack high-water does not conceal a non-contiguous acknowledgement gap', async () => {
+  const outbox = new MemoryOutbox();
+  const collector = new ProcessEventCollector(eventPayload({ outbox }));
+  await collector.record('document_visible', {});
+  await collector.record('window_focused', {});
+  await collector.record('item_rendered', { presentation_state: 'interactive' });
+
+  await outbox.deleteAcknowledged(INSTANCE_A, [1, 3]);
+  const state = await outbox.captureState(INSTANCE_A);
+
+  assert.equal(state.highestEmitted, 3);
+  assert.equal(state.highestAcked, 3);
+  assert.equal(state.highestContiguousAcked, 1);
+  assert.equal(state.pending, 1);
+});
+
+test('v2 navigation close carries the destination assignment', async () => {
+  const collector = new ProcessEventCollector(eventPayload());
+  const lifecycle = bindLifecycle(collector, {
+    document: null,
+    window: null,
+    setInterval: null,
+  });
+  await lifecycle.ready;
+  await lifecycle.closeAttempt('navigation', 42);
+  const batch = await collector.outbox.peekBatch();
+  const left = batch.events.find((event) => event.event_type === 'item_left');
+  assert.equal(left.event_version, 2);
+  assert.deepEqual(left.payload, {
+    leave_reason: 'navigation',
+    to_assignment_id: 42,
+  });
 });
 
 test('a retry sends the identical persisted batch body', async () => {
@@ -333,6 +403,7 @@ test('lifecycle capture emits approved events and heartbeat stops after close', 
   documentTarget.hasFocus = () => true;
   const windowTarget = new Target();
   const records = [];
+  const checkpoints = [];
   let intervalCallback;
   let intervalCleared = false;
   let monotonic = 5000;
@@ -340,6 +411,7 @@ test('lifecycle capture emits approved events and heartbeat stops after close', 
     attemptId: 11,
     record: async (eventType, payload) => { records.push({ eventType, payload }); },
     flush: async () => true,
+    checkpoint: async (trigger) => { checkpoints.push(trigger); },
   };
 
   const lifecycle = bindLifecycle(collector, {
@@ -352,15 +424,18 @@ test('lifecycle capture emits approved events and heartbeat stops after close', 
   });
   await lifecycle.ready;
   assert.equal(records[0].eventType, 'item_rendered');
+  assert.deepEqual(
+    records.slice(1, 4).map((item) => item.eventType),
+    ['pageshow', 'document_visible', 'window_focused'],
+  );
 
   documentTarget.visibilityState = 'hidden';
   await documentTarget.dispatch('visibilitychange');
   await windowTarget.dispatch('blur');
   await windowTarget.dispatch('offline');
-  await windowTarget.dispatch('pagehide', { persisted: true });
   assert.deepEqual(
-    records.slice(1, 5).map((item) => item.eventType),
-    ['document_hidden', 'window_blurred', 'network_offline', 'pagehide'],
+    records.slice(4, 7).map((item) => item.eventType),
+    ['document_hidden', 'window_blurred', 'network_offline'],
   );
 
   documentTarget.visibilityState = 'visible';
@@ -377,17 +452,52 @@ test('lifecycle capture emits approved events and heartbeat stops after close', 
     window_focused: true,
     last_device_interaction_age_ms: 1800,
   });
+  assert.ok(checkpoints.includes('heartbeat'));
 
-  await lifecycle.closeAttempt('submit');
+  await windowTarget.dispatch('pagehide', { persisted: true });
   const heartbeatCount = records.filter((item) => item.eventType === 'activity_heartbeat').length;
   await intervalCallback();
   assert.equal(intervalCleared, true);
-  assert.equal(records.at(-1).eventType, 'item_left');
-  assert.equal(records.at(-1).payload.leave_reason, 'submit');
+  const left = records.find((item) => item.eventType === 'item_left');
+  assert.equal(left.payload.leave_reason, 'pagehide');
+  assert.equal(left.payload.to_assignment_id, null);
+  const leftIndex = records.findIndex((item) => item.eventType === 'item_left');
+  const pagehideIndex = records.findIndex((item) => item.eventType === 'pagehide');
+  assert.ok(leftIndex < pagehideIndex);
+  assert.equal(checkpoints.at(-1), 'pagehide');
   assert.equal(
     records.filter((item) => item.eventType === 'activity_heartbeat').length,
     heartbeatCount,
   );
+});
+
+test('successful contiguous ACK emits an ack-progress checkpoint', async () => {
+  const checkpointBodies = [];
+  const collector = new ProcessEventCollector(eventPayload({
+    checkpointEndpoint: '/checkpoint/',
+    fetch: async (url, options) => {
+      const body = JSON.parse(options.body);
+      if (url === '/checkpoint/') {
+        checkpointBodies.push(body);
+        return okResponse({ success: true, checkpoint_id: body.checkpoint_id });
+      }
+      return okResponse({
+        success: true,
+        acknowledgements: body.events.map((event) => ({
+          client_sequence_no: event.client_sequence_no,
+          event_id: INSTANCE_B,
+          server_ingest_sequence_no: event.client_sequence_no,
+        })),
+      });
+    },
+  }));
+  await collector.record('item_rendered', { presentation_state: 'interactive' });
+
+  await collector.flush();
+
+  assert.equal(checkpointBodies.length, 1);
+  assert.equal(checkpointBodies[0].trigger, 'ack_progress');
+  assert.equal(checkpointBodies[0].highest_contiguous_acked_sequence_no, 1);
 });
 
 test('IndexedDB unavailability is explicit in the in-memory fallback quality', async () => {
@@ -397,7 +507,7 @@ test('IndexedDB unavailability is explicit in the in-memory fallback quality', a
   const event = await collector.record('item_rendered', {});
 
   assert.equal(outbox.isFallback, true);
-  assert.ok(event.quality_flags.includes('payload_recovered'));
+  assert.ok(event.quality_flags.includes('persistent_outbox_unavailable'));
 });
 
 test('two-step time synchronization uses one instance and links later events', async () => {
