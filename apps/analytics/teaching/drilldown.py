@@ -430,7 +430,7 @@ def _process_map(generated_at, attempts, submission_by_attempt):
             label = fact_labels[event.event_type]
             if event.event_type == "item_entered":
                 visit_number += 1
-                label = f"{label}（Visit {visit_number}）"
+                label = f"{label}（第 {visit_number} 次进入）"
             fact_step = ProcessStep(
                 generated_at=generated_at,
                 kind=event.event_type,

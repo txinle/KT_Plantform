@@ -443,6 +443,38 @@ class TeacherQuestionDrilldownTests(TransactionTestCase):
             self.assertNotIn(forbidden, html)
 
     @override_settings(CLASS_CENTER_ENABLED=True)
+    def test_process_page_labels_question_visits_in_chinese(self):
+        attempt = self.attempts[("A", "single")]
+        for _ in range(2):
+            append_assessment_event(
+                event_type="item_entered",
+                event_version=1,
+                event_domain="assessment",
+                actor_source="server",
+                session=attempt.session,
+                assignment=attempt.assignment,
+                attempt=attempt,
+                question_snapshot=attempt.assignment.snapshot,
+                item_instance=attempt.assignment.item_instance,
+                payload={
+                    "entry_reason": "navigation_click",
+                    "from_assignment_id": None,
+                },
+            )
+
+        detail = build_attempt_process_detail(
+            self.class_group,
+            experiment_id=self.experiment.pk,
+            question_id=self.single_snapshot.pk,
+            student_id=self.students["A"].pk,
+        )
+        labels = [step.label for step in detail.process.steps]
+
+        self.assertIn("进入题目（第 1 次进入）", labels)
+        self.assertIn("进入题目（第 2 次进入）", labels)
+        self.assertFalse(any("Visit" in label for label in labels))
+
+    @override_settings(CLASS_CENTER_ENABLED=True)
     def test_process_page_hides_navigation_assignment_ids_and_close_reason_codes(self):
         attempt = self.attempts[("A", "single")]
         destination = self.attempts[("A", "multiple")].assignment
