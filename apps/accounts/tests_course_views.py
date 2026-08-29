@@ -317,9 +317,10 @@ class CourseWorkspaceViewTests(TestCase):
             ).exists()
         )
 
-    def test_class_rename_named_route_is_removed(self):
+    def test_removed_class_settings_route_is_not_named(self):
+        removed_route_name = "_".join(("class", "rename"))
         with self.assertRaises(NoReverseMatch):
-            reverse("courses:class_rename", args=[self.course.pk, 1])
+            reverse(f"courses:{removed_route_name}", args=[self.course.pk, 1])
 
     @override_settings(CLASS_CENTER_ENABLED=True)
     def test_class_edit_redirects_to_center_manage_section(self):
@@ -578,6 +579,41 @@ class CourseWorkspaceViewTests(TestCase):
             ).exists()
         )
 
+    @override_settings(CLASS_CENTER_ENABLED=False)
+    def test_class_update_duplicate_keeps_bound_legacy_edit_form(self):
+        ClassGroup.objects.create(
+            course=self.course,
+            name="旧版已有班级",
+            academic_year="2027",
+        )
+        class_group = ClassGroup.objects.create(
+            course=self.course,
+            name="旧版待编辑班级",
+            academic_year="2026",
+        )
+        self.client.force_login(self.owner)
+        payload = {
+            "name": "旧版已有班级",
+            "academic_year": "2027",
+            "is_active": "on",
+            "state_token": self._class_edit_state_token(class_group),
+        }
+
+        response = self.client.post(self._class_update_url(class_group), payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "teacher/course_class_edit.html")
+        self.assertTrue(response.context["form"].is_bound)
+        self.assertContains(response, "同一课程和年级中已存在该班级名称。")
+        class_group.refresh_from_db()
+        self.assertEqual(class_group.name, "旧版待编辑班级")
+        self.assertEqual(class_group.academic_year, "2026")
+        self.assertFalse(
+            AuditLog.objects.filter(
+                action="class.update", object_id=str(class_group.pk)
+            ).exists()
+        )
+
     @override_settings(CLASS_CENTER_ENABLED=True)
     def test_class_update_rejects_a_stale_state_token_in_center_without_overwrite(self):
         class_group = ClassGroup.objects.create(
@@ -796,20 +832,45 @@ class CourseWorkspaceViewTests(TestCase):
             403,
         )
 
-    @override_settings(CLASS_CENTER_ENABLED=False)
     def test_class_update_rejects_an_archived_course(self):
         class_group = ClassGroup.objects.create(course=self.course, name="归档班级")
         self.course.status = Course.Status.ARCHIVED
         self.course.save(update_fields=["status"])
         self.client.force_login(self.owner)
 
-        self.assertEqual(
-            self.client.get(
-                reverse("courses:class_edit", args=[self.course.pk, class_group.pk])
-            ).status_code,
-            403,
+        for class_center_enabled in (False, True):
+            with self.subTest(class_center_enabled=class_center_enabled):
+                with override_settings(
+                    CLASS_CENTER_ENABLED=class_center_enabled
+                ):
+                    self.assertEqual(
+                        self.client.get(
+                            reverse(
+                                "courses:class_edit",
+                                args=[self.course.pk, class_group.pk],
+                            )
+                        ).status_code,
+                        403,
+                    )
+                    response = self.client.post(
+                        self._class_update_url(class_group),
+                        {
+                            "name": "归档后不应修改",
+                            "academic_year": "2027",
+                            "is_active": "on",
+                            "state_token": "invalid",
+                        },
+                    )
+                    self.assertEqual(response.status_code, 403)
+
+        class_group.refresh_from_db()
+        self.assertEqual(class_group.name, "归档班级")
+        self.assertEqual(class_group.academic_year, "")
+        self.assertFalse(
+            AuditLog.objects.filter(
+                action="class.update", object_id=str(class_group.pk)
+            ).exists()
         )
-        self.assertEqual(self.client.post(self._class_update_url(class_group), {}).status_code, 403)
 
     def test_inactive_class_write_endpoints_keep_archived_course_read_only(self):
         class_group = ClassGroup.objects.create(course=self.course, name="停用班级", is_active=False)

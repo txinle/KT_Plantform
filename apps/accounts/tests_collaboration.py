@@ -80,6 +80,14 @@ class CourseCollaborationRefreshTests(TestCase):
         self.assertIn("coursePageDirty", script)
         self.assertIn("window.location.reload()", script)
 
+    def test_base_navigation_drops_removed_route_reference(self):
+        template = (Path(settings.BASE_DIR) / "templates" / "base.html").read_text(
+            encoding="utf-8"
+        )
+        removed_route_name = "_".join(("class", "rename"))
+
+        self.assertNotIn(removed_route_name, template)
+
     def test_stale_course_settings_cannot_overwrite_another_manager(self):
         self.client.force_login(self.collaborator)
         settings_url = reverse("courses:settings", args=[self.course.pk])
