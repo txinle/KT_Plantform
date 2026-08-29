@@ -462,6 +462,134 @@ def class_detail(request, course_pk, class_pk):
     )
 
 
+def _class_drilldown_scope(request, course_pk, class_pk):
+    if not settings.CLASS_CENTER_ENABLED:
+        raise Http404
+    course = get_accessible_course(request.user, course_pk)
+    class_group = get_object_or_404(course.classes, pk=class_pk)
+    return course, class_group
+
+
+@require_GET
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_student_detail(request, course_pk, class_pk, student_pk):
+    course, class_group = _class_drilldown_scope(request, course_pk, class_pk)
+    from apps.analytics.teaching.drilldown import build_student_detail
+
+    try:
+        detail = build_student_detail(class_group, student_id=student_pk)
+    except LookupError as error:
+        raise Http404 from error
+    return render(
+        request,
+        "teacher/course_class_student_detail.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": class_group,
+            "detail": detail,
+        },
+    )
+
+
+@require_GET
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_student_experiment_detail(
+    request,
+    course_pk,
+    class_pk,
+    student_pk,
+    experiment_pk,
+):
+    course, class_group = _class_drilldown_scope(request, course_pk, class_pk)
+    from apps.analytics.teaching.drilldown import build_student_experiment_detail
+
+    try:
+        detail = build_student_experiment_detail(
+            class_group,
+            experiment_id=experiment_pk,
+            student_id=student_pk,
+        )
+    except LookupError as error:
+        raise Http404 from error
+    return render(
+        request,
+        "teacher/course_class_student_experiment_detail.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": class_group,
+            "detail": detail,
+        },
+    )
+
+
+@require_GET
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_question_detail(
+    request,
+    course_pk,
+    class_pk,
+    experiment_pk,
+    question_pk,
+):
+    course, class_group = _class_drilldown_scope(request, course_pk, class_pk)
+    from apps.analytics.teaching.drilldown import build_question_detail
+
+    try:
+        detail = build_question_detail(
+            class_group,
+            experiment_id=experiment_pk,
+            question_id=question_pk,
+        )
+    except LookupError as error:
+        raise Http404 from error
+    return render(
+        request,
+        "teacher/course_class_question_detail.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": class_group,
+            "detail": detail,
+        },
+    )
+
+
+@require_GET
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_question_process(
+    request,
+    course_pk,
+    class_pk,
+    experiment_pk,
+    question_pk,
+    student_pk,
+):
+    course, class_group = _class_drilldown_scope(request, course_pk, class_pk)
+    from apps.analytics.teaching.drilldown import build_attempt_process_detail
+
+    try:
+        detail = build_attempt_process_detail(
+            class_group,
+            experiment_id=experiment_pk,
+            question_id=question_pk,
+            student_id=student_pk,
+        )
+    except LookupError as error:
+        raise Http404 from error
+    return render(
+        request,
+        "teacher/course_class_attempt_process.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": class_group,
+            "detail": detail,
+        },
+    )
+
+
 @require_GET
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def student_import_template(request, course_pk, class_pk):

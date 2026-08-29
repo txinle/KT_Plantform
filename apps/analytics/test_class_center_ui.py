@@ -160,7 +160,7 @@ class ClassCenterUIContractTests(TransactionTestCase):
         ):
             self.assertNotIn(forbidden, html)
 
-    def test_single_experiment_student_page_exposes_rank_without_phase_two_links(self):
+    def test_single_experiment_student_page_exposes_rank_and_phase_two_student_link(self):
         response = self.client.get(
             self.url,
             {
@@ -181,5 +181,8 @@ class ClassCenterUIContractTests(TransactionTestCase):
         self.assertContains(response, "class-center-student-cards", html=False)
         self.assertContains(response, "当前实验排名")
         self.assertContains(response, "1 / 1")
-        self.assertNotIn(f"/students/{self.student.pk}/", html)
-        self.assertNotIn("单题详情", html)
+        student_url = reverse(
+            "courses:class_student_detail",
+            args=[self.course.pk, self.class_group.pk, self.student.pk],
+        )
+        self.assertIn(student_url, html)

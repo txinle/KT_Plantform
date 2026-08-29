@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from decimal import Decimal
 from math import ceil
 
@@ -21,6 +21,7 @@ from .contracts import (
     ClassOverview,
     DistributionBin,
     ExperimentOption,
+    ExperimentParticipantRow,
     ExperimentSummaryRow,
     KCRateRow,
     MetricValue,
@@ -169,19 +170,25 @@ def build_class_center_snapshot(
             (task.release_snapshot_id, task.class_snapshot_id): task for task in tasks
         }
         version_ids = {task.release_snapshot_id for task in tasks}
-        eligible_pairs = {
-            (participant.version_id, participant.student_id)
+        participant_records = tuple(
+            participant
             for participant in ExperimentVersionParticipantSnapshot.objects.filter(
                 version_id__in=version_ids,
-                student_id__in=roster_ids,
-            ).only("version_id", "student_id", "class_snapshot_id")
+            ).select_related("student")
             if (participant.version_id, participant.class_snapshot_id) in task_by_pair
+        )
+        eligible_pairs = {
+            (participant.version_id, participant.student_id)
+            for participant in participant_records
+        }
+        eligible_student_ids = {
+            participant.student_id for participant in participant_records
         }
         sessions = [
             session
             for session in ExperimentSession.objects.filter(
                 version_id__in=version_ids,
-                student_id__in=roster_ids,
+                student_id__in=eligible_student_ids,
             ).only("id", "version_id", "student_id", "class_snapshot_id", "status")
             if (session.version_id, session.class_snapshot_id) in task_by_pair
             and (session.version_id, session.student_id) in eligible_pairs
@@ -384,9 +391,8 @@ def build_class_center_snapshot(
 
         all_evaluated = [
             grade
-            for grade, _attempt in (
-                item for values in grades_by_student.values() for item in values
-            )
+            for student_id in roster_ids
+            for grade, _attempt in grades_by_student[student_id]
             if grade.is_correct is not None
         ]
         total_correct = sum(grade.is_correct is True for grade in all_evaluated)
@@ -484,6 +490,91 @@ def build_class_center_snapshot(
                     ),
                 )
             )
+
+        experiment_participants = []
+        if experiment_id is not None and tasks:
+            selected_version_id = tasks[0].release_snapshot_id
+            selected_participants = tuple(
+                participant
+                for participant in participant_records
+                if participant.version_id == selected_version_id
+            )
+            participant_rank_values = []
+            participant_score_pairs = {}
+            participant_assigned_counts = Counter()
+            for attempt in valid_attempts.values():
+                session = session_by_id[attempt.session_id]
+                if session.version_id == selected_version_id:
+                    participant_assigned_counts[session.student_id] += 1
+            for participant in selected_participants:
+                score_pairs = [
+                    (grade.score, grade.max_score)
+                    for grade, _attempt in grades_by_student[participant.student_id]
+                    if grade.score is not None and grade.max_score is not None
+                ]
+                participant_score_pairs[participant.student_id] = score_pairs
+                maximum = sum(
+                    (max_score for _score, max_score in score_pairs), Decimal("0")
+                )
+                comparable = (
+                    participant_assigned_counts[participant.student_id] > 0
+                    and len(score_pairs)
+                    == participant_assigned_counts[participant.student_id]
+                    and maximum > 0
+                )
+                participant_rank_values.append(
+                    (
+                        participant.student_id,
+                        (
+                            sum((score for score, _maximum in score_pairs), Decimal("0"))
+                            / maximum
+                            if comparable
+                            else None
+                        ),
+                        participant.student.student_number
+                        or participant.student.username,
+                    )
+                )
+            participant_ranks = competition_ranks(participant_rank_values)
+            for participant in selected_participants:
+                student = participant.student
+                evaluated = [
+                    grade
+                    for grade, _attempt in grades_by_student[student.pk]
+                    if grade.is_correct is not None
+                ]
+                correct_count = sum(grade.is_correct is True for grade in evaluated)
+                score_pairs = participant_score_pairs[student.pk]
+                experiment_participants.append(
+                    ExperimentParticipantRow(
+                        generated_at=generated_at,
+                        student_id=student.pk,
+                        student_number=student.student_number or student.username,
+                        display_name=student.shown_name,
+                        is_current_member=student.pk in roster_ids,
+                        participated=bool(session_versions_by_student[student.pk]),
+                        completed=(
+                            selected_version_id
+                            in completed_versions_by_student[student.pk]
+                        ),
+                        correct_rate=_metric(
+                            generated_at, correct_count, len(evaluated)
+                        ),
+                        score_rate=_metric(
+                            generated_at,
+                            sum(
+                                (score for score, _maximum in score_pairs),
+                                Decimal("0"),
+                            ),
+                            sum(
+                                (maximum for _score, maximum in score_pairs),
+                                Decimal("0"),
+                            ),
+                        ),
+                        rank=participant_ranks.get(student.pk),
+                        rank_sample_size=len(participant_ranks),
+                    )
+                )
 
         question_rows = []
         if experiment_id is not None and tasks:
@@ -583,6 +674,7 @@ def build_class_center_snapshot(
                 for task in all_tasks
             ),
             experiment_rows=tuple(experiment_rows),
+            experiment_participants=tuple(experiment_participants),
             students=StudentPage(
                 generated_at=generated_at,
                 items=student_rows,

@@ -145,6 +145,21 @@ class ExperimentOption:
 
 
 @dataclass(frozen=True)
+class ExperimentParticipantRow:
+    generated_at: datetime
+    student_id: int
+    student_number: str
+    display_name: str
+    is_current_member: bool
+    participated: bool
+    completed: bool
+    correct_rate: MetricValue
+    score_rate: MetricValue
+    rank: int | None
+    rank_sample_size: int
+
+
+@dataclass(frozen=True)
 class StudentSummaryRow:
     generated_at: datetime
     student_id: int
@@ -216,5 +231,6 @@ class ClassCenterSnapshot:
     kc_rows: tuple[KCRateRow, ...]
     experiment_options: tuple[ExperimentOption, ...]
     experiment_rows: tuple[ExperimentSummaryRow, ...]
+    experiment_participants: tuple[ExperimentParticipantRow, ...]
     students: StudentPage
     question_rows: tuple[QuestionSummaryRow, ...]

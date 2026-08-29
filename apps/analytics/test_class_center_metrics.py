@@ -318,6 +318,29 @@ class ClassCenterMetricContractTests(TransactionTestCase):
         self.assertEqual(archived.overview.participated_count, 0)
         self.assertEqual(archived.overview.correct_rate.state, DataState.NO_DATA)
 
+    def test_selected_experiment_keeps_historical_frozen_participant_outside_current_roster_metrics(self):
+        CourseEnrollment.objects.filter(
+            course=self.course,
+            student=self.student_b,
+        ).update(is_active=False)
+
+        snapshot = build_class_center_snapshot(
+            self.class_group,
+            experiment_id=self.experiment.pk,
+        )
+
+        self.assertEqual(snapshot.overview.roster_count, 2)
+        self.assertEqual(snapshot.overview.participated_count, 1)
+        self.assertEqual(snapshot.students.total_count, 2)
+        self.assertEqual(snapshot.experiment_rows[0].eligible_count, 3)
+        self.assertEqual(snapshot.experiment_rows[0].participated_count, 2)
+        self.assertEqual(snapshot.question_rows[0].answer_count, 2)
+        participants = {
+            row.student_number: row for row in snapshot.experiment_participants
+        }
+        self.assertEqual(set(participants), {"METRIC-A", "METRIC-B", "METRIC-C"})
+        self.assertFalse(participants["METRIC-B"].is_current_member)
+
     def test_dtos_are_frozen_and_share_one_generated_at(self):
         snapshot = build_class_center_snapshot(self.class_group)
 

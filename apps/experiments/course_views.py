@@ -1,5 +1,6 @@
 from urllib.parse import quote
 
+from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -19,7 +20,7 @@ from apps.analytics.export_fields import FIELD_GROUPS
 from apps.assessment.models import ExperimentSession, StudentQuestionAssignment
 
 from .forms import ExperimentForm, ParticipantRuleForm
-from .models import Experiment
+from .models import ClassExperimentTask, Experiment
 from .presentation import build_session_report_presentation
 from .session_report import build_session_report_document
 from .services import (
@@ -372,6 +373,28 @@ def experiment_results(request, course_pk, pk):
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def experiment_session_detail(request, course_pk, pk, session_pk):
+    if settings.CLASS_CENTER_ENABLED:
+        course = get_accessible_course(request.user, course_pk)
+        experiment = get_object_or_404(course.experiments, pk=pk)
+        session = get_object_or_404(
+            ExperimentSession.objects.select_related("class_snapshot"),
+            pk=session_pk,
+            version__experiment=experiment,
+        )
+        task = ClassExperimentTask.objects.filter(
+            class_group__course=course,
+            experiment=experiment,
+            release_snapshot=session.version,
+            class_snapshot=session.class_snapshot,
+        ).select_related("class_group").first()
+        if task is not None:
+            return redirect(
+                "courses:class_student_experiment_detail",
+                course.pk,
+                task.class_group_id,
+                session.student_id,
+                experiment.pk,
+            )
     course, experiment, session, report = _session_report_scope(
         request,
         course_pk,
