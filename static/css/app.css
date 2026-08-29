@@ -807,6 +807,15 @@ textarea.form-control { min-height: 7rem; }
 .teacher-process-timeline time { color: var(--kt-muted); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
 .teacher-process-timeline div { display: grid; gap: .2rem; min-width: 0; }
 .teacher-process-timeline span, .final-answer-panel { overflow-wrap: anywhere; white-space: normal; }
+.visibility-setting-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+.visibility-setting-grid > div { min-width: 0; padding: var(--space-4); border: 1px solid var(--kt-border); border-radius: var(--radius-control); background: var(--kt-surface); }
+.visibility-setting-grid .form-help { margin: var(--space-2) 0 0 1.45rem; }
+.student-course-nav { display: flex; margin: calc(-1 * var(--space-3)) 0 var(--space-5); border-bottom: 1px solid var(--kt-border); }
+.student-course-nav-link { min-width: 8rem; padding: .75rem 1rem; border-bottom: .2rem solid transparent; color: var(--kt-muted); font-size: var(--font-size-sm); font-weight: var(--weight-semibold); text-align: center; text-decoration: none; }
+.student-course-nav-link:hover { color: var(--kt-brand-900); background: var(--kt-surface-subtle); }
+.student-course-nav-link.active { border-bottom-color: var(--kt-brand-700); color: var(--kt-brand-900); }
+.student-learning-facts, .student-question-facts { grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
+.table-secondary-value { display: block; margin-top: .25rem; color: var(--kt-muted); font-size: var(--font-size-xs); font-weight: var(--weight-medium); white-space: normal; }
 
 @media (max-width: 991.98px) {
   .class-center-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -836,6 +845,7 @@ textarea.form-control { min-height: 7rem; }
   .kc-comparison-row { grid-template-columns: minmax(0, 1fr); }
   .transition-grid, .timing-quality-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .teacher-process-timeline li { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+  .visibility-setting-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 575.98px) {
@@ -843,4 +853,5 @@ textarea.form-control { min-height: 7rem; }
   .process-facts .data-fact + .data-fact { border-top: 1px solid var(--kt-border); border-left: 0; }
   .kc-comparison-row dl { grid-template-columns: minmax(0, 1fr); }
   .transition-grid, .timing-quality-grid { grid-template-columns: minmax(0, 1fr); }
+  .student-course-nav-link { min-width: 0; flex: 1 1 0; }
 }

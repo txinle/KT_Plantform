@@ -4,7 +4,7 @@
 {% block content %}
 <header class="page-header class-center-header">
   <div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">{{ class_group.name }}</h1><p class="page-subtitle">查看班级学习事实、定位未参与学生，并回到独立的成员管理工作区。</p><div class="d-flex flex-wrap gap-2 mt-3"><span class="status-badge {% if class_group.is_active %}status-success{% else %}status-neutral{% endif %}">{% if class_group.is_active %}班级可用{% else %}班级停用{% endif %}</span><span class="cell-meta">年级：{{ class_group.academic_year|default:'未设置' }}</span></div></div>
-  {% if active_section == 'manage' and course.status == 'active' %}<div class="page-actions">{% if class_group.is_active %}<a class="btn btn-primary" href="{% url 'courses:student_add' course.pk class_group.pk %}">导入学生</a>{% endif %}<a class="btn btn-outline-secondary" href="{% url 'courses:class_edit' course.pk class_group.pk %}">编辑班级</a></div>{% endif %}
+  <div class="page-actions"><a class="btn btn-outline-primary" href="{% url 'courses:class_student_visibility' course.pk class_group.pk %}">学生端显示设置</a>{% if active_section == 'manage' and course.status == 'active' %}{% if class_group.is_active %}<a class="btn btn-primary" href="{% url 'courses:student_add' course.pk class_group.pk %}">导入学生</a>{% endif %}<a class="btn btn-outline-secondary" href="{% url 'courses:class_edit' course.pk class_group.pk %}">编辑班级</a>{% endif %}</div>
 </header>
 
 <nav class="class-center-nav" aria-label="班级中心页面">

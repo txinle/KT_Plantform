@@ -1,11 +1,12 @@
 import json
+from django.conf import settings
 from django.contrib import messages
-from django.core.exceptions import ValidationError
-from django.http import JsonResponse
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.dateparse import parse_datetime
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
 from apps.accounts.permissions import role_required
 from apps.accounts.models import Course, CourseEnrollment
 from apps.experiments.models import Experiment
@@ -118,7 +119,126 @@ def course_dashboard(request, course_id):
     return render(
         request,
         "student/course.html",
-        {"enrollment": enrollment, "course": enrollment.course, "experiment_cards": cards},
+        {
+            "enrollment": enrollment,
+            "course": enrollment.course,
+            "experiment_cards": cards,
+            "student_learning_enabled": settings.STUDENT_LEARNING_ANALYTICS_ENABLED,
+            "student_course_section": "experiments",
+        },
+    )
+
+
+def _student_learning_enrollment(request, course_id):
+    if not settings.STUDENT_LEARNING_ANALYTICS_ENABLED:
+        raise Http404
+    return get_object_or_404(
+        CourseEnrollment.objects.select_related("course", "class_group"),
+        course_id=course_id,
+        student=request.user,
+        is_active=True,
+    )
+
+
+def _student_learning_forbidden(request, enrollment, message):
+    return render(
+        request,
+        "student/learning_forbidden.html",
+        {
+            "course": enrollment.course,
+            "enrollment": enrollment,
+            "message": message,
+            "student_learning_enabled": True,
+            "student_course_section": "learning",
+        },
+        status=403,
+    )
+
+
+@require_GET
+@role_required("student")
+def student_learning(request, course_id):
+    enrollment = _student_learning_enrollment(request, course_id)
+    from apps.analytics.teaching.student_projection import (
+        build_student_learning_projection,
+    )
+
+    try:
+        learning = build_student_learning_projection(enrollment)
+    except LookupError as error:
+        raise Http404 from error
+    return render(
+        request,
+        "student/learning.html",
+        {
+            "course": enrollment.course,
+            "enrollment": enrollment,
+            "learning": learning,
+            "student_learning_enabled": True,
+            "student_course_section": "learning",
+        },
+    )
+
+
+@require_GET
+@role_required("student")
+def student_learning_experiment(request, course_id, experiment_id):
+    enrollment = _student_learning_enrollment(request, course_id)
+    from apps.analytics.teaching.student_projection import (
+        build_student_experiment_projection,
+    )
+
+    try:
+        detail = build_student_experiment_projection(
+            enrollment,
+            experiment_id=experiment_id,
+            require_results=True,
+        )
+    except PermissionDenied as error:
+        return _student_learning_forbidden(request, enrollment, str(error))
+    except LookupError as error:
+        raise Http404 from error
+    return render(
+        request,
+        "student/learning_experiment.html",
+        {
+            "course": enrollment.course,
+            "enrollment": enrollment,
+            "detail": detail,
+            "student_learning_enabled": True,
+            "student_course_section": "learning",
+        },
+    )
+
+
+@require_GET
+@role_required("student")
+def student_learning_question(request, course_id, experiment_id, question_id):
+    enrollment = _student_learning_enrollment(request, course_id)
+    from apps.analytics.teaching.student_projection import (
+        build_student_question_projection,
+    )
+
+    try:
+        detail = build_student_question_projection(
+            enrollment,
+            experiment_id=experiment_id,
+            question_id=question_id,
+        )
+    except PermissionDenied as error:
+        return _student_learning_forbidden(request, enrollment, str(error))
+    except LookupError as error:
+        raise Http404 from error
+    return render(
+        request,
+        "student/learning_question.html",
+        {
+            "course": enrollment.course,
+            "enrollment": enrollment,
+            "detail": detail,
+            "student_learning_enabled": True,
+            "student_course_section": "learning",
+        },
     )
 
 

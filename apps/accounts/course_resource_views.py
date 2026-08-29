@@ -7,7 +7,7 @@ from django.db.models import Q
 from django.http import Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 from urllib.parse import quote
 from urllib.parse import urlencode
 
@@ -30,6 +30,7 @@ from .forms import (
     ClassGroupForm,
     ClassGroupRenameForm,
     ClassGroupUpdateForm,
+    ClassStudentAnalyticsPolicyForm,
     ManualStudentEnrollmentForm,
     PasswordResetForm,
     StudentBatchUploadForm,
@@ -38,6 +39,7 @@ from .forms import (
 )
 from .models import ClassGroup, ClassStudentAnalyticsPolicy, CourseEnrollment, User
 from .permissions import role_required
+from .student_analytics_policy import update_class_student_analytics_policy
 from .student_import import (
     ParsedStudent,
     StudentImportError,
@@ -468,6 +470,52 @@ def _class_drilldown_scope(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     class_group = get_object_or_404(course.classes, pk=class_pk)
     return course, class_group
+
+
+@require_http_methods(["GET", "POST"])
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_student_visibility(request, course_pk, class_pk):
+    course, class_group = _class_drilldown_scope(request, course_pk, class_pk)
+    policy = get_object_or_404(
+        ClassStudentAnalyticsPolicy,
+        class_group=class_group,
+    )
+    if request.method == "POST":
+        form = ClassStudentAnalyticsPolicyForm(request.POST)
+        if form.is_valid():
+            policy = update_class_student_analytics_policy(
+                class_group=class_group,
+                actor=request.user,
+                changes=form.cleaned_data,
+            )
+            messages.success(request, "学生端显示设置已更新。")
+            return redirect(
+                "courses:class_student_visibility",
+                course.pk,
+                class_group.pk,
+            )
+        response_status = 400
+    else:
+        form = ClassStudentAnalyticsPolicyForm(
+            initial=ClassStudentAnalyticsPolicyForm.initial_from_policy(policy)
+        )
+        response_status = 200
+    if course.status == course.Status.ARCHIVED:
+        for field in form.fields.values():
+            field.disabled = True
+    return render(
+        request,
+        "teacher/course_class_student_visibility.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": class_group,
+            "policy": policy,
+            "form": form,
+            "is_read_only": course.status == course.Status.ARCHIVED,
+        },
+        status=response_status,
+    )
 
 
 @require_GET

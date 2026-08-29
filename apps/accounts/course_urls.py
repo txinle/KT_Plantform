@@ -47,6 +47,7 @@ urlpatterns = [
     path("<int:course_pk>/concepts/search/", bank_views.concept_search, name="concept_search"),
     path("<int:course_pk>/classes/", course_resource_views.class_list, name="classes"),
     path("<int:course_pk>/classes/<int:class_pk>/", course_resource_views.class_detail, name="class_detail"),
+    path("<int:course_pk>/classes/<int:class_pk>/student-visibility/", course_resource_views.class_student_visibility, name="class_student_visibility"),
     path("<int:course_pk>/classes/<int:class_pk>/students/<int:student_pk>/analysis/", course_resource_views.class_student_detail, name="class_student_detail"),
     path("<int:course_pk>/classes/<int:class_pk>/students/<int:student_pk>/experiments/<int:experiment_pk>/", course_resource_views.class_student_experiment_detail, name="class_student_experiment_detail"),
     path("<int:course_pk>/classes/<int:class_pk>/experiments/<int:experiment_pk>/questions/<int:question_pk>/", course_resource_views.class_question_detail, name="class_question_detail"),

@@ -5,11 +5,45 @@ from django.core import signing
 from django.db import transaction
 from django.utils.crypto import constant_time_compare
 
-from .models import ClassGroup, Course, CourseTeacher, User
+from .models import (
+    ClassGroup,
+    ClassStudentAnalyticsPolicy,
+    Course,
+    CourseTeacher,
+    User,
+)
 
 
 CLASS_GROUP_STATE_TOKEN_SALT = "accounts.class_group_state"
 COURSE_SETTINGS_STATE_TOKEN_SALT = "accounts.course_settings_state"
+
+
+class ClassStudentAnalyticsPolicyForm(forms.Form):
+    show_scores = forms.BooleanField(label="显示实验成绩", required=False)
+    show_correct_rate = forms.BooleanField(label="显示正确率", required=False)
+    show_item_results = forms.BooleanField(label="显示逐题结果", required=False)
+    show_class_average = forms.BooleanField(label="显示班级平均", required=False)
+    rank_mode = forms.ChoiceField(
+        label="排名显示方式",
+        choices=ClassStudentAnalyticsPolicy.RankMode.choices,
+    )
+    show_kc_rates = forms.BooleanField(label="显示知识点正确率", required=False)
+    show_trend = forms.BooleanField(label="显示个人趋势", required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field_name, field in self.fields.items():
+            if field_name == "rank_mode":
+                field.widget.attrs["class"] = "form-select"
+            else:
+                field.widget.attrs["class"] = "form-check-input"
+
+    @classmethod
+    def initial_from_policy(cls, policy):
+        return {
+            field_name: getattr(policy, field_name)
+            for field_name in cls.base_fields
+        }
 
 
 def _class_group_state_digest(class_group):
