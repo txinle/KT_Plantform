@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from decimal import Decimal
 from math import ceil
+from typing import NamedTuple
 
 from django.db.models import Q
 
@@ -52,6 +53,23 @@ _STUDENT_SORTS = {
     "rank",
 }
 _STUDENT_STATUSES = {"completed", "in_progress", "not_participated"}
+
+
+class _AttemptFact(NamedTuple):
+    id: int
+    session_id: int
+    first_to_submit_duration_ms: int | None
+    snapshot_id: int
+    snapshot_version_id: int
+    snapshot_primary_kc: str
+    snapshot_all_kcs: list
+
+
+class _GradeFact(NamedTuple):
+    attempt_id: int
+    is_correct: bool | None
+    score: Decimal | None
+    max_score: Decimal | None
 
 
 def _metric(generated_at, numerator, denominator, *, sample_size=None):
@@ -196,42 +214,44 @@ def build_class_center_snapshot(
         ]
         session_by_id = {session.pk: session for session in sessions}
         session_ids = tuple(session_by_id)
-        attempts = list(
+        attempts = tuple(
+            _AttemptFact(*row)
+            for row in
             Attempt.objects.filter(session_id__in=session_ids)
-            .select_related("assignment__snapshot")
-            .only(
+            .values_list(
                 "id",
                 "session_id",
-                "status",
                 "first_to_submit_duration_ms",
                 "assignment__snapshot_id",
                 "assignment__snapshot__version_id",
-                "assignment__snapshot__code",
-                "assignment__snapshot__text",
                 "assignment__snapshot__primary_kc",
                 "assignment__snapshot__all_kcs",
             )
         )
         valid_attempts = {
-            attempt.pk: attempt
+            attempt.id: attempt
             for attempt in attempts
-            if attempt.assignment.snapshot.version_id
-            == session_by_id[attempt.session_id].version_id
+            if attempt.snapshot_version_id == session_by_id[attempt.session_id].version_id
         }
         submitted_attempt_ids = set(
             SubmissionEvent.objects.filter(attempt_id__in=valid_attempts).values_list(
                 "attempt_id", flat=True
             )
         )
-        grades = [
-            grade
-            for grade in GradeRecord.objects.filter(
+        grades = tuple(
+            _GradeFact(*row)
+            for row in GradeRecord.objects.filter(
                 submission__attempt_id__in=valid_attempts,
                 status=GradeRecord.Status.COMPLETED,
                 validity_status=GradeRecord.ValidityStatus.EFFECTIVE,
-            ).select_related("submission__attempt")
-            if grade.submission.attempt_id in valid_attempts
-        ]
+            ).values_list(
+                "submission__attempt_id",
+                "is_correct",
+                "score",
+                "max_score",
+            )
+            if row[0] in valid_attempts
+        )
 
         sessions_by_student = defaultdict(list)
         completed_versions_by_student = defaultdict(set)
@@ -255,13 +275,18 @@ def build_class_center_snapshot(
             session = session_by_id[attempt.session_id]
             submitted_attempts_by_student[session.student_id].append(attempt)
         for grade in grades:
-            attempt = valid_attempts[grade.submission.attempt_id]
+            attempt = valid_attempts[grade.attempt_id]
             session = session_by_id[attempt.session_id]
             grades_by_student[session.student_id].append((grade, attempt))
             grades_by_version[session.version_id].append((grade, attempt, session))
-            grades_by_snapshot[attempt.assignment.snapshot_id].append(
+            grades_by_snapshot[attempt.snapshot_id].append(
                 (grade, attempt, session)
             )
+
+        assigned_counts_by_student = Counter(
+            session_by_id[attempt.session_id].student_id
+            for attempt in valid_attempts.values()
+        )
 
         student_values = []
         for enrollment in roster:
@@ -285,11 +310,7 @@ def build_class_center_snapshot(
             ]
             eligible_versions = eligible_versions_by_student[student.pk]
             completed_versions = completed_versions_by_student[student.pk]
-            assigned_count = sum(
-                1
-                for attempt in valid_attempts.values()
-                if session_by_id[attempt.session_id].student_id == student.pk
-            )
+            assigned_count = assigned_counts_by_student[student.pk]
             rank_ratio = None
             if (
                 experiment_id is not None
@@ -416,9 +437,12 @@ def build_class_center_snapshot(
 
         kc_counts = defaultdict(lambda: [0, 0])
         for grade in all_evaluated:
-            attempt = valid_attempts[grade.submission.attempt_id]
-            question = attempt.assignment.snapshot
-            kcs = tuple(dict.fromkeys(question.all_kcs or [question.primary_kc]))
+            attempt = valid_attempts[grade.attempt_id]
+            kcs = tuple(
+                dict.fromkeys(
+                    attempt.snapshot_all_kcs or [attempt.snapshot_primary_kc]
+                )
+            )
             for kc in (kc for kc in kcs if kc):
                 kc_counts[kc][1] += 1
                 kc_counts[kc][0] += grade.is_correct is True
@@ -586,8 +610,8 @@ def build_class_center_snapshot(
                 question_submissions = [
                     (attempt, session_by_id[attempt.session_id])
                     for attempt in valid_attempts.values()
-                    if attempt.pk in submitted_attempt_ids
-                    and attempt.assignment.snapshot_id == question.pk
+                    if attempt.id in submitted_attempt_ids
+                    and attempt.snapshot_id == question.pk
                 ]
                 evaluated = [
                     (grade, attempt, session)

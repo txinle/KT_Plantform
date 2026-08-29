@@ -37,6 +37,10 @@
 - 从其他课程班级复制时只复制有效 `CourseEnrollment`；目标课程已有选课的学生被跳过，不复制账号、不改密码、不自动转班。
 - `ExperimentClassSnapshot.class_snapshot_id`：实验版本发布/分配时冻结的班级身份，是单版本研究范围的精确班级筛选真值；班级名称只作展示，后续改名不回写快照。普通 `TeachingScope.class_id` 通过 `source_class_group_id` 与一个或多个冻结快照取交集，不按名称匹配。
 - `ExperimentVersionParticipantSnapshot`：把参与者与不可变班级快照绑定。旧的 `class_snapshot_name` 仅保留为兼容展示投影，不能作为科研范围筛选键。
+- `ClassExperimentTask`：一次“班级 × 实验”的永久教学任务，唯一关联 `class_group`、`experiment`、不可变发布快照、班级快照和发布时间。同班同实验不能建立第二个任务；任务建立后，关联课程和快照关系不可改写或删除。
+- `ClassStudentAnalyticsPolicy`：每班一条学生可见性策略。字段只控制学生自己的成绩、正确率、逐题结果、班级平均、本人位次、KC 和趋势；教师权限、研究数据与原始事实不受其影响。
+
+班级中心的“总体正确率”是 response-level micro-average：有效且 `is_correct` 非空的完成评分中，正确记录数除以全部可评记录数。学生端“班级平均正确率”是 student-level macro-average：先计算各可比较学生的个人正确率，再等权平均。`numerator/denominator` 始终表示指标观测计数；`sample_size` 只表示进入比较统计的独立学生人数，二者不得互换。
 
 ## 稳定研究对象标识
 

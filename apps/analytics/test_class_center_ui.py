@@ -49,33 +49,33 @@ class ClassCenterUIContractTests(TransactionTestCase):
             class_group=self.class_group,
             student=self.student,
         )
-        bank = QuestionBank.objects.create(
+        self.bank = QuestionBank.objects.create(
             course=self.course,
             created_by=self.teacher,
             name="界面测试题库",
         )
         concept = Concept.objects.create(course=self.course, name="界面 KC")
-        question = Question.objects.create(
-            bank=bank,
+        self.question = Question.objects.create(
+            bank=self.bank,
             sequence=1,
             question_type=Question.Type.SHORT,
             text="界面统计题",
             correct_answer="正确",
         )
         QuestionConcept.objects.create(
-            question=question,
+            question=self.question,
             concept=concept,
             is_primary=True,
         )
         self.experiment = Experiment.objects.create(
             course=self.course,
             created_by=self.teacher,
-            question_bank=bank,
+            question_bank=self.bank,
             name="界面诊断实验",
         )
         ExperimentQuestion.objects.create(
             experiment=self.experiment,
-            question=question,
+            question=self.question,
             display_order=1,
         )
         save_participant_rules(self.experiment, [self.class_group], [], [])
@@ -126,6 +126,98 @@ class ClassCenterUIContractTests(TransactionTestCase):
             args=[self.course.pk, self.class_group.pk],
         )
         self.client.force_login(self.teacher)
+
+    def test_legacy_teaching_page_redirects_to_class_center_or_class_list(self):
+        teaching_url = reverse("courses:data_teaching", args=[self.course.pk])
+
+        without_scope = self.client.get(teaching_url)
+        with_scope = self.client.get(
+            teaching_url,
+            {
+                "experiment_id": self.experiment.pk,
+                "class_id": self.class_group.pk,
+            },
+        )
+
+        self.assertRedirects(
+            without_scope,
+            reverse("courses:classes", args=[self.course.pk]),
+        )
+        self.assertRedirects(
+            with_scope,
+            (
+                reverse(
+                    "courses:class_detail",
+                    args=[self.course.pk, self.class_group.pk],
+                )
+                + f"?section=experiments&experiment_id={self.experiment.pk}"
+            ),
+        )
+
+    def test_legacy_experiment_results_redirects_single_task_and_selects_multiple(self):
+        result_url = reverse(
+            "courses:experiment_results",
+            args=[self.course.pk, self.experiment.pk],
+        )
+        single = self.client.get(result_url)
+        self.assertRedirects(
+            single,
+            (
+                reverse(
+                    "courses:class_detail",
+                    args=[self.course.pk, self.class_group.pk],
+                )
+                + f"?section=experiments&experiment_id={self.experiment.pk}"
+            ),
+        )
+
+        second_class = ClassGroup.objects.create(
+            course=self.course,
+            name="第二界面班",
+            academic_year="2026",
+        )
+        second_student = User.objects.create_user(
+            username="UI-S002",
+            student_number="UI-S002",
+            role=User.Role.STUDENT,
+        )
+        CourseEnrollment.objects.create(
+            course=self.course,
+            class_group=second_class,
+            student=second_student,
+        )
+        multi_experiment = Experiment.objects.create(
+            course=self.course,
+            created_by=self.teacher,
+            question_bank=self.bank,
+            name="双班任务实验",
+        )
+        ExperimentQuestion.objects.create(
+            experiment=multi_experiment,
+            question=self.question,
+            display_order=1,
+        )
+        save_participant_rules(
+            multi_experiment,
+            [self.class_group, second_class],
+            [],
+            [],
+        )
+        publish_experiment(multi_experiment, self.teacher)
+
+        multiple = self.client.get(
+            reverse(
+                "courses:experiment_results",
+                args=[self.course.pk, multi_experiment.pk],
+            )
+        )
+        self.assertEqual(multiple.status_code, 200)
+        self.assertTemplateUsed(
+            multiple,
+            "teacher/course_experiment_class_tasks.html",
+        )
+        self.assertContains(multiple, self.class_group.name)
+        self.assertContains(multiple, second_class.name)
 
     def test_overview_uses_accessible_fact_graphics_and_frozen_metric_language(self):
         response = self.client.get(self.url)

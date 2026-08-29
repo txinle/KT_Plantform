@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import SuspiciousOperation
 from django.db import transaction
@@ -640,6 +641,17 @@ def _teaching_rows(scope):
 def course_data_teaching(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
     scope = _teaching_scope_from_request(request, course)
+    if settings.CLASS_CENTER_ENABLED:
+        if scope.class_id is None:
+            return redirect("courses:classes", course.pk)
+        target = reverse(
+            "courses:class_detail",
+            args=[course.pk, scope.class_id],
+        )
+        query = "section=overview"
+        if scope.experiment_id is not None:
+            query = f"section=experiments&experiment_id={scope.experiment_id}"
+        return redirect(f"{target}?{query}")
     if not scope.is_complete:
         return _render_data_center(
             request,

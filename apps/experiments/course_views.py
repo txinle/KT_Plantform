@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from apps.accounts.course_access import (
@@ -347,6 +348,38 @@ def experiment_delete(request, course_pk, pk):
 def experiment_results(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     experiment = _experiment(course, pk)
+    if settings.CLASS_CENTER_ENABLED:
+        tasks = tuple(
+            ClassExperimentTask.objects.filter(
+                experiment=experiment,
+                class_group__course=course,
+            )
+            .select_related("class_group", "class_snapshot")
+            .order_by("class_group__academic_year", "class_group__name", "pk")
+        )
+        analysis_available = experiment.status in {
+            Experiment.Status.PUBLISHED,
+            Experiment.Status.CLOSED,
+        }
+        if analysis_available and len(tasks) == 1:
+            task = tasks[0]
+            target = reverse(
+                "courses:class_detail",
+                args=[course.pk, task.class_group_id],
+            )
+            return redirect(
+                f"{target}?section=experiments&experiment_id={experiment.pk}"
+            )
+        return render(
+            request,
+            "teacher/course_experiment_class_tasks.html",
+            {
+                "course": course,
+                "current_course": course,
+                "experiment": experiment,
+                "tasks": tasks if analysis_available else (),
+            },
+        )
     latest_version = experiment.versions.order_by("-version_number").first()
     sessions = latest_version.sessions.select_related("student") if latest_version else ExperimentSession.objects.none()
     valid_statuses = {value for value, _label in ExperimentSession.Status.choices}
