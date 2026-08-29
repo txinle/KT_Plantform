@@ -81,6 +81,11 @@ class TeacherProcessLanguageTests(SimpleTestCase):
             "final_snapshot_mismatch": "最终答案快照与正式提交不一致",
             "submission_chain_mismatch": "正式提交与作答关闭记录不一致",
             "legacy_contract": "历史记录没有当前采集契约",
+            "dead_letter_event": "部分过程记录未能上传",
+            "persistent_outbox_unavailable": "设备未能持续保存过程记录",
+            "time_origin_changed": "页面时间基准发生变化",
+            "telemetry_baseline_missing": "未记录页面初始状态",
+            "collector_unavailable": "未收到客户端过程记录",
         }
         for reason, label in expected.items():
             with self.subTest(reason=reason):
