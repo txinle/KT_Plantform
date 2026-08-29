@@ -8,6 +8,7 @@ from django.db import IntegrityError
 from django.test import Client, TestCase
 from django.urls import reverse
 
+from apps.accounts.forms import ClassGroupUpdateForm
 from apps.accounts.models import Course, CourseEnrollment, ClassGroup, User
 from apps.audit.models import AuditLog
 from apps.experiments.models import Experiment, ExperimentStudent
@@ -637,13 +638,21 @@ class CourseQuestionBankScopeTests(TestCase):
             reverse("courses:concept_rename", args=[self.course_a.pk, concept.pk]),
             {"name": "改名后 KC"},
         )
+        class_form = ClassGroupUpdateForm(instance=class_group)
         self.client.post(
-            reverse("courses:class_rename", args=[self.course_a.pk, class_group.pk]),
-            {"name": "改名后班级"},
+            reverse("courses:class_update", args=[self.course_a.pk, class_group.pk]),
+            {
+                "name": "改名后班级",
+                "academic_year": class_group.academic_year,
+                "is_active": "on",
+                "state_token": class_form.initial["state_token"],
+            },
         )
 
         snapshot = version.question_snapshots.get()
         assignment = experiment.student_links.get(student=self.student)
+        class_group.refresh_from_db()
+        self.assertEqual(class_group.name, "改名后班级")
         self.assertEqual(snapshot.primary_kc, "发布时 KC")
         self.assertEqual(snapshot.all_kcs, ["发布时 KC"])
         self.assertEqual(assignment.class_snapshot_name, "2026 发布时班级")

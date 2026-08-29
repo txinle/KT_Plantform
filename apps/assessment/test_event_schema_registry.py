@@ -232,7 +232,7 @@ class EventSchemaRegistryContractTests(SimpleTestCase):
         self.assertIsNotNone(registry)
 
         with self.assertRaises(registry.EventSchemaNotFound):
-            registry.get_event_schema("session_started", 2)
+            registry.get_event_schema("session_started", 3)
 
     def test_schema_hash_is_stable_sha256(self):
         registry = load_registry_module()

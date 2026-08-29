@@ -1,14 +1,14 @@
 from django.contrib import messages
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models import Q
-from django.http import HttpResponse, HttpResponseBadRequest
+from django.http import Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 from urllib.parse import quote
-from urllib.parse import urlencode
 
 from apps.audit.services import log_action
 
@@ -27,16 +27,17 @@ from .enrollment_services import (
 )
 from .forms import (
     ClassGroupForm,
-    ClassGroupRenameForm,
     ClassGroupUpdateForm,
+    ClassStudentAnalyticsPolicyForm,
     ManualStudentEnrollmentForm,
     PasswordResetForm,
     StudentBatchUploadForm,
     StudentClassCopyForm,
     class_group_state_token_matches,
 )
-from .models import ClassGroup, CourseEnrollment, User
+from .models import ClassGroup, ClassStudentAnalyticsPolicy, CourseEnrollment, User
 from .permissions import role_required
+from .student_analytics_policy import update_class_student_analytics_policy
 from .student_import import (
     ParsedStudent,
     StudentImportError,
@@ -97,51 +98,9 @@ def class_list(request, course_pk):
             "classes": classes,
             "form": form,
             "query": query,
+            "class_center_enabled": settings.CLASS_CENTER_ENABLED,
         },
     )
-
-
-@require_POST
-@role_required(User.Role.TEACHER, User.Role.ADMIN)
-def class_rename(request, course_pk, class_pk):
-    course = get_accessible_course(request.user, course_pk)
-    require_writable_course(course)
-    saved_class_group = None
-    previous_values = None
-    with transaction.atomic():
-        class_group = get_object_or_404(
-            ClassGroup.objects.select_for_update(),
-            pk=class_pk,
-            course_id=course.pk,
-        )
-        form = ClassGroupRenameForm(request.POST, instance=class_group)
-        previous_values = {"name": class_group.name}
-        if form.is_valid():
-            class_group.name = form.cleaned_data["name"]
-            class_group.save(update_fields=["name"])
-            saved_class_group = class_group
-
-    if saved_class_group:
-        log_action(
-            request,
-            "class.rename",
-            saved_class_group,
-            _class_group_audit_details(
-                course,
-                saved_class_group,
-                previous_values,
-                ["name"],
-            ),
-        )
-        messages.success(request, "班级名称已更新。")
-    else:
-        errors = form.non_field_errors() or form.errors.get("name", [])
-        messages.error(request, "班级名称更新失败：" + "; ".join(errors))
-    target = reverse("courses:classes", args=[course.pk])
-    query = request.POST.get("q", "").strip()
-    if query:
-        target = f"{target}?{urlencode({'q': query})}"
-    return redirect(target)
 
 
 @require_POST
@@ -173,7 +132,11 @@ def class_delete(request, course_pk, class_pk):
             "academic_year": class_group.academic_year,
         }
         try:
-            class_group.delete()
+            with transaction.atomic():
+                ClassStudentAnalyticsPolicy.objects.filter(
+                    class_group_id=class_group.pk
+                ).delete()
+                class_group.delete()
         except ProtectedError:
             return HttpResponseBadRequest("班级仍被历史数据引用，不能删除。")
         log_action(request, "class.delete", details=details)
@@ -187,6 +150,9 @@ def class_edit(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     class_group = get_object_or_404(course.classes, pk=class_pk)
+    if settings.CLASS_CENTER_ENABLED:
+        target = reverse("courses:class_detail", args=[course.pk, class_group.pk])
+        return redirect(f"{target}?section=manage")
     form = ClassGroupUpdateForm(instance=class_group)
     return render(
         request,
@@ -248,7 +214,20 @@ def class_update(request, course_pk, class_pk):
         form.add_error(None, "同一课程和年级中已存在该班级名称。")
     if saved_class_group:
         messages.success(request, "班级设置已保存。")
+        if settings.CLASS_CENTER_ENABLED:
+            target = reverse(
+                "courses:class_detail", args=[course.pk, saved_class_group.pk]
+            )
+            return redirect(f"{target}?section=manage")
         return redirect("courses:class_detail", course.pk, saved_class_group.pk)
+    if settings.CLASS_CENTER_ENABLED:
+        return _class_detail_response(
+            request,
+            course,
+            class_group,
+            class_settings_form=form,
+            active_section_override="manage",
+        )
     return render(
         request,
         "teacher/course_class_edit.html",
@@ -389,10 +368,15 @@ def student_copy(request, course_pk, class_pk):
     )
 
 
-@role_required(User.Role.TEACHER, User.Role.ADMIN)
-def class_detail(request, course_pk, class_pk):
-    course = get_accessible_course(request.user, course_pk)
-    class_group = get_object_or_404(course.classes, pk=class_pk)
+def _class_detail_response(
+    request,
+    course,
+    class_group,
+    *,
+    class_settings_form=None,
+    active_section_override=None,
+    status=200,
+):
     enrollments = class_group.enrollments.filter(is_active=True).select_related("student")
     query = request.GET.get("q", "").strip()
     if query:
@@ -401,16 +385,249 @@ def class_detail(request, course_pk, class_pk):
             | Q(student__display_name__icontains=query)
             | Q(student__username__icontains=query)
         )
+    context = {
+        "course": course,
+        "current_course": course,
+        "class_group": class_group,
+        "enrollments": enrollments,
+        "course_classes": course.classes.filter(is_active=True),
+        "query": query,
+    }
+    if settings.CLASS_CENTER_ENABLED:
+        active_section = active_section_override or request.GET.get("section", "overview")
+        if active_section not in {"overview", "students", "experiments", "manage"}:
+            raise Http404
+        experiment_id = None
+        raw_experiment_id = request.GET.get("experiment_id", "").strip()
+        if raw_experiment_id:
+            try:
+                experiment_id = int(raw_experiment_id)
+            except (TypeError, ValueError) as error:
+                raise Http404 from error
+            if experiment_id <= 0:
+                raise Http404
+        class_center = None
+        if active_section != "manage":
+            from apps.analytics.teaching.metrics import build_class_center_snapshot
+
+            try:
+                page = int(request.GET.get("page", "1"))
+            except (TypeError, ValueError):
+                page = 1
+            class_center = build_class_center_snapshot(
+                class_group,
+                experiment_id=experiment_id,
+                query=query if active_section == "students" else "",
+                sort=request.GET.get("sort", "student_number"),
+                status=request.GET.get("status"),
+                page=page,
+            )
+            if experiment_id is not None and class_center.scope.task_count == 0:
+                raise Http404
+        context.update(
+            {
+                "active_section": active_section,
+                "class_center": class_center,
+                "selected_experiment_id": experiment_id,
+                "student_sort": request.GET.get("sort", "student_number"),
+                "student_status": request.GET.get("status", ""),
+            }
+        )
+        if active_section == "manage" and course.status == "active":
+            if class_settings_form is None:
+                class_settings_form = ClassGroupUpdateForm(instance=class_group)
+            context["class_settings_form"] = class_settings_form
+        return render(
+            request,
+            "teacher/course_class_center.html",
+            context,
+            status=status,
+        )
     return render(
         request,
         "teacher/course_class_detail.html",
+        context,
+        status=status,
+    )
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_detail(request, course_pk, class_pk):
+    course = get_accessible_course(request.user, course_pk)
+    class_group = get_object_or_404(course.classes, pk=class_pk)
+    return _class_detail_response(request, course, class_group)
+
+
+def _class_drilldown_scope(request, course_pk, class_pk):
+    if not settings.CLASS_CENTER_ENABLED:
+        raise Http404
+    course = get_accessible_course(request.user, course_pk)
+    class_group = get_object_or_404(course.classes, pk=class_pk)
+    return course, class_group
+
+
+@require_http_methods(["GET", "POST"])
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_student_visibility(request, course_pk, class_pk):
+    course, class_group = _class_drilldown_scope(request, course_pk, class_pk)
+    policy = get_object_or_404(
+        ClassStudentAnalyticsPolicy,
+        class_group=class_group,
+    )
+    if request.method == "POST":
+        form = ClassStudentAnalyticsPolicyForm(request.POST)
+        if form.is_valid():
+            policy = update_class_student_analytics_policy(
+                class_group=class_group,
+                actor=request.user,
+                changes=form.cleaned_data,
+            )
+            messages.success(request, "学生端显示设置已更新。")
+            return redirect(
+                "courses:class_student_visibility",
+                course.pk,
+                class_group.pk,
+            )
+        response_status = 400
+    else:
+        form = ClassStudentAnalyticsPolicyForm(
+            initial=ClassStudentAnalyticsPolicyForm.initial_from_policy(policy)
+        )
+        response_status = 200
+    if course.status == course.Status.ARCHIVED:
+        for field in form.fields.values():
+            field.disabled = True
+    return render(
+        request,
+        "teacher/course_class_student_visibility.html",
         {
             "course": course,
             "current_course": course,
             "class_group": class_group,
-            "enrollments": enrollments,
-            "course_classes": course.classes.filter(is_active=True),
-            "query": query,
+            "policy": policy,
+            "form": form,
+            "is_read_only": course.status == course.Status.ARCHIVED,
+        },
+        status=response_status,
+    )
+
+
+@require_GET
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_student_detail(request, course_pk, class_pk, student_pk):
+    course, class_group = _class_drilldown_scope(request, course_pk, class_pk)
+    from apps.analytics.teaching.drilldown import build_student_detail
+
+    try:
+        detail = build_student_detail(class_group, student_id=student_pk)
+    except LookupError as error:
+        raise Http404 from error
+    return render(
+        request,
+        "teacher/course_class_student_detail.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": class_group,
+            "detail": detail,
+        },
+    )
+
+
+@require_GET
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_student_experiment_detail(
+    request,
+    course_pk,
+    class_pk,
+    student_pk,
+    experiment_pk,
+):
+    course, class_group = _class_drilldown_scope(request, course_pk, class_pk)
+    from apps.analytics.teaching.drilldown import build_student_experiment_detail
+
+    try:
+        detail = build_student_experiment_detail(
+            class_group,
+            experiment_id=experiment_pk,
+            student_id=student_pk,
+        )
+    except LookupError as error:
+        raise Http404 from error
+    return render(
+        request,
+        "teacher/course_class_student_experiment_detail.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": class_group,
+            "detail": detail,
+        },
+    )
+
+
+@require_GET
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_question_detail(
+    request,
+    course_pk,
+    class_pk,
+    experiment_pk,
+    question_pk,
+):
+    course, class_group = _class_drilldown_scope(request, course_pk, class_pk)
+    from apps.analytics.teaching.drilldown import build_question_detail
+
+    try:
+        detail = build_question_detail(
+            class_group,
+            experiment_id=experiment_pk,
+            question_id=question_pk,
+        )
+    except LookupError as error:
+        raise Http404 from error
+    return render(
+        request,
+        "teacher/course_class_question_detail.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": class_group,
+            "detail": detail,
+        },
+    )
+
+
+@require_GET
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def class_question_process(
+    request,
+    course_pk,
+    class_pk,
+    experiment_pk,
+    question_pk,
+    student_pk,
+):
+    course, class_group = _class_drilldown_scope(request, course_pk, class_pk)
+    from apps.analytics.teaching.drilldown import build_attempt_process_detail
+
+    try:
+        detail = build_attempt_process_detail(
+            class_group,
+            experiment_id=experiment_pk,
+            question_id=question_pk,
+            student_id=student_pk,
+        )
+    except LookupError as error:
+        raise Http404 from error
+    return render(
+        request,
+        "teacher/course_class_attempt_process.html",
+        {
+            "course": course,
+            "current_course": course,
+            "class_group": class_group,
+            "detail": detail,
         },
     )
 

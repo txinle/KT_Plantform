@@ -4,6 +4,11 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "local-development-key-change-before-production")
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
+CLASS_CENTER_ENABLED = os.getenv("CLASS_CENTER_ENABLED") == "1"
+STUDENT_LEARNING_ANALYTICS_ENABLED = (
+    CLASS_CENTER_ENABLED
+    and os.getenv("STUDENT_LEARNING_ANALYTICS_ENABLED") == "1"
+)
 ALLOWED_HOSTS = [x.strip() for x in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if x.strip()]
 CSRF_TRUSTED_ORIGINS = [x.strip() for x in os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",") if x.strip()]
 

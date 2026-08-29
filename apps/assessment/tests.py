@@ -132,6 +132,21 @@ class AssessmentFlowTests(TestCase):
             content.index("js/assessment.js"),
         )
 
+    def test_returning_to_saved_draft_exposes_previous_response_state(self):
+        session = get_or_create_session(self.experiment, self.student)
+        assignment = session.assignments.get()
+        attempt = record_visit(session.id, assignment.id)
+        save_draft(attempt.id, "B")
+        self.client.force_login(self.student)
+
+        response = self.client.get(
+            reverse("assessment:question", args=[session.pk, assignment.pk])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="initial-response-state-data"')
+        self.assertContains(response, '"B"')
+
     def test_native_collector_source_avoids_prohibited_continuous_capture(self):
         source = (
             Path(__file__).resolve().parents[2]

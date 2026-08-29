@@ -6,7 +6,7 @@ from datetime import timezone as dt_timezone
 from io import StringIO
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TransactionTestCase
 from django.utils import timezone
 
 from apps.accounts.models import Course, User, DataPurgeRequest
@@ -18,7 +18,7 @@ from apps.experiments.presentation_instances import get_or_create_default_item_i
 from apps.question_bank.models import QuestionBank, Question
 
 
-class ExportLineageV2Tests(TestCase):
+class ExportLineageV2Tests(TransactionTestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(username="lineage-teacher", role=User.Role.TEACHER)
         self.course = Course.objects.create(owner=self.teacher, name="C", code="C", term="T")

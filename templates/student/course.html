@@ -2,6 +2,7 @@
 {% block title %}{{ course.name }} | 我的课程{% endblock %}
 {% block content %}
 <header class="page-header student-page-header"><div class="page-header-copy"><p class="page-kicker"><a href="{% url 'assessment:dashboard' %}">我的课程</a></p><h1 class="page-title">{{ course.name }}</h1><p class="page-subtitle"><span class="mono">{{ course.code }} · {{ course.term }}</span><span aria-hidden="true"> / </span>{{ enrollment.class_group.name }}</p></div></header>
+{% include 'student/partials/_course_nav.html' %}
 {% if course.status == 'archived' %}<div class="notice-panel mb-4"><strong>课程已归档。</strong>你仍可查看历史完成状态，但不能开始新的实验。</div>{% endif %}
 <div class="student-experiment-list">
 {% for card in experiment_cards %}

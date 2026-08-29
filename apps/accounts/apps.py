@@ -4,3 +4,6 @@ class AccountsConfig(AppConfig):
     name = "apps.accounts"
     label = "accounts"
     verbose_name = "课程与账号"
+
+    def ready(self):
+        from . import signals  # noqa: F401

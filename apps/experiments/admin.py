@@ -1,5 +1,12 @@
 from django.contrib import admin
-from .models import Experiment, ExperimentQuestion, ExperimentStudent, ExperimentVersion, QuestionSnapshot
+from .models import (
+    ClassExperimentTask,
+    Experiment,
+    ExperimentQuestion,
+    ExperimentStudent,
+    ExperimentVersion,
+    QuestionSnapshot,
+)
 Experiment._meta.verbose_name = "实验"
 Experiment._meta.verbose_name_plural = "实验"
 ExperimentQuestion._meta.verbose_name = "实验题目"
@@ -17,5 +24,48 @@ class ExperimentAdmin(admin.ModelAdmin):
     list_display = ("name", "course", "created_by", "status", "ordering_mode", "feedback_mode", "time_mode")
     list_filter = ("course", "status")
     inlines = [QuestionInline, StudentInline]
-admin.site.register(ExperimentVersion)
+
+    def get_readonly_fields(self, request, obj=None):
+        readonly_fields = tuple(super().get_readonly_fields(request, obj))
+        if obj is not None and obj.class_tasks.exists() and "course" not in readonly_fields:
+            return (*readonly_fields, "course")
+        return readonly_fields
+
+@admin.register(ExperimentVersion)
+class ExperimentVersionAdmin(admin.ModelAdmin):
+    list_display = ("experiment", "version_number", "published_at", "published_by")
+
+    def has_change_permission(self, request, obj=None):
+        if obj is not None and obj.class_tasks.exists():
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and obj.class_tasks.exists():
+            return False
+        return super().has_delete_permission(request, obj)
+
+
 admin.site.register(QuestionSnapshot)
+
+
+@admin.register(ClassExperimentTask)
+class ClassExperimentTaskAdmin(admin.ModelAdmin):
+    list_display = ("class_group", "experiment", "published_at")
+    readonly_fields = (
+        "class_group",
+        "experiment",
+        "release_snapshot",
+        "class_snapshot",
+        "published_at",
+        "created_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

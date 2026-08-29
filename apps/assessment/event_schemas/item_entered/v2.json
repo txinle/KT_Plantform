@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"entry_reason":{"type":"string"},"from_assignment_id":{"type":["integer","null"]}},"required":["entry_reason","from_assignment_id"],"additionalProperties":false}

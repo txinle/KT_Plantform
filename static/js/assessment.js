@@ -19,6 +19,9 @@
   const confidenceSkip = document.getElementById('confidence-skip-btn');
   const csrf = form.querySelector('[name="csrfmiddlewaretoken"]').value;
   const draft = JSON.parse(document.getElementById('draft-data').textContent || 'null');
+  const initialResponseState = JSON.parse(
+    document.getElementById('initial-response-state-data')?.textContent || 'null',
+  );
   const pendingConfidence = JSON.parse(
     document.getElementById('pending-confidence-data')?.textContent || 'null',
   );
@@ -29,10 +32,13 @@
   let saveQueue = Promise.resolve();
   let submitting = false;
   let inputStarted = false;
-  let lastStableText = '';
+  let lastStableText = typeof draft === 'string' ? draft : '';
   let textEditQueue = Promise.resolve();
+  let textObservationTimer = null;
+  let pendingTextObservation = null;
   let processLifecycle = null;
   let confidencePromptPromise = null;
+  let lastRecordedResponseState = initialResponseState;
 
   const processApi = window.KTProcessData;
   const processReady = (async () => {
@@ -42,6 +48,7 @@
       sessionId: Number(form.dataset.processSessionId),
       attemptId: Number(form.dataset.processAttemptId),
       endpoint: form.dataset.processEventUrl,
+      checkpointEndpoint: form.dataset.captureCheckpointUrl,
       csrfToken: csrf,
       appVersion: form.dataset.processAppVersion,
       outbox,
@@ -92,33 +99,68 @@
     return inputType ? 'keyboard' : 'unknown';
   }
 
-  function queueStableTextObservation(element, event = {}) {
-    if (!element || event.isComposing) return;
-    const after = String(element.value ?? '');
-    const before = lastStableText;
-    if (after === before) return;
-    lastStableText = after;
-    const operation = editOperation(event.inputType);
-    const method = inputMethod(event.inputType, event.isComposing);
+  function flushStableTextObservation() {
+    window.clearTimeout(textObservationTimer);
+    textObservationTimer = null;
+    const observation = pendingTextObservation;
+    pendingTextObservation = null;
+    if (!observation || observation.after === observation.before) return textEditQueue;
+    lastStableText = observation.after;
     textEditQueue = textEditQueue.then(async () => {
-      const [beforeHash, afterHash] = await Promise.all([sha256Text(before), sha256Text(after)]);
+      const [beforeHash, afterHash] = await Promise.all([
+        sha256Text(observation.before),
+        sha256Text(observation.after),
+      ]);
       if (!beforeHash || !afterHash) return;
       await recordProcessEvent('text_edit_observed', {
         question_type: form.dataset.questionType,
-        edit_operation: operation,
+        edit_operation: observation.operation,
         content_hash_before: beforeHash,
         content_hash_after: afterHash,
-        content_length_before: before.length,
-        content_length_after: after.length,
-        input_method: method,
+        content_length_before: observation.before.length,
+        content_length_after: observation.after.length,
+        input_method: observation.method,
+        batch_start_client_monotonic_ms: observation.startedAt,
+        batch_end_client_monotonic_ms: observation.endedAt,
+        is_ime: observation.isIme,
       });
     }).catch(() => {});
+    return textEditQueue;
   }
 
-  async function closeProcessAttempt(reason) {
+  function queueStableTextObservation(element, event = {}) {
+    if (!element || event.isComposing) return;
+    const after = String(element.value ?? '');
+    const operation = editOperation(event.inputType);
+    const method = inputMethod(event.inputType, event.isComposing);
+    const now = Math.round(performance.now() * 1000) / 1000;
+    if (pendingTextObservation && pendingTextObservation.operation !== operation) {
+      flushStableTextObservation();
+    }
+    if (!pendingTextObservation) {
+      pendingTextObservation = {
+        before: lastStableText,
+        after,
+        operation,
+        method,
+        isIme: method === 'ime',
+        startedAt: now,
+        endedAt: now,
+      };
+    } else {
+      pendingTextObservation.after = after;
+      pendingTextObservation.endedAt = now;
+      pendingTextObservation.isIme ||= method === 'ime';
+    }
+    window.clearTimeout(textObservationTimer);
+    textObservationTimer = window.setTimeout(flushStableTextObservation, 800);
+  }
+
+  async function closeProcessAttempt(reason, toAssignmentId = null) {
     try {
+      await flushStableTextObservation();
       await processReady;
-      await processLifecycle?.closeAttempt(reason);
+      await processLifecycle?.closeAttempt(reason, toAssignmentId);
     } catch (_error) {
       // Process-data capture must never block the authoritative assessment flow.
     }
@@ -301,16 +343,28 @@
       question_type: form.dataset.questionType,
       change_source: source,
     };
-    if (Object.prototype.hasOwnProperty.call(data, 'response_state_after')) {
-      payload.response_state_after = data.response_state_after;
-    } else if (data.response_snapshot_id) {
-      payload.response_snapshot_id = data.response_snapshot_id;
-      payload.content_hash = data.content_hash;
-      payload.content_length = data.content_length;
-    } else {
+    if (!data.response_snapshot_id) {
       return;
     }
-    await recordProcessEvent('response_state_changed', payload);
+    payload.response_state_before = lastRecordedResponseState;
+    payload.response_state_after = {
+      snapshot_id: data.response_snapshot_id,
+      state_hash: data.state_hash,
+      content_hash: data.content_hash,
+      content_length: data.content_length,
+      schema_version: 1,
+    };
+    if (
+      JSON.stringify(payload.response_state_before)
+      === JSON.stringify(payload.response_state_after)
+    ) return;
+    const recorded = await recordProcessEvent('response_state_changed', payload);
+    if (recorded) lastRecordedResponseState = payload.response_state_after;
+  }
+
+  function hasMeaningfulResponse(value) {
+    if (Array.isArray(value)) return value.length > 0;
+    return value !== null && value !== undefined && String(value) !== '';
   }
 
   function saveDraft(force = false) {
@@ -321,12 +375,32 @@
     setSaveState('正在保存', 'saving');
     const operation = async () => {
       try {
+        if (form.dataset.questionType !== 'short_answer') {
+          const nextState = answer;
+          const changed = JSON.stringify(nextState) !== JSON.stringify(lastRecordedResponseState);
+          const shouldRecord = changed && (
+            lastRecordedResponseState !== null || hasMeaningfulResponse(nextState)
+          );
+          if (shouldRecord) {
+            const recorded = await recordProcessEvent('response_state_changed', {
+              question_type: form.dataset.questionType,
+              response_state_before: lastRecordedResponseState,
+              response_state_after: nextState,
+              change_source: force ? 'forced_snapshot' : 'student',
+            });
+            if (recorded) {
+              lastRecordedResponseState = JSON.parse(JSON.stringify(nextState));
+            }
+          }
+        }
         const data = await post(form.dataset.saveUrl, {
           answer,
           client_occurred_at: new Date().toISOString(),
         });
         lastSerialized = serialized;
-        await recordSavedResponse(data, force ? 'forced_snapshot' : 'student');
+        if (form.dataset.questionType === 'short_answer') {
+          await recordSavedResponse(data, force ? 'forced_snapshot' : 'student');
+        }
         setSaveState('草稿已保存', 'saved');
         clearError();
         return data;
@@ -375,6 +449,16 @@
   form.addEventListener('compositionend', (event) => {
     if (!event.target.matches('[name="answer"]') || choiceQuestion) return;
     queueStableTextObservation(event.target, { inputType: 'insertCompositionText' });
+    flushStableTextObservation();
+  });
+
+  form.querySelector('[name="answer"]')?.addEventListener('blur', () => {
+    if (!choiceQuestion) flushStableTextObservation();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && !choiceQuestion) {
+      flushStableTextObservation();
+    }
   });
 
   submitConfirm?.addEventListener('click', async () => {
@@ -394,6 +478,9 @@
         { submission_token: submissionToken },
         { correlationId: submissionToken },
       );
+      const processCollector = await processReady;
+      await processCollector?.checkpoint('commit');
+      await processCollector?.flushBounded(1500, { ignoreVisibility: true, keepalive: true });
       const data = await post(form.dataset.submitUrl, {
         submission_token: submissionToken,
         client_clicked_at: new Date().toISOString()
@@ -442,7 +529,7 @@
     clearError();
     try {
       if (submitBtn) await saveDraft(true);
-      await closeProcessAttempt('navigation');
+      await closeProcessAttempt('navigation', Number(link.dataset.assignmentId));
       window.location.href = link.href;
     } catch (error) {
       showError('草稿保存失败，尚未切换题目。请检查网络后重试。', true);
@@ -450,6 +537,7 @@
   }));
 
   restore();
+  lastRecordedResponseState = initialResponseState;
   lastSerialized = JSON.stringify(collect());
   lastQueuedSerialized = lastSerialized;
   if (!choiceQuestion) lastStableText = String(collect() ?? '');

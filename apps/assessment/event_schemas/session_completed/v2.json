@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"completion_reason":{"type":"string"},"terminal_at":{"type":"string","format":"date-time"}},"required":["completion_reason","terminal_at"],"additionalProperties":false}

@@ -17,6 +17,7 @@ from apps.assessment.models import (
     AssessmentEvent, Attempt, ExperimentSession, EventSchemaArtifact,
     StudentQuestionAssignment, ConfidenceAssignment, SimulationSnapshot,
     GradeRecord, ResponseInputObservation, ResponseSnapshot, SubmissionEvent,
+    CaptureContractArtifact, ClientCaptureCheckpoint, ClientTimeSync,
 )
 from apps.experiments.models import (
     ConditionAssignment,
@@ -35,7 +36,10 @@ from .export_catalog import (
     TABLE_PATHS,
 )
 
-from .models import ExportJob, ExportSnapshot
+from .models import (
+    ExportJob, ExportSnapshot, RecordingCoverageAttempt,
+    RecordingCoverageSession,
+)
 from .data_scope import DataScope
 
 
@@ -58,6 +62,7 @@ def _validate_export_scope(scope, package):
 def create_export_snapshot(*, course=None, experiment=None, research_study=None,
                            created_by, filter_definition=None, scope=None,
                            package=None):
+    data_scope = scope
     if scope is not None:
         if scope.course.pk != course.pk:
             raise ExportContractError("导出范围不属于当前课程")
@@ -79,11 +84,11 @@ def create_export_snapshot(*, course=None, experiment=None, research_study=None,
         version_queryset = version_queryset.filter(experiment_id=scope.experiment_id)
     versions = list(version_queryset.values_list("pk", "version_number"))
     cutoff = timezone.now()
-    scope = {"session__version__experiment_id": experiment.pk} if experiment is not None else {"session__version__experiment__course_id": course.pk}
+    event_scope = {"session__version__experiment_id": experiment.pk} if experiment is not None else {"session__version__experiment__course_id": course.pk}
     if research_study is not None:
         course_ids = list(research_study.course_links.values_list("course_id", flat=True))
-        scope = {"session__version__experiment__course_id__in": course_ids}
-    watermark = AssessmentEvent.objects.filter(**scope, server_received_at__lte=cutoff).aggregate(max_seq=models.Max("server_ingest_sequence_no"))["max_seq"] or 0
+        event_scope = {"session__version__experiment__course_id__in": course_ids}
+    watermark = AssessmentEvent.objects.filter(**event_scope, server_received_at__lte=cutoff).aggregate(max_seq=models.Max("server_ingest_sequence_no"))["max_seq"] or 0
     schema_hashes = {
         f"{row.event_type}:v{row.event_version}": row.schema_sha256
         for row in EventSchemaArtifact.objects.all().order_by("event_type", "event_version")
@@ -93,6 +98,34 @@ def create_export_snapshot(*, course=None, experiment=None, research_study=None,
     scope_hash = hashlib.sha256(
         json.dumps(canonical_filter_definition, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
+    coverage_run = None
+    if course is not None and research_study is None:
+        coverage_mapping = dict(filter_definition or {})
+        if experiment is not None and not coverage_mapping.get("experiment_id"):
+            coverage_mapping["experiment_id"] = experiment.pk
+        coverage_scope = data_scope or DataScope.from_mapping(course, coverage_mapping)
+        finalized_sessions = list(
+            coverage_scope.sessions()
+            .filter(
+                status__in=("completed", "expired", "invalidated"),
+                terminal_at__lte=cutoff - timedelta(seconds=300),
+            )
+            .select_related("capture_contract")
+            .order_by("pk")
+        )
+        if finalized_sessions:
+            from .recording_coverage import generate_scope_coverage
+
+            coverage_run = generate_scope_coverage(
+                finalized_sessions,
+                scope_type="export",
+                scope_definition={
+                    "scope_hash": scope_hash,
+                    "session_ids": [session.pk for session in finalized_sessions],
+                },
+                source_cutoff_at=cutoff,
+            )
+
     return ExportSnapshot.objects.create(
         course=course,
         experiment=experiment,
@@ -105,6 +138,7 @@ def create_export_snapshot(*, course=None, experiment=None, research_study=None,
         selected_versions=[{"id": pk, "version": version} for pk, version in versions],
         filter_definition=canonical_filter_definition,
         scope_hash=scope_hash,
+        coverage_run=coverage_run,
     )
 
 
@@ -154,7 +188,8 @@ def _git_commit():
 
 
 def build_export_manifest(snapshot, *, selected_tables, row_counts=None, data_status=None,
-                          experiment_name=None, version_number=None):
+                          experiment_name=None, version_number=None,
+                          session_ids=None, attempt_ids=None):
     schemas = {
         f"{row.event_type}:v{row.event_version}": row.schema_sha256
         for row in EventSchemaArtifact.objects.all()
@@ -173,6 +208,73 @@ def build_export_manifest(snapshot, *, selected_tables, row_counts=None, data_st
         "derivation": {"version": "v1", "deterministic": True, "code_sha": _git_commit()},
         "source_records": {"sessions": "assessment.ExperimentSession", "attempts": "assessment.Attempt", "events": "assessment.AssessmentEvent", "grades": "assessment.GradeRecord", "confidence": "assessment.ConfidenceAssignment"},
     }
+    coverage_filter = {
+        "session__version__experiment_id": snapshot.experiment_id
+    } if snapshot.experiment_id else {
+        "session__version__experiment__course_id": snapshot.course_id
+    }
+    coverage_query = RecordingCoverageSession.objects.filter(
+            **coverage_filter,
+            run__run_status="completed",
+            run__source_cutoff_at__lte=snapshot.source_cutoff_at,
+        )
+    if getattr(snapshot, "coverage_run_id", None):
+        coverage_query = coverage_query.filter(run_id=snapshot.coverage_run_id)
+    if session_ids is not None:
+        coverage_query = coverage_query.filter(session_id__in=session_ids)
+    all_coverage_results = list(
+        coverage_query.select_related("run", "session__capture_contract").order_by(
+            "session_id", "-run__generated_at"
+        )
+    )
+    latest_by_session = {}
+    for item in all_coverage_results:
+        latest_by_session.setdefault(item.session_id, item)
+    coverage_results = list(latest_by_session.values())
+    coverage_runs = {str(item.run_id): item.run for item in coverage_results}
+    contract_rows = {
+        str(item.session.capture_contract_id): item.session.capture_contract
+        for item in coverage_results
+        if item.session.capture_contract_id
+    }
+    status_counts = {}
+    for item in coverage_results:
+        status_counts[item.overall_status] = status_counts.get(item.overall_status, 0) + 1
+    run_ids = sorted(coverage_runs)
+    coverage_versions = sorted(
+        {run.coverage_version for run in coverage_runs.values()}
+    )
+    parameter_hashes = sorted({run.parameter_hash for run in coverage_runs.values()})
+    coverage_attempt_query = RecordingCoverageAttempt.objects.filter(
+        run_id__in=run_ids
+    )
+    if attempt_ids is not None:
+        coverage_attempt_query = coverage_attempt_query.filter(
+            attempt_id__in=attempt_ids
+        )
+    time_quality_counts = {}
+    for quality in coverage_attempt_query.values_list("time_quality", flat=True):
+        time_quality_counts[quality] = time_quality_counts.get(quality, 0) + 1
+    checkpoint_query = ClientCaptureCheckpoint.objects.filter(
+        server_received_at__lte=snapshot.source_cutoff_at
+    )
+    if session_ids is not None:
+        checkpoint_query = checkpoint_query.filter(session_id__in=session_ids)
+    elif snapshot.experiment_id:
+        checkpoint_query = checkpoint_query.filter(
+            session__version__experiment_id=snapshot.experiment_id
+        )
+    else:
+        checkpoint_query = checkpoint_query.filter(
+            session__version__experiment__course_id=snapshot.course_id
+        )
+    latest_checkpoint_by_instance = {}
+    for checkpoint in checkpoint_query.order_by(
+        "session_id", "client_instance_id", "-server_received_at", "-checkpoint_id"
+    ):
+        latest_checkpoint_by_instance.setdefault(
+            (checkpoint.session_id, checkpoint.client_instance_id), checkpoint
+        )
     return {
         "manifest_version": 2,
         "contains_direct_identifiers": True,
@@ -199,6 +301,22 @@ def build_export_manifest(snapshot, *, selected_tables, row_counts=None, data_st
         "row_counts": row_counts or {},
         "data_status": data_status or {},
         "provenance": provenance,
+        "capture_contract_ids": sorted(contract_rows),
+        "capture_contract_hashes": sorted({row.schema_sha256 for row in contract_rows.values()}),
+        "coverage_run_id": run_ids[0] if len(run_ids) == 1 else None,
+        "coverage_run_ids": run_ids,
+        "coverage_version": coverage_versions[0] if len(coverage_versions) == 1 else None,
+        "coverage_parameter_hash": parameter_hashes[0] if len(parameter_hashes) == 1 else None,
+        "coverage_source_cutoff": max((run.source_cutoff_at for run in coverage_runs.values()), default=None).isoformat() if run_ids else None,
+        "coverage_source_high_water_marks": {run_id: coverage_runs[run_id].source_high_water_marks for run_id in run_ids},
+        "coverage_status_counts": status_counts,
+        "sequence_gap_count": sum(item.sequence_gap_count for item in coverage_results),
+        "tail_gap_count": sum(bool(item.tail_gap_detected) for item in coverage_results),
+        "dead_letter_count": sum(
+            checkpoint.failed_event_count
+            for checkpoint in latest_checkpoint_by_instance.values()
+        ),
+        "time_quality_counts": time_quality_counts,
     }
 
 
@@ -355,7 +473,9 @@ def run_export_job(job):
             ResponseInputObservation.objects.filter(
                 attempt_id__in=[a.pk for a in attempts],
                 observed_at__lte=snapshot.source_cutoff_at,
-            ).order_by("attempt_id", "client_instance_id", "client_sequence_no")
+            ).select_related("source_event").order_by(
+                "attempt_id", "client_instance_id", "client_sequence_no"
+            )
         )
         submissions = list(
             SubmissionEvent.objects.filter(
@@ -445,6 +565,8 @@ def run_export_job(job):
         data_status=data_status,
         experiment_name=job.experiment.name if job.experiment_id else None,
         version_number=selected_version_number,
+        session_ids=session_ids,
+        attempt_ids=[attempt.pk for attempt in attempts],
     )
     if job.package == "teaching":
         _write_teaching_workbook(
@@ -645,7 +767,9 @@ def preview_export_table(*, course, experiment, table, version_id=None,
         )
     )
     input_observations = list(
-        ResponseInputObservation.objects.filter(attempt_id__in=attempt_ids).order_by(
+        ResponseInputObservation.objects.filter(
+            attempt_id__in=attempt_ids
+        ).select_related("source_event").order_by(
             "attempt_id", "client_instance_id", "client_sequence_no"
         )
     )
@@ -747,19 +871,103 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
     selected_confidence = [assignment for assignment in confidence_assignments if assignment.attempt_id in selected_attempt_ids]
     selected_simulations = [simulation for simulation in simulations if simulation.attempt_id in selected_attempt_ids]
 
+    cutoff = snapshot.source_cutoff_at if snapshot is not None else timezone.now()
+    capture_contracts = list(
+        CaptureContractArtifact.objects.filter(
+            capture_contract_id__in={
+                session.capture_contract_id
+                for session in sessions
+                if session.capture_contract_id
+            }
+        ).order_by("contract_name")
+    )
+    time_syncs = list(
+        ClientTimeSync.objects.filter(
+            session_id__in=session_by_id,
+            created_at__lte=cutoff,
+        ).order_by("session_id", "client_instance_id", "created_at")
+    )
+    valid_syncs_by_instance = {}
+    for sync in time_syncs:
+        if (
+            sync.sync_quality == ClientTimeSync.SyncQuality.VALID
+            and sync.estimated_clock_offset_ms is not None
+        ):
+            valid_syncs_by_instance.setdefault(
+                (str(sync.client_instance_id), sync.client_time_origin), []
+            ).append(sync)
+
+    def derived_event_time(event):
+        if event.estimated_occurred_at_utc is not None:
+            return event.estimated_occurred_at_utc
+        if (
+            event.client_instance_id is None
+            or event.client_time_origin is None
+            or event.client_monotonic_ms is None
+        ):
+            return None
+        candidates = valid_syncs_by_instance.get(
+            (str(event.client_instance_id), event.client_time_origin), []
+        )
+        if not candidates:
+            return None
+        sample = min(
+            candidates,
+            key=lambda row: abs(row.client_monotonic_ms - event.client_monotonic_ms),
+        )
+        delta_ms = event.client_monotonic_ms - sample.client_monotonic_ms
+        if abs(delta_ms) > 20 * 60 * 1000:
+            return None
+        return (
+            sample.client_wall_time_utc
+            + timedelta(milliseconds=sample.estimated_clock_offset_ms)
+            + timedelta(milliseconds=float(delta_ms))
+        )
+    checkpoints = list(
+        ClientCaptureCheckpoint.objects.filter(
+            session_id__in=session_by_id,
+            server_received_at__lte=cutoff,
+        ).order_by("session_id", "client_instance_id", "server_received_at")
+    )
+    coverage_sessions = list(
+        RecordingCoverageSession.objects.filter(
+            session_id__in=session_by_id,
+            run__run_status="completed",
+            run__source_cutoff_at__lte=cutoff,
+        ).filter(
+            **({"run_id": snapshot.coverage_run_id} if getattr(snapshot, "coverage_run_id", None) else {})
+        ).select_related("run").order_by("session_id", "-run__generated_at")
+    )
+    coverage_attempts = list(
+        RecordingCoverageAttempt.objects.filter(
+            attempt_id__in=selected_attempt_ids,
+            run__run_status="completed",
+            run__source_cutoff_at__lte=cutoff,
+        ).filter(
+            **({"run_id": snapshot.coverage_run_id} if getattr(snapshot, "coverage_run_id", None) else {})
+        ).select_related("run", "attempt").order_by("attempt_id", "-run__generated_at")
+    )
+    latest_coverage_session = {}
+    for result in coverage_sessions:
+        latest_coverage_session.setdefault(result.session_id, result)
+    latest_coverage_attempt = {}
+    for result in coverage_attempts:
+        latest_coverage_attempt.setdefault(result.attempt_id, result)
+
     event_headers = (
-        *identity_headers, "question_code", "event_id", "event_type", "event_version", "session_id", "attempt_id",
+        *identity_headers, "student_id", "question_code", "event_id", "event_type", "event_version", "session_id", "attempt_id",
         "client_instance_id", "client_sequence_no", "server_ingest_sequence_no", "correlation_id",
         "server_received_at", "capture_mode", "quality_flags", "payload", "event_domain",
         "actor_source", "envelope_version", "assignment_id", "question_snapshot_id", "item_instance_id",
         "client_wall_time_utc", "client_monotonic_ms", "client_time_origin", "time_sync_id",
-        "estimated_clock_offset_ms", "estimated_rtt_ms", "estimated_occurred_at_utc", "server_committed_at",
+        "estimated_clock_offset_ms", "estimated_rtt_ms", "estimated_occurred_at_utc", "derived_occurred_at_utc", "server_committed_at",
         "app_version",
     )
 
     def event_row(event):
         return [
-            *identity_for_session(event.session_id), question_code_for_snapshot(event.question_snapshot_id),
+            *identity_for_session(event.session_id), event.student_id,
+            question_code_for_snapshot(event.question_snapshot_id),
             event.event_id, event.event_type, event.event_version, event.session_id, event.attempt_id,
             event.client_instance_id, event.client_sequence_no, event.server_ingest_sequence_no,
             event.correlation_id, event.server_received_at.isoformat(), event.capture_mode,
@@ -770,6 +978,7 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
             event.client_monotonic_ms, event.client_time_origin.isoformat() if event.client_time_origin else "",
             event.time_sync_id, event.estimated_clock_offset_ms, event.estimated_rtt_ms,
             event.estimated_occurred_at_utc.isoformat() if event.estimated_occurred_at_utc else "",
+            derived_event_time(event).isoformat() if derived_event_time(event) else "",
             event.server_committed_at.isoformat() if event.server_committed_at else "", event.app_version,
         ]
 
@@ -783,15 +992,99 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
             event.server_received_at.isoformat(), json.dumps(event.payload, ensure_ascii=False),
         ]
 
-    response_rows = [compact_event_row(event) for event in selected_events if event.event_type in RESPONSE_EVENT_TYPES]
-    exposure_rows = [compact_event_row(event) for event in selected_events if event.event_type in EXPOSURE_EVENT_TYPES]
-    navigation_rows = [compact_event_row(event) for event in selected_events if event.event_type in ("item_entered", "item_left")]
-    telemetry_rows = [compact_event_row(event) for event in selected_events if event.event_domain == AssessmentEvent.EventDomain.TELEMETRY]
+    projection_headers = (*event_headers, "time_quality", "coverage_run_id")
+
+    def projection_row(event):
+        coverage = latest_coverage_attempt.get(event.attempt_id) or latest_coverage_session.get(event.session_id)
+        return [
+            *event_row(event),
+            getattr(coverage, "time_quality", None) or event.interval_quality,
+            coverage.run_id if coverage else "",
+        ]
+
+    response_headers = (
+        *projection_headers, "before_state", "after_state", "before_state_hash",
+        "after_state_hash", "response_snapshot_id", "question_type", "change_source",
+    )
+    response_rows = [
+        [
+            *projection_row(event),
+            json.dumps(event.payload.get("response_state_before"), ensure_ascii=False),
+            json.dumps(event.payload.get("response_state_after"), ensure_ascii=False),
+            event.payload.get("before_state_hash", ""),
+            event.payload.get("after_state_hash") or event.payload.get("state_hash", ""),
+            event.payload.get("response_snapshot_id", ""),
+            event.payload.get("question_type", ""),
+            event.payload.get("change_source", ""),
+        ]
+        for event in selected_events if event.event_type in RESPONSE_EVENT_TYPES
+    ]
+    exposure_rows = [projection_row(event) for event in selected_events if event.event_type in EXPOSURE_EVENT_TYPES]
+    navigation_headers = (
+        *projection_headers, "from_assignment_id", "to_assignment_id",
+        "entry_reason", "leave_reason",
+    )
+    navigation_rows = [
+        [
+            *projection_row(event), event.payload.get("from_assignment_id", ""),
+            event.payload.get("to_assignment_id", ""), event.payload.get("entry_reason", ""),
+            event.payload.get("leave_reason", ""),
+        ]
+        for event in selected_events
+        if event.event_type in ("item_entered", "item_rendered", "item_left")
+    ]
+    telemetry_rows = [projection_row(event) for event in selected_events if event.event_domain == AssessmentEvent.EventDomain.TELEMETRY]
     simulation_event_rows = [compact_event_row(event) for event in selected_events if event.event_type in SIMULATION_EVENT_TYPES]
 
     def identity_and_question_for_attempt(attempt_id):
         attempt = attempt_by_id[attempt_id]
         return [*identity_for_session(attempt.session_id), attempt.assignment.snapshot.code]
+
+    def input_observation_row(item):
+        event = item.source_event if item.source_event_id else None
+        coverage = latest_coverage_attempt.get(item.attempt_id)
+        derived_time = derived_event_time(event) if event is not None else None
+        return [
+            *identity_and_question_for_attempt(item.attempt_id),
+            item.observation_id,
+            item.source_event_id or "",
+            event.event_type if event else "",
+            event.event_version if event else "",
+            event.envelope_version if event else "",
+            item.attempt_id,
+            item.client_instance_id,
+            item.client_sequence_no,
+            item.client_monotonic_ms,
+            item.batch_start_client_monotonic_ms,
+            item.batch_end_client_monotonic_ms,
+            event.client_wall_time_utc.isoformat()
+            if event and event.client_wall_time_utc else "",
+            event.client_time_origin.isoformat()
+            if event and event.client_time_origin else "",
+            event.time_sync_id if event else "",
+            event.estimated_occurred_at_utc.isoformat()
+            if event and event.estimated_occurred_at_utc else "",
+            derived_time.isoformat() if derived_time else "",
+            event.server_received_at.isoformat() if event else "",
+            event.server_committed_at.isoformat()
+            if event and event.server_committed_at else "",
+            event.server_ingest_sequence_no if event else "",
+            event.actor_source if event else "",
+            event.capture_mode if event else "",
+            json.dumps(event.quality_flags, ensure_ascii=False) if event else "",
+            (coverage.time_quality if coverage else event.interval_quality)
+            if event else "unknown",
+            coverage.run_id if coverage else "",
+            event.app_version if event else "",
+            item.edit_operation,
+            item.content_hash_before,
+            item.content_hash_after,
+            item.content_length_before,
+            item.content_length_after,
+            item.input_method,
+            item.is_ime,
+            item.observed_at.isoformat(),
+        ]
 
     grade_by_attempt = {}
     if not grade_records and selected_attempt_ids:
@@ -810,10 +1103,10 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         "item_instances": (("question_code", "item_instance_id", "question_snapshot_id", "presentation_variant", "option_order", "parameter_values", "random_seed", "presentation_hash"), [[assignment.snapshot.code, assignment.item_instance_id, assignment.snapshot_id, assignment.item_instance.presentation_variant, json.dumps(assignment.item_instance.option_order), json.dumps(assignment.item_instance.parameter_values), assignment.item_instance.random_seed, assignment.item_instance.presentation_hash] for assignment in _unique_assignments(assignments, "item_instance_id")]),
         "attempts": ((*identity_headers, "question_code", "attempt_id", "session_id", "question_snapshot_id", "item_instance_id", "status", "first_opened_at", "last_opened_at", "visit_count", "draft_answer", "draft_saved_at", "final_answer", "submitted_at", "first_to_submit_duration_ms", "last_visit_to_submission_ms", "is_correct", "score", "first_open_sequence_index", "submission_sequence_index", "current_response_snapshot_id", "final_response_snapshot_id", "submission_event_id", "submission_grade_status", "grade_version", "grade_is_correct", "grade_score", "grade_max_score", "normalized_response", "grading_method", "grading_version", "grader_version", "graded_at"), [_attempt_export_row(assignment, attempt_by_assignment.get(assignment.pk), session_by_id, grade_by_attempt) for assignment in assignments if assignment.session_id in session_by_id]),
         "assessment_events": (event_headers, event_rows),
-        "response_events": (compact_event_headers, response_rows),
-        "exposure_events": (compact_event_headers, exposure_rows),
-        "navigation_events": (compact_event_headers, navigation_rows),
-        "telemetry_events": (compact_event_headers, telemetry_rows),
+        "response_events": (response_headers, response_rows),
+        "exposure_events": (projection_headers, exposure_rows),
+        "navigation_events": (navigation_headers, navigation_rows),
+        "telemetry_events": (projection_headers, telemetry_rows),
         "simulation_events": (compact_event_headers, simulation_event_rows),
         "simulation_snapshots": ((*identity_headers, "question_code", "snapshot_id", "attempt_id", "simulation_version", "state_metadata", "content_hash", "content_size", "created_at"), [[*identity_and_question_for_attempt(simulation.attempt_id), simulation.snapshot_id, simulation.attempt_id, simulation.simulation_version, json.dumps(simulation.state_metadata), simulation.content_hash, simulation.content_size, simulation.created_at.isoformat()] for simulation in selected_simulations]),
         "confidence_assignments": ((*identity_headers, "question_code", "confidence_assignment_id", "attempt_id", "condition", "assignment_unit", "assignment_version", "response_status", "probability", "assigned_at", "committed_at"), [[*identity_and_question_for_attempt(confidence.attempt_id), confidence.confidence_assignment_id, confidence.attempt_id, confidence.condition, confidence.assignment_unit, confidence.assignment_version, confidence.response_status, confidence.probability, confidence.assigned_at.isoformat(), confidence.committed_at.isoformat() if confidence.committed_at else ""] for confidence in selected_confidence]),
@@ -841,23 +1134,9 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
             ],
         ),
         "response_input_observations": (
-            (*identity_headers, "question_code", "observation_id", "attempt_id", "client_instance_id", "client_sequence_no", "client_monotonic_ms", "edit_operation", "content_hash_before", "content_hash_after", "content_length_before", "content_length_after", "input_method", "observed_at"),
+            (*identity_headers, "question_code", "observation_id", "source_event_id", "source_event_type", "event_version", "envelope_version", "attempt_id", "client_instance_id", "client_sequence_no", "client_monotonic_ms", "batch_start_client_monotonic_ms", "batch_end_client_monotonic_ms", "client_wall_time_utc", "client_time_origin", "time_sync_id", "estimated_occurred_at_utc", "derived_occurred_at_utc", "server_received_at", "server_committed_at", "server_ingest_sequence_no", "actor_source", "capture_mode", "quality_flags", "time_quality", "coverage_run_id", "app_version", "edit_operation", "content_hash_before", "content_hash_after", "content_length_before", "content_length_after", "input_method", "is_ime", "observed_at"),
             [
-                [
-                    *identity_and_question_for_attempt(item.attempt_id),
-                    item.observation_id,
-                    item.attempt_id,
-                    item.client_instance_id,
-                    item.client_sequence_no,
-                    item.client_monotonic_ms,
-                    item.edit_operation,
-                    item.content_hash_before,
-                    item.content_hash_after,
-                    item.content_length_before,
-                    item.content_length_after,
-                    item.input_method,
-                    item.observed_at.isoformat(),
-                ]
+                input_observation_row(item)
                 for item in input_observations
                 if item.attempt_id in attempt_by_id
             ],
@@ -950,6 +1229,26 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                 [item.pk, item.version_id, item.student_id, item.class_snapshot_id or "", item.created_at.isoformat()]
                 for item in participant_snapshots
             ],
+        ),
+        "capture_contracts": (
+            ("capture_contract_id", "contract_name", "contract_version", "schema_document", "schema_sha256", "created_at"),
+            [[item.pk, item.contract_name, item.contract_version, json.dumps(item.schema_document, ensure_ascii=False), item.schema_sha256, item.created_at.isoformat()] for item in capture_contracts],
+        ),
+        "client_time_syncs": (
+            ("time_sync_id", "session_id", "client_instance_id", "client_wall_time_utc", "client_monotonic_ms", "client_time_origin", "server_received_at", "server_responded_at", "client_received_wall_time_utc", "client_received_monotonic_ms", "estimated_clock_offset_ms", "estimated_rtt_ms", "sync_quality", "finalized_at"),
+            [[item.pk, item.session_id, item.client_instance_id, item.client_wall_time_utc.isoformat(), item.client_monotonic_ms, item.client_time_origin.isoformat(), item.server_received_at.isoformat(), item.server_responded_at.isoformat(), item.client_received_wall_time_utc.isoformat() if item.client_received_wall_time_utc else "", item.client_received_monotonic_ms or "", item.estimated_clock_offset_ms or "", item.estimated_rtt_ms or "", item.sync_quality, item.finalized_at.isoformat() if item.finalized_at else ""] for item in time_syncs],
+        ),
+        "client_capture_checkpoints": (
+            ("checkpoint_id", "session_id", "student_id", "client_instance_id", "highest_emitted_sequence_no", "highest_acked_sequence_no", "highest_contiguous_acked_sequence_no", "pending_event_count", "failed_event_count", "missing_local_sequence_ranges", "client_monotonic_ms", "client_wall_time_utc", "client_time_origin", "time_sync_id", "trigger", "quality_flags", "app_version", "server_received_at"),
+            [[item.pk, item.session_id, item.student_id, item.client_instance_id, item.highest_emitted_sequence_no, item.highest_acked_sequence_no, item.highest_contiguous_acked_sequence_no, item.pending_event_count, item.failed_event_count, json.dumps(item.missing_local_sequence_ranges), item.client_monotonic_ms, item.client_wall_time_utc.isoformat(), item.client_time_origin.isoformat(), item.time_sync_id or "", item.trigger, json.dumps(item.quality_flags), item.app_version, item.server_received_at.isoformat()] for item in checkpoints],
+        ),
+        "recording_coverage_sessions": (
+            ("coverage_run_id", "coverage_version", "coverage_parameter_hash", "coverage_source_cutoff", "session_id", "overall_status", "lifecycle_status", "navigation_status", "client_sequence_status", "time_sync_status", "telemetry_status", "client_instance_count", "sequence_gap_count", "missing_sequence_ranges", "tail_gap_detected", "missing_reasons", "analysis_eligibility"),
+            [[item.run_id, item.run.coverage_version, item.run.parameter_hash, item.run.source_cutoff_at.isoformat(), item.session_id, item.overall_status, item.lifecycle_status, item.navigation_status, item.client_sequence_status, item.time_sync_status, item.telemetry_status, item.client_instance_count, item.sequence_gap_count, json.dumps(item.missing_sequence_ranges), item.tail_gap_detected, json.dumps(item.missing_reasons), json.dumps(item.analysis_eligibility, ensure_ascii=False)] for item in latest_coverage_session.values()],
+        ),
+        "recording_coverage_attempts": (
+            ("coverage_run_id", "coverage_version", "coverage_parameter_hash", "coverage_source_cutoff", "attempt_id", "overall_status", "enter_status", "render_status", "leave_status", "response_chain_status", "final_state_status", "time_quality", "response_state_count", "sequence_gap_count", "missing_reasons", "analysis_eligibility", "derived_features"),
+            [[item.run_id, item.run.coverage_version, item.run.parameter_hash, item.run.source_cutoff_at.isoformat(), item.attempt_id, item.overall_status, item.enter_status, item.render_status, item.leave_status, item.response_chain_status, item.final_state_status, item.time_quality, item.response_state_count, item.sequence_gap_count, json.dumps(item.missing_reasons), json.dumps(item.analysis_eligibility, ensure_ascii=False), json.dumps(item.derived_features, ensure_ascii=False)] for item in latest_coverage_attempt.values()],
         ),
     }
     derivation_id = str(getattr(snapshot, "snapshot_id", "preview"))

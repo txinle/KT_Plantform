@@ -1,4 +1,4 @@
-from django.test import TestCase
+from django.test import TransactionTestCase
 from django.urls import reverse
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
@@ -14,7 +14,7 @@ from apps.question_bank.models import Question, QuestionBank
 from apps.analytics.export_catalog import RESPONSE_EVENT_TYPES
 
 
-class DataCenterUiV2Tests(TestCase):
+class DataCenterUiV2Tests(TransactionTestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(
             username="data-ui-teacher", role=User.Role.TEACHER

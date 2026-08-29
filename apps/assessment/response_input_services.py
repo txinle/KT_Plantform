@@ -55,19 +55,27 @@ def record_stable_input_observation(
     content_length_before,
     content_length_after,
     input_method="unknown",
+    batch_start_client_monotonic_ms=None,
+    batch_end_client_monotonic_ms=None,
+    is_ime=False,
+    source_event=None,
 ):
     """Append one stable-input observation without accepting response text."""
     values = dict(
         attempt=attempt,
+        source_event=source_event,
         client_instance_id=client_instance_id,
         client_sequence_no=client_sequence_no,
         client_monotonic_ms=client_monotonic_ms,
+        batch_start_client_monotonic_ms=batch_start_client_monotonic_ms,
+        batch_end_client_monotonic_ms=batch_end_client_monotonic_ms,
         edit_operation=edit_operation,
         content_hash_before=content_hash_before,
         content_hash_after=content_hash_after,
         content_length_before=content_length_before,
         content_length_after=content_length_after,
         input_method=input_method,
+        is_ime=is_ime,
     )
     existing = ResponseInputObservation.objects.filter(
         attempt=attempt,
@@ -78,9 +86,13 @@ def record_stable_input_observation(
         comparable = {
             key: getattr(existing, key)
             for key in values
-            if key != "attempt"
+            if key not in {"attempt", "source_event"}
         }
-        incoming = {key: value for key, value in values.items() if key != "attempt"}
+        incoming = {
+            key: value
+            for key, value in values.items()
+            if key not in {"attempt", "source_event"}
+        }
         if comparable != incoming:
             raise ValueError("Input observation sequence conflicts with existing observation.")
         return existing

@@ -151,7 +151,9 @@ def _require_attempt_links(
         raise EventInvariantError("Event attempt links do not form one session assignment.")
 
 
-def _validate_payload_links(*, event_type, payload, session, attempt):
+def _validate_payload_links(
+    *, event_type, payload, session, attempt, question_snapshot
+):
     if event_type == "item_entered" and payload["from_assignment_id"] is not None:
         if not StudentQuestionAssignment.objects.filter(
             pk=payload["from_assignment_id"],
@@ -160,12 +162,53 @@ def _validate_payload_links(*, event_type, payload, session, attempt):
             raise EventInvariantError(
                 "item_entered.from_assignment_id is outside the event session."
             )
+    if event_type == "item_left" and payload.get("to_assignment_id") is not None:
+        if not StudentQuestionAssignment.objects.filter(
+            pk=payload["to_assignment_id"],
+            session_id=session.pk,
+        ).exists():
+            raise EventInvariantError(
+                "item_left.to_assignment_id is outside the event session."
+            )
     if event_type == "activity_heartbeat" and (
         attempt is None or payload["attempt_id"] != attempt.pk
     ):
         raise EventInvariantError(
             "activity_heartbeat.attempt_id does not match the event attempt."
         )
+    if event_type == "response_state_changed":
+        question_type = payload.get("question_type")
+        if question_snapshot is None or question_type != question_snapshot.question_type:
+            raise EventInvariantError(
+                "response_state_changed question type differs from the assigned item."
+            )
+        before = payload.get("response_state_before")
+        after = payload.get("response_state_after")
+        if question_type == "single_choice":
+            option_keys = {
+                str(option.get("key"))
+                for option in question_snapshot.options
+                if isinstance(option, dict) and option.get("key") is not None
+            }
+            if after not in option_keys or (before is not None and before not in option_keys):
+                raise EventInvariantError("Choice response contains an unknown option.")
+        elif question_type == "multiple_choice":
+            option_keys = {
+                str(option.get("key"))
+                for option in question_snapshot.options
+                if isinstance(option, dict) and option.get("key") is not None
+            }
+            for state in (before, after):
+                if state is None:
+                    continue
+                if (
+                    not isinstance(state, list)
+                    or state != sorted(set(state))
+                    or not set(state).issubset(option_keys)
+                ):
+                    raise EventInvariantError(
+                        "Multiple-choice response must be an ordered unique option set."
+                    )
     if event_type in CONFIDENCE_EVENTS:
         assignment = ConfidenceAssignment.objects.filter(attempt=attempt).first()
         if assignment is None or str(assignment.pk) != payload["confidence_assignment_id"]:
@@ -339,6 +382,7 @@ def validate_event_invariants(
         payload=payload,
         session=session,
         attempt=attempt,
+        question_snapshot=question_snapshot,
     )
     _validate_submission_invariants(
         event_type=event_type,

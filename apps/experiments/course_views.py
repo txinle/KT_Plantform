@@ -1,10 +1,12 @@
 from urllib.parse import quote
 
+from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from apps.accounts.course_access import (
@@ -19,7 +21,7 @@ from apps.analytics.export_fields import FIELD_GROUPS
 from apps.assessment.models import ExperimentSession, StudentQuestionAssignment
 
 from .forms import ExperimentForm, ParticipantRuleForm
-from .models import Experiment
+from .models import ClassExperimentTask, Experiment
 from .presentation import build_session_report_presentation
 from .session_report import build_session_report_document
 from .services import (
@@ -34,6 +36,15 @@ from .services import (
 
 def _experiment(course, pk):
     return get_object_or_404(course.experiments, pk=pk)
+
+
+def _is_class_experiment_task_unique_conflict(error):
+    message = str(error)
+    return (
+        "unique_class_experiment_task" in message
+        or "experiments_classexperimenttask.class_group_id, "
+        "experiments_classexperimenttask.experiment_id" in message
+    )
 
 
 def _session_report_scope(request, course_pk, experiment_pk, session_pk):
@@ -304,10 +315,13 @@ def experiment_publish(request, course_pk, pk):
     experiment = _experiment(course, pk)
     try:
         version = publish_experiment(experiment, request.user)
-        log_action(request, "experiment.publish", experiment, {"version": version.version_number})
         messages.success(request, f"实验已发布为 v{version.version_number}。")
     except ValidationError as exc:
         messages.error(request, "; ".join(exc.messages))
+    except IntegrityError as exc:
+        if not _is_class_experiment_task_unique_conflict(exc):
+            raise
+        messages.error(request, "该班级已存在此实验的正式任务；请新建或克隆实验后再发布。")
     return redirect("courses:experiment_detail", course.pk, experiment.pk)
 
 
@@ -319,9 +333,13 @@ def experiment_delete(request, course_pk, pk):
     experiment = _experiment(course, pk)
     if request.POST.get("confirmation") != "delete":
         return HttpResponseBadRequest("请在二次确认后再删除实验。")
-    with transaction.atomic():
-        details = delete_experiment_tree(experiment)
-        log_action(request, "experiment.delete", details=details)
+    try:
+        with transaction.atomic():
+            details = delete_experiment_tree(experiment)
+            log_action(request, "experiment.delete", details=details)
+    except ValidationError as exc:
+        messages.error(request, "; ".join(exc.messages))
+        return redirect("courses:experiment_detail", course.pk, experiment.pk)
     messages.success(request, "实验及其发布版本、会话与作答记录已删除。")
     return redirect("courses:experiments", course.pk)
 
@@ -330,6 +348,38 @@ def experiment_delete(request, course_pk, pk):
 def experiment_results(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     experiment = _experiment(course, pk)
+    if settings.CLASS_CENTER_ENABLED:
+        tasks = tuple(
+            ClassExperimentTask.objects.filter(
+                experiment=experiment,
+                class_group__course=course,
+            )
+            .select_related("class_group", "class_snapshot")
+            .order_by("class_group__academic_year", "class_group__name", "pk")
+        )
+        analysis_available = experiment.status in {
+            Experiment.Status.PUBLISHED,
+            Experiment.Status.CLOSED,
+        }
+        if analysis_available and len(tasks) == 1:
+            task = tasks[0]
+            target = reverse(
+                "courses:class_detail",
+                args=[course.pk, task.class_group_id],
+            )
+            return redirect(
+                f"{target}?section=experiments&experiment_id={experiment.pk}"
+            )
+        return render(
+            request,
+            "teacher/course_experiment_class_tasks.html",
+            {
+                "course": course,
+                "current_course": course,
+                "experiment": experiment,
+                "tasks": tasks if analysis_available else (),
+            },
+        )
     latest_version = experiment.versions.order_by("-version_number").first()
     sessions = latest_version.sessions.select_related("student") if latest_version else ExperimentSession.objects.none()
     valid_statuses = {value for value, _label in ExperimentSession.Status.choices}
@@ -356,6 +406,28 @@ def experiment_results(request, course_pk, pk):
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def experiment_session_detail(request, course_pk, pk, session_pk):
+    if settings.CLASS_CENTER_ENABLED:
+        course = get_accessible_course(request.user, course_pk)
+        experiment = get_object_or_404(course.experiments, pk=pk)
+        session = get_object_or_404(
+            ExperimentSession.objects.select_related("class_snapshot"),
+            pk=session_pk,
+            version__experiment=experiment,
+        )
+        task = ClassExperimentTask.objects.filter(
+            class_group__course=course,
+            experiment=experiment,
+            release_snapshot=session.version,
+            class_snapshot=session.class_snapshot,
+        ).select_related("class_group").first()
+        if task is not None:
+            return redirect(
+                "courses:class_student_experiment_detail",
+                course.pk,
+                task.class_group_id,
+                session.student_id,
+                experiment.pk,
+            )
     course, experiment, session, report = _session_report_scope(
         request,
         course_pk,

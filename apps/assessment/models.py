@@ -23,6 +23,9 @@ ALLOWED_QUALITY_FLAGS = frozenset(
         "mid_session_capture",
         "late_arrival",
         "payload_recovered",
+        "persistent_outbox_unavailable",
+        "dead_letter_event",
+        "collector_unavailable",
     }
 )
 
@@ -127,6 +130,37 @@ class ImmutableArtifactQuerySet(models.QuerySet):
 class ImmutableArtifactManager(models.Manager.from_queryset(ImmutableArtifactQuerySet)):
     pass
 
+
+class CaptureContractArtifact(models.Model):
+    capture_contract_id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False
+    )
+    contract_name = models.CharField(max_length=64, unique=True)
+    contract_version = models.PositiveSmallIntegerField()
+    schema_document = models.JSONField()
+    schema_sha256 = models.CharField(max_length=64, validators=[HASH_VALIDATOR])
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ImmutableArtifactManager()
+
+    class Meta:
+        ordering = ["contract_name"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(contract_version__gte=1),
+                name="capture_contract_version_positive",
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError("CaptureContractArtifact rows are immutable")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("CaptureContractArtifact rows are immutable")
+
+
 class ExperimentSession(models.Model):
     class Status(models.TextChoices):
         IN_PROGRESS = "in_progress", "进行中"
@@ -158,12 +192,50 @@ class ExperimentSession(models.Model):
     assignment_unit_type = models.CharField(max_length=16, choices=(("subject", "Subject"), ("session", "Session")), default="subject")
     condition = models.ForeignKey("experiments.Condition", null=True, blank=True, on_delete=models.PROTECT, related_name="sessions")
     condition_assigned_at = models.DateTimeField(null=True, blank=True)
+    capture_contract = models.ForeignKey(
+        CaptureContractArtifact,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="sessions",
+    )
+    terminal_at = models.DateTimeField(null=True, blank=True)
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["version", "student"], name="unique_student_version_session")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["version", "student"],
+                name="unique_student_version_session",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(status="in_progress", terminal_at__isnull=True)
+                    | Q(
+                        status__in=("completed", "expired", "invalidated"),
+                        terminal_at__isnull=False,
+                    )
+                ),
+                name="session_terminal_at_matches_status",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
-        if self.pk and self.condition_id != type(self).objects.only("condition_id").get(pk=self.pk).condition_id:
-            raise ValidationError("session condition is immutable")
+        if self.status == self.Status.IN_PROGRESS and self.terminal_at is not None:
+            raise ValidationError("in-progress session cannot have terminal_at")
+        if self.status != self.Status.IN_PROGRESS and self.terminal_at is None:
+            self.terminal_at = self.completed_at or timezone.now()
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = set(update_fields) | {"terminal_at"}
+        if self.pk:
+            previous = type(self).objects.only(
+                "condition_id", "student_id", "capture_contract_id"
+            ).get(pk=self.pk)
+            if self.condition_id != previous.condition_id:
+                raise ValidationError("session condition is immutable")
+            if self.student_id != previous.student_id:
+                raise ValidationError("session student is immutable")
+            if self.capture_contract_id != previous.capture_contract_id:
+                raise ValidationError("session capture contract is immutable")
         return super().save(*args, **kwargs)
 
 class StudentQuestionAssignment(models.Model):
@@ -290,16 +362,30 @@ class ResponseInputObservation(models.Model):
         UNKNOWN = "unknown", "未知"
 
     observation_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    source_event = models.OneToOneField(
+        "AssessmentEvent",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="response_input_observation",
+    )
     attempt = models.ForeignKey(Attempt, on_delete=models.PROTECT, related_name="input_observations")
     client_instance_id = models.UUIDField()
     client_sequence_no = models.PositiveBigIntegerField()
     client_monotonic_ms = models.DecimalField(max_digits=20, decimal_places=3)
+    batch_start_client_monotonic_ms = models.DecimalField(
+        max_digits=20, decimal_places=3, null=True, blank=True
+    )
+    batch_end_client_monotonic_ms = models.DecimalField(
+        max_digits=20, decimal_places=3, null=True, blank=True
+    )
     edit_operation = models.CharField(max_length=16, choices=EditOperation.choices)
     content_hash_before = models.CharField(max_length=64, validators=[HASH_VALIDATOR])
     content_hash_after = models.CharField(max_length=64, validators=[HASH_VALIDATOR])
     content_length_before = models.PositiveIntegerField()
     content_length_after = models.PositiveIntegerField()
     input_method = models.CharField(max_length=16, default="unknown")
+    is_ime = models.BooleanField(default=False)
     observed_at = models.DateTimeField(auto_now_add=True)
 
     objects = ImmutableArtifactManager()
@@ -314,6 +400,22 @@ class ResponseInputObservation(models.Model):
             models.CheckConstraint(
                 condition=Q(content_length_before__gte=0, content_length_after__gte=0),
                 name="input_observation_lengths_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        batch_start_client_monotonic_ms__isnull=True,
+                        batch_end_client_monotonic_ms__isnull=True,
+                    )
+                    | Q(
+                        batch_start_client_monotonic_ms__isnull=False,
+                        batch_end_client_monotonic_ms__isnull=False,
+                        batch_end_client_monotonic_ms__gte=models.F(
+                            "batch_start_client_monotonic_ms"
+                        ),
+                    )
+                ),
+                name="input_observation_batch_interval_valid",
             ),
         ]
 
@@ -577,6 +679,92 @@ class ClientTimeSync(models.Model):
         ]
 
 
+class ClientCaptureCheckpoint(models.Model):
+    class Trigger(models.TextChoices):
+        HEARTBEAT = "heartbeat", "心跳"
+        NAVIGATION = "navigation", "导航"
+        COMMIT = "commit", "提交"
+        PAGEHIDE = "pagehide", "页面隐藏"
+        RESUME = "resume", "恢复"
+        SESSION_END = "session_end", "会话结束"
+        ACK_PROGRESS = "ack_progress", "确认进度"
+
+    checkpoint_id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False
+    )
+    session = models.ForeignKey(
+        ExperimentSession,
+        on_delete=models.PROTECT,
+        related_name="client_capture_checkpoints",
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="client_capture_checkpoints",
+    )
+    client_instance_id = models.UUIDField()
+    highest_emitted_sequence_no = models.PositiveBigIntegerField(default=0)
+    highest_acked_sequence_no = models.PositiveBigIntegerField(default=0)
+    highest_contiguous_acked_sequence_no = models.PositiveBigIntegerField(default=0)
+    pending_event_count = models.PositiveIntegerField(default=0)
+    failed_event_count = models.PositiveIntegerField(default=0)
+    missing_local_sequence_ranges = models.JSONField(default=list, blank=True)
+    client_monotonic_ms = models.DecimalField(max_digits=20, decimal_places=3)
+    client_wall_time_utc = models.DateTimeField()
+    client_time_origin = models.DateTimeField()
+    time_sync = models.ForeignKey(
+        ClientTimeSync,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="capture_checkpoints",
+    )
+    trigger = models.CharField(max_length=20, choices=Trigger.choices)
+    quality_flags = models.JSONField(
+        default=list, blank=True, validators=[validate_quality_flags]
+    )
+    app_version = models.CharField(max_length=64, blank=True)
+    server_received_at = models.DateTimeField(default=timezone.now)
+
+    objects = ImmutableArtifactManager()
+
+    class Meta:
+        ordering = ["session_id", "client_instance_id", "server_received_at"]
+        indexes = [
+            models.Index(
+                fields=["session", "client_instance_id", "server_received_at"],
+                name="capture_ckpt_session_idx",
+            )
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(
+                    highest_contiguous_acked_sequence_no__lte=models.F(
+                        "highest_acked_sequence_no"
+                    )
+                ),
+                name="checkpoint_contiguous_lte_acked",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    highest_acked_sequence_no__lte=models.F(
+                        "highest_emitted_sequence_no"
+                    )
+                ),
+                name="checkpoint_acked_lte_emitted",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError("ClientCaptureCheckpoint rows are immutable")
+        self.full_clean(validate_unique=False, validate_constraints=False)
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("ClientCaptureCheckpoint rows are immutable")
+
+
 class ResponseSnapshot(models.Model):
     snapshot_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     attempt = models.ForeignKey(
@@ -807,6 +995,11 @@ class AssessmentEvent(models.Model):
         on_delete=models.PROTECT,
         related_name="assessment_events",
     )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="assessment_events",
+    )
     assignment = models.ForeignKey(
         StudentQuestionAssignment,
         null=True,
@@ -1005,6 +1198,8 @@ class AssessmentEvent(models.Model):
             )
         if not self._state.adding:
             raise AppendOnlyEventError("AssessmentEvent rows are append-only.")
+        if self.student_id is None and self.session_id is not None:
+            self.student_id = self.session.student_id
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):

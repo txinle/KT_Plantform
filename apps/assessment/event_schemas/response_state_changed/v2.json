@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "question_type": {"enum": ["single_choice", "multiple_choice", "numeric", "short_answer", "fill_blank", "true_false"]},
+    "response_state_before": {},
+    "response_state_after": {},
+    "response_snapshot_id": {"type": "string", "format": "uuid"},
+    "content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "content_length": {"type": "integer", "minimum": 0},
+    "state_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "change_source": {"enum": ["student", "restore", "forced_snapshot"]}
+  },
+  "required": ["question_type", "response_state_before", "response_state_after", "change_source"],
+  "allOf": [
+    {
+      "if": {"properties": {"question_type": {"const": "single_choice"}}},
+      "then": {
+        "properties": {
+          "response_state_before": {"type": ["string", "null"]},
+          "response_state_after": {"type": "string"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"question_type": {"const": "true_false"}}},
+      "then": {
+        "properties": {
+          "response_state_before": {"enum": [null, "true", "false"]},
+          "response_state_after": {"enum": ["true", "false"]}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"question_type": {"const": "multiple_choice"}}},
+      "then": {
+        "properties": {
+          "response_state_before": {
+            "oneOf": [
+              {"type": "null"},
+              {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+            ]
+          },
+          "response_state_after": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"question_type": {"enum": ["numeric", "fill_blank"]}}},
+      "then": {
+        "properties": {
+          "response_state_before": {"type": ["string", "null"]},
+          "response_state_after": {"type": "string"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"question_type": {"const": "short_answer"}}},
+      "then": {
+        "properties": {
+          "response_state_before": {
+            "oneOf": [
+              {"type": "null"},
+              {"$ref": "#/$defs/state_ref"}
+            ]
+          },
+          "response_state_after": {"$ref": "#/$defs/state_ref"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "state_ref": {
+      "type": "object",
+      "properties": {
+        "snapshot_id": {"type": "string", "format": "uuid"},
+        "state_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "content_length": {"type": "integer", "minimum": 0},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "required": ["snapshot_id", "state_hash", "content_length"],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

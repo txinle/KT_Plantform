@@ -10,11 +10,14 @@
   const MAX_BACKOFF_MS = 60000;
   const DEFAULT_SYNC_INTERVAL_MS = 15 * 60 * 1000;
   const DATABASE_NAME = 'kt-process-events-v1';
-  const DATABASE_VERSION = 1;
+  const DATABASE_VERSION = 2;
+  const V2_EVENT_TYPES = new Set([
+    'item_rendered', 'item_left', 'response_state_changed', 'text_edit_observed',
+  ]);
 
   const PAYLOAD_FIELDS = Object.freeze({
     item_rendered: [],
-    item_left: ['leave_reason'],
+    item_left: ['leave_reason', 'to_assignment_id'],
     response_input_started: ['question_type'],
     text_edit_observed: [
       'question_type',
@@ -24,6 +27,9 @@
       'content_length_before',
       'content_length_after',
       'input_method',
+      'batch_start_client_monotonic_ms',
+      'batch_end_client_monotonic_ms',
+      'is_ime',
     ],
     response_state_changed: [
       'question_type',
@@ -118,12 +124,30 @@
     });
   }
 
+  function missingSequenceRanges(highestEmitted, knownSequences) {
+    const known = new Set(knownSequences);
+    const ranges = [];
+    let start = null;
+    for (let sequence = 1; sequence <= highestEmitted; sequence += 1) {
+      if (!known.has(sequence) && start === null) start = sequence;
+      if (known.has(sequence) && start !== null) {
+        ranges.push([start, sequence - 1]);
+        start = null;
+      }
+    }
+    if (start !== null) ranges.push([start, highestEmitted]);
+    return ranges;
+  }
+
   class MemoryOutbox {
     constructor(options = {}) {
       this.isFallback = Boolean(options.isFallback);
       this.records = [];
       this.nextSequences = new Map();
       this.nextOrder = 1;
+      this.acknowledged = new Map();
+      this.checkpoints = [];
+      this.deadLetters = [];
       this.lock = Promise.resolve();
     }
 
@@ -169,6 +193,9 @@
     deleteAcknowledged(clientInstanceId, sequences) {
       const acknowledged = new Set(sequences);
       return this._locked(() => {
+        const prior = this.acknowledged.get(clientInstanceId) || new Set();
+        sequences.forEach((sequence) => prior.add(sequence));
+        this.acknowledged.set(clientInstanceId, prior);
         this.records = this.records.filter((record) => !(
           record.client_instance_id === clientInstanceId
           && acknowledged.has(record.client_sequence_no)
@@ -178,6 +205,55 @@
 
     count() {
       return this._locked(() => this.records.length);
+    }
+
+    captureState(clientInstanceId) {
+      return this._locked(() => {
+        const emitted = (this.nextSequences.get(clientInstanceId) || 1) - 1;
+        const acknowledged = this.acknowledged.get(clientInstanceId) || new Set();
+        const highestAcked = acknowledged.size ? Math.max(...acknowledged) : 0;
+        let contiguous = 0;
+        while (acknowledged.has(contiguous + 1)) contiguous += 1;
+        const pending = this.records.filter(
+          (record) => record.client_instance_id === clientInstanceId,
+        );
+        const failedRows = this.deadLetters.filter(
+          (row) => row.client_instance_id === clientInstanceId,
+        );
+        const known = new Set(acknowledged);
+        pending.forEach((record) => known.add(record.client_sequence_no));
+        failedRows.forEach((record) => known.add(record.client_sequence_no));
+        return {
+          highestEmitted: emitted,
+          highestAcked,
+          highestContiguousAcked: contiguous,
+          pending: pending.length,
+          failed: failedRows.length,
+          missingLocalRanges: missingSequenceRanges(emitted, known),
+        };
+      });
+    }
+
+    enqueueCheckpoint(document) {
+      return this._locked(() => this.checkpoints.push(clone(document)));
+    }
+
+    pendingCheckpoints() {
+      return this._locked(() => this.checkpoints.map(clone));
+    }
+
+    deleteCheckpoint(checkpointId) {
+      return this._locked(() => {
+        this.checkpoints = this.checkpoints.filter((row) => row.checkpoint_id !== checkpointId);
+      });
+    }
+
+    moveToDeadLetter(clientInstanceId, sequence, rejection) {
+      return this._locked(() => {
+        const record = this.records.find((row) => row.client_instance_id === clientInstanceId && row.client_sequence_no === sequence);
+        if (record) this.deadLetters.push({ ...record, rejection: clone(rejection) });
+        this.records = this.records.filter((row) => !(row.client_instance_id === clientInstanceId && row.client_sequence_no === sequence));
+      });
     }
   }
 
@@ -201,6 +277,12 @@
           }
           if (!database.objectStoreNames.contains('meta')) {
             database.createObjectStore('meta', { keyPath: 'key' });
+          }
+          if (!database.objectStoreNames.contains('checkpoints')) {
+            database.createObjectStore('checkpoints', { keyPath: 'checkpoint_id' });
+          }
+          if (!database.objectStoreNames.contains('dead_letters')) {
+            database.createObjectStore('dead_letters', { keyPath: 'dead_letter_id' });
           }
         };
         request.onsuccess = () => resolve(new IndexedDbOutbox(request.result));
@@ -254,10 +336,16 @@
     }
 
     async deleteAcknowledged(clientInstanceId, sequences) {
-      const transaction = this.database.transaction('events', 'readwrite');
+      const transaction = this.database.transaction(['events', 'meta'], 'readwrite');
       const completed = transactionResult(transaction);
       const store = transaction.objectStore('events');
       sequences.forEach((sequence) => store.delete([clientInstanceId, sequence]));
+      const meta = transaction.objectStore('meta');
+      const key = `acknowledged:${clientInstanceId}`;
+      const prior = await requestResult(meta.get(key));
+      const values = new Set(prior?.value || []);
+      sequences.forEach((sequence) => values.add(sequence));
+      meta.put({ key, value: [...values].sort((a, b) => a - b) });
       await completed;
     }
 
@@ -267,6 +355,80 @@
       const count = await requestResult(transaction.objectStore('events').count());
       await completed;
       return count;
+    }
+
+    async captureState(clientInstanceId) {
+      const transaction = this.database.transaction(['events', 'meta', 'dead_letters'], 'readonly');
+      const completed = transactionResult(transaction);
+      const events = transaction.objectStore('events');
+      const meta = transaction.objectStore('meta');
+      const [sequenceRow, ackRow, records, deadLetters] = await Promise.all([
+        requestResult(meta.get(`next-sequence:${clientInstanceId}`)),
+        requestResult(meta.get(`acknowledged:${clientInstanceId}`)),
+        requestResult(events.getAll()),
+        requestResult(transaction.objectStore('dead_letters').getAll()),
+      ]);
+      await completed;
+      const emitted = (sequenceRow?.value || 1) - 1;
+      const values = new Set(ackRow?.value || []);
+      const highestAcked = values.size ? Math.max(...values) : 0;
+      let contiguous = 0;
+      while (values.has(contiguous + 1)) contiguous += 1;
+      const pendingRows = records.filter(
+        (row) => row.client_instance_id === clientInstanceId,
+      );
+      const failedRows = deadLetters.filter(
+        (row) => row.client_instance_id === clientInstanceId,
+      );
+      const known = new Set(values);
+      pendingRows.forEach((row) => known.add(row.client_sequence_no));
+      failedRows.forEach((row) => known.add(row.client_sequence_no));
+      return {
+        highestEmitted: emitted,
+        highestAcked,
+        highestContiguousAcked: contiguous,
+        pending: pendingRows.length,
+        failed: failedRows.length,
+        missingLocalRanges: missingSequenceRanges(emitted, known),
+      };
+    }
+
+    async enqueueCheckpoint(document) {
+      const transaction = this.database.transaction('checkpoints', 'readwrite');
+      const completed = transactionResult(transaction);
+      transaction.objectStore('checkpoints').put(clone(document));
+      await completed;
+    }
+
+    async pendingCheckpoints() {
+      const transaction = this.database.transaction('checkpoints', 'readonly');
+      const completed = transactionResult(transaction);
+      const rows = await requestResult(transaction.objectStore('checkpoints').getAll());
+      await completed;
+      return rows.map(clone);
+    }
+
+    async deleteCheckpoint(checkpointId) {
+      const transaction = this.database.transaction('checkpoints', 'readwrite');
+      const completed = transactionResult(transaction);
+      transaction.objectStore('checkpoints').delete(checkpointId);
+      await completed;
+    }
+
+    async moveToDeadLetter(clientInstanceId, sequence, rejection) {
+      const transaction = this.database.transaction(['events', 'dead_letters'], 'readwrite');
+      const completed = transactionResult(transaction);
+      const events = transaction.objectStore('events');
+      const record = await requestResult(events.get([clientInstanceId, sequence]));
+      if (record) {
+        transaction.objectStore('dead_letters').put({
+          ...record,
+          dead_letter_id: `${clientInstanceId}:${sequence}`,
+          rejection: clone(rejection),
+        });
+        events.delete([clientInstanceId, sequence]);
+      }
+      await completed;
     }
   }
 
@@ -335,7 +497,9 @@
       persisted: Boolean(event.persisted),
     }));
     listen(windowTarget, 'pagehide', async (event) => {
+      if (attemptOpen) await closeAttempt('pagehide', null, false, false);
       await record('pagehide', { persisted: Boolean(event.persisted) });
+      await collector.checkpoint?.('pagehide');
       return collector.flush?.({ ignoreVisibility: true, keepalive: true });
     });
     listen(windowTarget, 'online', async () => {
@@ -358,7 +522,7 @@
             0,
             Math.round(monotonicNow() - lastInteractionAt),
           ),
-        });
+        }).then(() => collector.checkpoint?.('heartbeat'));
       }, Math.max(15, heartbeatSeconds) * 1000);
     }
 
@@ -368,12 +532,20 @@
       }
       heartbeatTimer = null;
     };
-    const closeAttempt = async (reason) => {
+    const closeAttempt = async (
+      reason, toAssignmentId = null, flush = true, createCheckpoint = true,
+    ) => {
       if (!attemptOpen) return;
       attemptOpen = false;
       stopHeartbeat();
-      await record('item_left', { leave_reason: reason });
-      collector.flush?.({ ignoreVisibility: true, keepalive: true });
+      await record('item_left', {
+        leave_reason: reason,
+        to_assignment_id: toAssignmentId,
+      });
+      if (createCheckpoint) {
+        await collector.checkpoint?.(reason === 'navigation' ? 'navigation' : 'session_end');
+      }
+      if (flush) collector.flushBounded?.(1500, { ignoreVisibility: true, keepalive: true });
     };
     const dispose = () => {
       stopHeartbeat();
@@ -383,7 +555,13 @@
     return {
       // item_rendered is the compatibility event name; the payload makes its
       // measurement boundary explicit: stem and controls are interactive.
-      ready: record('item_rendered', { presentation_state: 'interactive' }),
+      ready: (async () => {
+        await record('item_rendered', { presentation_state: 'interactive' });
+        await record('pageshow', { persisted: false });
+        await record(visible ? 'document_visible' : 'document_hidden', {});
+        await record(focused ? 'window_focused' : 'window_blurred', {});
+        await collector.checkpoint?.('resume');
+      })(),
       closeAttempt,
       dispose,
       isAttemptOpen: () => attemptOpen,
@@ -396,6 +574,7 @@
       this.sessionId = options.sessionId;
       this.attemptId = options.attemptId;
       this.endpoint = options.endpoint;
+      this.checkpointEndpoint = options.checkpointEndpoint || '';
       this.csrfToken = options.csrfToken || '';
       this.appVersion = options.appVersion || '';
       this.outbox = options.outbox;
@@ -416,6 +595,7 @@
       this.clientInstanceId = (options.uuid || (() => globalThis.crypto.randomUUID()))();
       this.timeSyncId = null;
       this.failureCount = 0;
+      this.lastCheckpointedContiguousAck = 0;
       this.retryTimer = null;
       this.syncTimer = null;
       this.flushPromise = null;
@@ -425,7 +605,7 @@
       const flags = [];
       if (!this.timeSyncId) flags.push('clock_unsynchronized');
       if (!this.isOnline()) flags.push('offline_buffered');
-      if (this.outbox.isFallback) flags.push('payload_recovered');
+      if (this.outbox.isFallback) flags.push('persistent_outbox_unavailable');
       return flags;
     }
 
@@ -442,7 +622,7 @@
         (sequence) => {
           const document = {
             event_type: eventType,
-            event_version: 1,
+            event_version: V2_EVENT_TYPES.has(eventType) ? 2 : 1,
             session_id: this.sessionId,
             attempt_id: this.attemptId,
             client_sequence_no: sequence,
@@ -499,7 +679,30 @@
           completed = false;
           break;
         }
-        if (!response.ok || !responseDocument?.success) {
+        if (!response.ok) {
+          const permanentResponse = response.status >= 400
+            && response.status < 500
+            && response.status !== 408
+            && response.status !== 429;
+          if (permanentResponse) {
+            for (const event of batch.events) {
+              await this.outbox.moveToDeadLetter?.(
+                batch.clientInstanceId,
+                event.client_sequence_no,
+                {
+                  client_sequence_no: event.client_sequence_no,
+                  code: responseDocument?.error?.code || 'permanent_rejection',
+                  permanent: true,
+                  http_status: response.status,
+                },
+              );
+            }
+            continue;
+          }
+          completed = false;
+          break;
+        }
+        if (!responseDocument?.success) {
           completed = false;
           break;
         }
@@ -507,14 +710,30 @@
         const acknowledged = (responseDocument.acknowledgements || [])
           .map((item) => item.client_sequence_no)
           .filter((sequence) => available.has(sequence));
-        if (!acknowledged.length) {
+        const permanent = (responseDocument.rejections || []).filter((item) => item.permanent);
+        if (!acknowledged.length && !permanent.length) {
           completed = false;
           break;
         }
-        await this.outbox.deleteAcknowledged(batch.clientInstanceId, acknowledged);
+        for (const rejection of permanent) {
+          await this.outbox.moveToDeadLetter?.(
+            batch.clientInstanceId,
+            rejection.client_sequence_no,
+            rejection,
+          );
+        }
+        if (acknowledged.length) await this.outbox.deleteAcknowledged(batch.clientInstanceId, acknowledged);
       }
       if (completed) {
         this.failureCount = 0;
+        const state = await this.outbox.captureState?.(this.clientInstanceId);
+        if (
+          state
+          && state.highestContiguousAcked > this.lastCheckpointedContiguousAck
+        ) {
+          this.lastCheckpointedContiguousAck = state.highestContiguousAcked;
+          await this.checkpoint('ack_progress');
+        }
       } else {
         const delay = backoffDelay(this.failureCount);
         this.failureCount += 1;
@@ -529,6 +748,62 @@
         this.flushPromise = null;
       });
       return this.flushPromise;
+    }
+
+    async flushBounded(timeoutMs = 1500, options = {}) {
+      if (!this.setTimeout) return this.flush(options);
+      let timeoutId;
+      return Promise.race([
+        this.flush(options),
+        new Promise((resolve) => {
+          timeoutId = this.setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]).finally(() => {
+        if (timeoutId && this.clearTimeout) this.clearTimeout(timeoutId);
+      });
+    }
+
+    async checkpoint(trigger) {
+      if (!this.checkpointEndpoint || !this.fetch || !this.outbox.captureState) return null;
+      const state = await this.outbox.captureState(this.clientInstanceId);
+      const document = {
+        checkpoint_id: (globalThis.crypto?.randomUUID?.() || `00000000-0000-4000-8000-${String(Date.now()).slice(-12).padStart(12, '0')}`),
+        session_id: this.sessionId,
+        client_instance_id: this.clientInstanceId,
+        highest_emitted_sequence_no: state.highestEmitted,
+        highest_acked_sequence_no: state.highestAcked,
+        highest_contiguous_acked_sequence_no: state.highestContiguousAcked,
+        pending_event_count: state.pending,
+        failed_event_count: state.failed,
+        missing_local_sequence_ranges: state.missingLocalRanges,
+        client_monotonic_ms: normalizeMonotonic(this.monotonicNow()),
+        client_wall_time_utc: this.wallNow().toISOString(),
+        client_time_origin: this.timeOrigin,
+        time_sync_id: this.timeSyncId,
+        trigger,
+        quality_flags: this._qualityFlags(),
+        app_version: this.appVersion,
+      };
+      await this.outbox.enqueueCheckpoint(document);
+      const pending = await this.outbox.pendingCheckpoints();
+      try {
+        let result = null;
+        for (const checkpoint of pending) {
+          const response = await this.fetch(this.checkpointEndpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrfToken },
+            body: JSON.stringify(checkpoint),
+            credentials: 'same-origin',
+            keepalive: trigger === 'pagehide' || trigger === 'session_end',
+          });
+          if (!response.ok) break;
+          result = await response.json();
+          await this.outbox.deleteCheckpoint(checkpoint.checkpoint_id);
+        }
+        return result;
+      } catch (_error) {
+        return null;
+      }
     }
 
     async synchronizeClock({ createUrl, finalizeUrl } = {}) {
