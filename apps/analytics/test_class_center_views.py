@@ -59,6 +59,8 @@ class ClassCenterViewTests(TransactionTestCase):
 
         self.assertContains(class_list, "管理学生")
         self.assertNotContains(class_list, "进入班级中心")
+        self.assertNotContains(class_list, "编辑班级")
+        self.assertNotContains(class_list, "编辑名称")
         self.assertContains(course_detail, "班级与学生")
         self.assertNotContains(course_detail, "班级教学分析")
 
@@ -68,6 +70,9 @@ class ClassCenterViewTests(TransactionTestCase):
 
         self.assertContains(class_list, "进入班级中心")
         self.assertNotContains(class_list, ">管理学生<", html=False)
+        self.assertNotContains(class_list, "编辑班级")
+        self.assertNotContains(class_list, "编辑名称")
+        self.assertContains(class_list, "删除班级")
         self.assertContains(course_detail, "班级教学分析")
         self.assertContains(course_detail, class_list_url)
 
@@ -117,6 +122,64 @@ class ClassCenterViewTests(TransactionTestCase):
         ))
 
     @override_settings(CLASS_CENTER_ENABLED=True)
+    def test_manage_section_places_class_settings_before_member_management(self):
+        self.client.force_login(self.owner)
+
+        response = self.client.get(self.url, {"section": "manage"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "teacher/course_class_center.html")
+        self.assertEqual(response.context["active_section"], "manage")
+        form = response.context["class_settings_form"]
+        self.assertFalse(form.is_bound)
+        self.assertTrue(form.initial["state_token"])
+        self.assertContains(response, "班级设置")
+        self.assertContains(
+            response,
+            f'action="{reverse("courses:class_update", args=[self.course.pk, self.class_group.pk])}"',
+        )
+        self.assertContains(response, 'name="state_token"', html=False)
+        self.assertContains(response, 'name="name"', html=False)
+        self.assertContains(response, 'name="academic_year"', html=False)
+        self.assertContains(response, 'name="is_active"', html=False)
+        self.assertContains(response, "停用后不能新增、导入、复制或转入学生")
+        self.assertContains(response, "导入学生")
+        self.assertNotContains(response, "编辑班级")
+        self.assertLess(
+            response.content.decode().index("班级设置"),
+            response.content.decode().index("班级学生"),
+        )
+
+    @override_settings(CLASS_CENTER_ENABLED=True)
+    def test_archived_course_manage_section_is_read_only(self):
+        self.course.status = Course.Status.ARCHIVED
+        self.course.save(update_fields=["status"])
+        self.client.force_login(self.owner)
+
+        response = self.client.get(self.url, {"section": "manage"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.context.get("class_settings_form"))
+        self.assertContains(response, "课程已归档，班级设置只读")
+        self.assertNotContains(
+            response,
+            reverse("courses:class_update", args=[self.course.pk, self.class_group.pk]),
+        )
+
+    @override_settings(CLASS_CENTER_ENABLED=True)
+    def test_inactive_class_keeps_settings_but_hides_student_import(self):
+        self.class_group.is_active = False
+        self.class_group.save(update_fields=["is_active"])
+        self.client.force_login(self.owner)
+
+        response = self.client.get(self.url, {"section": "manage"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(response.context["class_settings_form"])
+        self.assertContains(response, "班级已停用。")
+        self.assertNotContains(response, "导入学生")
+
+    @override_settings(CLASS_CENTER_ENABLED=True)
     def test_owner_collaborator_and_admin_can_read_but_outsider_gets_404(self):
         collaborator = User.objects.create_user(
             username="class-center-collaborator",
@@ -161,3 +224,8 @@ class ClassCenterViewTests(TransactionTestCase):
         self.assertEqual(self.client.get(wrong_pair).status_code, 404)
         response = self.client.get(self.url, {"section": "not-a-section"})
         self.assertEqual(response.status_code, 404)
+        invalid_experiment = self.client.get(
+            self.url,
+            {"section": "manage", "experiment_id": "not-an-integer"},
+        )
+        self.assertEqual(invalid_experiment.status_code, 404)

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from django.conf import settings
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from .models import ClassGroup, Course, CourseTeacher, User
@@ -40,18 +40,32 @@ class CourseCollaborationRefreshTests(TestCase):
         self.client.force_login(self.outsider)
         self.assertEqual(self.client.get(url).status_code, 404)
 
+    @override_settings(CLASS_CENTER_ENABLED=False)
     def test_revision_changes_after_collaborator_mutation_and_page_exposes_refresh_url(self):
         self.client.force_login(self.collaborator)
         revision_url = reverse("courses:revision", args=[self.course.pk])
         before = self.client.get(revision_url).json()["revision"]
+        edit_response = self.client.get(
+            reverse(
+                "courses:class_edit",
+                args=[self.course.pk, self.class_group.pk],
+            )
+        )
         response = self.client.post(
-            reverse("courses:class_rename", args=[self.course.pk, self.class_group.pk]),
-            {"name": "同步二班"},
+            reverse("courses:class_update", args=[self.course.pk, self.class_group.pk]),
+            {
+                "name": "同步二班",
+                "academic_year": self.class_group.academic_year,
+                "is_active": "on",
+                "state_token": edit_response.context["form"].initial["state_token"],
+            },
         )
         self.assertEqual(response.status_code, 302)
         after = self.client.get(revision_url).json()["revision"]
 
         self.assertNotEqual(before, after)
+        self.class_group.refresh_from_db()
+        self.assertEqual(self.class_group.name, "同步二班")
         page = self.client.get(reverse("courses:classes", args=[self.course.pk]))
         self.assertContains(page, f'data-course-revision-url="{revision_url}"')
         self.assertContains(page, f'data-course-revision="{after}"')

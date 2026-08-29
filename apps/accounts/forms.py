@@ -172,25 +172,6 @@ class ClassGroupForm(forms.ModelForm):
         }
 
 
-class ClassGroupRenameForm(forms.ModelForm):
-    class Meta:
-        model = ClassGroup
-        fields = ["name"]
-
-    def clean_name(self):
-        value = self.cleaned_data["name"].strip()
-        if not value:
-            raise forms.ValidationError("班级名称不能为空。")
-        duplicate = ClassGroup.objects.filter(
-            course=self.instance.course,
-            academic_year=self.instance.academic_year,
-            name=value,
-        ).exclude(pk=self.instance.pk)
-        if duplicate.exists():
-            raise forms.ValidationError("同一课程和年级中已存在该班级名称。")
-        return value
-
-
 class ClassGroupUpdateForm(forms.ModelForm):
     state_token = forms.CharField(
         required=True,

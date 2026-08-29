@@ -54,7 +54,6 @@ urlpatterns = [
     path("<int:course_pk>/classes/<int:class_pk>/experiments/<int:experiment_pk>/questions/<int:question_pk>/students/<int:student_pk>/process/", course_resource_views.class_question_process, name="class_question_process"),
     path("<int:course_pk>/classes/<int:class_pk>/edit/", course_resource_views.class_edit, name="class_edit"),
     path("<int:course_pk>/classes/<int:class_pk>/update/", course_resource_views.class_update, name="class_update"),
-    path("<int:course_pk>/classes/<int:class_pk>/rename/", course_resource_views.class_rename, name="class_rename"),
     path("<int:course_pk>/classes/<int:class_pk>/delete/", course_resource_views.class_delete, name="class_delete"),
     path("<int:course_pk>/classes/<int:class_pk>/students/add/", course_resource_views.student_add, name="student_add"),
     path("<int:course_pk>/classes/<int:class_pk>/students/add/manual/", course_resource_views.student_add_manual, name="student_add_manual"),
