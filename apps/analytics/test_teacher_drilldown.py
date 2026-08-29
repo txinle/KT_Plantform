@@ -28,6 +28,7 @@ from apps.question_bank.models import (
     QuestionOption,
 )
 
+from .models import RecordingCoverageAttempt, RecordingCoverageRun
 from .teaching.drilldown import (
     TransitionApplicability,
     build_attempt_process_detail,
@@ -258,6 +259,7 @@ class TeacherQuestionDrilldownTests(TransactionTestCase):
             final_answer=final_answer,
         )
         client_id = uuid.uuid4()
+        client_time_origin = timezone.now()
         before = None
         for client_sequence, after in enumerate(states, start=1):
             append_assessment_event(
@@ -269,6 +271,8 @@ class TeacherQuestionDrilldownTests(TransactionTestCase):
                 attempt=attempt,
                 client_instance_id=client_id,
                 client_sequence_no=client_sequence,
+                client_monotonic_ms=client_sequence * 100,
+                client_time_origin=client_time_origin,
                 payload={
                     "question_type": snapshot.question_type,
                     "response_state_before": before,
@@ -372,6 +376,173 @@ class TeacherQuestionDrilldownTests(TransactionTestCase):
         )
         self.assertEqual(detail.process.first_value, "A")
         self.assertEqual(detail.process.final_value, "A")
+
+    @override_settings(CLASS_CENTER_ENABLED=True)
+    def test_process_page_projects_coverage_and_time_evidence_into_teacher_language(self):
+        run = RecordingCoverageRun.objects.create(
+            scope_hash="0" * 64,
+            parameter_hash="1" * 64,
+            source_hash="2" * 64,
+        )
+        RecordingCoverageAttempt.objects.create(
+            run=run,
+            attempt=self.attempts[("A", "single")],
+            overall_status="partial",
+            time_quality="exact_monotonic",
+            missing_reasons=[
+                "missing_item_left",
+                "cross_instance_order_uncertain",
+            ],
+        )
+
+        detail = build_attempt_process_detail(
+            self.class_group,
+            experiment_id=self.experiment.pk,
+            question_id=self.single_snapshot.pk,
+            student_id=self.students["A"].pk,
+        )
+
+        self.assertEqual(detail.coverage_status_title, "过程记录不完整")
+        self.assertEqual(detail.coverage_time_title, "步骤间隔可可靠比较")
+        self.assertEqual(detail.coverage_reason_labels[0], "未记录离开题目")
+        self.assertTrue(detail.has_cross_instance_order_uncertainty)
+        for raw_field in (
+            "coverage_status",
+            "coverage_time_quality",
+            "coverage_missing_reasons",
+            "coverage_run_id",
+        ):
+            self.assertFalse(hasattr(detail, raw_field))
+        self.assertIn(
+            "服务器接收时间；与上一步的间隔可可靠比较",
+            [step.time_source for step in detail.process.steps],
+        )
+        self.assertNotIn(
+            "exact_monotonic",
+            [step.time_source for step in detail.process.steps],
+        )
+
+        self.client.force_login(self.teacher)
+        response = self.client.get(reverse(
+            "courses:class_question_process",
+            args=[
+                self.course.pk,
+                self.class_group.pk,
+                self.experiment.pk,
+                self.single_snapshot.pk,
+                self.students["A"].pk,
+            ],
+        ))
+        html = response.content.decode()
+
+        self.assertEqual(response.status_code, 200)
+        for expected in ("过程记录不完整", "步骤间隔可可靠比较", "未记录离开题目"):
+            self.assertIn(expected, html)
+        self.assertIn("缺失事件不会被解释为未发生行为。", html)
+        for forbidden in ("partial", "exact_monotonic", "server_received_at", str(run.run_id)):
+            self.assertNotIn(forbidden, html)
+
+    @override_settings(CLASS_CENTER_ENABLED=True)
+    def test_process_page_hides_navigation_assignment_ids_and_close_reason_codes(self):
+        attempt = self.attempts[("A", "single")]
+        destination = self.attempts[("A", "multiple")].assignment
+        append_assessment_event(
+            event_type="item_left",
+            event_version=2,
+            event_domain="assessment",
+            actor_source="client",
+            session=attempt.session,
+            assignment=attempt.assignment,
+            attempt=attempt,
+            question_snapshot=attempt.assignment.snapshot,
+            item_instance=attempt.assignment.item_instance,
+            client_instance_id=uuid.uuid4(),
+            client_sequence_no=1,
+            payload={
+                "leave_reason": "navigation",
+                "to_assignment_id": destination.pk,
+            },
+        )
+        append_assessment_event(
+            event_type="attempt_closed",
+            event_version=1,
+            event_domain="assessment",
+            actor_source="server",
+            session=attempt.session,
+            assignment=attempt.assignment,
+            attempt=attempt,
+            question_snapshot=attempt.assignment.snapshot,
+            item_instance=attempt.assignment.item_instance,
+            payload={"close_reason": "timed_out"},
+        )
+
+        self.client.force_login(self.teacher)
+        response = self.client.get(reverse(
+            "courses:class_question_process",
+            args=[
+                self.course.pk,
+                self.class_group.pk,
+                self.experiment.pk,
+                self.single_snapshot.pk,
+                self.students["A"].pk,
+            ],
+        ))
+        html = response.content.decode()
+
+        self.assertEqual(response.status_code, 200)
+        for expected in ("已前往下一题", "作答超时"):
+            self.assertIn(expected, html)
+        for forbidden in (
+            f"目标分配 {destination.pk}",
+            "timed_out",
+        ):
+            self.assertNotIn(forbidden, html)
+
+    @override_settings(CLASS_CENTER_ENABLED=True)
+    def test_process_page_pending_coverage_uses_chinese_finalization_message(self):
+        self.client.force_login(self.teacher)
+        response = self.client.get(reverse(
+            "courses:class_question_process",
+            args=[
+                self.course.pk,
+                self.class_group.pk,
+                self.experiment.pk,
+                self.single_snapshot.pk,
+                self.students["C"].pk,
+            ],
+        ))
+        html = response.content.decode()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("过程记录等待确认", html)
+        for forbidden in ("pending_finalization", "unknown", "CoverageRun"):
+            self.assertNotIn(forbidden, html)
+
+    @override_settings(CLASS_CENTER_ENABLED=True)
+    def test_process_page_without_coverage_outside_grace_uses_legacy_message(self):
+        attempt = self.attempts[("B", "single")]
+        ExperimentSession.objects.filter(pk=attempt.session_id).update(
+            terminal_at=timezone.now() - timedelta(minutes=6),
+        )
+
+        self.client.force_login(self.teacher)
+        response = self.client.get(reverse(
+            "courses:class_question_process",
+            args=[
+                self.course.pk,
+                self.class_group.pk,
+                self.experiment.pk,
+                self.single_snapshot.pk,
+                self.students["B"].pk,
+            ],
+        ))
+        html = response.content.decode()
+
+        self.assertEqual(response.status_code, 200)
+        for expected in ("历史记录无法评估", "尚未生成记录质量评估"):
+            self.assertIn(expected, html)
+        for forbidden in ("legacy_unknown", "coverage_run_missing", "unknown", "CoverageRun"):
+            self.assertNotIn(forbidden, html)
 
     def test_cross_experiment_question_and_nonparticipant_fail_closed(self):
         outsider = User.objects.create_user(

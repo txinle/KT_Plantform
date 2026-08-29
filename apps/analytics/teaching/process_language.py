@@ -61,6 +61,15 @@ _EVENT_TIME_SOURCE_LABELS = MappingProxyType(
     }
 )
 
+_CLOSE_REASON_LABELS = MappingProxyType(
+    {
+        "submitted": "已提交",
+        "timed_out": "作答超时",
+        "unanswered": "未作答关闭",
+        "invalidated": "作答已作废",
+    }
+)
+
 
 def coverage_status_message(status):
     return _COVERAGE_STATUS_MESSAGES.get(status, _UNKNOWN_COVERAGE_STATUS)
@@ -76,3 +85,7 @@ def coverage_reason_labels(reasons):
 
 def event_time_source_message(source):
     return _EVENT_TIME_SOURCE_LABELS.get(source, _EVENT_TIME_SOURCE_LABELS["unknown"])
+
+
+def close_reason_label(reason):
+    return _CLOSE_REASON_LABELS.get(reason, "关闭原因未记录")

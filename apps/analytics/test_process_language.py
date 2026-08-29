@@ -6,6 +6,7 @@ from .teaching.process_language import (
     TeacherProcessMessage,
     coverage_reason_labels,
     coverage_status_message,
+    close_reason_label,
     event_time_source_message,
     time_quality_message,
 )
@@ -90,3 +91,16 @@ class TeacherProcessLanguageTests(SimpleTestCase):
         self.assertEqual(event_time_source_message("server_received_at"), "服务器接收时间")
         self.assertEqual(event_time_source_message("unknown"), "时间来源无法判断")
         self.assertEqual(event_time_source_message("future_source"), "时间来源无法判断")
+
+    def test_close_reasons_are_localized_without_raw_codes(self):
+        expected = {
+            "submitted": "已提交",
+            "timed_out": "作答超时",
+            "unanswered": "未作答关闭",
+            "invalidated": "作答已作废",
+        }
+        for reason, label in expected.items():
+            with self.subTest(reason=reason):
+                self.assertEqual(close_reason_label(reason), label)
+                self.assertNotIn(reason, label)
+        self.assertEqual(close_reason_label("future_reason"), "关闭原因未记录")

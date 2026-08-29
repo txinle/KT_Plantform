@@ -25,9 +25,17 @@ from apps.analytics.models import RecordingCoverageAttempt
 from .comparisons import competition_ranks
 from .contracts import MetricValue, StudentComparison
 from .kc_time import QuestionTimingSummary, summarize_question_timing
+from .process_language import (
+    coverage_reason_labels,
+    coverage_status_message,
+    close_reason_label,
+    event_time_source_message,
+    time_quality_message,
+)
 from .process import (
     AttemptProcessProjection,
     ProcessCompleteness,
+    ProcessStep,
     order_process_records,
     project_attempt_process,
 )
@@ -107,11 +115,12 @@ class AttemptProcessDetail:
     result_label: str
     score_display: str
     process: AttemptProcessProjection
-    coverage_status: str
-    coverage_status_label: str
-    coverage_time_quality: str
-    coverage_run_id: str
-    coverage_missing_reasons: tuple[str, ...]
+    coverage_status_title: str
+    coverage_status_description: str
+    coverage_time_title: str
+    coverage_time_description: str
+    coverage_reason_labels: tuple[str, ...]
+    has_cross_instance_order_uncertainty: bool
 
 
 @dataclass(frozen=True)
@@ -415,9 +424,9 @@ def _process_map(generated_at, attempts, submission_by_attempt):
                 continue
             value = None
             if event.event_type == "item_left" and event.payload.get("to_assignment_id"):
-                value = f"目标分配 {event.payload['to_assignment_id']}"
+                value = "已前往下一题"
             elif event.event_type == "attempt_closed":
-                value = event.payload.get("close_reason")
+                value = close_reason_label(event.payload.get("close_reason"))
             label = fact_labels[event.event_type]
             if event.event_type == "item_entered":
                 visit_number += 1
@@ -439,9 +448,10 @@ def _process_map(generated_at, attempts, submission_by_attempt):
             ranked_steps, key=lambda row: (row[0], row[1].kind)
         ):
             interval_ms = step.interval_ms
-            time_source = step.time_source
+            raw_time_source = step.time_source
+            has_reliable_interval = False
             if source_event is not None:
-                time_source = (
+                raw_time_source = (
                     "synchronized_estimate"
                     if source_event.estimated_occurred_at_utc
                     else "server_received_at"
@@ -460,8 +470,11 @@ def _process_map(generated_at, attempts, submission_by_attempt):
                         source_event.client_monotonic_ms
                         - prior_source_event.client_monotonic_ms
                     )
-                    time_source += "；间隔=exact_monotonic"
+                    has_reliable_interval = True
                 prior_source_event = source_event
+            time_source = event_time_source_message(raw_time_source)
+            if has_reliable_interval:
+                time_source += "；与上一步的间隔可可靠比较"
             merged_steps.append(
                 replace(
                     step,
@@ -703,14 +716,6 @@ def build_attempt_process_detail(
                 run__run_status="completed",
             ).select_related("run").order_by("-run__generated_at").first()
         )
-        coverage_labels = {
-            "complete": "完整",
-            "partial": "部分",
-            "insufficient": "证据不足",
-            "invalid": "无效",
-            "not_applicable": "不适用",
-            "legacy_unknown": "历史未知",
-        }
         pending_finalization = coverage is None and (
             session.status == ExperimentSession.Status.IN_PROGRESS
             or (
@@ -721,11 +726,15 @@ def build_attempt_process_detail(
         fallback_status = (
             "pending_finalization" if pending_finalization else "legacy_unknown"
         )
-        fallback_label = "等待最终确认" if pending_finalization else "尚未生成"
         fallback_reasons = (
             ("pending_finalization",)
             if pending_finalization else ("coverage_run_missing",)
         )
+        coverage_status = coverage.overall_status if coverage else fallback_status
+        coverage_time_quality = coverage.time_quality if coverage else "unknown"
+        missing_reasons = tuple(coverage.missing_reasons) if coverage else fallback_reasons
+        status_message = coverage_status_message(coverage_status)
+        time_message = time_quality_message(coverage_time_quality)
         return AttemptProcessDetail(
             generated_at=generated_at,
             experiment_id=task.experiment_id,
@@ -740,11 +749,14 @@ def build_attempt_process_detail(
             result_label=_result_label(grade),
             score_display=score_display,
             process=process,
-            coverage_status=coverage.overall_status if coverage else fallback_status,
-            coverage_status_label=coverage_labels.get(coverage.overall_status, coverage.overall_status) if coverage else fallback_label,
-            coverage_time_quality=coverage.time_quality if coverage else "unknown",
-            coverage_run_id=str(coverage.run_id) if coverage else "",
-            coverage_missing_reasons=tuple(coverage.missing_reasons) if coverage else fallback_reasons,
+            coverage_status_title=status_message.title,
+            coverage_status_description=status_message.description,
+            coverage_time_title=time_message.title,
+            coverage_time_description=time_message.description,
+            coverage_reason_labels=coverage_reason_labels(missing_reasons),
+            has_cross_instance_order_uncertainty=(
+                "cross_instance_order_uncertain" in missing_reasons
+            ),
         )
 
 
