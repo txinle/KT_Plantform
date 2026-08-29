@@ -13,7 +13,7 @@
       <span class="cell-meta numeric">更新：{{ course.updated_at|date:'Y-m-d H:i' }}</span>
     </div>
   </div>
-  <div class="page-actions"><a class="btn btn-primary" href="{% url 'courses:data' course.pk %}">数据中心</a>{% if is_course_owner %}<a class="btn btn-outline-primary" href="{% url 'courses:settings' course.pk %}">课程设置</a>{% endif %}</div>
+  <div class="page-actions">{% if class_center_enabled %}<a class="btn btn-primary" href="{% url 'courses:classes' course.pk %}">班级教学分析</a><a class="btn btn-outline-primary" href="{% url 'courses:data' course.pk %}">数据中心</a>{% else %}<a class="btn btn-primary" href="{% url 'courses:data' course.pk %}">数据中心</a>{% endif %}{% if is_course_owner %}<a class="btn btn-outline-primary" href="{% url 'courses:settings' course.pk %}">课程设置</a>{% endif %}</div>
 </header>
 
 {% if course.status == 'archived' %}<div class="notice-panel mb-4"><strong>课程已归档。</strong> 课程资源和历史数据保持可读，但不能继续修改或开始新实验。</div>{% endif %}
@@ -38,7 +38,7 @@
       </article>
       <article class="workflow-stage">
         <div class="workflow-stage-header"><span class="workflow-stage-index numeric">02</span><h3>参与者管理</h3></div>
-        <div class="workflow-stage-links"><a class="workflow-link" href="{% url 'courses:classes' course.pk %}"><span class="workflow-link-title">班级与学生</span><span class="workflow-link-copy">维护课程班级、选课关系、导入名单与转班。</span></a></div>
+        <div class="workflow-stage-links"><a class="workflow-link" href="{% url 'courses:classes' course.pk %}">{% if class_center_enabled %}<span class="workflow-link-title">班级教学分析</span><span class="workflow-link-copy">选择班级查看概览、学生表现和实验分析，或管理班级成员。</span>{% else %}<span class="workflow-link-title">班级与学生</span><span class="workflow-link-copy">维护课程班级、选课关系、导入名单与转班。</span>{% endif %}</a></div>
       </article>
       <article class="workflow-stage">
         <div class="workflow-stage-header"><span class="workflow-stage-index numeric">03</span><h3>实验采集</h3></div>

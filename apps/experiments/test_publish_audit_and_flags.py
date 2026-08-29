@@ -35,6 +35,8 @@ from .services import (
 
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS_PATH = ROOT / "config" / "settings.py"
+WINDOWS_LOCAL_LAUNCHER_PATH = ROOT / "run_local.bat"
+POSIX_LOCAL_LAUNCHER_PATH = ROOT / "run_local.sh"
 
 
 class FeatureFlagSettingsTests(SimpleTestCase):
@@ -99,6 +101,24 @@ class FeatureFlagSettingsTests(SimpleTestCase):
                 }
             ),
             (False, False),
+        )
+
+    def test_local_launchers_enable_analytics_flags_unless_explicitly_overridden(self):
+        windows_launcher = WINDOWS_LOCAL_LAUNCHER_PATH.read_text(encoding="utf-8")
+        posix_launcher = POSIX_LOCAL_LAUNCHER_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'if not defined CLASS_CENTER_ENABLED set "CLASS_CENTER_ENABLED=1"',
+            windows_launcher,
+        )
+        self.assertIn(
+            'if not defined STUDENT_LEARNING_ANALYTICS_ENABLED set "STUDENT_LEARNING_ANALYTICS_ENABLED=1"',
+            windows_launcher,
+        )
+        self.assertIn(': "${CLASS_CENTER_ENABLED:=1}"', posix_launcher)
+        self.assertIn(
+            ': "${STUDENT_LEARNING_ANALYTICS_ENABLED:=1}"',
+            posix_launcher,
         )
 
 

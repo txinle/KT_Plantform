@@ -100,6 +100,7 @@ def class_list(request, course_pk):
             "classes": classes,
             "form": form,
             "query": query,
+            "class_center_enabled": settings.CLASS_CENTER_ENABLED,
         },
     )
 

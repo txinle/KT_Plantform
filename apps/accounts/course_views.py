@@ -90,6 +90,7 @@ def course_detail(request, course_pk):
             "student_count": course.enrollments.filter(is_active=True).count(),
             "recent_experiments": recent_experiments,
             "recent_banks": recent_banks,
+            "class_center_enabled": settings.CLASS_CENTER_ENABLED,
             "is_course_owner": request.user.is_superuser
             or request.user.role == User.Role.ADMIN
             or course.owner_id == request.user.id,

@@ -5,6 +5,8 @@ cd /d "%~dp0"
 set "APP_URL=http://127.0.0.1:8000/"
 set "VENV_PYTHON=.venv\Scripts\python.exe"
 set "REQUIREMENTS_STAMP=.venv\.requirements.sha256"
+if not defined CLASS_CENTER_ENABLED set "CLASS_CENTER_ENABLED=1"
+if not defined STUDENT_LEARNING_ANALYTICS_ENABLED set "STUDENT_LEARNING_ANALYTICS_ENABLED=1"
 
 powershell.exe -NoProfile -Command "if (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue) { exit 1 }"
 if errorlevel 1 (

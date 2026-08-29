@@ -48,6 +48,29 @@ class ClassCenterViewTests(TransactionTestCase):
         self.assertContains(response, "本页只管理其在当前课程中的选课和班级关系")
         self.assertNotContains(response, "实验分析")
 
+    def test_entry_labels_follow_the_class_center_flag(self):
+        self.client.force_login(self.owner)
+        class_list_url = reverse("courses:classes", args=[self.course.pk])
+        course_detail_url = reverse("courses:detail", args=[self.course.pk])
+
+        with override_settings(CLASS_CENTER_ENABLED=False):
+            class_list = self.client.get(class_list_url)
+            course_detail = self.client.get(course_detail_url)
+
+        self.assertContains(class_list, "管理学生")
+        self.assertNotContains(class_list, "进入班级中心")
+        self.assertContains(course_detail, "班级与学生")
+        self.assertNotContains(course_detail, "班级教学分析")
+
+        with override_settings(CLASS_CENTER_ENABLED=True):
+            class_list = self.client.get(class_list_url)
+            course_detail = self.client.get(course_detail_url)
+
+        self.assertContains(class_list, "进入班级中心")
+        self.assertNotContains(class_list, ">管理学生<", html=False)
+        self.assertContains(course_detail, "班级教学分析")
+        self.assertContains(course_detail, class_list_url)
+
     @override_settings(CLASS_CENTER_ENABLED=True)
     def test_enabled_flag_opens_overview_with_four_semantic_tabs(self):
         self.client.force_login(self.owner)
