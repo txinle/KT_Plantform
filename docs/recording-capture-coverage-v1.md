@@ -104,6 +104,12 @@ coverage_run_id
 
 当前实现逐 Attempt 输出 Outcome、First response、Final response、Revision、DecisionTime、RevisionTime、Navigation、Return behavior、ActiveTime、Text editing 和 Response replay 资格。不可计算的派生值保持 `null`，并携带 derivation version、parameter hash、run ID、输入状态、时间质量和缺失原因。
 
+### 6.1 教师显示与研究导出边界
+
+教师过程页将完整性与时间质量转换为中文教学结论，例如“过程记录不完整”“步骤间隔可可靠比较”。原始 Coverage 状态码、缺失原因码、CoverageRun UUID 和事件时间来源枚举仅在数据中心研究导出中保留，不作为教师页面的显示内容。
+
+教师页面中的“服务器接收时间”表示平台收到记录的时间，不表示学生实际操作时刻；缺失记录不解释为学生未操作。
+
 ## 7. 数据中心导出
 
 complete/process 包含 33 张表，新增：
