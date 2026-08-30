@@ -1,4 +1,6 @@
 Django==5.2.16
+djangorestframework==3.18.0
+drf-spectacular==0.30.0
 openpyxl==3.1.5
 python-docx==1.2.0
 gunicorn==23.0.0

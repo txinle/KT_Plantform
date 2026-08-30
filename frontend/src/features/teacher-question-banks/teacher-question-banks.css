@@ -1,0 +1,164 @@
+.kt-bank-list-layout,
+.kt-concept-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.kt-bank-search,
+.kt-bank-create,
+.kt-question-filter {
+  margin-bottom: 1rem;
+}
+
+.kt-bank-search label,
+.kt-bank-create label,
+.kt-question-filter label {
+  display: grid;
+  gap: .4rem;
+  color: var(--kt-color-muted);
+  font-size: .875rem;
+}
+
+.kt-bank-create form {
+  display: grid;
+  gap: 1rem;
+}
+
+.kt-inline-controls {
+  display: flex;
+  gap: .65rem;
+}
+
+.kt-inline-controls input {
+  flex: 1;
+}
+
+.kt-compact-form {
+  display: grid;
+  grid-template-columns: minmax(7rem, 1fr) auto;
+  align-items: center;
+  gap: .25rem;
+}
+
+.kt-compact-form select {
+  min-height: 2.25rem;
+  padding-block: .3rem;
+}
+
+.kt-bank-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .75rem 1.25rem;
+  margin-bottom: 1rem;
+  color: var(--kt-color-muted);
+}
+
+.kt-bank-danger {
+  margin-left: auto;
+}
+
+.kt-question-filter {
+  display: grid;
+  grid-template-columns: minmax(14rem, 2fr) minmax(9rem, 1fr) minmax(9rem, 1fr) auto;
+  align-items: end;
+  gap: .75rem;
+}
+
+.kt-mobile-bank-card,
+.kt-mobile-question-card {
+  border-top: 1px solid var(--kt-color-border);
+  padding: 1rem 0;
+}
+
+.kt-mobile-bank-card:first-child,
+.kt-mobile-question-card:first-child {
+  border-top: 0;
+}
+
+.kt-mobile-bank-card p,
+.kt-mobile-question-card p {
+  margin-bottom: .75rem;
+  color: var(--kt-color-muted);
+}
+
+.kt-mobile-bank-card dl,
+.kt-mobile-question-card dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .75rem;
+  margin: 0 0 .75rem;
+}
+
+.kt-mobile-bank-card dt,
+.kt-mobile-question-card dt {
+  color: var(--kt-color-muted);
+  font-size: .75rem;
+}
+
+.kt-mobile-bank-card dd,
+.kt-mobile-question-card dd {
+  margin: 0;
+}
+
+.kt-bank-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  margin-bottom: .75rem;
+}
+
+.kt-bank-tags a {
+  border-radius: var(--kt-radius-badge);
+  padding: .2rem .45rem;
+  background: var(--kt-action-050);
+  font-size: var(--kt-font-sm);
+  text-decoration: none;
+}
+
+.kt-danger-summary {
+  color: var(--kt-color-danger);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.kt-mono {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.kt-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+@media (max-width: 48rem) {
+  .kt-bank-list-layout,
+  .kt-concept-layout,
+  .kt-question-filter {
+    grid-template-columns: 1fr;
+  }
+
+  .kt-bank-create {
+    order: -1;
+  }
+
+  .kt-inline-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .kt-bank-danger {
+    width: 100%;
+    margin-left: 0;
+  }
+}

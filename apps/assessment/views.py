@@ -3,13 +3,18 @@ from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import Http404, JsonResponse
+from django.db.models import F
 from django.shortcuts import get_object_or_404, redirect, render
+from django.templatetags.static import static
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_GET, require_POST
 from apps.accounts.permissions import role_required
 from apps.accounts.models import Course, CourseEnrollment
-from apps.experiments.models import Experiment
+from apps.api.rollout import is_vue_module_enabled
+from apps.api.shell import render_vue_shell
+from apps.experiments.models import ClassExperimentTask, Experiment
 from .models import (
     Attempt,
     ConfidenceAssignment,
@@ -90,6 +95,12 @@ def _confidence_client_contract(attempt, confidence):
 
 @role_required("student")
 def dashboard(request):
+    if is_vue_module_enabled("student_courses", request.user):
+        return render_vue_shell(
+            request,
+            module="student-courses",
+            title="我的课程 | KT Data Lab",
+        )
     enrollments = CourseEnrollment.objects.filter(
         student=request.user,
         is_active=True,
@@ -105,18 +116,60 @@ def course_dashboard(request, course_id):
         student=request.user,
         is_active=True,
     )
-    experiments = list(
-        Experiment.objects.filter(
+    if is_vue_module_enabled(
+        "student_courses",
+        request.user,
+        course=enrollment.course,
+    ):
+        return render_vue_shell(
+            request,
+            module="student-courses",
+            title=f"{enrollment.course.name} | 我的课程",
             course=enrollment.course,
-            student_links__student=request.user,
-        ).distinct()
-    )
-    sessions = {
-        session.version.experiment_id: session
-        for session in request.user.assessment_sessions.select_related("version__experiment")
-        if session.version.experiment.course_id == enrollment.course_id
+        )
+    from .api.views import _student_task_queryset, _task_projection
+
+    status_labels = {
+        "scheduled": "未开始",
+        "open": "进行中",
+        "closed": "已结束",
+        "cancelled": "已取消",
     }
-    cards = [{"experiment": experiment, "session": sessions.get(experiment.id)} for experiment in experiments]
+    cards = []
+    for task in _student_task_queryset(request.user, course_id=enrollment.course_id):
+        projection = _task_projection(task, course=enrollment.course)
+        configuration = task.release_snapshot.configuration
+        session = next(iter(task.current_student_sessions), None)
+        status_label = status_labels.get(
+            projection["business_status"], projection["business_status"]
+        )
+        if session is not None and session.status != ExperimentSession.Status.IN_PROGRESS:
+            status_label = session.get_status_display()
+        cards.append(
+            {
+                "experiment": task.experiment,
+                "session": session,
+                "question_count": projection["progress"]["total"],
+                "primary_action": projection["primary_action"],
+                "status_label": status_label,
+                "status_tone": (
+                    "success"
+                    if projection["primary_action"] == "view_result"
+                    else "info"
+                    if projection["business_status"] == "open"
+                    else "neutral"
+                ),
+                "time_mode_label": Experiment.TimeMode(
+                    configuration.get("time_mode", Experiment.TimeMode.NONE)
+                ).label,
+                "feedback_mode_label": Experiment.Feedback(
+                    configuration.get("feedback_mode", Experiment.Feedback.NONE)
+                ).label,
+                "resume_mode_label": Experiment.ResumeMode(
+                    configuration.get("resume_mode", Experiment.ResumeMode.RESUMABLE)
+                ).label,
+            }
+        )
     return render(
         request,
         "student/course.html",
@@ -160,6 +213,17 @@ def _student_learning_forbidden(request, enrollment, message):
 @role_required("student")
 def student_learning(request, course_id):
     enrollment = _student_learning_enrollment(request, course_id)
+    if is_vue_module_enabled(
+        "student_courses",
+        request.user,
+        course=enrollment.course,
+    ):
+        return render_vue_shell(
+            request,
+            module="student-courses",
+            title=f"我的学习 | {enrollment.course.name}",
+            course=enrollment.course,
+        )
     from apps.analytics.teaching.student_projection import (
         build_student_learning_projection,
     )
@@ -185,6 +249,17 @@ def student_learning(request, course_id):
 @role_required("student")
 def student_learning_experiment(request, course_id, experiment_id):
     enrollment = _student_learning_enrollment(request, course_id)
+    if is_vue_module_enabled(
+        "student_courses",
+        request.user,
+        course=enrollment.course,
+    ):
+        return render_vue_shell(
+            request,
+            module="student-courses",
+            title=f"实验结果 | {enrollment.course.name}",
+            course=enrollment.course,
+        )
     from apps.analytics.teaching.student_projection import (
         build_student_experiment_projection,
     )
@@ -216,6 +291,17 @@ def student_learning_experiment(request, course_id, experiment_id):
 @role_required("student")
 def student_learning_question(request, course_id, experiment_id, question_id):
     enrollment = _student_learning_enrollment(request, course_id)
+    if is_vue_module_enabled(
+        "student_courses",
+        request.user,
+        course=enrollment.course,
+    ):
+        return render_vue_shell(
+            request,
+            module="student-courses",
+            title=f"题目结果 | {enrollment.course.name}",
+            course=enrollment.course,
+        )
     from apps.analytics.teaching.student_projection import (
         build_student_question_projection,
     )
@@ -243,11 +329,31 @@ def student_learning_question(request, course_id, experiment_id, question_id):
     )
 
 
+@require_POST
 @role_required("student")
 def start_experiment(request, experiment_id):
+    request_received_at = timezone.now()
     experiment = get_object_or_404(Experiment.objects.select_related("course"), pk=experiment_id)
+    tasks = list(
+        ClassExperimentTask.objects.filter(
+            experiment=experiment,
+            participant_snapshots__student=request.user,
+            participant_snapshots__version_id=F("release_snapshot_id"),
+            participant_snapshots__class_snapshot_id=F("class_snapshot_id"),
+        )
+        .distinct()
+        .order_by("pk")[:2]
+    )
+    if len(tasks) != 1:
+        messages.error(request, "无法确定唯一的班级实验任务，请返回课程重新进入。")
+        return redirect("assessment:dashboard")
     try:
-        session = get_or_create_session(experiment, request.user)
+        session = get_or_create_session(
+            experiment,
+            request.user,
+            request_received_at=request_received_at,
+            class_task=tasks[0],
+        )
     except ValidationError as exc:
         messages.error(request, "; ".join(exc.messages))
         return redirect("assessment:dashboard")
@@ -259,7 +365,34 @@ def start_experiment(request, experiment_id):
 
 @role_required("student")
 def question_page(request, session_id, assignment_id):
-    session = get_object_or_404(ExperimentSession.objects.select_related("version__experiment"), pk=session_id, student=request.user)
+    request_received_at = timezone.now()
+    session = get_object_or_404(
+        ExperimentSession.objects.select_related(
+            "version__experiment",
+            "class_task__class_group",
+            "class_task__experiment",
+        ),
+        pk=session_id,
+        student=request.user,
+    )
+    if is_vue_module_enabled(
+        "student_assessment",
+        request.user,
+        task=session.class_task,
+    ):
+        get_object_or_404(
+            StudentQuestionAssignment,
+            pk=assignment_id,
+            session=session,
+        )
+        return render_vue_shell(
+            request,
+            module="student-assessment",
+            title=f"作答 | {session.version.experiment.name}",
+            classic_scripts=(
+                f"{static('js/process-event-collector.js')}?v=20260829.2",
+            ),
+        )
     pending_confidence = (
         ConfidenceAssignment.objects.select_related("attempt__assignment")
         .filter(
@@ -286,7 +419,12 @@ def question_page(request, session_id, assignment_id):
     assignment = get_object_or_404(StudentQuestionAssignment.objects.select_related("snapshot"), pk=assignment_id, session=session)
     reason = request.GET.get("reason", "navigation_click")
     try:
-        attempt = record_visit(session.id, assignment.id, reason)
+        attempt = record_visit(
+            session.id,
+            assignment.id,
+            reason,
+            request_received_at=request_received_at,
+        )
     except ValidationError as exc:
         messages.error(request, "; ".join(exc.messages))
         return redirect("assessment:complete", session_id=session.id)
@@ -294,10 +432,14 @@ def question_page(request, session_id, assignment_id):
     assignments = list(session.assignments.select_related("snapshot", "attempt"))
     remaining = None
     config = session.version.configuration
-    if config.get("time_mode") == "per_question":
+    if attempt.initial_effective_deadline_at:
+        remaining = max(
+            0,
+            int((attempt.initial_effective_deadline_at - timezone.now()).total_seconds()),
+        )
+    elif config.get("time_mode") == "per_question":
         remaining = max(0, int(config.get("per_question_time_limit_seconds") or 0) - attempt.active_seconds)
     elif config.get("time_mode") == "total" and session.deadline_at:
-        from django.utils import timezone
         remaining = max(0, int((session.deadline_at - timezone.now()).total_seconds()))
     next_assignment = _next_assignment(session, assignment.id)
     fallback_next_url = reverse("assessment:question", args=[session.id, next_assignment.id]) if next_assignment else reverse("assessment:complete", args=[session.id])
@@ -336,10 +478,16 @@ def question_page(request, session_id, assignment_id):
 @role_required("student")
 @require_POST
 def save_draft_api(request, attempt_id):
+    request_received_at = timezone.now()
     attempt = get_object_or_404(Attempt, pk=attempt_id, session__student=request.user)
     data = _json(request)
     try:
-        attempt = save_draft(attempt.id, data.get("answer"), _client_time(data.get("client_occurred_at")))
+        attempt = save_draft(
+            attempt.id,
+            data.get("answer"),
+            _client_time(data.get("client_occurred_at")),
+            request_received_at=request_received_at,
+        )
         response = {"success": True, "saved_at": attempt.draft_saved_at.isoformat()}
         if attempt.saved_response_snapshot is not None:
             response.update(
@@ -366,10 +514,16 @@ def save_draft_api(request, attempt_id):
 @role_required("student")
 @require_POST
 def submit_api(request, attempt_id):
+    request_received_at = timezone.now()
     attempt = get_object_or_404(Attempt, pk=attempt_id, session__student=request.user)
     data = _json(request)
     try:
-        attempt = submit_attempt(attempt.id, data.get("submission_token"), _client_time(data.get("client_clicked_at")))
+        attempt = submit_attempt(
+            attempt.id,
+            data.get("submission_token"),
+            _client_time(data.get("client_clicked_at")),
+            request_received_at=request_received_at,
+        )
         confidence = ensure_confidence_assignment(attempt)
         prompt_pending = (
             confidence.condition == confidence.Condition.PROMPT
@@ -404,8 +558,12 @@ def submit_api(request, attempt_id):
             reason_code=exc.reason_code,
         )
         return JsonResponse(
-            {"success": False, "error": "; ".join(exc.messages)},
-            status=400,
+            {
+                "success": False,
+                "error": "; ".join(exc.messages),
+                "code": exc.reason_code.upper(),
+            },
+            status=409 if exc.reason_code == "task_terminated" else 400,
         )
     except ValidationError as exc:
         return JsonResponse({"success": False, "error": "; ".join(exc.messages)}, status=400)

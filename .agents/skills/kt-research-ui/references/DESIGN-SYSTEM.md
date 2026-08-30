@@ -2,27 +2,27 @@
 
 ## Direction
 
-Use an institutional research-product language: calm precision, trust first, high legibility, restrained enterprise UI.
+Use a calm institutional research-product language: precise hierarchy, high legibility, restrained enterprise surfaces, and compact teacher workflows. Reference-led pages follow their supplied visual system before generic taste conventions.
 
-## Parameters
+## Experiment reference system
 
-- Design variance 4: modest asymmetry and hierarchy, no experimental layout.
-- Motion intensity 2: state transitions and operation feedback only.
-- Visual density 6: compact teacher pages, calmer student pages.
-- Data clarity 10: state, time, order, and data meaning always outrank decoration.
-- Accessibility priority 10: keyboard, focus, contrast, and assistive technology are release requirements.
+- Primary canvas: 1586×992, DPR 1.
+- Global shell: one 64 px navigation row; centered business navigation; breadcrumb and local experiment tabs inside the content frame.
+- Content frame: wide desktop grid with consistent left/right gutters; compact vertical rhythm; no decorative hero treatment.
+- Typography: local Chinese system sans stack; strong but restrained page titles; compact 14–16 px table/form copy; tabular numeric content.
+- Color: deep navy text, action blue, cool neutral borders/backgrounds, semantic green/amber/red only when the server state warrants it.
+- Surfaces: thin borders, 8–10 px outer radii, subtle shadow only where elevation clarifies grouping.
+- Forms: left label/right control row grid on desktop; compact grouped sections; preserved native meaning and accessible names.
+- Tables: dense, aligned, readable; actions remain text/button controls; complex details may collapse but cannot disappear.
+- Icons: reuse the local SVG sprite and pair status color with text/shape. Do not use emoji or remote icon fonts.
 
-## System
+## Responsive and motion
 
-- Navy is the only brand accent.
-- Cool grays define page, surface, border, and secondary text.
-- Green, amber, and red communicate success, caution, and danger only.
-- Use the operating-system sans-serif stack for reliable Chinese rendering.
-- Use tabular figures for research data and timers.
-- Apply smaller radii to badges, medium radii to controls, and larger radii to outer grouped surfaces.
-- Use one subtle cool-tinted shadow level only for elevated interactive surfaces.
-- Keep transitions within 120 to 200 ms and disable nonessential motion for reduced-motion users.
+- At 1440×900 retain the desktop hierarchy without clipping or page-level horizontal overflow.
+- At 390×844 stack grids and expose dense table data as responsive rows/cards without changing meaning or action availability.
+- At 200% zoom, allow natural reflow; do not solve overflow by shrinking essential text below readable sizes.
+- Keep transitions within 120–200 ms, state-oriented only, and disable nonessential motion under `prefers-reduced-motion`.
 
-## Source note
+## Scope rule
 
-The audit-first approach, design-read method, anti-template checks, and pre-flight discipline were adapted from `Leonxlnx/taste-skill` (`redesign-skill`, `taste-skill`, and `gpt-tasteskill`). The source repository is distributed under the MIT License. This project-specific rewrite excludes its marketing, AIDA, Awwwards, cinematic scrolling, and GSAP prescriptions.
+Feature CSS must be rooted beneath the experiment module container or use feature-specific class names. Never place generic shared selectors in a feature stylesheet unless intentionally changing the shared design system with cross-module tests.

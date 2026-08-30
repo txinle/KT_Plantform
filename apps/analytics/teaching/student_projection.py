@@ -75,6 +75,34 @@ def _plain(value):
     return value
 
 
+def student_projection_to_api(value):
+    """Convert the student allow-list projection to JSON-safe public values."""
+    if isinstance(value, StudentAllowListDTO):
+        return {
+            key: student_projection_to_api(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, MetricValue):
+        return {
+            "generated_at": value.generated_at,
+            "numerator": value.numerator,
+            "denominator": value.denominator,
+            "ratio": value.ratio,
+            "state": value.state,
+            "sample_size": value.sample_size,
+            "percent_display": value.percent_display,
+            "percent_css": value.percent_css,
+        }
+    if isinstance(value, (tuple, list)):
+        return [student_projection_to_api(item) for item in value]
+    if isinstance(value, Mapping):
+        return {
+            key: student_projection_to_api(item)
+            for key, item in value.items()
+        }
+    return value
+
+
 @dataclass(frozen=True)
 class StudentVisibilityContext:
     generated_at: object
@@ -138,6 +166,7 @@ def _load_bundle(enrollment, generated_at):
             class_group=class_group,
             experiment__course_id=current_enrollment.course_id,
             experiment__status__in=(
+                Experiment.Status.FROZEN,
                 Experiment.Status.PUBLISHED,
                 Experiment.Status.CLOSED,
             ),
@@ -490,10 +519,6 @@ def _experiment_row(bundle, task):
         )
         if coverage is not None:
             values["grading_coverage"] = coverage
-        if bundle.policy.rank_mode == ClassStudentAnalyticsPolicy.RankMode.SELF:
-            rank = _rank(bundle, task)
-            if rank is not None:
-                values["rank"] = rank
     return StudentAllowListDTO(**values)
 
 
@@ -673,8 +698,6 @@ def build_student_learning_projection(enrollment):
             values["experiment_correct_rate_available"] = True
         if any("score_rate" in row for row in experiment_rows):
             values["experiment_score_rate_available"] = True
-        if any("rank" in row for row in experiment_rows):
-            values["experiment_rank_available"] = True
         kc_rows = _kc_rows(bundle, result_tasks)
         if kc_rows is not None:
             values["kc_rows"] = kc_rows

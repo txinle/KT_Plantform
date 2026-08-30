@@ -12,3 +12,10 @@ htmlcov/
 .idea/
 .vscode/
 .worktrees/
+.superpowers/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/.e2e/
+frontend/.e2e-results/
+frontend/playwright-report/

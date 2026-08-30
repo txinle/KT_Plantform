@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from openpyxl import load_workbook
 
-from django.test import TestCase
+from django.test import TransactionTestCase
 
 from apps.accounts.models import Course, User
 from apps.assessment.models import Attempt, ExperimentSession, StudentQuestionAssignment
@@ -24,7 +24,7 @@ from .services import (
 )
 
 
-class ExportScopeV2Tests(TestCase):
+class ExportScopeV2Tests(TransactionTestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(
             username="export-v2-teacher", role=User.Role.TEACHER

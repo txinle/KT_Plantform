@@ -1,16 +1,13 @@
 # Acceptance checklist
 
-- [ ] Routes, field names, DOM hooks, and Fetch contracts remain compatible.
-- [ ] Research invariants were reviewed and affected rules have regression tests.
-- [ ] Teacher and student primary paths work with keyboard only.
-- [ ] Current navigation and question state are exposed to assistive technology.
-- [ ] Inline saving, loading, success, and error states are present where needed.
-- [ ] No production `alert()` or native `confirm()` remains.
-- [ ] Status is not conveyed by color alone.
-- [ ] Controls and text meet WCAG AA contrast.
-- [ ] Desktop 1440 x 900 and mobile 390 x 844 have no page-level horizontal overflow.
-- [ ] Student options and primary controls have touch-friendly targets.
-- [ ] Reduced-motion preferences are honored.
-- [ ] Bootstrap and required local styling work without network access.
-- [ ] Django checks, tests, static collection, and JavaScript syntax checks were freshly run.
-- [ ] Visible copy was reviewed for directness, correctness, and research meaning.
+- [ ] Existing URLs, payloads, CSRF, permissions, idempotency, snapshots, schedules, randomization, feedback, and export semantics remain server-authoritative.
+- [ ] Reference content was not copied into source, API projections, seed data, or database records; only visual style and structure were reproduced.
+- [ ] Feature styles are scoped and do not alter other Vue modules or retained Django pages.
+- [ ] All affected empty, loading, saving, success, conflict, and error states still work with real data.
+- [ ] Keyboard order, visible focus, labels/ARIA, and non-color status cues are present.
+- [ ] Text and controls meet WCAG AA; reduced-motion preferences are honored.
+- [ ] 1586×992 DPR 1 captures exist for the six experiment states with no text overflow, unexpected scrollbar, or clipping.
+- [ ] Key containers/controls are within 4 px and font/control sizing within 2 px where the real content permits direct comparison.
+- [ ] 1440×900, 390×844, and 200% zoom reflow without page-level horizontal overflow or lost actions.
+- [ ] Relevant Vue tests and Django/API checks pass; lint, typecheck, unit, API schema check, and build are fresh for migrated UI work.
+- [ ] The actual diff is scoped; unrelated user changes remain untouched.

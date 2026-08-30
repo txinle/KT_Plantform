@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python manage.py check
+      - run: python manage.py makemigrations --check --dry-run
+      - run: python manage.py test
+
+  postgresql-contracts:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: kt_platform
+          POSTGRES_USER: kt_user
+          POSTGRES_PASSWORD: kt_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kt_user -d kt_platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: kt_platform
+      POSTGRES_USER: kt_user
+      POSTGRES_PASSWORD: kt_password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python manage.py migrate --noinput
+      - run: >-
+          python manage.py test
+          apps.experiments.test_a_plus_publication
+          apps.experiments.test_a_plus_migration_contract
+          apps.experiments.tests_postgresql_publish
+          apps.assessment.test_deadline_decisions
+          apps.assessment.tests_postgresql_events
+          apps.assessment.tests_postgresql_enrollment_race
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: pip install -r requirements.txt
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm run test:unit
+        working-directory: frontend
+      - run: npm run api:check
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: python manage.py check_vue_assets
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: kt_e2e
+          POSTGRES_USER: kt_user
+          POSTGRES_PASSWORD: kt_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kt_user -d kt_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: kt_user
+      POSTGRES_PASSWORD: kt_password
+      POSTGRES_DB: kt_e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: pip install -r requirements.txt
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium firefox webkit
+        working-directory: frontend
+      - run: npm run test:e2e
+        working-directory: frontend

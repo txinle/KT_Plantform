@@ -168,6 +168,27 @@ class ExperimentSession(models.Model):
         EXPIRED = "expired", "已超时"
         INVALIDATED = "invalidated", "已作废"
     version = models.ForeignKey("experiments.ExperimentVersion", on_delete=models.PROTECT, related_name="sessions")
+    class_task = models.ForeignKey(
+        "experiments.ClassExperimentTask",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="sessions",
+    )
+    participant_snapshot = models.ForeignKey(
+        "experiments.ExperimentVersionParticipantSnapshot",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="sessions",
+    )
+    schedule_revision = models.ForeignKey(
+        "experiments.ScheduleRevision",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="sessions",
+    )
     student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="assessment_sessions")
     class_snapshot = models.ForeignKey(
         "experiments.ExperimentClassSnapshot",
@@ -182,6 +203,11 @@ class ExperimentSession(models.Model):
     last_activity_at = models.DateTimeField(auto_now=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     deadline_at = models.DateTimeField(null=True, blank=True)
+    task_opens_at = models.DateTimeField(null=True, blank=True)
+    task_closes_at = models.DateTimeField(null=True, blank=True)
+    total_time_limit_seconds = models.PositiveIntegerField(null=True, blank=True)
+    initial_effective_deadline_at = models.DateTimeField(null=True, blank=True)
+    timer_semantics_version = models.CharField(max_length=64, blank=True, default="")
     current_assignment = models.ForeignKey("StudentQuestionAssignment", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     submission_count = models.PositiveIntegerField(default=0)
     first_open_count = models.PositiveIntegerField(default=0)
@@ -200,11 +226,19 @@ class ExperimentSession(models.Model):
         related_name="sessions",
     )
     terminal_at = models.DateTimeField(null=True, blank=True)
+    terminal_reason = models.CharField(max_length=64, blank=True, default="")
+    authoritative_terminal_at = models.DateTimeField(null=True, blank=True)
+    terminal_recorded_at = models.DateTimeField(null=True, blank=True)
     class Meta:
         constraints = [
             models.UniqueConstraint(
                 fields=["version", "student"],
                 name="unique_student_version_session",
+            ),
+            models.UniqueConstraint(
+                fields=["class_task", "participant_snapshot"],
+                condition=Q(class_task__isnull=False, participant_snapshot__isnull=False),
+                name="unique_task_participant_session",
             ),
             models.CheckConstraint(
                 condition=(
@@ -273,6 +307,13 @@ class Attempt(models.Model):
     last_opened_at = models.DateTimeField(null=True, blank=True)
     visit_count = models.PositiveIntegerField(default=0)
     active_seconds = models.PositiveIntegerField(default=0)
+    item_started_at = models.DateTimeField(null=True, blank=True)
+    per_item_time_limit_seconds = models.PositiveIntegerField(null=True, blank=True)
+    item_deadline_at = models.DateTimeField(null=True, blank=True)
+    initial_effective_deadline_at = models.DateTimeField(null=True, blank=True)
+    close_reason = models.CharField(max_length=64, blank=True, default="")
+    authoritative_terminal_at = models.DateTimeField(null=True, blank=True)
+    terminal_recorded_at = models.DateTimeField(null=True, blank=True)
     draft_answer = models.JSONField(null=True, blank=True)
     draft_saved_at = models.DateTimeField(null=True, blank=True)
     # Durable pointers to immutable response snapshots.  These are the sole

@@ -6,10 +6,12 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 from apps.experiments.models import (
+    ClassExperimentTask,
     Experiment,
     ExperimentStudent,
     ExperimentVersion,
     ExperimentVersionParticipantSnapshot,
+    PublishPreviewParticipant,
 )
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.experiments.services import derive_session_seeds, ordered_snapshots, select_snapshots
@@ -40,6 +42,7 @@ from .models import (
     StudentQuestionAssignment,
     SubmissionEvent,
 )
+from .deadline_services import DeadlineDecisionService
 
 
 class SubmissionValidationError(ValidationError):
@@ -90,7 +93,14 @@ def _append_attempt_closed(attempt, *, close_reason):
     )
 
 
-def _close_open_attempts(session, *, status, close_reason):
+def _close_open_attempts(
+    session,
+    *,
+    status,
+    close_reason,
+    event_close_reason=None,
+    authoritative_terminal_at=None,
+):
     attempts = list(
         session.attempts.select_for_update()
         .filter(
@@ -106,12 +116,33 @@ def _close_open_attempts(session, *, status, close_reason):
     for attempt in attempts:
         attempt.status = status
         attempt.is_correct = None
-        attempt.save(update_fields=["status", "is_correct"])
-        _append_attempt_closed(attempt, close_reason=close_reason)
+        attempt.close_reason = close_reason
+        attempt.authoritative_terminal_at = authoritative_terminal_at
+        attempt.terminal_recorded_at = timezone.now()
+        attempt.save(
+            update_fields=[
+                "status",
+                "is_correct",
+                "close_reason",
+                "authoritative_terminal_at",
+                "terminal_recorded_at",
+            ]
+        )
+        _append_attempt_closed(
+            attempt,
+            close_reason=event_close_reason or close_reason,
+        )
     return attempts
 
 @transaction.atomic
-def get_or_create_session(experiment, student):
+def get_or_create_session(
+    experiment,
+    student,
+    *,
+    request_received_at=None,
+    class_task=None,
+):
+    request_received_at = request_received_at or timezone.now()
     experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
     if experiment.course_id:
         from apps.accounts.models import Course, CourseEnrollment
@@ -126,20 +157,37 @@ def get_or_create_session(experiment, student):
             is_active=True,
         ).exists():
             raise ValidationError("你没有加入该实验所属课程")
-    enrollment = ExperimentStudent.objects.filter(experiment=experiment, student=student).first()
-    if not enrollment: raise ValidationError("你没有参加该实验的权限")
-    if experiment.status != Experiment.Status.PUBLISHED: raise ValidationError("实验尚未开放")
-    version = (
-        ExperimentVersion.objects.select_for_update()
-        .filter(experiment=experiment)
-        .order_by("-version_number")
-        .first()
-    )
-    participant_snapshot = (
-        ExperimentVersionParticipantSnapshot.objects.select_related("class_snapshot")
+    if experiment.status not in {Experiment.Status.PUBLISHED, Experiment.Status.FROZEN}:
+        raise ValidationError("实验尚未开放")
+    if class_task is not None:
+        class_task = (
+            ClassExperimentTask.objects.select_for_update()
+            .select_related("release_snapshot")
+            .get(pk=class_task.pk, experiment=experiment)
+        )
+        version = class_task.release_snapshot
+    else:
+        version = (
+            ExperimentVersion.objects.select_for_update().get(
+                pk=experiment.frozen_release_snapshot_id
+            )
+            if experiment.frozen_release_snapshot_id
+            else ExperimentVersion.objects.select_for_update()
+            .filter(experiment=experiment)
+            .order_by("-version_number")
+            .first()
+        )
+    participant_snapshots = (
+        ExperimentVersionParticipantSnapshot.objects.select_related(
+            "class_snapshot", "class_task"
+        )
         .filter(version=version, student=student)
-        .first()
     )
+    if class_task is not None:
+        participant_snapshots = participant_snapshots.filter(class_task=class_task)
+    if experiment.status == Experiment.Status.FROZEN:
+        participant_snapshots = participant_snapshots.filter(class_task__isnull=False)
+    participant_snapshot = participant_snapshots.order_by("class_task_id", "pk").first()
     # A published v2 course experiment freezes an explicit roster and must
     # never admit a student outside it.  Older/no-roster experiments have no
     # participant snapshot rows at all; retain their historical admission
@@ -150,11 +198,39 @@ def get_or_create_session(experiment, student):
     )
     if participant_snapshot_enabled and participant_snapshot is None:
         raise ValidationError("该实验版本缺少参与者快照，不能开始作答")
+    schedule = None
+    if participant_snapshot is not None and participant_snapshot.class_task_id is not None:
+        if class_task is None:
+            class_task = ClassExperimentTask.objects.select_for_update().get(
+                pk=participant_snapshot.class_task_id
+            )
+        decision = DeadlineDecisionService.can_start_session(
+            class_task,
+            request_received_at,
+        )
+        if not decision.allowed:
+            raise ValidationError("当前班级任务尚未开放或已结束")
+        schedule = class_task.schedule_revisions.order_by("-revision_no").first()
+        existing = ExperimentSession.objects.filter(
+            class_task=class_task,
+            participant_snapshot=participant_snapshot,
+        ).first()
+        if existing is not None:
+            return existing
+    elif not ExperimentStudent.objects.filter(experiment=experiment, student=student).exists():
+        raise ValidationError("你没有参加该实验的权限")
     sampling_seed, ordering_seed, algorithm_version = derive_session_seeds(version, student.id)
-    session, created = ExperimentSession.objects.get_or_create(
-        version=version,
-        student=student,
-        defaults={
+    now = timezone.now()
+    total_seconds = None
+    if version.configuration.get("total_time_limit_minutes"):
+        total_seconds = int(version.configuration["total_time_limit_minutes"]) * 60
+    total_deadline = now + timedelta(seconds=total_seconds) if total_seconds else None
+    task_close = schedule.closes_at if schedule is not None else None
+    initial_deadline = DeadlineDecisionService.initial_session_deadline(
+        task_close,
+        total_deadline,
+    )
+    session_defaults = {
             "class_snapshot": (
                 participant_snapshot.class_snapshot
                 if participant_snapshot is not None
@@ -171,14 +247,48 @@ def get_or_create_session(experiment, student):
             "sampling_algorithm_version": algorithm_version,
             "assignment_unit_type": version.assignment_unit_type,
             "capture_contract": ensure_capture_contract_v1(),
-        },
-    )
+            "class_task": class_task,
+            "participant_snapshot": participant_snapshot,
+            "schedule_revision": schedule,
+            "task_opens_at": schedule.opens_at if schedule is not None else None,
+            "task_closes_at": task_close,
+            "total_time_limit_seconds": total_seconds,
+            "deadline_at": initial_deadline,
+            "initial_effective_deadline_at": initial_deadline,
+            "timer_semantics_version": version.timer_semantics_version,
+        }
+    if class_task is not None:
+        session = ExperimentSession.objects.create(
+            version=version,
+            student=student,
+            **session_defaults,
+        )
+        created = True
+    else:
+        session, created = ExperimentSession.objects.get_or_create(
+            version=version,
+            student=student,
+            defaults=session_defaults,
+        )
     if created:
-        if version.configuration.get("time_mode") == "total":
-            session.deadline_at = timezone.now() + timedelta(minutes=int(version.configuration["total_time_limit_minutes"]))
-            session.save(update_fields=["deadline_at"])
-        selected = select_snapshots(version, student.id, sampling_seed)
-        ordered = ordered_snapshots(version, student.id, selected, ordering_seed)
+        preview_participant = None
+        if class_task is not None and class_task.preview_class_result_id:
+            preview_participant = (
+                PublishPreviewParticipant.objects.filter(
+                    class_result_id=class_task.preview_class_result_id,
+                    student=student,
+                )
+                .prefetch_related("items__release_mapping__question_snapshot")
+                .first()
+            )
+        if preview_participant is not None:
+            ordered = [
+                item.release_mapping.question_snapshot
+                for item in preview_participant.items.all().order_by("assigned_sequence_index")
+            ]
+        else:
+            selected = select_snapshots(version, student.id, sampling_seed)
+            ordered = ordered_snapshots(version, student.id, selected, ordering_seed)
         for index, snapshot in enumerate(ordered, start=1):
             item_instance = get_or_create_default_item_instance(snapshot)
             assignment = StudentQuestionAssignment.objects.create(
@@ -199,11 +309,46 @@ def get_or_create_session(experiment, student):
         )
     return session
 
+
+@transaction.atomic
+def resume_task_session(task, student, *, request_received_at=None):
+    request_received_at = request_received_at or timezone.now()
+    task = ClassExperimentTask.objects.select_for_update().get(pk=task.pk)
+    participant = ExperimentVersionParticipantSnapshot.objects.select_for_update().get(
+        class_task=task,
+        version=task.release_snapshot,
+        student=student,
+    )
+    session = (
+        ExperimentSession.objects.select_for_update()
+        .filter(
+            class_task=task,
+            participant_snapshot=participant,
+            student=student,
+        )
+        .first()
+    )
+    if session is None:
+        raise ExperimentSession.DoesNotExist
+    if session.status != ExperimentSession.Status.IN_PROGRESS:
+        raise ValidationError("该实验会话已结束，不能继续作答")
+    decision = DeadlineDecisionService.can_enter_item(
+        task,
+        session,
+        request_received_at,
+    )
+    if not decision.allowed:
+        raise ValidationError("当前班级任务已结束，不能继续作答")
+    materialize_confidence_assignments(session)
+    return session
+
 def _close_previous(session, now):
     previous = session.current_assignment
     if not previous: return
     attempt = Attempt.objects.select_for_update().get(assignment=previous)
     if attempt.status in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}: return
+    if session.timer_semantics_version == "continuous_wall_clock_v2":
+        return
     if attempt.last_opened_at:
         elapsed = max(0, int((now - attempt.last_opened_at).total_seconds()))
         attempt.active_seconds += elapsed
@@ -234,30 +379,100 @@ def _validate_course_access(session):
         raise ValidationError("你已不在该实验所属课程中")
 
 
-def _validate_session_time(session, attempt=None):
+def _terminate_for_deadline(session, *, now, reason, attempt=None):
+    if attempt is not None:
+        attempt.status = Attempt.Status.TIMED_OUT
+        attempt.is_correct = None
+        attempt.close_reason = reason
+        attempt.authoritative_terminal_at = now
+        attempt.terminal_recorded_at = timezone.now()
+        attempt.save(
+            update_fields=[
+                "status",
+                "is_correct",
+                "close_reason",
+                "authoritative_terminal_at",
+                "terminal_recorded_at",
+            ]
+        )
+        _append_attempt_closed(attempt, close_reason="timed_out")
+        return
+    _close_open_attempts(
+        session,
+        status=Attempt.Status.UNANSWERED,
+        close_reason=reason,
+        event_close_reason="unanswered",
+        authoritative_terminal_at=now,
+    )
+    session.status = ExperimentSession.Status.EXPIRED
+    session.completed_at = now
+    session.terminal_at = now
+    session.terminal_reason = reason
+    session.authoritative_terminal_at = now
+    session.terminal_recorded_at = timezone.now()
+    session.save(
+        update_fields=[
+            "status",
+            "completed_at",
+            "terminal_at",
+            "terminal_reason",
+            "authoritative_terminal_at",
+            "terminal_recorded_at",
+        ]
+    )
+    expiry_payload = (
+        {"expiration_reason": reason, "terminal_at": now.isoformat()}
+        if session.capture_contract_id
+        else {"expiry_reason": reason}
+    )
+    _append_session_event(
+        session,
+        event_type="session_expired",
+        payload=expiry_payload,
+    )
+
+
+def _validate_session_time(session, attempt=None, *, request_received_at=None):
     _validate_course_access(session)
-    now = timezone.now()
+    now = request_received_at or timezone.now()
+    if session.class_task_id:
+        task = ClassExperimentTask.objects.select_for_update().get(pk=session.class_task_id)
+        # A committed task-level termination is authoritative even when the
+        # manual-close transaction has already projected the Session/Attempt
+        # to an expired state.
+        if task.cancelled_at or task.manual_closed_at or task.invalidated_at:
+            return "班级任务已结束"
     if session.status != ExperimentSession.Status.IN_PROGRESS:
         raise ValidationError("当前会话不可继续作答")
+    if session.class_task_id:
+        decision = (
+            DeadlineDecisionService.can_write_response(task, session, attempt, now)
+            if attempt is not None
+            else DeadlineDecisionService.can_enter_item(task, session, now)
+        )
+        if not decision.allowed:
+            if decision.code == "DEADLINE_EXPIRED":
+                _terminate_for_deadline(
+                    session,
+                    now=decision.deadline or now,
+                    reason="deadline_expired",
+                    attempt=attempt,
+                )
+                return "作答时间已结束"
+            if decision.code == "TASK_TERMINATED":
+                _terminate_for_deadline(
+                    session,
+                    now=task.manual_closed_at or task.cancelled_at or task.invalidated_at or now,
+                    reason="task_terminated",
+                )
+                return "班级任务已结束"
+            return "当前班级任务尚未开放或已结束"
     if session.deadline_at and now >= session.deadline_at:
-        _close_open_attempts(
-            session,
-            status=Attempt.Status.UNANSWERED,
-            close_reason="unanswered",
-        )
-        session.status = ExperimentSession.Status.EXPIRED
-        session.completed_at = now
-        session.terminal_at = now
-        session.save(update_fields=["status", "completed_at", "terminal_at"])
-        _append_session_event(
-            session,
-            event_type="session_expired",
-            payload={
-                "expiration_reason": "total_time_limit",
-                "terminal_at": now.isoformat(),
-            },
-        )
+        _terminate_for_deadline(session, now=now, reason="total_time_limit")
         return "实验总时间已结束"
+    if attempt and attempt.initial_effective_deadline_at and now >= attempt.initial_effective_deadline_at:
+        _terminate_for_deadline(session, now=attempt.initial_effective_deadline_at, reason="item_time_limit", attempt=attempt)
+        return "本题作答时间已结束"
     if attempt and session.version.configuration.get("time_mode") == "per_question":
         limit = session.version.configuration.get("per_question_time_limit_seconds")
         elapsed = attempt.active_seconds
@@ -270,14 +485,19 @@ def _validate_session_time(session, attempt=None):
     return None
 
 @transaction.atomic
-def _record_visit_transaction(session_id, assignment_id, entry_reason="navigation_click", client_time=None):
+def _record_visit_transaction(session_id, assignment_id, entry_reason="navigation_click", client_time=None, request_received_at=None):
+    task_id = ExperimentSession.objects.only("class_task_id").get(pk=session_id).class_task_id
+    if task_id:
+        ClassExperimentTask.objects.select_for_update().get(pk=task_id)
     session = ExperimentSession.objects.select_for_update().select_related(
         "version__experiment"
     ).get(pk=session_id)
-    if session.status != ExperimentSession.Status.IN_PROGRESS: raise ValidationError("当前会话不可继续作答")
-    time_error = _validate_session_time(session)
+    request_received_at = request_received_at or timezone.now()
+    time_error = _validate_session_time(session, request_received_at=request_received_at)
     if time_error:
         return None, time_error
+    if session.status != ExperimentSession.Status.IN_PROGRESS:
+        raise ValidationError("当前会话不可继续作答")
     assignment = StudentQuestionAssignment.objects.select_related("snapshot").get(pk=assignment_id, session=session)
     now = timezone.now(); from_assignment = session.current_assignment
     _close_previous(session, now)
@@ -287,6 +507,21 @@ def _record_visit_transaction(session_id, assignment_id, entry_reason="navigatio
             session.first_open_count += 1
             attempt.first_open_sequence_index = session.first_open_count
             attempt.first_opened_at = now
+            if session.class_task_id:
+                limit = session.version.configuration.get("per_question_time_limit_seconds")
+                attempt.item_started_at = now
+                attempt.per_item_time_limit_seconds = int(limit) if limit else None
+                attempt.item_deadline_at = DeadlineDecisionService.item_deadline_from_start(
+                    now,
+                    attempt.per_item_time_limit_seconds,
+                )
+                attempt.initial_effective_deadline_at = (
+                    DeadlineDecisionService.initial_item_deadline(
+                        session.task_closes_at,
+                        session.deadline_at,
+                        attempt.item_deadline_at,
+                    )
+                )
         attempt.last_opened_at = now
         attempt.visit_count += 1
         if attempt.status in {Attempt.Status.UNVISITED, Attempt.Status.SKIPPED}: attempt.status = Attempt.Status.VISITED
@@ -321,12 +556,13 @@ def _record_visit_transaction(session_id, assignment_id, entry_reason="navigatio
     return attempt, None
 
 
-def record_visit(session_id, assignment_id, entry_reason="navigation_click", client_time=None):
+def record_visit(session_id, assignment_id, entry_reason="navigation_click", client_time=None, *, request_received_at=None):
     attempt, time_error = _record_visit_transaction(
         session_id,
         assignment_id,
         entry_reason,
         client_time,
+        request_received_at,
     )
     if time_error:
         raise ValidationError(time_error)
@@ -339,23 +575,35 @@ def _save_draft_transaction(
     client_time=None,
     writer_lease_token=None,
     writer_client_instance_id=None,
+    request_received_at=None,
 ):
+    session_id, task_id = Attempt.objects.filter(pk=attempt_id).values_list(
+        "session_id", "session__class_task_id"
+    ).get()
+    if task_id:
+        ClassExperimentTask.objects.select_for_update().get(pk=task_id)
+    session = ExperimentSession.objects.select_for_update().select_related(
+        "version__experiment"
+    ).get(pk=session_id)
     attempt = Attempt.objects.select_for_update().select_related(
-        "session__version__experiment",
         "assignment__snapshot",
-    ).get(pk=attempt_id)
+    ).get(pk=attempt_id, session=session)
     assert_attempt_writer_lease(
         attempt,
         lease_token=writer_lease_token,
         client_instance_id=writer_client_instance_id,
     )
-    if attempt.status in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
-        raise ValidationError("该题当前状态不能修改")
-    if attempt.session.status != ExperimentSession.Status.IN_PROGRESS:
-        raise ValidationError("当前会话不可继续作答")
-    time_error = _validate_session_time(attempt.session, attempt)
+    time_error = _validate_session_time(
+        session,
+        attempt,
+        request_received_at=request_received_at or timezone.now(),
+    )
     if time_error:
         return None, time_error
+    if attempt.status in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
+        raise ValidationError("该题当前状态不能修改")
+    if session.status != ExperimentSession.Status.IN_PROGRESS:
+        raise ValidationError("当前会话不可继续作答")
     attempt.draft_answer = answer; attempt.draft_saved_at = timezone.now(); attempt.status = Attempt.Status.DRAFT
     # Clear stale pointer before creating a replacement snapshot.  The whole
     # transaction rolls back if snapshot persistence fails.
@@ -385,6 +633,7 @@ def save_draft(
     *,
     writer_lease_token=None,
     writer_client_instance_id=None,
+    request_received_at=None,
 ):
     attempt, time_error = _save_draft_transaction(
         attempt_id,
@@ -392,6 +641,7 @@ def save_draft(
         client_time,
         writer_lease_token,
         writer_client_instance_id,
+        request_received_at,
     )
     if time_error:
         raise ValidationError(time_error)
@@ -404,16 +654,24 @@ def _submit_attempt_transaction(
     client_time=None,
     writer_lease_token=None,
     writer_client_instance_id=None,
+    request_received_at=None,
 ):
-    attempt = Attempt.objects.select_for_update().select_related("session", "assignment__snapshot").get(pk=attempt_id)
+    session_id, task_id = Attempt.objects.filter(pk=attempt_id).values_list(
+        "session_id", "session__class_task_id"
+    ).get()
+    if task_id:
+        ClassExperimentTask.objects.select_for_update().get(pk=task_id)
+    session = ExperimentSession.objects.select_for_update().select_related(
+        "version__experiment"
+    ).get(pk=session_id)
+    attempt = Attempt.objects.select_for_update().select_related(
+        "assignment__snapshot"
+    ).get(pk=attempt_id, session=session)
     assert_attempt_writer_lease(
         attempt,
         lease_token=writer_lease_token,
         client_instance_id=writer_client_instance_id,
     )
-    session = ExperimentSession.objects.select_for_update().select_related(
-        "version__experiment"
-    ).get(pk=attempt.session_id)
     try:
         _validate_course_access(session)
     except ValidationError as error:
@@ -428,6 +686,13 @@ def _submit_attempt_transaction(
             "该题已经提交",
             reason_code="already_submitted",
         )
+    time_error = _validate_session_time(
+        session,
+        attempt,
+        request_received_at=request_received_at or timezone.now(),
+    )
+    if time_error:
+        return None, time_error
     if attempt.status in {Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
         raise SubmissionValidationError(
             "该题当前状态不能提交",
@@ -437,9 +702,6 @@ def _submit_attempt_transaction(
                 else "session_closed"
             ),
         )
-    time_error = _validate_session_time(session, attempt)
-    if time_error:
-        return None, time_error
     if attempt.draft_answer in (None, "", []):
         raise SubmissionValidationError(
             "请先填写答案",
@@ -652,6 +914,7 @@ def submit_attempt(
     *,
     writer_lease_token=None,
     writer_client_instance_id=None,
+    request_received_at=None,
 ):
     attempt, time_error = _submit_attempt_transaction(
         attempt_id,
@@ -659,9 +922,17 @@ def submit_attempt(
         client_time,
         writer_lease_token,
         writer_client_instance_id,
+        request_received_at,
     )
     if time_error:
-        raise SubmissionValidationError(time_error, reason_code="time_expired")
+        raise SubmissionValidationError(
+            time_error,
+            reason_code=(
+                "task_terminated"
+                if time_error == "班级任务已结束"
+                else "time_expired"
+            ),
+        )
     return attempt
 
 @transaction.atomic

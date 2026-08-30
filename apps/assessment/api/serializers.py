@@ -1,0 +1,281 @@
+from rest_framework import serializers
+from drf_spectacular.utils import PolymorphicProxySerializer
+
+
+class StudentCourseSerializer(serializers.Serializer):
+    course_id = serializers.IntegerField()
+    course_name = serializers.CharField()
+    course_code = serializers.CharField()
+    course_term = serializers.CharField()
+    course_status = serializers.CharField()
+    class_name = serializers.CharField()
+
+
+class StudentCourseCollectionSerializer(serializers.Serializer):
+    items = StudentCourseSerializer(many=True)
+
+
+class StudentTaskProgressSerializer(serializers.Serializer):
+    completed = serializers.IntegerField()
+    total = serializers.IntegerField()
+
+
+class StudentTaskSerializer(serializers.Serializer):
+    task_id = serializers.IntegerField()
+    experiment_id = serializers.IntegerField()
+    experiment_name = serializers.CharField()
+    class_name = serializers.CharField()
+    business_status = serializers.CharField()
+    opens_at = serializers.DateTimeField(allow_null=True)
+    closes_at = serializers.DateTimeField(allow_null=True)
+    progress = StudentTaskProgressSerializer()
+    primary_action = serializers.CharField(allow_null=True)
+    available_actions = serializers.ListField(child=serializers.CharField())
+    feedback_mode = serializers.CharField()
+
+
+class StudentTaskCollectionSerializer(serializers.Serializer):
+    course = StudentCourseSerializer()
+    items = StudentTaskSerializer(many=True)
+
+
+class StudentSessionEntrySerializer(serializers.Serializer):
+    task_id = serializers.IntegerField()
+    session_id = serializers.IntegerField()
+    question_url = serializers.CharField()
+
+
+class StudentRuntimeAssignmentSerializer(serializers.Serializer):
+    assignment_id = serializers.IntegerField()
+    attempt_id = serializers.IntegerField()
+    status = serializers.CharField()
+    sequence_index = serializers.IntegerField()
+
+
+class StudentRuntimeProgressSerializer(serializers.Serializer):
+    submitted = serializers.IntegerField()
+    total = serializers.IntegerField()
+
+
+class StudentRuntimeOptionSerializer(serializers.Serializer):
+    key = serializers.CharField()
+    text = serializers.CharField()
+
+
+class StudentRuntimeQuestionSerializer(serializers.Serializer):
+    snapshot_id = serializers.IntegerField()
+    stable_code = serializers.CharField(allow_blank=True)
+    code = serializers.CharField()
+    question_type = serializers.CharField()
+    text = serializers.CharField()
+    primary_kc = serializers.CharField()
+    options = StudentRuntimeOptionSerializer(many=True)
+
+
+class StudentRuntimeNavigationItemSerializer(serializers.Serializer):
+    assignment_id = serializers.IntegerField()
+    sequence_index = serializers.IntegerField()
+    status = serializers.CharField()
+    url = serializers.CharField()
+    current = serializers.BooleanField()
+
+
+class StudentRuntimeActionsSerializer(serializers.Serializer):
+    save_draft_url = serializers.CharField()
+    submit_url = serializers.CharField()
+    skip_url = serializers.CharField()
+    finish_url = serializers.CharField()
+
+
+class StudentRuntimeProcessSerializer(serializers.Serializer):
+    session_id = serializers.IntegerField()
+    attempt_id = serializers.IntegerField()
+    event_batch_url = serializers.CharField()
+    checkpoint_url = serializers.CharField()
+    time_sync_create_url = serializers.CharField()
+    time_sync_finalize_url = serializers.CharField()
+    app_version = serializers.CharField()
+    heartbeat_interval_seconds = serializers.IntegerField()
+
+
+class StudentRuntimeQuestionEntrySerializer(serializers.Serializer):
+    task_id = serializers.IntegerField()
+    session_id = serializers.IntegerField()
+    session_status = serializers.CharField()
+    experiment_name = serializers.CharField()
+    assignment = StudentRuntimeAssignmentSerializer()
+    progress = StudentRuntimeProgressSerializer()
+    remaining_seconds = serializers.IntegerField(allow_null=True)
+    question = StudentRuntimeQuestionSerializer()
+    draft_answer = serializers.JSONField(allow_null=True)
+    initial_response_state = serializers.JSONField(allow_null=True)
+    pending_confidence = serializers.JSONField(allow_null=True)
+    navigation = StudentRuntimeNavigationItemSerializer(many=True)
+    actions = StudentRuntimeActionsSerializer()
+    process = StudentRuntimeProcessSerializer()
+
+
+class StudentResultScoreSerializer(serializers.Serializer):
+    earned = serializers.DecimalField(max_digits=12, decimal_places=2)
+    maximum = serializers.DecimalField(max_digits=12, decimal_places=2)
+    percent = serializers.DecimalField(max_digits=6, decimal_places=1)
+
+
+class StudentResultCorrectnessSummarySerializer(serializers.Serializer):
+    correct = serializers.IntegerField()
+    graded = serializers.IntegerField()
+    percent = serializers.DecimalField(max_digits=6, decimal_places=1)
+
+
+class StudentResultCorrectnessItemSerializer(serializers.Serializer):
+    question_id = serializers.IntegerField()
+    question_code = serializers.CharField()
+    submitted_answer = serializers.CharField()
+    is_correct = serializers.BooleanField(required=False, allow_null=True)
+    score = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+    max_score = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+
+
+class StudentResultFullItemSerializer(StudentResultCorrectnessItemSerializer):
+    correct_answer = serializers.CharField(required=False, allow_null=True)
+    explanation = serializers.CharField(required=False, allow_blank=True)
+
+
+class StudentComparisonBranchSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=("available", "unavailable"))
+    reason = serializers.CharField(required=False)
+    percent = serializers.DecimalField(max_digits=6, decimal_places=1, required=False)
+    position = serializers.IntegerField(required=False)
+    sample_size = serializers.IntegerField(required=False)
+
+
+class StudentComparisonSerializer(serializers.Serializer):
+    class_average = StudentComparisonBranchSerializer(required=False)
+    rank = StudentComparisonBranchSerializer(required=False)
+
+
+class StudentResultBaseSerializer(serializers.Serializer):
+    task_id = serializers.IntegerField()
+    completion_status = serializers.CharField()
+    submission_status = serializers.CharField()
+    completed_at = serializers.DateTimeField(allow_null=True)
+    grading_status = serializers.CharField()
+
+
+class StudentResultNoneSerializer(StudentResultBaseSerializer):
+    feedback_mode = serializers.ChoiceField(choices=("none",))
+
+
+class StudentResultCorrectnessSerializer(StudentResultBaseSerializer):
+    feedback_mode = serializers.ChoiceField(choices=("correctness",))
+    items = StudentResultCorrectnessItemSerializer(many=True, required=False)
+    score = StudentResultScoreSerializer(required=False)
+    correctness = StudentResultCorrectnessSummarySerializer(required=False)
+    comparison = StudentComparisonSerializer(required=False)
+
+
+class StudentResultFullSerializer(StudentResultBaseSerializer):
+    feedback_mode = serializers.ChoiceField(choices=("full",))
+    items = StudentResultFullItemSerializer(many=True, required=False)
+    score = StudentResultScoreSerializer(required=False)
+    correctness = StudentResultCorrectnessSummarySerializer(required=False)
+    comparison = StudentComparisonSerializer(required=False)
+
+
+StudentResultResponseSerializer = PolymorphicProxySerializer(
+    component_name="StudentResult",
+    serializers={
+        "none": StudentResultNoneSerializer,
+        "correctness": StudentResultCorrectnessSerializer,
+        "full": StudentResultFullSerializer,
+    },
+    resource_type_field_name="feedback_mode",
+)
+
+
+def serialize_student_result(result):
+    serializer_class = {
+        "none": StudentResultNoneSerializer,
+        "correctness": StudentResultCorrectnessSerializer,
+        "full": StudentResultFullSerializer,
+    }[result["feedback_mode"]]
+    serialized = serializer_class(instance=result).data
+
+    def retain_source_shape(value, source):
+        if isinstance(value, dict) and isinstance(source, dict):
+            return {
+                key: retain_source_shape(value[key], source[key])
+                for key in source
+                if key in value
+            }
+        if isinstance(value, list) and isinstance(source, list):
+            return [
+                retain_source_shape(item, source[index])
+                for index, item in enumerate(value)
+                if index < len(source)
+            ]
+        return value
+
+    return retain_source_shape(serialized, result)
+
+
+class StudentLearningProjectionSerializer(serializers.Serializer):
+    generated_at = serializers.DateTimeField()
+    course_id = serializers.IntegerField()
+    course_name = serializers.CharField()
+    course_code = serializers.CharField()
+    course_term = serializers.CharField()
+    class_group_name = serializers.CharField()
+    completion = serializers.DictField()
+    correct_rate = serializers.DictField(required=False)
+    score_rate = serializers.DictField(required=False)
+    score_grading_coverage = serializers.DictField(required=False)
+    comparisons = serializers.DictField(required=False)
+    experiments = serializers.ListField(child=serializers.DictField())
+    experiment_correct_rate_available = serializers.BooleanField(required=False)
+    experiment_score_rate_available = serializers.BooleanField(required=False)
+    kc_rows = serializers.ListField(child=serializers.DictField(), required=False)
+    trend_rows = serializers.ListField(child=serializers.DictField(), required=False)
+    trend_class_average_available = serializers.BooleanField(required=False)
+
+
+class StudentLearningExperimentSerializer(serializers.Serializer):
+    generated_at = serializers.DateTimeField()
+    course_id = serializers.IntegerField()
+    course_name = serializers.CharField()
+    class_group_name = serializers.CharField()
+    experiment_id = serializers.IntegerField()
+    experiment_name = serializers.CharField()
+    status = serializers.CharField()
+    status_label = serializers.CharField()
+    completed = serializers.BooleanField()
+    participated = serializers.BooleanField()
+    correct_rate = serializers.DictField(required=False)
+    correct_rate_comparison = serializers.DictField(required=False)
+    score_rate = serializers.DictField(required=False)
+    grading_coverage = serializers.DictField(required=False)
+    score_rate_comparison = serializers.DictField(required=False)
+    rank = serializers.DictField(required=False)
+    item_results = serializers.ListField(child=serializers.DictField(), required=False)
+
+
+class StudentLearningQuestionSerializer(serializers.Serializer):
+    generated_at = serializers.DateTimeField()
+    course_id = serializers.IntegerField()
+    course_name = serializers.CharField()
+    class_group_name = serializers.CharField()
+    experiment_id = serializers.IntegerField()
+    experiment_name = serializers.CharField()
+    question_id = serializers.IntegerField()
+    code = serializers.CharField()
+    text = serializers.CharField()
+    kcs = serializers.ListField(child=serializers.CharField())
+    result_label = serializers.CharField()
+    final_answer = serializers.CharField()
+    score = serializers.DictField(required=False)
+    correct_answer = serializers.CharField(required=False, allow_null=True)
+    explanation = serializers.CharField(required=False, allow_blank=True)

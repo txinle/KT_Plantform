@@ -272,8 +272,9 @@ class ClassExperimentTaskAuditTests(TransactionTestCase):
                 f"""
                 INSERT INTO {table}
                     (class_group_id, experiment_id, release_snapshot_id,
-                     class_snapshot_id, published_at, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                     class_snapshot_id, published_at, terminal_reason,
+                     provenance, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 [
                     class_group.pk,
@@ -281,6 +282,8 @@ class ClassExperimentTaskAuditTests(TransactionTestCase):
                     version.pk,
                     snapshot.pk.hex,
                     published_at or version.published_at,
+                    "",
+                    "native",
                     timezone.now(),
                 ],
             )

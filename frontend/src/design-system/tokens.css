@@ -1,0 +1,15 @@
+:root {
+  --kt-color-page: var(--kt-page);
+  --kt-color-surface: var(--kt-surface);
+  --kt-color-text: var(--kt-ink);
+  --kt-color-muted: var(--kt-muted);
+  --kt-color-border: var(--kt-border);
+  --kt-color-primary: var(--kt-action-600);
+  --kt-color-primary-hover: var(--kt-action-700);
+  --kt-color-success: var(--kt-success);
+  --kt-color-success-bg: var(--kt-success-bg);
+  --kt-color-warning: var(--kt-warning);
+  --kt-color-warning-bg: var(--kt-warning-bg);
+  --kt-color-danger: var(--kt-danger);
+  --kt-color-danger-bg: var(--kt-danger-bg);
+}

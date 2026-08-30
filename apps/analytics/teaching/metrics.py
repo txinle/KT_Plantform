@@ -491,7 +491,7 @@ def build_class_center_snapshot(
                     generated_at=generated_at,
                     experiment_id=task.experiment_id,
                     name=task.experiment_name,
-                    is_live=task.experiment_status == "published",
+                    is_live=task.experiment_status in {"frozen", "published"},
                     published_at=task.published_at,
                     eligible_count=len(eligible_students),
                     participated_count=len({session.student_id for session in task_sessions}),
@@ -657,7 +657,7 @@ def build_class_center_snapshot(
                 task_count=len(tasks),
             ),
             has_live_experiments=any(
-                task.experiment_status == "published" for task in tasks
+                task.experiment_status in {"frozen", "published"} for task in tasks
             ),
             rank_sample_size=len(ranks),
             overview=ClassOverview(

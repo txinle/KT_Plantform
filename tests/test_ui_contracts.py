@@ -6,6 +6,26 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class UIContractTests(TestCase):
+    def test_shared_theme_is_loaded_before_django_surface_styles(self):
+        source = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+
+        self.assertIn("css/kt-theme.css", source)
+        self.assertLess(source.index("css/kt-theme.css"), source.index("css/app.css"))
+
+    def test_shared_theme_defines_approved_tokens(self):
+        source = (ROOT / "static" / "css" / "kt-theme.css").read_text(
+            encoding="utf-8"
+        )
+
+        for token in (
+            "--kt-brand-900: #0c3266",
+            "--kt-action-600: #145bea",
+            "--kt-page: #f6f8fb",
+            "--kt-radius-surface: 0.75rem",
+            "--kt-font-sans:",
+        ):
+            self.assertIn(token, source)
+
     def test_assessment_uses_inline_feedback_instead_of_native_dialogs(self):
         source = (ROOT / "static" / "js" / "assessment.js").read_text(encoding="utf-8")
         self.assertNotIn("alert(", source)
@@ -18,10 +38,40 @@ class UIContractTests(TestCase):
         self.assertIn("vendor/bootstrap/js/bootstrap.bundle.min.js", source)
         self.assertNotIn("cdn.jsdelivr.net", source)
 
+    def test_django_header_uses_light_single_line_brand_shell(self):
+        source = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+
+        self.assertIn('class="brand-mark"', source)
+        self.assertIn('class="teacher-nav primary-navigation"', source)
+        self.assertNotIn("navbar-dark", source)
+        self.assertIn('aria-label="教师工作区"', source)
+
     def test_teacher_navigation_remains_visible_on_desktop(self):
         source = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
         self.assertIn(".teacher-nav .teacher-nav-collapse { display: block; }", source)
         self.assertIn(".teacher-nav-collapse:not(.show) { display: none; }", source)
+
+    def test_django_surfaces_use_approved_shape_and_control_tokens(self):
+        source = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("border-radius: var(--kt-radius-surface)", source)
+        self.assertIn("min-height: 2.5rem", source)
+        self.assertIn("font-variant-numeric: tabular-nums", source)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", source)
+
+    def test_high_value_pages_use_shared_presentation_wrappers(self):
+        detail = (ROOT / "templates" / "teacher" / "course_experiment_detail.html").read_text(encoding="utf-8")
+        form = (ROOT / "templates" / "teacher" / "course_experiment_form.html").read_text(encoding="utf-8")
+        publish = (ROOT / "templates" / "teacher" / "course_experiment_publish_wizard.html").read_text(encoding="utf-8")
+        results = (ROOT / "templates" / "teacher" / "course_experiment_results.html").read_text(encoding="utf-8")
+        login = (ROOT / "templates" / "registration" / "login.html").read_text(encoding="utf-8")
+
+        self.assertIn('class="experiment-detail-grid"', detail)
+        self.assertIn('class="page-header"', form)
+        self.assertIn('class="form-section"', form)
+        self.assertIn('class="lifecycle workflow-steps', publish)
+        self.assertIn('class="table-shell"', results)
+        self.assertIn('class="login-form-panel surface-elevated"', login)
 
     def test_table_scroll_shell_establishes_containing_block_to_prevent_absolute_accessibility_text_from_expanding_root(self):
         source = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")

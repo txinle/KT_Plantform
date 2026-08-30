@@ -10,6 +10,8 @@ from django.views.decorators.http import require_POST
 from urllib.parse import urlencode
 
 from apps.audit.services import log_action
+from apps.api.rollout import is_vue_module_enabled
+from apps.api.shell import render_vue_shell
 
 from .course_access import (
     accessible_courses,
@@ -574,6 +576,13 @@ def course_data(request, course_pk):
         suffix = f"?{query.urlencode()}" if query else ""
         return redirect(f"{reverse('courses:data_quality', args=[course.pk])}{suffix}")
     scope = _teaching_scope_from_request(request, course)
+    if is_vue_module_enabled("teacher_data_center", request.user, course):
+        return render_vue_shell(
+            request,
+            module="teacher-data-center",
+            title=f"数据中心 | {course.name}",
+            course=course,
+        )
     sessions = scope.sessions()
     attempts = scope.attempts()
     quality_report = build_quality_report(scope)
@@ -743,6 +752,13 @@ def course_data_exports(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
     scope = _scope_from_request(request, course)
     teaching_scope = _teaching_scope_from_request(request, course)
+    if is_vue_module_enabled("teacher_data_center", request.user, course):
+        return render_vue_shell(
+            request,
+            module="teacher-data-center",
+            title=f"导出 | {course.name}",
+            course=course,
+        )
     packages = [
         ("teaching", "教学成绩（XLSX）", "当前有效成绩与导出血缘"),
         ("complete", "完整研究包", "全过程数据与可复现派生"),
@@ -812,6 +828,13 @@ def course_data_quality(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
     scope = _scope_from_request(request, course)
     teaching_scope = _teaching_scope_from_request(request, course)
+    if is_vue_module_enabled("teacher_data_center", request.user, course):
+        return render_vue_shell(
+            request,
+            module="teacher-data-center",
+            title=f"数据质量 | {course.name}",
+            course=course,
+        )
     report = build_quality_report(scope)
     return _render_data_center(
         request,
@@ -830,6 +853,13 @@ def course_data_quality(request, course_pk):
 def course_data_export_history(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
     scope = _teaching_scope_from_request(request, course)
+    if is_vue_module_enabled("teacher_data_center", request.user, course):
+        return render_vue_shell(
+            request,
+            module="teacher-data-center",
+            title=f"导出记录 | {course.name}",
+            course=course,
+        )
     return _render_data_center(
         request,
         "teacher/data_center/export_history.html",
@@ -845,6 +875,13 @@ def course_data_advanced(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
     scope = _scope_from_request(request, course)
     teaching_scope = _teaching_scope_from_request(request, course)
+    if is_vue_module_enabled("teacher_data_center", request.user, course):
+        return render_vue_shell(
+            request,
+            module="teacher-data-center",
+            title=f"高级数据工具 | {course.name}",
+            course=course,
+        )
     selected_table = request.GET.get("table", "attempts")
     selected_experiment = None
     if scope.experiment_id:

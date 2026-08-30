@@ -1,18 +1,22 @@
 # Page audit
 
-Record each finding with page, severity (`P0`, `P1`, or `P2`), user impact, proposed repair, affected files, and research-semantic risk.
+Record each finding with page/state, severity (`P0`, `P1`, or `P2`), user impact, proposed repair, affected files, and research-semantic risk.
 
-Check:
+For reference-led experiment work, audit in this order:
 
-- Information hierarchy and current-page navigation
-- Typography, spacing, table density, and form grouping
-- Empty, loading, saving, success, and error states
-- Desktop and mobile layout, including horizontal overflow
-- Keyboard order, focus visibility, labels, ARIA, and zoom to 200 percent
-- WCAG AA contrast and whether status relies on color alone
-- Student assessment cognitive load and touch target size
-- Destructive-action hierarchy and confirmation behavior
-- Differences between anonymous, navigation-event, and identity exports
-- Offline availability of required frontend assets
+1. Skeleton: shell height, content width, breadcrumb, title, tabs, columns, panels, table and action placement.
+2. Typography: font family, size, weight, line-height, wrapping, numeric alignment, and any overflow.
+3. Controls: height, padding, border, radius, icons, focus, disabled/loading states, and action hierarchy.
+4. Color and elevation: brand/status colors, borders, surfaces, shadows, and WCAG AA contrast.
+5. Spacing: gutters, section gaps, card padding, row density, and alignment.
 
-Prioritize functional breakage and research-risk ambiguity over cosmetic polish.
+Also check:
+
+- Real API content remains authoritative; no screenshot data was copied into code, fixtures, seeds, or APIs.
+- Feature CSS does not leak into question-bank, class, data-center, student, or retained Django pages.
+- Empty, loading, saving, success, conflict, and server-error states remain understandable.
+- 1586×992 visual capture and overlay; 1440×900, 390×844, keyboard, 200% zoom, reduced motion, and page-level overflow.
+- Destructive-action hierarchy, confirmation, idempotency, and recovery.
+- Student assessment cognitive load and research invariants.
+
+Prioritize broken behavior and research-risk ambiguity first, then skeleton deviations, then fine pixel calibration.

@@ -127,4 +127,4 @@ for _ in range(60):
 PY
 fi
 
-exec "$VENV_PYTHON" manage.py runserver 0.0.0.0:8000
+exec "$VENV_PYTHON" scripts/run_dev.py
