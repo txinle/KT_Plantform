@@ -185,7 +185,8 @@ class CourseWorkspaceUIParityTests(TestCase):
 
         for label in ("实验生命周期", "题目顺序", "反馈", "时间", "断点续答", "发布前检查"):
             self.assertContains(draft_response, label)
-        self.assertContains(draft_response, 'data-bs-target="#publish-confirm-dialog"')
+        self.assertContains(draft_response, "进入四步发布向导")
+        self.assertContains(draft_response, "publish-plan/start/")
         self.assertContains(published_response, "发布快照")
         self.assertContains(published_response, "版本")
         self.assertContains(published_response, self.students[0].student_number)

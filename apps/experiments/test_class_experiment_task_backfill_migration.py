@@ -16,10 +16,19 @@ class ClassExperimentTaskBackfillMigrationTests(TransactionTestCase):
 
     @staticmethod
     def _targets_with_experiments_at(executor, experiments_target):
-        return [
-            experiments_target if target[0] == "experiments" else target
-            for target in executor.loader.graph.leaf_nodes()
-        ]
+        targets = []
+        for target in executor.loader.graph.leaf_nodes():
+            if target[0] == "experiments":
+                targets.append(experiments_target)
+            elif target[0] == "assessment":
+                # New assessment deadline fields depend on A+ experiment
+                # migrations.  This historical 0014 migration test must keep
+                # assessment at its last compatible leaf while it deliberately
+                # rewinds experiments to 0013/0014.
+                targets.append(("assessment", "0021_session_terminal_constraint"))
+            else:
+                targets.append(target)
+        return targets
 
     @classmethod
     def setUpClass(cls):

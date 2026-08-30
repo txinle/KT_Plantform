@@ -83,7 +83,7 @@ class StudentCourseNavigationTests(TestCase):
 
     def test_student_navigation_keeps_assigned_numbers_and_shows_the_stable_course_code(self):
         self.client.force_login(self.student)
-        self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
+        self.client.post(reverse("assessment:start", args=[self.experiment.pk]))
         session = ExperimentSession.objects.get(student=self.student)
         assignment = session.assignments.get()
 
@@ -106,7 +106,7 @@ class StudentCourseNavigationTests(TestCase):
         self.course.save(update_fields=["status"])
         self.client.force_login(self.student)
 
-        response = self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
+        response = self.client.post(reverse("assessment:start", args=[self.experiment.pk]))
 
         self.assertRedirects(response, reverse("assessment:dashboard"))
         self.assertFalse(ExperimentSession.objects.exists())
@@ -119,7 +119,7 @@ class StudentCourseNavigationTests(TestCase):
         )
         self.client.force_login(self.other_student)
 
-        response = self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
+        response = self.client.post(reverse("assessment:start", args=[self.experiment.pk]))
 
         self.assertRedirects(response, reverse("assessment:dashboard"))
         self.assertFalse(ExperimentSession.objects.filter(student=self.other_student).exists())
@@ -128,7 +128,7 @@ class StudentCourseNavigationTests(TestCase):
         lock_order = []
         original_course_lock = Course.objects.select_for_update
         original_enrollment_lock = CourseEnrollment.objects.select_for_update
-        original_session_write = ExperimentSession.objects.get_or_create
+        original_session_write = ExperimentSession.objects.create
 
         def lock_course(*args, **kwargs):
             lock_order.append("course")
@@ -156,17 +156,17 @@ class StudentCourseNavigationTests(TestCase):
             ),
             patch.object(
                 ExperimentSession.objects,
-                "get_or_create",
+                "create",
                 side_effect=write_session,
             ),
         ):
-            self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
+            self.client.post(reverse("assessment:start", args=[self.experiment.pk]))
 
         self.assertEqual(lock_order[:3], ["course", "enrollment", "session"])
 
     def test_archiving_course_blocks_writes_to_existing_session(self):
         self.client.force_login(self.student)
-        self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
+        self.client.post(reverse("assessment:start", args=[self.experiment.pk]))
         session = ExperimentSession.objects.get(student=self.student)
         attempt = session.attempts.get()
         self.course.status = Course.Status.ARCHIVED
@@ -185,7 +185,7 @@ class StudentCourseNavigationTests(TestCase):
 
     def test_inactive_enrollment_blocks_writes_to_existing_session(self):
         self.client.force_login(self.student)
-        self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
+        self.client.post(reverse("assessment:start", args=[self.experiment.pk]))
         session = ExperimentSession.objects.get(student=self.student)
         attempt = session.attempts.get()
         CourseEnrollment.objects.filter(course=self.course, student=self.student).update(is_active=False)
@@ -201,7 +201,7 @@ class StudentCourseNavigationTests(TestCase):
 
     def test_existing_session_write_locks_enrollment_before_research_event(self):
         self.client.force_login(self.student)
-        self.client.get(reverse("assessment:start", args=[self.experiment.pk]))
+        self.client.post(reverse("assessment:start", args=[self.experiment.pk]))
         attempt = ExperimentSession.objects.get(student=self.student).attempts.get()
         lock_order = []
         original_course_lock = Course.objects.select_for_update

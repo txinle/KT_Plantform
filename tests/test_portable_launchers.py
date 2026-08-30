@@ -10,6 +10,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PortableLauncherContractTests(TestCase):
+    def test_dev_runner_enables_teacher_experiment_vue_by_default(self):
+        source = (ROOT / "scripts" / "run_dev.py").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'environment["VUE_TEACHER_EXPERIMENTS_ENABLED"] = "1"',
+            source,
+        )
+
     def test_unix_launcher_matches_local_startup_contract(self):
         launcher = ROOT / "run_local.sh"
         self.assertTrue(launcher.is_file(), "run_local.sh is missing")
@@ -26,11 +34,15 @@ class PortableLauncherContractTests(TestCase):
             "manage.py seed_demo",
             "KT_SKIP_BROWSER",
             "webbrowser.open",
-            "manage.py runserver 0.0.0.0:8000",
+            "scripts/run_dev.py",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, source)
         self.assertNotIn("manage.py makemigrations", source)
+        dev_runner = (ROOT / "scripts" / "run_dev.py").read_text(encoding="utf-8")
+        for token in ('"manage.py"', '"runserver"', '"0.0.0.0:8000"'):
+            with self.subTest(dev_runner_token=token):
+                self.assertIn(token, dev_runner)
 
     def test_package_builder_includes_unix_artifacts(self):
         source = (ROOT / "scripts" / "create_portable_package.ps1").read_text(

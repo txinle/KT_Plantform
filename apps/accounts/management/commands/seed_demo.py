@@ -3,7 +3,14 @@ from django.db import transaction
 from apps.accounts.class_lifecycle import lock_active_class_groups
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.experiments.models import Experiment, ExperimentQuestion
-from apps.experiments.services import assign_students, publish_experiment
+from apps.experiments.publication_services import (
+    commit_publish_plan,
+    generate_preview,
+    get_or_create_publish_plan,
+    save_plan_schedules,
+    save_plan_selection,
+)
+from apps.experiments.services import assign_students
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
 
 class Command(BaseCommand):
@@ -75,5 +82,32 @@ class Command(BaseCommand):
             or experiment.participant_override_links.exists()
         ):
             assign_students(experiment, students)
-        if experiment.status == Experiment.Status.DRAFT and not experiment.versions.exists(): publish_experiment(experiment, teacher)
+        if experiment.status == Experiment.Status.DRAFT and not experiment.versions.exists():
+            plan = get_or_create_publish_plan(experiment, teacher)
+            plan = save_plan_selection(
+                plan,
+                teacher,
+                expected_revision=plan.plan_revision,
+                class_ids=[cls.pk],
+                exclusions_by_class={},
+            )
+            plan = save_plan_schedules(
+                plan,
+                teacher,
+                expected_revision=plan.plan_revision,
+                default_opens_at=None,
+                default_closes_at=None,
+                overrides={},
+            )
+            generate_preview(
+                plan,
+                teacher,
+                expected_revision=plan.plan_revision,
+            )
+            plan.refresh_from_db()
+            commit_publish_plan(
+                plan,
+                teacher,
+                expected_revision=plan.plan_revision,
+            )
         self.stdout.write(self.style.SUCCESS("演示数据已就绪：admin/admin123，teacher/teacher123，S001-S003/student123"))

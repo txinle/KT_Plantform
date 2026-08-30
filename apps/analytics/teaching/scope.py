@@ -40,6 +40,7 @@ def resolve_task_facts(class_group, *, experiment_id=None):
             class_group=class_group,
             experiment__course_id=class_group.course_id,
             experiment__status__in=(
+                Experiment.Status.FROZEN,
                 Experiment.Status.PUBLISHED,
                 Experiment.Status.CLOSED,
             ),

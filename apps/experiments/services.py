@@ -38,6 +38,10 @@ _class_experiment_task_creation_scope = ContextVar(
     "class_experiment_task_creation_scope",
     default=False,
 )
+_class_experiment_task_terminal_scope = ContextVar(
+    "class_experiment_task_terminal_scope",
+    default=False,
+)
 
 
 @contextmanager
@@ -51,6 +55,19 @@ def _class_experiment_task_publication_scope():
 
 def _class_experiment_task_creation_is_active():
     return _class_experiment_task_creation_scope.get()
+
+
+@contextmanager
+def _class_experiment_task_terminal_update_scope():
+    token = _class_experiment_task_terminal_scope.set(True)
+    try:
+        yield
+    finally:
+        _class_experiment_task_terminal_scope.reset(token)
+
+
+def _class_experiment_task_terminal_update_is_active():
+    return _class_experiment_task_terminal_scope.get()
 
 
 @dataclass(frozen=True)
@@ -287,6 +304,10 @@ def _create_class_experiment_tasks(experiment, version, class_snapshots):
             published_at=version.published_at,
         )
         task.save(force_insert=True)
+        ExperimentVersionParticipantSnapshot.objects.filter(
+            version=version,
+            class_snapshot_id=class_snapshots[class_group_id].pk,
+        ).update(class_task=task)
         tasks.append(task)
     return tasks
 

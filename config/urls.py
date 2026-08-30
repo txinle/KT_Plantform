@@ -5,6 +5,7 @@ from apps.accounts.views import PlatformLoginView, home
 from apps.accounts.health import health
 
 urlpatterns = [
+    path("api/v1/", include("apps.api.urls")),
     path("health/", health, name="health"),
     path("", home, name="home"),
     path("login/", PlatformLoginView.as_view(), name="login"),

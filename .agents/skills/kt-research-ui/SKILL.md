@@ -1,65 +1,46 @@
 ---
 name: kt-research-ui
-description: Use when auditing, redesigning, or iterating the Django and Bootstrap interfaces in this KT research data-collection repository, especially teacher dashboards, question-bank workflows, experiment configuration, student single-question assessment screens, responsive states, and accessibility.
+description: Use when auditing, redesigning, or iterating the KT research platform UI across progressive Vue 3 pages and retained Django templates, especially teacher experiments, question banks, classes, data views, student assessment screens, responsive states, visual-reference matching, and accessibility.
 ---
 
 # KT Research UI
 
 ## Design read
 
-Treat this repository as an educational research data-collection product for teachers, administrators, and students, not as a marketing site. Make the interface trustworthy, restrained, clear, stable, and accessible. Allow higher information density for teachers, but minimize cognitive interference in student assessment screens.
+Treat this repository as an educational research data-collection product, not a marketing site. Make teacher workflows precise and information-dense, and keep student assessment screens calm and cognitively stable.
 
-Use these defaults:
-
-- `DESIGN_VARIANCE: 4`
-- `MOTION_INTENSITY: 2`
-- `VISUAL_DENSITY: 6`
-- `DATA_CLARITY: 10`
-- `ACCESSIBILITY_PRIORITY: 10`
+Defaults: `DESIGN_VARIANCE: 4`, `MOTION_INTENSITY: 2`, `VISUAL_DENSITY: 6`, `DATA_CLARITY: 10`, `ACCESSIBILITY_PRIORITY: 10`.
 
 ## Required workflow
 
-1. Read [RESEARCH-INVARIANTS.md](references/RESEARCH-INVARIANTS.md) before touching templates, JavaScript, views, services, or tests.
-2. Inventory the affected routes, templates, forms, DOM hooks, Fetch contracts, and user paths.
-3. Audit the current rendered desktop and mobile states with [PAGE-AUDIT.md](references/PAGE-AUDIT.md).
-4. Read [DESIGN-SYSTEM.md](references/DESIGN-SYSTEM.md), then reuse its tokens and component rules before adding page-specific CSS.
-5. Implement the smallest targeted change in Django Templates, Bootstrap 5.3, native CSS, and native JavaScript.
-6. Verify the affected flow and complete [ACCEPTANCE-CHECKLIST.md](references/ACCEPTANCE-CHECKLIST.md).
+1. Read [RESEARCH-INVARIANTS.md](references/RESEARCH-INVARIANTS.md) before changing UI that can affect publishing, assessment, timing, feedback, or export.
+2. Inventory the affected URLs, Vue routes/components or retained Django templates, server projections, forms, DOM hooks, and user paths.
+3. For a reference-led request, read [EXPERIMENT-REFERENCE.md](references/EXPERIMENT-REFERENCE.md) and use the named asset as the primary visual authority.
+4. Audit desktop, mobile, zoom, empty, loading, success, and error states with [PAGE-AUDIT.md](references/PAGE-AUDIT.md).
+5. Read [DESIGN-SYSTEM.md](references/DESIGN-SYSTEM.md), then implement the smallest scoped change.
+6. Verify the real flow and complete [ACCEPTANCE-CHECKLIST.md](references/ACCEPTANCE-CHECKLIST.md).
 
-## Engineering constraints
+## Architecture and authority
 
-- Preserve the current Django monolith, Django Templates, Bootstrap, native CSS, and native JavaScript Fetch API.
-- Do not introduce React, Vue, Tailwind, HTMX, GSAP, an SPA, or a frontend build pipeline.
-- Do not change URLs, form field names, DOM IDs, `data-*` attributes, CSRF behavior, or Fetch payloads unless the same change includes regression coverage.
-- Prefer design tokens and reusable template components over repeated page-specific markup.
-- Keep student assessment stability and cognitive load ahead of visual novelty.
-- Keep teacher data hierarchy, action paths, error recovery, and irreversible-action clarity ahead of decoration.
-- Do not add production dependencies unless Bootstrap, CSS, and native JavaScript cannot reasonably implement the requirement.
-- Use the local system font stack. Do not add remote fonts.
-- Keep transitions between 120 and 200 ms and support `prefers-reduced-motion`.
-- Never use `window.alert()` or native `confirm()` for production feedback. Use inline status regions or accessible Bootstrap dialogs.
-- Never encode state with color alone. Pair color with text, shape, or an accessible label.
+- The approved architecture is Django 5.2 + DRF with progressive Vue 3 + TypeScript + Vite. Retained pages may still use Django templates, Bootstrap, native CSS, and native JavaScript.
+- Django owns permissions, task state, deadlines, scoring, Coverage, randomization, feedback visibility, snapshots, schedules, and publication semantics. Vue renders authoritative responses and user interaction; it must not infer these fields.
+- Preserve existing business URLs and server-side rollout controls. Do not add a permanent SPA fallback or unrelated route.
+- Preserve CSRF, payloads, idempotency, form/DOM/Fetch contracts, assessment runtime, exports, and retained templates unless the scoped migration explicitly covers them.
+- A visual-reference task never authorizes copying the reference's class names, counts, participants, question order, warnings, dates, or outcomes. Use real API data and existing domain behavior.
+- Do not change APIs, seed data, database state, or domain services merely to make a screenshot resemble reference content.
+- Scope component CSS to the migrated module. A feature stylesheet imported from Vue must not redefine shared `.kt-*` or Bootstrap classes outside its feature root.
+- Do not add dependencies unless the existing stack cannot reasonably implement the requirement. Use local fonts and SVG icons.
 
 ## Visual rules
 
-- Use a low-saturation navy brand color, cool neutral surfaces, and semantic green, amber, and red only for real status.
-- Avoid purple-blue gradients, large glass panels, excessive shadows, decorative statistics, giant marketing headlines, emoji icons, pill badges everywhere, and three identical generic cards.
-- Use cards only where grouping or elevation communicates hierarchy. Prefer section boundaries, tables, and spacing for dense teacher workflows.
-- Use tabular figures for IDs, sequence numbers, counts, dates, durations, and timers.
-- Give containers, controls, and status labels distinct restrained radii.
-- Preserve a visible keyboard focus indicator, real labels, useful error summaries, and touch targets of at least 44 px for primary student interactions.
-- Make the local app fully usable when offline. Vendor Bootstrap runtime files with their license when possible; otherwise document the degradation honestly.
+- For the six experiment states, the persisted 1586×992 reference images outrank generic taste rules. Match the skeleton first, then typography, controls, color, and spacing.
+- Use restrained navy/blue for brand and action, cool neutral surfaces, and green/amber/red only for real semantic status.
+- Avoid gradients, glass panels, decorative statistics, giant marketing headlines, emoji icons, excessive shadows, and pill badges everywhere.
+- Preserve visible focus, true labels, useful error summaries, non-color status cues, WCAG AA contrast, and reduced-motion behavior.
+- Keep primary touch targets at least 44 px on student/mobile surfaces. Use tabular figures for IDs, counts, dates, durations, and timers.
 
 ## Verification gate
 
-Run at least:
+For migrated Vue work run the affected unit/API tests, `npm run lint`, `npm run typecheck`, `npm run test:unit`, `npm run api:check`, and `npm run build`. For retained Django work run the narrow relevant Django tests and checks. Run broader regression only when repository instructions or change scope require it.
 
-```text
-python manage.py check
-python manage.py test
-python manage.py collectstatic --noinput
-node --check static/js/app.js
-node --check static/js/assessment.js
-```
-
-Also exercise teacher and student demo paths at 1440 x 900 and 390 x 844. For any touched research invariant, add or update an automated regression test before reporting completion.
+For the six experiment states, capture 1586×992 at DPR 1 and compare against the named reference. Also check 1440×900, 390×844, keyboard operation, 200% zoom, WCAG AA contrast, no text overflow, and `prefers-reduced-motion`.

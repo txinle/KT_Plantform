@@ -20,12 +20,17 @@ from apps.assessment.models import (
     CaptureContractArtifact, ClientCaptureCheckpoint, ClientTimeSync,
 )
 from apps.experiments.models import (
+    ClassExperimentTask,
     ConditionAssignment,
     ExperimentClassSnapshot,
     ExperimentVersion,
     ExperimentVersionParticipantSnapshot,
     ItemInstance,
+    PublishPreviewClassResult,
+    PublishPreviewRun,
     QuestionSnapshot,
+    ReleaseSnapshotQuestionMapping,
+    ScheduleRevision,
 )
 from .export_catalog import (
     EXPOSURE_EVENT_TYPES,
@@ -1096,12 +1101,54 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         if grade.validity_status == GradeRecord.ValidityStatus.EFFECTIVE:
             grade_by_attempt[grade.submission.attempt_id] = grade
     submission_by_attempt = {submission.attempt_id: submission for submission in submissions}
+    task_ids = {session.class_task_id for session in sessions if session.class_task_id}
+    class_tasks = list(
+        ClassExperimentTask.objects.filter(pk__in=task_ids)
+        .select_related(
+            "class_group",
+            "release_snapshot",
+            "randomization_identity",
+            "preview_class_result__preview_run",
+        )
+        .order_by("pk")
+    )
+    schedule_revisions = list(
+        ScheduleRevision.objects.filter(class_task_id__in=task_ids)
+        .select_related("class_task")
+        .order_by("class_task_id", "revision_no")
+    )
+    release_ids = {session.version_id for session in sessions} | {
+        task.release_snapshot_id for task in class_tasks
+    }
+    releases = list(
+        ExperimentVersion.objects.filter(pk__in=release_ids)
+        .select_related("experiment")
+        .order_by("experiment_id", "version_number")
+    )
+    release_mappings = list(
+        ReleaseSnapshotQuestionMapping.objects.filter(release_snapshot_id__in=release_ids)
+        .select_related("source_question", "question_snapshot")
+        .order_by("release_snapshot_id", "source_question_id")
+    )
+    preview_results = [
+        task.preview_class_result
+        for task in class_tasks
+        if task.preview_class_result_id
+    ]
+    preview_runs = {
+        result.preview_run_id: result.preview_run
+        for result in preview_results
+    }
+
+    def export_time(value):
+        return value.isoformat() if value else ""
+
     rows = {
         "subjects": (identity_headers, subject_values),
-        "sessions": ((*identity_headers, "session_id", "experiment_id", "version", "status", "started_at", "completed_at"), [[*identity_for_session(session.pk), session.pk, session.version.experiment_id, session.version.version_number, session.status, session.started_at.isoformat(), session.completed_at.isoformat() if session.completed_at else ""] for session in sessions]),
+        "sessions": ((*identity_headers, "session_id", "experiment_id", "version", "class_task_id", "participant_snapshot_id", "schedule_revision_id", "status", "started_at", "completed_at", "task_opens_at", "task_closes_at", "total_time_limit_seconds", "initial_effective_deadline_at", "timer_semantics_version", "terminal_reason", "authoritative_terminal_at", "terminal_recorded_at"), [[*identity_for_session(session.pk), session.pk, session.version.experiment_id, session.version.version_number, session.class_task_id or "", session.participant_snapshot_id or "", session.schedule_revision_id or "", session.status, session.started_at.isoformat(), session.completed_at.isoformat() if session.completed_at else "", export_time(session.task_opens_at), export_time(session.task_closes_at), session.total_time_limit_seconds or "", export_time(session.initial_effective_deadline_at), session.timer_semantics_version, session.terminal_reason, export_time(session.authoritative_terminal_at), export_time(session.terminal_recorded_at)] for session in sessions]),
         "assignments": ((*identity_headers, "question_code", "assignment_id", "session_id", "question_snapshot_id", "item_instance_id", "assigned_sequence_index"), [[*identity_for_session(assignment.session_id), assignment.snapshot.code, assignment.pk, assignment.session_id, assignment.snapshot_id, assignment.item_instance_id, assignment.assigned_sequence_index] for assignment in assignments]),
         "item_instances": (("question_code", "item_instance_id", "question_snapshot_id", "presentation_variant", "option_order", "parameter_values", "random_seed", "presentation_hash"), [[assignment.snapshot.code, assignment.item_instance_id, assignment.snapshot_id, assignment.item_instance.presentation_variant, json.dumps(assignment.item_instance.option_order), json.dumps(assignment.item_instance.parameter_values), assignment.item_instance.random_seed, assignment.item_instance.presentation_hash] for assignment in _unique_assignments(assignments, "item_instance_id")]),
-        "attempts": ((*identity_headers, "question_code", "attempt_id", "session_id", "question_snapshot_id", "item_instance_id", "status", "first_opened_at", "last_opened_at", "visit_count", "draft_answer", "draft_saved_at", "final_answer", "submitted_at", "first_to_submit_duration_ms", "last_visit_to_submission_ms", "is_correct", "score", "first_open_sequence_index", "submission_sequence_index", "current_response_snapshot_id", "final_response_snapshot_id", "submission_event_id", "submission_grade_status", "grade_version", "grade_is_correct", "grade_score", "grade_max_score", "normalized_response", "grading_method", "grading_version", "grader_version", "graded_at"), [_attempt_export_row(assignment, attempt_by_assignment.get(assignment.pk), session_by_id, grade_by_attempt) for assignment in assignments if assignment.session_id in session_by_id]),
+        "attempts": ((*identity_headers, "question_code", "attempt_id", "session_id", "question_snapshot_id", "item_instance_id", "status", "first_opened_at", "last_opened_at", "visit_count", "draft_answer", "draft_saved_at", "final_answer", "submitted_at", "first_to_submit_duration_ms", "last_visit_to_submission_ms", "is_correct", "score", "first_open_sequence_index", "submission_sequence_index", "current_response_snapshot_id", "final_response_snapshot_id", "submission_event_id", "submission_grade_status", "grade_version", "grade_is_correct", "grade_score", "grade_max_score", "normalized_response", "grading_method", "grading_version", "grader_version", "graded_at", "item_started_at", "per_item_time_limit_seconds", "item_deadline_at", "initial_effective_deadline_at", "close_reason", "authoritative_terminal_at", "terminal_recorded_at"), [_attempt_export_row(assignment, attempt_by_assignment.get(assignment.pk), session_by_id, grade_by_attempt) for assignment in assignments if assignment.session_id in session_by_id]),
         "assessment_events": (event_headers, event_rows),
         "response_events": (response_headers, response_rows),
         "exposure_events": (projection_headers, exposure_rows),
@@ -1251,6 +1298,122 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
             [[item.run_id, item.run.coverage_version, item.run.parameter_hash, item.run.source_cutoff_at.isoformat(), item.attempt_id, item.overall_status, item.enter_status, item.render_status, item.leave_status, item.response_chain_status, item.final_state_status, item.time_quality, item.response_state_count, item.sequence_gap_count, json.dumps(item.missing_reasons), json.dumps(item.analysis_eligibility, ensure_ascii=False), json.dumps(item.derived_features, ensure_ascii=False)] for item in latest_coverage_attempt.values()],
         ),
     }
+    rows.update(
+        {
+            "release_metadata": (
+                (
+                    "release_snapshot_id", "experiment_id", "version_number",
+                    "published_at", "timer_semantics_version",
+                    "randomization_semantics_version", "definition_fingerprint",
+                    "canonicalization_version",
+                ),
+                [
+                    [
+                        release.pk, release.experiment_id, release.version_number,
+                        export_time(release.published_at), release.timer_semantics_version,
+                        release.randomization_semantics_version,
+                        release.definition_fingerprint, release.canonicalization_version,
+                    ]
+                    for release in releases
+                ],
+            ),
+            "class_experiment_tasks": (
+                (
+                    "class_task_id", "experiment_id", "release_snapshot_id",
+                    "class_group_id", "class_snapshot_id", "published_at",
+                    "class_published_at", "randomization_algorithm_version",
+                    "root_seed_fingerprint", "preview_class_result_id",
+                    "cancelled_at", "manual_closed_at", "invalidated_at",
+                    "terminal_reason", "provenance",
+                ),
+                [
+                    [
+                        task.pk, task.experiment_id, task.release_snapshot_id,
+                        task.class_group_id, task.class_snapshot_id,
+                        export_time(task.published_at), export_time(task.class_published_at),
+                        task.randomization_identity.algorithm_version
+                        if task.randomization_identity_id else "",
+                        task.randomization_identity.root_seed_fingerprint
+                        if task.randomization_identity_id else "",
+                        task.preview_class_result_id or "", export_time(task.cancelled_at),
+                        export_time(task.manual_closed_at), export_time(task.invalidated_at),
+                        task.terminal_reason or "", task.provenance or "",
+                    ]
+                    for task in class_tasks
+                ],
+            ),
+            "schedule_revisions": (
+                (
+                    "class_task_id", "revision_no", "opens_at", "closes_at",
+                    "timezone", "reason", "provenance", "created_at",
+                ),
+                [
+                    [
+                        revision.class_task_id, revision.revision_no,
+                        export_time(revision.opens_at), export_time(revision.closes_at),
+                        revision.timezone_name, revision.reason, revision.provenance,
+                        export_time(revision.created_at),
+                    ]
+                    for revision in schedule_revisions
+                ],
+            ),
+            "release_question_mappings": (
+                (
+                    "release_snapshot_id", "source_question_id",
+                    "question_release_fingerprint", "question_snapshot_id",
+                    "created_at",
+                ),
+                [
+                    [
+                        mapping.release_snapshot_id, mapping.source_question_id,
+                        mapping.question_release_fingerprint,
+                        mapping.question_snapshot_id, export_time(mapping.created_at),
+                    ]
+                    for mapping in release_mappings
+                ],
+            ),
+            "publish_preview_runs": (
+                (
+                    "preview_run_id", "plan_revision", "status",
+                    "definition_fingerprint", "input_hash", "output_hash",
+                    "algorithm_version", "created_at", "invalidated_at",
+                    "invalidation_reason",
+                ),
+                [
+                    [
+                        run.pk, run.plan_revision, run.status,
+                        run.definition_fingerprint, run.input_hash, run.output_hash,
+                        run.algorithm_version, export_time(run.created_at),
+                        export_time(run.invalidated_at), run.invalidation_reason,
+                    ]
+                    for run in preview_runs.values()
+                ],
+            ),
+            "publish_preview_class_results": (
+                (
+                    "preview_class_result_id", "preview_run_id",
+                    "class_task_id", "participant_count", "quota_valid",
+                    "input_hash", "output_hash", "algorithm_version",
+                    "root_seed_fingerprint", "created_at",
+                ),
+                [
+                    [
+                        result.pk, result.preview_run_id,
+                        next(
+                            task.pk for task in class_tasks
+                            if task.preview_class_result_id == result.pk
+                        ),
+                        result.participant_count, result.quota_valid,
+                        result.input_hash, result.output_hash,
+                        result.randomization_identity.algorithm_version,
+                        result.randomization_identity.root_seed_fingerprint,
+                        export_time(result.created_at),
+                    ]
+                    for result in preview_results
+                ],
+            ),
+        }
+    )
     derivation_id = str(getattr(snapshot, "snapshot_id", "preview"))
     base = (*identity_headers, "question_code", "attempt_id", "derivation_run_id", "derivation_version")
     feature_rows, kt_rows, cd_rows, cal_rows = [], [], [], []
@@ -1290,7 +1453,7 @@ def _attempt_export_row(assignment, attempt, session_by_id, grade_by_attempt=Non
     identity = [session.student.student_number or "", session.student.shown_name, assignment.snapshot.code]
     linkage = [assignment.session_id, assignment.snapshot.pk, assignment.item_instance_id]
     if attempt is None:
-        return [*identity, "", *linkage] + [""] * 28
+        return [*identity, "", *linkage] + [""] * 28 + [""] * 7
     grade = (grade_by_attempt or {}).get(attempt.pk)
     submission = getattr(attempt, "submission_event", None)
     if attempt is None:
@@ -1326,6 +1489,16 @@ def _attempt_export_row(assignment, attempt, session_by_id, grade_by_attempt=Non
         grade.grading_version if grade else "",
         grade.grader_version if grade else "",
         grade.graded_at.isoformat() if grade and grade.graded_at else "",
+        attempt.item_started_at.isoformat() if attempt.item_started_at else "",
+        attempt.per_item_time_limit_seconds or "",
+        attempt.item_deadline_at.isoformat() if attempt.item_deadline_at else "",
+        attempt.initial_effective_deadline_at.isoformat()
+        if attempt.initial_effective_deadline_at else "",
+        attempt.close_reason,
+        attempt.authoritative_terminal_at.isoformat()
+        if attempt.authoritative_terminal_at else "",
+        attempt.terminal_recorded_at.isoformat()
+        if attempt.terminal_recorded_at else "",
     ]
 
 

@@ -1195,7 +1195,7 @@ class ParticipantRuleDemoSeedTests(TestCase):
             course__code="KT101",
             name="演示交互数据采集",
         )
-        self.assertEqual(experiment.status, Experiment.Status.PUBLISHED)
+        self.assertEqual(experiment.status, Experiment.Status.FROZEN)
         self.assertEqual(experiment.student_links.count(), 3)
         self.assertEqual(
             experiment.participant_override_links.filter(
@@ -1203,6 +1203,10 @@ class ParticipantRuleDemoSeedTests(TestCase):
             ).count(),
             3,
         )
+        task = experiment.class_tasks.get()
+        self.assertEqual(task.class_group.name, "认知追踪实验班")
+        self.assertEqual(task.participant_snapshots.count(), 3)
+        self.assertEqual(task.release_snapshot.question_snapshots.count(), 4)
 
     def test_seed_demo_locks_experiment_course_and_class_before_enrollment_write(self):
         lock_order = []

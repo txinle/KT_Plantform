@@ -74,7 +74,7 @@ echo Ctrl+click the URL above if the browser does not open automatically.
 if /I not "%KT_SKIP_BROWSER%"=="1" (
     start "" powershell.exe -NoProfile -WindowStyle Hidden -Command "$url='%APP_URL%'; for ($attempt = 0; $attempt -lt 60; $attempt++) { try { Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 1 | Out-Null; Start-Process $url; exit 0 } catch { Start-Sleep -Milliseconds 500 } }; exit 1"
 )
-"%VENV_PYTHON%" manage.py runserver 0.0.0.0:8000
+"%VENV_PYTHON%" scripts\run_dev.py
 exit /b %errorlevel%
 
 :fail

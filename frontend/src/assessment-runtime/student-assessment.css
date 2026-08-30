@@ -1,0 +1,330 @@
+.kt-assessment-focus {
+  min-height: 100vh;
+  overflow-x: clip;
+  background: var(--kt-page);
+  padding: 1.5rem;
+}
+
+.kt-assessment-capability {
+  max-width: 44rem;
+  margin: 8vh auto;
+  border: 1px solid var(--kt-color-danger);
+  border-radius: var(--kt-radius-surface);
+  background: var(--kt-color-surface);
+  padding: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+.kt-assessment-layout {
+  display: grid;
+  grid-template-columns: 204px minmax(0, 1fr);
+  gap: 1.25rem;
+  width: min(100%, 74rem);
+  margin: 0 auto;
+}
+
+.kt-assessment-mobile-header {
+  display: none;
+}
+
+.kt-assessment-nav,
+.kt-assessment-question {
+  border: 1px solid var(--kt-color-border);
+  border-radius: var(--kt-radius-surface);
+  background: var(--kt-color-surface);
+}
+
+.kt-assessment-nav {
+  position: sticky;
+  top: 1.5rem;
+  align-self: start;
+  max-height: calc(100vh - 3rem);
+  overflow: auto;
+  padding: 1rem;
+}
+
+.kt-assessment-nav__header,
+.kt-assessment-question__header,
+.kt-assessment-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.kt-assessment-nav__header h2,
+.kt-assessment-nav__header span {
+  margin: 0;
+}
+
+.kt-assessment-nav nav,
+.kt-drawer nav {
+  display: grid;
+  gap: 0.35rem;
+  margin: 1rem 0;
+}
+
+.kt-assessment-nav__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 2.75rem;
+  gap: 0.5rem;
+  border-left: 3px solid transparent;
+  border-radius: 0 var(--kt-radius-control) var(--kt-radius-control) 0;
+  padding: 0.45rem 0.55rem;
+  color: var(--kt-color-text);
+  text-decoration: none;
+}
+
+.kt-assessment-nav__item:hover {
+  background: var(--kt-action-050);
+}
+
+.kt-assessment-nav__item[aria-current='step'] {
+  border-left-color: var(--kt-action-600);
+  background: var(--kt-action-050);
+  color: var(--kt-action-600);
+  font-weight: 700;
+}
+
+.kt-assessment-nav__item small {
+  color: var(--kt-color-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.kt-button--danger-secondary {
+  width: 100%;
+  border-color: var(--kt-color-danger);
+  background: #fff;
+  color: var(--kt-color-danger);
+}
+
+.kt-button--danger-secondary:hover {
+  background: var(--kt-color-danger-bg);
+}
+
+.kt-assessment-question {
+  min-width: 0;
+  padding: clamp(1.25rem, 3vw, 2.25rem);
+}
+
+.kt-assessment-question__header {
+  border-bottom: 1px solid var(--kt-color-border);
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+}
+
+.kt-assessment-question__header h1 {
+  margin-bottom: 0;
+  font-size: var(--kt-font-title);
+}
+
+.kt-assessment-question__header [role='timer'] {
+  flex: none;
+  border: 1px solid var(--kt-color-border);
+  border-radius: var(--kt-radius-control);
+  padding: 0.45rem 0.7rem;
+  color: var(--kt-color-text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.kt-kicker,
+.kt-assessment-context,
+.kt-assessment-save-status,
+.kt-assessment-drawer-progress {
+  color: var(--kt-color-muted);
+}
+
+.kt-kicker {
+  margin-bottom: 0.3rem;
+  color: var(--kt-action-600);
+  font-size: var(--kt-font-xs);
+  font-weight: 750;
+}
+
+.kt-assessment-context {
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+
+.kt-assessment-stem {
+  margin: 1.5rem 0;
+  font-size: var(--kt-font-lg);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.kt-assessment-question fieldset {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.kt-assessment-option {
+  display: grid;
+  grid-template-columns: auto 1.75rem minmax(0, 1fr);
+  align-items: start;
+  gap: 0.75rem;
+  min-height: 3.25rem;
+  border: 1px solid var(--kt-color-border);
+  border-radius: var(--kt-radius-control);
+  padding: 0.85rem 1rem;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 400;
+}
+
+.kt-assessment-option:has(input:checked) {
+  border-color: var(--kt-action-600);
+  background: var(--kt-action-050);
+}
+
+.kt-assessment-option span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.kt-assessment-text-answer {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.kt-assessment-confidence {
+  margin: 1rem 0;
+  border: 1px solid var(--kt-color-border);
+  border-radius: var(--kt-radius-control);
+  padding: 1rem;
+  background: var(--kt-surface-subtle);
+}
+
+.kt-assessment-save-status {
+  min-height: 1.55rem;
+  margin: 1rem 0 0.5rem;
+  font-size: 0.875rem;
+}
+
+.kt-assessment-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.kt-assessment-actions .kt-button { min-height: 2.75rem; }
+
+.kt-dialog-backdrop {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(23 35 58 / 46%);
+  padding: 1rem;
+}
+
+.kt-dialog {
+  width: min(100%, 30rem);
+  border-radius: var(--kt-radius-surface);
+  background: var(--kt-color-surface);
+  box-shadow: var(--kt-shadow-raised);
+  padding: 1.5rem;
+}
+
+.kt-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.kt-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.kt-drawer {
+  z-index: 60;
+  border-left: 1px solid var(--kt-color-border);
+}
+
+.kt-drawer > button:first-child {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  border: 1px solid var(--kt-color-border);
+  border-radius: var(--kt-radius-control);
+  background: #fff;
+  color: var(--kt-color-text);
+  cursor: pointer;
+}
+
+@media (max-width: 45rem) {
+  .kt-assessment-focus {
+    padding: 0;
+  }
+
+  .kt-assessment-layout {
+    display: block;
+    width: 100%;
+  }
+
+  .kt-assessment-mobile-header {
+    position: sticky;
+    z-index: 20;
+    top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    min-height: 4rem;
+    border-bottom: 1px solid var(--kt-color-border);
+    background: var(--kt-color-surface);
+    padding: 0.65rem 1rem;
+  }
+
+  .kt-assessment-mobile-header .kt-button {
+    min-height: 2.75rem;
+  }
+
+  .kt-assessment-nav {
+    display: none;
+  }
+
+  .kt-assessment-question {
+    border: 0;
+    border-radius: 0;
+    padding: 1.1rem 1rem 2rem;
+  }
+
+  .kt-assessment-question__header {
+    align-items: flex-start;
+  }
+
+  .kt-assessment-question__header h1 {
+    font-size: 1.5rem;
+  }
+
+  .kt-assessment-option {
+    padding: 0.8rem;
+  }
+
+  .kt-assessment-actions,
+  .kt-dialog__actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .kt-assessment-actions .kt-button,
+  .kt-dialog__actions .kt-button {
+    width: 100%;
+  }
+}

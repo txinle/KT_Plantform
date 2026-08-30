@@ -101,6 +101,7 @@ class ExperimentManager(models.Manager.from_queryset(ExperimentQuerySet)):
 class Experiment(models.Model):
     class Status(models.TextChoices):
         DRAFT = "draft", "草稿"
+        FROZEN = "frozen", "已冻结"
         PUBLISHED = "published", "已发布"
         CLOSED = "closed", "已关闭"
         ARCHIVED = "archived", "已归档"
@@ -155,6 +156,13 @@ class Experiment(models.Model):
     )
     question_bank = models.ForeignKey("question_bank.QuestionBank", on_delete=models.PROTECT, related_name="experiments")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    frozen_release_snapshot = models.ForeignKey(
+        "ExperimentVersion",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="frozen_for_experiments",
+    )
     selection_mode = models.CharField(
         max_length=16,
         choices=SelectionMode.choices,
@@ -236,6 +244,15 @@ class Experiment(models.Model):
         default_manager_name = "objects"
 
     def __str__(self): return self.name
+
+    @property
+    def is_definition_frozen(self):
+        return self.status in {
+            self.Status.FROZEN,
+            self.Status.PUBLISHED,
+            self.Status.CLOSED,
+            self.Status.ARCHIVED,
+        }
 
     def clean(self):
         super().clean()
@@ -506,6 +523,16 @@ class ExperimentVersion(models.Model):
     published_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     published_at = models.DateTimeField(auto_now_add=True)
     assignment_unit_type = models.CharField(max_length=16, choices=(("subject", "Subject"), ("session", "Session")), default="subject")
+    timer_semantics_version = models.CharField(
+        max_length=64,
+        default="continuous_wall_clock_v2",
+    )
+    randomization_semantics_version = models.CharField(
+        max_length=64,
+        default="task_root_hmac_v2",
+    )
+    definition_fingerprint = models.CharField(max_length=64, blank=True, default="")
+    canonicalization_version = models.CharField(max_length=32, default="canonical-json-v1")
     objects = ExperimentVersionManager()
 
     class Meta:
@@ -581,6 +608,33 @@ class ClassExperimentTask(models.Model):
         related_name="class_task",
     )
     published_at = models.DateTimeField()
+    class_published_at = models.DateTimeField(null=True, blank=True)
+    published_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="published_class_experiment_tasks",
+    )
+    randomization_identity = models.ForeignKey(
+        "ExperimentClassRandomizationIdentity",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="class_tasks",
+    )
+    preview_class_result = models.ForeignKey(
+        "PublishPreviewClassResult",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="published_tasks",
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    manual_closed_at = models.DateTimeField(null=True, blank=True)
+    invalidated_at = models.DateTimeField(null=True, blank=True)
+    terminal_reason = models.CharField(max_length=64, blank=True, default="")
+    provenance = models.CharField(max_length=64, default="native")
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = ClassExperimentTaskManager()
@@ -639,7 +693,27 @@ class ClassExperimentTask(models.Model):
 
     def save(self, *args, **kwargs):
         if not self._state.adding:
-            raise ValidationError("班级实验任务不可修改。")
+            previous = type(self).objects.get(pk=self.pk)
+            mutable_fields = {
+                "cancelled_at",
+                "manual_closed_at",
+                "invalidated_at",
+                "terminal_reason",
+            }
+            changed = {
+                field.name
+                for field in self._meta.fields
+                if getattr(self, field.attname) != getattr(previous, field.attname)
+            }
+            from .services import _class_experiment_task_terminal_update_is_active
+
+            if (
+                not changed
+                or not changed.issubset(mutable_fields)
+                or not _class_experiment_task_terminal_update_is_active()
+            ):
+                raise ValidationError("班级实验任务的正式发布事实不可修改。")
+            return super().save(*args, **kwargs)
         from .services import _class_experiment_task_creation_is_active
 
         if (
@@ -652,6 +726,48 @@ class ClassExperimentTask(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError("班级实验任务不可删除。")
+
+
+class ScheduleRevision(models.Model):
+    class_task = models.ForeignKey(
+        ClassExperimentTask,
+        on_delete=models.CASCADE,
+        related_name="schedule_revisions",
+    )
+    revision_no = models.PositiveIntegerField()
+    opens_at = models.DateTimeField(null=True, blank=True)
+    closes_at = models.DateTimeField(null=True, blank=True)
+    timezone_name = models.CharField(max_length=64, default="Asia/Shanghai")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_schedule_revisions",
+    )
+    reason = models.CharField(max_length=500, blank=True, default="")
+    provenance = models.CharField(max_length=64, default="native")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["class_task_id", "revision_no"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["class_task", "revision_no"],
+                name="unique_task_schedule_revision",
+            ),
+            models.CheckConstraint(
+                condition=Q(closes_at__isnull=True)
+                | Q(opens_at__isnull=True)
+                | Q(closes_at__gt=models.F("opens_at")),
+                name="schedule_revision_window_order",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk and not self._state.adding:
+            raise ValidationError("开放排期历史版本不可修改。")
+        return super().save(*args, **kwargs)
 
 
 class ExperimentClassSnapshotQuerySet(models.QuerySet):
@@ -777,14 +893,30 @@ class ExperimentVersionParticipantSnapshot(models.Model):
         on_delete=models.PROTECT,
         related_name="participant_snapshots",
     )
+    class_task = models.ForeignKey(
+        ClassExperimentTask,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="participant_snapshots",
+    )
+    course_subject = models.ForeignKey(
+        "accounts.CourseSubject",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="experiment_participant_snapshots",
+    )
+    randomization_subject_key = models.CharField(max_length=128, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["version_id", "student_id"]
         constraints = [
             models.UniqueConstraint(
-                fields=["version", "student"],
-                name="unique_version_participant_snapshot",
+                fields=["class_task", "student"],
+                condition=Q(class_task__isnull=False),
+                name="unique_task_participant_snapshot",
             ),
         ]
 
@@ -888,6 +1020,7 @@ class QuestionSnapshot(models.Model):
     empirical_difficulty = models.DecimalField(max_digits=4, decimal_places=3, null=True, blank=True)
     primary_kc = models.CharField(max_length=160)
     all_kcs = models.JSONField(default=list)
+    release_fingerprint = models.CharField(max_length=64, blank=True, default="")
     class Meta: ordering = ["source_sequence", "id"]
 
 
@@ -976,3 +1109,339 @@ class ItemInstance(models.Model):
                 raise ValidationError("ItemInstance 呈现内容创建后不可修改。")
         self.full_clean(validate_unique=False, validate_constraints=False)
         return super().save(*args, **kwargs)
+
+
+class ExperimentClassRandomizationIdentity(models.Model):
+    """One immutable randomization root per Experiment × Class pair."""
+
+    experiment = models.ForeignKey(
+        Experiment,
+        on_delete=models.PROTECT,
+        related_name="class_randomization_identities",
+    )
+    class_group = models.ForeignKey(
+        "accounts.ClassGroup",
+        on_delete=models.PROTECT,
+        related_name="experiment_randomization_identities",
+    )
+    encrypted_root_seed = models.BinaryField(editable=False)
+    root_seed_fingerprint = models.CharField(max_length=64)
+    algorithm_version = models.CharField(max_length=64, default="task_root_hmac_v2")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_experiment_randomization_identities",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["experiment", "class_group"],
+                name="unique_experiment_class_randomization_identity",
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk and not self._state.adding:
+            raise ValidationError("班级随机化根不可修改。")
+        return super().save(*args, **kwargs)
+
+
+class PublishPlan(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "草稿"
+        PREVIEWED = "previewed", "已预览"
+        COMMITTED = "committed", "已提交"
+        DISCARDED = "discarded", "已放弃"
+        EXPIRED = "expired", "已过期"
+
+    experiment = models.ForeignKey(
+        Experiment,
+        on_delete=models.CASCADE,
+        related_name="publish_plans",
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    current_step = models.PositiveSmallIntegerField(default=1)
+    plan_revision = models.PositiveIntegerField(default=1)
+    default_opens_at = models.DateTimeField(null=True, blank=True)
+    default_closes_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_publish_plans",
+    )
+    current_editor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="editing_publish_plans",
+    )
+    last_meaningful_write_at = models.DateTimeField()
+    expires_at = models.DateTimeField()
+    source_plan = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="copies",
+    )
+    preview_run = models.ForeignKey(
+        "PublishPreviewRun",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="selected_by_plans",
+    )
+    committed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-last_meaningful_write_at", "-pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["experiment"],
+                condition=Q(status__in=["draft", "previewed"]),
+                name="unique_active_publish_plan_per_experiment",
+            ),
+            models.CheckConstraint(
+                condition=Q(current_step__gte=1, current_step__lte=2),
+                name="publish_plan_step_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(default_closes_at__isnull=True)
+                | Q(default_opens_at__isnull=True)
+                | Q(default_closes_at__gt=models.F("default_opens_at")),
+                name="publish_plan_default_schedule_order",
+            ),
+        ]
+
+
+class PublishPlanClass(models.Model):
+    publish_plan = models.ForeignKey(
+        PublishPlan,
+        on_delete=models.CASCADE,
+        related_name="class_plans",
+    )
+    class_group = models.ForeignKey(
+        "accounts.ClassGroup",
+        on_delete=models.PROTECT,
+        related_name="publish_plan_entries",
+    )
+    schedule_configured = models.BooleanField(default=False)
+    use_batch_default = models.BooleanField(default=True)
+    opens_at = models.DateTimeField(null=True, blank=True)
+    closes_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["class_group__academic_year", "class_group__name", "pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["publish_plan", "class_group"],
+                name="unique_publish_plan_class",
+            ),
+            models.CheckConstraint(
+                condition=Q(closes_at__isnull=True)
+                | Q(opens_at__isnull=True)
+                | Q(closes_at__gt=models.F("opens_at")),
+                name="publish_plan_class_schedule_order",
+            ),
+        ]
+
+
+class PublishPlanExclusion(models.Model):
+    publish_plan_class = models.ForeignKey(
+        PublishPlanClass,
+        on_delete=models.CASCADE,
+        related_name="exclusions",
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="publish_plan_exclusions",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["publish_plan_class", "student"],
+                name="unique_publish_plan_class_exclusion",
+            )
+        ]
+
+
+class PublishPreviewRun(models.Model):
+    class Status(models.TextChoices):
+        VALID = "valid", "有效"
+        INVALIDATED = "invalidated", "已失效"
+
+    publish_plan = models.ForeignKey(
+        PublishPlan,
+        on_delete=models.CASCADE,
+        related_name="preview_runs",
+    )
+    plan_revision = models.PositiveIntegerField()
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.VALID)
+    definition_fingerprint = models.CharField(max_length=64)
+    input_hash = models.CharField(max_length=64)
+    output_hash = models.CharField(max_length=64)
+    algorithm_version = models.CharField(max_length=64, default="task_root_hmac_v2")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_publish_preview_runs",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    invalidated_at = models.DateTimeField(null=True, blank=True)
+    invalidation_reason = models.CharField(max_length=64, blank=True, default="")
+
+
+class PublishPreviewClassResult(models.Model):
+    preview_run = models.ForeignKey(
+        PublishPreviewRun,
+        on_delete=models.CASCADE,
+        related_name="class_results",
+    )
+    publish_plan_class = models.ForeignKey(
+        PublishPlanClass,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="preview_results",
+    )
+    randomization_identity = models.ForeignKey(
+        ExperimentClassRandomizationIdentity,
+        on_delete=models.PROTECT,
+        related_name="preview_results",
+    )
+    participant_count = models.PositiveIntegerField(default=0)
+    input_hash = models.CharField(max_length=64)
+    output_hash = models.CharField(max_length=64)
+    quota_valid = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["preview_run", "publish_plan_class"],
+                name="unique_preview_run_class_result",
+            )
+        ]
+
+
+class PublishPreviewParticipant(models.Model):
+    class_result = models.ForeignKey(
+        PublishPreviewClassResult,
+        on_delete=models.CASCADE,
+        related_name="participants",
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="publish_preview_participations",
+    )
+    course_subject = models.ForeignKey(
+        "accounts.CourseSubject",
+        on_delete=models.PROTECT,
+        related_name="publish_preview_participations",
+    )
+    randomization_subject_key = models.CharField(max_length=128)
+    item_count = models.PositiveIntegerField(default=0)
+    is_valid = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["class_result", "student"],
+                name="unique_preview_class_student",
+            )
+        ]
+
+
+class ReleaseSnapshotQuestionMapping(models.Model):
+    release_snapshot = models.ForeignKey(
+        ExperimentVersion,
+        on_delete=models.CASCADE,
+        related_name="question_mappings",
+    )
+    source_question = models.ForeignKey(
+        "question_bank.Question",
+        on_delete=models.PROTECT,
+        related_name="release_snapshot_mappings",
+    )
+    question_release_fingerprint = models.CharField(max_length=64)
+    question_snapshot = models.ForeignKey(
+        QuestionSnapshot,
+        on_delete=models.PROTECT,
+        related_name="release_mappings",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["release_snapshot", "source_question"],
+                name="unique_release_source_question_mapping",
+            ),
+            models.UniqueConstraint(
+                fields=["release_snapshot", "question_snapshot"],
+                name="unique_release_question_snapshot_mapping",
+            ),
+        ]
+
+
+class PublishPreviewItem(models.Model):
+    participant = models.ForeignKey(
+        PublishPreviewParticipant,
+        on_delete=models.CASCADE,
+        related_name="items",
+    )
+    source_question = models.ForeignKey(
+        "question_bank.Question",
+        on_delete=models.PROTECT,
+        related_name="publish_preview_items",
+    )
+    question_release_fingerprint = models.CharField(max_length=64)
+    assigned_sequence_index = models.PositiveIntegerField()
+    release_mapping = models.ForeignKey(
+        ReleaseSnapshotQuestionMapping,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="preview_items",
+    )
+
+    class Meta:
+        ordering = ["assigned_sequence_index"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["participant", "assigned_sequence_index"],
+                name="unique_preview_item_sequence",
+            ),
+            models.UniqueConstraint(
+                fields=["participant", "source_question"],
+                name="unique_preview_participant_source_question",
+            ),
+        ]
+
+
+class PublishPreviewInvalidation(models.Model):
+    preview_run = models.ForeignKey(
+        PublishPreviewRun,
+        on_delete=models.CASCADE,
+        related_name="invalidation_events",
+    )
+    reason = models.CharField(max_length=64)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="publish_preview_invalidations",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)

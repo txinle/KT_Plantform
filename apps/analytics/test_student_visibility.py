@@ -277,7 +277,6 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
                 "experiments",
                 "experiment_correct_rate_available",
                 "experiment_score_rate_available",
-                "experiment_rank_available",
                 "kc_rows",
                 "trend_rows",
                 "trend_class_average_available",
@@ -299,8 +298,7 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
         small_row = by_id[self.experiments["small"].pk]
         self.assertNotIn("rank", small_row)
         correctness_row = by_id[self.experiments["correctness"].pk]
-        self.assertEqual(correctness_row["rank"]["position"], 1)
-        self.assertEqual(correctness_row["rank"]["sample_size"], 5)
+        self.assertNotIn("rank", correctness_row)
         self.assertEqual(len(data["kc_rows"]), 1)
         self.assertEqual(len(data["trend_rows"]), 3)
 

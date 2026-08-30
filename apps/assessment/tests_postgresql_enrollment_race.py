@@ -98,7 +98,7 @@ class PostgreSQLEnrollmentRemovalRaceTests(TransactionTestCase):
         order_lock = Lock()
         commit_order = []
         errors = []
-        original_session_write = ExperimentSession.objects.get_or_create
+        original_session_write = ExperimentSession.objects.create
 
         def delayed_session_write(*args, **kwargs):
             session_reached_write.set()
@@ -114,7 +114,7 @@ class PostgreSQLEnrollmentRemovalRaceTests(TransactionTestCase):
             try:
                 with patch.object(
                     ExperimentSession.objects,
-                    "get_or_create",
+                    "create",
                     side_effect=delayed_session_write,
                 ):
                     get_or_create_session(

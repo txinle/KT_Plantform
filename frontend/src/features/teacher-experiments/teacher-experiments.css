@@ -1,0 +1,355 @@
+.kt-teacher-experiments .kt-page-header__actions,
+.kt-teacher-experiments .kt-form-actions,
+.kt-teacher-experiments .kt-inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; }
+.kt-teacher-experiments .kt-table-card { padding: 0; overflow: hidden; }
+.kt-teacher-experiments .kt-table-card > .kt-section-heading { padding: 1rem 1rem 0; }
+.kt-teacher-experiments .kt-table-scroll { overflow-x: auto; }
+.kt-teacher-experiments .kt-mobile-only { display: none; }
+.kt-teacher-experiments .kt-cell-note { display: block; max-width: 32rem; margin-top: 0.2rem; overflow: hidden; color: var(--kt-muted); font-size: var(--kt-font-sm); text-overflow: ellipsis; white-space: nowrap; }
+.kt-teacher-experiments .kt-paginator { display: flex; align-items: center; justify-content: flex-end; gap: 0.75rem; padding: 1rem; }
+.kt-teacher-experiments .kt-paginator button,
+.kt-teacher-experiments .kt-text-button { border: 0; padding: 0.45rem; background: transparent; color: var(--kt-color-primary); font-weight: 700; cursor: pointer; }
+.kt-teacher-experiments .kt-paginator button:disabled { color: var(--kt-color-muted); cursor: not-allowed; }
+.kt-teacher-experiments .kt-empty-state { padding: 2rem; text-align: center; }
+.kt-teacher-experiments .kt-empty-state p { margin-bottom: 0; color: var(--kt-color-muted); }
+.kt-teacher-experiments .kt-mobile-card-list { margin: 0; padding: 0 1rem 1rem; list-style: none; }
+.kt-teacher-experiments .kt-mobile-experiment-card { border-top: 1px solid var(--kt-color-border); padding: 1rem 0; }
+.kt-teacher-experiments .kt-mobile-experiment-card:first-child { border-top: 0; }
+.kt-teacher-experiments .kt-mobile-experiment-card p { margin-bottom: 0.75rem; color: var(--kt-color-muted); font-size: 0.9rem; }
+.kt-teacher-experiments .kt-mobile-experiment-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 0; }
+.kt-teacher-experiments .kt-mobile-experiment-card dt { color: var(--kt-color-muted); font-size: 0.75rem; }
+.kt-teacher-experiments .kt-mobile-experiment-card dd { margin: 0; }
+.kt-teacher-experiments .kt-form-stack,
+.kt-teacher-experiments .kt-review-stack { display: grid; gap: 1rem; }
+.kt-teacher-experiments .kt-form-section { display: grid; gap: 1rem; padding: 1.25rem; }
+.kt-teacher-experiments .kt-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.kt-teacher-experiments .kt-form-grid > label,
+.kt-teacher-experiments .kt-inline-panel > label { display: grid; gap: 0.35rem; }
+.kt-teacher-experiments .kt-fieldset { margin: 0; border: 1px solid var(--kt-color-border); border-radius: var(--kt-radius-control); padding: 1rem; }
+.kt-teacher-experiments .kt-fieldset legend { padding-inline: 0.3rem; font-weight: 750; }
+.kt-teacher-experiments .kt-quota-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }
+.kt-teacher-experiments .kt-quota-grid label { display: grid; gap: 0.3rem; font-size: 0.9rem; }
+.kt-teacher-experiments .kt-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.kt-teacher-experiments .kt-description-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.9rem 1rem; margin: 0; }
+.kt-teacher-experiments .kt-description-list div { min-width: 0; }
+.kt-teacher-experiments .kt-description-list dt { color: var(--kt-color-muted); font-size: 0.8rem; }
+.kt-teacher-experiments .kt-description-list dd { margin: 0.2rem 0 0; font-weight: 700; }
+.kt-teacher-experiments .kt-muted { color: var(--kt-color-muted); }
+.kt-teacher-experiments .kt-issue-list { margin: 0; padding-left: 1.25rem; }
+.kt-teacher-experiments .kt-task-list { display: grid; gap: 0.75rem; }
+.kt-teacher-experiments .kt-task-card { padding: 1.1rem 1.25rem; }
+.kt-teacher-experiments .kt-progress-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; margin: 1rem 0; }
+.kt-teacher-experiments .kt-progress-grid div { border-left: 2px solid var(--kt-color-border); padding-left: 0.65rem; }
+.kt-teacher-experiments .kt-progress-grid dt { color: var(--kt-color-muted); font-size: 0.75rem; }
+.kt-teacher-experiments .kt-progress-grid dd { margin: 0; font-size: 1.15rem; font-weight: 750; font-variant-numeric: tabular-nums; }
+.kt-teacher-experiments .kt-text-button--danger { color: var(--kt-color-danger); }
+.kt-teacher-experiments .kt-inline-panel { display: grid; gap: 0.75rem; margin-top: 1rem; border: 1px solid var(--kt-border); border-radius: var(--kt-radius-control); padding: 1rem; background: var(--kt-surface-subtle); }
+.kt-teacher-experiments .kt-inline-panel--danger,
+.kt-teacher-experiments .kt-confirm-panel { border-color: #ddb6b6; background: var(--kt-color-danger-bg); }
+.kt-teacher-experiments .kt-stepper { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 36rem; margin: 0 0 1.5rem; padding: 0; list-style: none; }
+.kt-teacher-experiments .kt-stepper li { display: flex; align-items: center; gap: 0.5rem; border-bottom: 3px solid var(--kt-color-border); padding: 0.6rem; color: var(--kt-color-muted); }
+.kt-teacher-experiments .kt-stepper li span { display: grid; width: 1.5rem; height: 1.5rem; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 0.75rem; }
+.kt-teacher-experiments .kt-stepper li.is-current { border-color: var(--kt-color-primary); color: var(--kt-color-primary); font-weight: 750; }
+.kt-teacher-experiments .kt-choice-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; }
+.kt-teacher-experiments .kt-choice-row { display: flex; min-height: 3.5rem; align-items: flex-start; gap: 0.65rem; border: 1px solid var(--kt-color-border); border-radius: var(--kt-radius-control); padding: 0.75rem; cursor: pointer; }
+.kt-teacher-experiments .kt-choice-row:has(input:checked) { border-color: var(--kt-action-600); background: var(--kt-action-050); }
+.kt-teacher-experiments .kt-choice-row span { display: grid; }
+.kt-teacher-experiments .kt-choice-row small,
+.kt-teacher-experiments .kt-schedule-row span { color: var(--kt-color-muted); font-weight: 400; }
+.kt-teacher-experiments .kt-schedule-row { display: grid; grid-template-columns: minmax(10rem, 1fr) auto minmax(10rem, 0.75fr); align-items: center; gap: 0.8rem; border-top: 1px solid var(--kt-color-border); padding-top: 0.9rem; }
+.kt-teacher-experiments .kt-schedule-row > div:first-child { display: grid; }
+.kt-teacher-experiments .kt-check-inline { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.9rem; }
+.kt-teacher-experiments .kt-form-actions--sticky { position: sticky; z-index: var(--kt-z-actions); bottom: 0; border: 1px solid var(--kt-border); border-radius: var(--kt-radius-surface); padding: 0.75rem; background: rgb(255 255 255 / 96%); box-shadow: 0 -0.25rem 1rem rgb(12 50 102 / 7%); }
+.kt-teacher-experiments .kt-confirm-panel { margin-top: 1rem; padding: 1.25rem; }
+
+@media (max-width: 48rem) {
+  .kt-teacher-experiments .kt-detail-grid,
+.kt-teacher-experiments .kt-form-grid,
+.kt-teacher-experiments .kt-choice-list { grid-template-columns: 1fr; }
+  .kt-teacher-experiments .kt-quota-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kt-teacher-experiments .kt-description-list { grid-template-columns: 1fr 1fr; }
+  .kt-teacher-experiments .kt-progress-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kt-teacher-experiments .kt-schedule-row { grid-template-columns: 1fr; }
+  .kt-teacher-experiments .kt-form-actions--sticky { position: static; }
+  .kt-teacher-experiments .kt-form-actions > .kt-button { flex: 1 1 100%; }
+  .kt-teacher-experiments .kt-desktop-only { display: none; }
+  .kt-teacher-experiments .kt-mobile-only { display: block; }
+}
+
+/* Experiment publishing is intentionally denser than the generic teacher pages. */
+.kt-teacher-experiments .kt-experiment-shell-main {
+  width: min(calc(100% - 8.75rem), 90.5rem);
+}
+.kt-teacher-experiments .kt-experiment-shell-header .kt-experiment-shell-header__inner {
+  width: min(calc(100% - 3.75rem), 96rem);
+}
+.kt-teacher-experiments .kt-experiment-shell-header { min-height: 4rem; background: rgb(255 255 255 / 98%); }
+.kt-teacher-experiments .kt-experiment-shell-header__inner { display: flex; min-width: 0; min-height: 4rem; align-items: center; gap: 2.1rem; }
+.kt-teacher-experiments .kt-experiment-shell-header .kt-wordmark { font-size: 1.25rem; }
+.kt-teacher-experiments .kt-experiment-shell-header .kt-brand-mark { width: 2.25rem; height: 2.25rem; }
+.kt-teacher-experiments .kt-experiment-global-nav { gap: clamp(1rem, 2.65vw, 2.7rem); }
+.kt-teacher-experiments .kt-experiment-global-nav a { min-height: 4rem; font-size: 0.95rem; font-weight: 700; }
+.kt-teacher-experiments .kt-experiment-header-tools { display: flex; flex: none; align-items: center; gap: 1rem; color: #172b4d; }
+.kt-teacher-experiments .kt-experiment-header-notification { display: inline-grid; width: 2rem; height: 2rem; place-items: center; color: #55657d; }
+.kt-teacher-experiments .kt-experiment-header-user { display: inline-flex; align-items: center; gap: 0.45rem; color: #172b4d; }
+.kt-teacher-experiments .kt-experiment-header-user__initial { display: grid; width: 2rem; height: 2rem; place-items: center; border-radius: 50%; background: #0a2d63; color: #fff; font-size: 0.8rem; font-weight: 800; }
+.kt-teacher-experiments .kt-experiment-shell-main { padding-top: 1.15rem; }
+
+.kt-teacher-experiments .kt-experiment-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1.5rem; margin-bottom: 1.1rem; }
+.kt-teacher-experiments .kt-experiment-page-header__copy { min-width: 0; }
+.kt-teacher-experiments .kt-experiment-breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 0.55rem; margin-bottom: 0.85rem; color: #69778c; font-size: 0.81rem; line-height: 1.3; }
+.kt-teacher-experiments .kt-experiment-breadcrumb a { color: #69778c; text-decoration: none; }
+.kt-teacher-experiments .kt-experiment-breadcrumb a:hover { color: var(--kt-action-600); text-decoration: underline; }
+.kt-teacher-experiments .kt-experiment-breadcrumb [aria-current='page'] { min-width: 0; overflow-wrap: anywhere; color: #38465c; }
+.kt-teacher-experiments .kt-experiment-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.8rem; }
+.kt-teacher-experiments .kt-experiment-title-row h1 { margin-bottom: 0.35rem; font-size: clamp(1.65rem, 2.1vw, 2rem); letter-spacing: -0.035em; }
+.kt-teacher-experiments .kt-experiment-page-header__copy > p { max-width: 55rem; margin-bottom: 0; color: #64748b; font-size: 0.94rem; }
+.kt-teacher-experiments .kt-experiment-page-header__actions { display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.65rem; padding-top: 2.05rem; }
+.kt-teacher-experiments .kt-experiment-tabs { display: flex; min-width: 0; margin: 0 0 1.35rem; border-bottom: 1px solid #d5ddea; }
+.kt-teacher-experiments .kt-experiment-tabs button,
+.kt-teacher-experiments .kt-experiment-tabs > span { display: inline-flex; min-height: 2.7rem; align-items: center; border: 0; border-bottom: 3px solid transparent; padding: 0.4rem 1rem 0.35rem; background: transparent; color: #627089; font: inherit; font-size: 0.95rem; font-weight: 700; white-space: nowrap; }
+.kt-teacher-experiments .kt-experiment-tabs button { cursor: pointer; }
+.kt-teacher-experiments .kt-experiment-tabs button:hover { color: var(--kt-action-600); }
+.kt-teacher-experiments .kt-experiment-tabs .is-active,
+.kt-teacher-experiments .kt-experiment-tabs [aria-current='page'] { border-bottom-color: var(--kt-action-600); color: var(--kt-action-600); }
+.kt-teacher-experiments .kt-experiment-tabs [aria-disabled='true'] { color: #8a96a8; }
+
+.kt-teacher-experiments .kt-experiment-draft-grid { display: grid; grid-template-columns: minmax(0, 1.26fr) minmax(20rem, 0.78fr); gap: 1.15rem; align-items: start; }
+.kt-teacher-experiments .kt-definition-summary,
+.kt-teacher-experiments .kt-readiness-card,
+.kt-teacher-experiments .kt-publish-ready-card,
+.kt-teacher-experiments .kt-published-task-table,
+.kt-teacher-experiments .kt-publish-plan-panel,
+.kt-teacher-experiments .kt-precheck-results,
+.kt-teacher-experiments .kt-precheck-participants,
+.kt-teacher-experiments .kt-publish-confirmation-grid > .kt-card { border-color: #dce3ec; border-radius: 0.55rem; box-shadow: 0 0.25rem 0.9rem rgb(27 51 91 / 4%); }
+.kt-teacher-experiments .kt-definition-summary { padding: 1.1rem 1.45rem; }
+.kt-teacher-experiments .kt-definition-summary__list { grid-template-columns: 1fr; gap: 0; }
+.kt-teacher-experiments .kt-definition-summary__list div { display: grid; grid-template-columns: minmax(7rem, 0.8fr) minmax(0, 1.25fr); gap: 0.75rem; align-items: center; min-height: 3.27rem; border-top: 1px solid #e5eaf1; }
+.kt-teacher-experiments .kt-definition-summary__list div:first-child { border-top: 0; }
+.kt-teacher-experiments .kt-definition-summary__list dt { color: #56657c; font-size: 0.88rem; font-weight: 650; }
+.kt-teacher-experiments .kt-definition-summary__list dd { margin: 0; color: #27364a; font-size: 0.9rem; font-weight: 650; overflow-wrap: anywhere; text-align: right; }
+.kt-teacher-experiments .kt-experiment-side-stack { display: grid; gap: 0.9rem; }
+.kt-teacher-experiments .kt-publish-ready-card { display: grid; gap: 0.72rem; padding: 1.2rem 1.35rem; }
+.kt-teacher-experiments .kt-publish-ready-card h2,
+.kt-teacher-experiments .kt-readiness-card h2 { margin: 0; font-size: 1.1rem; }
+.kt-teacher-experiments .kt-publish-ready-card p { margin: 0; color: #64748b; font-size: 0.88rem; }
+.kt-teacher-experiments .kt-publish-ready-card .kt-button { justify-self: center; min-width: 10.9rem; }
+.kt-teacher-experiments .kt-readiness-card { padding: 1.1rem 1.35rem; }
+.kt-teacher-experiments .kt-readiness-facts { display: grid; grid-template-columns: 1fr 1fr; margin: 0.25rem 0 0.9rem; }
+.kt-teacher-experiments .kt-readiness-facts div { padding: 0.25rem 0.9rem 0.25rem 0; }
+.kt-teacher-experiments .kt-readiness-facts div + div { border-left: 1px solid #e2e8f0; padding-left: 1rem; }
+.kt-teacher-experiments .kt-readiness-facts dt { color: #6b778c; font-size: 0.8rem; }
+.kt-teacher-experiments .kt-readiness-facts dd { margin: 0.1rem 0 0; color: #1b345c; font-size: 1.25rem; font-weight: 750; font-variant-numeric: tabular-nums; }
+.kt-teacher-experiments .kt-readiness-card .kt-issue-list { margin-top: 0.45rem; }
+
+.kt-teacher-experiments .kt-published-layout { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(16.5rem, 0.55fr); gap: 1.15rem; align-items: start; }
+.kt-teacher-experiments .kt-published-task-table { min-width: 0; padding: 1.1rem 1.25rem 0.4rem; }
+.kt-teacher-experiments .kt-published-task-table .kt-table { min-width: 52rem; }
+.kt-teacher-experiments .kt-published-task-table .kt-table th,
+.kt-teacher-experiments .kt-published-task-table .kt-table td { padding: 0.72rem 0.68rem; white-space: nowrap; }
+.kt-teacher-experiments .kt-published-task-table .kt-table td:nth-child(4) { max-width: 17rem; overflow: hidden; text-overflow: ellipsis; }
+.kt-teacher-experiments .kt-table-actions { display: flex; flex-wrap: wrap; gap: 0.3rem 0.55rem; }
+.kt-teacher-experiments .kt-table-actions .kt-text-button { padding: 0.1rem; font-size: 0.84rem; }
+.kt-teacher-experiments .kt-inline-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }
+.kt-teacher-experiments .kt-inline-panel { margin: 0.25rem 0; }
+
+.kt-teacher-experiments .kt-form-stack { gap: 0.55rem; }
+.kt-teacher-experiments .kt-numbered-form-section { display: grid; grid-template-columns: 15.5rem minmax(0, 1fr); gap: 1rem; padding: 0.65rem 1.15rem; border-radius: 0.55rem; }
+.kt-teacher-experiments .kt-numbered-form-section__heading { display: flex; align-items: flex-start; gap: 0.7rem; padding-top: 0.18rem; }
+.kt-teacher-experiments .kt-numbered-form-section__heading > span { display: grid; width: 1.65rem; height: 1.65rem; flex: none; place-items: center; border-radius: 50%; background: var(--kt-action-600); color: #fff; font-size: 0.8rem; font-weight: 750; }
+.kt-teacher-experiments .kt-numbered-form-section__heading h2 { margin: 0.16rem 0 0; font-size: 1.04rem; }
+.kt-teacher-experiments .kt-numbered-form-section__content { display: grid; min-width: 0; gap: 0.45rem; }
+.kt-teacher-experiments .kt-numbered-form-section .kt-field { grid-template-columns: 10rem minmax(0, 1fr); align-items: start; gap: 0.4rem 1rem; }
+.kt-teacher-experiments .kt-numbered-form-section .kt-field > label { padding-top: 0.55rem; color: #4d5c72; font-size: 0.88rem; }
+.kt-teacher-experiments .kt-numbered-form-section .kt-field > input,
+.kt-teacher-experiments .kt-numbered-form-section .kt-field > select,
+.kt-teacher-experiments .kt-numbered-form-section .kt-field > textarea { grid-column: 2; }
+.kt-teacher-experiments .kt-numbered-form-section .kt-field__error { grid-column: 2; }
+.kt-teacher-experiments .kt-radio-group { min-width: 0; margin: 0; border: 0; padding: 0; }
+.kt-teacher-experiments .kt-radio-group legend { margin-bottom: 0.45rem; color: #4d5c72; font-size: 0.88rem; font-weight: 700; }
+.kt-teacher-experiments .kt-radio-options { display: flex; flex-wrap: wrap; gap: 0.3rem 1.1rem; }
+.kt-teacher-experiments .kt-radio-options label { display: inline-flex; min-height: 1.45rem; align-items: center; gap: 0.42rem; color: #2c384b; font-size: 0.88rem; font-weight: 500; }
+.kt-teacher-experiments .kt-radio-options label > span { display: inline; }
+.kt-teacher-experiments .kt-radio-options small { margin-left: 0.3rem; color: #7a879a; font-size: 0.77rem; font-weight: 400; }
+.kt-teacher-experiments .kt-numbered-form-section input:not([type='radio']):not([type='checkbox']),
+.kt-teacher-experiments .kt-numbered-form-section select { min-height: 2.35rem; }
+.kt-teacher-experiments .kt-numbered-form-section textarea { min-height: 4rem; }
+.kt-teacher-experiments .kt-numbered-form-section .kt-fieldset { padding: 0.85rem 1rem; }
+.kt-teacher-experiments .kt-experiment-form-actions { justify-content: flex-end; margin-top: 0.35rem; }
+
+.kt-teacher-experiments .kt-publish-stepper { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 38rem; margin: 0 auto 1.25rem; padding: 0; list-style: none; }
+.kt-teacher-experiments .kt-publish-stepper li { display: flex; min-width: 0; align-items: center; gap: 0.7rem; border-bottom: 2px solid #d7dfeb; padding: 0.45rem 0.65rem 0.65rem; color: #7a879a; }
+.kt-teacher-experiments .kt-publish-stepper li span { display: grid; width: 2.25rem; height: 2.25rem; flex: none; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.kt-teacher-experiments .kt-publish-stepper li strong { overflow: hidden; font-size: 0.94rem; text-overflow: ellipsis; white-space: nowrap; }
+.kt-teacher-experiments .kt-publish-stepper li.is-current { border-color: var(--kt-action-600); color: var(--kt-action-600); }
+.kt-teacher-experiments .kt-publish-stepper li.is-current span { border-color: var(--kt-action-600); background: var(--kt-action-600); color: #fff; }
+.kt-teacher-experiments .kt-publish-stepper li.is-complete { color: #397f42; }
+.kt-teacher-experiments .kt-publish-plan-panel { padding: 1.05rem 0.4rem 1.15rem; }
+.kt-teacher-experiments .kt-publish-plan-panel > .kt-section-heading,
+.kt-teacher-experiments .kt-publish-plan-panel > .kt-publish-roster { margin-inline: 1rem; }
+.kt-teacher-experiments .kt-publish-batch-schedule { display: grid; grid-template-columns: minmax(12rem, 1fr) minmax(12rem, 1fr) minmax(13rem, 1.25fr); gap: 0.9rem; align-items: end; padding: 0 1rem 1rem; border-bottom: 1px solid #e2e8f0; }
+.kt-teacher-experiments .kt-publish-batch-schedule label { display: grid; gap: 0.35rem; color: #46556c; font-size: 0.87rem; font-weight: 700; }
+.kt-teacher-experiments .kt-publish-batch-schedule p { margin: 0 0 0.55rem; color: #748197; font-size: 0.83rem; }
+.kt-teacher-experiments .kt-publish-class-table { min-width: 70rem; margin-top: 0.2rem; }
+.kt-teacher-experiments .kt-publish-class-table th,
+.kt-teacher-experiments .kt-publish-class-table td { vertical-align: middle; white-space: nowrap; }
+.kt-teacher-experiments .kt-publish-class-table td:nth-child(2) { white-space: normal; }
+.kt-teacher-experiments .kt-publish-class-table label { cursor: pointer; }
+.kt-teacher-experiments .kt-schedule-status { color: #5f6f85; font-size: 0.86rem; }
+.kt-teacher-experiments .kt-publish-schedule-editor { display: grid; grid-template-columns: minmax(10rem, 1fr) auto minmax(11rem, 0.9fr); gap: 0.8rem; align-items: center; margin: 0.75rem 1rem 0; border-top: 1px solid #e3e9f1; padding-top: 0.75rem; }
+.kt-teacher-experiments .kt-publish-schedule-editor > div:first-child { display: grid; gap: 0.1rem; }
+.kt-teacher-experiments .kt-publish-schedule-editor > div:first-child span { color: #78869a; font-size: 0.8rem; }
+.kt-teacher-experiments .kt-publish-schedule-editor .kt-form-grid { grid-column: 1 / -1; }
+.kt-teacher-experiments .kt-publish-roster { margin-top: 1rem; border-top: 1px solid #dce4ee; padding-top: 0.95rem; }
+.kt-teacher-experiments .kt-publish-roster h3 { margin: 0; }
+.kt-teacher-experiments .kt-publish-roster p { margin: 0.2rem 0 0; color: #708096; font-size: 0.85rem; }
+.kt-teacher-experiments .kt-publish-empty-row { border: 1px dashed #d1dae6; border-radius: 0.4rem; padding: 0.85rem; }
+.kt-teacher-experiments .kt-publish-actions { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-top: 1.7rem; }
+.kt-teacher-experiments .kt-publish-actions > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.65rem; }
+.kt-teacher-experiments .kt-publish-actions--center { justify-content: center; }
+
+.kt-teacher-experiments .kt-publish-precheck,
+.kt-teacher-experiments .kt-publish-confirmation { display: grid; gap: 1rem; }
+.kt-teacher-experiments .kt-publish-precheck > h2,
+.kt-teacher-experiments .kt-publish-confirmation > h2 { margin: 0; font-size: 1.15rem; }
+.kt-teacher-experiments .kt-publish-precheck__metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid #dce4ee; border-radius: 0.55rem; background: #fff; box-shadow: 0 0.25rem 0.9rem rgb(27 51 91 / 4%); }
+.kt-teacher-experiments .kt-publish-precheck__metrics > div { display: grid; gap: 0.12rem; padding: 1rem 1.25rem; border-left: 1px solid #e2e8f0; }
+.kt-teacher-experiments .kt-publish-precheck__metrics > div:first-child { border-left: 0; }
+.kt-teacher-experiments .kt-publish-precheck__metrics strong { color: #1f8b3d; font-size: 1.25rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.kt-teacher-experiments .kt-publish-precheck__metrics span { color: #617088; font-size: 0.84rem; }
+.kt-teacher-experiments .kt-precheck-results,
+.kt-teacher-experiments .kt-precheck-participants { padding: 1rem 1.2rem; }
+.kt-teacher-experiments .kt-precheck-effects { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.65rem 1.25rem; margin: 0; padding: 0; list-style: none; }
+.kt-teacher-experiments .kt-precheck-effects li { display: flex; align-items: flex-start; gap: 0.45rem; color: #34445b; font-size: 0.9rem; }
+.kt-teacher-experiments .kt-precheck-effects li::before { content: '✓'; display: grid; width: 1.1rem; height: 1.1rem; flex: none; place-items: center; border-radius: 50%; background: #e6f6ea; color: #20853a; font-size: 0.72rem; font-weight: 800; }
+.kt-teacher-experiments .kt-publish-confirmation > p { margin: -0.55rem 0 0; color: #66758a; }
+.kt-teacher-experiments .kt-publish-confirmation-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.17fr); gap: 1rem; }
+.kt-teacher-experiments .kt-publish-confirmation-grid > .kt-card { padding: 1rem 1.25rem; }
+.kt-teacher-experiments .kt-publish-confirmation-grid h3 { margin-bottom: 0.7rem; }
+.kt-teacher-experiments .kt-confirm-task-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.kt-teacher-experiments .kt-confirm-task-table th,
+.kt-teacher-experiments .kt-confirm-task-table td { border-top: 1px solid #e4eaf1; padding: 0.65rem 0.45rem; text-align: left; vertical-align: top; }
+.kt-teacher-experiments .kt-confirm-task-table th { color: #617088; font-size: 0.8rem; }
+
+@media (max-width: 62rem) {
+  .kt-teacher-experiments .kt-experiment-shell-header .kt-experiment-shell-header__inner,
+.kt-teacher-experiments .kt-experiment-shell-main { width: min(calc(100% - 2rem), 90.5rem); }
+  .kt-teacher-experiments .kt-experiment-shell-header__inner { flex-wrap: wrap; gap: 0 1rem; padding-block: 0.35rem; }
+  .kt-teacher-experiments .kt-experiment-global-nav { order: 3; width: 100%; flex-basis: 100%; justify-content: flex-start; overflow-x: auto; }
+  .kt-teacher-experiments .kt-experiment-global-nav a { min-height: 2.55rem; }
+  .kt-teacher-experiments .kt-experiment-draft-grid,
+.kt-teacher-experiments .kt-published-layout,
+.kt-teacher-experiments .kt-publish-confirmation-grid { grid-template-columns: 1fr; }
+  .kt-teacher-experiments .kt-experiment-side-stack { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 48rem) {
+  .kt-teacher-experiments .kt-experiment-page-header { flex-direction: column; gap: 0.6rem; }
+  .kt-teacher-experiments .kt-experiment-page-header__actions { width: 100%; justify-content: flex-start; padding-top: 0; }
+  .kt-teacher-experiments .kt-experiment-tabs { overflow-x: auto; }
+  .kt-teacher-experiments .kt-experiment-tabs button,
+.kt-teacher-experiments .kt-experiment-tabs > span { padding-inline: 0.8rem; }
+  .kt-teacher-experiments .kt-experiment-side-stack { grid-template-columns: 1fr; }
+  .kt-teacher-experiments .kt-publish-precheck__metrics { grid-template-columns: 1fr 1fr; }
+  .kt-teacher-experiments .kt-publish-precheck__metrics > div:nth-child(odd) { border-left: 0; }
+  .kt-teacher-experiments .kt-publish-precheck__metrics > div:nth-child(n + 3) { border-top: 1px solid #e2e8f0; }
+  .kt-teacher-experiments .kt-numbered-form-section { grid-template-columns: 1fr; gap: 0.75rem; padding: 0.95rem 1rem; }
+  .kt-teacher-experiments .kt-numbered-form-section .kt-field { grid-template-columns: 1fr; }
+  .kt-teacher-experiments .kt-numbered-form-section .kt-field > label,
+.kt-teacher-experiments .kt-numbered-form-section .kt-field > input,
+.kt-teacher-experiments .kt-numbered-form-section .kt-field > select,
+.kt-teacher-experiments .kt-numbered-form-section .kt-field > textarea,
+.kt-teacher-experiments .kt-numbered-form-section .kt-field__error { grid-column: auto; }
+  .kt-teacher-experiments .kt-publish-batch-schedule,
+.kt-teacher-experiments .kt-publish-schedule-editor { grid-template-columns: 1fr; }
+  .kt-teacher-experiments .kt-publish-schedule-editor .kt-form-grid { grid-column: auto; }
+  .kt-teacher-experiments .kt-publish-actions { align-items: stretch; flex-direction: column-reverse; }
+  .kt-teacher-experiments .kt-publish-actions > div { justify-content: stretch; }
+  .kt-teacher-experiments .kt-publish-actions .kt-button { flex: 1 1 auto; }
+  .kt-teacher-experiments .kt-inline-form-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 26rem) {
+  .kt-teacher-experiments .kt-experiment-shell-header__inner { gap: 0 0.65rem; }
+  .kt-teacher-experiments .kt-experiment-header-tools { gap: 0.45rem; }
+  .kt-teacher-experiments .kt-experiment-title-row h1 { font-size: 1.48rem; }
+  .kt-teacher-experiments .kt-publish-precheck__metrics { grid-template-columns: 1fr; }
+  .kt-teacher-experiments .kt-publish-precheck__metrics > div { border-top: 1px solid #e2e8f0; border-left: 0; }
+  .kt-teacher-experiments .kt-publish-precheck__metrics > div:first-child { border-top: 0; }
+}
+
+.kt-teacher-experiments .kt-definition-summary > .kt-definition-summary__list div { grid-template-columns: 1.45rem minmax(6.5rem, 0.8fr) minmax(0, 1.25fr); }
+.kt-teacher-experiments .kt-definition-summary > .kt-definition-summary__list dt { grid-column: 2; }
+.kt-teacher-experiments .kt-definition-summary > .kt-definition-summary__list dd { grid-column: 3; }
+.kt-teacher-experiments .kt-summary-icon { display: grid; width: 1.45rem; height: 1.45rem; grid-column: 1; place-items: center; border-radius: 50%; background: #edf3fb; color: #496486; }
+.kt-teacher-experiments .kt-definition-summary__action { display: flex; justify-content: flex-end; margin-top: 0.8rem; border-top: 1px solid #e5eaf1; padding-top: 0.9rem; }
+.kt-teacher-experiments .kt-publish-empty-illustration { position: relative; display: grid; width: 4.25rem; height: 3.4rem; place-items: center; margin: 0.1rem auto 0.25rem; border-radius: 0.9rem; background: #eef5ff; color: #245795; }
+.kt-teacher-experiments .kt-publish-empty-illustration .kt-icon:nth-child(2) { position: absolute; right: -0.55rem; bottom: -0.2rem; padding: 0.2rem; border-radius: 50%; background: #fff; color: #4e709d; }
+.kt-teacher-experiments .kt-publish-empty-illustration .kt-icon:nth-child(3) { position: absolute; right: -0.45rem; top: -0.3rem; padding: 0.18rem; border-radius: 50%; background: #e4f6e8; color: #28783c; }
+.kt-teacher-experiments .kt-readiness-checklist { display: grid; gap: 0.48rem; margin: 0.2rem 0 0; padding: 0; list-style: none; }
+.kt-teacher-experiments .kt-readiness-checklist li { display: flex; align-items: flex-start; gap: 0.45rem; color: #43536a; font-size: 0.86rem; line-height: 1.45; }
+.kt-teacher-experiments .kt-readiness-checklist .kt-icon { flex: none; margin-top: 0.1rem; color: #47705c; }
+
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row { display: grid; grid-template-columns: 10rem minmax(0, 1fr); align-items: start; gap: 0.4rem 1rem; min-width: 0; }
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > label,
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > legend { grid-column: 1; padding-top: 0.55rem; color: #4d5c72; font-size: 0.88rem; font-weight: 700; }
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > input,
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > select,
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > textarea,
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > .kt-radio-options,
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > .kt-quota-grid { grid-column: 2; }
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > .kt-field__error { grid-column: 2; }
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row.kt-fieldset { border-color: #dce4ee; padding: 0.65rem 0.85rem; }
+.kt-teacher-experiments .kt-numbered-form-section .kt-form-grid { grid-template-columns: 1fr; gap: 0.75rem; }
+
+.kt-teacher-experiments .kt-publish-batch-schedule { grid-template-columns: minmax(11.5rem, 1fr) minmax(11.5rem, 1fr) auto minmax(12rem, 1.1fr); }
+.kt-teacher-experiments .kt-publish-batch-schedule > .kt-button { align-self: end; margin-bottom: 0.03rem; white-space: nowrap; }
+.kt-teacher-experiments .kt-publish-roster .kt-section-heading > .kt-button { flex: none; }
+.kt-teacher-experiments .kt-publish-precheck__metrics { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.kt-teacher-experiments .kt-publish-precheck__metrics > div { position: relative; min-width: 0; padding: 1rem 1rem 1rem 3.1rem; }
+.kt-teacher-experiments .kt-precheck-metric-icon { position: absolute; top: 1rem; left: 1rem; display: grid; width: 1.55rem; height: 1.55rem; place-items: center; border-radius: 50%; background: #eef5ff; color: #35639b; }
+.kt-teacher-experiments .kt-randomization-details { margin-top: 0.95rem; border-top: 1px solid #e5eaf1; padding-top: 0.7rem; color: #5e6d82; font-size: 0.86rem; }
+.kt-teacher-experiments .kt-randomization-details summary { color: #2f5f9d; font-weight: 700; cursor: pointer; }
+.kt-teacher-experiments .kt-randomization-details p { margin: 0.55rem 0 0; }
+
+@media (max-width: 48rem) {
+  .kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row { grid-template-columns: 1fr; }
+  .kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > label,
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > legend,
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > input,
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > select,
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > textarea,
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > .kt-radio-options,
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > .kt-quota-grid,
+.kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > .kt-field__error { grid-column: auto; }
+  .kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > label,
+  .kt-teacher-experiments .kt-numbered-form-section .kt-compact-form-row > legend { padding-top: 0; }
+  .kt-teacher-experiments .kt-publish-batch-schedule { grid-template-columns: 1fr; }
+  .kt-teacher-experiments .kt-publish-precheck__metrics { grid-template-columns: 1fr 1fr; }
+  .kt-teacher-experiments .kt-publish-precheck__metrics > div { padding-left: 3.1rem; }
+}
+
+@media (max-width: 26rem) {
+  .kt-teacher-experiments .kt-publish-precheck__metrics { grid-template-columns: 1fr; }
+}
+
+@media (min-width: 48.01rem) {
+  .kt-teacher-experiments .kt-numbered-form-section fieldset.kt-compact-form-row {
+    display: block;
+    min-height: 1.75rem;
+  }
+  .kt-teacher-experiments .kt-numbered-form-section fieldset.kt-compact-form-row > legend {
+    float: left;
+    width: 10rem;
+    margin: 0;
+    padding: 0.15rem 1rem 0 0;
+  }
+  .kt-teacher-experiments .kt-numbered-form-section fieldset.kt-compact-form-row > .kt-radio-options,
+  .kt-teacher-experiments .kt-numbered-form-section fieldset.kt-compact-form-row > .kt-quota-grid {
+    margin-left: 11rem;
+  }
+  .kt-teacher-experiments .kt-numbered-form-section[aria-labelledby='definition-runtime'] .kt-form-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}

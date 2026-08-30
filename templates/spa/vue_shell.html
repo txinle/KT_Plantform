@@ -1,0 +1,19 @@
+{% load static %}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="KT 教育科研交互数据采集平台">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="{% static 'css/kt-theme.css' %}?v=20260830.1">
+  {% for style in styles %}<link rel="stylesheet" href="{{ style }}">{% endfor %}
+</head>
+<body>
+  <div id="kt-app" data-module="{{ module }}"></div>
+  {{ bootstrap|json_script:"kt-bootstrap" }}
+  {% for script in classic_scripts %}<script src="{{ script }}"></script>{% endfor %}
+  {% if vite_client %}<script type="module" src="{{ vite_client }}"></script>{% endif %}
+  {% for script in scripts %}<script type="module" src="{{ script }}"></script>{% endfor %}
+</body>
+</html>

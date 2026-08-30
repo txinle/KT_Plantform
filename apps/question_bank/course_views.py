@@ -17,6 +17,8 @@ from apps.accounts.course_access import (
 )
 from apps.accounts.models import Course, User
 from apps.accounts.permissions import role_required
+from apps.api.rollout import is_vue_module_enabled
+from apps.api.shell import render_vue_shell
 from apps.audit.services import log_action
 
 from .access import lock_writable_course_bank, require_writable_bank_content
@@ -95,6 +97,13 @@ def bank_list(request, course_pk):
             return redirect("courses:bank_detail", course.pk, bank.pk)
     else:
         form = _active_question_bank_form()
+        if is_vue_module_enabled("teacher_question_banks", request.user, course):
+            return render_vue_shell(
+                request,
+                module="teacher-question-banks",
+                title=f"{course.name}题库 | KT Data Lab",
+                course=course,
+            )
     banks = course.question_banks.exclude(
         visibility=QuestionBank.Visibility.ARCHIVED
     ).annotate(question_count=Count("questions"))
@@ -252,6 +261,13 @@ def shared_creator_banks(request, course_pk, source_course_pk, creator_pk):
 def bank_detail(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     bank = _bank(course, pk)
+    if is_vue_module_enabled("teacher_question_banks", request.user, course):
+        return render_vue_shell(
+            request,
+            module="teacher-question-banks",
+            title=f"{bank.name} | {course.name}",
+            course=course,
+        )
     questions = bank.questions.select_related("course_identity").prefetch_related(
         "options",
         "concept_links__concept",

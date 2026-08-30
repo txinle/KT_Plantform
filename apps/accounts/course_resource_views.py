@@ -11,6 +11,8 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 from urllib.parse import quote
 
 from apps.audit.services import log_action
+from apps.api.rollout import is_vue_module_enabled
+from apps.api.shell import render_vue_shell
 
 from .course_access import (
     accessible_courses,
@@ -74,6 +76,17 @@ def _inactive_target_class_response(request, course, class_group, action):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def class_list(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
+    if (
+        request.method == "GET"
+        and settings.CLASS_CENTER_ENABLED
+        and is_vue_module_enabled("teacher_classes", request.user, course=course)
+    ):
+        return render_vue_shell(
+            request,
+            module="teacher-classes",
+            title=f"{course.name} · 班级",
+            course=course,
+        )
     if request.method == "POST":
         require_writable_course(course)
     form = ClassGroupForm(request.POST or None)
@@ -455,6 +468,18 @@ def _class_detail_response(
 def class_detail(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     class_group = get_object_or_404(course.classes, pk=class_pk)
+    active_section = request.GET.get("section", "overview")
+    if (
+        settings.CLASS_CENTER_ENABLED
+        and active_section in {"overview", "students", "experiments"}
+        and is_vue_module_enabled("teacher_classes", request.user, course=course)
+    ):
+        return render_vue_shell(
+            request,
+            module="teacher-classes",
+            title=f"{class_group.name} · 班级中心",
+            course=course,
+        )
     return _class_detail_response(request, course, class_group)
 
 
