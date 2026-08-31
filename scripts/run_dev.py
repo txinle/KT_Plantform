@@ -1,6 +1,7 @@
 import hashlib
 import os
 from pathlib import Path
+import signal
 import shutil
 import socket
 import subprocess
@@ -73,6 +74,38 @@ def vite_command(npm, port):
     ]
 
 
+def process_creation_kwargs():
+    if os.name == "nt":
+        return {
+            "creationflags": (
+                subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+            )
+        }
+    return {"start_new_session": True}
+
+
+def terminate_process_tree(process, *, timeout=5):
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    else:
+        os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=timeout)
+
+
 def main():
     legacy_only = os.getenv("KT_LEGACY_ONLY") == "1"
     environment = os.environ.copy()
@@ -95,17 +128,17 @@ def main():
     ensure_frontend_dependencies(npm)
     print(f"Checkout: {ROOT}", flush=True)
     print(f"Frontend: {vite_url}", flush=True)
-    hidden = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     vite = subprocess.Popen(
         vite_command(npm, vite_port),
         cwd=FRONTEND,
         env=environment,
-        creationflags=hidden,
+        **process_creation_kwargs(),
     )
     django = subprocess.Popen(
         [sys.executable, "manage.py", "runserver", "0.0.0.0:8000"],
         cwd=ROOT,
         env=environment,
+        **process_creation_kwargs(),
     )
     try:
         while vite.poll() is None and django.poll() is None:
@@ -115,13 +148,7 @@ def main():
         return 130
     finally:
         for process in (vite, django):
-            if process.poll() is None:
-                process.terminate()
-        for process in (vite, django):
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
+            terminate_process_tree(process)
 
 
 if __name__ == "__main__":

@@ -3,9 +3,12 @@ import socket
 import sys
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 from unittest import TestCase
+from unittest import skipUnless
 
+from scripts import run_dev
 from scripts.run_dev import find_available_vite_port, vite_command
 
 
@@ -13,6 +16,51 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PortableLauncherContractTests(TestCase):
+    @skipUnless(sys.platform == "win32", "Windows process-tree contract")
+    def test_windows_shutdown_stops_the_entire_child_process_tree(self):
+        self.assertTrue(hasattr(run_dev, "process_creation_kwargs"))
+        self.assertTrue(hasattr(run_dev, "terminate_process_tree"))
+
+        parent = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import subprocess, sys, time; "
+                    "child = subprocess.Popen([sys.executable, '-c', "
+                    "'import time; time.sleep(60)']); "
+                    "print(child.pid, flush=True); time.sleep(60)"
+                ),
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+            **run_dev.process_creation_kwargs(),
+        )
+        self.addCleanup(
+            subprocess.run,
+            ["taskkill", "/PID", str(parent.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        child_pid = int(parent.stdout.readline().strip())
+        parent.stdout.close()
+
+        run_dev.terminate_process_tree(parent, timeout=1)
+        parent.wait(timeout=5)
+
+        for _ in range(20):
+            child_status = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {child_pid}", "/NH"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+            if str(child_pid) not in child_status:
+                break
+            time.sleep(0.1)
+        self.assertNotIn(str(child_pid), child_status)
+
     def test_dev_runner_uses_the_same_available_strict_vite_port(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
             occupied.bind(("127.0.0.1", 0))

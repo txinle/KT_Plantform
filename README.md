@@ -2,7 +2,7 @@
 
 KT 交互数据采集平台是一个以课程为中心的 Django 实验管理与作答数据采集系统。教师可在同一工作区管理课程、班级、题库、知识组件（KC）、实验发布与研究数据导出；学生通过课程选课关系参加实验，并在单题页面完成作答。
 
-本地开发默认使用 SQLite。Docker 部署使用 PostgreSQL、Gunicorn 与 Nginx，适合在校内服务器或云主机上运行。
+一键本地运行使用项目专用 PostgreSQL 17，并由 Django 与 Vite 联合提供开发页面。Docker 部署使用 PostgreSQL、Gunicorn 与 Nginx，适合在校内服务器或云主机上运行。
 
 ## 核心能力
 
@@ -19,17 +19,18 @@ KT 交互数据采集平台是一个以课程为中心的 Django 实验管理与
 ## 技术与运行环境
 
 - Python 3.10+
-- Django 服务端模板与权限控制
+- Django 服务端模板、DRF 与权限控制
+- Vue 3、TypeScript、Vite 8、Node.js 24 LTS
 - 本地托管的 Bootstrap 5.3.8
-- 原生 JavaScript Fetch API
-- SQLite（本地开发）
-- PostgreSQL 17、Gunicorn、Nginx（Docker 部署）
+- Fetch API
+- PostgreSQL 17（本地与 Docker 部署）
+- Gunicorn、Nginx（Docker 部署）
 
-前端不依赖 Node.js、npm、前端构建步骤或运行时 CDN。断网环境不会因 CDN 不可用而丢失基础布局和交互组件。
+前端开发需要 Node.js 与 npm；生产环境使用 Vite 预构建的静态资源，不需要运行 Vite 开发服务器，也不依赖运行时 CDN。
 
 ## 一键本地运行
 
-启动脚本会自动发现 Python、创建或复用项目内的 `.venv`、按需安装依赖、执行数据库迁移，并在新建本地数据库时写入演示数据。服务默认运行在 `http://127.0.0.1:8000/`。
+启动脚本会自动发现 Python 与 Node.js、创建或复用项目内的 `.venv`、按需安装依赖、执行数据库迁移，并在新建本地数据库时写入演示数据。脚本会同时启动 Django 后端和 Vite 前端，页面入口为 `http://127.0.0.1:8000/`。
 
 ### Windows
 
@@ -38,6 +39,8 @@ KT 交互数据采集平台是一个以课程为中心的 Django 实验管理与
 ```bat
 .\run_local.bat
 ```
+
+在脚本窗口按一次 `Ctrl+C` 会同步关闭本次启动的 Django、npm、Vite 及其子进程；项目 PostgreSQL 实例保持运行，供下次启动复用。
 
 ### Linux / macOS
 
@@ -56,7 +59,40 @@ chmod +x run_local.sh
 
 首次安装依赖需要能够访问 Python 包索引。演示账号仅供本地验证，禁止直接用于公网环境。
 
-## 手工启动
+## 手工分别启动前后端
+
+以下命令假定已经至少成功运行过一次 `run_local.bat`，因此 Python、Node.js、PostgreSQL 和项目依赖均已准备好。在项目根目录打开两个 PowerShell 窗口。
+
+前端窗口：
+
+```powershell
+$nodeDir = "$env:USERPROFILE\Downloads\ATOP-tooling\node-v24.20.0-win-x64"
+$env:PATH = "$nodeDir;$env:PATH"
+Set-Location .\frontend
+& "$nodeDir\npm.cmd" run dev -- --host 127.0.0.1 --port 5173 --strictPort
+```
+
+后端窗口：
+
+```powershell
+$postgresBin = "$env:USERPROFILE\Downloads\ATOP-tooling\PostgreSQL-17.11-portable\pgsql\bin"
+$env:PATH = "$postgresBin;$env:PATH"
+$env:POSTGRES_HOST = "127.0.0.1"
+$env:POSTGRES_PORT = "55432"
+$env:POSTGRES_USER = "kt_user"
+$env:POSTGRES_PASSWORD = "kt_password"
+$env:POSTGRES_DB = "kt_platform"
+$env:CLASS_CENTER_ENABLED = "1"
+$env:STUDENT_LEARNING_ANALYTICS_ENABLED = "1"
+$env:VUE_TEACHER_EXPERIMENTS_ENABLED = "1"
+$env:VUE_TEACHER_QUESTION_BANKS_ENABLED = "1"
+$env:VITE_DEV_SERVER_URL = "http://127.0.0.1:5173"
+.\.venv\Scripts\python.exe manage.py runserver 0.0.0.0:8000
+```
+
+分别启动时，需要在两个窗口中分别按 `Ctrl+C`。停止后端不会自动停止另一个窗口中的 Vite。
+
+如果尚未初始化项目，可先执行完整的手工准备流程：
 
 ```bash
 python -m venv .venv
