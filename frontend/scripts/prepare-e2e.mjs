@@ -11,11 +11,16 @@ const localPython = process.platform === 'win32'
   ? join(repositoryDir, '.venv', 'Scripts', 'python.exe')
   : join(repositoryDir, '.venv', 'bin', 'python')
 const python = process.env.PYTHON || (existsSync(localPython) ? localPython : 'python')
-const environment = { ...process.env, ...requireIsolatedPostgres(process.env) }
+const environment = {
+  ...process.env,
+  ...requireIsolatedPostgres(process.env),
+  PYTHONUTF8: '1',
+}
 
 const commands = [['manage.py', 'migrate', '--noinput']]
 commands.push(['manage.py', 'flush', '--noinput'])
 commands.push(['manage.py', 'seed_demo'])
+commands.push(['manage.py', 'seed_e2e_student_feedback'])
 
 for (const args of commands) {
   const result = spawnSync(python, args, {

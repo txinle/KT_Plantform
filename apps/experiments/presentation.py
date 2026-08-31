@@ -145,6 +145,19 @@ def _choice_keys(value: Any) -> tuple[str, ...]:
     return tuple(keys)
 
 
+def answer_option_values(question_type: str, value: Any) -> tuple[str, ...]:
+    """Normalize one answer to stable option values using scoring conventions."""
+
+    if question_type == "true_false":
+        normalized = normalize_true_false_answer(value)
+        if normalized is None:
+            return ()
+        return ("true" if normalized else "false",)
+    if question_type in {"single_choice", "multiple_choice"}:
+        return _choice_keys(value)
+    return ()
+
+
 def format_answer(
     question_type: str,
     value: Any,

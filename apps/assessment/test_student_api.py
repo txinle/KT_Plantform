@@ -846,7 +846,33 @@ class StudentLearningApiTests(StudentApiFixtureMixin, TransactionTestCase):
         for row in summary.json()["experiments"]:
             self.assertNotIn("rank", row)
         self.assertEqual(detail.json()["experiment_id"], self.experiment.pk)
-        self.assertEqual(question.json()["correct_answer"], "B：4")
+        question_payload = question.json()
+        self.assertEqual(question_payload["correct_answer"], "B：4")
+        self.assertEqual(question_payload["score"]["value"], "1.00")
+        self.assertEqual(question_payload["score"]["maximum"], "1.00")
+        self.assertEqual(detail.json()["item_results"][0]["score"]["value"], "1.00")
+        self.assertEqual(detail.json()["item_results"][0]["score"]["maximum"], "1.00")
+        self.assertEqual(question_payload["question_type"], Question.Type.SINGLE)
+        self.assertEqual(question_payload["result_state"], "correct")
+        self.assertEqual(
+            question_payload["options"],
+            [
+                {
+                    "value": "A",
+                    "label": "A",
+                    "text": "3",
+                    "selected_by_student": False,
+                    "is_correct": False,
+                },
+                {
+                    "value": "B",
+                    "label": "B",
+                    "text": "4",
+                    "selected_by_student": True,
+                    "is_correct": True,
+                },
+            ],
+        )
         serialized = str([summary.json(), detail.json(), question.json()])
         self.assertNotIn(self.peer.student_number, serialized)
         self.assertNotIn(self.peer.shown_name, serialized)
@@ -1008,3 +1034,57 @@ class StudentVueRolloutTests(StudentApiTestCase):
 
         self.assertContains(response, 'class="student-experiment-list"')
         self.assertNotContains(response, 'id="kt-app"')
+
+
+@override_settings(
+    DEBUG=True,
+    VITE_DEV_SERVER_URL="http://localhost:5173",
+    CLASS_CENTER_ENABLED=True,
+    STUDENT_LEARNING_ANALYTICS_ENABLED=True,
+)
+class StudentVueFallbackTransactionTests(
+    StudentApiFixtureMixin,
+    TransactionTestCase,
+):
+    def rollout_env(self):
+        return patch.dict(
+            "os.environ",
+            {
+                "VUE_STUDENT_COURSES_ENABLED": "0",
+                "VUE_STUDENT_COURSES_COURSE_IDS": "",
+                "VUE_STUDENT_COURSES_USER_IDS": "",
+                "VUE_STUDENT_ASSESSMENT_ENABLED": "0",
+                "VUE_STUDENT_ASSESSMENT_COURSE_IDS": "",
+                "VUE_STUDENT_ASSESSMENT_USER_IDS": "",
+            },
+        )
+
+    def test_flag_off_preserves_legacy_learning_result_and_question_fallbacks(self):
+        self.start()
+        session = ExperimentSession.objects.get(
+            class_task=self.task,
+            student=self.student,
+        )
+        self.complete_session(session)
+        question_snapshot = self.task.release_snapshot.question_snapshots.get()
+
+        with self.rollout_env():
+            result_response = self.client.get(
+                reverse(
+                    "assessment:learning_experiment",
+                    args=[self.course.pk, self.experiment.pk],
+                )
+            )
+            question_response = self.client.get(
+                reverse(
+                    "assessment:learning_question",
+                    args=[self.course.pk, self.experiment.pk, question_snapshot.pk],
+                )
+            )
+
+        self.assertContains(result_response, 'id="student-item-results-title"')
+        self.assertContains(result_response, "查看题目反馈")
+        self.assertNotContains(result_response, 'id="kt-app"')
+        self.assertContains(question_response, 'id="student-own-answer-title"')
+        self.assertContains(question_response, "正确答案")
+        self.assertNotContains(question_response, 'id="kt-app"')

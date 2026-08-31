@@ -25,7 +25,12 @@ from apps.experiments.models import (
     ExperimentVersionParticipantSnapshot,
     QuestionSnapshot,
 )
-from apps.experiments.presentation import display_text, format_answer, options_for_snapshot
+from apps.experiments.presentation import (
+    answer_option_values,
+    display_text,
+    format_answer,
+    options_for_snapshot,
+)
 
 from .comparisons import competition_ranks
 from .contracts import MetricValue
@@ -719,6 +724,39 @@ def _resolve_task(bundle, experiment_id):
     return task
 
 
+def _result_state(grade):
+    if grade is None or grade.is_correct is None:
+        return "pending"
+    return "correct" if grade.is_correct else "incorrect"
+
+
+def _question_options(question, student_answer, *, include_correct):
+    student_values = set(
+        answer_option_values(question.question_type, student_answer)
+    )
+    correct_values = set(
+        answer_option_values(question.question_type, question.correct_answer)
+    )
+    rows = []
+    for index, option in enumerate(options_for_snapshot(question)):
+        if question.question_type == "true_false":
+            value = "true" if index == 0 else "false"
+            label = "T" if index == 0 else "F"
+        else:
+            value = option.key.strip().upper()
+            label = option.key.strip()
+        values = {
+            "value": value,
+            "label": label,
+            "text": option.text,
+            "selected_by_student": value in student_values,
+        }
+        if include_correct:
+            values["is_correct"] = value in correct_values
+        rows.append(StudentAllowListDTO(**values))
+    return tuple(rows)
+
+
 def _item_rows(bundle, task):
     rows = []
     for attempt in _task_attempts(bundle, task, bundle.context.student_id):
@@ -736,6 +774,7 @@ def _item_rows(bundle, task):
             "code": question.code,
             "kcs": tuple(dict.fromkeys(question.all_kcs or [question.primary_kc])),
             "result_label": result_label,
+            "result_state": _result_state(grade),
             "final_answer": format_answer(
                 question.question_type,
                 submission.final_answer,
@@ -844,6 +883,7 @@ def build_student_question_projection(
         if grade is not None and grade.is_correct is not None:
             result_label = "正确" if grade.is_correct else "错误"
         options = options_for_snapshot(question)
+        include_correct = bundle.feedback_by_task[task.pk] == Experiment.Feedback.FULL
         values = {
             "generated_at": generated_at,
             "course_id": bundle.enrollment.course_id,
@@ -853,15 +893,22 @@ def build_student_question_projection(
             "experiment_name": task.experiment.name,
             "question_id": question.pk,
             "code": question.code,
+            "question_type": question.question_type,
             "text": display_text(question.text),
             "kcs": tuple(dict.fromkeys(question.all_kcs or [question.primary_kc])),
             "result_label": result_label,
+            "result_state": _result_state(grade),
             "final_answer": format_answer(
                 question.question_type,
                 submission.final_answer,
                 options,
             )
             or "（空）",
+            "options": _question_options(
+                question,
+                submission.final_answer,
+                include_correct=include_correct,
+            ),
         }
         if bundle.policy.show_scores and grade is not None:
             values["score"] = StudentAllowListDTO(
@@ -869,7 +916,7 @@ def build_student_question_projection(
                 value=grade.score,
                 maximum=grade.max_score,
             )
-        if bundle.feedback_by_task[task.pk] == Experiment.Feedback.FULL:
+        if include_correct:
             values["correct_answer"] = format_answer(
                 question.question_type,
                 question.correct_answer,

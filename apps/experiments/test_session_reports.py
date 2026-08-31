@@ -10,7 +10,12 @@ from apps.accounts.models import ClassGroup, Course, CourseEnrollment, CourseTea
 from apps.assessment.models import Attempt, ExperimentSession, StudentQuestionAssignment
 from apps.audit.models import AuditLog
 from apps.experiments.models import Experiment, ExperimentVersion, QuestionSnapshot
-from apps.experiments.presentation import OptionPresentation, display_text, format_answer
+from apps.experiments.presentation import (
+    OptionPresentation,
+    answer_option_values,
+    display_text,
+    format_answer,
+)
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.question_bank.models import Question, QuestionBank
 
@@ -298,6 +303,15 @@ class CourseExperimentSessionReportTests(TestCase):
         )
         self.assertNotIn("\x00", display_text({"answer": "\x00安全文本"}))
         self.assertEqual(display_text("\ud800安全文本"), "安全文本")
+
+    def test_answer_option_values_share_choice_and_true_false_normalization(self):
+        self.assertEqual(
+            answer_option_values("multiple_choice", ["c", "A", "C"]),
+            ("C", "A"),
+        )
+        self.assertEqual(answer_option_values("true_false", "正确"), ("true",))
+        self.assertEqual(answer_option_values("true_false", False), ("false",))
+        self.assertEqual(answer_option_values("short_answer", "A"), ())
 
     def test_results_include_a_link_to_the_session_detail(self):
         response = self.client.get(

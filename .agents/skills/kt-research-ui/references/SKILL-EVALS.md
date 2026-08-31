@@ -2,24 +2,34 @@
 
 ## Should trigger
 
-- “按照六张参考图 1:1 复刻实验页面的 UI 风格，但保留真实班级和数据。”
-- “优化 Vue 教师工作台和题库列表界面。”
-- “改善学生单题答题页的移动端和无障碍体验。”
-- “统一实验管理页的表单、状态和视觉层次。”
-- “审计当前 Django 或 Vue 页面是否存在通用 AI UI 和文字溢出。”
+- "Reproduce the supplied reference at 1:1 fidelity for an existing Vue pilot while retaining the same-URL Django kill-switch fallback."
+- "This page is scheduled for Vue migration; use the redesign to complete the Service-to-API-to-Vue vertical slice."
+- "Audit whether this legacy Django page has entered the frontend separation migration scope."
+- "Improve the mobile and accessibility behavior of the student question page."
+- "Unify the form, status, and visual hierarchy of the experiment-management page."
 
 ## Should not trigger or should refuse scope expansion
 
-- “为了对齐截图，把 seed_demo 改成 3 个班 120 人。”
-- “让前端自行判断班级能否发布和随机化是否通过。”
-- “修复数值题判分错误。”
-- “修改 PostgreSQL 数据库索引。”
-- “增加新的 KT 模型。”
-- “重写随机化、评分或数据导出算法。”
+- "Change seed_demo to three classes and 120 students so the data matches the screenshot."
+- "Let the frontend decide whether a class can publish, feedback is open, or randomization passed."
+- "Vue is already the primary path; copy the same new layout into the Django template."
+- "Fix numeric-question grading."
+- "Change PostgreSQL indexes."
+- "Add a new KT model."
+- "Rewrite randomization, grading, or data-export algorithms."
 
-## Expected behavior
+## Expected migration decisions
 
-- Select the correct persisted reference by page state.
+- A route with an approved Vue component/API and same-URL feature-flag branch plus retained template is classified as **Vue primary + Django fallback**. New presentation work goes to Vue; the template receives only necessary safety compatibility.
+- An approved Vue migration with missing route/API/error-state coverage is **Vue migration in progress**. The agent completes the scoped vertical slice instead of polishing the template first.
+- A page with no approved Vue slice or rollout evidence is **legacy Django** and remains on its existing presentation path.
+- A module whose exit criteria explicitly retired the template is **Vue migration complete**; the agent does not recreate a fallback.
+- If evidence conflicts, the agent asks for clarification instead of creating a second long-lived implementation.
+
+## Expected authority behavior
+
+- Select the correct persisted or user-supplied visual reference for the page state.
 - Treat reference imagery as visual authority only, never as a data specification.
-- Preserve Django authority and real API projections.
+- Preserve Service authority and server-trimmed API contracts.
+- Add authorized API projection fields when required by a Vue vertical slice, without duplicating domain rules in serializers or Vue.
 - Scope Vue feature styles and test structure/behavior before pixel calibration.

@@ -531,7 +531,8 @@ class StudentLearningView(StudentApiMixin, APIView):
             projection = build_student_learning_projection(enrollment)
         except LookupError as error:
             raise Http404 from error
-        return Response(student_projection_to_api(projection))
+        payload = student_projection_to_api(projection)
+        return Response(StudentLearningProjectionSerializer(instance=payload).data)
 
 
 class StudentLearningExperimentView(StudentApiMixin, APIView):
@@ -551,7 +552,8 @@ class StudentLearningExperimentView(StudentApiMixin, APIView):
             )
         except LookupError as error:
             raise Http404 from error
-        return Response(student_projection_to_api(projection))
+        payload = student_projection_to_api(projection)
+        return Response(StudentLearningExperimentSerializer(instance=payload).data)
 
 
 class StudentLearningQuestionView(StudentApiMixin, APIView):
@@ -571,4 +573,5 @@ class StudentLearningQuestionView(StudentApiMixin, APIView):
             )
         except LookupError as error:
             raise Http404 from error
-        return Response(student_projection_to_api(projection))
+        payload = student_projection_to_api(projection)
+        return Response(StudentLearningQuestionSerializer(instance=payload).data)

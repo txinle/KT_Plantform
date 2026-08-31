@@ -14,6 +14,12 @@ function vueDemoTask(page: Page) {
   })
 }
 
+function vueFullFeedbackTask(page: Page) {
+  return page.locator('.kt-student-task-card').filter({
+    has: page.getByRole('heading', { name: '完整反馈视觉验证', exact: true }),
+  })
+}
+
 async function loginStudent(page: Page, origin: string, account = 'S001') {
   await page.goto(`${origin}/login/`)
   await page.getByLabel('账号或学号').fill(account)
@@ -100,15 +106,15 @@ test('student user allowlist mounts the Vue dashboard', async ({ page }) => {
   await expect(page.locator('#kt-app')).toBeVisible()
 })
 
-test('student starts the exact task, completes it in the Vue runtime, and sees the trimmed result', async ({ browserName, page }, testInfo) => {
+test('student completes the isolated full-feedback task and sees P4, P3, and legacy fallbacks', async ({ browserName, page }, testInfo) => {
   test.setTimeout(420_000)
   test.skip(browserName !== 'chromium', 'One browser covers the destructive student submission journey.')
   await loginStudent(page, 'http://127.0.0.1:8014')
   await page.goto('http://127.0.0.1:8014/student/courses/1/')
-  const progress = await vueDemoTask(page).getByText(/^0 \/ \d+$/).textContent()
+  const progress = await vueFullFeedbackTask(page).getByText(/^0 \/ \d+$/).textContent()
   const questionCount = Number(progress?.split('/')[1].trim())
-  expect(questionCount).toBeGreaterThan(0)
-  await vueDemoTask(page).getByRole('button', { name: /^(开始实验|继续作答)$/ }).click()
+  expect(questionCount).toBe(1)
+  await vueFullFeedbackTask(page).getByRole('button', { name: /^(开始实验|继续作答)$/ }).click()
   await expect(page).toHaveURL(/\/student\/sessions\/\d+\/questions\/\d+\/$/)
   await page.locator('.kt-assessment-question').waitFor({ state: 'visible' })
 
@@ -122,11 +128,19 @@ test('student starts the exact task, completes it in the Vue runtime, and sees t
   await expect(page.getByText('已完成', { exact: true })).toBeVisible()
 
   await page.goto('http://127.0.0.1:8014/student/courses/1/learning/')
-  await page.getByRole('link', { name: '查看实验记录' }).click()
-  await expect(page.getByRole('heading', { name: '演示交互数据采集' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '得分' })).toBeVisible()
-  await expect(page.getByText('正确答案')).toHaveCount(0)
+  const fullFeedbackCard = page.locator('.kt-learning-card').filter({
+    has: page.getByRole('heading', { name: '完整反馈视觉验证', exact: true }),
+  })
+  await fullFeedbackCard.getByRole('link', { name: '查看实验记录' }).click()
+  await expect(page.getByRole('heading', { name: '完整反馈视觉验证' })).toBeVisible()
+  await expect(page.locator('.kt-feedback-metric')).toHaveCount(3)
+  await expect(page.locator('.kt-feedback-table tbody tr')).toHaveCount(1)
+  await expect(page.locator('.kt-course-bar')).toHaveCount(0)
+  await page.locator('.kt-feedback-table tbody tr').focus()
+  await expect(page.locator('.kt-feedback-table tbody tr')).toHaveCSS('outline-style', 'solid')
+  const resultPath = new URL(page.url()).pathname
   for (const viewport of [
+    { name: 'result-reference-1448x1086', width: 1448, height: 1086 },
     { name: 'result-desktop-1440x900', width: 1440, height: 900 },
     { name: 'result-mobile-390x844', width: 390, height: 844 },
     { name: 'result-zoom-200-percent-equivalent', width: 720, height: 450 },
@@ -135,6 +149,33 @@ test('student starts the exact task, completes it in the Vue runtime, and sees t
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false)
     await page.screenshot({ path: testInfo.outputPath(`${viewport.name}.png`), fullPage: true })
   }
+
+  await page.setViewportSize({ width: 1448, height: 1086 })
+  await page.getByRole('link', { name: '查看题目反馈' }).click()
+  await expect(page.getByRole('heading', { name: /^Q\d+$/ })).toBeVisible()
+  await expect(page.locator('.kt-feedback-option')).toHaveCount(4)
+  await expect(page.getByText('我的作答', { exact: true })).toBeVisible()
+  await expect(page.getByText('正确答案', { exact: true })).toHaveCount(2)
+  await expect(page.getByText('答案解析', { exact: true })).toBeVisible()
+  const questionPath = new URL(page.url()).pathname
+  for (const viewport of [
+    { name: 'question-reference-1448x1086', width: 1448, height: 1086 },
+    { name: 'question-desktop-1440x900', width: 1440, height: 900 },
+    { name: 'question-mobile-390x844', width: 390, height: 844 },
+    { name: 'question-zoom-200-percent-equivalent', width: 720, height: 450 },
+  ]) {
+    await page.setViewportSize(viewport)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false)
+    await page.screenshot({ path: testInfo.outputPath(`${viewport.name}.png`), fullPage: true })
+  }
+
+  await page.goto(`http://127.0.0.1:8013${resultPath}`)
+  await expect(page.locator('#student-item-results-title')).toBeVisible()
+  await expect(page.locator('#kt-app')).toHaveCount(0)
+  await page.goto(`http://127.0.0.1:8013${questionPath}`)
+  await expect(page.locator('#student-own-answer-title')).toBeVisible()
+  await expect(page.getByText('正确答案', { exact: true })).toBeVisible()
+  await expect(page.locator('#kt-app')).toHaveCount(0)
 })
 
 test('assessment runtime retains an offline answer and saves it after reconnecting', async ({ browserName, context, page }) => {

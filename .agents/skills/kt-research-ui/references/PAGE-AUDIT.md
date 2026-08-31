@@ -2,7 +2,13 @@
 
 Record each finding with page/state, severity (`P0`, `P1`, or `P2`), user impact, proposed repair, affected files, and research-semantic risk.
 
-For reference-led experiment work, audit in this order:
+Before visual inspection, record:
+
+1. The module migration state: legacy Django, Vue migration in progress, Vue primary + Django fallback, or Vue migration complete.
+2. The repository evidence for that state: module specification/plan, business URL, rollout branch, DRF API, Vue route/component, and fallback presence.
+3. The authoritative Service/API fields and the presentation path that may be changed. Do not treat the fallback as a second visual target for a Vue-primary module.
+
+For reference-led work, audit in this order:
 
 1. Skeleton: shell height, content width, breadcrumb, title, tabs, columns, panels, table and action placement.
 2. Typography: font family, size, weight, line-height, wrapping, numeric alignment, and any overflow.
@@ -12,11 +18,12 @@ For reference-led experiment work, audit in this order:
 
 Also check:
 
-- Real API content remains authoritative; no screenshot data was copied into code, fixtures, seeds, or APIs.
-- Feature CSS does not leak into question-bank, class, data-center, student, or retained Django pages.
+- Real Service/API content remains authoritative; no screenshot data was copied into code, fixtures, seeds, or APIs.
+- Permission-sensitive fields are removed by the server rather than hidden after Vue derives policy.
+- Feature CSS stays inside the formal module path and does not leak into other Vue modules or the kill-switch fallback.
 - Empty, loading, saving, success, conflict, and server-error states remain understandable.
-- 1586×992 visual capture and overlay; 1440×900, 390×844, keyboard, 200% zoom, reduced motion, and page-level overflow.
+- The reference's native viewport plus 1440x900, 390x844, keyboard, 200% zoom, reduced motion, and page-level overflow.
 - Destructive-action hierarchy, confirmation, idempotency, and recovery.
 - Student assessment cognitive load and research invariants.
 
-Prioritize broken behavior and research-risk ambiguity first, then skeleton deviations, then fine pixel calibration.
+Prioritize broken behavior and research-risk ambiguity first, then migration-boundary violations, skeleton deviations, and fine pixel calibration.

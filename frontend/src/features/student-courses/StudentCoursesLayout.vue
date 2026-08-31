@@ -13,9 +13,10 @@ const route = useRoute()
 const bootstrap = getBootstrapContext()
 const courseId = computed(() => Number(route.params.courseId))
 const course = ref<StudentCourse>()
+const isFeedbackRoute = computed(() => route.name === 'student-result' || route.name === 'student-learning-question')
 
 onMounted(async () => {
-  if (!courseId.value) return
+  if (!courseId.value || isFeedbackRoute.value) return
   const response = await getStudentCourseApi().tasks(courseId.value)
   course.value = response.course
 })
@@ -23,10 +24,17 @@ onMounted(async () => {
 
 <template>
   <a class="kt-skip-link" href="#student-main">跳到主要内容</a>
-  <AppHeader class="kt-app-header--student" :user-name="bootstrap.user.display_name" :user-meta="bootstrap.user.student_number || bootstrap.user.username">
-    <a href="/student/" aria-current="page">我的课程</a>
+  <AppHeader
+    class="kt-app-header--student"
+    :class="{ 'kt-app-header--feedback': isFeedbackRoute }"
+    :user-name="bootstrap.user.display_name"
+    :user-meta="bootstrap.user.student_number || bootstrap.user.username"
+    :show-logout="isFeedbackRoute"
+    :csrf-token="bootstrap.csrf_token"
+  >
+    <a v-if="!isFeedbackRoute" href="/student/" aria-current="page">我的课程</a>
   </AppHeader>
-  <div v-if="courseId" class="kt-course-bar">
+  <div v-if="courseId && !isFeedbackRoute" class="kt-course-bar">
     <div class="kt-shell">
       <div class="kt-course-context">
         <strong>{{ course?.course_name || '课程' }}</strong>
@@ -38,7 +46,7 @@ onMounted(async () => {
       </nav>
     </div>
   </div>
-  <main id="student-main" class="kt-shell kt-page-main" tabindex="-1">
+  <main id="student-main" class="kt-shell kt-page-main" :class="{ 'kt-feedback-main': isFeedbackRoute }" tabindex="-1">
     <RouterView />
   </main>
 </template>

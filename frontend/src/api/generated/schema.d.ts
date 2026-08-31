@@ -1564,6 +1564,13 @@ export interface components {
          */
         QuestionTypeEnum: "single_choice" | "multiple_choice" | "numeric" | "short_answer" | "fill_blank" | "true_false";
         /**
+         * @description * `correct` - correct
+         *     * `incorrect` - incorrect
+         *     * `pending` - pending
+         * @enum {string}
+         */
+        ResultStateEnum: "correct" | "incorrect" | "pending";
+        /**
          * @description * `single_session` - 必须一次完成
          *     * `resumable` - 允许断点续答
          * @enum {string}
@@ -1698,9 +1705,18 @@ export interface components {
             rank?: {
                 [key: string]: unknown;
             };
-            item_results?: {
-                [key: string]: unknown;
-            }[];
+            item_results?: components["schemas"]["StudentLearningItemResult"][];
+        };
+        StudentLearningItemResult: {
+            /** Format: date-time */
+            generated_at: string;
+            question_id: number;
+            code: string;
+            kcs: string[];
+            result_label: string;
+            result_state: components["schemas"]["ResultStateEnum"];
+            final_answer: string;
+            score?: components["schemas"]["StudentLearningScore"];
         };
         StudentLearningProjection: {
             /** Format: date-time */
@@ -1748,15 +1764,31 @@ export interface components {
             experiment_name: string;
             question_id: number;
             code: string;
+            question_type: string;
             text: string;
             kcs: string[];
             result_label: string;
+            result_state: components["schemas"]["ResultStateEnum"];
             final_answer: string;
-            score?: {
-                [key: string]: unknown;
-            };
+            options: components["schemas"]["StudentLearningQuestionOption"][];
+            score?: components["schemas"]["StudentLearningScore"];
             correct_answer?: string | null;
             explanation?: string;
+        };
+        StudentLearningQuestionOption: {
+            value: string;
+            label: string;
+            text: string;
+            selected_by_student: boolean;
+            is_correct?: boolean;
+        };
+        StudentLearningScore: {
+            /** Format: date-time */
+            generated_at: string;
+            /** Format: decimal */
+            value: string;
+            /** Format: decimal */
+            maximum: string;
         };
         StudentResult: components["schemas"]["StudentResultNone"] | components["schemas"]["StudentResultCorrectness"] | components["schemas"]["StudentResultFull"];
         StudentResultCorrectness: {

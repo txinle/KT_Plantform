@@ -1,12 +1,13 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   api: { tasks: vi.fn() },
+  route: { name: 'student-course', params: { courseId: '7' } },
 }))
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { courseId: '7' } }),
+  useRoute: () => mocks.route,
   RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
   RouterView: { template: '<div data-router-view />' },
 }))
@@ -21,6 +22,11 @@ vi.mock('./api', () => ({ getStudentCourseApi: () => mocks.api }))
 import StudentCoursesLayout from './StudentCoursesLayout.vue'
 
 describe('StudentCoursesLayout', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.route.name = 'student-course'
+  })
+
   it('uses the student identity header and the two approved course tabs', async () => {
     mocks.api.tasks.mockResolvedValue({
       course: { course_name: '知识追踪研究方法', course_code: 'KT101', course_term: '2026春', class_name: '实验一班' },
@@ -36,5 +42,19 @@ describe('StudentCoursesLayout', () => {
     expect(wrapper.get('.kt-course-nav').text()).toContain('实验任务')
     expect(wrapper.get('.kt-course-nav').text()).toContain('我的学习')
     expect(wrapper.text()).not.toContain('通知')
+  })
+
+  it('uses the feedback shell without the global nav or course bar on P3 and P4', async () => {
+    mocks.route.name = 'student-result'
+
+    const wrapper = mount(StudentCoursesLayout)
+    await flushPromises()
+
+    expect(mocks.api.tasks).not.toHaveBeenCalled()
+    expect(wrapper.get('.kt-app-header').classes()).toContain('kt-app-header--feedback')
+    expect(wrapper.get('.kt-global-nav').text()).toBe('')
+    expect(wrapper.find('.kt-course-bar').exists()).toBe(false)
+    expect(wrapper.get('#student-main').classes()).toContain('kt-feedback-main')
+    expect(wrapper.get('.kt-logout-button').text()).toBe('退出')
   })
 })

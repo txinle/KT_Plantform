@@ -403,6 +403,8 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
 
         self.assertIn("item_results", correctness)
         self.assertIn("item_results", full)
+        self.assertEqual(correctness["item_results"][0]["result_state"], "correct")
+        self.assertEqual(full["item_results"][0]["result_state"], "correct")
         correctness_question_id = correctness["item_results"][0]["question_id"]
         full_question_id = full["item_results"][0]["question_id"]
         correctness_question = build_student_question_projection(
@@ -417,10 +419,51 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
         ).to_dict()
 
         self.assertEqual(correctness_question["final_answer"], "B：正确选项")
+        self.assertEqual(correctness_question["question_type"], "single_choice")
+        self.assertEqual(correctness_question["result_state"], "correct")
+        self.assertEqual(
+            correctness_question["options"],
+            (
+                {
+                    "value": "A",
+                    "label": "A",
+                    "text": "错误选项",
+                    "selected_by_student": False,
+                },
+                {
+                    "value": "B",
+                    "label": "B",
+                    "text": "正确选项",
+                    "selected_by_student": True,
+                },
+            ),
+        )
         self.assertNotIn("correct_answer", correctness_question)
         self.assertNotIn("explanation", correctness_question)
+        self.assertTrue(
+            all("is_correct" not in option for option in correctness_question["options"])
+        )
         self.assertEqual(full_question["correct_answer"], "B：正确选项")
         self.assertEqual(full_question["explanation"], "闭合回路电压代数和为零。")
+        self.assertEqual(
+            full_question["options"],
+            (
+                {
+                    "value": "A",
+                    "label": "A",
+                    "text": "错误选项",
+                    "selected_by_student": False,
+                    "is_correct": False,
+                },
+                {
+                    "value": "B",
+                    "label": "B",
+                    "text": "正确选项",
+                    "selected_by_student": True,
+                    "is_correct": True,
+                },
+            ),
+        )
         for projection in (correctness_question, full_question):
             self.assertNotIn("process", projection)
             self.assertNotIn("first_answer", projection)

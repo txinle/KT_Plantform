@@ -243,6 +243,25 @@ class StudentLearningProjectionSerializer(serializers.Serializer):
     trend_class_average_available = serializers.BooleanField(required=False)
 
 
+class StudentLearningScoreSerializer(serializers.Serializer):
+    generated_at = serializers.DateTimeField()
+    value = serializers.DecimalField(max_digits=12, decimal_places=2)
+    maximum = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+class StudentLearningItemResultSerializer(serializers.Serializer):
+    generated_at = serializers.DateTimeField()
+    question_id = serializers.IntegerField()
+    code = serializers.CharField()
+    kcs = serializers.ListField(child=serializers.CharField())
+    result_label = serializers.CharField()
+    result_state = serializers.ChoiceField(
+        choices=("correct", "incorrect", "pending")
+    )
+    final_answer = serializers.CharField()
+    score = StudentLearningScoreSerializer(required=False)
+
+
 class StudentLearningExperimentSerializer(serializers.Serializer):
     generated_at = serializers.DateTimeField()
     course_id = serializers.IntegerField()
@@ -260,7 +279,15 @@ class StudentLearningExperimentSerializer(serializers.Serializer):
     grading_coverage = serializers.DictField(required=False)
     score_rate_comparison = serializers.DictField(required=False)
     rank = serializers.DictField(required=False)
-    item_results = serializers.ListField(child=serializers.DictField(), required=False)
+    item_results = StudentLearningItemResultSerializer(many=True, required=False)
+
+
+class StudentLearningQuestionOptionSerializer(serializers.Serializer):
+    value = serializers.CharField()
+    label = serializers.CharField(allow_blank=True)
+    text = serializers.CharField(allow_blank=True)
+    selected_by_student = serializers.BooleanField()
+    is_correct = serializers.BooleanField(required=False)
 
 
 class StudentLearningQuestionSerializer(serializers.Serializer):
@@ -272,10 +299,15 @@ class StudentLearningQuestionSerializer(serializers.Serializer):
     experiment_name = serializers.CharField()
     question_id = serializers.IntegerField()
     code = serializers.CharField()
+    question_type = serializers.CharField()
     text = serializers.CharField()
     kcs = serializers.ListField(child=serializers.CharField())
     result_label = serializers.CharField()
+    result_state = serializers.ChoiceField(
+        choices=("correct", "incorrect", "pending")
+    )
     final_answer = serializers.CharField()
-    score = serializers.DictField(required=False)
+    options = StudentLearningQuestionOptionSerializer(many=True)
+    score = StudentLearningScoreSerializer(required=False)
     correct_answer = serializers.CharField(required=False, allow_null=True)
     explanation = serializers.CharField(required=False, allow_blank=True)

@@ -3529,6 +3529,16 @@ components:
         * `short_answer` - 简答题
         * `fill_blank` - 填空题
         * `true_false` - 判断题
+    ResultStateEnum:
+      enum:
+      - correct
+      - incorrect
+      - pending
+      type: string
+      description: |-
+        * `correct` - correct
+        * `incorrect` - incorrect
+        * `pending` - pending
     ResumeModeEnum:
       enum:
       - single_session
@@ -3789,8 +3799,7 @@ components:
         item_results:
           type: array
           items:
-            type: object
-            additionalProperties: {}
+            $ref: '#/components/schemas/StudentLearningItemResult'
       required:
       - class_group_name
       - completed
@@ -3802,6 +3811,36 @@ components:
       - participated
       - status
       - status_label
+    StudentLearningItemResult:
+      type: object
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        question_id:
+          type: integer
+        code:
+          type: string
+        kcs:
+          type: array
+          items:
+            type: string
+        result_label:
+          type: string
+        result_state:
+          $ref: '#/components/schemas/ResultStateEnum'
+        final_answer:
+          type: string
+        score:
+          $ref: '#/components/schemas/StudentLearningScore'
+      required:
+      - code
+      - final_answer
+      - generated_at
+      - kcs
+      - question_id
+      - result_label
+      - result_state
     StudentLearningProjection:
       type: object
       properties:
@@ -3883,6 +3922,8 @@ components:
           type: integer
         code:
           type: string
+        question_type:
+          type: string
         text:
           type: string
         kcs:
@@ -3891,11 +3932,16 @@ components:
             type: string
         result_label:
           type: string
+        result_state:
+          $ref: '#/components/schemas/ResultStateEnum'
         final_answer:
           type: string
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentLearningQuestionOption'
         score:
-          type: object
-          additionalProperties: {}
+          $ref: '#/components/schemas/StudentLearningScore'
         correct_answer:
           type: string
           nullable: true
@@ -3911,9 +3957,48 @@ components:
       - final_answer
       - generated_at
       - kcs
+      - options
       - question_id
+      - question_type
       - result_label
+      - result_state
       - text
+    StudentLearningQuestionOption:
+      type: object
+      properties:
+        value:
+          type: string
+        label:
+          type: string
+        text:
+          type: string
+        selected_by_student:
+          type: boolean
+        is_correct:
+          type: boolean
+      required:
+      - label
+      - selected_by_student
+      - text
+      - value
+    StudentLearningScore:
+      type: object
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        value:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        maximum:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - generated_at
+      - maximum
+      - value
     StudentResult:
       oneOf:
       - $ref: '#/components/schemas/StudentResultNone'

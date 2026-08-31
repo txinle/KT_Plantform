@@ -1,4 +1,4 @@
 interface:
   display_name: "KT Research UI"
-  short_description: "高保真迭代 KT 平台的 Vue 与 Django 界面"
-  default_prompt: "Use $kt-research-ui to reproduce the requested visual system while preserving real API data and Django-owned research semantics."
+  short_description: "Migrate KT UI modules while preserving backend authority"
+  default_prompt: "Use $kt-research-ui to determine the module migration state and update its authoritative presentation path while preserving Service-owned research semantics."
