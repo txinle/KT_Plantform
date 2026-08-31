@@ -21,8 +21,10 @@ function vueFullFeedbackTask(page: Page) {
 }
 
 async function loginStudent(page: Page, origin: string, account = 'S001') {
-  await page.goto(`${origin}/login/`)
-  await page.getByLabel('账号或学号').fill(account)
+  await page.goto(`${origin}/login/`, { waitUntil: 'commit' })
+  const accountField = page.getByLabel('账号或学号')
+  await expect(accountField).toBeVisible()
+  await accountField.fill(account)
   await page.getByLabel('密码').fill('student123')
   await page.getByRole('button', { name: '登录' }).click()
   await expect(page).toHaveURL(new RegExp(`${origin}/student/`))

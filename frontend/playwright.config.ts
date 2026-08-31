@@ -25,6 +25,7 @@ export default defineConfig({
   outputDir: '.e2e-results',
   fullyParallel: false,
   workers: 1,
+  retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     viewport: { width: 1440, height: 900 },

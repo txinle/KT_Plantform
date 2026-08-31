@@ -1,8 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
 
 async function login(page: Page, origin: string) {
-  await page.goto(`${origin}/login/`)
-  await page.getByLabel('账号或学号').fill('teacher')
+  await page.goto(`${origin}/login/`, { waitUntil: 'commit' })
+  const account = page.getByLabel('账号或学号')
+  await expect(account).toBeVisible()
+  await account.fill('teacher')
   await page.getByLabel('密码').fill('teacher123')
   await page.getByRole('button', { name: '登录' }).click()
   await expect(page).toHaveURL(new RegExp(`${origin}/teacher/courses/`))
@@ -84,6 +86,31 @@ test('teacher previews and atomically publishes a class task', async ({ browserN
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/)
   await expect(page.getByRole('heading', { name: '班级任务' })).toBeVisible()
   await expect(page.getByText('未开始', { exact: true })).toBeVisible()
+})
+
+test('login proceeds when the form is interactive before optional resources finish', async ({ page }) => {
+  let releaseOptionalResource = () => {}
+  const optionalResourceGate = new Promise<void>((resolve) => {
+    releaseOptionalResource = resolve
+  })
+  await page.route('http://127.0.0.1:8011/__e2e_slow_resource__', async (route) => {
+    await optionalResourceGate
+    await route.fulfill({ body: '', contentType: 'application/javascript' })
+  })
+  await page.route('http://127.0.0.1:8011/login/', async (route) => {
+    const response = await route.fetch()
+    const body = (await response.text()).replace(
+      '</body>',
+      '<script src="/__e2e_slow_resource__"></script></body>',
+    )
+    await route.fulfill({ response, body })
+  }, { times: 1 })
+
+  try {
+    await login(page, 'http://127.0.0.1:8011')
+  } finally {
+    releaseOptionalResource()
+  }
 })
 
 test('Session and CSRF contracts remain same-origin', async ({ page }) => {
