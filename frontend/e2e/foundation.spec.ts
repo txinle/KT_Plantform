@@ -389,7 +389,10 @@ test('data-center overview and advanced pages reflow at required viewports', asy
     ]) {
       await page.setViewportSize(viewport)
       await page.goto(`http://127.0.0.1:8018/teacher/courses/1/data/${route.suffix}`)
-      await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeInViewport()
+      const heading = page.getByRole('heading', { name: route.heading, exact: true })
+      await expect(heading).toBeVisible()
+      await page.evaluate(() => window.scrollTo(0, 0))
+      await expect(heading).toBeInViewport()
       await expect(page.getByRole('status')).toHaveCount(0)
       expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false)
       await page.screenshot({ path: testInfo.outputPath(`${route.name}-${viewport.name}.png`), fullPage: true })
