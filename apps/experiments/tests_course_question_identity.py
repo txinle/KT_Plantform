@@ -1,13 +1,16 @@
 from django.core.exceptions import ValidationError
+from django.db import models
 from django.test import TestCase
-from django.urls import reverse
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
 from apps.question_bank.services.course_question_identity import allocate_course_question_identity
 
 from .models import Experiment, ExperimentQuestion, QuestionSnapshot
-from .services import publish_experiment, save_participant_rules
+from .services import (
+    _publish_legacy_experiment as publish_experiment,
+    save_participant_rules,
+)
 
 
 class CourseQuestionIdentitySnapshotTests(TestCase):
@@ -88,20 +91,14 @@ class CourseQuestionIdentitySnapshotTests(TestCase):
         self.assertEqual(snapshot.source_bank_name, "原题库名称")
         self.assertEqual(snapshot.bank_sequence, 17)
 
-    def test_course_publish_view_reports_missing_primary_kc_without_a_version(self):
-        QuestionConcept.objects.filter(question=self.question, is_primary=True).delete()
-        self.client.force_login(self.teacher)
-
-        response = self.client.post(
-            reverse(
-                "courses:experiment_publish",
-                args=[self.course.pk, self.experiment.pk],
-            ),
-            follow=True,
+    def test_legacy_snapshot_publish_reports_missing_primary_kc_without_a_version(self):
+        models.QuerySet.delete(
+            QuestionConcept.objects.filter(question=self.question, is_primary=True)
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, f"以下题目缺少主知识点：{self.question.code}")
+        with self.assertRaisesRegex(ValidationError, self.question.code):
+            publish_experiment(self.experiment, self.teacher)
+
         self.experiment.refresh_from_db()
         self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
         self.assertFalse(self.experiment.versions.exists())
@@ -149,7 +146,10 @@ class CourseQuestionIdentitySnapshotTests(TestCase):
             created_by=self.teacher,
             name="另一课程题库",
         )
-        Question.objects.filter(pk=self.question.pk).update(bank=other_bank)
+        models.QuerySet.update(
+            Question.objects.filter(pk=self.question.pk),
+            bank=other_bank,
+        )
 
         with self.assertRaisesRegex(ValidationError, self.question.code):
             publish_experiment(self.experiment, self.teacher)

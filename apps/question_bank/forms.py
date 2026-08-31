@@ -1,4 +1,8 @@
+import json
+
 from django import forms
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from .models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
 from .services.numeric import normalize_finite_decimal
 from .services.scoring import normalize_true_false_answer
@@ -21,47 +25,64 @@ class UploadForm(forms.Form):
 
 
 class CourseConceptForm(forms.Form):
+    sequence = forms.IntegerField(label="KC 序号", min_value=1)
     name = forms.CharField(label="KC 名称", max_length=160)
+    description = forms.CharField(
+        label="说明（可选）", required=False, widget=forms.Textarea(attrs={"rows": 3})
+    )
 
     def __init__(self, *args, course, instance=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.course = course
         self.instance = instance
+        if instance is not None:
+            self.fields.pop("sequence")
         if instance is None:
+            self.fields["sequence"].widget.attrs["id"] = "id_course_concept_sequence"
             self.fields["name"].widget.attrs["id"] = "id_course_concept_name"
+            self.fields["description"].widget.attrs["id"] = "id_course_concept_description"
         if instance is not None and not self.is_bound:
             self.initial["name"] = instance.name
+            self.initial["description"] = instance.description
 
     def clean_name(self):
+        from .services.course_kc import CourseKCService
+
         value = " ".join(self.cleaned_data["name"].strip().split())
-        if not value:
-            raise forms.ValidationError("KC 名称不能为空。")
-        normalized = value.casefold()
-        duplicate = Concept.objects.filter(course=self.course, normalized_name=normalized)
-        if self.instance is not None:
-            duplicate = duplicate.exclude(pk=self.instance.pk)
-        if duplicate.exists():
-            raise forms.ValidationError("当前课程已存在同名 KC。")
+        try:
+            CourseKCService.validate_unique_name(
+                course=self.course,
+                name=value,
+                exclude_pk=self.instance.pk if self.instance is not None else None,
+            )
+        except ValidationError as exc:
+            raise forms.ValidationError(exc.messages[0]) from exc
         return value
 
     def save(self):
+        from .services.course_kc import CourseKCService
+
         if self.instance is None:
-            return Concept.objects.create(course=self.course, name=self.cleaned_data["name"])
-        self.instance.name = self.cleaned_data["name"]
-        self.instance.save(update_fields=["name", "normalized_name"])
-        return self.instance
+            return CourseKCService.create(
+                course=self.course,
+                sequence=self.cleaned_data["sequence"],
+                name=self.cleaned_data["name"],
+                description=self.cleaned_data.get("description", ""),
+            )
+        return CourseKCService.rename(
+            concept=self.instance,
+            name=self.cleaned_data["name"],
+            description=self.cleaned_data.get("description", ""),
+        )
 
 class QuestionEditForm(forms.ModelForm):
     primary_concept = forms.ModelChoiceField(
-        label="主 KC",
-        queryset=Concept.objects.none(),
-        required=False,
+        label="主 KC（兼容模式）", queryset=Concept.objects.none(), required=False
     )
     secondary_concepts = forms.ModelMultipleChoiceField(
-        label="次 KC",
-        queryset=Concept.objects.none(),
-        required=False,
+        label="次 KC（兼容模式）", queryset=Concept.objects.none(), required=False
     )
+    kc_mapping_json = forms.CharField(required=False, widget=forms.HiddenInput())
     accepted_answers_text = forms.CharField(label="其他可接受答案（分号分隔）", required=False)
     option_a = forms.CharField(label="选项 A", required=False)
     option_b = forms.CharField(label="选项 B", required=False)
@@ -88,11 +109,13 @@ class QuestionEditForm(forms.ModelForm):
         if course is None and self.instance.pk:
             course = self.instance.bank.course
         self.manage_concepts = course is not None
-        concept_queryset = course.concepts.order_by("name") if course is not None else Concept.objects.none()
+        concept_queryset = (
+            course.concepts.filter(status=Concept.Status.ACTIVE).order_by("code")
+            if course is not None
+            else Concept.objects.none()
+        )
         self.fields["primary_concept"].queryset = concept_queryset
         self.fields["secondary_concepts"].queryset = concept_queryset
-        self.fields["primary_concept"].widget.attrs["data-concept-select"] = "primary"
-        self.fields["secondary_concepts"].widget.attrs["data-concept-select"] = "secondary"
         self.fields["question_type"].widget.attrs["data-question-type-controller"] = ""
         if self.instance.pk:
             option_map = {item.key.lower(): item.text for item in self.instance.options.all()}
@@ -103,8 +126,15 @@ class QuestionEditForm(forms.ModelForm):
             else:
                 self.fields["correct_answer_text"].initial = ",".join(answer) if isinstance(answer, list) else answer
             self.fields["accepted_answers_text"].initial = ";".join(self.instance.accepted_answers or [])
+            from .services.question_kc_mapping import project_question_kc_mapping
+
+            self.fields["kc_mapping_json"].initial = json.dumps(
+                project_question_kc_mapping(self.instance), ensure_ascii=False
+            )
             primary_link = self.instance.concept_links.filter(is_primary=True).first()
-            self.fields["primary_concept"].initial = primary_link.concept_id if primary_link else None
+            self.fields["primary_concept"].initial = (
+                primary_link.concept_id if primary_link else None
+            )
             self.fields["secondary_concepts"].initial = self.instance.concept_links.filter(
                 is_primary=False
             ).values_list("concept_id", flat=True)
@@ -140,16 +170,65 @@ class QuestionEditForm(forms.ModelForm):
         elif question_type == Question.Type.TRUE_FALSE:
             if normalize_true_false_answer(raw_answer) is None:
                 self.add_error("correct_answer_text", "判断题答案必须为正确或错误")
-        primary = cleaned.get("primary_concept")
-        secondary = cleaned.get("secondary_concepts")
-        if primary is not None and secondary is not None and primary in secondary:
-            self.add_error("secondary_concepts", "主 KC 不能同时作为次 KC。")
-        raw_secondary = self.data.getlist("secondary_concepts") if hasattr(self.data, "getlist") else []
-        raw_secondary = [value for value in raw_secondary if value]
-        if len(raw_secondary) != len(set(raw_secondary)):
-            self.add_error("secondary_concepts", "次 KC 不能重复。")
+        mapping = None
+        try:
+            mapping = json.loads(cleaned.get("kc_mapping_json") or "{}")
+        except (TypeError, ValueError):
+            self.add_error("kc_mapping_json", "KC 映射不是有效的结构数据。")
+        if mapping is not None:
+            primary = cleaned.get("primary_concept")
+            secondary = list(cleaned.get("secondary_concepts") or [])
+            if primary is not None and primary in secondary:
+                self.add_error("secondary_concepts", "主 KC 不能同时作为次 KC。")
+            raw_secondary = (
+                self.data.getlist("secondary_concepts")
+                if hasattr(self.data, "getlist")
+                else []
+            )
+            raw_secondary = [value for value in raw_secondary if value]
+            if len(raw_secondary) != len(set(raw_secondary)):
+                self.add_error("secondary_concepts", "次 KC 不能重复。")
+            if not mapping.get("nodes") and primary is not None:
+                mapping = {
+                    "schema_version": "question-kc-tree-v2",
+                    "root_kc_code": primary.code,
+                    "nodes": [
+                        {"kc_code": primary.code, "parent_kc_code": None, "order": 1},
+                        *[
+                            {
+                                "kc_code": concept.code,
+                                "parent_kc_code": primary.code,
+                                "order": index,
+                            }
+                            for index, concept in enumerate(secondary, start=1)
+                            if concept.pk != primary.pk
+                        ],
+                    ],
+                }
+            nodes = mapping.get("nodes") or []
+            if (
+                self.manage_concepts
+                and cleaned.get("status") == Question.Status.ACTIVE
+                and not nodes
+            ):
+                self.add_error("kc_mapping_json", "可用题目必须具备完整 KC 树。")
+                if not (cleaned.get("kc_mapping_json") or "").strip():
+                    self.add_error("primary_concept", "可用题目必须选择主 KC。")
+            elif self.manage_concepts and nodes and self.instance.pk:
+                from .services.question_kc_mapping import validate_question_kc_mapping
+
+                try:
+                    validate_question_kc_mapping(
+                        self.instance,
+                        root_kc_code=mapping.get("root_kc_code"),
+                        nodes=nodes,
+                    )
+                except forms.ValidationError as exc:
+                    self.add_error("kc_mapping_json", exc)
+            cleaned["kc_mapping"] = mapping
         return cleaned
 
+    @transaction.atomic
     def save(self, commit=True):
         question = super().save(commit=False)
         raw = self.cleaned_data["correct_answer_text"].strip()
@@ -167,6 +246,9 @@ class QuestionEditForm(forms.ModelForm):
         else:
             question.accepted_answers = []
         if commit:
+            desired_status = question.status
+            if self.manage_concepts and desired_status == Question.Status.ACTIVE:
+                question.status = Question.Status.DRAFT
             question.save()
             question.options.all().delete()
             if question.question_type in {Question.Type.SINGLE, Question.Type.MULTIPLE}:
@@ -174,14 +256,18 @@ class QuestionEditForm(forms.ModelForm):
                     value = self.cleaned_data.get(f"option_{key}", "").strip()
                     if value: QuestionOption.objects.create(question=question, key=key.upper(), text=value, display_order=idx)
             if self.manage_concepts:
-                question.concept_links.all().delete()
-                primary = self.cleaned_data.get("primary_concept")
-                if primary is not None:
-                    QuestionConcept.objects.create(question=question, concept=primary, is_primary=True)
-                QuestionConcept.objects.bulk_create(
-                    [
-                        QuestionConcept(question=question, concept=concept, is_primary=False)
-                        for concept in self.cleaned_data.get("secondary_concepts", [])
-                    ]
-                )
+                from .services.question_kc_mapping import replace_question_kc_mapping
+
+                mapping = self.cleaned_data.get("kc_mapping") or {}
+                if mapping.get("nodes"):
+                    replace_question_kc_mapping(
+                        question,
+                        root_kc_code=mapping.get("root_kc_code"),
+                        nodes=mapping["nodes"],
+                    )
+                else:
+                    question.concept_links.all().delete()
+                if desired_status == Question.Status.ACTIVE:
+                    question.status = Question.Status.ACTIVE
+                    question.save(update_fields=["status"])
         return question

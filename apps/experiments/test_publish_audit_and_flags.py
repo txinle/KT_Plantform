@@ -28,7 +28,7 @@ from .models import (
 )
 from .services import (
     _class_experiment_task_publication_scope,
-    publish_experiment,
+    _publish_legacy_experiment as publish_experiment,
     save_participant_rules,
 )
 
@@ -337,41 +337,24 @@ class PublishAuditTests(TestCase):
             ClassExperimentTask.objects.filter(experiment=legacy_experiment).exists()
         )
 
-    def test_course_publish_view_uses_only_the_service_audit_and_exposes_no_audit_payload(self):
+    def test_course_publish_view_requires_the_a_plus_publish_plan(self):
         self._configure_course_roster(self.class_a)
         self.client.force_login(self.teacher)
         publish_url = reverse(
             "courses:experiment_publish",
             args=[self.course.pk, self.experiment.pk],
         )
-        detail_url = reverse(
-            "courses:experiment_detail",
-            args=[self.course.pk, self.experiment.pk],
-        )
-
         response = self.client.post(publish_url)
 
-        self.assertRedirects(response, detail_url)
-        version = ExperimentVersion.objects.get(experiment=self.experiment)
-        tasks = list(
-            ClassExperimentTask.objects.filter(experiment=self.experiment).select_related(
-                "class_group"
-            )
+        self.assertEqual(response.status_code, 409)
+        self.assertContains(response, "旧版课程草稿", status_code=409)
+        self.assertFalse(self.experiment.versions.exists())
+        self.assertFalse(
+            AuditLog.objects.filter(
+                action="experiment.publish",
+                object_id=str(self.experiment.pk),
+            ).exists()
         )
-        self._assert_publish_audit(
-            self.experiment,
-            version,
-            tasks,
-            course_id=self.course.pk,
-        )
-        detail_response = self.client.get(detail_url)
-        self.assertEqual(detail_response.status_code, 200)
-        for internal_audit_field in (
-            "release_snapshot_id",
-            "class_snapshot_id",
-            "class_tasks",
-        ):
-            self.assertNotContains(detail_response, internal_audit_field)
 
     def test_legacy_publish_view_uses_only_the_service_audit(self):
         legacy_experiment = self._create_legacy_experiment()

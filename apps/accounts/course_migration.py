@@ -1,3 +1,6 @@
+from django.db import models
+
+
 def backfill_legacy_courses(apps, schema_editor):
     User = apps.get_model("accounts", "User")
     Course = apps.get_model("accounts", "Course")
@@ -51,13 +54,19 @@ def backfill_legacy_courses(apps, schema_editor):
             ).exclude(pk=link.pk).first()
             if existing is not None:
                 keep_primary = existing.is_primary or link.is_primary
-                link.delete()
+                models.QuerySet.delete(
+                    QuestionConcept.objects.filter(pk=link.pk)
+                )
                 if keep_primary and not existing.is_primary:
-                    existing.is_primary = True
-                    existing.save(update_fields=["is_primary"])
+                    models.QuerySet.update(
+                        QuestionConcept.objects.filter(pk=existing.pk),
+                        is_primary=True,
+                    )
             else:
-                link.concept_id = target.pk
-                link.save(update_fields=["concept"])
+                models.QuerySet.update(
+                    QuestionConcept.objects.filter(pk=link.pk),
+                    concept_id=target.pk,
+                )
 
     for experiment in Experiment.objects.select_related("question_bank").iterator():
         if experiment.course_id is None:

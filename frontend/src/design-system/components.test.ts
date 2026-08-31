@@ -31,6 +31,11 @@ describe('design-system foundations', () => {
     expect(header.get('.kt-wordmark__name').text()).toBe('KT Data Lab')
     expect(header.get('.kt-user-name').text()).toContain('教师甲')
     expect(header.get('.kt-user-name').text()).toContain('T001')
+    const teacherHeader = mount(AppHeader, {
+      props: { userName: '教师甲', userMeta: 'teacher', csrfToken: 'csrf-token', showLogout: true },
+    })
+    expect(teacherHeader.get('form[action="/logout/"] input[name="csrfmiddlewaretoken"]').attributes('value')).toBe('csrf-token')
+    expect(teacherHeader.get('form[action="/logout/"] button').text()).toBe('退出')
     expect(mount(Breadcrumb, { slots: { default: '<a href="/">课程</a>' } }).get('nav').attributes('aria-label')).toBe('层级目录')
     expect(mount(LocalTabs, { slots: { default: '<a href="/">实验</a>' } }).get('nav').attributes('aria-label')).toBe('页面导航')
     const pageHeader = mount(PageHeader, {

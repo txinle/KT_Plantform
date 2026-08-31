@@ -17,7 +17,10 @@ from apps.assessment.models import (
 )
 from apps.experiments.models import Experiment, ExperimentQuestion
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
-from apps.experiments.services import publish_experiment, save_participant_rules
+from apps.experiments.services import (
+    _publish_legacy_experiment as publish_experiment,
+    save_participant_rules,
+)
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
 
 from .teaching.contracts import DataState

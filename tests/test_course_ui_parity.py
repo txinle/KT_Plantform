@@ -212,7 +212,14 @@ class CourseWorkspaceUIParityTests(TestCase):
             )
         )
 
-        for label in ("题干与题型", "选项", "评分规则", "难度、解析与状态"):
+        for label in (
+            "题干与题型",
+            "题目状态",
+            "选项",
+            "评分规则",
+            "难度与解析",
+            "课程 KC 映射",
+        ):
             self.assertContains(response, label)
         self.assertContains(
             response,

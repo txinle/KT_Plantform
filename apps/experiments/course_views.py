@@ -177,6 +177,12 @@ def experiment_list(request, course_pk):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def experiment_create(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
+    if request.method == "POST":
+        return HttpResponse(
+            "旧版实验表单不能创建新的 all/type_quota 配置；请使用新版实验设计器。",
+            status=409,
+            content_type="text/plain; charset=utf-8",
+        )
     if request.method == "GET" and is_vue_module_enabled(
         "teacher_experiments", request.user, course=course
     ):
@@ -186,35 +192,17 @@ def experiment_create(request, course_pk):
             title=f"创建实验 | {course.name} | KT Data Lab",
             course=course,
         )
-    if request.method == "POST":
-        require_writable_course(course)
     form = ExperimentForm(request.POST or None, owner=request.user, course=course)
-    if request.method == "POST" and form.is_valid():
-        try:
-            with transaction.atomic():
-                course = lock_writable_course(course)
-                question_bank = lock_experiment_question_bank(
-                    form.cleaned_data["question_bank"],
-                    course,
-                )
-                experiment = form.save(commit=False)
-                experiment.question_bank = question_bank
-                experiment.course = course
-                experiment.created_by = request.user
-                experiment.full_clean()
-                experiment.save()
-                form.save_quotas(experiment)
-                sync_experiment_questions(experiment)
-                log_action(request, "experiment.create", experiment, {"course_id": course.pk})
-        except ValidationError as exc:
-            form.add_error("question_bank", exc)
-        else:
-            messages.success(request, "实验草稿已创建。")
-            return redirect("courses:experiment_detail", course.pk, experiment.pk)
     return render(
         request,
         "teacher/course_experiment_form.html",
-        {"course": course, "current_course": course, "form": form, "experiment": None},
+        {
+            "course": course,
+            "current_course": course,
+            "form": form,
+            "experiment": None,
+            "legacy_definition_read_only": True,
+        },
     )
 
 
@@ -266,47 +254,22 @@ def experiment_edit(request, course_pk, pk):
         messages.error(request, "实验发布后不能修改配置。")
         return redirect("courses:experiment_detail", course.pk, experiment.pk)
     if request.method == "POST":
-        require_writable_course(course)
+        return HttpResponse(
+            "旧版实验表单不能修改 all/type_quota 配置；请在新版实验设计器中显式转换。",
+            status=409,
+            content_type="text/plain; charset=utf-8",
+        )
     form = ExperimentForm(request.POST or None, instance=experiment, owner=request.user, course=course)
-    if request.method == "POST" and form.is_valid():
-        saved = False
-        try:
-            with transaction.atomic():
-                experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
-                if experiment.status != Experiment.Status.DRAFT:
-                    raise ValidationError("实验发布后不能修改配置。")
-                course = lock_writable_course(experiment.course_id)
-                original_bank_id = experiment.question_bank_id
-                question_bank = lock_experiment_question_bank(
-                    form.cleaned_data["question_bank"],
-                    course,
-                )
-                form = ExperimentForm(
-                    request.POST,
-                    instance=experiment,
-                    owner=request.user,
-                    course=course,
-                )
-                if form.is_valid():
-                    experiment = form.save(commit=False)
-                    experiment.question_bank = question_bank
-                    experiment.full_clean()
-                    experiment.save()
-                    form.save_quotas(experiment)
-                    if experiment.question_bank_id != original_bank_id:
-                        sync_experiment_questions(experiment)
-                    log_action(request, "experiment.update", experiment, {"course_id": course.pk})
-                    saved = True
-        except ValidationError as exc:
-            form.add_error("question_bank", exc)
-        else:
-            if saved:
-                messages.success(request, "实验配置已保存。")
-                return redirect("courses:experiment_detail", course.pk, experiment.pk)
     return render(
         request,
         "teacher/course_experiment_form.html",
-        {"course": course, "current_course": course, "form": form, "experiment": experiment},
+        {
+            "course": course,
+            "current_course": course,
+            "form": form,
+            "experiment": experiment,
+            "legacy_definition_read_only": True,
+        },
     )
 
 
@@ -369,16 +332,16 @@ def experiment_publish(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     experiment = _experiment(course, pk)
-    try:
-        version = publish_experiment(experiment, request.user)
-        messages.success(request, f"实验已发布为 v{version.version_number}。")
-    except ValidationError as exc:
-        messages.error(request, "; ".join(exc.messages))
-    except IntegrityError as exc:
-        if not _is_class_experiment_task_unique_conflict(exc):
-            raise
-        messages.error(request, "该班级已存在此实验的正式任务；请新建或克隆实验后再发布。")
-    return redirect("courses:experiment_detail", course.pk, experiment.pk)
+    message = (
+        "新版抽题配置必须通过班级发布计划完成预检与原子提交。"
+        if experiment.sampling_mode
+        else "旧版课程草稿必须先在新版实验设计器中显式转换抽题模式。"
+    )
+    return HttpResponse(
+        message,
+        status=409,
+        content_type="text/plain; charset=utf-8",
+    )
 
 
 def _publish_plan_datetime(value):

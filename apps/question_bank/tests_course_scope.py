@@ -11,7 +11,13 @@ from django.urls import reverse
 from apps.accounts.forms import ClassGroupUpdateForm
 from apps.accounts.models import Course, CourseEnrollment, ClassGroup, User
 from apps.audit.models import AuditLog
-from apps.experiments.models import Experiment, ExperimentStudent
+from apps.experiments.models import Experiment, ExperimentSamplingKC, ExperimentStudent
+from apps.experiments.publication_services import (
+    commit_publish_plan,
+    generate_preview,
+    get_or_create_publish_plan,
+    save_plan_selection,
+)
 from apps.experiments.services import assign_students, publish_experiment, sync_experiment_questions
 
 from .models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
@@ -286,14 +292,17 @@ class CourseQuestionBankScopeTests(TestCase):
         self.assertContains(preview, "2+2=?")
         self.client.post(question_url, {"action": "confirm"})
 
+        Concept.objects.create(course=self.course_a, code="KC1", name="加法")
+        Concept.objects.create(course=self.course_a, code="KC2", name="整数")
+
         kc_url = reverse("courses:kc_import", args=[self.course_a.pk, bank.pk])
         kc_file = SimpleUploadedFile(
             "kcs.csv",
-            "sequence,primary_kc,secondary_kcs\n1,加法,整数\n".encode(),
+            "题目序号,一级知识点,二级知识点,三级知识点\n1,加法,KC2,\n".encode("utf-8-sig"),
             content_type="text/csv",
         )
         preview = self.client.post(kc_url, {"file": kc_file})
-        self.assertContains(preview, "加法")
+        self.assertContains(preview, "Question-KC tree v2")
         response = self.client.post(kc_url, {"action": "confirm"})
 
         self.assertRedirects(response, reverse("courses:bank_detail", args=[self.course_a.pk, bank.pk]))
@@ -324,8 +333,9 @@ class CourseQuestionBankScopeTests(TestCase):
         self.assertContains(response, "基础运算")
         self.assertContains(response, "第一章：1 题")
         self.assertContains(response, "第二章：1 题")
-        self.assertContains(response, "2 个题库")
         self.assertContains(response, "2 道题")
+        self.assertContains(response, concept.code)
+        self.assertContains(response, "一级 2 · 二级 0 · 三级 0")
 
     def test_course_bank_list_form_control_ids_are_unique(self):
         Concept.objects.create(course=self.course_a, name="基础运算")
@@ -343,6 +353,7 @@ class CourseQuestionBankScopeTests(TestCase):
         bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="当前章节")
         other_bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="其他章节")
         shared = Concept.objects.create(course=self.course_a, name="共享知识点")
+        secondary_root = Concept.objects.create(course=self.course_a, name="次级结构根")
         other_only = Concept.objects.create(course=self.course_a, name="其他章节知识点")
         primary_question = Question.objects.create(
             bank=bank,
@@ -366,7 +377,15 @@ class CourseQuestionBankScopeTests(TestCase):
             correct_answer="C",
         )
         QuestionConcept.objects.create(question=primary_question, concept=shared, is_primary=True)
-        QuestionConcept.objects.create(question=secondary_question, concept=shared, is_primary=False)
+        secondary_root_link = QuestionConcept.objects.create(
+            question=secondary_question, concept=secondary_root, is_primary=True
+        )
+        QuestionConcept.objects.create(
+            question=secondary_question,
+            concept=shared,
+            is_primary=False,
+            parent_link=secondary_root_link,
+        )
         QuestionConcept.objects.create(question=outside_question, concept=other_only, is_primary=True)
 
         response = self.client.get(reverse("courses:bank_detail", args=[self.course_a.pk, bank.pk]))
@@ -382,9 +401,10 @@ class CourseQuestionBankScopeTests(TestCase):
     def test_course_kc_create_rename_and_safe_delete_are_audited(self):
         self.client.post(
             reverse("courses:concept_create", args=[self.course_a.pk]),
-            {"name": "  基础运算  "},
+            {"sequence": "1", "name": "  基础运算  "},
         )
         concept = Concept.objects.get(course=self.course_a, normalized_name="基础运算")
+        self.assertEqual(concept.code, "KC1")
         self.assertEqual(concept.name, "基础运算")
         self.assertTrue(AuditLog.objects.filter(action="concept.create", object_id=str(concept.pk)).exists())
 
@@ -404,6 +424,31 @@ class CourseQuestionBankScopeTests(TestCase):
         self.assertFalse(Concept.objects.filter(pk=concept.pk).exists())
         self.assertTrue(AuditLog.objects.filter(action="concept.delete", object_id=str(concept.pk)).exists())
 
+    def test_course_kc_create_and_edit_keep_nodes_flat(self):
+        root = Concept.objects.create(course=self.course_a, name="数学")
+        self.client.post(
+            reverse("courses:concept_create", args=[self.course_a.pk]),
+            {
+                "sequence": "2",
+                "name": "代数",
+                "description": "方程与结构",
+                "parent": root.pk,
+            },
+        )
+        branch = Concept.objects.get(course=self.course_a, name="代数")
+        self.assertIsNone(branch.parent)
+        self.assertEqual(branch.description, "方程与结构")
+
+        self.client.post(
+            reverse("courses:concept_rename", args=[self.course_a.pk, root.pk]),
+            {"name": "数学基础", "description": "稳定节点"},
+        )
+
+        root.refresh_from_db()
+        self.assertIsNone(root.parent)
+        self.assertEqual(root.name, "数学基础")
+        self.assertEqual(root.description, "稳定节点")
+
     def test_referenced_or_duplicate_course_kc_changes_are_rejected(self):
         bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="题库")
         question = Question.objects.create(
@@ -417,11 +462,30 @@ class CourseQuestionBankScopeTests(TestCase):
         duplicate = Concept.objects.create(course=self.course_a, name="重复名称")
         QuestionConcept.objects.create(question=question, concept=referenced, is_primary=True)
 
+        create_child = self.client.post(
+            reverse("courses:concept_create", args=[self.course_a.pk]),
+            {"sequence": "3", "name": "非法子节点", "parent": referenced.pk},
+            follow=True,
+        )
+        self.assertTrue(
+            Concept.objects.filter(course=self.course_a, name="非法子节点").exists()
+        )
+
+        movable = Concept.objects.create(course=self.course_a, name="待移动")
+        move_under_referenced = self.client.post(
+            reverse("courses:concept_rename", args=[self.course_a.pk, movable.pk]),
+            {"name": movable.name, "parent": referenced.pk},
+            follow=True,
+        )
+        movable.refresh_from_db()
+        self.assertIsNone(movable.parent)
+
         delete = self.client.post(
             reverse("courses:concept_delete", args=[self.course_a.pk, referenced.pk])
         )
         self.assertRedirects(delete, reverse("courses:banks", args=[self.course_a.pk]))
-        self.assertTrue(Concept.objects.filter(pk=referenced.pk).exists())
+        referenced.refresh_from_db()
+        self.assertEqual(referenced.status, Concept.Status.ARCHIVED)
 
         rename = self.client.post(
             reverse("courses:concept_rename", args=[self.course_a.pk, referenced.pk]),
@@ -440,7 +504,7 @@ class CourseQuestionBankScopeTests(TestCase):
         ):
             create_response = self.client.post(
                 reverse("courses:concept_create", args=[self.course_a.pk]),
-                {"name": "并发名称"},
+                {"sequence": "2", "name": "并发名称"},
                 follow=True,
             )
             rename_response = self.client.post(
@@ -489,8 +553,16 @@ class CourseQuestionBankScopeTests(TestCase):
         page = self.client.get(url)
         self.assertContains(page, 'name="primary_concept"')
         self.assertContains(page, 'name="secondary_concepts"')
-        self.assertContains(page, 'data-concept-picker')
-        self.assertContains(page, reverse("courses:concept_search", args=[self.course_a.pk]))
+        self.assertContains(page, 'id="id_kc_mapping_json"')
+        self.assertContains(page, 'id="kc-tree-editor"')
+        self.assertContains(page, 'id="add-kc-level-two"')
+        self.assertContains(page, 'data-action="add-level-three"')
+        self.assertContains(page, 'id="focus-kc-structure"')
+        self.assertContains(page, 'data-icon="eye"')
+        self.assertContains(page, 'data-icon="trash"')
+        self.assertNotContains(page, 'id="add-kc-node"')
+        self.assertNotContains(page, 'data-field="parent"')
+        self.assertNotContains(page, '添加二/三级 KC')
 
         response = self.client.post(
             url,
@@ -570,7 +642,7 @@ class CourseQuestionBankScopeTests(TestCase):
         question.refresh_from_db()
         self.assertEqual(question.text, "保持原题目")
 
-    def test_question_edit_allows_empty_primary_with_secondary_course_kcs(self):
+    def test_question_edit_rejects_empty_primary_for_an_active_question(self):
         bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="章节题库")
         question = Question.objects.create(
             bank=bank,
@@ -597,11 +669,12 @@ class CourseQuestionBankScopeTests(TestCase):
             },
         )
 
-        self.assertRedirects(response, reverse("courses:bank_detail", args=[self.course_a.pk, bank.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "可用题目必须选择主 KC")
         question.refresh_from_db()
-        self.assertEqual(question.text, "不应保存")
-        self.assertIsNone(question.primary_concept)
-        self.assertTrue(question.concept_links.filter(concept=secondary, is_primary=False).exists())
+        self.assertEqual(question.text, "保持原题目")
+        self.assertEqual(question.primary_concept, existing)
+        self.assertFalse(question.concept_links.filter(concept=secondary).exists())
 
     def test_class_and_kc_renames_do_not_rewrite_published_snapshots(self):
         class_group = ClassGroup.objects.create(
@@ -629,10 +702,28 @@ class CourseQuestionBankScopeTests(TestCase):
             created_by=self.teacher,
             question_bank=bank,
             name="快照实验",
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=1,
         )
+        ExperimentSamplingKC.objects.create(experiment=experiment, concept=concept)
         sync_experiment_questions(experiment)
-        assign_students(experiment, [self.student])
-        version = publish_experiment(experiment, self.teacher)
+        plan = get_or_create_publish_plan(experiment, self.teacher)
+        plan = save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[class_group.pk],
+            exclusions_by_class={},
+        )
+        generate_preview(
+            plan, self.teacher, expected_revision=plan.plan_revision
+        )
+        plan.refresh_from_db()
+        commit_publish_plan(
+            plan, self.teacher, expected_revision=plan.plan_revision
+        )
+        experiment.refresh_from_db()
+        version = experiment.frozen_release_snapshot
 
         self.client.post(
             reverse("courses:concept_rename", args=[self.course_a.pk, concept.pk]),

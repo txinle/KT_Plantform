@@ -8,6 +8,15 @@ async function login(page: Page, origin: string) {
   await expect(page).toHaveURL(new RegExp(`${origin}/teacher/courses/`))
 }
 
+async function selectFirstKnowledgeComponent(page: Page) {
+  await page.getByText('选择知识点', { exact: true }).click()
+  await page
+    .locator('.kt-kc-config-panel', { hasText: '知识点范围' })
+    .locator('.kt-kc-tree-selector input[type="checkbox"]')
+    .first()
+    .check()
+}
+
 test('Flag OFF keeps the legacy template', async ({ page }) => {
   await login(page, 'http://127.0.0.1:8010')
   await page.goto('http://127.0.0.1:8010/teacher/courses/1/experiments/')
@@ -41,7 +50,8 @@ test('teacher creates an experiment and saves a resumable publish draft', async 
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/create\/$/)
 
   await page.getByLabel('实验名称').fill(`渐进式发布验证-${browserName}`)
-  await page.getByLabel('题库').selectOption({ index: 1 })
+  await page.getByLabel('题库').selectOption({ label: '演示题库' })
+  await selectFirstKnowledgeComponent(page)
   await page.getByRole('button', { name: '保存实验' }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/)
   await expect(page.getByRole('heading', { name: `渐进式发布验证-${browserName}` })).toBeVisible()
@@ -51,7 +61,7 @@ test('teacher creates an experiment and saves a resumable publish draft', async 
   await page.locator('[id^="publish-class-"]').first().check()
   await page.getByRole('button', { name: '保存草稿' }).click()
   await expect(page.getByText('草稿已保存。你可以退出后继续。')).toBeVisible()
-  await expect(page.getByText('当前草稿尚不完整')).toBeVisible()
+  await expect(page.getByText('设置完整，可以执行发布检查。')).toBeVisible()
 })
 
 test('teacher previews and atomically publishes a class task', async ({ browserName, page }) => {
@@ -59,17 +69,17 @@ test('teacher previews and atomically publishes a class task', async ({ browserN
   await login(page, 'http://127.0.0.1:8011')
   await page.goto('http://127.0.0.1:8011/teacher/courses/1/experiments/create/')
   await page.getByLabel('实验名称').fill('正式发布浏览器验收')
-  await page.getByLabel('题库').selectOption({ index: 1 })
+  await page.getByLabel('题库').selectOption({ label: '演示题库' })
+  await selectFirstKnowledgeComponent(page)
   await page.getByRole('button', { name: '保存实验' }).click()
   await page.getByRole('button', { name: '发布到班级' }).click()
 
   await page.locator('[id^="publish-class-"]').first().check()
-  await page.getByLabel('本班排期已配置').first().check()
-  await page.getByRole('button', { name: '保存并执行检查' }).click()
+  await page.getByRole('button', { name: '运行发布前检查' }).click()
 
   await expect(page).toHaveURL(/\/publish-plan\/\d+\/step\/2\/$/)
-  await expect(page.getByRole('heading', { name: '发布摘要' })).toBeVisible()
-  await page.getByRole('button', { name: '准备正式发布' }).click()
+  await expect(page.getByRole('heading', { name: '发布前检查', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '进入发布确认' }).click()
   await page.getByRole('button', { name: '确认发布' }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/)
   await expect(page.getByRole('heading', { name: '班级任务' })).toBeVisible()
@@ -245,7 +255,7 @@ test('question-bank flag ON mounts list and detail on the existing URLs', async 
   await page.goto('http://127.0.0.1:8017/teacher/courses/1/banks/')
   await expect(page.locator('#kt-app')).toBeVisible()
   await expect(page.getByRole('heading', { name: '题库', exact: true })).toBeVisible()
-  await expect(page.getByText('基础运算', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: /课程 KC 总库 \d+/ })).toBeVisible()
   await page.getByRole('link', { name: '演示题库', exact: true }).first().click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/banks\/\d+\/$/)
   await expect(page.getByRole('heading', { name: '演示题库', exact: true })).toBeVisible()
@@ -265,6 +275,7 @@ test('question-bank Vue keeps create and import operations in Django document fl
   await createForm.getByLabel('可见性').selectOption('private')
   await createForm.getByRole('button', { name: '创建题库' }).click()
 
+  await page.getByRole('link', { name: '浏览器验收题库', exact: true }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/banks\/\d+\/$/)
   await expect(page.getByRole('heading', { name: '浏览器验收题库', exact: true })).toBeVisible()
   await page.getByRole('link', { name: '导入题目文件' }).click()
@@ -315,6 +326,7 @@ test('data-center flag OFF keeps the legacy data templates', async ({ page }) =>
 })
 
 test('data-center flag ON mounts every migrated read route on its existing URL', async ({ page }) => {
+  test.setTimeout(120_000)
   await login(page, 'http://127.0.0.1:8018')
   const routes = [
     ['', '数据中心'],

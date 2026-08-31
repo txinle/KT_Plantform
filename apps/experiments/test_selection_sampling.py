@@ -130,7 +130,7 @@ class ExperimentQuotaFormTests(TestCase):
             2,
         )
 
-    def test_course_create_view_saves_submitted_quota_values(self):
+    def test_course_create_view_rejects_new_legacy_quota_configuration(self):
         course = Course.objects.create(
             owner=self.teacher,
             name="配额课程",
@@ -143,13 +143,9 @@ class ExperimentQuotaFormTests(TestCase):
 
         response = self.client.post(reverse("courses:experiment_create", args=[course.pk]), data)
 
-        self.assertEqual(response.status_code, 302)
-        experiment = Experiment.objects.get(name="配额实验")
-        self.assertEqual(experiment.course_id, course.pk)
-        self.assertEqual(
-            dict(experiment.question_quotas.values_list("question_type", "amount"))[Question.Type.FILL_BLANK],
-            2,
-        )
+        self.assertEqual(response.status_code, 409)
+        self.assertContains(response, "不能创建新的 all/type_quota", status_code=409)
+        self.assertFalse(Experiment.objects.filter(name="配额实验").exists())
 
 
 class QuotaPublishingTests(TestCase):

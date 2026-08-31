@@ -79,7 +79,7 @@ onMounted(() => load())
               <span class="kt-cell-note">{{ experiment.description || '无说明' }}</span>
             </td>
             <td>{{ experiment.question_bank.name }}</td>
-            <td>{{ experiment.selection_mode_label }}</td>
+            <td>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}</td>
             <td><StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" /></td>
             <td>{{ new Date(experiment.updated_at).toLocaleString('zh-CN') }}</td>
           </tr>
@@ -97,7 +97,7 @@ onMounted(() => load())
         <p>{{ experiment.description || '无说明' }}</p>
         <dl>
           <div><dt>题库</dt><dd>{{ experiment.question_bank.name }}</dd></div>
-          <div><dt>选题</dt><dd>{{ experiment.selection_mode_label }}</dd></div>
+          <div><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}</dd></div>
         </dl>
       </li>
     </MobileCardList>

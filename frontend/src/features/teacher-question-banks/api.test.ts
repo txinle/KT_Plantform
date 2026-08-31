@@ -4,11 +4,16 @@ import { createTeacherQuestionBankApi } from './api'
 
 describe('teacher question-bank API paths', () => {
   it('uses the scoped bank, question, and KC collection endpoints', async () => {
-    const client = { get: vi.fn().mockResolvedValue({}) }
+    const client = { get: vi.fn().mockResolvedValue({}), mutate: vi.fn().mockResolvedValue({}), mutateForm: vi.fn().mockResolvedValue({}) }
     const api = createTeacherQuestionBankApi(client as never)
 
     await api.list(7, { page: 2, query: '代数' })
+    await api.createBank(7, { name: '题库', description: '', visibility: 'private' })
     await api.courseConcepts(7, { page: 3, query: '函数' })
+    await api.createCourseConcept(7, { sequence: 8, name: '图论', description: '' })
+    const file = new File(['序号,知识点名称\n1,图论'], 'course-kcs.csv')
+    await api.previewCourseConceptImport(7, file)
+    await api.confirmCourseConceptImport(7, 'batch-1')
     await api.detail(7, 11)
     await api.questions(7, 11, {
       page: 2,
@@ -37,6 +42,23 @@ describe('teacher question-bank API paths', () => {
     expect(client.get).toHaveBeenNthCalledWith(
       5,
       '/api/v1/teacher/courses/7/banks/11/concepts/?page=4&q=%E6%A6%82%E7%8E%87',
+    )
+    expect(client.mutate).toHaveBeenNthCalledWith(1, '/api/v1/teacher/courses/7/banks/', {
+      method: 'POST',
+      body: { name: '题库', description: '', visibility: 'private' },
+    })
+    expect(client.mutate).toHaveBeenNthCalledWith(2, '/api/v1/teacher/courses/7/concepts/', {
+      method: 'POST',
+      body: { sequence: 8, name: '图论', description: '' },
+    })
+    expect(client.mutateForm).toHaveBeenCalledWith(
+      '/api/v1/teacher/courses/7/concepts/import/preview/',
+      { method: 'POST', body: expect.any(FormData) },
+    )
+    expect(client.mutate).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/teacher/courses/7/concepts/import/confirm/',
+      { method: 'POST', body: { batch_id: 'batch-1' } },
     )
   })
 })

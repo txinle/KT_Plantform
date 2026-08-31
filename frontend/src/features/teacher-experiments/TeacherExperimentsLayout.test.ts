@@ -27,7 +27,7 @@ vi.mock('@/app/bootstrap', () => ({
 import TeacherExperimentsLayout from './TeacherExperimentsLayout.vue'
 
 describe('TeacherExperimentsLayout', () => {
-  it('renders the compact experiment shell with seven real navigation destinations', async () => {
+  it('renders the reference teacher shell with seven real navigation destinations', async () => {
     mocks.get.mockResolvedValue({ id: 7, name: '研究方法', code: 'RM101', term: '2026 秋' })
 
     const wrapper = mount(TeacherExperimentsLayout)
@@ -35,10 +35,12 @@ describe('TeacherExperimentsLayout', () => {
 
     const links = wrapper.get('[aria-label="全局导航"]').findAll('a')
     expect(links.map((link) => link.text())).toEqual(['我的课程', '概览', '题库', '班级', '实验', '数据', '设置'])
-    expect(wrapper.get('header.kt-experiment-shell-header').text()).toContain('KT Data Lab')
-    expect(wrapper.get('.kt-experiment-shell-header [aria-current="page"]').text()).toBe('实验')
-    expect(wrapper.find('.kt-course-bar').exists()).toBe(false)
-    expect(wrapper.get('.kt-experiment-header-user').text()).toContain('李')
+    expect(wrapper.get('header.kt-app-header').text()).toContain('KT Data Lab')
+    expect(wrapper.get('header.kt-app-header [aria-current="page"]').text()).toBe('实验')
+    expect(wrapper.get('.kt-course-context').text()).toContain('研究方法')
+    expect(wrapper.get('.kt-course-context').text()).toContain('RM101 · 2026 秋')
+    expect(wrapper.get('.kt-user-name').text()).toContain('李老师')
+    expect(wrapper.get('form[action="/logout/"] button').text()).toBe('退出')
     expect(wrapper.find('.kt-teacher-experiments').exists()).toBe(true)
 
     expect(styles).not.toMatch(/(?:^|[\n,])\s*\.kt-(?!teacher-experiments\b)/)

@@ -3,12 +3,20 @@
 {% block title %}导入 KC 对应 | {{ bank.name }}{% endblock %}
 {% block content %}
 <header class="page-header"><div class="page-header-copy"><h1 class="page-title">导入 KC 对应表</h1><p class="page-subtitle">只更新已有题目的知识点关联，不会创建或修改题干、选项和答案。</p></div></header>
-<ol class="step-list" aria-label="导入进度"><li class="{% if not preview %}active{% endif %}">上传文件</li><li class="{% if preview %}active{% endif %}">校验预览</li><li>确认导入</li></ol>
+<ol class="step-list" aria-label="导入进度"><li class="{% if not preview and not preview_v2 and not preview_tree %}active{% endif %}">上传文件</li><li class="{% if preview or preview_v2 or preview_tree %}active{% endif %}">校验预览</li><li>确认导入</li></ol>
 <div class="card"><div class="card-body p-md-4">
-  <div class="notice-panel mb-4"><strong>中文列名与英文别名对照：</strong><code>题目序号 / sequence</code>、<code>主知识点 / primary_kc</code>、<code>次知识点 / secondary_kcs</code>。题目序号必须对应当前题库已有题目；多个次知识点用中文或英文分号分隔，新名称会创建为当前课程 KC。<a class="btn btn-sm btn-outline-primary ms-2" href="{% url 'question_bank:kc_import_template' %}">下载 KC CSV 示例</a></div>
+  <div class="notice-panel mb-4"><strong>唯一新标准为四列 KC 对应表：</strong><code>题目序号</code>、<code>一级知识点</code>、<code>二级知识点</code>、<code>三级知识点</code>。三级关系必须使用“二级KC&gt;三级KC”；名称和 kc_code 均可识别。旧主/次 KC 与三表工作簿仅作为 legacy 输入。<a class="btn btn-sm btn-outline-primary ms-2" href="{% url 'question_bank:kc_import_template' %}">下载四列 CSV 模板</a></div>
   {% include 'components/error_summary.html' with form=form %}
-  {% if not preview %}
+  {% if not preview and not preview_v2 and not preview_tree %}
     <form method="post" enctype="multipart/form-data" novalidate>{% csrf_token %}{% include 'components/form_field.html' with field=form.file %}<button class="btn btn-primary" type="submit">校验并生成预览</button></form>
+  {% elif preview_tree %}
+    <div class="d-flex flex-wrap justify-content-between gap-3 mb-4"><div><strong>{{ upload_name }}</strong><div class="cell-meta">校验通过：{{ preview_tree.trees|length }} 道题；每行将完整替换该题当前 KC 树。</div></div><span class="status-badge status-success">Question-KC tree v2</span></div>
+    <div class="table-shell mb-4"><table class="table"><thead><tr><th>题目序号</th><th>一级 KC</th><th>规范化节点</th></tr></thead><tbody>{% for tree in preview_tree.trees %}<tr><td class="mono">{{ tree.sequence }}</td><td class="mono">{{ tree.root_kc_code }}</td><td>{% for node in tree.nodes %}{% if not forloop.first %}；{% endif %}{% if node.parent_kc_code %}{{ node.parent_kc_code }} → {% endif %}{{ node.kc_code }}{% endfor %}</td></tr>{% endfor %}</tbody></table></div>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="confirm"><div class="notice-panel mb-3">确认后完整替换以上题目的映射；未列出的题目保持不变，既有发布快照不变。</div><button class="btn btn-primary" type="submit">确认导入 KC 对应</button></form>
+  {% elif preview_v2 %}
+    <div class="d-flex flex-wrap justify-content-between gap-3 mb-4"><div><strong>{{ upload_name }}</strong><div class="cell-meta">校验通过：{{ preview_v2.nodes|length }} 个 KC，{{ preview_v2.roots|length }} 道题，{{ preview_v2.relations|length }} 条关系。</div></div><span class="status-badge status-success">KC v2</span></div>
+    <div class="table-shell mb-4"><table class="table"><thead><tr><th>题目稳定代码</th><th>主 KC 代码</th></tr></thead><tbody>{% for item in preview_v2.roots %}<tr><td class="mono">{{ item.stable_question_code }}</td><td class="mono">{{ item.primary_kc_code }}</td></tr>{% endfor %}</tbody></table></div>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="confirm"><div class="notice-panel mb-3">这是 legacy 三表输入。只校验课程总库中已有 KC，并完整替换以上题目的三级映射；不会创建或修改课程 KC。</div><button class="btn btn-primary" type="submit">确认导入 legacy 工作簿</button></form>
   {% else %}
     <div class="d-flex flex-wrap justify-content-between gap-3 mb-4"><div><strong>{{ upload_name }}</strong><div class="cell-meta">校验通过，可预览 {{ preview|length }} 条对应关系；错误 0 条。</div></div><span class="status-badge status-success">校验通过</span></div>
     <div class="table-shell mb-4"><table class="table"><thead><tr><th scope="col">题目序号</th><th scope="col">主 KC</th><th scope="col">次 KC</th></tr></thead><tbody>{% for item in preview %}<tr><td class="mono">{{ item.sequence }}</td><td>{{ item.primary }}</td><td>{{ item.secondary|join:'；'|default:'无' }}</td></tr>{% endfor %}</tbody></table></div>

@@ -1,4 +1,5 @@
-from django.db import IntegrityError
+from decimal import Decimal
+
 from django.test import TestCase
 
 from apps.accounts.models import User
@@ -156,6 +157,77 @@ class QuestionTypeEditingTests(TestCase):
         self.assertEqual(imported[0].accepted_answers, ["KT", "知识追踪"])
         self.assertIs(imported[1].correct_answer, False)
 
+    def test_import_persists_explanation_and_teacher_difficulty_from_normalized_headers(self):
+        rows = parse_question_rows(
+            [
+                {
+                    "序号": 2,
+                    "题目": "2 + 2 等于多少？",
+                    "题型": "单选题",
+                    "选项A": "3",
+                    "选项B": "4",
+                    "答案": "B",
+                    "解析 ": "  2 与 2 相加得到 4。  ",
+                    "难度": "0.350",
+                }
+            ]
+        )
+
+        imported = import_questions(self.bank, rows)
+
+        self.assertEqual(imported[0].explanation, "2 与 2 相加得到 4。")
+        self.assertEqual(imported[0].teacher_difficulty, Decimal("0.350"))
+
+    def test_import_keeps_blank_difficulty_unset(self):
+        rows = parse_question_rows(
+            [{"序号": 2, "题目": "判断", "题型": "判断题", "答案": "正确", "难度": ""}]
+        )
+
+        imported = import_questions(self.bank, rows)
+
+        self.assertIsNone(imported[0].teacher_difficulty)
+
+    def test_import_rejects_invalid_teacher_difficulty(self):
+        for value in ("-0.001", "1.001", "0.1234", "NaN", "Infinity", "35%", "困难"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError,
+                "难度必须为 0 到 1 之间且最多三位小数",
+            ):
+                parse_question_rows(
+                    [{"序号": 2, "题目": "判断", "题型": "判断题", "答案": "正确", "难度": value}]
+                )
+
+    def test_blank_sequences_are_generated_after_bank_and_explicit_maximum_in_file_order(self):
+        rows = parse_question_rows(
+            [
+                {"序号": "", "题目": "第一题", "题型": "判断题", "答案": "正确"},
+                {"序号": "20", "题目": "第二题", "题型": "判断题", "答案": "正确"},
+                {"序号": "", "题目": "第三题", "题型": "判断题", "答案": "错误"},
+            ],
+            sequence_floor=10,
+        )
+
+        self.assertEqual([row.sequence for row in rows], [21, 20, 22])
+
+    def test_multiple_choice_can_read_additional_correct_keys_from_accepted_answer_column(self):
+        rows = parse_question_rows(
+            [
+                {
+                    "序号": "",
+                    "题目": "请选择两项",
+                    "题型": "多选题",
+                    "选项A": "甲",
+                    "选项B": "乙",
+                    "选项C": "丙",
+                    "答案": "A",
+                    "可接受答案": "C",
+                }
+            ]
+        )
+
+        self.assertEqual(rows[0].answer, ["A", "C"])
+        self.assertEqual(rows[0].accepted_answers, [])
+
     def test_import_rolls_back_the_entire_new_type_batch_on_a_late_failure(self):
         rows = [
             ParsedQuestion(
@@ -174,7 +246,7 @@ class QuestionTypeEditingTests(TestCase):
             ),
         ]
 
-        with self.assertRaises(IntegrityError):
+        with self.assertRaisesRegex(ValueError, "导入批次包含重复序号"):
             import_questions(self.bank, rows)
 
         self.assertEqual(self.bank.questions.count(), 1)

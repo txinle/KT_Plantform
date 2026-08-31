@@ -21,7 +21,11 @@ from .models import (
     ExperimentQuestion,
     ExperimentStudent,
 )
-from .services import assign_students, publish_experiment, save_participant_rules
+from .services import (
+    _publish_legacy_experiment as publish_experiment,
+    assign_students,
+    save_participant_rules,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -419,7 +423,7 @@ class ParticipantRuleSaveServiceTests(TestCase):
             },
         )
 
-    def test_save_locks_experiment_then_course_then_classes(self):
+    def test_save_locks_course_then_experiment_then_classes(self):
         from . import services
 
         lock_order = []
@@ -454,9 +458,9 @@ class ParticipantRuleSaveServiceTests(TestCase):
         ):
             save_participant_rules(self.experiment, [self.class_a], [], [])
 
-        self.assertEqual(lock_order[:3], ["experiment", "course", "class"])
+        self.assertEqual(lock_order[:3], ["course", "experiment", "class"])
 
-    def test_assign_students_locks_experiment_then_course_then_classes(self):
+    def test_assign_students_locks_course_then_experiment_then_classes(self):
         from . import services
 
         lock_order = []
@@ -491,7 +495,7 @@ class ParticipantRuleSaveServiceTests(TestCase):
         ):
             assign_students(self.experiment, [self.student_a1])
 
-        self.assertEqual(lock_order[:3], ["experiment", "course", "class"])
+        self.assertEqual(lock_order[:3], ["course", "experiment", "class"])
 
     def test_assign_students_rechecks_a_stale_draft_before_replacing_roster(self):
         save_participant_rules(self.experiment, [self.class_a], [], [])
@@ -1206,9 +1210,9 @@ class ParticipantRuleDemoSeedTests(TestCase):
         task = experiment.class_tasks.get()
         self.assertEqual(task.class_group.name, "认知追踪实验班")
         self.assertEqual(task.participant_snapshots.count(), 3)
-        self.assertEqual(task.release_snapshot.question_snapshots.count(), 4)
+        self.assertEqual(task.release_snapshot.question_snapshots.count(), 93)
 
-    def test_seed_demo_locks_experiment_course_and_class_before_enrollment_write(self):
+    def test_seed_demo_locks_course_experiment_and_class_before_enrollment_write(self):
         lock_order = []
         original_experiment_lock = Experiment.objects.select_for_update
         original_course_lock = Course.objects.select_for_update
@@ -1250,5 +1254,5 @@ class ParticipantRuleDemoSeedTests(TestCase):
         enrollment_index = lock_order.index("enrollment")
         self.assertEqual(
             lock_order[enrollment_index - 3 : enrollment_index + 1],
-            ["experiment", "course", "class", "enrollment"],
+            ["course", "experiment", "class", "enrollment"],
         )

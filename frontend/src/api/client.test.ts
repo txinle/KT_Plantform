@@ -53,6 +53,25 @@ describe('API client', () => {
     )
   })
 
+  it('uploads multipart mutations without forcing a JSON content type', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ batch_id: 'batch-1' }))
+    const client = createApiClient({ fetchImpl, getCsrfToken: () => 'csrf-token' })
+    const body = new FormData()
+    body.append('file', new File(['序号,知识点名称\n1,数学基础'], 'course-kcs.csv'))
+
+    await client.mutateForm('/api/v1/import/preview/', { method: 'POST', body })
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/v1/import/preview/',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'same-origin',
+        body,
+        headers: { Accept: 'application/json', 'X-CSRFToken': 'csrf-token' },
+      }),
+    )
+  })
+
   it('never retries an uncertain mutation and refreshes authoritative state', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('network'))
     const refresh = vi.fn().mockResolvedValue({ status: 'saved' })

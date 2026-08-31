@@ -76,7 +76,7 @@ class CourseWorkspaceScopeTests(TestCase):
         self.assertEqual(self.client.get(bank_url).status_code, 404)
         self.assertEqual(self.client.get(class_url).status_code, 404)
 
-    def test_experiment_create_rejects_bank_from_another_course(self):
+    def test_legacy_experiment_create_is_read_only(self):
         response = self.client.post(
             reverse("courses:experiment_create", args=[self.course_a.pk]),
             {
@@ -90,8 +90,8 @@ class CourseWorkspaceScopeTests(TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "选择一个有效的选项")
+        self.assertEqual(response.status_code, 409)
+        self.assertContains(response, "请使用新版实验设计器", status_code=409)
         self.assertFalse(Experiment.objects.filter(name="越界实验").exists())
 
     def test_experiment_assignment_rejects_student_from_another_course(self):
@@ -112,7 +112,7 @@ class CourseWorkspaceScopeTests(TestCase):
         )
         self.assertFalse(ExperimentStudent.objects.filter(experiment=experiment).exists())
 
-    def test_experiment_edit_cannot_switch_to_another_course_bank(self):
+    def test_legacy_experiment_edit_is_read_only(self):
         experiment = Experiment.objects.create(
             course=self.course_a,
             created_by=self.teacher,
@@ -133,7 +133,7 @@ class CourseWorkspaceScopeTests(TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "选择一个有效的选项")
+        self.assertEqual(response.status_code, 409)
+        self.assertContains(response, "请在新版实验设计器中显式转换", status_code=409)
         experiment.refresh_from_db()
         self.assertEqual(experiment.question_bank, self.bank_a)

@@ -38,7 +38,6 @@ const experiment = ref<TeacherExperiment>()
 const classes = ref<ClassOption[]>([])
 const participants = ref<Participant[]>([])
 const selected = reactive<Record<number, boolean>>({})
-const scheduleConfigured = reactive<Record<number, boolean>>({})
 const scheduleMode = reactive<Record<number, 'default' | 'custom'>>({})
 const classOpensAt = reactive<Record<number, string>>({})
 const classClosesAt = reactive<Record<number, string>>({})
@@ -51,7 +50,7 @@ const confirmCommit = ref(false)
 const scheduleEditClassId = ref<number>()
 const rosterExpanded = ref(false)
 const courseName = computed(() => course?.value?.name || '课程')
-const configuredScheduleCount = computed(() => review.value?.plan.classes.filter((row) => row.schedule_configured).length ?? 0)
+const configuredScheduleCount = computed(() => review.value?.plan.classes.length ?? 0)
 
 function dateTimeLocal(value: string | null | undefined) {
   if (!value) return ''
@@ -70,14 +69,12 @@ function hydratePlan(nextPlan: PublishPlan) {
   defaultSchedule.closes_at = dateTimeLocal(nextPlan.default_closes_at)
   for (const option of classes.value) {
     selected[option.id] = false
-    scheduleConfigured[option.id] = false
     scheduleMode[option.id] = 'default'
     classOpensAt[option.id] = ''
     classClosesAt[option.id] = ''
   }
   for (const row of nextPlan.classes) {
     selected[row.class_id] = true
-    scheduleConfigured[row.class_id] = row.schedule_configured
     scheduleMode[row.class_id] = row.schedule_mode === 'custom' ? 'custom' : 'default'
     classOpensAt[row.class_id] = dateTimeLocal(row.opens_at)
     classClosesAt[row.class_id] = dateTimeLocal(row.closes_at)
@@ -133,7 +130,7 @@ function setupInput(): PublishPlanSetupInput {
       closes_at: isoOrNull(defaultSchedule.closes_at),
     },
     schedules: selectedClasses
-      .filter((option) => scheduleConfigured[option.id])
+      .filter((option) => scheduleMode[option.id] === 'custom')
       .map((option) => scheduleMode[option.id] === 'custom'
         ? {
             class_id: option.id,
@@ -149,6 +146,14 @@ async function recover(caught: unknown, fallback: string) {
   if (caught instanceof ApiError && caught.code === 'PUBLISH_PLAN_STALE') {
     notice.value = '计划已在其他页面更新，已重新载入最新版本。'
     await load()
+    return
+  }
+  if (caught instanceof ApiError) {
+    const details = Object.values(caught.fields)
+      .flatMap((value) => Array.isArray(value) ? value : [value])
+      .map(String)
+      .filter(Boolean)
+    error.value = details.join('；') || caught.message || fallback
     return
   }
   error.value = caught instanceof Error ? caught.message : fallback
@@ -175,6 +180,10 @@ async function saveDraft(showNotice = true) {
 async function runPreview() {
   const saved = await saveDraft(false)
   if (!saved) return
+  if (saved.blocking_issues.length) {
+    error.value = saved.blocking_issues.map((issue) => issue.message).join('；')
+    return
+  }
   working.value = true
   try {
     await api.preview(planId, saved.plan_revision)
@@ -208,13 +217,12 @@ function exclusionCount(option: ClassOption) {
 
 function scheduleLabel(option: ClassOption) {
   if (!selected[option.id]) return '未选择'
-  if (!scheduleConfigured[option.id]) return '待设置'
   return scheduleMode[option.id] === 'custom' ? '自定义排期' : '沿用批量排期'
 }
 
 function classScheduleTime(option: ClassOption, boundary: 'opens_at' | 'closes_at') {
   if (!selected[option.id]) return null
-  if (scheduleConfigured[option.id] && scheduleMode[option.id] === 'custom') {
+  if (scheduleMode[option.id] === 'custom') {
     return boundary === 'opens_at' ? classOpensAt[option.id] || null : classClosesAt[option.id] || null
   }
   return boundary === 'opens_at'
@@ -225,14 +233,12 @@ function classScheduleTime(option: ClassOption, boundary: 'opens_at' | 'closes_a
 function applyDefaultScheduleToSelected() {
   for (const option of classes.value) {
     if (!selected[option.id]) continue
-    scheduleConfigured[option.id] = true
     scheduleMode[option.id] = 'default'
   }
   scheduleEditClassId.value = undefined
 }
 
 function openScheduleEditor(classId: number) {
-  scheduleConfigured[classId] = true
   scheduleMode[classId] ||= 'default'
   scheduleEditClassId.value = classId
 }
@@ -287,7 +293,8 @@ onMounted(load)
   <Alert v-if="notice" tone="success">{{ notice }}</Alert>
 
   <template v-if="!loading && plan && step === 1">
-    <Alert :tone="plan.setup_status === 'complete' ? 'success' : 'warning'">{{ plan.setup_status === 'complete' ? '设置完整，可以执行发布检查。' : '当前草稿尚不完整，仍可保存并稍后继续。' }}<span v-if="plan.missing_requirements.length">缺少：{{ plan.missing_requirements.join('、') }}</span></Alert>
+    <Alert v-if="plan.blocking_issues.length" tone="danger">{{ plan.blocking_issues.map((issue) => issue.message).join('；') }}</Alert>
+    <Alert v-else :tone="plan.setup_status === 'complete' ? 'success' : 'warning'">{{ plan.setup_status === 'complete' ? '设置完整，可以执行发布检查。' : '当前草稿尚不完整，仍可保存并稍后继续。' }}<span v-if="plan.missing_requirements.length">缺少：{{ plan.missing_requirements.join('、') }}</span></Alert>
 
     <section class="kt-card kt-publish-plan-panel" aria-labelledby="publish-classes">
       <div class="kt-publish-batch-schedule">
@@ -301,8 +308,7 @@ onMounted(load)
 
       <div v-for="option in classes.filter((item) => selected[item.id] && scheduleEditClassId === item.id)" :key="option.id" class="kt-publish-schedule-editor">
         <div><strong>{{ option.academic_year }} {{ option.name }}</strong><span>{{ scheduleLabel(option) }}</span></div>
-        <label class="kt-check-inline"><input v-model="scheduleConfigured[option.id]" type="checkbox">本班排期已配置</label>
-        <template v-if="scheduleConfigured[option.id]"><select v-model="scheduleMode[option.id]" :aria-label="`${option.name}排期方式`"><option value="default">沿用批量排期</option><option value="custom">自定义排期</option></select><div v-if="scheduleMode[option.id] === 'custom'" class="kt-form-grid"><label>开放时间<input v-model="classOpensAt[option.id]" type="datetime-local"></label><label>截止时间<input v-model="classClosesAt[option.id]" type="datetime-local"></label></div></template>
+        <select v-model="scheduleMode[option.id]" :aria-label="`${option.name}排期方式`"><option value="default">沿用批量排期</option><option value="custom">自定义排期</option></select><div v-if="scheduleMode[option.id] === 'custom'" class="kt-form-grid"><label>开放时间<input v-model="classOpensAt[option.id]" type="datetime-local"></label><label>截止时间<input v-model="classClosesAt[option.id]" type="datetime-local"></label></div>
       </div>
 
       <section id="publish-roster" class="kt-publish-roster" aria-labelledby="publish-roster-title">
@@ -331,7 +337,7 @@ onMounted(load)
       <h2 id="confirmation-title">发布确认</h2>
       <p>请确认本次将创建的班级任务；提交后将跳转回实验详情。</p>
       <div class="kt-publish-confirmation-grid">
-        <section class="kt-card"><h3>实验定义</h3><dl v-if="experiment" class="kt-description-list kt-definition-summary__list"><div><dt>题库</dt><dd>{{ experiment.question_bank.name }}</dd></div><div><dt>选题</dt><dd>{{ experiment.selection_mode_label }}</dd></div><div><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div><div><dt>反馈</dt><dd>{{ experiment.feedback_mode_label }}</dd></div><div><dt>总限时</dt><dd>{{ displayLimit(experiment.total_time_limit_minutes, '分钟') }}</dd></div><div><dt>单题限时</dt><dd>{{ displayLimit(experiment.per_question_time_limit_seconds, '秒') }}</dd></div><div><dt>中断续答</dt><dd>{{ experiment.resume_mode_label }}</dd></div><div><dt>作答信心</dt><dd>{{ experiment.confidence_mode_label }}</dd></div></dl></section>
+        <section class="kt-card"><h3>实验定义</h3><dl v-if="experiment" class="kt-description-list kt-definition-summary__list"><div><dt>题库</dt><dd>{{ experiment.question_bank.name }}</dd></div><div><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}<span v-if="experiment.sampling_mode === 'total_count'"> · {{ experiment.sampling_total_count }} 题</span></dd></div><div><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div><div><dt>反馈</dt><dd>{{ experiment.feedback_mode_label }}</dd></div><div><dt>总限时</dt><dd>{{ displayLimit(experiment.total_time_limit_minutes, '分钟') }}</dd></div><div><dt>单题限时</dt><dd>{{ displayLimit(experiment.per_question_time_limit_seconds, '秒') }}</dd></div><div><dt>中断续答</dt><dd>{{ experiment.resume_mode_label }}</dd></div><div><dt>作答信心</dt><dd>{{ experiment.confidence_mode_label }}</dd></div></dl></section>
         <section class="kt-card"><h3>本次班级任务</h3><table class="kt-confirm-task-table"><thead><tr><th>班级</th><th>参与者</th><th>开放时段</th></tr></thead><tbody><tr v-for="row in review.plan.classes" :key="row.class_id"><td>{{ row.academic_year }} {{ row.class_name }}</td><td>{{ row.participant_count }}</td><td>{{ displayDate(row.opens_at) }} — {{ displayDate(row.closes_at) }}</td></tr></tbody></table></section>
       </div>
       <Alert tone="info">确认后将按本次检查过的发布计划创建正式班级任务和参与者快照。</Alert>

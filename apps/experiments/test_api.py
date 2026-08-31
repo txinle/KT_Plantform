@@ -12,7 +12,12 @@ from apps.question_bank.models import (
     QuestionConcept,
 )
 
-from .models import ClassExperimentTask, Experiment, PublishPlan
+from .models import (
+    ClassExperimentTask,
+    Experiment,
+    ExperimentSamplingKC,
+    PublishPlan,
+)
 
 
 class TeacherExperimentApiTests(TestCase):
@@ -114,16 +119,24 @@ class TeacherExperimentApiTests(TestCase):
         self.assertEqual(response.json()["error"]["code"], "PERMISSION_DENIED")
 
     def test_create_accepts_only_teacher_managed_definition_fields(self):
+        concept = Concept.objects.create(course=self.course, code="KC1", name="抽题范围")
         self.client.force_login(self.teacher)
         payload = {
-            "name": "新建配额实验",
+            "name": "新建总题数实验",
             "description": "通过 API 新建",
             "question_bank_id": self.bank.pk,
-            "selection_mode": Experiment.SelectionMode.QUOTA,
-            "question_quotas": [
-                {"question_type": "single_choice", "amount": 2},
-                {"question_type": "multiple_choice", "amount": 1},
-            ],
+            "sampling": {
+                "mode": Experiment.SamplingMode.TOTAL_COUNT,
+                "total_count": 12,
+                "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                "nodes": [
+                    {
+                        "kc_code": concept.code,
+                        "quota": None,
+                        "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                    }
+                ],
+            },
             "ordering_mode": Experiment.Ordering.RANDOM,
             "feedback_mode": Experiment.Feedback.CORRECTNESS,
             "time_mode": Experiment.TimeMode.TOTAL,
@@ -147,11 +160,241 @@ class TeacherExperimentApiTests(TestCase):
         self.assertEqual(created.owner, self.teacher)
         self.assertEqual(created.heartbeat_interval_seconds, 30)
         self.assertEqual(
-            dict(created.question_quotas.values_list("question_type", "amount"))[
-                "single_choice"
-            ],
-            2,
+            list(
+                created.sampling_kcs.values_list(
+                    "concept__code", "quota", "match_scope"
+                )
+            ),
+            [(concept.code, None, Experiment.MatchScope.ANY_LEVEL)],
         )
+        self.assertEqual(
+            response.json()["sampling"]["nodes"][0]["kc_code"], concept.code
+        )
+
+    def test_create_persists_total_count_question_type_quotas(self):
+        concept = Concept.objects.create(course=self.course, code="KC101", name="题型配额范围")
+        self.client.force_login(self.teacher)
+
+        response = self.client.post(
+            self.api_url(),
+            data=json.dumps(
+                {
+                    "name": "题型构成实验",
+                    "question_bank_id": self.bank.pk,
+                    "sampling": {
+                        "mode": Experiment.SamplingMode.TOTAL_COUNT,
+                        "total_count": 3,
+                        "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                        "nodes": [
+                            {
+                                "kc_code": concept.code,
+                                "quota": None,
+                                "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                            }
+                        ],
+                        "type_quotas": [
+                            {"question_type": Question.Type.SINGLE, "amount": 2},
+                            {"question_type": Question.Type.MULTIPLE, "amount": 1},
+                        ],
+                    },
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        experiment = Experiment.objects.get(pk=response.json()["id"])
+        self.assertEqual(
+            list(
+                experiment.question_quotas.filter(amount__gt=0)
+                .order_by("question_type")
+                .values_list("question_type", "amount")
+            ),
+            [(Question.Type.MULTIPLE, 1), (Question.Type.SINGLE, 2)],
+        )
+        self.assertEqual(
+            response.json()["sampling"]["type_quotas"],
+            [
+                {"question_type": Question.Type.SINGLE, "amount": 2},
+                {"question_type": Question.Type.MULTIPLE, "amount": 1},
+            ],
+        )
+
+    def test_create_rejects_invalid_total_count_question_type_quotas(self):
+        concept = Concept.objects.create(course=self.course, code="KC102", name="无效题型范围")
+        self.client.force_login(self.teacher)
+        invalid_cases = {
+            "duplicate": [
+                {"question_type": Question.Type.SINGLE, "amount": 1},
+                {"question_type": Question.Type.SINGLE, "amount": 1},
+            ],
+            "zero": [{"question_type": Question.Type.SINGLE, "amount": 0}],
+            "sum_mismatch": [
+                {"question_type": Question.Type.SINGLE, "amount": 1}
+            ],
+        }
+
+        for suffix, type_quotas in invalid_cases.items():
+            with self.subTest(case=suffix):
+                response = self.client.post(
+                    self.api_url(),
+                    data=json.dumps(
+                        {
+                            "name": f"无效题型配额-{suffix}",
+                            "question_bank_id": self.bank.pk,
+                            "sampling": {
+                                "mode": Experiment.SamplingMode.TOTAL_COUNT,
+                                "total_count": 2,
+                                "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                                "nodes": [
+                                    {
+                                        "kc_code": concept.code,
+                                        "quota": None,
+                                        "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                                    }
+                                ],
+                                "type_quotas": type_quotas,
+                            },
+                        }
+                    ),
+                    content_type="application/json",
+                )
+
+                self.assertEqual(response.status_code, 400, response.content)
+
+    def test_kc_quota_mode_rejects_question_type_quotas(self):
+        concept = Concept.objects.create(course=self.course, code="KC103", name="KC 配额范围")
+        self.client.force_login(self.teacher)
+
+        response = self.client.post(
+            self.api_url(),
+            data=json.dumps(
+                {
+                    "name": "不得组合二维配额",
+                    "question_bank_id": self.bank.pk,
+                    "sampling": {
+                        "mode": Experiment.SamplingMode.KC_QUOTA,
+                        "total_count": None,
+                        "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                        "nodes": [
+                            {
+                                "kc_code": concept.code,
+                                "quota": 1,
+                                "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                            }
+                        ],
+                        "type_quotas": [
+                            {"question_type": Question.Type.SINGLE, "amount": 1}
+                        ],
+                    },
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.content)
+
+    def test_switching_to_kc_quota_without_type_field_clears_saved_type_quotas(self):
+        concept = Concept.objects.create(course=self.course, code="KC106", name="切换范围")
+        self.experiment.sampling_mode = Experiment.SamplingMode.TOTAL_COUNT
+        self.experiment.sampling_total_count = 1
+        self.experiment.save(update_fields=["sampling_mode", "sampling_total_count"])
+        ExperimentSamplingKC.objects.create(experiment=self.experiment, concept=concept)
+        self.experiment.question_quotas.filter(
+            question_type=Question.Type.SINGLE
+        ).update(amount=1)
+        self.client.force_login(self.teacher)
+
+        response = self.client.patch(
+            self.api_url(f"{self.experiment.pk}/"),
+            data=json.dumps(
+                {
+                    "sampling": {
+                        "mode": Experiment.SamplingMode.KC_QUOTA,
+                        "total_count": None,
+                        "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                        "nodes": [
+                            {
+                                "kc_code": concept.code,
+                                "quota": 1,
+                                "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                            }
+                        ],
+                    }
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertFalse(self.experiment.question_quotas.filter(amount__gt=0).exists())
+
+    def test_sampling_inventory_counts_deduplicated_candidates_by_question_type(self):
+        selected = Concept.objects.create(course=self.course, code="KC104", name="库存范围")
+        other = Concept.objects.create(course=self.course, code="KC105", name="其他范围")
+        for sequence, question_type, concept in (
+            (1, Question.Type.SINGLE, selected),
+            (2, Question.Type.MULTIPLE, selected),
+            (3, Question.Type.SHORT, other),
+        ):
+            question = Question.objects.create(
+                bank=self.bank,
+                sequence=sequence,
+                question_type=question_type,
+                text=f"库存题 {sequence}",
+                correct_answer="A" if question_type != Question.Type.MULTIPLE else ["A", "B"],
+                status=Question.Status.ACTIVE,
+            )
+            QuestionConcept.objects.create(
+                question=question,
+                concept=concept,
+                is_primary=True,
+            )
+        self.client.force_login(self.teacher)
+
+        response = self.client.post(
+            self.api_url("sampling-inventory/"),
+            data=json.dumps(
+                {
+                    "question_bank_id": self.bank.pk,
+                    "kc_codes": [selected.code],
+                    "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["candidate_count"], 2)
+        inventory = {
+            item["question_type"]: item["available"]
+            for item in response.json()["question_types"]
+        }
+        self.assertEqual(inventory[Question.Type.SINGLE], 1)
+        self.assertEqual(inventory[Question.Type.MULTIPLE], 1)
+        self.assertEqual(inventory[Question.Type.SHORT], 0)
+
+    def test_create_rejects_legacy_question_type_sampling_fields(self):
+        self.client.force_login(self.teacher)
+
+        response = self.client.post(
+            self.api_url(),
+            data=json.dumps(
+                {
+                    "name": "不得新建的旧抽题实验",
+                    "question_bank_id": self.bank.pk,
+                    "selection_mode": Experiment.SelectionMode.QUOTA,
+                    "question_quotas": [
+                        {"question_type": Question.Type.SINGLE, "amount": 1},
+                    ],
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("selection_mode", response.json()["error"]["fields"])
+        self.assertFalse(Experiment.objects.filter(name="不得新建的旧抽题实验").exists())
 
     def test_patch_rejects_frozen_definition_with_conflict_code(self):
         self.experiment.status = Experiment.Status.PUBLISHED
@@ -169,6 +412,48 @@ class TeacherExperimentApiTests(TestCase):
         self.experiment.refresh_from_db()
         self.assertEqual(self.experiment.name, "已有实验")
 
+    def test_legacy_draft_patch_requires_complete_explicit_conversion(self):
+        concept = Concept.objects.create(course=self.course, code="KC1", name="转换范围")
+        self.client.force_login(self.teacher)
+
+        rejected = self.client.patch(
+            self.api_url(f"{self.experiment.pk}/"),
+            data=json.dumps({"name": "不得偷偷改名"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(rejected.status_code, 409)
+        self.assertEqual(
+            rejected.json()["error"]["code"], "LEGACY_CONVERSION_REQUIRED"
+        )
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.name, "已有实验")
+
+        converted = self.client.patch(
+            self.api_url(f"{self.experiment.pk}/"),
+            data=json.dumps(
+                {
+                    "sampling": {
+                        "mode": Experiment.SamplingMode.TOTAL_COUNT,
+                        "total_count": 1,
+                        "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                        "nodes": [{"kc_code": concept.code, "quota": None, "match_scope": Experiment.MatchScope.ANY_LEVEL}],
+                    },
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(converted.status_code, 200, converted.content)
+        self.experiment.refresh_from_db()
+        self.assertEqual(
+            self.experiment.sampling_mode, Experiment.SamplingMode.TOTAL_COUNT
+        )
+        self.assertEqual(
+            list(self.experiment.sampling_kcs.values_list("concept_id", "quota")),
+            [(concept.pk, None)],
+        )
+
     def test_readiness_reports_definition_failures_without_exposing_internals(self):
         self.client.force_login(self.teacher)
 
@@ -181,6 +466,39 @@ class TeacherExperimentApiTests(TestCase):
         self.assertIn("题库中至少需要一道可用题目", response.json()["issues"])
         self.assertEqual(response.json()["candidate_count"], 0)
         self.assertNotIn("seed", response.json())
+
+    def test_definition_readiness_does_not_require_a_preassigned_student(self):
+        concept = Concept.objects.create(course=self.course, code="KC1", name="定义就绪 KC")
+        question = Question.objects.create(
+            bank=self.bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="定义就绪题目",
+            correct_answer="答案",
+        )
+        QuestionConcept.objects.create(
+            question=question,
+            concept=concept,
+            is_primary=True,
+        )
+        self.experiment.sampling_mode = Experiment.SamplingMode.TOTAL_COUNT
+        self.experiment.sampling_total_count = 1
+        self.experiment.save(
+            update_fields=["sampling_mode", "sampling_total_count"]
+        )
+        ExperimentSamplingKC.objects.create(
+            experiment=self.experiment,
+            concept=concept,
+        )
+        self.client.force_login(self.teacher)
+
+        response = self.client.get(
+            self.api_url(f"{self.experiment.pk}/readiness/")
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.json()["ready"])
+        self.assertEqual(response.json()["candidate_count"], 1)
 
 
 class TeacherPublishPlanApiTests(TestCase):
@@ -230,7 +548,7 @@ class TeacherPublishPlanApiTests(TestCase):
             text="发布 API 题目",
             correct_answer="答案",
         )
-        concept = Concept.objects.create(course=self.course, name="发布 KC")
+        concept = Concept.objects.create(course=self.course, code="KC1", name="发布 KC")
         QuestionConcept.objects.create(
             question=question,
             concept=concept,
@@ -242,6 +560,12 @@ class TeacherPublishPlanApiTests(TestCase):
             question_bank=bank,
             owner=self.teacher,
             created_by=self.teacher,
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=1,
+        )
+        ExperimentSamplingKC.objects.create(
+            experiment=self.experiment,
+            concept=concept,
         )
         self.client.force_login(self.teacher)
 
@@ -282,7 +606,133 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.json()["id"], plan.pk)
 
-    def test_setup_can_save_partial_schedules_and_reports_stale_revision(self):
+    def test_selected_classes_have_a_valid_immediate_indefinite_default_schedule(self):
+        plan, _ = self.start_plan()
+
+        response = self.put_setup(
+            plan,
+            {
+                "expected_revision": plan.plan_revision,
+                "classes": [
+                    {"class_id": self.class_a.pk, "excluded_student_ids": []},
+                    {"class_id": self.class_b.pk, "excluded_student_ids": []},
+                ],
+                "default_schedule": {"opens_at": None, "closes_at": None},
+                "schedules": [],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["setup_status"], "complete")
+        self.assertEqual(response.json()["missing_requirements"], [])
+        self.assertEqual(
+            [row["schedule_mode"] for row in response.json()["classes"]],
+            ["default", "default"],
+        )
+        self.assertTrue(
+            all(
+                row["opens_at"] is None and row["closes_at"] is None
+                for row in response.json()["classes"]
+            )
+        )
+
+    def test_plan_projects_a_specific_blocker_for_an_empty_selected_class(self):
+        empty_class = ClassGroup.objects.create(
+            course=self.course,
+            name="空班",
+            academic_year="2026",
+        )
+        plan, _ = self.start_plan()
+
+        response = self.put_setup(
+            plan,
+            {
+                "expected_revision": plan.plan_revision,
+                "classes": [
+                    {"class_id": empty_class.pk, "excluded_student_ids": []},
+                ],
+                "default_schedule": {"opens_at": None, "closes_at": None},
+                "schedules": [],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["setup_status"], "complete")
+        self.assertEqual(
+            response.json()["blocking_issues"],
+            [
+                {
+                    "code": "CLASS_NO_PARTICIPANTS",
+                    "message": "班级“2026 空班”没有可发布参与者。",
+                    "class_id": empty_class.pk,
+                    "kc_id": None,
+                    "field": "classes",
+                }
+            ],
+        )
+
+    def test_plan_projects_a_specific_blocker_for_insufficient_kc_inventory(self):
+        concept = self.experiment.question_bank.questions.get().primary_concept
+        self.experiment.sampling_mode = Experiment.SamplingMode.KC_QUOTA
+        self.experiment.sampling_total_count = None
+        self.experiment.save(
+            update_fields=["sampling_mode", "sampling_total_count"]
+        )
+        self.experiment.sampling_kcs.update(
+            quota=2,
+        )
+        readiness = self.client.get(
+            f"/api/v1/teacher/courses/{self.course.pk}/experiments/{self.experiment.pk}/readiness/"
+        )
+        self.assertEqual(readiness.status_code, 200, readiness.content)
+        self.assertEqual(readiness.json()["candidate_count"], 1)
+        self.assertEqual(readiness.json()["requested_count"], 2)
+        self.assertEqual(
+            readiness.json()["inventory_buckets"],
+            [
+                {
+                    "kc_code": concept.code,
+                    "kc_name": concept.name,
+                    "match_scope": Experiment.MatchScope.PRIMARY,
+                    "requested": 2,
+                    "available": 1,
+                }
+            ],
+        )
+        self.assertEqual(
+            readiness.json()["blocking_issues"][0]["code"],
+            "KC_QUOTA_INSUFFICIENT",
+        )
+        plan, _ = self.start_plan()
+
+        response = self.put_setup(
+            plan,
+            {
+                "expected_revision": 1,
+                "classes": [
+                    {"class_id": self.class_a.pk, "excluded_student_ids": []},
+                ],
+                "default_schedule": {"opens_at": None, "closes_at": None},
+                "schedules": [],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(
+            response.json()["blocking_issues"],
+            [
+                {
+                    "code": "KC_QUOTA_INSUFFICIENT",
+                    "message": f"知识点“{concept.name}”需要 2 题，可用 1 题。",
+                    "class_id": None,
+                    "kc_id": concept.pk,
+                    "kc_code": concept.code,
+                    "field": "sampling_kcs",
+                }
+            ],
+        )
+
+    def test_setup_treats_omitted_class_schedules_as_batch_defaults_and_reports_stale_revision(self):
         plan, _ = self.start_plan()
         response = self.put_setup(
             plan,
@@ -300,20 +750,17 @@ class TeacherPublishPlanApiTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200, response.content)
-        self.assertEqual(response.json()["setup_status"], "incomplete")
-        self.assertEqual(
-            response.json()["missing_requirements"],
-            [f"schedule:{self.class_b.pk}"],
-        )
+        self.assertEqual(response.json()["setup_status"], "complete")
+        self.assertEqual(response.json()["missing_requirements"], [])
         self.assertGreater(response.json()["plan_revision"], 1)
         plan.refresh_from_db()
         class_states = {
-            item.class_group_id: item.schedule_configured
+            item.class_group_id: item.use_batch_default
             for item in plan.class_plans.all()
         }
         self.assertEqual(
             class_states,
-            {self.class_a.pk: True, self.class_b.pk: False},
+            {self.class_a.pk: True, self.class_b.pk: True},
         )
 
         stale = self.put_setup(
@@ -328,7 +775,7 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertEqual(stale.status_code, 409)
         self.assertEqual(stale.json()["error"]["code"], "PUBLISH_PLAN_STALE")
 
-    def test_preview_failure_preserves_incomplete_setup(self):
+    def test_preview_accepts_an_immediate_indefinite_schedule(self):
         plan, _ = self.start_plan()
         setup = self.put_setup(
             plan,
@@ -350,9 +797,9 @@ class TeacherPublishPlanApiTests(TestCase):
         )
 
         self.assertEqual(setup.status_code, 200)
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 200, response.content)
         plan.refresh_from_db()
-        self.assertEqual(plan.status, PublishPlan.Status.DRAFT)
+        self.assertEqual(plan.status, PublishPlan.Status.PREVIEWED)
         self.assertEqual(
             list(plan.class_plans.values_list("class_group_id", flat=True)),
             [self.class_a.pk],
@@ -491,6 +938,8 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertFalse(first["excluded"])
         self.assertIn("student_number", first)
         self.assertNotIn("randomization_subject_key", first)
+        self.assertNotIn("sampling_seed", first)
+        self.assertNotIn("ordering_seed", first)
 
         detail = self.client.get(
             self.plan_url(plan, f"participants/{first['id']}/")
@@ -505,6 +954,27 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertEqual(export["Content-Type"], "text/csv; charset=utf-8")
         self.assertIn("student_number,class_name,item_count", export.content.decode("utf-8-sig"))
         self.assertEqual(len(export.content.decode("utf-8-sig").splitlines()), 3)
+
+        commit = self.client.post(
+            self.plan_url(plan, "commit/"),
+            data=json.dumps({"expected_revision": plan.plan_revision}),
+            content_type="application/json",
+        )
+        self.assertEqual(commit.status_code, 201, commit.content)
+        Question.objects.filter(pk=detail.json()["items"][0]["question_id"]).update(
+            code="MUTATED",
+            question_type=Question.Type.TRUE_FALSE,
+        )
+
+        frozen_detail = self.client.get(
+            self.plan_url(plan, f"participants/{first['id']}/")
+        )
+        self.assertEqual(frozen_detail.status_code, 200)
+        self.assertEqual(frozen_detail.json()["items"][0]["question_code"], "PUB-Q1")
+        self.assertNotEqual(
+            frozen_detail.json()["items"][0]["question_type"],
+            Question.Type.TRUE_FALSE,
+        )
 
     def test_class_task_projection_progress_and_terminal_actions_use_server_state(self):
         plan, opens_at = self.preview_two_classes()

@@ -5,14 +5,14 @@
 <header class="page-header"><div class="page-header-copy"><h1 class="page-title">导入题目文件</h1><p class="page-subtitle">新建题目、选项和答案。KC 关联需在题目导入完成后使用独立入口处理。</p></div></header>
 <ol class="step-list" aria-label="导入进度"><li class="{% if not preview %}active{% endif %}">上传文件</li><li class="{% if preview %}active{% endif %}">校验预览</li><li>确认导入</li></ol>
 <div class="card"><div class="card-body p-md-4">
-  <div class="notice-panel mb-4"><strong>中文列名与英文别名对照：</strong><code>序号 / sequence</code>、<code>题目 / question</code>、<code>题型 / question_type</code>、<code>选项A-F / option_a-option_f</code>、<code>答案 / answer</code>、<code>可接受答案 / accepted_answers</code>。示例完整覆盖单选、多选、数值、简答、填空、判断六种题型；非选择题不要填写选项，多个可接受答案用中文或英文分号分隔。导入前不会写入数据库。<a class="btn btn-sm btn-outline-primary ms-2" href="{% url 'question_bank:question_import_template' %}">下载题目 CSV 示例</a></div>
+  <div class="notice-panel mb-4"><strong>中文列名与英文别名对照：</strong><code>序号 / sequence</code>、<code>题目 / question</code>、<code>题型 / question_type</code>、<code>选项A-F / option_a-option_f</code>、<code>答案 / answer</code>、<code>可接受答案 / accepted_answers</code>、<code>解析 / explanation</code>、<code>难度 / difficulty</code>。系统支持六种题型；非选择题不要填写选项。序号留空时按文件顺序自动生成；难度可留空，有值时须为 0–1 且最多三位小数。KC 关联仍使用独立四列表导入。<a class="btn btn-sm btn-outline-primary ms-2" href="{% url 'question_bank:question_import_template' %}">下载题目 CSV 示例</a></div>
   {% include 'components/error_summary.html' with form=form %}
   {% if not preview %}
     <form method="post" enctype="multipart/form-data" novalidate>{% csrf_token %}{% include 'components/form_field.html' with field=form.file %}<button class="btn btn-primary" type="submit">校验并生成预览</button></form>
   {% else %}
     <div class="d-flex flex-wrap justify-content-between gap-3 mb-4"><div><strong>{{ upload_name }}</strong><div class="cell-meta">校验通过，可预览 {{ preview|length }} 条记录；错误 0 条。</div></div><span class="status-badge status-success">校验通过</span></div>
-    <div class="table-shell mb-4"><table class="table"><thead><tr><th scope="col">序号</th><th scope="col">题目</th><th scope="col">题型</th><th scope="col">答案</th></tr></thead><tbody>{% for q in preview %}<tr><td class="mono">{{ q.sequence }}</td><td>{{ q.text }}</td><td>{{ q.question_type }}</td><td class="mono">{{ q.answer }}</td></tr>{% endfor %}</tbody></table></div>
-    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="confirm"><div class="notice-panel mb-3">确认后将一次性写入 {{ preview|length }} 道题。请先核对序号、题型和答案。</div><button class="btn btn-primary" type="submit">确认导入 {{ preview|length }} 道题</button></form>
+    <div class="table-shell mb-4"><table class="table"><thead><tr><th scope="col">序号</th><th scope="col">题目</th><th scope="col">题型</th><th scope="col">答案</th><th scope="col">难度</th><th scope="col">解析</th></tr></thead><tbody>{% for q in preview %}<tr><td class="mono">{{ q.sequence }}</td><td>{{ q.text }}</td><td>{{ q.question_type }}</td><td class="mono">{{ q.answer }}</td><td class="mono">{{ q.teacher_difficulty|default_if_none:"未设置" }}</td><td>{{ q.explanation|default:"—" }}</td></tr>{% endfor %}</tbody></table></div>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="confirm"><div class="notice-panel mb-3">确认后将一次性写入 {{ preview|length }} 道题。请先核对序号、题型、答案、难度和解析。</div><button class="btn btn-primary" type="submit">确认导入 {{ preview|length }} 道题</button></form>
   {% endif %}
 </div></div>
 {% endblock %}

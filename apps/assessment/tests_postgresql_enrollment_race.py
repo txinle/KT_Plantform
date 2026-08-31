@@ -7,8 +7,13 @@ from django.test import TransactionTestCase, skipUnlessDBFeature
 
 from apps.accounts.enrollment_services import remove_course_enrollment
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
-from apps.experiments.models import Experiment, ExperimentQuestion
-from apps.experiments.services import assign_students, publish_experiment
+from apps.experiments.models import Experiment, ExperimentQuestion, ExperimentSamplingKC
+from apps.experiments.publication_services import (
+    commit_publish_plan,
+    generate_preview,
+    get_or_create_publish_plan,
+    save_plan_selection,
+)
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
 from apps.question_bank.services.course_question_identity import (
     allocate_course_question_identity,
@@ -81,14 +86,29 @@ class PostgreSQLEnrollmentRemovalRaceTests(TransactionTestCase):
             owner=self.teacher,
             question_bank=bank,
             name="并发发布实验",
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=1,
+        )
+        ExperimentSamplingKC.objects.create(
+            experiment=self.experiment, concept=concept
         )
         ExperimentQuestion.objects.create(
             experiment=self.experiment,
             question=question,
             display_order=1,
         )
-        assign_students(self.experiment, [self.student])
-        publish_experiment(self.experiment, self.teacher)
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        plan = save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
+        plan.refresh_from_db()
+        commit_publish_plan(plan, self.teacher, expected_revision=plan.plan_revision)
+        self.experiment.refresh_from_db()
 
     def test_session_creation_linearizes_before_enrollment_removal(self):
         session_reached_write = Event()

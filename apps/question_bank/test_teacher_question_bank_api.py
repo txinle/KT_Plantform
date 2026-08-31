@@ -11,6 +11,7 @@ from apps.question_bank.models import (
     QuestionBank,
     QuestionConcept,
 )
+from apps.question_bank.services.question_kc_mapping import replace_question_kc_mapping
 
 
 class TeacherQuestionBankApiTests(TestCase):
@@ -32,8 +33,10 @@ class TeacherQuestionBankApiTests(TestCase):
             name="核心题库",
             description="覆盖知识点与题目分页",
         )
-        self.math = Concept.objects.create(course=self.course, name="基础运算")
-        self.prime = Concept.objects.create(course=self.course, name="质数")
+        self.root = Concept.objects.create(course=self.course, code="KC1", name="数学")
+        self.number = Concept.objects.create(course=self.course, code="KC2", name="数与运算")
+        self.math = Concept.objects.create(course=self.course, code="KC3", name="基础运算")
+        self.prime = Concept.objects.create(course=self.course, code="KC4", name="质数")
         self.question = Question.objects.create(
             bank=self.bank,
             sequence=1,
@@ -43,15 +46,15 @@ class TeacherQuestionBankApiTests(TestCase):
             explanation="不得进入题目清单 DTO",
             teacher_difficulty="0.125",
         )
-        QuestionConcept.objects.create(
-            question=self.question,
-            concept=self.math,
-            is_primary=True,
-        )
-        QuestionConcept.objects.create(
-            question=self.question,
-            concept=self.prime,
-            is_primary=False,
+        replace_question_kc_mapping(
+            self.question,
+            root_kc_code=self.root.code,
+            nodes=[
+                {"kc_code": self.root.code, "parent_kc_code": None, "order": 1},
+                {"kc_code": self.number.code, "parent_kc_code": self.root.code, "order": 1},
+                {"kc_code": self.math.code, "parent_kc_code": self.number.code, "order": 1},
+                {"kc_code": self.prime.code, "parent_kc_code": self.number.code, "order": 2},
+            ],
         )
         self.client.force_login(self.owner)
 
@@ -120,10 +123,55 @@ class TeacherQuestionBankApiTests(TestCase):
         self.assertEqual(payload["page"]["total_items"], 1)
         concept = payload["items"][0]
         self.assertEqual(concept["name"], "基础运算")
+        self.assertEqual(concept["kc_code"], self.math.code)
+        self.assertEqual(concept["role_counts"], {"level_1": 0, "level_2": 0, "level_3": 1})
         self.assertEqual(concept["question_count"], 1)
         self.assertEqual(concept["bank_count"], 1)
         self.assertEqual(concept["distribution"][0]["bank_name"], "核心题库")
-        self.assertFalse(concept["can_delete"])
+        self.assertTrue(concept["can_delete"])
+
+        tree = self.client.get(
+            f"/api/v1/teacher/courses/{self.course.pk}/concepts/",
+            {"all": "1"},
+        ).json()
+        self.assertEqual(tree["page"]["total_items"], 4)
+        self.assertEqual(len(tree["items"]), 4)
+        self.assertEqual(tree["summary"], {"total": 4, "active": 4, "used": 4, "archived": 0})
+
+    def test_course_concepts_use_numeric_kc_code_order(self):
+        Concept.objects.create(course=self.course, code="KC10", name="第十节点")
+
+        response = self.client.get(
+            f"/api/v1/teacher/courses/{self.course.pk}/concepts/",
+            {"all": "1"},
+        )
+
+        self.assertEqual(
+            [item["kc_code"] for item in response.json()["items"]],
+            ["KC1", "KC2", "KC3", "KC4", "KC10"],
+        )
+
+    def test_course_concept_full_tree_is_not_truncated_at_500_nodes(self):
+        Concept.objects.bulk_create(
+            [
+                Concept(
+                    course=self.course,
+                    code=f"KC{index + 5}",
+                    name=f"批量节点 {index:03d}",
+                    normalized_name=f"批量节点 {index:03d}",
+                )
+                for index in range(501)
+            ]
+        )
+
+        response = self.client.get(
+            f"/api/v1/teacher/courses/{self.course.pk}/concepts/",
+            {"all": "1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["page"]["total_items"], 505)
+        self.assertEqual(len(response.json()["items"]), 505)
 
     def test_bank_detail_and_question_collection_expose_only_list_safe_fields(self):
         detail = self.client.get(
@@ -152,7 +200,8 @@ class TeacherQuestionBankApiTests(TestCase):
         self.assertEqual(item["course_sequence"], 1)
         self.assertTrue(item["stable_code"].startswith("C"))
         self.assertEqual(item["question_type_label"], "单选题")
-        self.assertEqual(item["primary_concept"]["name"], "基础运算")
+        self.assertEqual(item["kc_mapping"]["root_kc_code"], self.root.code)
+        self.assertEqual(len(item["kc_mapping"]["nodes"]), 4)
         self.assertEqual(item["teacher_difficulty"], "0.125")
         self.assertEqual(
             item["edit_url"],
@@ -177,12 +226,12 @@ class TeacherQuestionBankApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["page"]["total_items"], 2)
+        self.assertEqual(payload["page"]["total_items"], 4)
         rows = {row["name"]: row for row in payload["items"]}
-        self.assertEqual(rows["基础运算"]["primary_count"], 1)
-        self.assertEqual(rows["基础运算"]["secondary_count"], 0)
-        self.assertEqual(rows["质数"]["primary_count"], 0)
-        self.assertEqual(rows["质数"]["secondary_count"], 1)
+        self.assertEqual(rows["数学"]["level_1_count"], 1)
+        self.assertEqual(rows["数与运算"]["level_2_count"], 1)
+        self.assertEqual(rows["基础运算"]["level_3_count"], 1)
+        self.assertEqual(rows["质数"]["level_3_count"], 1)
         self.assertEqual(rows["基础运算"]["questions"][0]["code"], "Q0001")
 
     def test_unknown_cross_course_and_inaccessible_scopes_are_hidden_as_404(self):

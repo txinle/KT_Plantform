@@ -8,10 +8,11 @@ from unittest.mock import patch
 from apps.accounts.models import Course, User
 
 from . import models
-from .models import CourseQuestionIdentity, Question, QuestionBank
+from .models import Concept, CourseQuestionIdentity, Question, QuestionBank
 from .services.course_question_identity import allocate_course_question_identity
 from .services.import_parsing import ParsedQuestion
 from .services.import_service import copy_shared_bank, import_questions
+from .services.question_kc_mapping import project_question_kc_mapping
 
 
 class CourseQuestionIdentityModelContractTests(SimpleTestCase):
@@ -171,9 +172,49 @@ class CourseQuestionIdentityAllocatorTests(TestCase):
         call_command("seed_demo")
 
         course = Course.objects.get(code="KT101", term="2026春")
+        questions = course.question_banks.get(name="演示题库").questions.all()
+        self.assertEqual(questions.count(), 93)
         self.assertEqual(
             CourseQuestionIdentity.objects.filter(course=course, question__isnull=False).count(),
+            questions.count(),
+        )
+        mappings = [project_question_kc_mapping(question) for question in questions]
+        self.assertTrue(all(mapping["root_kc_code"] for mapping in mappings))
+        self.assertEqual(
+            max(node["depth"] for mapping in mappings for node in mapping["nodes"]),
+            3,
+        )
+        first_mapping = project_question_kc_mapping(questions.get(sequence=1))
+        first_third_level_nodes = [
+            node for node in first_mapping["nodes"] if node["depth"] == 3
+        ]
+        self.assertEqual(len(first_third_level_nodes), 2)
+        self.assertEqual(
+            {node["parent_kc_code"] for node in first_third_level_nodes},
+            {
+                next(
+                    node["kc_code"]
+                    for node in first_mapping["nodes"]
+                    if node["depth"] == 2
+                )
+            },
+        )
+        self.assertFalse(
+            Concept.objects.filter(course=course, parent__isnull=False).exists()
+        )
+
+    def test_demo_seed_can_rebuild_its_existing_frozen_demo_dependency_closure(self):
+        call_command("seed_demo")
+        call_command("seed_demo", reset_question_bank=True)
+
+        course = Course.objects.get(code="KT101", term="2026春")
+        self.assertEqual(
             course.question_banks.get(name="演示题库").questions.count(),
+            93,
+        )
+        self.assertEqual(
+            course.experiments.get(name="演示交互数据采集").versions.count(),
+            1,
         )
 
     def test_question_deletion_keeps_the_identity_and_the_next_number_is_not_reused(self):
@@ -196,7 +237,7 @@ class CourseQuestionIdentityAllocatorTests(TestCase):
             ParsedQuestion(1, "重复题", {}, "答案", Question.Type.SHORT),
         ]
 
-        with self.assertRaises(IntegrityError):
+        with self.assertRaisesRegex(ValueError, "导入批次包含重复序号"):
             import_questions(self.bank_a, duplicate_rows)
 
         self.assertFalse(self.bank_a.questions.exists())

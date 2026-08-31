@@ -5,9 +5,37 @@ import { getBootstrapContext } from '@/app/bootstrap'
 export type TeacherExperiment = components['schemas']['TeacherExperiment']
 export type TeacherExperimentCollection = components['schemas']['TeacherExperimentCollection']
 export type TeacherExperimentReadiness = components['schemas']['TeacherExperimentReadiness']
-export type ExperimentDefinitionInput = components['schemas']['PatchedTeacherExperiment'] & {
+export type ExperimentQuestionType = 'single_choice' | 'multiple_choice' | 'numeric' | 'short_answer' | 'fill_blank' | 'true_false'
+export type SamplingInventoryInput = {
+  question_bank_id: number
+  kc_codes: string[]
+  match_scope: 'primary' | 'any_level'
+}
+export type SamplingInventory = {
+  candidate_count: number
+  question_types: Array<{
+    question_type: ExperimentQuestionType
+    label: string
+    available: number
+  }>
+}
+export type ExperimentDefinitionInput = Omit<components['schemas']['PatchedTeacherExperiment'], 'sampling'> & {
   name: string
   question_bank_id: number
+  sampling?: {
+    mode: 'total_count' | 'kc_quota'
+    total_count?: number | null
+    match_scope: 'primary' | 'any_level'
+    nodes: Array<{
+      kc_code: string
+      quota?: number | null
+      match_scope: 'primary' | 'any_level'
+    }>
+    type_quotas?: Array<{
+      question_type: ExperimentQuestionType
+      amount: number
+    }>
+  }
 }
 export type PublishPlan = components['schemas']['PublishPlan']
 export type PublishPlanSetupInput = components['schemas']['PublishPlanSetupInput']
@@ -20,6 +48,7 @@ export type ClassTaskCollection = components['schemas']['ClassTaskCollection']
 export type ClassTask = components['schemas']['ClassTask']
 export type ClassTaskProgress = components['schemas']['ClassTaskProgress']
 export type ScheduleRevisionInput = components['schemas']['ScheduleRevisionInput']
+export type CourseConceptCollection = components['schemas']['CourseConceptCollection']
 
 type ApiClient = ReturnType<typeof createApiClient>
 
@@ -35,9 +64,20 @@ export function createTeacherExperimentApi(client: ApiClient) {
         `/api/v1/teacher/courses/${courseId}/experiments/${experimentId}/`,
       )
     },
+    concepts(courseId: number) {
+      return client.get<CourseConceptCollection>(
+        `/api/v1/teacher/courses/${courseId}/concepts/?all=1`,
+      )
+    },
     readiness(courseId: number, experimentId: number) {
       return client.get<TeacherExperimentReadiness>(
         `/api/v1/teacher/courses/${courseId}/experiments/${experimentId}/readiness/`,
+      )
+    },
+    samplingInventory(courseId: number, input: SamplingInventoryInput) {
+      return client.mutate<SamplingInventory>(
+        `/api/v1/teacher/courses/${courseId}/experiments/sampling-inventory/`,
+        { method: 'POST', body: input },
       )
     },
     create(courseId: number, input: ExperimentDefinitionInput) {
@@ -141,4 +181,3 @@ export function getTeacherExperimentApi() {
     createApiClient({ getCsrfToken: () => bootstrap.csrf_token }),
   )
 }
-

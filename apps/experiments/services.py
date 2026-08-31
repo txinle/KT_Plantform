@@ -79,9 +79,16 @@ def delete_experiment(experiment):
     """Delete an experiment and its immutable research tree in dependency order."""
 
     with transaction.atomic():
+        course_id = (
+            Experiment.objects.filter(pk=experiment.pk)
+            .values_list("course_id", flat=True)
+            .get()
+        )
+        if course_id is not None:
+            lock_writable_course(course_id)
         experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
-        if experiment.course_id is not None:
-            lock_writable_course(experiment.course_id)
+        if experiment.course_id != course_id:
+            raise ValidationError("实验所属课程已变化，请刷新后重试。")
         if (
             ClassExperimentTask.objects.select_for_update()
             .filter(experiment=experiment)
@@ -141,6 +148,23 @@ def _lock_participant_course(experiment, *, action="修改实验参与规则"):
     if course.status != Course.Status.ACTIVE:
         raise ValidationError(f"课程已归档，不能{action}。")
     return course
+
+
+def _lock_course_then_draft_experiment(experiment, *, error_message, action):
+    course_id = (
+        Experiment.objects.filter(pk=experiment.pk)
+        .values_list("course_id", flat=True)
+        .get()
+    )
+    course = None
+    if course_id is not None:
+        course = lock_course(course_id)
+        if course.status != Course.Status.ACTIVE:
+            raise ValidationError(f"课程已归档，不能{action}。")
+    experiment = _lock_draft_experiment(experiment, error_message=error_message)
+    if experiment.course_id != course_id:
+        raise ValidationError("实验所属课程已变化，请刷新后重试。")
+    return experiment, course
 
 
 def _lock_course_classes(course):
@@ -434,20 +458,24 @@ def save_participant_rules(experiment, classes, includes, excludes):
     if set(include_ids) & set(exclude_ids):
         raise ValidationError("同一学生不能同时显式纳入和排除。")
 
-    experiment = _lock_draft_experiment(
+    experiment, course = _lock_course_then_draft_experiment(
         experiment,
         error_message="发布后不能修改参与规则。",
+        action="修改实验参与规则",
     )
     return _save_participant_rules_locked(
         experiment,
         class_ids,
         include_ids,
         exclude_ids,
+        course=course,
     )
 
 
-def _save_participant_rules_locked(experiment, class_ids, include_ids, exclude_ids):
-    course = _lock_participant_course(experiment)
+def _save_participant_rules_locked(
+    experiment, class_ids, include_ids, exclude_ids, *, course=None
+):
+    course = course or _lock_participant_course(experiment)
     locked_classes = _lock_course_classes(course)
     selected_classes = _locked_requested_classes(course, class_ids, locked_classes)
 
@@ -715,8 +743,21 @@ def selection_display_context(experiment):
         "version_rows": version_rows,
     }
 
-@transaction.atomic
 def publish_experiment(experiment, actor):
+    course_id = Experiment.objects.values_list("course_id", flat=True).get(
+        pk=experiment.pk
+    )
+    if course_id is not None:
+        if experiment.sampling_mode:
+            raise ValidationError("新版抽题配置必须通过班级发布计划预检并提交。")
+        raise ValidationError("旧版课程草稿必须先显式转换抽题模式。")
+    return _publish_legacy_experiment(experiment, actor)
+
+
+@transaction.atomic
+def _publish_legacy_experiment(experiment, actor):
+    """Publish the retained v1 model; course callers must use A+ publication."""
+
     experiment = _lock_draft_experiment(
         experiment,
         error_message="只有草稿实验可以发布",
@@ -962,13 +1003,24 @@ def sync_experiment_questions(experiment):
 @transaction.atomic
 def assign_students(experiment, students):
     students = list(students)
+    course_id = Experiment.objects.filter(pk=experiment.pk).values_list(
+        "course_id", flat=True
+    ).get()
+    if course_id is not None:
+        experiment, course = _lock_course_then_draft_experiment(
+            experiment,
+            error_message="发布后不能修改学生",
+            action="修改实验参与规则",
+        )
+        include_ids = _participant_ids(students, "显式纳入学生")
+        return _save_participant_rules_locked(
+            experiment, [], include_ids, [], course=course
+        )
+
     experiment = _lock_draft_experiment(
         experiment,
         error_message="发布后不能修改学生",
     )
-    if experiment.course_id is not None:
-        include_ids = _participant_ids(students, "显式纳入学生")
-        return _save_participant_rules_locked(experiment, [], include_ids, [])
 
     student_ids = _participant_ids(students, "学生")
     initial_class_ids = dict(

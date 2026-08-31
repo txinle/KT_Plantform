@@ -560,7 +560,7 @@ class DataCenterContractTests(TransactionTestCase):
     def test_package_catalog_produces_distinct_research_files(self):
         expected = {
             "kt": {"02_core/subjects.csv", "06_derived/kt_sequences.csv"},
-            "cd": {"01_design_metadata/q_matrix.csv", "06_derived/cd_response_matrix.csv"},
+            "cd": {"01_design_metadata/q_matrix_v2.csv", "06_derived/cd_response_matrix.csv"},
             "process": {"03_raw_events/assessment_events.csv", "03_raw_events/navigation_events.csv"},
             "confidence": {"05_self_report/confidence_assignments.csv", "06_derived/calibration_features.csv"},
             "simulation": {"03_raw_events/simulation_events.csv", "03_raw_events/simulation_snapshots.csv"},

@@ -39,6 +39,8 @@ class VueShellRolloutTests(TestCase):
             course=self.course,
             question_bank=self.bank,
             owner=self.teacher,
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=1,
         )
 
     def rollout_env(self, **values):

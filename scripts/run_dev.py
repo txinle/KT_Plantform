@@ -2,6 +2,7 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -47,11 +48,37 @@ def ensure_frontend_dependencies(npm):
     stamp.write_text(digest, encoding="utf-8")
 
 
+def find_available_vite_port(*, start=5173, stop=5273):
+    for port in range(start, stop + 1):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as candidate:
+                candidate.bind(("127.0.0.1", port))
+        except OSError:
+            continue
+        return port
+    raise SystemExit(f"No available Vite port was found between {start} and {stop}.")
+
+
+def vite_command(npm, port):
+    return [
+        str(npm),
+        "run",
+        "dev",
+        "--",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--strictPort",
+    ]
+
+
 def main():
     legacy_only = os.getenv("KT_LEGACY_ONLY") == "1"
     environment = os.environ.copy()
     if legacy_only:
         environment["VUE_TEACHER_EXPERIMENTS_ENABLED"] = "0"
+        environment["VUE_TEACHER_QUESTION_BANKS_ENABLED"] = "0"
         return subprocess.call(
             [sys.executable, "manage.py", "runserver", "0.0.0.0:8000"],
             cwd=ROOT,
@@ -59,13 +86,18 @@ def main():
         )
 
     environment["VUE_TEACHER_EXPERIMENTS_ENABLED"] = "1"
+    environment["VUE_TEACHER_QUESTION_BANKS_ENABLED"] = "1"
     node_directory, npm = find_node_directory()
     environment["PATH"] = f"{node_directory}{os.pathsep}{environment.get('PATH', '')}"
-    environment["VITE_DEV_SERVER_URL"] = "http://localhost:5173"
+    vite_port = find_available_vite_port()
+    vite_url = f"http://127.0.0.1:{vite_port}"
+    environment["VITE_DEV_SERVER_URL"] = vite_url
     ensure_frontend_dependencies(npm)
+    print(f"Checkout: {ROOT}", flush=True)
+    print(f"Frontend: {vite_url}", flush=True)
     hidden = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     vite = subprocess.Popen(
-        [str(npm), "run", "dev", "--", "--host", "127.0.0.1"],
+        vite_command(npm, vite_port),
         cwd=FRONTEND,
         env=environment,
         creationflags=hidden,

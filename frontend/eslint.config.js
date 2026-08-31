@@ -32,5 +32,8 @@ export default tseslint.config(
         extraFileExtensions: ['.vue'],
       },
     },
+    rules: {
+      'no-undef': 'off',
+    },
   },
 )

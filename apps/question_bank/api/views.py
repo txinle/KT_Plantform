@@ -1,24 +1,60 @@
 from collections import defaultdict
 
-from django.db.models import Count, Prefetch, Q
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
+from django.db.models import Count, IntegerField, Prefetch, Q
+from django.db.models.functions import Cast, Substr
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import Course
+from apps.accounts.course_access import lock_writable_course
+from apps.audit.services import log_action
 from apps.api.pagination import FixedPageNumberPagination
 from apps.question_bank.course_views import can_edit_bank_metadata
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
+from apps.question_bank.services.question_kc_mapping import project_question_kc_mapping
+from apps.question_bank.services.course_kc_import import (
+    CourseKCBulkImportError,
+    apply_course_kc_import,
+    preview_course_kcs,
+)
+from apps.question_bank.services.course_kc import CourseKCService
+from apps.question_bank.services.file_reader import read_uploaded_rows
+from apps.question_bank.services.import_parsing import (
+    parse_course_kc_rows,
+    parse_question_kc_tree_rows,
+)
+from apps.question_bank.services.preview_batch import (
+    ImportPreviewBatchConflict,
+    ImportPreviewBatchService,
+)
+from apps.question_bank.services.question_kc_import import (
+    QuestionKCTreeImportError,
+    apply_question_kc_tree_import,
+    preview_question_kc_trees,
+)
 
 from .serializers import (
     BankConceptCollectionSerializer,
+    CourseConceptCreateRequestSerializer,
+    CourseConceptCreateResponseSerializer,
     CourseConceptCollectionSerializer,
+    CourseKCImportResultSerializer,
+    FileImportRequestSerializer,
+    ImportConfirmRequestSerializer,
+    ImportPreviewResponseSerializer,
+    QuestionBankCreateRequestSerializer,
+    QuestionBankCreateResponseSerializer,
     QuestionBankCollectionSerializer,
     QuestionBankDetailSerializer,
     QuestionCollectionSerializer,
+    QuestionKCImportResultSerializer,
 )
 
 
@@ -76,6 +112,160 @@ def _serialize_page(paginator, items, extra):
     response = paginator.get_paginated_response(items)
     response.data.update(extra)
     return response
+
+
+def _session_key(request):
+    if request.session.session_key is None:
+        request.session.create()
+    return request.session.session_key
+
+
+def _batch_conflict_response(error):
+    external_code = {
+        "preview_consumed": "preview_batch_consumed",
+        "preview_expired": "preview_batch_invalid",
+        "preview_not_found": "preview_batch_invalid",
+        "preview_binding_mismatch": "preview_batch_invalid",
+    }.get(error.code, error.code)
+    return Response(
+        {"code": external_code, "detail": str(error)},
+        status=status.HTTP_409_CONFLICT,
+    )
+
+
+class TeacherCourseKCImportPreviewView(APIView):
+    @extend_schema(
+        request=FileImportRequestSerializer,
+        responses=ImportPreviewResponseSerializer,
+    )
+    def post(self, request, course_id):
+        course = _course_for_teacher(request.user, course_id)
+        uploaded = request.FILES.get("file")
+        if uploaded is None:
+            raise ValidationError({"file": "请选择 CSV 或 Excel 文件。"})
+        try:
+            raw = uploaded.read()
+            uploaded.seek(0)
+            parsed = parse_course_kc_rows(read_uploaded_rows(uploaded))
+            preview = preview_course_kcs(course=course, parsed_rows=parsed)
+        except ValueError as error:
+            raise ValidationError({"file": str(error)}) from error
+        batch = ImportPreviewBatchService.create(
+            kind="course_kc",
+            course=course,
+            bank=None,
+            actor=request.user,
+            session_key=_session_key(request),
+            file_bytes=raw,
+            payload=preview,
+            summary={
+                "rows": len(preview["rows"]),
+                "conflicts": sum(row["classification"] == "conflict" for row in preview["rows"]),
+            },
+        )
+        return Response({"batch_id": str(batch.pk), "preview": preview})
+
+
+class TeacherCourseKCImportConfirmView(APIView):
+    @extend_schema(
+        request=ImportConfirmRequestSerializer,
+        responses=CourseKCImportResultSerializer,
+    )
+    def post(self, request, course_id):
+        course = _course_for_teacher(request.user, course_id)
+        try:
+            batch, result = ImportPreviewBatchService.confirm(
+                batch_id=request.data.get("batch_id"),
+                kind="course_kc",
+                course=course,
+                bank=None,
+                actor=request.user,
+                session_key=_session_key(request),
+                apply=lambda payload: apply_course_kc_import(course=course, payload=payload),
+            )
+        except ImportPreviewBatchConflict as error:
+            return _batch_conflict_response(error)
+        except CourseKCBulkImportError as error:
+            return Response(
+                {"code": error.code, "detail": str(error)},
+                status=status.HTTP_409_CONFLICT,
+            )
+        log_action(
+            request,
+            "course_kc.import",
+            course,
+            {"batch_id": str(batch.pk), "file_sha256": batch.file_sha256, **result},
+        )
+        return Response(result)
+
+
+class TeacherQuestionKCImportPreviewView(APIView):
+    @extend_schema(
+        request=FileImportRequestSerializer,
+        responses=ImportPreviewResponseSerializer,
+    )
+    def post(self, request, course_id, bank_id):
+        course = _course_for_teacher(request.user, course_id)
+        bank = _bank_for_course(course, bank_id)
+        uploaded = request.FILES.get("file")
+        if uploaded is None:
+            raise ValidationError({"file": "请选择 CSV 或 Excel 文件。"})
+        try:
+            raw = uploaded.read()
+            uploaded.seek(0)
+            parsed = parse_question_kc_tree_rows(read_uploaded_rows(uploaded))
+            preview = preview_question_kc_trees(bank=bank, parsed_rows=parsed)
+        except (ValueError, QuestionKCTreeImportError) as error:
+            code = getattr(error, "code", "invalid_question_kc_file")
+            return Response(
+                {"code": code, "detail": str(error)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        batch = ImportPreviewBatchService.create(
+            kind="question_kc",
+            course=course,
+            bank=bank,
+            actor=request.user,
+            session_key=_session_key(request),
+            file_bytes=raw,
+            payload=preview,
+            summary={"questions": len(preview["trees"])},
+        )
+        return Response({"batch_id": str(batch.pk), "preview": preview})
+
+
+class TeacherQuestionKCImportConfirmView(APIView):
+    @extend_schema(
+        request=ImportConfirmRequestSerializer,
+        responses=QuestionKCImportResultSerializer,
+    )
+    def post(self, request, course_id, bank_id):
+        course = _course_for_teacher(request.user, course_id)
+        bank = _bank_for_course(course, bank_id)
+        try:
+            batch, result = ImportPreviewBatchService.confirm(
+                batch_id=request.data.get("batch_id"),
+                kind="question_kc",
+                course=course,
+                bank=bank,
+                actor=request.user,
+                session_key=_session_key(request),
+                apply=lambda payload: apply_question_kc_tree_import(bank=bank, payload=payload),
+            )
+        except ImportPreviewBatchConflict as error:
+            return _batch_conflict_response(error)
+        except QuestionKCTreeImportError as error:
+            return Response(
+                {"code": error.code, "detail": str(error)},
+                status=status.HTTP_409_CONFLICT,
+            )
+        log_action(
+            request,
+            "question_kc.import",
+            bank,
+            {"batch_id": str(batch.pk), "file_sha256": batch.file_sha256, **result},
+        )
+        return Response(result)
 
 
 class TeacherQuestionBankCollectionView(APIView):
@@ -140,10 +330,46 @@ class TeacherQuestionBankCollectionView(APIView):
             },
         )
 
+    @extend_schema(
+        request=QuestionBankCreateRequestSerializer,
+        responses={201: QuestionBankCreateResponseSerializer},
+    )
+    @transaction.atomic
+    def post(self, request, course_id):
+        course = lock_writable_course(_course_for_teacher(request.user, course_id))
+        name = " ".join(str(request.data.get("name") or "").strip().split())
+        description = str(request.data.get("description") or "").strip()
+        visibility = request.data.get("visibility") or QuestionBank.Visibility.PRIVATE
+        errors = {}
+        if not name:
+            errors["name"] = ["该字段是必填项。"]
+        if visibility not in {QuestionBank.Visibility.PRIVATE, QuestionBank.Visibility.SHARED}:
+            errors["visibility"] = ["可见性无效。"]
+        if errors:
+            raise ValidationError(errors)
+        bank = QuestionBank.objects.create(
+            course=course,
+            created_by=request.user,
+            name=name,
+            description=description,
+            visibility=visibility,
+        )
+        return Response(
+            {
+                "id": bank.pk,
+                "name": bank.name,
+                "detail_url": _bank_detail_url(course.pk, bank.pk),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
 
 class TeacherCourseConceptCollectionView(APIView):
     @extend_schema(
-        parameters=[OpenApiParameter("q", str, required=False)],
+        parameters=[
+            OpenApiParameter("q", str, required=False),
+            OpenApiParameter("all", bool, required=False),
+        ],
         responses=CourseConceptCollectionSerializer,
     )
     def get(self, request, course_id):
@@ -152,11 +378,29 @@ class TeacherCourseConceptCollectionView(APIView):
         concepts = course.concepts.annotate(
             question_count=Count("question_links", distinct=True),
             bank_count=Count("question_links__question__bank", distinct=True),
-        ).order_by("name", "pk")
+            level_1_count=Count(
+                "question_links",
+                filter=Q(question_links__parent_link__isnull=True),
+            ),
+            level_2_count=Count(
+                "question_links",
+                filter=Q(
+                    question_links__parent_link__isnull=False,
+                    question_links__parent_link__parent_link__isnull=True,
+                ),
+            ),
+            level_3_count=Count(
+                "question_links",
+                filter=Q(question_links__parent_link__parent_link__isnull=False),
+            ),
+            kc_sequence=Cast(Substr("code", 3), IntegerField()),
+        ).order_by("kc_sequence", "pk")
         if query:
             concepts = concepts.filter(name__icontains=query)
 
         paginator = FixedPageNumberPagination()
+        if request.query_params.get("all") == "1":
+            paginator.page_size = max(1, concepts.count())
         page = list(paginator.paginate_queryset(concepts, request, view=self))
         concept_ids = [concept.pk for concept in page]
         distribution = defaultdict(list)
@@ -183,12 +427,22 @@ class TeacherCourseConceptCollectionView(APIView):
         items = [
             {
                 "id": concept.pk,
+                "kc_code": concept.code,
                 "name": concept.name,
+                "description": concept.description,
+                "status": concept.status,
+                "role_counts": {
+                    "level_1": concept.level_1_count,
+                    "level_2": concept.level_2_count,
+                    "level_3": concept.level_3_count,
+                },
                 "question_count": concept.question_count,
                 "bank_count": concept.bank_count,
                 "distribution": distribution[concept.pk],
                 "can_rename": writable,
-                "can_delete": writable and concept.question_count == 0,
+                "can_delete": (
+                    writable
+                ),
                 "rename_url": reverse(
                     "courses:concept_rename", args=[course.pk, concept.pk]
                 )
@@ -197,15 +451,47 @@ class TeacherCourseConceptCollectionView(APIView):
                 "delete_url": reverse(
                     "courses:concept_delete", args=[course.pk, concept.pk]
                 )
-                if writable and concept.question_count == 0
+                if writable
                 else None,
             }
             for concept in page
         ]
+        summary = {
+            "total": course.concepts.count(),
+            "active": course.concepts.filter(status=Concept.Status.ACTIVE).count(),
+            "used": course.concepts.filter(question_links__isnull=False).distinct().count(),
+            "archived": course.concepts.filter(status=Concept.Status.ARCHIVED).count(),
+        }
         return _serialize_page(
             paginator,
             items,
-            {"course": _course_payload(course)},
+            {"course": _course_payload(course), "summary": summary},
+        )
+
+    @extend_schema(
+        request=CourseConceptCreateRequestSerializer,
+        responses={201: CourseConceptCreateResponseSerializer},
+    )
+    def post(self, request, course_id):
+        course = _course_for_teacher(request.user, course_id)
+        try:
+            concept = CourseKCService.create(
+                course=lock_writable_course(course),
+                sequence=request.data.get("sequence"),
+                name=request.data.get("name"),
+                description=str(request.data.get("description") or ""),
+            )
+        except DjangoValidationError as error:
+            raise ValidationError({"concept": error.messages}) from error
+        return Response(
+            {
+                "id": concept.pk,
+                "kc_code": concept.code,
+                "name": concept.name,
+                "description": concept.description,
+                "status": concept.status,
+            },
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -292,7 +578,7 @@ class TeacherQuestionCollectionView(APIView):
                 Prefetch(
                     "concept_links",
                     queryset=QuestionConcept.objects.select_related("concept").order_by(
-                        "concept__name", "concept_id"
+                        "display_order", "concept__code", "concept_id"
                     ),
                 )
             )
@@ -319,10 +605,6 @@ class TeacherQuestionCollectionView(APIView):
         items = []
         for question in page:
             identity = getattr(question, "course_identity", None)
-            primary_link = next(
-                (link for link in question.concept_links.all() if link.is_primary),
-                None,
-            )
             items.append(
                 {
                     "id": question.pk,
@@ -333,12 +615,7 @@ class TeacherQuestionCollectionView(APIView):
                     "text": question.text,
                     "question_type": question.question_type,
                     "question_type_label": question.get_question_type_display(),
-                    "primary_concept": {
-                        "id": primary_link.concept_id,
-                        "name": primary_link.concept.name,
-                    }
-                    if primary_link
-                    else None,
+                    "kc_mapping": project_question_kc_mapping(question),
                     "teacher_difficulty": (
                         format(question.teacher_difficulty, "f")
                         if question.teacher_difficulty is not None
@@ -408,6 +685,28 @@ class TeacherBankConceptCollectionView(APIView):
                         question_links__is_primary=False,
                     ),
                 ),
+                level_1_count=Count(
+                    "question_links",
+                    filter=Q(
+                        question_links__question__bank=bank,
+                        question_links__parent_link__isnull=True,
+                    ),
+                ),
+                level_2_count=Count(
+                    "question_links",
+                    filter=Q(
+                        question_links__question__bank=bank,
+                        question_links__parent_link__isnull=False,
+                        question_links__parent_link__parent_link__isnull=True,
+                    ),
+                ),
+                level_3_count=Count(
+                    "question_links",
+                    filter=Q(
+                        question_links__question__bank=bank,
+                        question_links__parent_link__parent_link__isnull=False,
+                    ),
+                ),
                 question_count=Count(
                     "question_links__question",
                     filter=Q(question_links__question__bank=bank),
@@ -454,9 +753,11 @@ class TeacherBankConceptCollectionView(APIView):
         items = [
             {
                 "id": concept.pk,
+                "kc_code": concept.code,
                 "name": concept.name,
-                "primary_count": concept.primary_count,
-                "secondary_count": concept.secondary_count,
+                "level_1_count": concept.level_1_count,
+                "level_2_count": concept.level_2_count,
+                "level_3_count": concept.level_3_count,
                 "question_count": concept.question_count,
                 "questions": linked_questions[concept.pk],
             }

@@ -2,12 +2,10 @@ from queue import Queue
 from threading import Event, Thread, current_thread
 from unittest.mock import patch
 
-from django.core.exceptions import ValidationError
-from django.db import close_old_connections, transaction
+from django.db import close_old_connections
 from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
-from apps.audit.models import AuditLog
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
 
 from .models import (
@@ -15,13 +13,22 @@ from .models import (
     Experiment,
     ExperimentClassSnapshot,
     ExperimentQuestion,
+    ExperimentSamplingKC,
     ExperimentStudent,
     ExperimentVersion,
     ExperimentVersionParticipantSnapshot,
+    PublishPlan,
+    PublishPlanClass,
     QuestionSnapshot,
 )
+from .publication_services import (
+    PublicationConflict,
+    commit_publish_plan,
+    generate_preview,
+    get_or_create_publish_plan,
+    save_plan_selection,
+)
 from .services import publish_experiment, save_participant_rules
-from . import services
 
 
 @skipUnlessDBFeature("has_select_for_update_of")
@@ -33,7 +40,7 @@ class PostgreSQLPublishLockRegressionTests(TestCase):
             username="postgres-publish-teacher",
             role=User.Role.TEACHER,
         )
-        student = User.objects.create_user(
+        self.student = User.objects.create_user(
             username="POSTGRES-PUBLISH-STUDENT",
             student_number="POSTGRES-PUBLISH-STUDENT",
             role=User.Role.STUDENT,
@@ -67,7 +74,7 @@ class PostgreSQLPublishLockRegressionTests(TestCase):
             question=question,
             display_order=1,
         )
-        ExperimentStudent.objects.create(experiment=experiment, student=student)
+        ExperimentStudent.objects.create(experiment=experiment, student=self.student)
 
         version = publish_experiment(experiment, teacher)
 
@@ -95,7 +102,7 @@ class PostgreSQLConcurrentPublishRegressionTests(TransactionTestCase):
             name="PostgreSQL 并发发布班",
             academic_year="2026",
         )
-        student = User.objects.create_user(
+        self.student = User.objects.create_user(
             username="PG-CONCURRENT-STUDENT",
             student_number="PG-CONCURRENT-STUDENT",
             role=User.Role.STUDENT,
@@ -103,7 +110,7 @@ class PostgreSQLConcurrentPublishRegressionTests(TransactionTestCase):
         CourseEnrollment.objects.create(
             course=self.course,
             class_group=self.class_group,
-            student=student,
+            student=self.student,
         )
         bank = QuestionBank.objects.create(
             course=self.course,
@@ -131,6 +138,12 @@ class PostgreSQLConcurrentPublishRegressionTests(TransactionTestCase):
             created_by=self.teacher,
             question_bank=bank,
             name="PostgreSQL 并发发布实验",
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=1,
+        )
+        ExperimentSamplingKC.objects.create(
+            experiment=self.experiment,
+            concept=concept,
         )
         ExperimentQuestion.objects.create(
             experiment=self.experiment,
@@ -140,68 +153,45 @@ class PostgreSQLConcurrentPublishRegressionTests(TransactionTestCase):
         save_participant_rules(self.experiment, [self.class_group], [], [])
 
     def test_two_publish_transactions_commit_one_complete_release(self):
-        first_lock_acquired = Event()
-        contender_entered_lock = Event()
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        plan = save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
+        plan.refresh_from_db()
+        expected_revision = plan.plan_revision
+        start = Event()
         outcomes = Queue()
-        original_lock_draft_experiment = services._lock_draft_experiment
 
-        def observe_contender_lock(experiment, *, error_message):
-            if current_thread().name == "publish-contender":
-                contender_entered_lock.set()
-            return original_lock_draft_experiment(
-                experiment,
-                error_message=error_message,
-            )
-
-        def publish_while_holding_first_lock():
+        def commit_as_contender():
             close_old_connections()
             try:
-                with transaction.atomic():
-                    experiment = Experiment.objects.select_for_update().get(
-                        pk=self.experiment.pk
-                    )
-                    first_lock_acquired.set()
-                    if not contender_entered_lock.wait(timeout=10):
-                        raise AssertionError("contending publish never reached the row lock")
-                    actor = User.objects.get(pk=self.teacher.pk)
-                    version = publish_experiment(experiment, actor)
-                outcomes.put(("committed", version.pk))
-            except Exception as exc:  # pragma: no cover - asserted through outcomes
-                outcomes.put(("failed", exc))
-            finally:
-                close_old_connections()
-
-        def publish_as_contender():
-            close_old_connections()
-            try:
-                if not first_lock_acquired.wait(timeout=10):
-                    raise AssertionError("first publish never acquired the row lock")
-                experiment = Experiment.objects.get(pk=self.experiment.pk)
+                if not start.wait(timeout=10):
+                    raise AssertionError("concurrent commit was not released")
+                worker_plan = PublishPlan.objects.get(pk=plan.pk)
                 actor = User.objects.get(pk=self.teacher.pk)
-                version = publish_experiment(experiment, actor)
-                outcomes.put(("committed", version.pk))
+                tasks = commit_publish_plan(
+                    worker_plan,
+                    actor,
+                    expected_revision=expected_revision,
+                )
+                outcomes.put(("committed", tasks[0].pk))
             except Exception as exc:
                 outcomes.put(("failed", exc))
             finally:
                 close_old_connections()
 
-        with patch.object(
-            services,
-            "_lock_draft_experiment",
-            side_effect=observe_contender_lock,
-        ):
-            first = Thread(
-                target=publish_while_holding_first_lock,
-                name="publish-winner",
-            )
-            contender = Thread(
-                target=publish_as_contender,
-                name="publish-contender",
-            )
-            first.start()
-            contender.start()
-            first.join(timeout=20)
-            contender.join(timeout=20)
+        first = Thread(target=commit_as_contender, name="publish-winner")
+        contender = Thread(target=commit_as_contender, name="publish-contender")
+        first.start()
+        contender.start()
+        start.set()
+        first.join(timeout=20)
+        contender.join(timeout=20)
 
         self.assertFalse(first.is_alive(), "first publish transaction did not finish")
         self.assertFalse(contender.is_alive(), "contending publish transaction did not finish")
@@ -211,11 +201,10 @@ class PostgreSQLConcurrentPublishRegressionTests(TransactionTestCase):
 
         self.assertEqual(len(committed), 1)
         self.assertEqual(len(failures), 1)
-        self.assertIsInstance(failures[0], ValidationError)
-        self.assertIn("只有草稿实验可以发布", failures[0].messages)
+        self.assertIsInstance(failures[0], PublicationConflict)
 
         self.experiment.refresh_from_db()
-        self.assertEqual(self.experiment.status, Experiment.Status.PUBLISHED)
+        self.assertEqual(self.experiment.status, Experiment.Status.FROZEN)
         self.assertEqual(
             ExperimentVersion.objects.filter(experiment=self.experiment).count(), 1
         )
@@ -237,9 +226,217 @@ class PostgreSQLConcurrentPublishRegressionTests(TransactionTestCase):
             1,
         )
         self.assertEqual(
-            AuditLog.objects.filter(
-                action="experiment.publish",
-                object_id=str(self.experiment.pk),
+            PublishPlan.objects.filter(
+                experiment=self.experiment,
+                status=PublishPlan.Status.COMMITTED,
             ).count(),
             1,
         )
+
+    def test_resume_plan_and_preview_share_course_experiment_plan_lock_order(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        PublishPlanClass.objects.create(
+            publish_plan=plan,
+            class_group=self.class_group,
+        )
+        preview_reached_plan_lock = Event()
+        resume_started = Event()
+        resume_reached_plan_lock = Event()
+        outcomes = Queue()
+
+        from . import publication_services
+
+        original_lock_plan = publication_services._lock_editable_publish_plan
+        original_select_plan_for_update = PublishPlan.objects.select_for_update
+
+        def pause_after_plan_lock(*args, **kwargs):
+            result = original_lock_plan(*args, **kwargs)
+            if current_thread().name == "preview-lock-order":
+                preview_reached_plan_lock.set()
+                if not resume_started.wait(timeout=10):
+                    raise AssertionError("resume transaction never started")
+                resume_reached_plan_lock.wait(timeout=1)
+            return result
+
+        def observe_plan_lock(*args, **kwargs):
+            if current_thread().name == "resume-lock-order":
+                resume_reached_plan_lock.set()
+            return original_select_plan_for_update(*args, **kwargs)
+
+        def preview_worker():
+            close_old_connections()
+            try:
+                worker_plan = type(plan).objects.get(pk=plan.pk)
+                actor = User.objects.get(pk=self.teacher.pk)
+                preview = generate_preview(
+                    worker_plan,
+                    actor,
+                    expected_revision=worker_plan.plan_revision,
+                )
+                outcomes.put(("preview", preview.pk))
+            except Exception as exc:  # pragma: no cover - asserted below
+                outcomes.put(("failed", exc))
+            finally:
+                close_old_connections()
+
+        def resume_worker():
+            close_old_connections()
+            try:
+                if not preview_reached_plan_lock.wait(timeout=10):
+                    raise AssertionError("preview never reached the plan lock")
+                resume_started.set()
+                experiment = Experiment.objects.get(pk=self.experiment.pk)
+                actor = User.objects.get(pk=self.teacher.pk)
+                resumed = get_or_create_publish_plan(experiment, actor)
+                outcomes.put(("resume", resumed.pk))
+            except Exception as exc:  # pragma: no cover - asserted below
+                outcomes.put(("failed", exc))
+            finally:
+                close_old_connections()
+
+        with (
+            patch.object(
+                publication_services,
+                "_lock_editable_publish_plan",
+                side_effect=pause_after_plan_lock,
+            ),
+            patch.object(
+                PublishPlan.objects,
+                "select_for_update",
+                side_effect=observe_plan_lock,
+            ),
+        ):
+            preview_thread = Thread(target=preview_worker, name="preview-lock-order")
+            resume_thread = Thread(target=resume_worker, name="resume-lock-order")
+            preview_thread.start()
+            resume_thread.start()
+            preview_thread.join(timeout=20)
+            resume_thread.join(timeout=20)
+
+        self.assertFalse(preview_thread.is_alive(), "preview transaction deadlocked")
+        self.assertFalse(resume_thread.is_alive(), "resume transaction deadlocked")
+        results = [outcomes.get_nowait(), outcomes.get_nowait()]
+        self.assertEqual({status for status, _ in results}, {"preview", "resume"})
+        self.assertEqual(
+            {value for status, value in results if status == "resume"},
+            {plan.pk},
+        )
+
+    def test_student_start_and_later_class_publish_share_course_first_lock_order(self):
+        first_plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        first_plan = save_plan_selection(
+            first_plan,
+            self.teacher,
+            expected_revision=first_plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        generate_preview(
+            first_plan, self.teacher, expected_revision=first_plan.plan_revision
+        )
+        first_plan.refresh_from_db()
+        first_task = commit_publish_plan(
+            first_plan, self.teacher, expected_revision=first_plan.plan_revision
+        )[0]
+
+        later_class = ClassGroup.objects.create(
+            course=self.course, name="稍后发布班", academic_year="2026"
+        )
+        later_student = User.objects.create_user(
+            username="PG-LATER-STUDENT",
+            student_number="PG-LATER-STUDENT",
+            role=User.Role.STUDENT,
+        )
+        CourseEnrollment.objects.create(
+            course=self.course,
+            class_group=later_class,
+            student=later_student,
+        )
+        later_plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        later_plan = save_plan_selection(
+            later_plan,
+            self.teacher,
+            expected_revision=later_plan.plan_revision,
+            class_ids=[later_class.pk],
+            exclusions_by_class={},
+        )
+        generate_preview(
+            later_plan, self.teacher, expected_revision=later_plan.plan_revision
+        )
+        later_plan.refresh_from_db()
+
+        from apps.assessment import services as assessment_services
+
+        session_has_course_lock = Event()
+        publisher_reached_course_lock = Event()
+        outcomes = Queue()
+        original_session_course_lock = assessment_services._lock_session_course
+        original_course_select_for_update = Course.objects.select_for_update
+
+        def pause_after_session_course_lock(course_id):
+            course = original_session_course_lock(course_id)
+            session_has_course_lock.set()
+            if not publisher_reached_course_lock.wait(timeout=10):
+                raise AssertionError("publisher did not reach the course lock")
+            return course
+
+        def observe_publisher_course_lock(*args, **kwargs):
+            if current_thread().name == "later-class-publisher":
+                publisher_reached_course_lock.set()
+            return original_course_select_for_update(*args, **kwargs)
+
+        def start_session():
+            close_old_connections()
+            try:
+                session = assessment_services.get_or_create_session(
+                    Experiment.objects.get(pk=self.experiment.pk),
+                    User.objects.get(pk=self.student.pk),
+                    class_task=ClassExperimentTask.objects.get(pk=first_task.pk),
+                )
+                outcomes.put(("session", session.pk))
+            except Exception as exc:  # pragma: no cover - asserted below
+                outcomes.put(("failed", exc))
+            finally:
+                close_old_connections()
+
+        def publish_later_class():
+            close_old_connections()
+            try:
+                if not session_has_course_lock.wait(timeout=10):
+                    raise AssertionError("student session did not lock the course")
+                tasks = commit_publish_plan(
+                    PublishPlan.objects.get(pk=later_plan.pk),
+                    User.objects.get(pk=self.teacher.pk),
+                    expected_revision=later_plan.plan_revision,
+                )
+                outcomes.put(("publish", tasks[0].pk))
+            except Exception as exc:  # pragma: no cover - asserted below
+                outcomes.put(("failed", exc))
+            finally:
+                close_old_connections()
+
+        with (
+            patch.object(
+                assessment_services,
+                "_lock_session_course",
+                side_effect=pause_after_session_course_lock,
+            ),
+            patch.object(
+                Course.objects,
+                "select_for_update",
+                side_effect=observe_publisher_course_lock,
+            ),
+        ):
+            session_thread = Thread(target=start_session, name="student-session")
+            publish_thread = Thread(
+                target=publish_later_class, name="later-class-publisher"
+            )
+            session_thread.start()
+            publish_thread.start()
+            session_thread.join(timeout=20)
+            publish_thread.join(timeout=20)
+
+        self.assertFalse(session_thread.is_alive(), "student session deadlocked")
+        self.assertFalse(publish_thread.is_alive(), "later publish deadlocked")
+        results = [outcomes.get_nowait(), outcomes.get_nowait()]
+        self.assertEqual({status for status, _ in results}, {"session", "publish"})

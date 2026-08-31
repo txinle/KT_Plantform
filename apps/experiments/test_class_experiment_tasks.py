@@ -25,8 +25,8 @@ from .models import (
 from .services import (
     _class_experiment_task_publication_scope,
     _create_class_experiment_tasks,
+    _publish_legacy_experiment as publish_experiment,
     delete_experiment,
-    publish_experiment,
     save_participant_rules,
 )
 
@@ -1217,7 +1217,7 @@ class ClassExperimentTaskTests(TestCase):
             class_group_admin.get_readonly_fields(request, self.class_a),
         )
 
-    def test_publish_view_returns_to_experiment_when_a_task_conflicts(self):
+    def test_legacy_course_publish_view_is_blocked_when_a_task_exists(self):
         save_participant_rules(self.experiment, [self.class_a], [], [])
         existing_version, existing_snapshot = self._version_and_snapshot(
             version_number=1,
@@ -1237,13 +1237,8 @@ class ClassExperimentTaskTests(TestCase):
             ),
         )
 
-        self.assertRedirects(
-            response,
-            reverse(
-                "courses:experiment_detail",
-                args=[self.course.pk, self.experiment.pk],
-            ),
-        )
+        self.assertEqual(response.status_code, 409)
+        self.assertContains(response, "旧版课程草稿", status_code=409)
         self.experiment.refresh_from_db()
         self.assertEqual(self.experiment.status, Experiment.Status.DRAFT)
         self.assertEqual(

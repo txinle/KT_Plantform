@@ -9,7 +9,11 @@ from apps.assessment.models import ExperimentSession
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
 from .forms import ExperimentForm, StudentAssignmentForm
 from .models import Experiment, ExperimentQuestion, ExperimentStudent, ExperimentVersion, QuestionSnapshot
-from .services import assign_students, publish_experiment, sync_experiment_questions
+from .services import (
+    _publish_legacy_experiment as publish_experiment,
+    assign_students,
+    sync_experiment_questions,
+)
 
 class PublishingTests(TestCase):
     def setUp(self):
@@ -193,24 +197,36 @@ class ExperimentFormArchivedBankRaceTests(TestCase):
         bank.refresh_from_db()
         self.assertEqual(bank.visibility, QuestionBank.Visibility.ARCHIVED)
 
-    def test_course_create_rolls_back_when_the_validated_bank_is_archived_before_save(self):
+    def test_course_create_rejects_legacy_write_before_form_validation(self):
         response = self.post_after_archiving_the_validated_bank(
             reverse("courses:experiment_create", args=[self.course.pk]),
             self.course_target_bank,
             self.payload(self.course_target_bank, "不应创建的课程草稿"),
         )
 
-        self.assert_archived_bank_error(response, self.course_target_bank)
+        self.assertEqual(response.status_code, 409)
+        self.assertContains(response, "不能创建新的 all/type_quota", status_code=409)
+        self.course_target_bank.refresh_from_db()
+        self.assertEqual(
+            self.course_target_bank.visibility,
+            QuestionBank.Visibility.PRIVATE,
+        )
         self.assertFalse(Experiment.objects.filter(name="不应创建的课程草稿").exists())
 
-    def test_course_edit_keeps_the_existing_bank_when_the_target_is_archived_before_save(self):
+    def test_course_edit_rejects_legacy_write_before_form_validation(self):
         response = self.post_after_archiving_the_validated_bank(
             reverse("courses:experiment_edit", args=[self.course.pk, self.course_experiment.pk]),
             self.course_target_bank,
             self.payload(self.course_target_bank, "不应换绑的课程草稿"),
         )
 
-        self.assert_archived_bank_error(response, self.course_target_bank)
+        self.assertEqual(response.status_code, 409)
+        self.assertContains(response, "不能修改 all/type_quota", status_code=409)
+        self.course_target_bank.refresh_from_db()
+        self.assertEqual(
+            self.course_target_bank.visibility,
+            QuestionBank.Visibility.PRIVATE,
+        )
         self.course_experiment.refresh_from_db()
         self.assertEqual(self.course_experiment.question_bank_id, self.course_bank.pk)
 
@@ -375,11 +391,11 @@ class ExperimentFormPublishedRaceTests(TestCase):
                 self.payload(self.course_bank, "不应覆盖已发布课程实验"),
             )
 
-        self.assert_published_experiment_is_unchanged(
-            response,
-            self.course_experiment,
-            "课程发布草稿",
-        )
+        self.assertEqual(response.status_code, 409)
+        self.assertContains(response, "不能修改 all/type_quota", status_code=409)
+        self.course_experiment.refresh_from_db()
+        self.assertEqual(self.course_experiment.status, Experiment.Status.PUBLISHED)
+        self.assertEqual(self.course_experiment.name, "课程发布草稿")
 
     def test_legacy_edit_rejects_a_stale_draft_after_it_is_published(self):
         from . import views
@@ -404,7 +420,7 @@ class ExperimentFormPublishedRaceTests(TestCase):
             "旧版发布草稿",
         )
 
-    def test_course_edit_locks_experiment_before_course(self):
+    def test_course_edit_rejects_legacy_write_without_taking_write_locks(self):
         from . import course_views
 
         lock_order = []
@@ -438,8 +454,8 @@ class ExperimentFormPublishedRaceTests(TestCase):
                 self.payload(self.course_bank, "锁序课程草稿"),
             )
 
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(lock_order[:2], ["experiment", "course"])
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(lock_order, [])
 
     def test_legacy_edit_locks_only_experiment(self):
         from . import views

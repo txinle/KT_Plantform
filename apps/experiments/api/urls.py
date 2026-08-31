@@ -10,6 +10,7 @@ from .views import (
     TeacherExperimentDetailView,
     TeacherExperimentClassTaskListView,
     TeacherExperimentReadinessView,
+    TeacherSamplingInventoryView,
     TeacherPublishPlanCommitView,
     TeacherPublishPlanDetailView,
     TeacherPublishPlanPreviewView,
@@ -27,6 +28,11 @@ urlpatterns = [
         "courses/<int:course_id>/experiments/",
         TeacherExperimentCollectionView.as_view(),
         name="teacher-experiment-collection",
+    ),
+    path(
+        "courses/<int:course_id>/experiments/sampling-inventory/",
+        TeacherSamplingInventoryView.as_view(),
+        name="teacher-experiment-sampling-inventory",
     ),
     path(
         "courses/<int:course_id>/experiments/<int:experiment_id>/",

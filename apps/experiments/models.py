@@ -41,6 +41,15 @@ class ExperimentQuerySet(models.QuerySet):
     def _writes_course(self, values):
         return bool(self._course_field_names.intersection(values))
 
+    def _writes_frozen_definition(self, values):
+        normalized = {
+            f"{field_name}_id"
+            if field_name in {"course", "question_bank", "frozen_release_snapshot"}
+            else field_name
+            for field_name in values
+        }
+        return bool(normalized.intersection(Experiment.FROZEN_DEFINITION_FIELDS))
+
     def _locked_course_write_target_ids(self):
         return list(
             self.select_for_update()
@@ -49,7 +58,10 @@ class ExperimentQuerySet(models.QuerySet):
         )
 
     def update(self, **kwargs):
-        if not self._writes_course(kwargs):
+        writes_course = self._writes_course(kwargs)
+        writes_frozen_definition = self._writes_frozen_definition(kwargs)
+        rolls_back_release = kwargs.get("status") == Experiment.Status.DRAFT
+        if not writes_course and not writes_frozen_definition and not rolls_back_release:
             return super().update(**kwargs)
         self._not_support_combined_queries("update")
         if self.query.is_sliced:
@@ -63,7 +75,21 @@ class ExperimentQuerySet(models.QuerySet):
                 self._result_cache = None
                 return 0
             locked_targets = locked_scope.filter(pk__in=target_ids)
-            if locked_targets.filter(class_tasks__isnull=False).exists():
+            if (
+                writes_frozen_definition
+                and locked_targets.filter(
+                    frozen_release_snapshot__isnull=False
+                ).exists()
+            ):
+                raise ValidationError("实验定义已冻结，不能批量修改。")
+            if (
+                rolls_back_release
+                and locked_targets.filter(
+                    frozen_release_snapshot__isnull=False
+                ).exists()
+            ):
+                raise ValidationError("已冻结实验不能退回草稿状态。")
+            if writes_course and locked_targets.filter(class_tasks__isnull=False).exists():
                 raise ValidationError("已存在正式班级实验任务，实验所属课程不可变更。")
             # Update only the rows whose original queryset scope was locked.
             rows = models.QuerySet.update(locked_targets, **kwargs)
@@ -99,6 +125,32 @@ class ExperimentManager(models.Manager.from_queryset(ExperimentQuerySet)):
 
 
 class Experiment(models.Model):
+    FROZEN_DEFINITION_FIELDS = (
+        "name",
+        "description",
+        "course_id",
+        "question_bank_id",
+        "selection_mode",
+        "sampling_mode",
+        "sampling_total_count",
+        "sampling_match_scope",
+        "ordering_mode",
+        "feedback_mode",
+        "time_mode",
+        "total_time_limit_minutes",
+        "per_question_time_limit_seconds",
+        "resume_mode",
+        "confidence_mode",
+        "confidence_sampling_unit",
+        "confidence_probability",
+        "confidence_randomization_seed",
+        "confidence_assignment_version",
+        "confidence_scale_version",
+        "confidence_prompt_version",
+        "assignment_unit_type",
+        "heartbeat_interval_seconds",
+        "frozen_release_snapshot_id",
+    )
     class Status(models.TextChoices):
         DRAFT = "draft", "草稿"
         FROZEN = "frozen", "已冻结"
@@ -112,6 +164,12 @@ class Experiment(models.Model):
     class SelectionMode(models.TextChoices):
         ALL = "all", "全量题池"
         QUOTA = "quota", "按题型配额抽题"
+    class SamplingMode(models.TextChoices):
+        TOTAL_COUNT = "total_count", "按总题数抽题"
+        KC_QUOTA = "kc_quota", "按知识点配额抽题"
+    class MatchScope(models.TextChoices):
+        PRIMARY = "primary", "主 KC"
+        ANY_LEVEL = "any_level", "任意层级"
     class Feedback(models.TextChoices):
         NONE = "none", "仅显示已提交"
         CORRECTNESS = "correctness", "显示正误"
@@ -167,6 +225,18 @@ class Experiment(models.Model):
         max_length=16,
         choices=SelectionMode.choices,
         default=SelectionMode.ALL,
+    )
+    sampling_mode = models.CharField(
+        max_length=20,
+        choices=SamplingMode.choices,
+        null=True,
+        blank=True,
+    )
+    sampling_total_count = models.PositiveIntegerField(null=True, blank=True)
+    sampling_match_scope = models.CharField(
+        max_length=16,
+        choices=MatchScope.choices,
+        default=MatchScope.ANY_LEVEL,
     )
     ordering_mode = models.CharField(max_length=24, choices=Ordering.choices, default=Ordering.FIXED)
     feedback_mode = models.CharField(max_length=16, choices=Feedback.choices, default=Feedback.NONE)
@@ -295,9 +365,47 @@ class Experiment(models.Model):
                 ignore_conflicts=True,
             )
 
+    def _frozen_definition_is_changing(self, update_fields, *, using):
+        if self._state.adding:
+            return False
+        normalized_update_fields = {
+            f"{field_name}_id" if field_name in {"course", "question_bank", "frozen_release_snapshot"} else field_name
+            for field_name in (update_fields or ())
+        }
+        rolls_back_release = self.status == self.Status.DRAFT and (
+            update_fields is None or "status" in normalized_update_fields
+        )
+        if (
+            update_fields is not None
+            and not normalized_update_fields.intersection(
+                self.FROZEN_DEFINITION_FIELDS
+            )
+            and not rolls_back_release
+        ):
+            return False
+        current = (
+            self.__class__._base_manager.using(using)
+            .filter(pk=self.pk)
+            .values("status", *self.FROZEN_DEFINITION_FIELDS)
+            .get()
+        )
+        if not current["frozen_release_snapshot_id"]:
+            return False
+        if rolls_back_release:
+            raise ValidationError("已冻结实验不能退回草稿状态。")
+        return any(
+            current[field_name] != getattr(self, field_name)
+            for field_name in self.FROZEN_DEFINITION_FIELDS
+        )
+
     def save(self, *args, **kwargs):
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         save_kwargs = {**kwargs, "using": using}
+        if self._frozen_definition_is_changing(
+            save_kwargs.get("update_fields"),
+            using=using,
+        ):
+            raise ValidationError("实验定义已冻结，不能再修改。")
         if not self._task_backed_course_is_changing(
             save_kwargs.get("update_fields"),
             using=using,
@@ -357,6 +465,54 @@ class ExperimentQuestionQuota(models.Model):
                 name="experiment_question_quota_nonnegative",
             ),
         ]
+
+
+class ExperimentSamplingKC(models.Model):
+    experiment = models.ForeignKey(
+        Experiment,
+        on_delete=models.CASCADE,
+        related_name="sampling_kcs",
+    )
+    concept = models.ForeignKey(
+        "question_bank.Concept",
+        on_delete=models.PROTECT,
+        related_name="experiment_sampling_rules",
+    )
+    quota = models.PositiveIntegerField(null=True, blank=True)
+    match_scope = models.CharField(
+        max_length=16,
+        choices=Experiment.MatchScope.choices,
+        default=Experiment.MatchScope.PRIMARY,
+    )
+
+    class Meta:
+        ordering = ["concept_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["experiment", "concept"],
+                name="unique_experiment_sampling_kc",
+            ),
+            models.CheckConstraint(
+                condition=Q(quota__isnull=True) | Q(quota__gt=0),
+                name="experiment_sampling_kc_positive_quota",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if (
+            self.experiment_id
+            and self.concept_id
+            and self.experiment.course_id != self.concept.course_id
+        ):
+            raise ValidationError({"concept": "抽题知识点必须属于实验课程。"})
+        if self.concept_id and self.concept.status != self.concept.Status.ACTIVE:
+            raise ValidationError({"concept": "归档知识点不能用于新的实验规则。"})
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        return super().save(*args, **kwargs)
+
 
 class ExperimentStudent(models.Model):
     experiment = models.ForeignKey(Experiment, on_delete=models.CASCADE, related_name="student_links")
@@ -908,6 +1064,10 @@ class ExperimentVersionParticipantSnapshot(models.Model):
         related_name="experiment_participant_snapshots",
     )
     randomization_subject_key = models.CharField(max_length=128, blank=True, default="")
+    sampling_seed = models.CharField(max_length=64, blank=True, default="")
+    ordering_seed = models.CharField(max_length=64, blank=True, default="")
+    sampling_algorithm_version = models.CharField(max_length=32, blank=True, default="")
+    assignment_snapshot = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -991,6 +1151,24 @@ class ConditionAssignment(models.Model):
     def assignment_probability(self, value):
         self.probability = value
 
+class QuestionSnapshotQuerySet(models.QuerySet):
+    def _assert_not_task_backed(self, *, action):
+        if self.filter(version__class_tasks__isnull=False).exists():
+            raise ValidationError(f"已发布题目快照不可{action}。")
+
+    def update(self, **kwargs):
+        self._assert_not_task_backed(action="修改")
+        return super().update(**kwargs)
+
+    def delete(self):
+        self._assert_not_task_backed(action="删除")
+        return super().delete()
+
+
+class QuestionSnapshotManager(models.Manager.from_queryset(QuestionSnapshotQuerySet)):
+    pass
+
+
 class QuestionSnapshot(models.Model):
     version = models.ForeignKey(ExperimentVersion, on_delete=models.CASCADE, related_name="question_snapshots")
     source_question = models.ForeignKey("question_bank.Question", on_delete=models.PROTECT)
@@ -1020,8 +1198,31 @@ class QuestionSnapshot(models.Model):
     empirical_difficulty = models.DecimalField(max_digits=4, decimal_places=3, null=True, blank=True)
     primary_kc = models.CharField(max_length=160)
     all_kcs = models.JSONField(default=list)
+    primary_kc_id_snapshot = models.PositiveBigIntegerField(null=True, blank=True)
+    primary_kc_path = models.TextField(blank=True, default="")
+    primary_kc_levels = models.JSONField(default=list)
+    all_kc_paths = models.JSONField(default=list)
+    all_kc_snapshots = models.JSONField(default=list)
+    root_kc_code = models.CharField(max_length=32, blank=True, default="")
+    kc_mapping_snapshot = models.JSONField(default=dict)
+    kc_mapping_schema_version = models.CharField(max_length=32, blank=True, default="")
+    kc_mapping_hash = models.CharField(max_length=64, blank=True, default="")
     release_fingerprint = models.CharField(max_length=64, blank=True, default="")
+    objects = QuestionSnapshotManager()
     class Meta: ordering = ["source_sequence", "id"]
+
+    def _is_task_backed(self):
+        return self.version.class_tasks.exists()
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding and self._is_task_backed():
+            raise ValidationError("已发布题目快照不可修改。")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self._is_task_backed():
+            raise ValidationError("已发布题目快照不可删除。")
+        return super().delete(*args, **kwargs)
 
 
 class ItemInstanceQuerySet(models.QuerySet):
@@ -1231,7 +1432,6 @@ class PublishPlanClass(models.Model):
         on_delete=models.PROTECT,
         related_name="publish_plan_entries",
     )
-    schedule_configured = models.BooleanField(default=False)
     use_batch_default = models.BooleanField(default=True)
     opens_at = models.DateTimeField(null=True, blank=True)
     closes_at = models.DateTimeField(null=True, blank=True)
@@ -1351,6 +1551,12 @@ class PublishPreviewParticipant(models.Model):
         related_name="publish_preview_participations",
     )
     randomization_subject_key = models.CharField(max_length=128)
+    sampling_seed = models.CharField(max_length=64)
+    ordering_seed = models.CharField(max_length=64)
+    sampling_algorithm_version = models.CharField(
+        max_length=64,
+        default="task_root_hmac_v2",
+    )
     item_count = models.PositiveIntegerField(default=0)
     is_valid = models.BooleanField(default=True)
 
@@ -1408,6 +1614,7 @@ class PublishPreviewItem(models.Model):
     )
     question_release_fingerprint = models.CharField(max_length=64)
     assigned_sequence_index = models.PositiveIntegerField()
+    sampling_source = models.JSONField(default=dict, blank=True)
     release_mapping = models.ForeignKey(
         ReleaseSnapshotQuestionMapping,
         null=True,

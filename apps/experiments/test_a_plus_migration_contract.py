@@ -19,7 +19,7 @@ class APlusMigrationContractTests(SimpleTestCase):
 
         self.assertEqual(
             loader.graph.leaf_nodes("experiments"),
-            [("experiments", "0017_participant_task_uniqueness")],
+            [("experiments", "0022_participant_snapshot_assignment_provenance")],
         )
 
     def test_a_plus_initial_schema_migration_has_no_data_backfill(self):

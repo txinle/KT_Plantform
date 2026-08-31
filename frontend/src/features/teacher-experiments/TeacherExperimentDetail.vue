@@ -176,7 +176,7 @@ onMounted(load)
           <div class="kt-section-heading"><h2 id="definition-summary">实验设置摘要</h2></div>
           <dl class="kt-description-list kt-definition-summary__list">
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="bank" :size="17" /></span><dt>题库</dt><dd>{{ experiment.question_bank.name }}</dd></div>
-            <div><span class="kt-summary-icon" data-summary-icon><Icon name="definition" :size="17" /></span><dt>选题</dt><dd>{{ experiment.selection_mode_label }}</dd></div>
+            <div><span class="kt-summary-icon" data-summary-icon><Icon name="definition" :size="17" /></span><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}<span v-if="experiment.sampling_mode === 'total_count'"> · {{ experiment.sampling_total_count }} 题</span></dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="summary" :size="17" /></span><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>反馈</dt><dd>{{ experiment.feedback_mode_label }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>总限时</dt><dd>{{ displayLimit(experiment.total_time_limit_minutes, '分钟') }}</dd></div>

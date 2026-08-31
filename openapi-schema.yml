@@ -423,6 +423,37 @@ paths:
               schema:
                 $ref: '#/components/schemas/QuestionBankCollection'
           description: ''
+    post:
+      operationId: teacher_courses_banks_create
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionBankCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/QuestionBankCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/QuestionBankCreateRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionBankCreateResponse'
+          description: ''
   /api/v1/teacher/courses/{course_id}/banks/{bank_id}/:
     get:
       operationId: teacher_question_banks_retrieve
@@ -476,6 +507,80 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BankConceptCollection'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/concepts/import/confirm/:
+    post:
+      operationId: teacher_courses_banks_concepts_import_confirm_create
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportConfirmRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ImportConfirmRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ImportConfirmRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionKCImportResult'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/concepts/import/preview/:
+    post:
+      operationId: teacher_courses_banks_concepts_import_preview_create
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportPreviewResponse'
           description: ''
   /api/v1/teacher/courses/{course_id}/banks/{bank_id}/questions/:
     get:
@@ -587,6 +692,10 @@ paths:
     get:
       operationId: teacher_courses_concepts_retrieve
       parameters:
+      - in: query
+        name: all
+        schema:
+          type: boolean
       - in: path
         name: course_id
         schema:
@@ -606,6 +715,101 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CourseConceptCollection'
+          description: ''
+    post:
+      operationId: teacher_courses_concepts_create
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseConceptCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CourseConceptCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CourseConceptCreateRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseConceptCreateResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/concepts/import/confirm/:
+    post:
+      operationId: teacher_courses_concepts_import_confirm_create
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportConfirmRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ImportConfirmRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ImportConfirmRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseKCImportResult'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/concepts/import/preview/:
+    post:
+      operationId: teacher_courses_concepts_import_preview_create
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportPreviewResponse'
           description: ''
   /api/v1/teacher/courses/{course_id}/data/advanced/:
     get:
@@ -902,6 +1106,38 @@ paths:
               schema:
                 $ref: '#/components/schemas/TeacherExperimentReadiness'
           description: ''
+  /api/v1/teacher/courses/{course_id}/experiments/sampling-inventory/:
+    post:
+      operationId: teacher_experiment_sampling_inventory
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeacherSamplingInventoryRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TeacherSamplingInventoryRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TeacherSamplingInventoryRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherSamplingInventoryResponse'
+          description: ''
   /api/v1/teacher/experiments/{experiment_id}/class-tasks/:
     get:
       operationId: teacher_experiment_class_task_list
@@ -1177,12 +1413,17 @@ components:
       properties:
         id:
           type: integer
+        kc_code:
+          type: string
         name:
           type: string
-        primary_count:
+        level_1_count:
           type: integer
           minimum: 0
-        secondary_count:
+        level_2_count:
+          type: integer
+          minimum: 0
+        level_3_count:
           type: integer
           minimum: 0
         question_count:
@@ -1194,11 +1435,13 @@ components:
             $ref: '#/components/schemas/BankConceptQuestion'
       required:
       - id
+      - kc_code
+      - level_1_count
+      - level_2_count
+      - level_3_count
       - name
-      - primary_count
       - question_count
       - questions
-      - secondary_count
     ClassAnalysisScope:
       type: object
       properties:
@@ -1409,17 +1652,62 @@ components:
           $ref: '#/components/schemas/QuestionBankPageMetadata'
         course:
           $ref: '#/components/schemas/QuestionBankCourse'
+        summary:
+          type: object
+          additionalProperties: {}
       required:
       - course
       - items
       - page
+      - summary
+    CourseConceptCreateRequest:
+      type: object
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+          maxLength: 160
+        description:
+          type: string
+      required:
+      - name
+      - sequence
+    CourseConceptCreateResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        kc_code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+      required:
+      - description
+      - id
+      - kc_code
+      - name
+      - status
     CourseConceptSummary:
       type: object
       properties:
         id:
           type: integer
+        kc_code:
+          type: string
         name:
           type: string
+        description:
+          type: string
+        status:
+          type: string
+        role_counts:
+          $ref: '#/components/schemas/KCRoleCounts'
         question_count:
           type: integer
           minimum: 0
@@ -1445,11 +1733,15 @@ components:
       - can_delete
       - can_rename
       - delete_url
+      - description
       - distribution
       - id
+      - kc_code
       - name
       - question_count
       - rename_url
+      - role_counts
+      - status
     CourseContext:
       type: object
       properties:
@@ -1486,6 +1778,18 @@ components:
       description: |-
         * `active` - 进行中
         * `archived` - 已归档
+    CourseKCImportResult:
+      type: object
+      properties:
+        created:
+          type: integer
+          minimum: 0
+        unchanged:
+          type: integer
+          minimum: 0
+      required:
+      - created
+      - unchanged
     CourseReference:
       type: object
       properties:
@@ -2098,6 +2402,14 @@ components:
       - participated_count
       - published_at
       - score_rate
+    FileImportRequest:
+      type: object
+      properties:
+        file:
+          type: string
+          format: uri
+      required:
+      - file
     FilterChoice:
       type: object
       properties:
@@ -2115,6 +2427,24 @@ components:
           type: string
       required:
       - status
+    ImportConfirmRequest:
+      type: object
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+      required:
+      - batch_id
+    ImportPreviewResponse:
+      type: object
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+        preview: {}
+      required:
+      - batch_id
+      - preview
     KCRateRow:
       type: object
       properties:
@@ -2125,6 +2455,30 @@ components:
       required:
       - correct_rate
       - name
+    KCRoleCounts:
+      type: object
+      properties:
+        level_1:
+          type: integer
+          minimum: 0
+        level_2:
+          type: integer
+          minimum: 0
+        level_3:
+          type: integer
+          minimum: 0
+      required:
+      - level_1
+      - level_2
+      - level_3
+    MatchScopeEnum:
+      enum:
+      - primary
+      - any_level
+      type: string
+      description: |-
+        * `primary` - 主 KC
+        * `any_level` - 任意层级
     MetricValue:
       type: object
       properties:
@@ -2156,7 +2510,7 @@ components:
       - ratio
       - sample_size
       - state
-    ModeEnum:
+    Mode567Enum:
       enum:
       - default
       - custom
@@ -2164,6 +2518,17 @@ components:
       description: |-
         * `default` - default
         * `custom` - custom
+    Mode9dfEnum:
+      enum:
+      - total_count
+      - kc_quota
+      type: string
+      description: |-
+        * `total_count` - 按总题数抽题
+        * `kc_quota` - 按知识点配额抽题
+    NullEnum:
+      enum:
+      - null
     OrderingModeEnum:
       enum:
       - fixed
@@ -2238,7 +2603,9 @@ components:
           type: string
           readOnly: true
         selection_mode:
-          $ref: '#/components/schemas/SelectionModeEnum'
+          allOf:
+          - $ref: '#/components/schemas/SelectionModeEnum'
+          readOnly: true
         selection_mode_label:
           type: string
           readOnly: true
@@ -2246,6 +2613,32 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/QuestionQuota'
+          readOnly: true
+        sampling_mode:
+          readOnly: true
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/SamplingModeEnum'
+          - $ref: '#/components/schemas/NullEnum'
+        sampling_mode_label:
+          type: string
+          readOnly: true
+          nullable: true
+        sampling_total_count:
+          type: integer
+          readOnly: true
+          nullable: true
+        sampling_match_scope:
+          allOf:
+          - $ref: '#/components/schemas/SamplingMatchScopeEnum'
+          readOnly: true
+        sampling_kcs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SamplingKC'
+          readOnly: true
+        sampling:
+          $ref: '#/components/schemas/SamplingDefinition'
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -2424,6 +2817,10 @@ components:
           type: array
           items:
             type: string
+        blocking_issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublishPlanBlockingIssue'
         field_errors:
           type: object
           additionalProperties: {}
@@ -2446,6 +2843,7 @@ components:
           items:
             $ref: '#/components/schemas/PublishPlanClass'
       required:
+      - blocking_issues
       - classes
       - current_step
       - default_closes_at
@@ -2458,6 +2856,36 @@ components:
       - plan_revision
       - setup_status
       - status
+    PublishPlanBlockingIssue:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        class_id:
+          type: integer
+          nullable: true
+        kc_id:
+          type: integer
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        ancestor_kc_id:
+          type: integer
+        ancestor_kc_path:
+          type: string
+        descendant_kc_id:
+          type: integer
+        descendant_kc_path:
+          type: string
+      required:
+      - class_id
+      - code
+      - field
+      - kc_id
+      - message
     PublishPlanClass:
       type: object
       properties:
@@ -2473,8 +2901,6 @@ components:
         participant_count:
           type: integer
           minimum: 0
-        schedule_configured:
-          type: boolean
         schedule_mode:
           $ref: '#/components/schemas/ScheduleModeEnum'
         opens_at:
@@ -2493,7 +2919,6 @@ components:
       - excluded_count
       - opens_at
       - participant_count
-      - schedule_configured
       - schedule_mode
     PublishPlanClassSelection:
       type: object
@@ -2545,7 +2970,7 @@ components:
           type: integer
           minimum: 1
         mode:
-          $ref: '#/components/schemas/ModeEnum'
+          $ref: '#/components/schemas/Mode567Enum'
         opens_at:
           type: string
           format: date-time
@@ -2666,16 +3091,6 @@ components:
       - archived_banks_url
       - archived_count
       - shared_sources_url
-    QuestionBankConceptReference:
-      type: object
-      properties:
-        id:
-          type: integer
-        name:
-          type: string
-      required:
-      - id
-      - name
     QuestionBankCourse:
       type: object
       properties:
@@ -2695,6 +3110,31 @@ components:
       - name
       - status
       - term
+    QuestionBankCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 160
+        description:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/VisibilityEnum'
+      required:
+      - name
+    QuestionBankCreateResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        detail_url:
+          type: string
+      required:
+      - detail_url
+      - id
+      - name
     QuestionBankDetail:
       type: object
       properties:
@@ -2907,6 +3347,62 @@ components:
       - question_types
       - status
       - statuses
+    QuestionKCImportResult:
+      type: object
+      properties:
+        questions_updated:
+          type: integer
+          minimum: 0
+      required:
+      - questions_updated
+    QuestionKCMapping:
+      type: object
+      properties:
+        schema_version:
+          type: string
+        root_kc_code:
+          type: string
+          nullable: true
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionKCMappingNode'
+        mapping_hash:
+          type: string
+      required:
+      - mapping_hash
+      - nodes
+      - root_kc_code
+      - schema_version
+    QuestionKCMappingNode:
+      type: object
+      properties:
+        kc_code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        depth:
+          type: integer
+          maximum: 3
+          minimum: 1
+        parent_kc_code:
+          type: string
+          nullable: true
+        order:
+          type: integer
+          minimum: 1
+      required:
+      - depth
+      - description
+      - kc_code
+      - name
+      - order
+      - parent_kc_code
+      - status
     QuestionQuota:
       type: object
       properties:
@@ -2940,10 +3436,8 @@ components:
           type: string
         question_type_label:
           type: string
-        primary_concept:
-          allOf:
-          - $ref: '#/components/schemas/QuestionBankConceptReference'
-          nullable: true
+        kc_mapping:
+          $ref: '#/components/schemas/QuestionKCMapping'
         teacher_difficulty:
           type: string
           format: decimal
@@ -2965,7 +3459,7 @@ components:
       - delete_url
       - edit_url
       - id
-      - primary_concept
+      - kc_mapping
       - question_type
       - question_type_label
       - sequence
@@ -3043,16 +3537,84 @@ components:
       description: |-
         * `single_session` - 必须一次完成
         * `resumable` - 允许断点续答
+    SamplingDefinition:
+      type: object
+      properties:
+        mode:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/Mode9dfEnum'
+          - $ref: '#/components/schemas/NullEnum'
+        total_count:
+          type: integer
+          minimum: 1
+          nullable: true
+        match_scope:
+          $ref: '#/components/schemas/MatchScopeEnum'
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SamplingKC'
+        type_quotas:
+          type: array
+          items:
+            $ref: '#/components/schemas/SamplingQuestionTypeQuota'
+      required:
+      - mode
+    SamplingKC:
+      type: object
+      properties:
+        kc_code:
+          type: string
+          maxLength: 32
+        kc_name:
+          type: string
+          readOnly: true
+        quota:
+          type: integer
+          minimum: 1
+          nullable: true
+        match_scope:
+          $ref: '#/components/schemas/MatchScopeEnum'
+      required:
+      - kc_code
+      - kc_name
+      - match_scope
+    SamplingMatchScopeEnum:
+      enum:
+      - primary
+      - any_level
+      type: string
+      description: |-
+        * `primary` - 主 KC
+        * `any_level` - 任意层级
+    SamplingModeEnum:
+      enum:
+      - total_count
+      - kc_quota
+      type: string
+      description: |-
+        * `total_count` - 按总题数抽题
+        * `kc_quota` - 按知识点配额抽题
+    SamplingQuestionTypeQuota:
+      type: object
+      properties:
+        question_type:
+          $ref: '#/components/schemas/QuestionTypeEnum'
+        amount:
+          type: integer
+          minimum: 1
+      required:
+      - amount
+      - question_type
     ScheduleModeEnum:
       enum:
       - default
       - custom
-      - unset
       type: string
       description: |-
         * `default` - default
         * `custom` - custom
-        * `unset` - unset
     ScheduleRevisionInput:
       type: object
       properties:
@@ -4042,7 +4604,9 @@ components:
           type: string
           readOnly: true
         selection_mode:
-          $ref: '#/components/schemas/SelectionModeEnum'
+          allOf:
+          - $ref: '#/components/schemas/SelectionModeEnum'
+          readOnly: true
         selection_mode_label:
           type: string
           readOnly: true
@@ -4050,6 +4614,32 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/QuestionQuota'
+          readOnly: true
+        sampling_mode:
+          readOnly: true
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/SamplingModeEnum'
+          - $ref: '#/components/schemas/NullEnum'
+        sampling_mode_label:
+          type: string
+          readOnly: true
+          nullable: true
+        sampling_total_count:
+          type: integer
+          readOnly: true
+          nullable: true
+        sampling_match_scope:
+          allOf:
+          - $ref: '#/components/schemas/SamplingMatchScopeEnum'
+          readOnly: true
+        sampling_kcs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SamplingKC'
+          readOnly: true
+        sampling:
+          $ref: '#/components/schemas/SamplingDefinition'
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -4119,7 +4709,14 @@ components:
       - ordering_mode_label
       - question_bank
       - question_bank_id
+      - question_quotas
       - resume_mode_label
+      - sampling_kcs
+      - sampling_match_scope
+      - sampling_mode
+      - sampling_mode_label
+      - sampling_total_count
+      - selection_mode
       - selection_mode_label
       - status
       - status_label
@@ -4167,6 +4764,27 @@ components:
         * `none` - 仅显示已提交
         * `correctness` - 显示正误
         * `full` - 显示正误、答案与解析
+    TeacherExperimentInventoryBucket:
+      type: object
+      properties:
+        kc_code:
+          type: string
+        kc_name:
+          type: string
+        match_scope:
+          $ref: '#/components/schemas/MatchScopeEnum'
+        requested:
+          type: integer
+          nullable: true
+        available:
+          type: integer
+          minimum: 0
+      required:
+      - available
+      - kc_code
+      - kc_name
+      - match_scope
+      - requested
     TeacherExperimentReadiness:
       type: object
       properties:
@@ -4176,17 +4794,64 @@ components:
           type: array
           items:
             type: string
+        blocking_issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherExperimentReadinessIssue'
         candidate_count:
           type: integer
           minimum: 0
+        requested_count:
+          type: integer
+          nullable: true
+        inventory_buckets:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherExperimentInventoryBucket'
         participant_count:
           type: integer
           minimum: 0
       required:
+      - blocking_issues
       - candidate_count
+      - inventory_buckets
       - issues
       - participant_count
       - ready
+      - requested_count
+    TeacherExperimentReadinessIssue:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        class_id:
+          type: integer
+          nullable: true
+        kc_id:
+          type: integer
+          nullable: true
+        kc_code:
+          type: string
+          nullable: true
+        field:
+          type: string
+          nullable: true
+        ancestor_kc_id:
+          type: integer
+        ancestor_kc_path:
+          type: string
+        descendant_kc_id:
+          type: integer
+        descendant_kc_path:
+          type: string
+      required:
+      - class_id
+      - code
+      - field
+      - kc_id
+      - message
     TeacherExperimentStatusEnum:
       enum:
       - draft
@@ -4225,6 +4890,50 @@ components:
       required:
       - id
       - name
+    TeacherSamplingInventoryQuestionType:
+      type: object
+      properties:
+        question_type:
+          $ref: '#/components/schemas/QuestionTypeEnum'
+        label:
+          type: string
+        available:
+          type: integer
+          minimum: 0
+      required:
+      - available
+      - label
+      - question_type
+    TeacherSamplingInventoryRequest:
+      type: object
+      properties:
+        question_bank_id:
+          type: integer
+          minimum: 1
+        kc_codes:
+          type: array
+          items:
+            type: string
+            maxLength: 32
+        match_scope:
+          $ref: '#/components/schemas/MatchScopeEnum'
+      required:
+      - kc_codes
+      - match_scope
+      - question_bank_id
+    TeacherSamplingInventoryResponse:
+      type: object
+      properties:
+        candidate_count:
+          type: integer
+          minimum: 0
+        question_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherSamplingInventoryQuestionType'
+      required:
+      - candidate_count
+      - question_types
     TimeModeEnum:
       enum:
       - none
@@ -4235,6 +4944,14 @@ components:
         * `none` - 无时限
         * `total` - 实验总时限
         * `per_question` - 单题时限
+    VisibilityEnum:
+      enum:
+      - private
+      - shared
+      type: string
+      description: |-
+        * `private` - private
+        * `shared` - shared
   securitySchemes:
     SessionAuth:
       type: apiKey

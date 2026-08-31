@@ -197,35 +197,30 @@ class UIContractTests(TestCase):
         self.assertGreaterEqual(owned_row.count("bank.question_count"), 2)
         self.assertNotIn("bank.questions.count", owned_row)
 
-    def test_course_question_kc_picker_is_progressive_and_keyboard_accessible(self):
+    def test_course_question_kc_tree_editor_is_progressive_and_keyboard_accessible(self):
         template = (ROOT / "templates" / "teacher" / "course_question_edit.html").read_text(encoding="utf-8")
-        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
-        stylesheet = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
 
         for token in (
-            "data-concept-picker",
-            "data-search-url",
+            "form.kc_mapping_json",
             "form.primary_concept",
             "form.secondary_concepts",
-            "无 JavaScript 时仍可直接使用",
+            "<noscript>",
+            'id="kc-root-select"',
+            'id="add-kc-level-two"',
+            'id="kc-tree-editor"',
+            'aria-live="polite"',
+            'data-action="add-level-three"',
+            'id="clear-kc-mapping"',
+            'id="focus-kc-structure"',
         ):
             self.assertIn(token, template)
         for token in (
-            "data-concept-select",
-            "role', 'combobox",
-            "aria-autocomplete",
-            "aria-activedescendant",
-            "ArrowDown",
-            "ArrowUp",
-            "Enter",
-            "Escape",
-            "AbortController",
-            "fetch(",
-            "concept-tag-remove",
+            "rootSelect.addEventListener('change'",
+            "addEventListener('click'",
+            "rootSelect.focus",
+            "visually-hidden",
         ):
-            self.assertIn(token, script)
-        self.assertIn(".concept-combobox", stylesheet)
-        self.assertIn(".concept-tags", stylesheet)
+            self.assertIn(token, template)
 
     def test_long_kc_and_page_header_text_wrap_without_root_overflow(self):
         stylesheet = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")

@@ -18,7 +18,7 @@ from apps.api.permissions import RolePermission
 from apps.assessment.deadline_services import DeadlineDecisionService
 from apps.assessment.models import ExperimentSession
 from apps.audit.services import log_action
-from apps.question_bank.models import Question
+from apps.question_bank.models import Concept, Question, QuestionBank
 
 from ..models import (
     ClassExperimentTask,
@@ -43,6 +43,7 @@ from ..publication_services import (
     save_plan_selection,
 )
 from ..services import validate_for_publish
+from ..sampling import SamplingService, SamplingValidationError
 from .serializers import (
     ClassTaskCollectionSerializer,
     ClassTaskProgressSerializer,
@@ -60,6 +61,8 @@ from .serializers import (
     TeacherExperimentCollectionSerializer,
     TeacherExperimentReadinessSerializer,
     TeacherExperimentSerializer,
+    TeacherSamplingInventoryRequestSerializer,
+    TeacherSamplingInventoryResponseSerializer,
 )
 
 
@@ -94,16 +97,13 @@ def _plan_projection(plan):
                 "academic_year": plan_class.class_group.academic_year,
                 "excluded_count": excluded_count,
                 "participant_count": max(0, enrolled_count - excluded_count),
-                "schedule_configured": plan_class.schedule_configured,
                 "schedule_mode": (
-                    "unset"
-                    if not plan_class.schedule_configured
-                    else "default"
+                    "default"
                     if plan_class.use_batch_default
                     else "custom"
                 ),
-                "opens_at": opens_at if plan_class.schedule_configured else None,
-                "closes_at": closes_at if plan_class.schedule_configured else None,
+                "opens_at": opens_at,
+                "closes_at": closes_at,
             }
         )
     return {
@@ -148,15 +148,26 @@ def _participant_projection(participant, *, include_items=False):
         "excluded": False,
     }
     if include_items:
-        result["items"] = [
-            {
-                "assigned_sequence_index": item.assigned_sequence_index,
-                "question_id": item.source_question_id,
-                "question_code": item.source_question.code,
-                "question_type": item.source_question.question_type,
-            }
-            for item in participant.items.all()
-        ]
+        items = []
+        for item in participant.items.all():
+            frozen = (
+                item.release_mapping.question_snapshot
+                if item.release_mapping_id is not None
+                else None
+            )
+            items.append(
+                {
+                    "assigned_sequence_index": item.assigned_sequence_index,
+                    "question_id": item.source_question_id,
+                    "question_code": frozen.code if frozen else item.source_question.code,
+                    "question_type": (
+                        frozen.question_type
+                        if frozen
+                        else item.source_question.question_type
+                    ),
+                }
+            )
+        result["items"] = items
     return result
 
 
@@ -228,12 +239,64 @@ class TeacherExperimentApiMixin:
         )
 
     def get_experiment(self, course, *, lock=False):
-        queryset = course.experiments.select_related("question_bank").prefetch_related(
-            "question_quotas"
-        )
+        queryset = course.experiments.select_related(
+            "question_bank", "frozen_release_snapshot"
+        ).prefetch_related("question_quotas")
         if lock:
-            queryset = queryset.select_for_update()
+            queryset = queryset.select_for_update(of=("self",))
         return get_object_or_404(queryset, pk=self.kwargs["experiment_id"])
+
+
+class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
+    @extend_schema(
+        operation_id="teacher_experiment_sampling_inventory",
+        request=TeacherSamplingInventoryRequestSerializer,
+        responses=TeacherSamplingInventoryResponseSerializer,
+    )
+    def post(self, request, course_id):
+        course = self.get_course()
+        serializer = TeacherSamplingInventoryRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        bank = get_object_or_404(
+            course.question_banks.exclude(visibility=QuestionBank.Visibility.ARCHIVED),
+            pk=data["question_bank_id"],
+        )
+        concepts = list(
+            Concept.objects.filter(
+                course=course,
+                code__in=data["kc_codes"],
+                status=Concept.Status.ACTIVE,
+            )
+        )
+        if {concept.code for concept in concepts} != set(data["kc_codes"]):
+            raise ValidationError(
+                {"kc_codes": "包含不存在、已归档或不属于当前课程的知识点。"}
+            )
+        candidates = SamplingService.total_count_candidates(
+            question_bank_id=bank.pk,
+            concept_ids=[concept.pk for concept in concepts],
+            match_scope=data["match_scope"],
+        )
+        counts = {
+            question_type: sum(
+                question.question_type == question_type for question in candidates
+            )
+            for question_type in Question.Type.values
+        }
+        return Response(
+            {
+                "candidate_count": len(candidates),
+                "question_types": [
+                    {
+                        "question_type": question_type,
+                        "label": label,
+                        "available": counts[question_type],
+                    }
+                    for question_type, label in Question.Type.choices
+                ],
+            }
+        )
 
 
 class TeacherExperimentCollectionView(TeacherExperimentApiMixin, APIView):
@@ -243,9 +306,9 @@ class TeacherExperimentCollectionView(TeacherExperimentApiMixin, APIView):
     )
     def get(self, request, course_id):
         course = self.get_course()
-        queryset = course.experiments.select_related("question_bank").prefetch_related(
-            "question_quotas"
-        )
+        queryset = course.experiments.select_related(
+            "question_bank", "frozen_release_snapshot"
+        ).prefetch_related("question_quotas")
         paginator = FixedPageNumberPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         serializer = TeacherExperimentSerializer(
@@ -378,19 +441,83 @@ class TeacherExperimentReadinessView(TeacherExperimentApiMixin, APIView):
         ).count()
         participant_count = experiment.student_links.count()
         issues = []
+        blocking_issues = []
+        inventory_buckets = []
+        requested_count = experiment.sampling_total_count
         with transaction.atomic():
             try:
                 validate_for_publish(
                     experiment,
-                    participant_count=participant_count,
+                    participant_count=1,
                 )
             except DjangoValidationError as exc:
                 issues.extend(exc.messages)
+                blocking_issues.extend(
+                    {
+                        "code": "EXPERIMENT_DEFINITION_INVALID",
+                        "message": message,
+                        "class_id": None,
+                        "kc_id": None,
+                        "kc_code": None,
+                        "field": None,
+                    }
+                    for message in exc.messages
+                )
+            if experiment.sampling_mode:
+                try:
+                    service = SamplingService(experiment)
+                    resolution = service.resolve(validate_inventory=False)
+                    candidate_count = len(resolution.candidates)
+                    rules = list(
+                        experiment.sampling_kcs.select_related("concept").order_by("pk")
+                    )
+                    if experiment.sampling_mode == Experiment.SamplingMode.KC_QUOTA:
+                        requested_count = sum(rule.quota or 0 for rule in rules)
+                    inventory_buckets = [
+                        {
+                            "kc_code": rule.concept.code,
+                            "kc_name": rule.concept.name,
+                            "match_scope": (
+                                experiment.sampling_match_scope
+                                if experiment.sampling_mode
+                                == Experiment.SamplingMode.TOTAL_COUNT
+                                else rule.match_scope
+                            ),
+                            "requested": rule.quota,
+                            "available": (
+                                len(resolution.buckets.get(rule.concept_id, []))
+                                if experiment.sampling_mode
+                                == Experiment.SamplingMode.KC_QUOTA
+                                else len(
+                                    [
+                                        question
+                                        for question in resolution.candidates
+                                        if service._question_matches(
+                                            question,
+                                            rule.concept_id,
+                                            experiment.sampling_match_scope,
+                                        )
+                                    ]
+                                )
+                            ),
+                        }
+                        for rule in rules
+                    ]
+                    service.resolve(validate_inventory=True)
+                except SamplingValidationError as exc:
+                    issues.extend(issue["message"] for issue in exc.issues)
+                    blocking_issues.extend(exc.issues)
+        blocking_issues.sort(
+            key=lambda issue: issue["code"] == "EXPERIMENT_DEFINITION_INVALID"
+        )
         return Response(
             {
                 "ready": not issues,
                 "issues": issues,
+                "blocking_issues": blocking_issues,
                 "candidate_count": candidate_count,
+                "requested_count": requested_count,
+                "inventory_buckets": inventory_buckets,
                 "participant_count": participant_count,
             }
         )
@@ -593,7 +720,10 @@ class TeacherPublishParticipantMixin(TeacherPublishPlanMixin):
                 "student",
                 "class_result__publish_plan_class__class_group",
             )
-            .prefetch_related("items__source_question")
+            .prefetch_related(
+                "items__source_question",
+                "items__release_mapping__question_snapshot",
+            )
             .order_by(
                 "class_result__publish_plan_class__class_group__academic_year",
                 "class_result__publish_plan_class__class_group__name",

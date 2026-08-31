@@ -3,6 +3,10 @@
 {% block title %}{% if experiment %}编辑实验{% else %}创建实验{% endif %} | {{ course.name }}{% endblock %}
 {% block content %}
 <header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">{% if experiment %}编辑实验配置{% else %}创建实验{% endif %}</h1><p class="page-subtitle">发布前可调整配置。发布后系统使用不可变快照，不能继续修改。</p></div></header>
+{% if legacy_definition_read_only %}
+<div class="alert alert-warning">该兼容界面仅供查看。新实验必须使用“总题数”或“知识点配额”模式；旧草稿只能在新版实验设计器中显式转换。</div>
+<div class="form-actions"><a class="btn btn-secondary" href="{% if experiment %}{% url 'courses:experiment_detail' course.pk experiment.pk %}{% else %}{% url 'courses:experiments' course.pk %}{% endif %}">返回</a></div>
+{% else %}
 <div class="card"><div class="card-body p-md-4">
 {% include 'components/error_summary.html' with form=form %}
 <form method="post" novalidate>{% csrf_token %}
@@ -15,4 +19,5 @@
   <div class="form-actions"><button class="btn btn-primary" type="submit">{% if experiment %}保存实验配置{% else %}创建并载入题库题目{% endif %}</button><a class="btn btn-secondary" href="{% if experiment %}{% url 'courses:experiment_detail' course.pk experiment.pk %}{% else %}{% url 'courses:experiments' course.pk %}{% endif %}">取消</a></div>
 </form>
 </div></div>
+{% endif %}
 {% endblock %}

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from django.conf import settings
 from django.db import connection, models, transaction
+from django.db.models.functions import Concat, Trim
 from django.utils import timezone
 from openpyxl import Workbook
 
@@ -494,19 +495,99 @@ def run_export_job(job):
                 created_at__lte=snapshot.source_cutoff_at,
             ).select_related("submission")
         )
-        version_ids = {session.version_id for session in sessions}
-        class_snapshots = list(
-            ExperimentClassSnapshot.objects.filter(
-                version_id__in=version_ids,
-                created_at__lte=snapshot.source_cutoff_at,
-            ).order_by("version_id", "created_at")
+        version_ids = {
+            int(item["id"] if isinstance(item, dict) else item[0])
+            for item in snapshot.selected_versions
+        } or {session.version_id for session in sessions}
+        class_snapshot_queryset = ExperimentClassSnapshot.objects.filter(
+            version_id__in=version_ids,
+            created_at__lte=snapshot.source_cutoff_at,
         )
-        participant_snapshots = list(
+        participant_snapshot_queryset = (
             ExperimentVersionParticipantSnapshot.objects.filter(
                 version_id__in=version_ids,
-                student_id__in=[session.student_id for session in sessions],
                 created_at__lte=snapshot.source_cutoff_at,
-            ).order_by("version_id", "student_id")
+            )
+        )
+        if scope is not None and scope.class_snapshot_id is not None:
+            class_snapshot_queryset = class_snapshot_queryset.filter(
+                pk=scope.class_snapshot_id
+            )
+            participant_snapshot_queryset = participant_snapshot_queryset.filter(
+                class_snapshot_id=scope.class_snapshot_id
+            )
+        elif scope is not None and scope.class_id is not None:
+            class_snapshot_queryset = class_snapshot_queryset.filter(
+                source_class_group_id=scope.class_id
+            )
+            participant_snapshot_queryset = participant_snapshot_queryset.filter(
+                class_snapshot__source_class_group_id=scope.class_id
+            )
+        if scope is not None and scope.student_id is not None:
+            participant_snapshot_queryset = participant_snapshot_queryset.filter(
+                student_id=scope.student_id
+            )
+            class_snapshot_queryset = class_snapshot_queryset.filter(
+                pk__in=participant_snapshot_queryset.values("class_snapshot_id")
+            )
+        narrow_to_started_sessions = False
+        if scope is not None:
+            narrow_to_started_sessions = any(
+                value is not None
+                for value in (
+                    scope.session_id,
+                    scope.condition_id,
+                    scope.session_status,
+                    scope.attempt_status,
+                    scope.started_from_utc,
+                    scope.started_before_utc,
+                )
+            )
+        else:
+            if filter_definition.get("student_number"):
+                participant_snapshot_queryset = participant_snapshot_queryset.filter(
+                    student__student_number=filter_definition["student_number"]
+                )
+                class_snapshot_queryset = class_snapshot_queryset.filter(
+                    pk__in=participant_snapshot_queryset.values("class_snapshot_id")
+                )
+            if filter_definition.get("class_name"):
+                class_name = _class_snapshot_filter_value(
+                    filter_definition["class_name"]
+                )
+                class_snapshot_queryset = class_snapshot_queryset.annotate(
+                    display_name_filter=Trim(
+                        Concat(
+                            "academic_year_snapshot",
+                            models.Value(" "),
+                            "name_snapshot",
+                        )
+                    )
+                ).filter(display_name_filter=class_name)
+                participant_snapshot_queryset = participant_snapshot_queryset.filter(
+                    class_snapshot_id__in=class_snapshot_queryset.values("pk")
+                )
+            narrow_to_started_sessions = bool(
+                filter_definition.get("session_id")
+                or filter_definition.get("status")
+            )
+        if narrow_to_started_sessions:
+            participant_snapshot_ids = [
+                session.participant_snapshot_id
+                for session in sessions
+                if session.participant_snapshot_id is not None
+            ]
+            participant_snapshot_queryset = participant_snapshot_queryset.filter(
+                pk__in=participant_snapshot_ids
+            )
+            class_snapshot_queryset = class_snapshot_queryset.filter(
+                pk__in=participant_snapshot_queryset.values("class_snapshot_id")
+            )
+        class_snapshots = list(
+            class_snapshot_queryset.order_by("version_id", "created_at")
+        )
+        participant_snapshots = list(
+            participant_snapshot_queryset.order_by("version_id", "student_id")
         )
         condition_assignments = list(
             ConditionAssignment.objects.filter(
@@ -1102,6 +1183,11 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
             grade_by_attempt[grade.submission.attempt_id] = grade
     submission_by_attempt = {submission.attempt_id: submission for submission in submissions}
     task_ids = {session.class_task_id for session in sessions if session.class_task_id}
+    task_ids.update(
+        participant.class_task_id
+        for participant in participant_snapshots
+        if participant.class_task_id
+    )
     class_tasks = list(
         ClassExperimentTask.objects.filter(pk__in=task_ids)
         .select_related(
@@ -1119,6 +1205,10 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
     )
     release_ids = {session.version_id for session in sessions} | {
         task.release_snapshot_id for task in class_tasks
+    } | {
+        participant.version_id for participant in participant_snapshots
+    } | {
+        class_snapshot.version_id for class_snapshot in class_snapshots
     }
     releases = list(
         ExperimentVersion.objects.filter(pk__in=release_ids)
@@ -1130,6 +1220,127 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         .select_related("source_question", "question_snapshot")
         .order_by("release_snapshot_id", "source_question_id")
     )
+    metadata_snapshots_by_id = {
+        mapping.question_snapshot_id: mapping.question_snapshot
+        for mapping in release_mappings
+    }
+    metadata_snapshots_by_id.update(
+        {assignment.snapshot_id: assignment.snapshot for assignment in assignments}
+    )
+    participant_snapshot_question_ids = {
+        item.get("question_snapshot_id")
+        for participant in participant_snapshots
+        for item in participant.assignment_snapshot
+        if item.get("question_snapshot_id")
+    }
+    missing_snapshot_ids = (
+        participant_snapshot_question_ids - metadata_snapshots_by_id.keys()
+    )
+    if missing_snapshot_ids:
+        metadata_snapshots_by_id.update(
+            {
+                item.pk: item
+                for item in QuestionSnapshot.objects.filter(
+                    pk__in=missing_snapshot_ids
+                )
+            }
+        )
+    metadata_snapshots = [
+        metadata_snapshots_by_id[snapshot_id]
+        for snapshot_id in sorted(metadata_snapshots_by_id)
+    ]
+    kc_dictionary_by_id = {}
+    for item in metadata_snapshots:
+        frozen_concepts = item.all_kc_snapshots or []
+        if not frozen_concepts and item.primary_kc:
+            frozen_concepts = [
+                {
+                    "concept_id": item.primary_kc_id_snapshot,
+                    "name": item.primary_kc,
+                    "path": item.primary_kc_path,
+                }
+            ]
+        for concept in frozen_concepts:
+            concept_id = concept.get("concept_id")
+            if concept_id is not None:
+                kc_dictionary_by_id[concept_id] = [
+                    concept_id,
+                    concept.get("name", ""),
+                    concept.get("path", ""),
+                ]
+    kc_dictionary_rows = [
+        kc_dictionary_by_id[concept_id]
+        for concept_id in sorted(kc_dictionary_by_id)
+    ]
+
+    def primary_level_name(item, index):
+        levels = item.primary_kc_levels or []
+        return levels[index].get("name", "") if len(levels) > index else ""
+
+    v2_snapshots = [
+        item
+        for item in metadata_snapshots
+        if item.kc_mapping_schema_version == "question-kc-tree-v2"
+    ]
+    frozen_kcs = {}
+    structure_v2_rows = []
+    for item in v2_snapshots:
+        for node in item.kc_mapping_snapshot.get("nodes", []):
+            frozen_kcs.setdefault(
+                node["kc_code"],
+                [
+                    node["kc_code"],
+                    node["name"],
+                    node.get("description", ""),
+                    node.get("status", "active"),
+                ],
+            )
+            structure_v2_rows.append(
+                [
+                    item.code,
+                    item.stable_code,
+                    node["kc_code"],
+                    node["depth"],
+                    node.get("parent_kc_code") or "",
+                    node["order"],
+                    item.kc_mapping_hash,
+                    item.kc_mapping_schema_version,
+                ]
+            )
+    q_matrix_codes = sorted(frozen_kcs)
+    q_matrix_v2_rows = []
+    for item in v2_snapshots:
+        mapped = {
+            node["kc_code"]
+            for node in item.kc_mapping_snapshot.get("nodes", [])
+        }
+        q_matrix_v2_rows.append(
+            [item.code, item.stable_code, item.kc_mapping_hash]
+            + [1 if code in mapped else 0 for code in q_matrix_codes]
+        )
+    snapshot_by_id = {item.pk: item for item in metadata_snapshots}
+    attribution_v2_rows = []
+    for participant in participant_snapshots:
+        for assignment in participant.assignment_snapshot:
+            source = assignment.get("sampling_source", {})
+            item = snapshot_by_id.get(assignment.get("question_snapshot_id"))
+            attribution_v2_rows.append(
+                [
+                    participant.student_id,
+                    participant.version_id,
+                    item.code if item else "",
+                    item.stable_code if item else "",
+                    assignment.get("assigned_sequence_index", ""),
+                    source.get("quota_kc_code") or "",
+                    source.get("quota_question_type") or "",
+                    source.get("match_scope") or "",
+                    hashlib.sha256(participant.sampling_seed.encode()).hexdigest()
+                    if participant.sampling_seed
+                    else "",
+                    source.get("algorithm_version")
+                    or participant.sampling_algorithm_version,
+                ]
+            )
     preview_results = [
         task.preview_class_result
         for task in class_tasks
@@ -1157,10 +1368,26 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         "simulation_events": (compact_event_headers, simulation_event_rows),
         "simulation_snapshots": ((*identity_headers, "question_code", "snapshot_id", "attempt_id", "simulation_version", "state_metadata", "content_hash", "content_size", "created_at"), [[*identity_and_question_for_attempt(simulation.attempt_id), simulation.snapshot_id, simulation.attempt_id, simulation.simulation_version, json.dumps(simulation.state_metadata), simulation.content_hash, simulation.content_size, simulation.created_at.isoformat()] for simulation in selected_simulations]),
         "confidence_assignments": ((*identity_headers, "question_code", "confidence_assignment_id", "attempt_id", "condition", "assignment_unit", "assignment_version", "response_status", "probability", "assigned_at", "committed_at"), [[*identity_and_question_for_attempt(confidence.attempt_id), confidence.confidence_assignment_id, confidence.attempt_id, confidence.condition, confidence.assignment_unit, confidence.assignment_version, confidence.response_status, confidence.probability, confidence.assigned_at.isoformat(), confidence.committed_at.isoformat() if confidence.committed_at else ""] for confidence in selected_confidence]),
-        "item_snapshots": (("question_code", "question_snapshot_id", "version_id", "stable_code", "question_type", "primary_kc", "all_kcs"), [[assignment.snapshot.code, assignment.snapshot_id, assignment.snapshot.version_id, assignment.snapshot.stable_code, assignment.snapshot.question_type, assignment.snapshot.primary_kc, json.dumps(assignment.snapshot.all_kcs, ensure_ascii=False)] for assignment in _unique_assignments(assignments, "snapshot_id")]),
-        "item_kc_mapping": (("question_code", "question_snapshot_id", "primary_kc", "all_kcs"), [[assignment.snapshot.code, assignment.snapshot_id, assignment.snapshot.primary_kc, json.dumps(assignment.snapshot.all_kcs, ensure_ascii=False)] for assignment in _unique_assignments(assignments, "snapshot_id")]),
-        "q_matrix": (("question_code", "question_snapshot_id", "primary_kc", "all_kcs"), [[assignment.snapshot.code, assignment.snapshot_id, assignment.snapshot.primary_kc, json.dumps(assignment.snapshot.all_kcs, ensure_ascii=False)] for assignment in _unique_assignments(assignments, "snapshot_id")]),
-        "kc_dictionary": (("kc_id", "kc_name"), [[assignment.snapshot.primary_kc, assignment.snapshot.primary_kc] for assignment in _unique_assignments(assignments, "snapshot_id") if assignment.snapshot.primary_kc]),
+        "item_snapshots": (("question_code", "question_snapshot_id", "version_id", "stable_code", "question_type", "primary_kc", "primary_kc_id", "primary_kc_path", "kc_level_1", "kc_level_2", "kc_level_3", "all_kcs", "all_kc_paths", "all_kc_snapshots"), [[item.code, item.pk, item.version_id, item.stable_code, item.question_type, item.primary_kc, item.primary_kc_id_snapshot or "", item.primary_kc_path, primary_level_name(item, 0), primary_level_name(item, 1), primary_level_name(item, 2), json.dumps(item.all_kcs, ensure_ascii=False), json.dumps(item.all_kc_paths, ensure_ascii=False), json.dumps(item.all_kc_snapshots, ensure_ascii=False)] for item in metadata_snapshots]),
+        "item_kc_mapping": (("question_code", "question_snapshot_id", "primary_kc", "primary_kc_id", "primary_kc_path", "kc_level_1", "kc_level_2", "kc_level_3", "all_kcs", "all_kc_paths", "all_kc_snapshots"), [[item.code, item.pk, item.primary_kc, item.primary_kc_id_snapshot or "", item.primary_kc_path, primary_level_name(item, 0), primary_level_name(item, 1), primary_level_name(item, 2), json.dumps(item.all_kcs, ensure_ascii=False), json.dumps(item.all_kc_paths, ensure_ascii=False), json.dumps(item.all_kc_snapshots, ensure_ascii=False)] for item in metadata_snapshots]),
+        "q_matrix": (("question_code", "question_snapshot_id", "primary_kc", "primary_kc_id", "primary_kc_path", "kc_level_1", "kc_level_2", "kc_level_3", "all_kcs", "all_kc_paths", "all_kc_snapshots"), [[item.code, item.pk, item.primary_kc, item.primary_kc_id_snapshot or "", item.primary_kc_path, primary_level_name(item, 0), primary_level_name(item, 1), primary_level_name(item, 2), json.dumps(item.all_kcs, ensure_ascii=False), json.dumps(item.all_kc_paths, ensure_ascii=False), json.dumps(item.all_kc_snapshots, ensure_ascii=False)] for item in metadata_snapshots]),
+        "kc_dictionary": (("kc_id", "kc_name", "kc_full_path"), kc_dictionary_rows),
+        "kc_dictionary_v2": (
+            ("kc_code", "kc_name", "description", "status"),
+            [frozen_kcs[code] for code in sorted(frozen_kcs)],
+        ),
+        "question_kc_structure_v2": (
+            ("question_code", "stable_question_code", "kc_code", "depth", "parent_kc_code", "order", "mapping_hash", "schema_version"),
+            structure_v2_rows,
+        ),
+        "q_matrix_v2": (
+            ("question_code", "stable_question_code", "mapping_hash", *q_matrix_codes),
+            q_matrix_v2_rows,
+        ),
+        "participant_question_attribution_v2": (
+            ("participant_id", "version_id", "question_code", "stable_question_code", "assigned_sequence_index", "quota_kc_code", "quota_question_type", "match_scope", "sampling_seed_sha256", "algorithm_version"),
+            attribution_v2_rows,
+        ),
         "response_snapshots": (
             (*identity_headers, "question_code", "snapshot_id", "attempt_id", "content", "content_hash", "content_length", "state_json", "state_hash", "schema_version", "created_at"),
             [
@@ -1271,9 +1498,33 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
             ],
         ),
         "participant_snapshots": (
-            ("participant_snapshot_id", "version_id", "student_id", "class_snapshot_id", "created_at"),
+            (
+                "participant_snapshot_id",
+                "version_id",
+                "student_id",
+                "class_snapshot_id",
+                "sampling_seed_sha256",
+                "ordering_seed_sha256",
+                "sampling_algorithm_version",
+                "assignment_snapshot",
+                "created_at",
+            ),
             [
-                [item.pk, item.version_id, item.student_id, item.class_snapshot_id or "", item.created_at.isoformat()]
+                [
+                    item.pk,
+                    item.version_id,
+                    item.student_id,
+                    item.class_snapshot_id or "",
+                    hashlib.sha256(item.sampling_seed.encode()).hexdigest()
+                    if item.sampling_seed
+                    else "",
+                    hashlib.sha256(item.ordering_seed.encode()).hexdigest()
+                    if item.ordering_seed
+                    else "",
+                    item.sampling_algorithm_version,
+                    json.dumps(item.assignment_snapshot, ensure_ascii=False),
+                    item.created_at.isoformat(),
+                ]
                 for item in participant_snapshots
             ],
         ),
@@ -1305,7 +1556,10 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                     "release_snapshot_id", "experiment_id", "version_number",
                     "published_at", "timer_semantics_version",
                     "randomization_semantics_version", "definition_fingerprint",
-                    "canonicalization_version",
+                    "canonicalization_version", "sampling_mode",
+                    "sampling_total_count", "sampling_kcs", "sampling_inventory",
+                    "taxonomy_snapshot", "candidate_resolution",
+                    "sampling_definition", "timezone",
                 ),
                 [
                     [
@@ -1313,6 +1567,19 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                         export_time(release.published_at), release.timer_semantics_version,
                         release.randomization_semantics_version,
                         release.definition_fingerprint, release.canonicalization_version,
+                        release.configuration.get("sampling_mode")
+                        or (
+                            "type_quota_legacy"
+                            if release.configuration.get("selection_mode") == "quota"
+                            else "all_legacy"
+                        ),
+                        release.configuration.get("sampling_total_count", ""),
+                        json.dumps(release.configuration.get("sampling_kcs", []), ensure_ascii=False),
+                        json.dumps(release.configuration.get("sampling_inventory", []), ensure_ascii=False),
+                        json.dumps(release.configuration.get("taxonomy_snapshot", []), ensure_ascii=False),
+                        json.dumps(release.configuration.get("candidate_resolution", []), ensure_ascii=False),
+                        json.dumps(release.configuration.get("sampling", {}), ensure_ascii=False),
+                        release.configuration.get("timezone", settings.TIME_ZONE),
                     ]
                     for release in releases
                 ],
@@ -1421,17 +1688,33 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         ident = [*identity_and_question_for_attempt(attempt.pk), attempt.pk, derivation_id, "v1"]
         feature_rows.append([*ident, attempt.is_correct, attempt.score, attempt.visit_count, attempt.first_opened_at.isoformat() if attempt.first_opened_at else "", attempt.submitted_at.isoformat() if attempt.submitted_at else ""])
         outcome = "" if attempt.is_correct is None else int(bool(attempt.is_correct))
-        kt_rows.append([*ident, attempt.assignment.assigned_sequence_index, outcome, attempt.assignment.snapshot.primary_kc or ""])
+        item_snapshot = attempt.assignment.snapshot
+        kt_rows.append([
+            *ident,
+            attempt.assignment.assigned_sequence_index,
+            outcome,
+            item_snapshot.root_kc_code
+            if item_snapshot.kc_mapping_schema_version == "question-kc-tree-v2"
+            else item_snapshot.primary_kc or "",
+        ])
         response_value = attempt.final_answer if attempt.final_answer is not None else attempt.draft_answer
-        cd_rows.append([*ident, json.dumps(response_value, ensure_ascii=False) if response_value is not None else "", json.dumps(attempt.assignment.snapshot.all_kcs, ensure_ascii=False)])
+        cd_kcs = (
+            [
+                node["kc_code"]
+                for node in item_snapshot.kc_mapping_snapshot.get("nodes", [])
+            ]
+            if item_snapshot.kc_mapping_schema_version == "question-kc-tree-v2"
+            else item_snapshot.all_kcs
+        )
+        cd_rows.append([*ident, json.dumps(response_value, ensure_ascii=False) if response_value is not None else "", json.dumps(cd_kcs, ensure_ascii=False)])
         confidence = next((c for c in selected_confidence if c.attempt_id == attempt.pk), None)
         probability = confidence.probability if confidence and confidence.probability is not None else ""
         error = (float(probability) / 100.0 - float(bool(attempt.is_correct))) if probability != "" and attempt.is_correct is not None else ""
         cal_rows.append([*ident, probability, attempt.is_correct, error, confidence.condition if confidence else ""])
     rows.update({
         "attempt_features": (base + ("is_correct", "score", "visit_count", "first_opened_at", "submitted_at"), feature_rows),
-        "kt_sequences": (base + ("sequence_index", "outcome", "primary_kc"), kt_rows),
-        "cd_response_matrix": (base + ("response", "all_kcs"), cd_rows),
+        "kt_sequences": (base + ("sequence_index", "outcome", "root_kc_code"), kt_rows),
+        "cd_response_matrix": (base + ("response", "kc_codes"), cd_rows),
         "calibration_features": (base + ("confidence_probability", "is_correct", "calibration_error", "condition"), cal_rows),
     })
     return rows

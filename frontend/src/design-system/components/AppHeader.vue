@@ -1,5 +1,14 @@
 <script setup lang="ts">
-defineProps<{ userName: string; userMeta?: string | null }>()
+withDefaults(defineProps<{
+  userName: string
+  userMeta?: string | null
+  csrfToken?: string
+  showLogout?: boolean
+}>(), {
+  userMeta: null,
+  csrfToken: '',
+  showLogout: false,
+})
 </script>
 
 <template>
@@ -10,10 +19,16 @@ defineProps<{ userName: string; userMeta?: string | null }>()
         <span class="kt-wordmark__name">KT Data Lab</span>
       </a>
       <nav class="kt-global-nav" aria-label="全局导航"><slot /></nav>
-      <span class="kt-user-name">
-        <strong>{{ userName }}</strong>
-        <small v-if="userMeta">{{ userMeta }}</small>
-      </span>
+      <div class="kt-account-actions">
+        <span class="kt-user-name">
+          <strong>{{ userName }}</strong>
+          <small v-if="userMeta">· {{ userMeta }}</small>
+        </span>
+        <form v-if="showLogout" method="post" action="/logout/">
+          <input type="hidden" name="csrfmiddlewaretoken" :value="csrfToken">
+          <button class="kt-logout-button" type="submit">退出</button>
+        </form>
+      </div>
     </div>
   </header>
 </template>

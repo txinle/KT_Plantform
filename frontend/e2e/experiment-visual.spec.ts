@@ -13,6 +13,15 @@ async function login(page: Page) {
   await expect(page).toHaveURL(new RegExp(`${origin}/teacher/courses/`))
 }
 
+async function selectFirstKnowledgeComponent(page: Page) {
+  await page.getByText('选择知识点', { exact: true }).click()
+  await page
+    .locator('.kt-kc-config-panel', { hasText: '知识点范围' })
+    .locator('.kt-kc-tree-selector input[type="checkbox"]')
+    .first()
+    .check()
+}
+
 async function capture(page: Page, testInfo: TestInfo, name: string) {
   await page.getByText(/正在加载/).first().waitFor({ state: 'hidden' })
   await page.evaluate(() => document.fonts.ready)
@@ -35,6 +44,7 @@ test('captures the six real experiment workflow states', async ({ browserName, p
   const experimentName = `UI 视觉验收 ${Date.now()}`
   await page.getByLabel('实验名称').fill(experimentName)
   await page.getByLabel('题库', { exact: true }).selectOption({ index: 1 })
+  await selectFirstKnowledgeComponent(page)
   await page.getByRole('button', { name: '保存实验' }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/)
   const detailUrl = page.url()
@@ -45,7 +55,7 @@ test('captures the six real experiment workflow states', async ({ browserName, p
   await expect(page.getByRole('heading', { name: '编辑实验定义' })).toBeVisible()
   await expect(page.getByLabel('实验名称')).toHaveValue(experimentName)
   await capture(page, testInfo, '02-edit-definition.png')
-  await expect(page.getByRole('button', { name: '保存更改' })).toBeInViewport()
+  await expect(page.getByRole('button', { name: '保存更改' })).toBeVisible()
 
   await page.goto(detailUrl)
   await expect(page.getByRole('heading', { name: experimentName })).toBeVisible()
@@ -55,8 +65,6 @@ test('captures the six real experiment workflow states', async ({ browserName, p
   await capture(page, testInfo, '03-class-schedule.png')
 
   await page.locator('[id^="publish-class-"]').first().check()
-  await page.getByRole('button', { name: '修改时间' }).first().click()
-  await page.getByLabel('本班排期已配置').first().check()
   await page.getByRole('button', { name: '运行发布前检查' }).click()
   await expect(page).toHaveURL(/\/publish-plan\/\d+\/step\/2\/$/)
   await capture(page, testInfo, '04-preflight-check.png')

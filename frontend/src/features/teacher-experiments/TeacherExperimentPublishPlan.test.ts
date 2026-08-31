@@ -36,6 +36,7 @@ describe('TeacherExperimentPublishPlan', () => {
       current_step: 1,
       setup_status: 'empty',
       missing_requirements: ['classes'],
+      blocking_issues: [],
       field_errors: {},
       plan_revision: 1,
       expires_at: '2026-08-31T00:00:00Z',
@@ -72,18 +73,19 @@ describe('TeacherExperimentPublishPlan', () => {
       experiment_id: 11,
       status: 'draft',
       current_step: 1,
-      setup_status: 'incomplete',
-      missing_requirements: ['schedule:5'],
+      setup_status: 'complete',
+      missing_requirements: [],
+      blocking_issues: [],
       field_errors: {},
       plan_revision: 3,
       expires_at: '2026-08-31T00:00:00Z',
       default_opens_at: null,
       default_closes_at: null,
-      classes: [{ class_id: 5, class_name: '一班', academic_year: '2026', excluded_count: 0, participant_count: 36, schedule_configured: false, schedule_mode: 'unset', opens_at: null, closes_at: null }],
+      classes: [{ class_id: 5, class_name: '一班', academic_year: '2026', excluded_count: 0, participant_count: 36, schedule_mode: 'default', opens_at: null, closes_at: null }],
     })
   })
 
-  it('saves an incomplete class selection as a resumable draft without previewing', async () => {
+  it('saves an immediate indefinite class schedule without previewing', async () => {
     const wrapper = mount(TeacherExperimentPublishPlan)
     await flushPromises()
 
@@ -133,12 +135,13 @@ describe('TeacherExperimentPublishPlan', () => {
       current_step: 2,
       setup_status: 'complete',
       missing_requirements: [],
+      blocking_issues: [],
       field_errors: {},
       plan_revision: 4,
       expires_at: '2026-08-31T00:00:00Z',
       default_opens_at: '2026-09-01T00:00:00Z',
       default_closes_at: '2026-09-03T00:00:00Z',
-      classes: [{ class_id: 5, class_name: '一班', academic_year: '2026', excluded_count: 1, participant_count: 35, schedule_configured: true, schedule_mode: 'default', opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-09-03T00:00:00Z' }],
+      classes: [{ class_id: 5, class_name: '一班', academic_year: '2026', excluded_count: 1, participant_count: 35, schedule_mode: 'default', opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-09-03T00:00:00Z' }],
     }
     mocks.api.plan.mockResolvedValue(completedPlan)
     mocks.api.participants.mockResolvedValue({
@@ -174,5 +177,38 @@ describe('TeacherExperimentPublishPlan', () => {
     await flushPromises()
 
     expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/11/')
+  })
+
+  it('shows a specific empty-class blocker and does not call preview', async () => {
+    mocks.api.saveSetup.mockResolvedValue({
+      id: 23,
+      experiment_id: 11,
+      status: 'draft',
+      current_step: 1,
+      setup_status: 'complete',
+      missing_requirements: [],
+      blocking_issues: [{
+        code: 'CLASS_NO_PARTICIPANTS',
+        message: '班级“一班”没有可发布参与者。',
+        class_id: 5,
+        kc_id: null,
+        field: 'classes',
+      }],
+      field_errors: {},
+      plan_revision: 2,
+      expires_at: '2026-08-31T00:00:00Z',
+      default_opens_at: null,
+      default_closes_at: null,
+      classes: [{ class_id: 5, class_name: '一班', academic_year: '2026', excluded_count: 0, participant_count: 0, schedule_mode: 'default', opens_at: null, closes_at: null }],
+    })
+    const wrapper = mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+
+    await wrapper.get('#publish-class-5').setValue(true)
+    await wrapper.get('[data-action="run-preview"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('班级“一班”没有可发布参与者。')
+    expect(mocks.api.preview).not.toHaveBeenCalled()
   })
 })

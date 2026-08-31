@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   api: {
     list: vi.fn(),
+    concepts: vi.fn(),
     detail: vi.fn(),
+    samplingInventory: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
   },
@@ -37,6 +39,25 @@ describe('TeacherExperimentForm', () => {
       summary: { question_banks: [{ id: 3, name: '认知诊断题库' }], classes: [] },
     })
     mocks.api.create.mockResolvedValue({ id: 19 })
+    mocks.api.samplingInventory.mockResolvedValue({
+      candidate_count: 12,
+      question_types: [
+        { question_type: 'single_choice', label: '单选题', available: 8 },
+        { question_type: 'multiple_choice', label: '多选题', available: 4 },
+        { question_type: 'numeric', label: '数值题', available: 0 },
+        { question_type: 'short_answer', label: '简答题', available: 0 },
+        { question_type: 'fill_blank', label: '填空题', available: 0 },
+        { question_type: 'true_false', label: '判断题', available: 0 },
+      ],
+    })
+    mocks.api.concepts.mockResolvedValue({
+      items: [
+        { id: 10, kc_code: 'KC000001', name: '数学', description: '', status: 'active', role_counts: { level_1: 0, level_2: 0, level_3: 0 }, question_count: 0, bank_count: 0, distribution: [], can_rename: true, can_delete: true, rename_url: null, delete_url: null },
+        { id: 11, kc_code: 'KC000002', name: '分数', description: '', status: 'active', role_counts: { level_1: 12, level_2: 0, level_3: 0 }, question_count: 12, bank_count: 1, distribution: [], can_rename: true, can_delete: true, rename_url: null, delete_url: null },
+      ],
+      page: { number: 1, size: 500, total_items: 2, total_pages: 1, start: 1, end: 2 },
+      course: { id: 7, name: '课程', code: 'C', term: '2026', status: 'active' },
+    })
   })
 
   it('creates a complete teacher-owned experiment definition and opens its detail page', async () => {
@@ -51,13 +72,14 @@ describe('TeacherExperimentForm', () => {
       expect.stringContaining('作答规则'),
       expect.stringContaining('研究采集'),
     ]))
-    expect(wrapper.find('input[name="selection_mode"][value="all"]').exists()).toBe(true)
+    expect(wrapper.find('input[name="sampling_mode"][value="total_count"]').exists()).toBe(true)
     expect(wrapper.findAll('.kt-numbered-form-section .kt-compact-form-row').length).toBeGreaterThanOrEqual(4)
     expect(wrapper.find('#experiment-total-time').exists()).toBe(true)
     expect(wrapper.find('#experiment-question-time').exists()).toBe(true)
 
     await wrapper.get('#experiment-name').setValue('分数比较实验')
     await wrapper.get('#experiment-bank').setValue('3')
+    await wrapper.get('input[type="checkbox"][value="11"]').setValue(true)
     await wrapper.get('input[name="time_mode"][value="total"]').setValue(true)
     await wrapper.get('#experiment-total-time').setValue('25')
     await wrapper.get('form').trigger('submit')
@@ -68,7 +90,13 @@ describe('TeacherExperimentForm', () => {
       expect.objectContaining({
         name: '分数比较实验',
         question_bank_id: 3,
-        selection_mode: 'all',
+        sampling: {
+          mode: 'total_count',
+          total_count: 1,
+          match_scope: 'any_level',
+          nodes: [{ kc_code: 'KC000002', quota: null, match_scope: 'any_level' }],
+          type_quotas: [],
+        },
         ordering_mode: 'fixed',
         feedback_mode: 'none',
         time_mode: 'total',
@@ -78,5 +106,78 @@ describe('TeacherExperimentForm', () => {
       }),
     )
     expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/19/')
+  })
+
+  it('selects an exact question-type composition from server inventory', async () => {
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('题型构成')
+    expect(wrapper.text()).toContain('不限题型')
+    await wrapper.get('#experiment-name').setValue('题型构成实验')
+    await wrapper.get('input[type="checkbox"][value="11"]').setValue(true)
+    await flushPromises()
+
+    expect(mocks.api.samplingInventory).toHaveBeenCalledWith(7, {
+      question_bank_id: 3,
+      kc_codes: ['KC000002'],
+      match_scope: 'any_level',
+    })
+    await wrapper.get('summary[data-type-picker]').trigger('click')
+    await wrapper.get('input[name="question_type_choice"][value="single_choice"]').setValue(true)
+    await wrapper.get('input[name="question_type_choice"][value="multiple_choice"]').setValue(true)
+    await wrapper.get('#sampling-total-count').setValue('10')
+    await wrapper.get('input[aria-label="单选题数量"]').setValue('6')
+    await wrapper.get('input[aria-label="多选题数量"]').setValue('4')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.api.create).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({
+        sampling: expect.objectContaining({
+          mode: 'total_count',
+          total_count: 10,
+          type_quotas: [
+            { question_type: 'single_choice', amount: 6 },
+            { question_type: 'multiple_choice', amount: 4 },
+          ],
+        }),
+      }),
+    )
+  })
+
+  it('blocks saving when selected type amounts do not equal the total', async () => {
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+    await wrapper.get('input[type="checkbox"][value="11"]').setValue(true)
+    await flushPromises()
+    await wrapper.get('summary[data-type-picker]').trigger('click')
+    await wrapper.get('input[name="question_type_choice"][value="single_choice"]').setValue(true)
+
+    expect(wrapper.text()).toContain('已分配 1 / 总题数 1')
+    await wrapper.get('#sampling-total-count').setValue('2')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('题型数量合计必须等于总题数')
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('hides and omits question-type quotas in knowledge-point quota mode', async () => {
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+    await wrapper.get('#experiment-name').setValue('KC 配额实验')
+    await wrapper.get('input[type="checkbox"][value="11"]').setValue(true)
+    await flushPromises()
+    await wrapper.get('input[name="question_type_choice"][value="single_choice"]').setValue(true)
+    await wrapper.get('input[name="sampling_mode"][value="kc_quota"]').setValue(true)
+
+    expect(wrapper.text()).not.toContain('不限题型')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const sampling = mocks.api.create.mock.calls.at(-1)?.[1]?.sampling
+    expect(sampling?.mode).toBe('kc_quota')
+    expect(sampling).not.toHaveProperty('type_quotas')
   })
 })

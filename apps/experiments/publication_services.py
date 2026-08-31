@@ -15,8 +15,8 @@ from django.db import IntegrityError, connections, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from apps.accounts.models import CourseEnrollment, CourseSubject, User
-from apps.question_bank.models import Question
+from apps.accounts.models import Course, CourseEnrollment, CourseSubject, User
+from apps.question_bank.models import Concept, Question
 
 from .models import (
     ClassExperimentTask,
@@ -46,6 +46,7 @@ from .services import (
     _quota_map,
     validate_for_publish,
 )
+from .sampling import SamplingService, SamplingValidationError
 
 
 PLAN_TTL = timedelta(hours=72)
@@ -87,9 +88,19 @@ def _assert_plan_editor(plan, actor):
 @transaction.atomic
 def get_or_create_publish_plan(experiment, actor):
     """Resume the active plan or atomically retire a stale one before create."""
+    course_id = Experiment.objects.values_list("course_id", flat=True).get(
+        pk=experiment.pk
+    )
+    if course_id is not None:
+        Course.objects.select_for_update().get(pk=course_id)
     experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
     if experiment.status == Experiment.Status.ARCHIVED:
         raise PublicationConflict("归档实验不能继续发布班级。", code="EXPERIMENT_ARCHIVED")
+    if not experiment.sampling_mode:
+        raise PublicationConflict(
+            "旧版草稿必须先显式转换为总题数或知识点配额模式。",
+            code="LEGACY_CONVERSION_REQUIRED",
+        )
     now = database_now()
     active = (
         PublishPlan.objects.select_for_update()
@@ -182,20 +193,35 @@ def _invalidate_current_preview(plan, *, reason, actor=None):
 
 
 def publish_plan_setup_projection(plan):
-    class_plans = list(plan.class_plans.order_by("class_group_id"))
+    class_plans = list(
+        plan.class_plans.select_related("class_group").order_by("class_group_id")
+    )
     if not class_plans:
         setup_status = "empty"
         missing_requirements = ["classes"]
     else:
-        missing_requirements = [
-            f"schedule:{plan_class.class_group_id}"
-            for plan_class in class_plans
-            if not plan_class.schedule_configured
-        ]
-        setup_status = "incomplete" if missing_requirements else "complete"
+        missing_requirements = []
+        setup_status = "complete"
+    blocking_issues = [
+        {
+            "code": "CLASS_NO_PARTICIPANTS",
+            "message": f"班级“{plan_class.class_group}”没有可发布参与者。",
+            "class_id": plan_class.class_group_id,
+            "kc_id": None,
+            "field": "classes",
+        }
+        for plan_class in class_plans
+        if not _plan_participants(plan_class)
+    ]
+    if plan.experiment.sampling_mode and not plan.experiment.frozen_release_snapshot_id:
+        try:
+            SamplingService(plan.experiment).resolve()
+        except SamplingValidationError as exc:
+            blocking_issues.extend(exc.issues)
     return {
         "setup_status": setup_status,
         "missing_requirements": missing_requirements,
+        "blocking_issues": blocking_issues,
         "field_errors": {},
         "plan_revision": plan.plan_revision,
         "expires_at": plan.expires_at,
@@ -314,9 +340,7 @@ def save_plan_schedules(
     if default_opens_at and default_closes_at and default_closes_at <= default_opens_at:
         raise ValidationError("批量默认截止时间必须晚于开始时间。")
     plan_classes = list(plan.class_plans.select_for_update().order_by("pk"))
-    if configured_class_ids is None:
-        configured_class_ids = {plan_class.class_group_id for plan_class in plan_classes}
-    else:
+    if configured_class_ids is not None:
         configured_class_ids = {int(class_id) for class_id in configured_class_ids}
         selected_class_ids = {
             plan_class.class_group_id for plan_class in plan_classes
@@ -325,23 +349,19 @@ def save_plan_schedules(
             raise ValidationError("排期包含未选择的班级。")
     desired_schedules = {}
     for plan_class in plan_classes:
-        if plan_class.class_group_id not in configured_class_ids:
-            desired_schedules[plan_class.pk] = (False, True, None, None)
-            continue
         override = overrides.get(plan_class.class_group_id)
         if override is None:
-            desired_schedules[plan_class.pk] = (True, True, None, None)
+            desired_schedules[plan_class.pk] = (True, None, None)
             continue
         opens_at, closes_at = override
         if opens_at and closes_at and closes_at <= opens_at:
             raise ValidationError("班级截止时间必须晚于开始时间。")
-        desired_schedules[plan_class.pk] = (True, False, opens_at, closes_at)
+        desired_schedules[plan_class.pk] = (False, opens_at, closes_at)
     schedule_changed = (
         plan.default_opens_at != default_opens_at
         or plan.default_closes_at != default_closes_at
         or any(
             (
-                plan_class.schedule_configured,
                 plan_class.use_batch_default,
                 plan_class.opens_at,
                 plan_class.closes_at,
@@ -359,14 +379,12 @@ def save_plan_schedules(
     plan.save(update_fields=["default_opens_at", "default_closes_at"])
     for plan_class in plan_classes:
         (
-            plan_class.schedule_configured,
             plan_class.use_batch_default,
             plan_class.opens_at,
             plan_class.closes_at,
         ) = desired_schedules[plan_class.pk]
         plan_class.save(
             update_fields=[
-                "schedule_configured",
                 "use_batch_default",
                 "opens_at",
                 "closes_at",
@@ -568,12 +586,169 @@ def _candidate_release_fingerprint(candidate):
     return question_release_fingerprint(candidate)
 
 
+def _frozen_quota_selection(items, configuration, sampling_seed):
+    rng = random.Random(int(sampling_seed[:16], 16))
+    rules = list(configuration["sampling_kcs"])
+    evidence = {
+        row["question_id"]: row
+        for row in configuration.get("candidate_resolution", [])
+    }
+    slots = [
+        (row["kc_code"], index)
+        for row in rules
+        for index in range(row.get("quota") or 0)
+    ]
+    rng.shuffle(slots)
+    candidate_ids = {}
+    by_id = {_candidate_id(item): item for item in items}
+    for rule in rules:
+        ids = [
+            item_id
+            for item_id in by_id
+            if rule["kc_code"]
+            in evidence.get(item_id, {}).get("matched_kc_codes", [])
+        ]
+        rng.shuffle(ids)
+        candidate_ids[rule["kc_code"]] = ids
+    question_to_slot = {}
+    slot_to_question = {}
+
+    def augment(slot, visited):
+        for question_id in candidate_ids[slot[0]]:
+            if question_id in visited:
+                continue
+            visited.add(question_id)
+            previous = question_to_slot.get(question_id)
+            if previous is None or augment(previous, visited):
+                question_to_slot[question_id] = slot
+                slot_to_question[slot] = question_id
+                if previous is not None and slot_to_question.get(previous) == question_id:
+                    slot_to_question.pop(previous, None)
+                return True
+        return False
+
+    for slot in slots:
+        augment(slot, set())
+    if len(slot_to_question) != len(slots):
+        raise PublicationConflict(
+            "冻结候选图无法同时满足全部 KC 配额。",
+            code="KC_QUOTA_GLOBAL_INSUFFICIENT",
+        )
+    rule_by_code = {row["kc_code"]: row for row in rules}
+    return [
+        {
+            "candidate": by_id[question_id],
+            "sampling_source": {
+                "mode": Experiment.SamplingMode.KC_QUOTA,
+                "quota_kc_code": kc_code,
+                "match_scope": rule_by_code[kc_code]["match_scope"],
+                "algorithm_version": "deterministic-bipartite-v2",
+            },
+        }
+        for (kc_code, _slot), question_id in slot_to_question.items()
+    ]
+
+
 def _select_questions(experiment, candidates, sampling_seed, ordering_seed):
     items = sorted(
         candidates,
         key=lambda item: (_candidate_sequence(item), _candidate_id(item)),
     )
-    if experiment.selection_mode == Experiment.SelectionMode.QUOTA:
+    configuration = (
+        items[0].release_snapshot.configuration
+        if items and isinstance(items[0], ReleaseSnapshotQuestionMapping)
+        else None
+    )
+    sampling_mode = (
+        configuration.get("sampling_mode")
+        if configuration is not None
+        else experiment.sampling_mode
+    )
+    if sampling_mode:
+        if configuration is not None:
+            rng = random.Random(int(sampling_seed[:16], 16))
+            if configuration["sampling_mode"] == Experiment.SamplingMode.TOTAL_COUNT:
+                type_quotas = configuration.get("sampling_type_quotas", [])
+                if type_quotas:
+                    selected = []
+                    for quota in type_quotas:
+                        options = [
+                            item
+                            for item in items
+                            if _candidate_question_type(item)
+                            == quota["question_type"]
+                        ]
+                        if len(options) < quota["amount"]:
+                            raise PublicationConflict(
+                                "冻结候选集无法满足题型配额。",
+                                code="QUESTION_TYPE_QUOTA_INSUFFICIENT",
+                            )
+                        selected.extend(rng.sample(options, quota["amount"]))
+                    items = [
+                        {
+                            "candidate": item,
+                            "sampling_source": {
+                                "mode": Experiment.SamplingMode.TOTAL_COUNT,
+                                "quota_kc_code": None,
+                                "quota_question_type": _candidate_question_type(item),
+                                "match_scope": configuration["sampling_match_scope"],
+                                "algorithm_version": "deterministic-union-type-quota-v3",
+                            },
+                        }
+                        for item in selected
+                    ]
+                else:
+                    items = [
+                        {
+                            "candidate": item,
+                            "sampling_source": {
+                                "mode": Experiment.SamplingMode.TOTAL_COUNT,
+                                "quota_kc_code": None,
+                                "quota_question_type": None,
+                                "match_scope": configuration["sampling_match_scope"],
+                                "algorithm_version": "deterministic-union-sample-v2",
+                            },
+                        }
+                        for item in rng.sample(items, configuration["sampling_total_count"])
+                    ]
+            else:
+                items = _frozen_quota_selection(
+                    items, configuration, sampling_seed
+                )
+        else:
+            rules_by_id = {
+                rule.concept_id: rule
+                for rule in experiment.sampling_kcs.select_related("concept")
+            }
+            items = [
+                {
+                    "candidate": row["question"],
+                    "sampling_source": {
+                        "mode": experiment.sampling_mode,
+                        "quota_kc_code": (
+                            rules_by_id[row["quota_kc_id"]].concept.code
+                            if row["quota_kc_id"] is not None
+                            else None
+                        ),
+                        "quota_question_type": row["quota_question_type"],
+                        "match_scope": row["match_scope"],
+                        "algorithm_version": (
+                            "deterministic-union-type-quota-v3"
+                            if row["quota_question_type"] is not None
+                            else (
+                                "deterministic-union-sample-v2"
+                                if experiment.sampling_mode
+                                == Experiment.SamplingMode.TOTAL_COUNT
+                                else "deterministic-bipartite-v2"
+                            )
+                        ),
+                    },
+                }
+                for row in SamplingService(experiment).select_with_attribution(
+                    sampling_seed
+                )
+            ]
+    elif experiment.selection_mode == Experiment.SelectionMode.QUOTA:
         rng = random.Random(int(sampling_seed[:16], 16))
         quota_map = _quota_map(experiment)
         selected = []
@@ -585,14 +760,28 @@ def _select_questions(experiment, candidates, sampling_seed, ordering_seed):
             ]
             selected.extend(rng.sample(options, int(quota_map.get(question_type, 0))))
         items = selected
+    if not sampling_mode:
+        items = [{"candidate": item, "sampling_source": {}} for item in items]
+    items = sorted(
+        items,
+        key=lambda row: (
+            _candidate_sequence(row["candidate"]),
+            _candidate_id(row["candidate"]),
+        ),
+    )
     rng = random.Random(int(ordering_seed[:16], 16))
-    if experiment.ordering_mode == Experiment.Ordering.RANDOM:
+    ordering_mode = (
+        configuration.get("ordering_mode")
+        if configuration is not None
+        else experiment.ordering_mode
+    )
+    if ordering_mode == Experiment.Ordering.RANDOM:
         rng.shuffle(items)
-    elif experiment.ordering_mode == Experiment.Ordering.STRATIFIED:
+    elif ordering_mode == Experiment.Ordering.STRATIFIED:
         groups = {}
         for item in items:
-            primary = _candidate_primary_kc(item)
-            difficulty = float(_candidate_teacher_difficulty(item) or 0.5)
+            primary = _candidate_primary_kc(item["candidate"])
+            difficulty = float(_candidate_teacher_difficulty(item["candidate"]) or 0.5)
             band = 0 if difficulty < 1 / 3 else 1 if difficulty < 2 / 3 else 2
             groups.setdefault((primary, band), []).append(item)
         queues = []
@@ -616,9 +805,12 @@ def _current_release(experiment):
 def _preview_candidates(experiment):
     release = _current_release(experiment)
     if release is None:
-        candidates = _publish_candidates(experiment.question_bank)
         validate_for_publish(experiment, experiment.question_bank, participant_count=1)
-        _candidate_inventory(candidates, experiment.selection_mode, _quota_map(experiment))
+        if experiment.sampling_mode:
+            candidates = SamplingService(experiment).resolve().candidates
+        else:
+            candidates = _publish_candidates(experiment.question_bank)
+            _candidate_inventory(candidates, experiment.selection_mode, _quota_map(experiment))
         return candidates
     mappings = list(
         ReleaseSnapshotQuestionMapping.objects.filter(release_snapshot=release)
@@ -631,7 +823,28 @@ def _preview_candidates(experiment):
 
 
 def _preview_definition_fingerprint(experiment, candidates):
+    from apps.question_bank.services.question_kc_mapping import (
+        project_question_kc_mapping,
+    )
+
     release = _current_release(experiment)
+    frozen = release.configuration if release is not None else None
+    if frozen is not None:
+        sampling_kcs = frozen.get("sampling_kcs", [])
+    elif experiment.sampling_mode:
+        SamplingService(experiment).resolve()
+        sampling_kcs = [
+            {
+                "kc_code": rule.concept.code,
+                "quota": rule.quota,
+                "match_scope": rule.match_scope,
+            }
+            for rule in experiment.sampling_kcs.select_related("concept").order_by(
+                "concept__code"
+            )
+        ]
+    else:
+        sampling_kcs = []
     return canonical_json_hash(
         {
             "canonicalization_version": "canonical-json-v1",
@@ -642,20 +855,29 @@ def _preview_definition_fingerprint(experiment, candidates):
                 {
                     "id": _candidate_id(candidate),
                     "fingerprint": _candidate_release_fingerprint(candidate),
+                    "mapping_hash": (
+                        candidate.question_snapshot.kc_mapping_hash
+                        if isinstance(candidate, ReleaseSnapshotQuestionMapping)
+                        else project_question_kc_mapping(candidate)["mapping_hash"]
+                    ),
                 }
                 for candidate in candidates
             ],
-            "selection_mode": experiment.selection_mode,
-            "ordering_mode": experiment.ordering_mode,
-            "feedback_mode": experiment.feedback_mode,
-            "resume_mode": experiment.resume_mode,
-            "assignment_unit_type": experiment.assignment_unit_type,
-            "total_time_limit_minutes": experiment.total_time_limit_minutes,
-            "per_question_time_limit_seconds": experiment.per_question_time_limit_seconds,
-            "quotas": _quota_map(experiment),
-            "confidence_mode": experiment.confidence_mode,
-            "confidence_sampling_unit": experiment.confidence_sampling_unit,
-            "confidence_probability": str(experiment.confidence_probability or ""),
+            "selection_mode": frozen.get("selection_mode") if frozen else experiment.selection_mode,
+            "sampling_mode": frozen.get("sampling_mode") if frozen else experiment.sampling_mode,
+            "sampling_total_count": frozen.get("sampling_total_count") if frozen else experiment.sampling_total_count,
+            "sampling_match_scope": frozen.get("sampling_match_scope") if frozen else experiment.sampling_match_scope,
+            "sampling_kcs": sampling_kcs,
+            "ordering_mode": frozen.get("ordering_mode") if frozen else experiment.ordering_mode,
+            "feedback_mode": frozen.get("feedback_mode") if frozen else experiment.feedback_mode,
+            "resume_mode": frozen.get("resume_mode") if frozen else experiment.resume_mode,
+            "assignment_unit_type": frozen.get("assignment_unit_type") if frozen else experiment.assignment_unit_type,
+            "total_time_limit_minutes": frozen.get("total_time_limit_minutes") if frozen else experiment.total_time_limit_minutes,
+            "per_question_time_limit_seconds": frozen.get("per_question_time_limit_seconds") if frozen else experiment.per_question_time_limit_seconds,
+            "quotas": frozen.get("quota_map") if frozen else _quota_map(experiment),
+            "confidence_mode": frozen.get("confidence_mode") if frozen else experiment.confidence_mode,
+            "confidence_sampling_unit": frozen.get("confidence_sampling_unit") if frozen else experiment.confidence_sampling_unit,
+            "confidence_probability": frozen.get("confidence_probability") if frozen else str(experiment.confidence_probability or ""),
             "timer_semantics_version": (
                 release.timer_semantics_version
                 if release is not None
@@ -672,13 +894,21 @@ def _preview_definition_fingerprint(experiment, candidates):
 
 @transaction.atomic
 def generate_preview(plan, actor, *, expected_revision):
+    plan_identity = PublishPlan.objects.values(
+        "experiment_id", "experiment__course_id"
+    ).get(pk=plan.pk)
+    course_id = plan_identity["experiment__course_id"]
+    if course_id is not None:
+        Course.objects.select_for_update().get(pk=course_id)
+    experiment = Experiment.objects.select_for_update().get(
+        pk=plan_identity["experiment_id"]
+    )
     plan, _ = _lock_editable_publish_plan(
         plan,
         actor,
         expected_revision=expected_revision,
     )
-    plan = PublishPlan.objects.select_related("experiment").get(pk=plan.pk)
-    experiment = Experiment.objects.select_for_update().get(pk=plan.experiment_id)
+    plan.experiment = experiment
     if experiment.status == Experiment.Status.ARCHIVED:
         raise PublicationConflict("归档实验不能继续发布班级。", code="EXPERIMENT_ARCHIVED")
     plan_classes = list(
@@ -692,6 +922,10 @@ def generate_preview(plan, actor, *, expected_revision):
     setup = publish_plan_setup_projection(plan)
     if setup["setup_status"] != "complete":
         raise ValidationError("请先为所有已选班级确认开放排期。")
+    if setup["blocking_issues"]:
+        raise ValidationError(
+            [issue["message"] for issue in setup["blocking_issues"]]
+        )
     candidates = _preview_candidates(experiment)
     definition_fingerprint = _preview_definition_fingerprint(experiment, candidates)
     class_inputs = []
@@ -763,10 +997,14 @@ def generate_preview(plan, actor, *, expected_revision):
                 student=student,
                 course_subject=subject,
                 randomization_subject_key=subject_key,
+                sampling_seed=sampling_seed,
+                ordering_seed=ordering_seed,
+                sampling_algorithm_version="task_root_hmac_v2",
                 item_count=len(selected),
             )
             items_payload = []
-            for index, candidate in enumerate(selected, start=1):
+            for index, selection in enumerate(selected, start=1):
+                candidate = selection["candidate"]
                 source_question = _candidate_source_question(candidate)
                 fingerprint = _candidate_release_fingerprint(candidate)
                 PublishPreviewItem.objects.create(
@@ -774,8 +1012,11 @@ def generate_preview(plan, actor, *, expected_revision):
                     source_question=source_question,
                     question_release_fingerprint=fingerprint,
                     assigned_sequence_index=index,
+                    sampling_source=selection["sampling_source"],
                 )
-                items_payload.append((source_question.pk, fingerprint))
+                items_payload.append(
+                    (source_question.pk, fingerprint, selection["sampling_source"])
+                )
             result_payload.append((student.pk, items_payload))
         class_result.output_hash = canonical_json_hash(result_payload)
         class_result.save(update_fields=["output_hash"])
@@ -791,7 +1032,7 @@ def generate_preview(plan, actor, *, expected_revision):
 
 
 def _release_configuration(experiment, candidates):
-    return {
+    configuration = {
         "ordering_mode": experiment.ordering_mode,
         "feedback_mode": experiment.feedback_mode,
         "time_mode": experiment.time_mode,
@@ -810,12 +1051,180 @@ def _release_configuration(experiment, candidates):
         "confidence_sampling_unit": experiment.confidence_sampling_unit,
         "confidence_probability": str(experiment.confidence_probability or ""),
         "heartbeat_interval_seconds": experiment.heartbeat_interval_seconds,
+        "timezone": settings.TIME_ZONE,
     }
+    if experiment.sampling_mode:
+        from apps.question_bank.services.question_kc_mapping import (
+            project_question_kc_mapping,
+        )
+
+        resolution = SamplingService(experiment).resolve()
+        quota_map = _quota_map(experiment)
+        sampling_type_quotas = (
+            [
+                {"question_type": question_type, "amount": quota_map[question_type]}
+                for question_type in Question.Type.values
+                if quota_map.get(question_type, 0) > 0
+            ]
+            if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+            else []
+        )
+        configuration["sampling_mode"] = experiment.sampling_mode
+        configuration["sampling_total_count"] = experiment.sampling_total_count
+        configuration["sampling_match_scope"] = experiment.sampling_match_scope
+        configuration["sampling_type_quotas"] = sampling_type_quotas
+        configuration["sampling_kcs"] = [
+            {
+                "kc_code": rule.concept.code,
+                "kc_name": rule.concept.name,
+                "quota": rule.quota,
+                "match_scope": rule.match_scope,
+            }
+            for rule in experiment.sampling_kcs.select_related("concept").order_by(
+                "concept__code"
+            )
+        ]
+        candidate_resolution = []
+        for question in candidates:
+            mapping = project_question_kc_mapping(question)
+            all_codes = {node["kc_code"] for node in mapping["nodes"]}
+            matched_nodes = []
+            for rule in experiment.sampling_kcs.select_related("concept").order_by(
+                "concept__code"
+            ):
+                scope = (
+                    experiment.sampling_match_scope
+                    if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+                    else rule.match_scope
+                )
+                if (
+                    mapping["root_kc_code"] == rule.concept.code
+                    if scope == Experiment.MatchScope.PRIMARY
+                    else rule.concept.code in all_codes
+                ):
+                    matched_nodes.append(rule.concept.code)
+            candidate_resolution.append(
+                {
+                    "question_id": question.pk,
+                    "stable_question_code": (
+                        question.course_identity.stable_code
+                        if getattr(question, "course_identity", None) is not None
+                        else question.code
+                    ),
+                    "mapping_hash": mapping["mapping_hash"],
+                    "question_type": question.question_type,
+                    "root_kc_code": mapping["root_kc_code"],
+                    "matched_kc_codes": matched_nodes,
+                }
+            )
+        configuration["candidate_resolution"] = candidate_resolution
+        configuration["sampling_inventory"] = [
+            {
+                "kc_code": rule.concept.code,
+                "kc_name": rule.concept.name,
+                "quota": rule.quota,
+                "match_scope": (
+                    experiment.sampling_match_scope
+                    if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+                    else rule.match_scope
+                ),
+                "available": (
+                    len(resolution.buckets[rule.concept_id])
+                    if experiment.sampling_mode == Experiment.SamplingMode.KC_QUOTA
+                    else sum(
+                        1
+                        for evidence in candidate_resolution
+                        if rule.concept.code in evidence["matched_kc_codes"]
+                    )
+                ),
+            }
+            for rule in experiment.sampling_kcs.select_related("concept").order_by(
+                "concept__code"
+            )
+        ]
+        sampling_type_inventory = (
+            [
+                {
+                    "question_type": question_type,
+                    "label": dict(Question.Type.choices)[question_type],
+                    "requested": quota_map.get(question_type, 0),
+                    "available": len(resolution.type_buckets.get(question_type, [])),
+                }
+                for question_type in Question.Type.values
+            ]
+            if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+            else []
+        )
+        configuration["sampling"] = {
+            "schema_version": (
+                "sampling-snapshot-v3"
+                if sampling_type_quotas
+                else "sampling-snapshot-v2"
+            ),
+            "mode": configuration["sampling_mode"],
+            "total_count": configuration["sampling_total_count"],
+            "match_scope": configuration["sampling_match_scope"],
+            "selected_nodes": configuration["sampling_kcs"],
+            "type_quotas": sampling_type_quotas,
+            "type_inventory": sampling_type_inventory,
+            "attribution_rule": (
+                "deduplicated_question_union"
+                if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+                else "participant_local_global_bipartite_matching"
+            ),
+            "candidate_resolution": configuration["candidate_resolution"],
+            "inventory": configuration["sampling_inventory"],
+            "sampling_algorithm_version": (
+                "deterministic-union-type-quota-v3"
+                if sampling_type_quotas
+                else (
+                    "deterministic-union-sample-v2"
+                    if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+                    else "deterministic-bipartite-v2"
+                )
+            ),
+            "candidate_ordering": "source_sequence_then_pk",
+            "seed_derivation_version": "task_root_hmac_v2",
+        }
+    return configuration
 
 
 def _create_question_snapshot(version, question):
+    from apps.question_bank.services.question_kc_mapping import (
+        project_question_kc_mapping,
+    )
+
     concept_links = list(question.concept_links.select_related("concept").order_by("pk"))
     primary = next((link.concept.name for link in concept_links if link.is_primary), "")
+    primary_link = next((link for link in concept_links if link.is_primary), None)
+
+    def concept_snapshot(link):
+        levels = []
+        concept = link.concept
+        while concept is not None:
+            levels.append(
+                {
+                    "concept_id": concept.pk,
+                    "name": concept.name,
+                    "depth": concept.depth,
+                }
+            )
+            concept = concept.parent
+        levels.reverse()
+        return {
+            "concept_id": link.concept_id,
+            "name": link.concept.name,
+            "path": link.concept.full_path,
+            "is_primary": link.is_primary,
+            "levels": levels,
+        }
+
+    frozen_concepts = [concept_snapshot(link) for link in concept_links]
+    frozen_primary = next(
+        (concept for concept in frozen_concepts if concept["is_primary"]),
+        None,
+    )
+    mapping_projection = project_question_kc_mapping(question)
     snapshot = QuestionSnapshot.objects.create(
         version=version,
         source_question=question,
@@ -849,6 +1258,15 @@ def _create_question_snapshot(version, question):
         empirical_difficulty=question.empirical_difficulty,
         primary_kc=primary,
         all_kcs=[link.concept.name for link in concept_links],
+        primary_kc_id_snapshot=(primary_link.concept_id if primary_link else None),
+        primary_kc_path=(primary_link.concept.full_path if primary_link else ""),
+        primary_kc_levels=(frozen_primary["levels"] if frozen_primary else []),
+        all_kc_paths=[link.concept.full_path for link in concept_links],
+        all_kc_snapshots=frozen_concepts,
+        root_kc_code=mapping_projection["root_kc_code"] or "",
+        kc_mapping_snapshot=mapping_projection,
+        kc_mapping_schema_version=mapping_projection["schema_version"],
+        kc_mapping_hash=mapping_projection["mapping_hash"],
         release_fingerprint=question_release_fingerprint(question),
     )
     return snapshot
@@ -965,7 +1383,33 @@ def _create_task_from_preview(class_result, release_snapshot, actor, now):
         .select_related("student", "course_subject")
         .order_by("student_id")
     )
+    release_configuration = release_snapshot.configuration
     for participant in participants:
+        assignment_snapshot = [
+            {
+                "assigned_sequence_index": item.assigned_sequence_index,
+                "question_snapshot_id": item.release_mapping.question_snapshot_id,
+                "source_question_id": item.source_question_id,
+                "sampling_source": (
+                    item.sampling_source
+                    if item.sampling_source
+                    else {
+                        "mode": (
+                            "type_quota_legacy"
+                            if release_configuration.get("selection_mode")
+                            == Experiment.SelectionMode.QUOTA
+                            else "all_legacy"
+                        ),
+                        "inclusion_reason": "legacy_selection",
+                        "matched_nodes": [],
+                        "quota_kc_code": None,
+                    }
+                ),
+            }
+            for item in participant.items.select_related(
+                "release_mapping__question_snapshot"
+            ).order_by("assigned_sequence_index")
+        ]
         ExperimentStudent.objects.get_or_create(
             experiment=release_snapshot.experiment,
             student=participant.student,
@@ -978,6 +1422,10 @@ def _create_task_from_preview(class_result, release_snapshot, actor, now):
             class_task=task,
             course_subject=participant.course_subject,
             randomization_subject_key=participant.randomization_subject_key,
+            sampling_seed=participant.sampling_seed,
+            ordering_seed=participant.ordering_seed,
+            sampling_algorithm_version=participant.sampling_algorithm_version,
+            assignment_snapshot=assignment_snapshot,
         )
     return task
 
@@ -985,8 +1433,16 @@ def _create_task_from_preview(class_result, release_snapshot, actor, now):
 @transaction.atomic
 def commit_publish_plan(plan, actor, *, expected_revision):
     """Atomically freeze once and create every selected class task or none."""
+    plan_identity = PublishPlan.objects.values(
+        "experiment_id", "experiment__course_id"
+    ).get(pk=plan.pk)
+    course_id = plan_identity["experiment__course_id"]
+    if course_id is not None:
+        Course.objects.select_for_update().get(pk=course_id)
+    experiment = Experiment.objects.select_for_update().get(
+        pk=plan_identity["experiment_id"]
+    )
     plan = PublishPlan.objects.select_for_update().get(pk=plan.pk)
-    experiment = Experiment.objects.select_for_update().get(pk=plan.experiment_id)
     now = database_now()
     if plan.status != PublishPlan.Status.PREVIEWED or plan.preview_run_id is None:
         raise PublicationConflict("请先完成有效的随机化预览。", code="PREVIEW_INVALIDATED")

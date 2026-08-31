@@ -185,12 +185,12 @@ def remove_course_enrollment(*, course, class_group, enrollment):
         ExperimentStudent,
     )
 
+    course = lock_writable_course(course)
     draft_experiments = list(
         Experiment.objects.select_for_update()
         .filter(course_id=course.pk, status=Experiment.Status.DRAFT)
         .order_by("pk")
     )
-    course = lock_writable_course(course)
     try:
         class_group = ClassGroup.objects.select_for_update().get(
             pk=class_group.pk,

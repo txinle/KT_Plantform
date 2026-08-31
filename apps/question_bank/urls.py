@@ -5,6 +5,7 @@ urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("import-templates/questions.csv", views.question_import_template, name="question_import_template"),
     path("import-templates/kcs.csv", views.kc_import_template, name="kc_import_template"),
+    path("import-templates/course-kcs.csv", views.course_kc_import_template, name="course_kc_import_template"),
     path("banks/", views.bank_list, name="bank_list"),
     path("banks/<int:pk>/", views.bank_detail, name="bank_detail"),
     path("banks/<int:pk>/visibility/", views.bank_visibility_update, name="bank_visibility_update"),

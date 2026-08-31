@@ -3,7 +3,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.db import transaction
 from django.http import FileResponse, Http404
-from django.db.models import Count
+from django.db.models import Count, Max
 from django.db.models import Q
 from django.views.decorators.http import require_GET, require_POST
 from django.shortcuts import get_object_or_404, redirect, render
@@ -50,6 +50,12 @@ def question_import_template(request):
 @require_GET
 def kc_import_template(request):
     return _fixture_download("kc_mapping_template.csv")
+
+
+@role_required("teacher", "admin")
+@require_GET
+def course_kc_import_template(request):
+    return _fixture_download("course_kc_template.csv")
 
 @role_required("teacher", "admin")
 def dashboard(request):
@@ -162,13 +168,22 @@ def question_import(request, pk):
     if request.method == "POST" and request.POST.get("action") == "confirm":
         stored = request.session.pop(f"question_import_{bank.pk}", [])
         parsed = [ParsedQuestion(**item) for item in stored]
-        import_questions(bank, parsed); messages.success(request, f"已导入 {len(parsed)} 道题")
-        return redirect("question_bank:bank_detail", pk=bank.pk)
+        try:
+            import_questions(bank, parsed)
+        except ValueError as exc:
+            messages.error(request, f"导入预览已失效：{exc}。请重新上传文件。")
+        else:
+            messages.success(request, f"已导入 {len(parsed)} 道题")
+            return redirect("question_bank:bank_detail", pk=bank.pk)
     form = UploadForm(request.POST or None, request.FILES or None)
     if request.method == "POST" and form.is_valid():
         upload_name = form.cleaned_data["file"].name
         try:
-            parsed = parse_question_rows(read_uploaded_rows(form.cleaned_data["file"]))
+            sequence_floor = bank.questions.aggregate(value=Max("sequence"))["value"] or 0
+            parsed = parse_question_rows(
+                read_uploaded_rows(form.cleaned_data["file"]),
+                sequence_floor=sequence_floor,
+            )
             incoming = [item.sequence for item in parsed]
             existing = list(bank.questions.filter(sequence__in=incoming).values_list("sequence", flat=True))
             if existing:

@@ -18,13 +18,17 @@ button, input, select, textarea { font: inherit; }
 .kt-global-nav a { display: inline-flex; min-height: 4.25rem; align-items: center; border-bottom: 3px solid transparent; color: #303a4c; font-size: 0.9375rem; font-weight: 650; text-decoration: none; white-space: nowrap; }
 .kt-global-nav a:hover { color: var(--kt-action-600); }
 .kt-global-nav [aria-current='page'] { border-bottom-color: var(--kt-action-600); color: var(--kt-action-600); }
-.kt-user-name { display: grid; flex: none; color: var(--kt-ink); line-height: 1.25; text-align: left; }
+.kt-account-actions { display: flex; flex: none; align-items: center; gap: 0.75rem; }
+.kt-user-name { display: flex; flex: none; align-items: center; gap: 0.35rem; color: var(--kt-ink); line-height: 1.25; text-align: left; white-space: nowrap; }
 .kt-user-name small { color: var(--kt-muted); font-size: var(--kt-font-xs); font-weight: 400; }
+.kt-account-actions form { margin: 0; }
+.kt-logout-button { min-height: 2.4rem; border: 1px solid #cbd5e1; border-radius: var(--kt-radius-control); padding: 0.4rem 0.7rem; background: #fff; color: var(--kt-brand-900); font-weight: 650; cursor: pointer; }
+.kt-logout-button:hover { border-color: var(--kt-action-600); color: var(--kt-action-600); }
 .kt-skip-link { position: fixed; z-index: var(--kt-z-dialog); top: 0.5rem; left: 0.5rem; transform: translateY(-150%); border-radius: var(--kt-radius-control); padding: 0.6rem 0.8rem; background: var(--kt-surface); box-shadow: var(--kt-shadow-raised); }
 .kt-skip-link:focus { transform: translateY(0); }
 .kt-course-bar { border-bottom: 1px solid var(--kt-border); background: var(--kt-surface); }
-.kt-course-bar > .kt-shell { display: grid; grid-template-columns: minmax(13rem, 1fr) auto; align-items: end; gap: 1rem; }
-.kt-course-context { display: grid; gap: 0.1rem; padding-block: 0.75rem; }
+.kt-course-bar > .kt-shell { display: flex; min-height: 3.15rem; align-items: center; }
+.kt-course-context { display: flex; align-items: baseline; gap: 1rem; padding-block: 0.7rem; }
 .kt-course-context strong { color: var(--kt-brand-900); font-size: var(--kt-font-base); }
 .kt-course-context span { color: var(--kt-muted); font-size: var(--kt-font-sm); }
 .kt-course-nav { display: flex; overflow-x: auto; }

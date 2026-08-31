@@ -11,7 +11,7 @@ from apps.experiments.models import (
     ExperimentStudent,
     ExperimentVersion,
     ExperimentVersionParticipantSnapshot,
-    PublishPreviewParticipant,
+    QuestionSnapshot,
 )
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.experiments.services import derive_session_seeds, ordered_snapshots, select_snapshots
@@ -43,6 +43,12 @@ from .models import (
     SubmissionEvent,
 )
 from .deadline_services import DeadlineDecisionService
+
+
+def _lock_session_course(course_id):
+    from apps.accounts.models import Course
+
+    return Course.objects.select_for_update().get(pk=course_id)
 
 
 class SubmissionValidationError(ValidationError):
@@ -143,11 +149,21 @@ def get_or_create_session(
     class_task=None,
 ):
     request_received_at = request_received_at or timezone.now()
-    experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
-    if experiment.course_id:
+    course_id = (
+        Experiment.objects.filter(pk=experiment.pk)
+        .values_list("course_id", flat=True)
+        .get()
+    )
+    course = None
+    if course_id:
         from apps.accounts.models import Course, CourseEnrollment
 
-        course = Course.objects.select_for_update().get(pk=experiment.course_id)
+        # Publishing and student entry share one global order: Course -> Experiment.
+        course = _lock_session_course(course_id)
+    experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
+    if experiment.course_id != course_id:
+        raise ValidationError("实验所属课程已变化，请重试")
+    if experiment.course_id:
         if course.status != Course.Status.ACTIVE:
             raise ValidationError("课程已归档，不能开始或继续实验")
 
@@ -219,7 +235,15 @@ def get_or_create_session(
             return existing
     elif not ExperimentStudent.objects.filter(experiment=experiment, student=student).exists():
         raise ValidationError("你没有参加该实验的权限")
-    sampling_seed, ordering_seed, algorithm_version = derive_session_seeds(version, student.id)
+    if participant_snapshot is not None and participant_snapshot.sampling_seed:
+        sampling_seed = participant_snapshot.sampling_seed
+        ordering_seed = participant_snapshot.ordering_seed
+        algorithm_version = participant_snapshot.sampling_algorithm_version
+    else:
+        sampling_seed, ordering_seed, algorithm_version = derive_session_seeds(
+            version,
+            student.id,
+        )
     now = timezone.now()
     total_seconds = None
     if version.configuration.get("total_time_limit_minutes"):
@@ -271,21 +295,19 @@ def get_or_create_session(
             defaults=session_defaults,
         )
     if created:
-        preview_participant = None
-        if class_task is not None and class_task.preview_class_result_id:
-            preview_participant = (
-                PublishPreviewParticipant.objects.filter(
-                    class_result_id=class_task.preview_class_result_id,
-                    student=student,
-                )
-                .prefetch_related("items__release_mapping__question_snapshot")
-                .first()
-            )
-        if preview_participant is not None:
-            ordered = [
-                item.release_mapping.question_snapshot
-                for item in preview_participant.items.all().order_by("assigned_sequence_index")
+        if participant_snapshot is not None and participant_snapshot.assignment_snapshot:
+            snapshot_ids = [
+                item["question_snapshot_id"]
+                for item in participant_snapshot.assignment_snapshot
             ]
+            snapshots_by_id = {
+                snapshot.pk: snapshot
+                for snapshot in QuestionSnapshot.objects.filter(
+                    version=version,
+                    pk__in=snapshot_ids,
+                )
+            }
+            ordered = [snapshots_by_id[snapshot_id] for snapshot_id in snapshot_ids]
         else:
             selected = select_snapshots(version, student.id, sampling_seed)
             ordered = ordered_snapshots(version, student.id, selected, ordering_seed)

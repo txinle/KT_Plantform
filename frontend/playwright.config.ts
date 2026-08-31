@@ -10,12 +10,14 @@ const localPython = process.platform === 'win32'
   : join(repositoryDir, '.venv', 'bin', 'python')
 const python = process.env.PYTHON || (existsSync(localPython) ? localPython : 'python')
 const pythonCommand = JSON.stringify(python)
+const vitePort = Number(process.env.E2E_VITE_PORT || '5173')
+const viteUrl = `http://127.0.0.1:${vitePort}`
 const databaseEnvironment = requireIsolatedPostgres(process.env)
 const commonDjangoEnvironment = {
   ...process.env,
   ...databaseEnvironment,
   DJANGO_DEBUG: '1',
-  VITE_DEV_SERVER_URL: 'http://127.0.0.1:5173',
+  VITE_DEV_SERVER_URL: viteUrl,
 }
 
 export default defineConfig({
@@ -35,8 +37,8 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'npm run dev -- --host 127.0.0.1',
-      url: 'http://127.0.0.1:5173',
+      command: `npm run dev -- --host 127.0.0.1 --port ${vitePort}`,
+      url: viteUrl,
       reuseExistingServer: false,
     },
     {

@@ -27,6 +27,12 @@ class ExperimentAdmin(admin.ModelAdmin):
 
     def get_readonly_fields(self, request, obj=None):
         readonly_fields = tuple(super().get_readonly_fields(request, obj))
+        if obj is not None and obj.frozen_release_snapshot_id:
+            frozen_fields = tuple(
+                field_name.removesuffix("_id")
+                for field_name in Experiment.FROZEN_DEFINITION_FIELDS
+            )
+            return tuple(dict.fromkeys((*readonly_fields, *frozen_fields, "status")))
         if obj is not None and obj.class_tasks.exists() and "course" not in readonly_fields:
             return (*readonly_fields, "course")
         return readonly_fields
@@ -46,7 +52,18 @@ class ExperimentVersionAdmin(admin.ModelAdmin):
         return super().has_delete_permission(request, obj)
 
 
-admin.site.register(QuestionSnapshot)
+@admin.register(QuestionSnapshot)
+class QuestionSnapshotAdmin(admin.ModelAdmin):
+    list_display = ("code", "version", "question_type", "primary_kc")
+
+    def get_readonly_fields(self, request, obj=None):
+        return tuple(field.name for field in self.model._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(ClassExperimentTask)

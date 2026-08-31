@@ -29,6 +29,11 @@
 .kt-teacher-experiments .kt-fieldset legend { padding-inline: 0.3rem; font-weight: 750; }
 .kt-teacher-experiments .kt-quota-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }
 .kt-teacher-experiments .kt-quota-grid label { display: grid; gap: 0.3rem; font-size: 0.9rem; }
+.kt-teacher-experiments .kt-kc-tree-selector { display: grid; gap: 0.35rem; margin-top: 0.75rem; }
+.kt-teacher-experiments .kt-kc-tree-selector label { display: grid; grid-template-columns: auto minmax(9rem, 1fr) auto minmax(5rem, 7rem); align-items: center; gap: 0.65rem; min-height: 2.5rem; border-bottom: 1px solid #edf1f5; }
+.kt-teacher-experiments .kt-kc-tree-selector label small { color: var(--kt-color-text-muted); }
+.kt-teacher-experiments .kt-quota-total { margin: 0.75rem 0 0; border-top: 1px solid #e4eaf2; padding-top: 0.75rem; text-align: center; }
+.kt-teacher-experiments .kt-quota-total strong { color: var(--kt-color-primary); font-size: 1.15rem; }
 .kt-teacher-experiments .kt-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .kt-teacher-experiments .kt-description-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.9rem 1rem; margin: 0; }
 .kt-teacher-experiments .kt-description-list div { min-width: 0; }
@@ -351,5 +356,348 @@
   }
   .kt-teacher-experiments .kt-numbered-form-section[aria-labelledby='definition-runtime'] .kt-form-grid {
     grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Reference-aligned experiment definition rail. */
+.kt-teacher-experiments .kt-form-stack {
+  gap: 1rem;
+}
+
+.kt-teacher-experiments .kt-numbered-form-section {
+  display: grid;
+  grid-template-columns: 12rem minmax(0, 1fr);
+  gap: 1rem;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.kt-teacher-experiments .kt-numbered-form-section__heading {
+  align-self: stretch;
+  border: 1px solid #dce4ef;
+  border-radius: .6rem;
+  padding: 1.2rem 1.1rem;
+  background: #fff;
+}
+
+.kt-teacher-experiments .kt-numbered-form-section__content {
+  gap: .8rem;
+  padding: 1.1rem 1.4rem;
+}
+
+.kt-teacher-experiments .kt-step-one-grid {
+  grid-template-columns: minmax(20rem, 1.15fr) minmax(9rem, .34fr) minmax(20rem, 1fr);
+  align-items: start;
+  gap: 1.2rem 2rem;
+}
+
+.kt-teacher-experiments .kt-step-one-grid .kt-field {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .4rem;
+}
+
+.kt-teacher-experiments .kt-step-one-grid .kt-field > label,
+.kt-teacher-experiments .kt-step-one-grid .kt-field > input,
+.kt-teacher-experiments .kt-step-one-grid .kt-field > select,
+.kt-teacher-experiments .kt-step-one-grid .kt-field > textarea,
+.kt-teacher-experiments .kt-step-one-grid .kt-field__error {
+  grid-column: 1;
+  padding-top: 0;
+}
+
+.kt-teacher-experiments .kt-count-field input {
+  max-width: 22rem;
+}
+
+.kt-teacher-experiments .kt-kc-config-panel,
+.kt-teacher-experiments .kt-type-config-panel,
+.kt-teacher-experiments .kt-quota-panel {
+  display: grid;
+  grid-template-columns: 10rem minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.kt-teacher-experiments .kt-type-tree-selector input[type='number'] {
+  width: 6rem;
+  min-height: 2.2rem;
+}
+
+.kt-teacher-experiments .kt-type-allocation-status {
+  border-top: 1px solid #e5eaf1;
+  padding: .7rem 1rem;
+  color: #617088;
+  font-size: .8rem;
+}
+
+.kt-teacher-experiments .kt-type-allocation-status.is-error {
+  color: #b33a32;
+}
+
+.kt-teacher-experiments .kt-config-label {
+  padding-top: .75rem;
+  color: #4d5c72;
+  font-size: .88rem;
+}
+
+.kt-teacher-experiments .kt-kc-config-content {
+  min-width: 0;
+  border: 1px solid #dce4ef;
+  border-radius: .55rem;
+  background: #fff;
+}
+
+.kt-teacher-experiments .kt-kc-config-top,
+.kt-teacher-experiments .kt-quota-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 1rem;
+  padding: .9rem 1rem;
+}
+
+.kt-teacher-experiments .kt-quota-toolbar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  border-bottom: 1px solid #e4eaf2;
+}
+
+.kt-teacher-experiments .kt-quota-toolbar p {
+  margin: 0;
+  color: #5f6e83;
+  font-size: .84rem;
+}
+
+.kt-teacher-experiments .kt-selected-kcs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+  margin-top: .4rem;
+}
+
+.kt-teacher-experiments .kt-selected-kcs > span:not(.is-empty) {
+  border: 1px solid #a9c0f8;
+  border-radius: .38rem;
+  padding: .25rem .55rem;
+  background: #f3f6ff;
+  color: #2456b5;
+  font-size: .8rem;
+}
+
+.kt-teacher-experiments .kt-selected-kcs .is-empty,
+.kt-teacher-experiments .kt-selection-facts {
+  color: #748197;
+  font-size: .82rem;
+}
+
+.kt-teacher-experiments .kt-kc-picker {
+  position: relative;
+}
+
+.kt-teacher-experiments .kt-kc-picker > summary {
+  list-style: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.kt-teacher-experiments .kt-kc-picker > summary::-webkit-details-marker {
+  display: none;
+}
+
+.kt-teacher-experiments .kt-kc-picker[open] > .kt-kc-tree-selector {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + .45rem);
+  right: 0;
+  width: min(34rem, 75vw);
+  max-height: 22rem;
+  overflow: auto;
+  border: 1px solid #cfd9e8;
+  border-radius: .55rem;
+  padding: .75rem 1rem;
+  background: #fff;
+  box-shadow: 0 .7rem 2rem rgb(26 48 88 / 14%);
+}
+
+.kt-teacher-experiments .kt-match-scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .45rem .85rem;
+  border-top: 1px solid #e5eaf1;
+  padding: .75rem 1rem;
+}
+
+.kt-teacher-experiments .kt-match-scope > span {
+  margin-right: .4rem;
+  color: #617088;
+  font-size: .82rem;
+  font-weight: 700;
+}
+
+.kt-teacher-experiments .kt-match-scope label {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-weight: 700;
+}
+
+.kt-teacher-experiments .kt-match-scope small {
+  color: #8591a2;
+  font-size: .76rem;
+}
+
+.kt-teacher-experiments .kt-quota-table-wrap {
+  overflow-x: auto;
+}
+
+.kt-teacher-experiments .kt-quota-table {
+  width: 100%;
+  min-width: 44rem;
+  border-collapse: collapse;
+}
+
+.kt-teacher-experiments .kt-quota-table th,
+.kt-teacher-experiments .kt-quota-table td {
+  border-top: 1px solid #e4eaf2;
+  padding: .62rem 1rem;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.kt-teacher-experiments .kt-quota-table thead th {
+  border-top: 0;
+  color: #617088;
+  font-size: .78rem;
+}
+
+.kt-teacher-experiments .kt-quota-table select,
+.kt-teacher-experiments .kt-quota-table input {
+  width: 7rem;
+  min-height: 2.2rem;
+}
+
+.kt-teacher-experiments .kt-quota-table tfoot td {
+  background: #edf3ff;
+  text-align: center;
+}
+
+.kt-teacher-experiments .kt-quota-table tfoot strong {
+  color: #245fe5;
+  font-size: 1.05rem;
+}
+
+.kt-teacher-experiments .kt-empty-quota {
+  color: #7b8798;
+  text-align: center !important;
+}
+
+.kt-teacher-experiments .kt-collapsible-step {
+  padding: 0;
+}
+
+.kt-teacher-experiments .kt-collapsible-step > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  min-height: 3.45rem;
+  padding: .85rem 1.35rem;
+  color: #526178;
+  font-size: .86rem;
+  list-style: none;
+  cursor: pointer;
+}
+
+.kt-teacher-experiments .kt-collapsible-step > summary::-webkit-details-marker {
+  display: none;
+}
+
+.kt-teacher-experiments .kt-collapsible-step > summary span:last-child {
+  color: #14213a;
+  font-size: 1.6rem;
+  transition: transform .15s ease;
+}
+
+.kt-teacher-experiments .kt-collapsible-step[open] > summary span:last-child {
+  transform: rotate(90deg);
+}
+
+.kt-teacher-experiments .kt-collapsible-step__body {
+  display: grid;
+  gap: .8rem;
+  border-top: 1px solid #e4eaf2;
+  padding: 1rem 1.35rem 1.25rem;
+}
+
+@media (max-width: 62rem) {
+  .kt-teacher-experiments .kt-step-one-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .kt-teacher-experiments .kt-step-one-grid .kt-field:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 48rem) {
+  .kt-teacher-experiments .kt-numbered-form-section,
+  .kt-teacher-experiments .kt-step-one-grid,
+  .kt-teacher-experiments .kt-kc-config-panel,
+  .kt-teacher-experiments .kt-type-config-panel,
+  .kt-teacher-experiments .kt-quota-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .kt-teacher-experiments .kt-numbered-form-section__heading {
+    min-height: auto;
+    padding: .85rem 1rem;
+  }
+
+  .kt-teacher-experiments .kt-step-one-grid .kt-field:last-child {
+    grid-column: auto;
+  }
+
+  .kt-teacher-experiments .kt-kc-config-top {
+    grid-template-columns: 1fr;
+  }
+
+  .kt-teacher-experiments .kt-kc-config-top > * {
+    min-width: 0;
+  }
+
+  .kt-teacher-experiments .kt-kc-picker[open] > .kt-kc-tree-selector {
+    position: static;
+    width: 100%;
+    max-height: none;
+    margin-top: .5rem;
+    box-shadow: none;
+  }
+
+  .kt-teacher-experiments .kt-type-tree-selector label {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .kt-teacher-experiments .kt-type-tree-selector label small,
+  .kt-teacher-experiments .kt-type-tree-selector label input[type='number'] {
+    grid-column: 2;
+  }
+
+  .kt-teacher-experiments .kt-type-tree-selector input[type='number'] {
+    width: 100%;
+  }
+
+  .kt-teacher-experiments .kt-collapsible-step > summary {
+    grid-template-columns: 1fr auto;
+  }
+
+  .kt-teacher-experiments .kt-collapsible-step > summary span:nth-child(2) {
+    grid-column: 1;
+  }
+
+  .kt-teacher-experiments .kt-collapsible-step > summary span:last-child {
+    grid-column: 2;
+    grid-row: 1 / 3;
   }
 }

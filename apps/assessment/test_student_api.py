@@ -10,7 +10,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
-from apps.experiments.models import Experiment
+from apps.experiments.models import Experiment, ExperimentSamplingKC
 from apps.experiments.models import ScheduleRevision
 from apps.experiments.publication_services import (
     commit_publish_plan,
@@ -128,6 +128,14 @@ class StudentApiFixtureMixin:
             owner=self.teacher,
             created_by=self.teacher,
             feedback_mode=feedback_mode,
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=self.bank.questions.filter(
+                status=Question.Status.ACTIVE
+            ).count(),
+        )
+        ExperimentSamplingKC.objects.create(
+            experiment=experiment,
+            concept=self.question.primary_concept,
         )
         plan = get_or_create_publish_plan(experiment, self.teacher)
         plan = save_plan_selection(

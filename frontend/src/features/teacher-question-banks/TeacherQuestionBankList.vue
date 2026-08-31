@@ -4,17 +4,8 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import { getBootstrapContext } from '@/app/bootstrap'
 import Alert from '@/design-system/components/Alert.vue'
-import EmptyState from '@/design-system/components/EmptyState.vue'
-import MobileCardList from '@/design-system/components/MobileCardList.vue'
-import PageHeader from '@/design-system/components/PageHeader.vue'
-import Paginator from '@/design-system/components/Paginator.vue'
-import StatusBadge from '@/design-system/components/StatusBadge.vue'
 
-import {
-  getTeacherQuestionBankApi,
-  type CourseConceptCollection,
-  type QuestionBankCollection,
-} from './api'
+import { getTeacherQuestionBankApi, type CourseConceptCollection, type CourseConceptImportPreview, type QuestionBankCollection } from './api'
 
 const route = useRoute()
 const router = useRouter()
@@ -25,24 +16,21 @@ const banks = ref<QuestionBankCollection>()
 const concepts = ref<CourseConceptCollection>()
 const loading = ref(true)
 const error = ref('')
-const filters = reactive({
-  query: String(route.query.q || ''),
-  conceptQuery: String(route.query.kc_q || ''),
-})
-const bankPage = computed(() => Number(route.query.page || 1))
-const conceptPage = computed(() => Number(route.query.kc_page || 1))
-
-function visibilityTone(visibility: string) {
-  return visibility === 'shared' ? 'success' as const : 'neutral' as const
-}
+const activeTab = computed(() => route.query.tab === 'course-kcs' ? 'course-kcs' : 'banks')
+const bankForm = reactive({ name: '', description: '', visibility: 'private' })
+const conceptForm = reactive({ sequence: '', name: '', description: '' })
+const generatedCode = computed(() => Number(conceptForm.sequence) > 0 ? `KC${Number(conceptForm.sequence)}` : '')
+const importInput = ref<HTMLInputElement>()
+const importPreview = ref<CourseConceptImportPreview>()
+const importBusy = ref(false)
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
     const [bankCollection, conceptCollection] = await Promise.all([
-      api.list(courseId, { page: bankPage.value, query: filters.query }),
-      api.courseConcepts(courseId, { page: conceptPage.value, query: filters.conceptQuery }),
+      api.list(courseId, { page: Number(route.query.page || 1) }),
+      api.courseConcepts(courseId, { page: Number(route.query.page || 1), all: true }),
     ])
     banks.value = bankCollection
     concepts.value = conceptCollection
@@ -53,147 +41,192 @@ async function load() {
   }
 }
 
-async function applyQuery(kind: 'bank' | 'concept') {
-  const query = { ...route.query }
-  if (kind === 'bank') {
-    if (filters.query) query.q = filters.query
-    else delete query.q
-    delete query.page
-  } else {
-    if (filters.conceptQuery) query.kc_q = filters.conceptQuery
-    else delete query.kc_q
-    delete query.kc_page
-  }
-  await router.push({ query })
-  await load()
+async function selectTab(tab: 'banks' | 'course-kcs') {
+  await router.push({ query: tab === 'course-kcs' ? { tab } : {} })
 }
 
-async function navigate(kind: 'bank' | 'concept', page: number) {
-  const query = { ...route.query }
-  const key = kind === 'bank' ? 'page' : 'kc_page'
-  if (page === 1) delete query[key]
-  else query[key] = String(page)
-  await router.push({ query })
-  await load()
+async function createBank() {
+  error.value = ''
+  try {
+    await api.createBank(courseId, { ...bankForm })
+    Object.assign(bankForm, { name: '', description: '', visibility: 'private' })
+    await load()
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '创建题库失败。'
+  }
+}
+
+async function createConcept() {
+  error.value = ''
+  try {
+    await api.createCourseConcept(courseId, {
+      sequence: Number(conceptForm.sequence),
+      name: conceptForm.name,
+      description: conceptForm.description,
+    })
+    Object.assign(conceptForm, { sequence: '', name: '', description: '' })
+    await load()
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '新增 KC 失败。'
+  }
+}
+
+async function previewCourseConceptImport(event: Event) {
+  const input = event.currentTarget as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  importBusy.value = true
+  error.value = ''
+  try {
+    importPreview.value = await api.previewCourseConceptImport(courseId, file)
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : 'KC 文件校验失败。'
+  } finally {
+    importBusy.value = false
+    input.value = ''
+  }
+}
+
+async function confirmCourseConceptImport() {
+  if (!importPreview.value?.preview.confirmable) return
+  importBusy.value = true
+  error.value = ''
+  try {
+    await api.confirmCourseConceptImport(courseId, importPreview.value.batch_id)
+    importPreview.value = undefined
+    await load()
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : 'KC 导入确认失败，请重新生成预览。'
+  } finally {
+    importBusy.value = false
+  }
+}
+
+function importClassificationLabel(value: string) {
+  return ({ new: '可新增', unchanged: '已存在', archived_unchanged: '已归档', conflict: '冲突' } as Record<string, string>)[value] || value
+}
+
+function formattedDate(value: string) {
+  return new Date(value).toLocaleString('zh-CN', { hour12: false })
 }
 
 onMounted(load)
 </script>
 
 <template>
-  <PageHeader title="题库">
-    <template #kicker>课程资源</template>
-    <p>管理本课程题目与 KC 映射；跨课程共享题库只能复制为独立副本。</p>
-    <template v-if="banks" #actions>
-      <a class="kt-button kt-button--secondary" :href="banks.summary.shared_sources_url">浏览共享题库</a>
-      <a class="kt-button kt-button--secondary" :href="banks.summary.archived_banks_url">
-        归档题库 {{ banks.summary.archived_count }}
-      </a>
-    </template>
-  </PageHeader>
+  <nav v-if="banks" class="kt-qb-breadcrumb" aria-label="层级目录">
+    <a href="/teacher/courses/">我的课程</a><span>/</span>
+    <a :href="`/teacher/courses/${courseId}/`">{{ banks.course.name }}</a><span>/</span>
+    <strong aria-current="page">题库</strong>
+  </nav>
+
+  <header class="kt-qb-titlebar">
+    <div>
+      <h1>题库</h1>
+      <p>管理本课程题目与 KC 映射；跨课程共享题库只能复制为独立副本。</p>
+    </div>
+    <div v-if="banks" class="kt-qb-title-actions">
+      <a class="kt-qb-btn kt-qb-btn--outline" :href="banks.summary.shared_sources_url">浏览共享题库</a>
+      <a class="kt-qb-btn kt-qb-btn--outline" :href="banks.summary.archived_banks_url">归档题库 {{ banks.summary.archived_count }}</a>
+    </div>
+  </header>
+
+  <nav v-if="banks && concepts" class="kt-qb-tabs" :class="`is-${activeTab}`" aria-label="题库模块">
+    <button data-tab="banks" :class="{ 'is-active': activeTab === 'banks' }" type="button" @click="selectTab('banks')">
+      题库管理 <span>{{ banks.page.total_items }}</span>
+    </button>
+    <button data-tab="course-kcs" :class="{ 'is-active': activeTab === 'course-kcs' }" type="button" @click="selectTab('course-kcs')">
+      课程 KC 总库 <span>{{ concepts.summary.total }}</span>
+    </button>
+  </nav>
 
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
-  <p v-if="loading" role="status">正在加载题库…</p>
+  <p v-if="loading" class="kt-qb-loading" role="status">正在加载题库…</p>
+
   <template v-else-if="banks && concepts">
-    <div class="kt-bank-list-layout">
-      <section aria-labelledby="bank-list-title">
-        <form class="kt-card kt-bank-search" role="search" @submit.prevent="applyQuery('bank')">
-          <label for="bank-search">搜索题库</label>
-          <div class="kt-inline-controls">
-            <input id="bank-search" v-model="filters.query" type="search" placeholder="名称、说明或创建者">
-            <button class="kt-button kt-button--secondary" type="submit">搜索</button>
-          </div>
-        </form>
-        <EmptyState v-if="!banks.items.length" title="本课程还没有题库">
-          <p>{{ banks.course.status === 'active' ? '使用创建表单建立空题库，或浏览共享题库复制副本。' : '归档课程保持只读。' }}</p>
-        </EmptyState>
-        <div v-else class="kt-card kt-table-card">
-          <div class="kt-section-heading">
-            <h2 id="bank-list-title">课程题库</h2>
-            <span>{{ banks.page.total_items }} 个</span>
-          </div>
-          <div class="kt-table-scroll kt-desktop-only">
-            <table class="kt-table">
-              <thead><tr><th>题库</th><th>题目</th><th>可见性</th><th>最近更新</th><th><span class="kt-visually-hidden">操作</span></th></tr></thead>
+    <div v-if="activeTab === 'banks'" class="kt-qb-grid" data-panel="banks">
+      <div class="kt-qb-main-column">
+        <section class="kt-qb-card kt-qb-bank-card" aria-labelledby="course-bank-heading">
+          <div class="kt-qb-card-title"><h2 id="course-bank-heading">课程题库</h2><span>{{ banks.page.total_items }} 个</span></div>
+          <div class="kt-qb-table-wrap kt-qb-desktop-table">
+            <table class="kt-qb-table kt-qb-bank-table">
+              <thead><tr><th>题库</th><th>题目数</th><th>可见性</th><th>最近更新</th><th>操作</th></tr></thead>
               <tbody>
                 <tr v-for="bank in banks.items" :key="bank.id">
-                  <td>
-                    <RouterLink :to="bank.detail_url"><strong>{{ bank.name }}</strong></RouterLink>
-                    <span class="kt-cell-note">创建者：{{ bank.created_by_name }} · {{ bank.description || '未填写说明' }}</span>
-                  </td>
+                  <td><RouterLink :to="bank.detail_url"><strong>{{ bank.name }}</strong></RouterLink><small>创建者：{{ bank.created_by_name }}</small><small>{{ bank.description }}</small></td>
                   <td>{{ bank.question_count }}</td>
-                  <td>
-                    <form v-if="bank.visibility_update_url" class="kt-compact-form" method="post" :action="bank.visibility_update_url">
-                      <input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token">
-                      <label class="kt-visually-hidden" :for="`visibility-${bank.id}`">题库可见性</label>
-                      <select :id="`visibility-${bank.id}`" name="visibility" :value="bank.visibility">
-                        <option value="private">私有</option><option value="shared">共享</option>
-                      </select>
-                      <button class="kt-text-button" type="submit">保存</button>
-                    </form>
-                    <StatusBadge v-else :label="bank.visibility_label" :tone="visibilityTone(bank.visibility)" />
-                  </td>
-                  <td>{{ new Date(bank.updated_at).toLocaleString('zh-CN') }}</td>
-                  <td><form v-if="bank.archive_url" method="post" :action="bank.archive_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><button class="kt-text-button" type="submit">归档</button></form></td>
+                  <td><span class="kt-qb-badge" :class="`is-${bank.visibility}`">{{ bank.visibility_label }}</span></td>
+                  <td>{{ formattedDate(bank.updated_at) }}</td>
+                  <td><div class="kt-qb-row-actions"><RouterLink class="kt-qb-btn kt-qb-btn--outline" :to="bank.detail_url">管理</RouterLink><form v-if="bank.archive_url" method="post" :action="bank.archive_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><button class="kt-qb-btn kt-qb-btn--outline" type="submit">归档</button></form></div></td>
                 </tr>
               </tbody>
             </table>
           </div>
-          <MobileCardList class="kt-mobile-only">
-            <li v-for="bank in banks.items" :key="bank.id" class="kt-mobile-bank-card">
-              <div class="kt-section-heading"><RouterLink :to="bank.detail_url"><strong>{{ bank.name }}</strong></RouterLink><StatusBadge :label="bank.visibility_label" :tone="visibilityTone(bank.visibility)" /></div>
-              <p>{{ bank.description || '未填写说明' }}</p>
-              <dl><div><dt>题目</dt><dd>{{ bank.question_count }}</dd></div><div><dt>创建者</dt><dd>{{ bank.created_by_name }}</dd></div></dl>
-              <div v-if="bank.can_edit_metadata" class="kt-inline-actions">
-                <details v-if="bank.visibility_update_url"><summary>修改可见性</summary><form method="post" :action="bank.visibility_update_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><select name="visibility" :value="bank.visibility"><option value="private">私有</option><option value="shared">共享</option></select><button class="kt-button kt-button--secondary" type="submit">保存</button></form></details>
-                <form v-if="bank.archive_url" method="post" :action="bank.archive_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><button class="kt-text-button" type="submit">归档</button></form>
-              </div>
-            </li>
-          </MobileCardList>
-          <Paginator :page="banks.page.number" :total-pages="banks.page.total_pages" @navigate="navigate('bank', $event)" />
-        </div>
-      </section>
+          <ul class="kt-qb-mobile-list"><li v-for="bank in banks.items" :key="bank.id"><div><RouterLink :to="bank.detail_url"><strong>{{ bank.name }}</strong></RouterLink><span class="kt-qb-badge">{{ bank.visibility_label }}</span></div><p>{{ bank.description }}</p><dl><div><dt>题目数</dt><dd>{{ bank.question_count }}</dd></div><div><dt>创建者</dt><dd>{{ bank.created_by_name }}</dd></div></dl><RouterLink class="kt-qb-btn kt-qb-btn--outline" :to="bank.detail_url">管理</RouterLink></li></ul>
+        </section>
 
-      <aside v-if="banks.course.status === 'active'" class="kt-card kt-bank-create" aria-labelledby="create-bank-title">
-        <h2 id="create-bank-title">创建题库</h2>
-        <form data-create-bank method="post" :action="`/teacher/courses/${courseId}/banks/`">
-          <input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token">
-          <label>名称<input name="name" maxlength="160" required></label>
-          <label>说明<textarea name="description" rows="4" /></label>
-          <label>可见性<select name="visibility"><option value="private">私有</option><option value="shared">共享</option></select></label>
-          <button class="kt-button" type="submit">创建题库</button>
+        <section class="kt-qb-card kt-qb-kc-entry" aria-labelledby="kc-entry-heading">
+          <div><h2 id="kc-entry-heading">课程 KC 总库</h2><p>课程总库只维护 KC 的稳定身份，二三级关系由题目映射单独定义。</p></div>
+          <div><span>{{ concepts.summary.total }} 个</span><button class="kt-qb-btn kt-qb-btn--outline" type="button" @click="selectTab('course-kcs')">进入 KC 总库</button></div>
+        </section>
+      </div>
+
+      <aside v-if="banks.course.status === 'active'" class="kt-qb-card kt-qb-form-card">
+        <h2>创建题库</h2>
+        <form data-create-bank @submit.prevent="createBank">
+          <label>题库名称 <span>必填</span><input v-model="bankForm.name" name="name" maxlength="160" placeholder="请输入题库名称" required></label>
+          <label>说明 <span>可选</span><textarea v-model="bankForm.description" name="description" rows="5" placeholder="请输入说明" /></label>
+          <label>可见性 <span>必填</span><select v-model="bankForm.visibility" name="visibility"><option value="private">私有</option><option value="shared">共享</option></select></label>
+          <button class="kt-qb-btn kt-qb-btn--primary" type="submit">创建题库</button>
         </form>
       </aside>
     </div>
 
-    <section class="kt-section" aria-labelledby="course-concept-title">
-      <div class="kt-section-heading"><div><p class="kt-kicker">统一知识体系</p><h2 id="course-concept-title">课程 KC 总库</h2></div><span>{{ concepts.page.total_items }} 个</span></div>
-      <p class="kt-muted">统一维护本课程知识点；题库详情只展示当前题库实际引用的子集。</p>
-      <div class="kt-concept-layout">
-        <div>
-          <form class="kt-card kt-bank-search" role="search" @submit.prevent="applyQuery('concept')">
-            <label for="concept-search">搜索 KC</label>
-            <div class="kt-inline-controls"><input id="concept-search" v-model="filters.conceptQuery" type="search" placeholder="KC 名称"><button class="kt-button kt-button--secondary" type="submit">搜索</button></div>
-          </form>
-          <EmptyState v-if="!concepts.items.length" title="课程中还没有 KC"><p>可新增 KC，或在题库中导入 KC 对应表。</p></EmptyState>
-          <div v-else class="kt-card kt-table-card">
-            <div class="kt-table-scroll kt-desktop-only">
-              <table class="kt-table">
-                <thead><tr><th>KC</th><th>关联范围</th><th>题库分布</th><th>操作</th></tr></thead><tbody>
-                  <tr v-for="concept in concepts.items" :key="concept.id">
-                    <td><strong>{{ concept.name }}</strong></td><td>{{ concept.bank_count }} 个题库 · {{ concept.question_count }} 道题</td>
-                    <td><span v-for="(item, index) in concept.distribution" :key="item.bank_id"><RouterLink :to="item.detail_url">{{ item.bank_name }}</RouterLink>：{{ item.question_count }} 题<span v-if="index < concept.distribution.length - 1">；</span></span><span v-if="!concept.distribution.length" class="kt-muted">尚未关联题目</span></td>
-                    <td><details v-if="concept.rename_url"><summary>重命名</summary><form class="kt-inline-panel" method="post" :action="concept.rename_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><label>KC 名称<input name="name" :value="concept.name" maxlength="160" required></label><button class="kt-button kt-button--secondary" type="submit">保存名称</button></form></details><details v-if="concept.delete_url"><summary class="kt-danger-summary">删除</summary><form class="kt-inline-panel kt-inline-panel--danger" method="post" :action="concept.delete_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><p>确认删除未被任何题目引用的“{{ concept.name }}”？</p><button class="kt-button kt-button--danger" type="submit">确认删除</button></form></details><span v-if="concept.can_rename && !concept.can_delete" class="kt-cell-note">已引用，不能删除</span></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <MobileCardList class="kt-mobile-only"><li v-for="concept in concepts.items" :key="concept.id" class="kt-mobile-bank-card"><div class="kt-section-heading"><strong>{{ concept.name }}</strong><span>{{ concept.question_count }} 题</span></div><p>{{ concept.bank_count }} 个题库</p><div class="kt-bank-tags"><RouterLink v-for="item in concept.distribution" :key="item.bank_id" :to="item.detail_url">{{ item.bank_name }} · {{ item.question_count }}</RouterLink></div><details v-if="concept.rename_url"><summary>重命名</summary><form class="kt-inline-panel" method="post" :action="concept.rename_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><input name="name" :value="concept.name" maxlength="160" required><button class="kt-button kt-button--secondary" type="submit">保存</button></form></details></li></MobileCardList>
-            <Paginator :page="concepts.page.number" :total-pages="concepts.page.total_pages" @navigate="navigate('concept', $event)" />
+    <div v-else class="kt-qb-grid" data-panel="course-kcs">
+      <div class="kt-qb-main-column kt-qb-main-column--kc">
+        <section class="kt-qb-card kt-qb-overview" aria-labelledby="kc-overview-heading">
+          <h2 id="kc-overview-heading">课程 KC 总览</h2>
+          <dl><div><dt>KC 总数</dt><dd>{{ concepts.summary.total }}</dd></div><div><dt>有效</dt><dd>{{ concepts.summary.active }}</dd></div><div><dt>已被题目使用</dt><dd>{{ concepts.summary.used }}</dd></div><div><dt>已归档</dt><dd>{{ concepts.summary.archived }}</dd></div></dl>
+        </section>
+
+        <section class="kt-qb-card kt-qb-kc-list" aria-labelledby="kc-list-heading">
+          <div class="kt-qb-card-title"><h2 id="kc-list-heading">课程 KC 列表</h2><span>{{ concepts.page.total_items }} 个</span></div>
+          <div class="kt-qb-table-wrap kt-qb-desktop-table">
+            <table class="kt-qb-table">
+              <thead><tr><th>KC</th><th>使用题目</th><th>题库分布</th><th>角色分布</th><th>状态</th><th>操作</th></tr></thead><tbody>
+                <tr v-for="concept in concepts.items" :key="concept.id"><td><strong>{{ concept.name }}</strong><small>{{ concept.kc_code }}</small></td><td>{{ concept.question_count }}</td><td>{{ concept.bank_count }}</td><td>一级 {{ concept.role_counts.level_1 }} · 二级 {{ concept.role_counts.level_2 }} · 三级 {{ concept.role_counts.level_3 }}</td><td><span class="kt-qb-badge" :class="concept.status === 'active' ? 'is-active' : 'is-archived'">{{ concept.status === 'active' ? '有效' : '已归档' }}</span></td><td><div class="kt-qb-row-actions"><details v-if="concept.rename_url"><summary class="kt-qb-btn kt-qb-btn--outline">重命名</summary><form class="kt-qb-popover" method="post" :action="concept.rename_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><input name="name" :value="concept.name" required><textarea name="description" :value="concept.description" /><button class="kt-qb-btn kt-qb-btn--primary" type="submit">保存</button></form></details><form v-if="concept.delete_url" method="post" :action="concept.delete_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><button class="kt-qb-btn kt-qb-btn--outline" type="submit">归档</button></form></div></td></tr>
+              </tbody>
+            </table>
           </div>
-        </div>
-        <aside v-if="concepts.course.status === 'active'" class="kt-card kt-bank-create"><h2>新增课程 KC</h2><form data-create-concept method="post" :action="`/teacher/courses/${courseId}/concepts/create/`"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><label>KC 名称<input name="name" maxlength="160" required></label><button class="kt-button" type="submit">新增 KC</button></form></aside>
+          <ul class="kt-qb-mobile-list"><li v-for="concept in concepts.items" :key="concept.id"><div><strong>{{ concept.name }}</strong><span class="kt-qb-badge">{{ concept.status === 'active' ? '有效' : '已归档' }}</span></div><p>{{ concept.kc_code }} · {{ concept.question_count }} 道题</p><p>一级 {{ concept.role_counts.level_1 }} · 二级 {{ concept.role_counts.level_2 }} · 三级 {{ concept.role_counts.level_3 }}</p></li></ul>
+        </section>
       </div>
-    </section>
+
+      <div class="kt-qb-side-stack">
+        <aside class="kt-qb-card kt-qb-form-card">
+          <h2>新增课程 KC</h2>
+          <form data-create-concept @submit.prevent="createConcept">
+            <label>KC 序号 <span>必填</span><small>系统将根据序号自动生成唯一 KC Code</small><input v-model="conceptForm.sequence" name="sequence" type="number" min="1" step="1" placeholder="请输入正整数" required></label>
+            <label>KC Code<input :value="generatedCode" readonly></label>
+            <label>KC 名称 <span>必填</span><input v-model="conceptForm.name" name="name" maxlength="160" placeholder="请输入 KC 名称" required></label>
+            <label>说明（可选） <span>可选</span><textarea v-model="conceptForm.description" name="description" rows="4" placeholder="请输入说明" /></label>
+            <button class="kt-qb-btn kt-qb-btn--primary" type="submit">新增 KC</button>
+          </form>
+        </aside>
+        <aside class="kt-qb-card kt-qb-import-card" data-course-kc-import>
+          <h2>批量导入 KC</h2><p>上传 CSV 后按序号生成 KC1、KC2...</p><div><a data-course-kc-template class="kt-qb-btn kt-qb-btn--outline" download="course_kc_template.csv" href="/teacher/import-templates/course-kcs.csv">下载模板</a><button class="kt-qb-btn kt-qb-btn--primary" type="button" :disabled="importBusy" @click="importInput?.click()">批量导入 KC</button><input ref="importInput" data-course-kc-file class="kt-qb-visually-hidden" type="file" accept=".csv,.xlsx" @change="previewCourseConceptImport"></div><small>上传文件&nbsp; → &nbsp;校验预览&nbsp; → &nbsp;确认导入</small>
+        </aside>
+      </div>
+    </div>
   </template>
+
+  <div v-if="importPreview" class="kt-qb-modal-backdrop" role="presentation" @click.self="importPreview = undefined">
+    <section class="kt-qb-modal" role="dialog" aria-modal="true" aria-labelledby="course-kc-preview-title">
+      <header><div><h2 id="course-kc-preview-title">校验预览</h2><p>确认后仅新增明确列出的课程 KC，现有节点保持不变。</p></div><button class="kt-qb-modal-close" type="button" aria-label="关闭" @click="importPreview = undefined">×</button></header>
+      <div class="kt-qb-import-steps"><strong>上传文件</strong><span>→</span><strong>校验预览</strong><span>→</span><span>确认导入</span></div>
+      <div class="kt-qb-import-preview-table"><table><thead><tr><th>序号</th><th>KC Code</th><th>知识点名称</th><th>校验结果</th></tr></thead><tbody><tr v-for="row in importPreview.preview.rows" :key="row.sequence"><td>{{ row.sequence }}</td><td>{{ row.code }}</td><td>{{ row.name }}</td><td><span class="kt-qb-badge" :class="row.classification === 'conflict' ? 'is-conflict' : 'is-active'">{{ importClassificationLabel(row.classification) }}</span><small v-if="row.error">{{ row.error }}</small></td></tr></tbody></table></div>
+      <p v-if="!importPreview.preview.confirmable" class="kt-qb-import-conflict">预览包含冲突，修正文件后重新上传。</p>
+      <footer><button class="kt-qb-btn kt-qb-btn--outline" type="button" @click="importPreview = undefined">取消</button><button class="kt-qb-btn kt-qb-btn--primary" data-confirm-course-kc-import type="button" :disabled="importBusy || !importPreview.preview.confirmable" @click="confirmCourseConceptImport">确认导入</button></footer>
+    </section>
+  </div>
 </template>

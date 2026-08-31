@@ -1,6 +1,57 @@
 from rest_framework import serializers
 
 
+class FileImportRequestSerializer(serializers.Serializer):
+    file = serializers.FileField()
+
+
+class ImportPreviewResponseSerializer(serializers.Serializer):
+    batch_id = serializers.UUIDField()
+    preview = serializers.JSONField()
+
+
+class ImportConfirmRequestSerializer(serializers.Serializer):
+    batch_id = serializers.UUIDField()
+
+
+class CourseKCImportResultSerializer(serializers.Serializer):
+    created = serializers.IntegerField(min_value=0)
+    unchanged = serializers.IntegerField(min_value=0)
+
+
+class QuestionKCImportResultSerializer(serializers.Serializer):
+    questions_updated = serializers.IntegerField(min_value=0)
+
+
+class QuestionBankCreateRequestSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=160)
+    description = serializers.CharField(required=False, allow_blank=True)
+    visibility = serializers.ChoiceField(
+        choices=("private", "shared"),
+        required=False,
+    )
+
+
+class QuestionBankCreateResponseSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    detail_url = serializers.CharField()
+
+
+class CourseConceptCreateRequestSerializer(serializers.Serializer):
+    sequence = serializers.IntegerField(min_value=1)
+    name = serializers.CharField(max_length=160)
+    description = serializers.CharField(required=False, allow_blank=True)
+
+
+class CourseConceptCreateResponseSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    kc_code = serializers.CharField()
+    name = serializers.CharField()
+    description = serializers.CharField()
+    status = serializers.CharField()
+
+
 class QuestionBankCourseSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
@@ -53,9 +104,19 @@ class QuestionBankDistributionSerializer(serializers.Serializer):
     detail_url = serializers.CharField()
 
 
+class KCRoleCountsSerializer(serializers.Serializer):
+    level_1 = serializers.IntegerField(min_value=0)
+    level_2 = serializers.IntegerField(min_value=0)
+    level_3 = serializers.IntegerField(min_value=0)
+
+
 class CourseConceptSummarySerializer(serializers.Serializer):
     id = serializers.IntegerField()
+    kc_code = serializers.CharField()
     name = serializers.CharField()
+    description = serializers.CharField()
+    status = serializers.CharField()
+    role_counts = KCRoleCountsSerializer()
     question_count = serializers.IntegerField(min_value=0)
     bank_count = serializers.IntegerField(min_value=0)
     distribution = QuestionBankDistributionSerializer(many=True)
@@ -69,6 +130,7 @@ class CourseConceptCollectionSerializer(serializers.Serializer):
     items = CourseConceptSummarySerializer(many=True)
     page = QuestionBankPageMetadataSerializer()
     course = QuestionBankCourseSerializer()
+    summary = serializers.DictField()
 
 
 class QuestionBankDetailSerializer(serializers.Serializer):
@@ -101,6 +163,25 @@ class TeacherQuestionBankReferenceSerializer(serializers.Serializer):
 class QuestionBankConceptReferenceSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
+    path = serializers.CharField()
+    depth = serializers.IntegerField(min_value=1)
+
+
+class QuestionKCMappingNodeSerializer(serializers.Serializer):
+    kc_code = serializers.CharField()
+    name = serializers.CharField()
+    description = serializers.CharField()
+    status = serializers.CharField()
+    depth = serializers.IntegerField(min_value=1, max_value=3)
+    parent_kc_code = serializers.CharField(allow_null=True)
+    order = serializers.IntegerField(min_value=1)
+
+
+class QuestionKCMappingSerializer(serializers.Serializer):
+    schema_version = serializers.CharField()
+    root_kc_code = serializers.CharField(allow_null=True)
+    nodes = QuestionKCMappingNodeSerializer(many=True)
+    mapping_hash = serializers.CharField()
 
 
 class QuestionSummarySerializer(serializers.Serializer):
@@ -112,7 +193,7 @@ class QuestionSummarySerializer(serializers.Serializer):
     text = serializers.CharField()
     question_type = serializers.CharField()
     question_type_label = serializers.CharField()
-    primary_concept = QuestionBankConceptReferenceSerializer(allow_null=True)
+    kc_mapping = QuestionKCMappingSerializer()
     teacher_difficulty = serializers.DecimalField(
         max_digits=4,
         decimal_places=3,
@@ -153,9 +234,11 @@ class BankConceptQuestionSerializer(serializers.Serializer):
 
 class BankConceptSummarySerializer(serializers.Serializer):
     id = serializers.IntegerField()
+    kc_code = serializers.CharField()
     name = serializers.CharField()
-    primary_count = serializers.IntegerField(min_value=0)
-    secondary_count = serializers.IntegerField(min_value=0)
+    level_1_count = serializers.IntegerField(min_value=0)
+    level_2_count = serializers.IntegerField(min_value=0)
+    level_3_count = serializers.IntegerField(min_value=0)
     question_count = serializers.IntegerField(min_value=0)
     questions = BankConceptQuestionSerializer(many=True)
 

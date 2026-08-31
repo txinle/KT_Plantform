@@ -14,7 +14,10 @@ from .models import (
     ExperimentQuestion,
     ExperimentVersionParticipantSnapshot,
 )
-from .services import publish_experiment, save_participant_rules
+from .services import (
+    _publish_legacy_experiment as publish_experiment,
+    save_participant_rules,
+)
 
 
 class ExperimentClassSnapshotTests(TestCase):

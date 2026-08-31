@@ -5,11 +5,13 @@ import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
 
 const repositoryDir = join(import.meta.dirname, '..', '..')
 const python = join(repositoryDir, '.venv', 'Scripts', 'python.exe')
+const vitePort = Number(process.env.E2E_VITE_PORT || '5173')
+const viteUrl = `http://127.0.0.1:${vitePort}`
 const environment = {
   ...process.env,
   ...requireIsolatedPostgres(process.env),
   DJANGO_DEBUG: '1',
-  VITE_DEV_SERVER_URL: 'http://127.0.0.1:5173',
+  VITE_DEV_SERVER_URL: viteUrl,
   VUE_TEACHER_EXPERIMENTS_ENABLED: '1',
 }
 
@@ -26,8 +28,8 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
   webServer: [
     {
-      command: 'npm run dev -- --host 127.0.0.1',
-      url: 'http://127.0.0.1:5173',
+      command: `npm run dev -- --host 127.0.0.1 --port ${vitePort}`,
+      url: viteUrl,
       reuseExistingServer: false,
     },
     {

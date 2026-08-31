@@ -5,8 +5,13 @@ from django.test import TestCase
 from django.urls import reverse
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
-from apps.experiments.models import Experiment, ExperimentQuestion, ExperimentStudent
-from apps.experiments.services import assign_students, publish_experiment
+from apps.experiments.models import Experiment, ExperimentSamplingKC, ExperimentStudent
+from apps.experiments.publication_services import (
+    commit_publish_plan,
+    generate_preview,
+    get_or_create_publish_plan,
+    save_plan_selection,
+)
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
 from apps.question_bank.services.course_question_identity import allocate_course_question_identity
 
@@ -32,10 +37,10 @@ class StudentCourseNavigationTests(TestCase):
             code="MATH101",
             term="2026春",
         )
-        class_group = ClassGroup.objects.create(course=self.course, name="一班")
+        self.class_group = ClassGroup.objects.create(course=self.course, name="一班")
         CourseEnrollment.objects.create(
             course=self.course,
-            class_group=class_group,
+            class_group=self.class_group,
             student=self.student,
         )
         bank = QuestionBank.objects.create(
@@ -58,14 +63,32 @@ class StudentCourseNavigationTests(TestCase):
             created_by=self.teacher,
             question_bank=bank,
             name="测验",
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=1,
         )
-        ExperimentQuestion.objects.create(
+        ExperimentSamplingKC.objects.create(
             experiment=self.experiment,
-            question=question,
-            display_order=1,
+            concept=concept,
         )
-        assign_students(self.experiment, [self.student])
-        publish_experiment(self.experiment, self.teacher)
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        plan = save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        generate_preview(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+        )
+        plan.refresh_from_db()
+        commit_publish_plan(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+        )
         self.experiment.refresh_from_db()
 
     def test_student_selects_course_before_experiment(self):

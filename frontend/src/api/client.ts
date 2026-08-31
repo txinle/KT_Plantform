@@ -70,6 +70,13 @@ interface MutationOptions<TState> {
   refreshAuthoritativeState?: () => Promise<TState>
 }
 
+interface FormMutationOptions<TState> {
+  method: 'POST' | 'PUT' | 'PATCH'
+  body: FormData
+  signal?: AbortSignal
+  refreshAuthoritativeState?: () => Promise<TState>
+}
+
 async function responseBody(response: Response): Promise<unknown> {
   if (response.status === 204) return undefined
   return response.json()
@@ -135,6 +142,31 @@ export function createApiClient(options: ClientOptions = {}) {
           credentials: 'same-origin',
           headers,
           body: mutation.body === undefined ? undefined : JSON.stringify(mutation.body),
+          signal: mutation.signal,
+        })
+        return await parse<T>(response)
+      } catch (error) {
+        if (error instanceof ApiError) throw error
+        const authoritativeState = mutation.refreshAuthoritativeState
+          ? await mutation.refreshAuthoritativeState()
+          : undefined
+        throw new MutationOutcomeUnknownError(error, authoritativeState)
+      }
+    },
+
+    async mutateForm<T, TState = unknown>(
+      path: string,
+      mutation: FormMutationOptions<TState>,
+    ): Promise<T> {
+      try {
+        const headers: Record<string, string> = { Accept: 'application/json' }
+        const csrfToken = getCsrfToken()
+        if (csrfToken) headers['X-CSRFToken'] = csrfToken
+        const response = await fetchImpl(path, {
+          method: mutation.method,
+          credentials: 'same-origin',
+          headers,
+          body: mutation.body,
           signal: mutation.signal,
         })
         return await parse<T>(response)

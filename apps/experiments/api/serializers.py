@@ -1,9 +1,11 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
-from apps.question_bank.models import Question, QuestionBank
+from apps.api.exceptions import ApiConflict
+from apps.question_bank.models import Concept, Question, QuestionBank
 
-from ..models import Experiment
+from ..models import Experiment, ExperimentSamplingKC
+from ..sampling import SamplingService, SamplingValidationError
 from ..services import lock_experiment_question_bank, sync_experiment_questions
 
 
@@ -19,6 +21,63 @@ class QuestionQuotaSerializer(serializers.Serializer):
     amount = serializers.IntegerField(min_value=0)
 
 
+class SamplingQuestionTypeQuotaSerializer(serializers.Serializer):
+    question_type = serializers.ChoiceField(choices=Question.Type.choices)
+    amount = serializers.IntegerField(min_value=1)
+
+
+class SamplingKCSerializer(serializers.Serializer):
+    kc_code = serializers.CharField(max_length=32)
+    kc_name = serializers.CharField(source="concept.name", read_only=True)
+    quota = serializers.IntegerField(min_value=1, allow_null=True, required=False)
+    match_scope = serializers.ChoiceField(choices=Experiment.MatchScope.choices)
+
+    def to_representation(self, instance):
+        if isinstance(instance, dict):
+            return super().to_representation(instance)
+        return {
+            "kc_code": instance.concept.code,
+            "kc_name": instance.concept.name,
+            "quota": instance.quota,
+            "match_scope": instance.match_scope,
+        }
+
+
+class SamplingDefinitionSerializer(serializers.Serializer):
+    mode = serializers.ChoiceField(
+        source="sampling_mode",
+        choices=Experiment.SamplingMode.choices,
+        allow_null=True,
+    )
+    total_count = serializers.IntegerField(
+        source="sampling_total_count",
+        min_value=1,
+        allow_null=True,
+        required=False,
+    )
+    match_scope = serializers.ChoiceField(
+        source="sampling_match_scope",
+        choices=Experiment.MatchScope.choices,
+        required=False,
+    )
+    nodes = SamplingKCSerializer(source="sampling_kcs", many=True, required=False)
+    type_quotas = SamplingQuestionTypeQuotaSerializer(many=True, required=False)
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        amounts = {
+            row.question_type: row.amount
+            for row in instance.question_quotas.all()
+            if row.amount > 0
+        }
+        representation["type_quotas"] = [
+            {"question_type": question_type, "amount": amounts[question_type]}
+            for question_type in Question.Type.values
+            if question_type in amounts
+        ]
+        return representation
+
+
 class TeacherExperimentSerializer(serializers.ModelSerializer):
     question_bank = QuestionBankReferenceSerializer(read_only=True)
     question_bank_id = serializers.PrimaryKeyRelatedField(
@@ -26,10 +85,17 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         queryset=QuestionBank.objects.all(),
         write_only=True,
     )
-    question_quotas = QuestionQuotaSerializer(many=True, required=False)
+    question_quotas = QuestionQuotaSerializer(many=True, read_only=True)
+    sampling_kcs = SamplingKCSerializer(many=True, read_only=True)
+    sampling = SamplingDefinitionSerializer(source="*", required=False)
     status_label = serializers.CharField(source="get_status_display", read_only=True)
     selection_mode_label = serializers.CharField(
         source="get_selection_mode_display", read_only=True
+    )
+    sampling_mode_label = serializers.CharField(
+        source="get_sampling_mode_display",
+        read_only=True,
+        allow_null=True,
     )
     ordering_mode_label = serializers.CharField(
         source="get_ordering_mode_display", read_only=True
@@ -64,6 +130,12 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "selection_mode",
             "selection_mode_label",
             "question_quotas",
+            "sampling_mode",
+            "sampling_mode_label",
+            "sampling_total_count",
+            "sampling_match_scope",
+            "sampling_kcs",
+            "sampling",
             "ordering_mode",
             "ordering_mode_label",
             "feedback_mode",
@@ -88,10 +160,79 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "status",
             "created_at",
             "updated_at",
+            "selection_mode",
+            "sampling_mode",
+            "sampling_total_count",
+            "sampling_match_scope",
+            "sampling_kcs",
         )
 
     def get_can_edit(self, experiment) -> bool:
         return experiment.status == Experiment.Status.DRAFT
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        if not instance.frozen_release_snapshot_id:
+            return representation
+        configuration = instance.frozen_release_snapshot.configuration
+        frozen_fields = (
+            "selection_mode",
+            "sampling_mode",
+            "sampling_total_count",
+            "ordering_mode",
+            "feedback_mode",
+            "time_mode",
+            "total_time_limit_minutes",
+            "per_question_time_limit_seconds",
+            "resume_mode",
+            "confidence_mode",
+            "confidence_sampling_unit",
+            "confidence_probability",
+        )
+        for field_name in frozen_fields:
+            if field_name in configuration:
+                value = configuration[field_name]
+                representation[field_name] = None if value == "" else value
+        representation["question_quotas"] = [
+            {
+                "question_type": question_type,
+                "amount": configuration.get("quota_map", {}).get(question_type, 0),
+            }
+            for question_type in Question.Type.values
+        ]
+        representation["sampling_kcs"] = [
+            {
+                "kc_code": row["kc_code"],
+                "kc_name": row["kc_name"],
+                "quota": row.get("quota"),
+                "match_scope": row["match_scope"],
+            }
+            for row in configuration.get("sampling_kcs", [])
+        ]
+        representation["sampling"] = {
+            "mode": representation["sampling_mode"],
+            "total_count": representation["sampling_total_count"],
+            "match_scope": representation["sampling_match_scope"],
+            "nodes": representation["sampling_kcs"],
+            "type_quotas": configuration.get("sampling_type_quotas", []),
+        }
+        label_fields = {
+            "selection_mode": Experiment.SelectionMode,
+            "sampling_mode": Experiment.SamplingMode,
+            "ordering_mode": Experiment.Ordering,
+            "feedback_mode": Experiment.Feedback,
+            "time_mode": Experiment.TimeMode,
+            "resume_mode": Experiment.ResumeMode,
+            "confidence_mode": Experiment.ConfidenceMode,
+            "confidence_sampling_unit": Experiment.ConfidenceSamplingUnit,
+        }
+        for field_name, choices in label_fields.items():
+            value = representation.get(field_name)
+            representation[f"{field_name}_label"] = dict(choices.choices).get(
+                value,
+                representation.get(f"{field_name}_label"),
+            )
+        return representation
 
     def validate_question_bank_id(self, bank):
         course = self.context["course"]
@@ -116,6 +257,108 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        legacy_fields = {
+            field_name
+            for field_name in ("selection_mode", "question_quotas")
+            if field_name in self.initial_data
+        }
+        if legacy_fields:
+            raise serializers.ValidationError(
+                {
+                    field_name: "旧版全量/题型配额仅支持读取，不能用于新配置。"
+                    for field_name in legacy_fields
+                }
+            )
+        sampling_mode = self._effective_value(attrs, "sampling_mode")
+        sampling_total_count = self._effective_value(attrs, "sampling_total_count")
+        sampling_match_scope = self._effective_value(attrs, "sampling_match_scope")
+        sampling_kcs = attrs.get("sampling_kcs")
+        type_quotas = attrs.get("type_quotas")
+        if (
+            self.instance is not None
+            and self.instance.sampling_mode is None
+            and (sampling_mode is None or sampling_kcs is None)
+        ):
+            raise ApiConflict(
+                "旧版草稿只读；请先显式转换为完整的新抽题配置。",
+                code="LEGACY_CONVERSION_REQUIRED",
+            )
+        if self.instance is None and sampling_kcs is None:
+            sampling_kcs = []
+        if self.instance is None and sampling_mode is None:
+            raise serializers.ValidationError({"sampling_mode": "请选择抽题模式。"})
+        if sampling_kcs is not None:
+            kc_codes = [row["kc_code"] for row in sampling_kcs]
+            if len(kc_codes) != len(set(kc_codes)):
+                raise serializers.ValidationError(
+                    {"sampling_kcs": "同一知识点只能选择一次。"}
+                )
+            concepts_by_code = {
+                concept.code: concept
+                for concept in Concept.objects.filter(
+                    course=self.context["course"],
+                    code__in=kc_codes,
+                    status=Concept.Status.ACTIVE,
+                )
+            }
+            if set(concepts_by_code) != set(kc_codes):
+                raise serializers.ValidationError(
+                    {"sampling_kcs": "包含不存在、已归档或不属于当前课程的知识点。"}
+                )
+            for row in sampling_kcs:
+                row["concept_id"] = concepts_by_code[row.pop("kc_code")].pk
+            if sampling_mode == Experiment.SamplingMode.TOTAL_COUNT:
+                if sampling_match_scope not in Experiment.MatchScope.values:
+                    raise serializers.ValidationError(
+                        {"sampling_match_scope": "请选择匹配层级。"}
+                    )
+                for row in sampling_kcs:
+                    row["match_scope"] = sampling_match_scope
+            if sampling_mode == Experiment.SamplingMode.TOTAL_COUNT:
+                if not sampling_total_count or not sampling_kcs:
+                    raise serializers.ValidationError(
+                        {"sampling_kcs": "总题数模式必须设置题数并选择知识点范围。"}
+                    )
+                if any(row.get("quota") is not None for row in sampling_kcs):
+                    raise serializers.ValidationError(
+                        {"sampling_kcs": "总题数模式不能设置知识点配额。"}
+                    )
+            elif sampling_mode == Experiment.SamplingMode.KC_QUOTA:
+                if sampling_total_count is not None or not sampling_kcs or any(
+                    not row.get("quota") for row in sampling_kcs
+                ):
+                    raise serializers.ValidationError(
+                        {"sampling_kcs": "知识点配额模式必须为每个节点设置正整数配额。"}
+                    )
+            else:
+                raise serializers.ValidationError({"sampling_mode": "请选择抽题模式。"})
+        if sampling_mode == Experiment.SamplingMode.KC_QUOTA:
+            if type_quotas is not None:
+                raise serializers.ValidationError(
+                    {"sampling_type_quotas": "知识点配额模式不能携带题型构成。"}
+                )
+            attrs["type_quotas"] = []
+            effective_type_quotas = []
+        elif type_quotas is None and self.instance is not None:
+            effective_type_quotas = [
+                {"question_type": row.question_type, "amount": row.amount}
+                for row in self.instance.question_quotas.filter(amount__gt=0)
+            ]
+        else:
+            effective_type_quotas = type_quotas or []
+        question_types = [row["question_type"] for row in effective_type_quotas]
+        if len(question_types) != len(set(question_types)):
+            raise serializers.ValidationError(
+                {"sampling_type_quotas": "同一题型只能设置一次。"}
+            )
+        if sampling_mode != Experiment.SamplingMode.KC_QUOTA and effective_type_quotas and sum(
+            row["amount"] for row in effective_type_quotas
+        ) != sampling_total_count:
+            raise serializers.ValidationError(
+                {"sampling_type_quotas": "题型构成数量合计必须严格等于每位参与者题目数。"}
+            )
+        elif self.instance is None and type_quotas is None:
+            attrs["type_quotas"] = []
         selection_mode = self._effective_value(attrs, "selection_mode")
         quotas = attrs.get("question_quotas")
         if quotas is None and self.instance is not None:
@@ -171,8 +414,26 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
                 defaults={"amount": amounts.get(question_type, 0)},
             )
 
+    def _save_sampling_kcs(self, experiment, sampling_kcs):
+        if sampling_kcs is None:
+            return
+        experiment.sampling_kcs.all().delete()
+        ExperimentSamplingKC.objects.bulk_create(
+            [
+                ExperimentSamplingKC(
+                    experiment=experiment,
+                    concept_id=row["concept_id"],
+                    quota=row.get("quota"),
+                    match_scope=row["match_scope"],
+                )
+                for row in sampling_kcs
+            ]
+        )
+
     def create(self, validated_data):
-        quotas = validated_data.pop("question_quotas", None)
+        quotas = validated_data.pop("type_quotas", None)
+        validated_data.pop("question_quotas", None)
+        sampling_kcs = validated_data.pop("sampling_kcs", None)
         validated_data["question_bank"] = lock_experiment_question_bank(
             validated_data["question_bank"], validated_data["course"]
         )
@@ -183,11 +444,20 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(exc.message_dict) from exc
         experiment.save()
         self._save_quotas(experiment, quotas)
+        self._save_sampling_kcs(experiment, sampling_kcs)
+        try:
+            SamplingService(experiment).resolve(validate_inventory=False)
+        except SamplingValidationError as exc:
+            raise serializers.ValidationError(
+                {issue["field"] or "sampling_kcs": issue["message"] for issue in exc.issues}
+            ) from exc
         sync_experiment_questions(experiment)
         return experiment
 
     def update(self, instance, validated_data):
-        quotas = validated_data.pop("question_quotas", None)
+        quotas = validated_data.pop("type_quotas", None)
+        validated_data.pop("question_quotas", None)
+        sampling_kcs = validated_data.pop("sampling_kcs", None)
         original_bank_id = instance.question_bank_id
         if "question_bank" in validated_data:
             validated_data["question_bank"] = lock_experiment_question_bank(
@@ -201,6 +471,14 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(exc.message_dict) from exc
         instance.save()
         self._save_quotas(instance, quotas)
+        self._save_sampling_kcs(instance, sampling_kcs)
+        if instance.sampling_mode:
+            try:
+                SamplingService(instance).resolve(validate_inventory=False)
+            except SamplingValidationError as exc:
+                raise serializers.ValidationError(
+                    {issue["field"] or "sampling_kcs": issue["message"] for issue in exc.issues}
+                ) from exc
         if instance.question_bank_id != original_bank_id:
             sync_experiment_questions(instance)
         return instance
@@ -233,11 +511,60 @@ class TeacherExperimentCollectionSerializer(serializers.Serializer):
     summary = TeacherExperimentSummarySerializer()
 
 
+class TeacherExperimentReadinessIssueSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    message = serializers.CharField()
+    class_id = serializers.IntegerField(allow_null=True)
+    kc_id = serializers.IntegerField(allow_null=True)
+    kc_code = serializers.CharField(allow_null=True, required=False)
+    field = serializers.CharField(allow_null=True)
+    ancestor_kc_id = serializers.IntegerField(required=False)
+    ancestor_kc_path = serializers.CharField(required=False)
+    descendant_kc_id = serializers.IntegerField(required=False)
+    descendant_kc_path = serializers.CharField(required=False)
+
+
+class TeacherExperimentInventoryBucketSerializer(serializers.Serializer):
+    kc_code = serializers.CharField()
+    kc_name = serializers.CharField()
+    match_scope = serializers.ChoiceField(choices=Experiment.MatchScope.choices)
+    requested = serializers.IntegerField(allow_null=True)
+    available = serializers.IntegerField(min_value=0)
+
+
 class TeacherExperimentReadinessSerializer(serializers.Serializer):
     ready = serializers.BooleanField()
     issues = serializers.ListField(child=serializers.CharField())
+    blocking_issues = TeacherExperimentReadinessIssueSerializer(many=True)
     candidate_count = serializers.IntegerField(min_value=0)
+    requested_count = serializers.IntegerField(allow_null=True)
+    inventory_buckets = TeacherExperimentInventoryBucketSerializer(many=True)
     participant_count = serializers.IntegerField(min_value=0)
+
+
+class TeacherSamplingInventoryRequestSerializer(serializers.Serializer):
+    question_bank_id = serializers.IntegerField(min_value=1)
+    kc_codes = serializers.ListField(
+        child=serializers.CharField(max_length=32),
+        allow_empty=False,
+    )
+    match_scope = serializers.ChoiceField(choices=Experiment.MatchScope.choices)
+
+    def validate_kc_codes(self, codes):
+        if len(codes) != len(set(codes)):
+            raise serializers.ValidationError("同一知识点只能选择一次。")
+        return codes
+
+
+class TeacherSamplingInventoryQuestionTypeSerializer(serializers.Serializer):
+    question_type = serializers.ChoiceField(choices=Question.Type.choices)
+    label = serializers.CharField()
+    available = serializers.IntegerField(min_value=0)
+
+
+class TeacherSamplingInventoryResponseSerializer(serializers.Serializer):
+    candidate_count = serializers.IntegerField(min_value=0)
+    question_types = TeacherSamplingInventoryQuestionTypeSerializer(many=True)
 
 
 class PublishPlanClassSerializer(serializers.Serializer):
@@ -246,10 +573,21 @@ class PublishPlanClassSerializer(serializers.Serializer):
     academic_year = serializers.CharField()
     excluded_count = serializers.IntegerField(min_value=0)
     participant_count = serializers.IntegerField(min_value=0)
-    schedule_configured = serializers.BooleanField()
-    schedule_mode = serializers.ChoiceField(choices=("default", "custom", "unset"))
+    schedule_mode = serializers.ChoiceField(choices=("default", "custom"))
     opens_at = serializers.DateTimeField(allow_null=True)
     closes_at = serializers.DateTimeField(allow_null=True)
+
+
+class PublishPlanBlockingIssueSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    message = serializers.CharField()
+    class_id = serializers.IntegerField(allow_null=True)
+    kc_id = serializers.IntegerField(allow_null=True)
+    field = serializers.CharField(allow_null=True)
+    ancestor_kc_id = serializers.IntegerField(required=False)
+    ancestor_kc_path = serializers.CharField(required=False)
+    descendant_kc_id = serializers.IntegerField(required=False)
+    descendant_kc_path = serializers.CharField(required=False)
 
 
 class PublishPlanSerializer(serializers.Serializer):
@@ -259,6 +597,7 @@ class PublishPlanSerializer(serializers.Serializer):
     current_step = serializers.IntegerField(min_value=1, max_value=2)
     setup_status = serializers.ChoiceField(choices=("empty", "incomplete", "complete"))
     missing_requirements = serializers.ListField(child=serializers.CharField())
+    blocking_issues = PublishPlanBlockingIssueSerializer(many=True)
     field_errors = serializers.DictField()
     plan_revision = serializers.IntegerField(min_value=1)
     expires_at = serializers.DateTimeField()

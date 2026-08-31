@@ -53,7 +53,7 @@ describe('TeacherQuestionBankDetail', () => {
         text: '2 + 2 等于多少？',
         question_type: 'single_choice',
         question_type_label: '单选题',
-        primary_concept: { id: 23, name: '基础运算' },
+        kc_mapping: { schema_version: 'question-kc-tree-v2', root_kc_code: 'KC000001', mapping_hash: 'abc', nodes: [{ kc_code: 'KC000001', name: '基础运算', description: '', status: 'active', depth: 1, parent_kc_code: null, order: 1 }] },
         teacher_difficulty: '0.125',
         status: 'active',
         status_label: '启用',
@@ -67,9 +67,11 @@ describe('TeacherQuestionBankDetail', () => {
       bank: { id: 11, name: '演示题库' },
       items: [{
         id: 23,
+        kc_code: 'KC000001',
         name: '基础运算',
-        primary_count: 1,
-        secondary_count: 0,
+        level_1_count: 1,
+        level_2_count: 0,
+        level_3_count: 0,
         question_count: 1,
         questions: [{ id: 31, sequence: 1, code: 'Q001', edit_url: '/teacher/courses/7/banks/11/questions/31/edit/' }],
       }],
@@ -82,6 +84,8 @@ describe('TeacherQuestionBankDetail', () => {
     await flushPromises()
 
     expect(wrapper.get('h1').text()).toBe('演示题库')
+    expect(wrapper.get('[aria-label="层级目录"]').text()).toContain('演示题库')
+    expect(wrapper.get('.kt-bank-course-context').text()).toContain('KT101 · 2026 秋')
     expect(wrapper.text()).toContain('2 + 2 等于多少？')
     expect(wrapper.text()).toContain('C000001')
     expect(wrapper.text()).toContain('基础运算')
