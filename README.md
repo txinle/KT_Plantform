@@ -61,9 +61,45 @@ chmod +x run_local.sh
 
 ## 手工分别启动前后端
 
-以下命令假定已经至少成功运行过一次 `run_local.bat`，因此 Python、Node.js、PostgreSQL 和项目依赖均已准备好。在项目根目录打开两个 PowerShell 窗口。
+前后端最核心的启动命令就是：
 
-前端窗口：
+```text
+前端：npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
+后端：python manage.py runserver 0.0.0.0:8000
+```
+
+本项目还需要指定 Node.js、PostgreSQL 和 Vue 功能开关。以下命令假定已经至少成功运行过一次 `run_local.bat`，在项目根目录打开两个普通 CMD 命令窗口后，可以直接逐行输入。
+
+第一个 CMD 窗口启动前端：
+
+```bat
+set "NODE_DIR=%USERPROFILE%\Downloads\ATOP-tooling\node-v24.20.0-win-x64"
+set "PATH=%NODE_DIR%;%PATH%"
+cd frontend
+"%NODE_DIR%\npm.cmd" run dev -- --host 127.0.0.1 --port 5173 --strictPort
+```
+
+第二个 CMD 窗口启动后端：
+
+```bat
+set "POSTGRES_BIN=%USERPROFILE%\Downloads\ATOP-tooling\PostgreSQL-17.11-portable\pgsql\bin"
+set "PATH=%POSTGRES_BIN%;%PATH%"
+set "POSTGRES_HOST=127.0.0.1"
+set "POSTGRES_PORT=55432"
+set "POSTGRES_USER=kt_user"
+set "POSTGRES_PASSWORD=kt_password"
+set "POSTGRES_DB=kt_platform"
+set "CLASS_CENTER_ENABLED=1"
+set "STUDENT_LEARNING_ANALYTICS_ENABLED=1"
+set "VUE_TEACHER_EXPERIMENTS_ENABLED=1"
+set "VUE_TEACHER_QUESTION_BANKS_ENABLED=1"
+set "VITE_DEV_SERVER_URL=http://127.0.0.1:5173"
+.venv\Scripts\python.exe manage.py runserver 0.0.0.0:8000
+```
+
+如果使用 PowerShell，对应命令如下。
+
+PowerShell 前端窗口：
 
 ```powershell
 $nodeDir = "$env:USERPROFILE\Downloads\ATOP-tooling\node-v24.20.0-win-x64"
@@ -72,7 +108,7 @@ Set-Location .\frontend
 & "$nodeDir\npm.cmd" run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-后端窗口：
+PowerShell 后端窗口：
 
 ```powershell
 $postgresBin = "$env:USERPROFILE\Downloads\ATOP-tooling\PostgreSQL-17.11-portable\pgsql\bin"
