@@ -93,6 +93,11 @@ set "CLASS_CENTER_ENABLED=1"
 set "STUDENT_LEARNING_ANALYTICS_ENABLED=1"
 set "VUE_TEACHER_EXPERIMENTS_ENABLED=1"
 set "VUE_TEACHER_QUESTION_BANKS_ENABLED=1"
+set "VUE_TEACHER_COURSES_ENABLED=1"
+set "VUE_TEACHER_CLASSES_ENABLED=1"
+set "VUE_TEACHER_DATA_CENTER_ENABLED=1"
+set "VUE_STUDENT_COURSES_ENABLED=1"
+set "VUE_STUDENT_ASSESSMENT_ENABLED=1"
 set "VITE_DEV_SERVER_URL=http://127.0.0.1:5173"
 .venv\Scripts\python.exe manage.py runserver 0.0.0.0:8000
 ```
@@ -122,6 +127,11 @@ $env:CLASS_CENTER_ENABLED = "1"
 $env:STUDENT_LEARNING_ANALYTICS_ENABLED = "1"
 $env:VUE_TEACHER_EXPERIMENTS_ENABLED = "1"
 $env:VUE_TEACHER_QUESTION_BANKS_ENABLED = "1"
+$env:VUE_TEACHER_COURSES_ENABLED = "1"
+$env:VUE_TEACHER_CLASSES_ENABLED = "1"
+$env:VUE_TEACHER_DATA_CENTER_ENABLED = "1"
+$env:VUE_STUDENT_COURSES_ENABLED = "1"
+$env:VUE_STUDENT_ASSESSMENT_ENABLED = "1"
 $env:VITE_DEV_SERVER_URL = "http://127.0.0.1:5173"
 .\.venv\Scripts\python.exe manage.py runserver 0.0.0.0:8000
 ```
@@ -284,3 +294,13 @@ docker compose logs nginx --tail=100
 - 未提交、跳过或超时的作答默认将 `is_correct` 保持为空。
 - 分层随机按主 KC 与难度区间组织题目并生成可复现的个人抽题和顺序，不属于自适应推荐。
 - 生产部署、备份恢复、域名、HTTPS 和服务器安全加固需由部署环境单独完成。
+
+## 独立前端运行与切换
+
+师生业务页面使用独立构建的 Vue HTML；Django 保留 Session 认证、DRF API、文件下载和 `/admin/`。业务 URL 沿用原路径，未知 API 不会返回前端 HTML。
+
+- 本地启动：当前 checkout 的 `.venv` 运行 `scripts/run_dev.py`。启动器先构建前端，再启动构建监听与同域 Django 服务。手工启动时先在 `frontend` 执行 `npm ci`、`npm run build`，设置 `VUE_STANDALONE_ENABLED=1` 后运行 Django。
+- 前端与后端可分别构建。生产网关使用 `nginx/kt-platform.conf`；Django 设置 `FRONTEND_INTERNAL_REDIRECT=/__frontend/index.html`，由 Nginx 内部提供前端 HTML。此变量不可用于没有对应 Nginx 配置的本地服务。
+- 分批切换使用 `VUE_STANDALONE_COURSE_IDS`、`VUE_STANDALONE_USER_IDS`；空名单表示全量。旧模块开关和模板暂留以支持退出条件验收，正常启动默认使用独立前端。代码中保留的旧模板不代表本轮已经完成物理删除。
+- 采集器及离线 Worker 随前端构建，Worker 继续使用原 URL 和 scope。Nginx 的 `frontend_assets` 持久卷保留旧哈希资源，启动脚本追加新版本文件；发布及回滚不删除该卷，不清理 IndexedDB 或待上传队列。
+- 本轮便携 PostgreSQL 与本地浏览器验证不替代生产 Nginx 容器联调、真实中文输入法或真实浏览器 200% 缩放检查。验证范围与截图见 `docs/ui/UI-AUDIT.md`。

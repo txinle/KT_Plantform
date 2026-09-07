@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from unittest import TestCase
 from unittest import skipUnless
+from unittest.mock import Mock, patch
 
 from scripts import run_dev
 from scripts.run_dev import find_available_vite_port, vite_command
@@ -16,6 +17,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PortableLauncherContractTests(TestCase):
+    def test_standalone_runner_builds_before_starting_the_same_origin_backend(self):
+        process = Mock(returncode=0)
+        process.poll.return_value = 0
+        with (
+            patch.dict(run_dev.os.environ, {'KT_LEGACY_ONLY': '0', 'VUE_STANDALONE_ENABLED': '1'}),
+            patch.object(run_dev, 'find_node_directory', return_value=(Path('node'), Path('npm.cmd'))),
+            patch.object(run_dev, 'ensure_frontend_dependencies'),
+            patch.object(run_dev.subprocess, 'run') as build,
+            patch.object(run_dev.subprocess, 'Popen', return_value=process) as start,
+        ):
+            self.assertEqual(run_dev.main(), 0)
+        self.assertEqual(build.call_args.args[0], ['npm.cmd', 'run', 'build'])
+        self.assertEqual(start.call_args_list[0].args[0], ['npm.cmd', 'run', 'build', '--', '--watch'])
+        backend_env = start.call_args_list[1].kwargs['env']
+        self.assertEqual(backend_env['VUE_STANDALONE_ENABLED'], '1')
+        self.assertEqual(backend_env['VITE_DEV_SERVER_URL'], '')
+
     @skipUnless(sys.platform == "win32", "Windows process-tree contract")
     def test_windows_shutdown_stops_the_entire_child_process_tree(self):
         self.assertTrue(hasattr(run_dev, "process_creation_kwargs"))

@@ -1,4 +1,22 @@
 <script setup lang="ts">
+import { ref } from 'vue'
+import { logout } from '@/app/auth'
+
+const pending = ref(false)
+const error = ref('')
+async function signOut() {
+  if (pending.value) return
+  pending.value = true
+  error.value = ''
+  try {
+    await logout()
+    window.location.assign('/login/')
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '退出失败，请重试。'
+  } finally {
+    pending.value = false
+  }
+}
 withDefaults(defineProps<{
   userName: string
   userMeta?: string | null
@@ -21,13 +39,14 @@ withDefaults(defineProps<{
       <nav class="kt-global-nav" aria-label="全局导航"><slot /></nav>
       <div class="kt-account-actions">
         <span class="kt-user-name">
-          <strong>{{ userName }}</strong>
-          <small v-if="userMeta">· {{ userMeta }}</small>
+          <strong :title="userName">{{ userName }}</strong>
+          <small v-if="userMeta" :title="userMeta">· {{ userMeta }}</small>
         </span>
-        <form v-if="showLogout" method="post" action="/logout/">
+        <form v-if="showLogout" method="post" action="/logout/" @submit.prevent="signOut">
           <input type="hidden" name="csrfmiddlewaretoken" :value="csrfToken">
-          <button class="kt-logout-button" type="submit">退出</button>
+          <button class="kt-logout-button" type="submit" :disabled="pending">{{ pending ? '正在退出…' : '退出' }}</button>
         </form>
+        <span v-if="error" role="alert">{{ error }}</span>
       </div>
     </div>
   </header>

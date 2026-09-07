@@ -15,6 +15,25 @@ const {
 const INSTANCE_A = '11111111-1111-4111-8111-111111111111';
 const INSTANCE_B = '22222222-2222-4222-8222-222222222222';
 
+test('interactive presentation survives payload sanitization for the v2 schema', async () => {
+  const collector = new ProcessEventCollector(eventPayload());
+  const event = await collector.record('item_rendered', { presentation_state: 'interactive' });
+  assert.equal(event.event_version, 2);
+  assert.deepEqual(event.payload, { presentation_state: 'interactive' });
+});
+
+test('atomic capture-v2 rejection retains all evidence instead of dead-lettering valid neighbours', async () => {
+  const outbox = new MemoryOutbox();
+  const collector = new ProcessEventCollector(eventPayload({
+    outbox, endpoint: '/assessment/process/capture-v2/batch/',
+    fetch: async () => ({ ok: false, status: 400, json: async () => ({ error: { code: 'invalid_event' } }) }),
+  }));
+  await collector.record('document_visible', {});
+  await collector.record('item_rendered', { presentation_state: 'interactive' });
+  assert.equal(await collector.flush(), false);
+  assert.equal(await outbox.count(), 2);
+});
+
 function eventPayload(overrides = {}) {
   return {
     sessionId: 7,
@@ -304,6 +323,116 @@ test('uploads are split at the server maximum of 100 events', async () => {
   assert.deepEqual(sizes, [100, 5]);
 });
 
+test('a response transition larger than 64 KiB remains intact and avoids keepalive truncation', async () => {
+  const outbox = new MemoryOutbox();
+  const uploads = [];
+  const longText = 'x'.repeat((64 * 1024) + 1);
+  const collector = new ProcessEventCollector(eventPayload({
+    outbox,
+    fetch: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      uploads.push({
+        body,
+        bytes: new TextEncoder().encode(options.body).byteLength,
+        keepalive: options.keepalive,
+      });
+      return okResponse({
+        success: true,
+        acknowledgements: body.events.map((event) => ({
+          client_sequence_no: event.client_sequence_no,
+          event_id: INSTANCE_B,
+          server_ingest_sequence_no: event.client_sequence_no,
+        })),
+      });
+    },
+  }));
+  const event = await collector.record('response_transition', {
+    capture_version: 'capture-v2',
+    operation_id: 'long-text-edit',
+    branch_id: 'branch-long-text',
+    parent_event_id: null,
+    before_state: { question_type: 'short_answer', value: '' },
+    after_state: { question_type: 'short_answer', value: longText },
+    before_state_hash: 'a'.repeat(64),
+    after_state_hash: 'b'.repeat(64),
+    input_type: 'insertText',
+    source: 'student',
+  });
+
+  assert.equal(await outbox.count(), 1);
+  await collector.flush({ keepalive: true });
+
+  assert.equal(uploads.length, 1);
+  assert.equal(uploads[0].body.events.length, 1);
+  assert.equal(uploads[0].body.events[0].event_id, event.event_id);
+  assert.equal(uploads[0].body.events[0].payload.after_state.value, longText);
+  assert.ok(uploads[0].bytes > 64 * 1024);
+  assert.equal(uploads[0].keepalive, false);
+  assert.equal(await outbox.count(), 0);
+});
+
+test('a thousand offline response transitions restore in ordered batches without loss or coalescing', async () => {
+  const outbox = new MemoryOutbox();
+  const uploaded = [];
+  const batchSizes = [];
+  let online = false;
+  const collector = new ProcessEventCollector(eventPayload({
+    outbox,
+    isOnline: () => online,
+    fetch: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      batchSizes.push(body.events.length);
+      uploaded.push(...body.events);
+      return okResponse({
+        success: true,
+        acknowledgements: body.events.map((event) => ({
+          client_sequence_no: event.client_sequence_no,
+          event_id: INSTANCE_B,
+          server_ingest_sequence_no: event.client_sequence_no,
+        })),
+      });
+    },
+  }));
+  const emitted = await Promise.all(Array.from({ length: 1000 }, (_, index) => collector.record(
+    'response_transition',
+    {
+      capture_version: 'capture-v2',
+      operation_id: `offline-edit-${index + 1}`,
+      branch_id: 'branch-offline',
+      parent_event_id: index === 0 ? null : `offline-event-${index}`,
+      before_state: { question_type: 'short_answer', value: String(index) },
+      after_state: { question_type: 'short_answer', value: String(index + 1) },
+      before_state_hash: String(index).padStart(64, '0'),
+      after_state_hash: String(index + 1).padStart(64, '0'),
+      input_type: 'insertText',
+      source: 'student',
+    },
+    { eventId: `offline-event-${index + 1}` },
+  )));
+
+  assert.deepEqual(
+    emitted.map((event) => event.client_sequence_no),
+    Array.from({ length: 1000 }, (_, index) => index + 1),
+  );
+  assert.equal(await outbox.count(), 1000);
+  assert.equal(await collector.flush(), false);
+  assert.equal(uploaded.length, 0);
+
+  online = true;
+  assert.equal(await collector.handleOnline({ synchronize: false }), true);
+
+  assert.ok(batchSizes.every((size) => size <= 100));
+  assert.deepEqual(
+    uploaded.map((event) => event.client_sequence_no),
+    Array.from({ length: 1000 }, (_, index) => index + 1),
+  );
+  assert.deepEqual(
+    uploaded.map((event) => event.payload.operation_id),
+    Array.from({ length: 1000 }, (_, index) => `offline-edit-${index + 1}`),
+  );
+  assert.equal(await outbox.count(), 0);
+});
+
 test('payload sanitization retains declared fields and drops tracking detail', () => {
   assert.deepEqual(
     sanitizePayload('activity_heartbeat', {
@@ -574,4 +703,72 @@ test('hidden pages retain queued data unless a bounded lifecycle flush is reques
   assert.equal(uploads, 0);
   await collector.flush({ ignoreVisibility: true, keepalive: true });
   assert.equal(uploads, 1);
+});
+
+
+test('bounded navigation flush waits for pending durable event materialization', async () => {
+  let materialize;
+  const bodyReady = new Promise(resolve => { materialize = resolve; });
+  const uploaded = [];
+  const collector = new ProcessEventCollector(eventPayload({
+    fetch: async (_url, options) => {
+      const body = JSON.parse(options.body); uploaded.push(...body.events);
+      return okResponse({ success: true, acknowledgements: body.events.map(e => ({ client_sequence_no: e.client_sequence_no })) });
+    },
+  }));
+  const record = collector.record('item_left', {}, { materialize: () => bodyReady });
+  const flushed = collector.flushBounded(1500, { ignoreVisibility: true, keepalive: true });
+  await new Promise(resolve => setImmediate(resolve));
+  materialize({ leave_reason: 'navigation' });
+  await record;
+  assert.equal(await flushed, true);
+  assert.equal(uploaded.length, 1);
+  assert.equal(await collector.outbox.count(), 0);
+});
+
+test('bounded navigation flush drains events added during an earlier ACK checkpoint', async () => {
+  let completeCheckpoint, checkpointStarted;
+  const started = new Promise(resolve => { checkpointStarted = resolve; });
+  const pending = new Promise(resolve => { completeCheckpoint = resolve; });
+  const uploaded = [];
+  let checkpoints = 0;
+  const collector = new ProcessEventCollector(eventPayload({
+    checkpointEndpoint: '/checkpoint/',
+    fetch: async (url, options) => {
+      const body = JSON.parse(options.body);
+      if (url === '/checkpoint/') {
+        if (++checkpoints === 1) { checkpointStarted(); await pending; }
+        return okResponse({ success: true });
+      }
+      uploaded.push(...body.events);
+      return okResponse({ success: true, acknowledgements: body.events.map(e => ({ client_sequence_no: e.client_sequence_no })) });
+    },
+  }));
+  await collector.record('item_left', { leave_reason: 'submit' });
+  const background = collector.flush();
+  await started;
+  await collector.record('feedback_shown', { feedback_mode: 'correctness' });
+  const leaving = collector.flushBounded(1500, { ignoreVisibility: true, keepalive: true });
+  completeCheckpoint();
+  await background;
+  assert.equal(await leaving, true);
+  assert.deepEqual(uploaded.map(e => e.event_type), ['item_left', 'feedback_shown']);
+  assert.equal(await collector.outbox.count(), 0);
+});
+
+test('bounded keepalive uploads preserve the final ACK checkpoint during page departure', async () => {
+  const checkpoints = [];
+  const collector = new ProcessEventCollector(eventPayload({
+    checkpointEndpoint: '/checkpoint/',
+    fetch: async (url, options) => {
+      const body = JSON.parse(options.body);
+      if (url === '/checkpoint/') { checkpoints.push(options); return okResponse({ success: true }); }
+      return okResponse({ success: true, acknowledgements: body.events.map(e => ({ client_sequence_no: e.client_sequence_no })) });
+    },
+  }));
+  await collector.record('item_left', { leave_reason: 'submit' });
+  await collector.flushBounded(1500, { ignoreVisibility: true, keepalive: true });
+  assert.equal(checkpoints.length, 1);
+  assert.equal(checkpoints[0].keepalive, true);
+  assert.equal(JSON.parse(checkpoints[0].body).pending_event_count, 0);
 });

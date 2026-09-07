@@ -1,0 +1,953 @@
+from urllib.parse import quote
+
+from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError
+from django.db.models import Q
+from django.http import HttpResponse, QueryDict
+from django.shortcuts import get_object_or_404
+from django.urls import reverse
+from drf_spectacular.utils import OpenApiTypes, extend_schema
+from rest_framework import status
+from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.accounts.class_management_services import (
+    CourseClassDeletionError,
+    delete_course_class_group,
+    update_course_class_group,
+)
+from apps.accounts.course_access import (
+    accessible_courses,
+    get_accessible_course,
+    require_writable_course,
+)
+from apps.accounts.enrollment_services import (
+    copy_class_enrollments,
+    enroll_parsed_students,
+    enroll_single_student,
+    import_legacy_students,
+    remove_course_enrollment,
+    transfer_course_enrollment,
+)
+from apps.accounts.forms import (
+    ClassGroupForm,
+    ClassGroupUpdateForm,
+    ClassStudentAnalyticsPolicyForm,
+    ManualStudentEnrollmentForm,
+    PasswordResetForm,
+    StudentBatchUploadForm,
+    StudentClassCopyForm,
+    StudentCreateForm,
+)
+from apps.accounts.models import (
+    ClassGroup,
+    ClassStudentAnalyticsPolicy,
+    CourseEnrollment,
+    User,
+)
+from apps.accounts.student_analytics_policy import (
+    POLICY_FIELD_NAMES,
+    update_class_student_analytics_policy,
+)
+from apps.accounts.student_import import (
+    ParsedStudent,
+    StudentImportError,
+    build_student_import_workbook,
+    parse_student_workbook,
+)
+from apps.accounts.views import _class_queryset, _student_queryset
+from apps.api.permissions import RolePermission
+from apps.audit.services import log_action
+
+from .teacher_account_management_serializers import (
+    CourseClassCopyConfirmRequestSerializer,
+    CourseClassCopyPreviewRequestSerializer,
+    CourseClassCopyPreviewSerializer,
+    CourseClassCopyResultSerializer,
+    CourseClassDeleteRequestSerializer,
+    CourseClassDeleteResponseSerializer,
+    CourseClassManagementSerializer,
+    CourseClassUpdateRequestSerializer,
+    CourseStudentImportConfirmRequestSerializer,
+    CourseStudentImportResultSerializer,
+    LegacyStudentImportPreviewSerializer,
+    LegacyStudentImportResultSerializer,
+    ManualEnrollmentRequestSerializer,
+    ManualEnrollmentResponseSerializer,
+    MoveEnrollmentRequestSerializer,
+    MoveEnrollmentResponseSerializer,
+    PasswordResetRequestSerializer,
+    RemoveEnrollmentRequestSerializer,
+    RemoveEnrollmentResponseSerializer,
+    StudentImportPreviewRequestSerializer,
+    StudentVisibilityPolicyRequestSerializer,
+    StudentVisibilityPolicySerializer,
+    TeacherAccountClassCollectionSerializer,
+    TeacherAccountClassCreateRequestSerializer,
+    TeacherAccountClassCreateResponseSerializer,
+    TeacherAccountStudentCollectionSerializer,
+    TeacherAccountStudentImportConfirmRequestSerializer,
+    TeacherAccountStudentCreateRequestSerializer,
+    TeacherAccountStudentCreateResponseSerializer,
+    TeacherAccountStudentSerializer,
+)
+
+
+LEGACY_IMPORT_SESSION_KEY = "student_batch_import"
+
+
+def _form_data(payload, field_names, *, boolean_fields=()):
+    data = QueryDict("", mutable=True)
+    boolean_fields = frozenset(boolean_fields)
+    for field_name in field_names:
+        value = payload.get(field_name)
+        if field_name in boolean_fields:
+            data[field_name] = "on" if value is True else ""
+        else:
+            data[field_name] = "" if value is None else str(value)
+    return data
+
+
+def _course_payload(course):
+    return {
+        "id": course.pk,
+        "name": course.name,
+        "code": course.code,
+        "term": course.term,
+        "status": course.status,
+    }
+
+
+def _class_option_payload(class_group):
+    return {
+        "id": class_group.pk,
+        "name": class_group.name,
+        "academic_year": class_group.academic_year,
+        "display_name": str(class_group),
+        "is_active": class_group.is_active,
+    }
+
+
+def _student_payload(student):
+    return {
+        "id": student.pk,
+        "student_number": student.student_number,
+        "display_name": student.shown_name,
+        "username": student.username,
+        "class_group": (
+            _class_option_payload(student.class_group)
+            if student.class_group_id
+            else None
+        ),
+    }
+
+
+def _source_class_payload(class_group):
+    course = class_group.course
+    return {
+        "id": class_group.pk,
+        "course_id": course.pk,
+        "course_name": course.name,
+        "course_code": course.code,
+        "course_term": course.term,
+        "name": class_group.name,
+        "academic_year": class_group.academic_year,
+        "display_name": str(class_group),
+    }
+
+
+def _preview_payload(parsed_students, *, existing_numbers=()):
+    existing_numbers = set(existing_numbers)
+    return [
+        {
+            "student_number": item.student_number,
+            "display_name": item.display_name,
+            "class_id": item.class_id,
+            "class_name": item.class_name,
+            "account_action": (
+                "reuse" if item.student_number in existing_numbers else "create"
+            ),
+        }
+        for item in parsed_students
+    ]
+
+
+def _existing_student_numbers(parsed_students):
+    numbers = [item.student_number for item in parsed_students]
+    return {
+        value
+        for student_number, username in User.objects.filter(
+            Q(student_number__in=numbers) | Q(username__in=numbers)
+        ).values_list("student_number", "username")
+        for value in (student_number, username)
+        if value in numbers
+    }
+
+
+def _require_active_class(class_group, action):
+    if not class_group.is_active:
+        raise ValidationError(f"目标班级已停用，不能{action}。")
+
+
+def _course_and_class(user, course_id, class_id):
+    course = get_accessible_course(user, course_id)
+    class_group = get_object_or_404(course.classes, pk=class_id)
+    return course, class_group
+
+
+def _source_classes(user, course):
+    return ClassGroup.objects.filter(
+        course__in=accessible_courses(user).exclude(pk=course.pk)
+    ).select_related("course").order_by(
+        "course__term", "course__code", "academic_year", "name", "pk"
+    )
+
+
+def _class_management_payload(course, class_group, user):
+    enrollments = class_group.enrollments.filter(is_active=True).select_related(
+        "student", "student__class_group"
+    ).order_by("student__student_number", "student__display_name", "pk")
+    target_classes = course.classes.filter(is_active=True).order_by(
+        "academic_year", "name", "pk"
+    )
+    source_classes = _source_classes(user, course)
+    writable = course.status == course.Status.ACTIVE
+    return {
+        "course": _course_payload(course),
+        "class_group": {
+            "id": class_group.pk,
+            "name": class_group.name,
+            "academic_year": class_group.academic_year,
+            "is_active": class_group.is_active,
+            "state_token": ClassGroupUpdateForm(instance=class_group).initial[
+                "state_token"
+            ],
+            "detail_url": reverse(
+                "courses:class_detail", args=[course.pk, class_group.pk]
+            ),
+        },
+        "enrollments": [
+            {
+                "enrollment_id": enrollment.pk,
+                "student": _student_payload(enrollment.student),
+            }
+            for enrollment in enrollments
+        ],
+        "target_classes": [_class_option_payload(item) for item in target_classes],
+        "source_classes": [_source_class_payload(item) for item in source_classes],
+        "capabilities": {
+            "can_update": writable,
+            "can_delete": writable,
+            "can_add_students": writable and class_group.is_active,
+            "can_move_students": writable,
+            "can_remove_students": writable,
+            "can_reset_passwords": writable,
+            "can_update_visibility": writable and settings.CLASS_CENTER_ENABLED,
+        },
+        "actions": {
+            "detail_url": reverse(
+                "courses:class_detail", args=[course.pk, class_group.pk]
+            ),
+            "classes_url": reverse("courses:classes", args=[course.pk]),
+            "add_students_url": reverse(
+                "courses:student_add", args=[course.pk, class_group.pk]
+            ),
+            "visibility_url": reverse(
+                "courses:class_student_visibility", args=[course.pk, class_group.pk]
+            ),
+            "import_template_url": reverse(
+                "courses:student_import_template", args=[course.pk, class_group.pk]
+            ),
+        },
+    }
+
+
+def _policy_payload(policy, *, is_read_only):
+    return {
+        **{field_name: getattr(policy, field_name) for field_name in POLICY_FIELD_NAMES},
+        "is_read_only": is_read_only,
+    }
+
+
+class TeacherAccountManagementApiView(APIView):
+    permission_classes = (RolePermission,)
+    allowed_roles = (User.Role.TEACHER,)
+
+
+class TeacherAccountClassCollectionView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_account_class_list",
+        responses=TeacherAccountClassCollectionSerializer,
+    )
+    def get(self, request):
+        classes = _class_queryset(request.user).order_by("academic_year", "name", "pk")
+        return Response(
+            TeacherAccountClassCollectionSerializer(
+                {
+                    "items": [
+                        {
+                            "id": class_group.pk,
+                            "name": class_group.name,
+                            "academic_year": class_group.academic_year,
+                            "is_active": class_group.is_active,
+                            "course_id": class_group.course_id,
+                            "student_count": class_group.students.filter(
+                                role=User.Role.STUDENT
+                            ).count(),
+                        }
+                        for class_group in classes
+                    ]
+                }
+            ).data
+        )
+
+    @extend_schema(
+        operation_id="teacher_account_class_create",
+        request=TeacherAccountClassCreateRequestSerializer,
+        responses={201: TeacherAccountClassCreateResponseSerializer},
+    )
+    def post(self, request):
+        data = _form_data(request.data, ("name", "academic_year"))
+        form = ClassGroupForm(data)
+        if not form.is_valid():
+            raise ValidationError(form.errors)
+        class_group = form.save(commit=False)
+        class_group.owner = request.user
+        class_group.save()
+        log_action(
+            request,
+            "class.create",
+            class_group,
+            {"name": class_group.name, "academic_year": class_group.academic_year},
+        )
+        return Response(
+            TeacherAccountClassCreateResponseSerializer(
+                {
+                    "class_group": {
+                        "id": class_group.pk,
+                        "name": class_group.name,
+                        "academic_year": class_group.academic_year,
+                        "is_active": class_group.is_active,
+                        "course_id": class_group.course_id,
+                        "student_count": 0,
+                    }
+                }
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class TeacherAccountStudentCollectionView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_account_student_list",
+        responses=TeacherAccountStudentCollectionSerializer,
+    )
+    def get(self, request):
+        classes = _class_queryset(request.user).order_by("academic_year", "name", "pk")
+        students = _student_queryset(request.user).order_by(
+            "student_number", "display_name", "pk"
+        )
+        query = request.query_params.get("q", "").strip()
+        raw_class_id = request.query_params.get("class_id", "").strip()
+        selected_class_id = None
+        if query:
+            students = students.filter(
+                Q(student_number__icontains=query) | Q(display_name__icontains=query)
+            )
+        if raw_class_id.isdecimal() and classes.filter(pk=raw_class_id).exists():
+            selected_class_id = int(raw_class_id)
+            students = students.filter(class_group_id=selected_class_id)
+        class_options = classes.filter(is_active=True)
+        return Response(
+            TeacherAccountStudentCollectionSerializer(
+                {
+                    "items": [_student_payload(student) for student in students],
+                    "class_options": [
+                        _class_option_payload(class_group)
+                        for class_group in class_options
+                    ],
+                    "query": query,
+                    "selected_class_id": selected_class_id,
+                }
+            ).data
+        )
+
+    @extend_schema(
+        operation_id="teacher_account_student_create",
+        request=TeacherAccountStudentCreateRequestSerializer,
+        responses={201: TeacherAccountStudentCreateResponseSerializer},
+    )
+    def post(self, request):
+        data = _form_data(
+            request.data,
+            ("student_number", "display_name", "class_group", "password"),
+        )
+        form = StudentCreateForm(data, owner=request.user)
+        if not form.is_valid():
+            raise ValidationError(form.errors)
+        student = form.save()
+        log_action(
+            request,
+            "student.create",
+            student,
+            {
+                "student_number": student.student_number,
+                "class": str(student.class_group or ""),
+            },
+        )
+        return Response(
+            TeacherAccountStudentCreateResponseSerializer(
+                {"student": _student_payload(student)}
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class TeacherAccountStudentImportPreviewView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_account_student_import_preview",
+        request=StudentImportPreviewRequestSerializer,
+        responses=LegacyStudentImportPreviewSerializer,
+    )
+    def post(self, request):
+        request.session.pop(LEGACY_IMPORT_SESSION_KEY, None)
+        form = StudentBatchUploadForm(request.data, request.FILES)
+        if not form.is_valid():
+            raise ValidationError(form.errors)
+        classes = list(_class_queryset(request.user))
+        try:
+            preview = parse_student_workbook(form.cleaned_data["file"], classes)
+            classes_by_id = {class_group.pk: class_group for class_group in classes}
+            for item in preview:
+                if not classes_by_id[item.class_id].is_active:
+                    raise StudentImportError(
+                        f"班级已停用，不能导入学生：{item.class_name}"
+                    )
+        except StudentImportError as exc:
+            raise ValidationError(str(exc)) from exc
+        request.session[LEGACY_IMPORT_SESSION_KEY] = [item.__dict__ for item in preview]
+        return Response(
+            LegacyStudentImportPreviewSerializer(
+                {"preview": _preview_payload(preview)}
+            ).data
+        )
+
+
+class TeacherAccountStudentImportConfirmView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_account_student_import_confirm",
+        request=TeacherAccountStudentImportConfirmRequestSerializer,
+        responses=LegacyStudentImportResultSerializer,
+    )
+    def post(self, request):
+        confirmation = TeacherAccountStudentImportConfirmRequestSerializer(data=request.data)
+        confirmation.is_valid(raise_exception=True)
+        preview = [
+            ParsedStudent(**item)
+            for item in request.session.get(LEGACY_IMPORT_SESSION_KEY, [])
+        ]
+        try:
+            import_legacy_students(preview, _class_queryset(request.user))
+        except (StudentImportError, IntegrityError) as exc:
+            raise ValidationError(
+                str(exc) if str(exc) else "导入失败，请重新校验名单"
+            ) from exc
+        request.session.pop(LEGACY_IMPORT_SESSION_KEY, None)
+        log_action(request, "student.batch_import", details={"count": len(preview)})
+        return Response(LegacyStudentImportResultSerializer({"imported": len(preview)}).data)
+
+
+class TeacherAccountStudentResetView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_account_student_password_reset",
+        request=PasswordResetRequestSerializer,
+        responses=TeacherAccountStudentCreateResponseSerializer,
+    )
+    def post(self, request, student_id):
+        student = get_object_or_404(_student_queryset(request.user), pk=student_id)
+        data = _form_data(request.data, ("password",))
+        form = PasswordResetForm(data)
+        if not form.is_valid():
+            raise ValidationError(form.errors)
+        student.set_password(form.cleaned_data["password"])
+        student.save(update_fields=["password"])
+        log_action(request, "student.password_reset", student)
+        return Response(
+            TeacherAccountStudentCreateResponseSerializer(
+                {"student": _student_payload(student)}
+            ).data
+        )
+
+
+class CourseClassManagementView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_class_management",
+        responses=CourseClassManagementSerializer,
+    )
+    def get(self, request, course_id, class_id):
+        course, class_group = _course_and_class(request.user, course_id, class_id)
+        return Response(
+            CourseClassManagementSerializer(
+                _class_management_payload(course, class_group, request.user)
+            ).data
+        )
+
+    @extend_schema(
+        operation_id="teacher_course_class_management_update",
+        request=CourseClassUpdateRequestSerializer,
+        responses=CourseClassManagementSerializer,
+    )
+    def patch(self, request, course_id, class_id):
+        course, class_group = _course_and_class(request.user, course_id, class_id)
+        require_writable_course(course)
+        data = _form_data(
+            request.data,
+            ("name", "academic_year", "is_active", "state_token"),
+            boolean_fields=("is_active",),
+        )
+        saved_class_group, form = update_course_class_group(
+            request=request,
+            course=course,
+            class_group=class_group,
+            form_data=data,
+        )
+        if saved_class_group is None:
+            raise ValidationError(form.errors)
+        return Response(
+            CourseClassManagementSerializer(
+                _class_management_payload(course, saved_class_group, request.user)
+            ).data
+        )
+
+
+class CourseClassDeleteView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_class_delete",
+        request=CourseClassDeleteRequestSerializer,
+        responses=CourseClassDeleteResponseSerializer,
+    )
+    def post(self, request, course_id, class_id):
+        course, class_group = _course_and_class(request.user, course_id, class_id)
+        require_writable_course(course)
+        if request.data.get("confirmation") != "delete":
+            raise ValidationError("请在二次确认后再删除班级。")
+        try:
+            delete_course_class_group(
+                request=request,
+                course=course,
+                class_group=class_group,
+            )
+        except CourseClassDeletionError as exc:
+            raise ValidationError("; ".join(exc.messages)) from exc
+        return Response(CourseClassDeleteResponseSerializer({"deleted": True}).data)
+
+
+class CourseClassManualEnrollmentView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_class_manual_enrollment",
+        request=ManualEnrollmentRequestSerializer,
+        responses={201: ManualEnrollmentResponseSerializer},
+    )
+    def post(self, request, course_id, class_id):
+        course, class_group = _course_and_class(request.user, course_id, class_id)
+        require_writable_course(course)
+        _require_active_class(class_group, "新增学生")
+        data = _form_data(request.data, ("student_number", "display_name"))
+        form = ManualStudentEnrollmentForm(data)
+        if not form.is_valid():
+            raise ValidationError(form.errors)
+        try:
+            student, created_account = enroll_single_student(
+                course,
+                class_group,
+                form.cleaned_data["student_number"],
+                form.cleaned_data["display_name"],
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError("; ".join(exc.messages)) from exc
+        enrollment = CourseEnrollment.objects.get(course=course, student=student)
+        log_action(
+            request,
+            "student.manual_enroll",
+            enrollment,
+            {
+                "course_id": course.pk,
+                "class_id": class_group.pk,
+                "created_account": created_account,
+            },
+        )
+        return Response(
+            ManualEnrollmentResponseSerializer(
+                {
+                    "student": _student_payload(student),
+                    "created_account": created_account,
+                }
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class CourseClassCopyPreviewView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_class_copy_preview",
+        request=CourseClassCopyPreviewRequestSerializer,
+        responses=CourseClassCopyPreviewSerializer,
+    )
+    def post(self, request, course_id, class_id):
+        course, target_class = _course_and_class(request.user, course_id, class_id)
+        require_writable_course(course)
+        _require_active_class(target_class, "复制学生")
+        source_classes = _source_classes(request.user, course)
+        session_key = f"course_student_copy:{course.pk}:{target_class.pk}"
+        request.session.pop(session_key, None)
+        data = _form_data(request.data, ("source_class",))
+        form = StudentClassCopyForm(data, source_classes=source_classes)
+        if not form.is_valid():
+            raise ValidationError(form.errors)
+        source_class = form.cleaned_data["source_class"]
+        request.session[session_key] = source_class.pk
+        existing_ids = set(
+            CourseEnrollment.objects.filter(course=course).values_list(
+                "student_id", flat=True
+            )
+        )
+        preview = [
+            {
+                "student": _student_payload(enrollment.student),
+                "skip": enrollment.student_id in existing_ids,
+            }
+            for enrollment in source_class.enrollments.filter(is_active=True)
+            .select_related("student", "student__class_group")
+            .order_by("student__student_number", "student__display_name", "pk")
+        ]
+        return Response(
+            CourseClassCopyPreviewSerializer(
+                {
+                    "source_class": _source_class_payload(source_class),
+                    "preview": preview,
+                }
+            ).data
+        )
+
+
+class CourseClassCopyConfirmView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_class_copy_confirm",
+        request=CourseClassCopyConfirmRequestSerializer,
+        responses=CourseClassCopyResultSerializer,
+    )
+    def post(self, request, course_id, class_id):
+        course, target_class = _course_and_class(request.user, course_id, class_id)
+        require_writable_course(course)
+        _require_active_class(target_class, "复制学生")
+        confirmation = CourseClassCopyConfirmRequestSerializer(data=request.data)
+        confirmation.is_valid(raise_exception=True)
+        source_classes = _source_classes(request.user, course)
+        session_key = f"course_student_copy:{course.pk}:{target_class.pk}"
+        source_class = source_classes.filter(
+            pk=request.session.get(session_key)
+        ).first()
+        if source_class is None:
+            raise ValidationError("复制预览已失效，请重新选择来源班级。")
+        try:
+            copied, skipped = copy_class_enrollments(
+                target_course=course,
+                target_class=target_class,
+                source_class=source_class,
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError("; ".join(exc.messages)) from exc
+        request.session.pop(session_key, None)
+        log_action(
+            request,
+            "student.class_copy",
+            target_class,
+            {
+                "course_id": course.pk,
+                "source_course_id": source_class.course_id,
+                "source_class_id": source_class.pk,
+                "copied": copied,
+                "skipped": skipped,
+            },
+        )
+        return Response(
+            CourseClassCopyResultSerializer(
+                {"copied": copied, "skipped": skipped}
+            ).data
+        )
+
+
+class CourseStudentImportPreviewView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_class_student_import_preview",
+        request=StudentImportPreviewRequestSerializer,
+        responses=LegacyStudentImportPreviewSerializer,
+    )
+    def post(self, request, course_id, class_id):
+        course, class_group = _course_and_class(request.user, course_id, class_id)
+        require_writable_course(course)
+        _require_active_class(class_group, "新增学生")
+        session_key = f"course_student_import:{course.pk}:{class_group.pk}"
+        request.session.pop(session_key, None)
+        form = StudentBatchUploadForm(request.data, request.FILES)
+        if not form.is_valid():
+            raise ValidationError(form.errors)
+        try:
+            preview = parse_student_workbook(
+                form.cleaned_data["file"], [class_group], allow_existing=True
+            )
+        except StudentImportError as exc:
+            raise ValidationError(str(exc)) from exc
+        request.session[session_key] = [item.__dict__ for item in preview]
+        return Response(
+            LegacyStudentImportPreviewSerializer(
+                {
+                    "preview": _preview_payload(
+                        preview,
+                        existing_numbers=_existing_student_numbers(preview),
+                    )
+                }
+            ).data
+        )
+
+
+class CourseStudentImportConfirmView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_class_student_import_confirm",
+        request=CourseStudentImportConfirmRequestSerializer,
+        responses=CourseStudentImportResultSerializer,
+    )
+    def post(self, request, course_id, class_id):
+        course, class_group = _course_and_class(request.user, course_id, class_id)
+        require_writable_course(course)
+        _require_active_class(class_group, "新增学生")
+        confirmation = CourseStudentImportConfirmRequestSerializer(data=request.data)
+        confirmation.is_valid(raise_exception=True)
+        session_key = f"course_student_import:{course.pk}:{class_group.pk}"
+        preview = [
+            ParsedStudent(**item) for item in request.session.get(session_key, [])
+        ]
+        if not preview:
+            raise ValidationError("导入预览已失效，请重新上传文件。")
+        try:
+            created_accounts, enrollments = enroll_parsed_students(
+                course, class_group, preview
+            )
+        except (StudentImportError, DjangoValidationError) as exc:
+            message = "; ".join(exc.messages) if hasattr(exc, "messages") else str(exc)
+            raise ValidationError(message) from exc
+        request.session.pop(session_key, None)
+        log_action(
+            request,
+            "student.batch_import",
+            class_group,
+            {
+                "course_id": course.pk,
+                "class_id": class_group.pk,
+                "enrollments": enrollments,
+                "created_accounts": created_accounts,
+            },
+        )
+        return Response(
+            CourseStudentImportResultSerializer(
+                {
+                    "created_accounts": created_accounts,
+                    "enrollments": enrollments,
+                }
+            ).data
+        )
+
+
+class CourseStudentMoveView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_class_student_move",
+        request=MoveEnrollmentRequestSerializer,
+        responses=MoveEnrollmentResponseSerializer,
+    )
+    def post(self, request, course_id, class_id, student_id):
+        course, source_class = _course_and_class(request.user, course_id, class_id)
+        require_writable_course(course)
+        enrollment = get_object_or_404(
+            CourseEnrollment,
+            course=course,
+            class_group=source_class,
+            student_id=student_id,
+            is_active=True,
+        )
+        target_class = get_object_or_404(
+            course.classes, pk=request.data.get("class_group")
+        )
+        _require_active_class(target_class, "转入学生")
+        try:
+            enrollment = transfer_course_enrollment(enrollment, target_class)
+        except DjangoValidationError as exc:
+            raise ValidationError("; ".join(exc.messages)) from exc
+        log_action(
+            request,
+            "student.class_transfer",
+            enrollment,
+            {
+                "course_id": course.pk,
+                "from_class_id": source_class.pk,
+                "to_class_id": target_class.pk,
+            },
+        )
+        return Response(
+            MoveEnrollmentResponseSerializer(
+                {"class_group": _class_option_payload(target_class)}
+            ).data
+        )
+
+
+class CourseStudentRemoveView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_class_student_remove",
+        request=RemoveEnrollmentRequestSerializer,
+        responses=RemoveEnrollmentResponseSerializer,
+    )
+    def post(self, request, course_id, class_id, student_id):
+        course, class_group = _course_and_class(request.user, course_id, class_id)
+        require_writable_course(course)
+        enrollment = get_object_or_404(
+            CourseEnrollment.objects.select_related("student"),
+            course=course,
+            class_group=class_group,
+            student_id=student_id,
+            is_active=True,
+        )
+        if request.data.get("confirmation") != "delete":
+            raise ValidationError("请在二次确认后再将学生移出课程。")
+        try:
+            details = remove_course_enrollment(
+                course=course,
+                class_group=class_group,
+                enrollment=enrollment,
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError("; ".join(exc.messages)) from exc
+        log_action(request, "student.course_remove", enrollment.student, details)
+        return Response(RemoveEnrollmentResponseSerializer({"removed": True}).data)
+
+
+class CourseStudentResetView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_class_student_password_reset",
+        request=PasswordResetRequestSerializer,
+        responses=TeacherAccountStudentCreateResponseSerializer,
+    )
+    def post(self, request, course_id, class_id, student_id):
+        course, class_group = _course_and_class(request.user, course_id, class_id)
+        require_writable_course(course)
+        enrollment = get_object_or_404(
+            CourseEnrollment.objects.select_related("student"),
+            course=course,
+            class_group=class_group,
+            student_id=student_id,
+            is_active=True,
+        )
+        data = _form_data(request.data, ("password",))
+        form = PasswordResetForm(data)
+        if not form.is_valid():
+            raise ValidationError(form.errors)
+        enrollment.student.set_password(form.cleaned_data["password"])
+        enrollment.student.save(update_fields=["password"])
+        log_action(
+            request,
+            "student.password_reset",
+            enrollment.student,
+            {"course_id": course.pk, "global_account": True},
+        )
+        return Response(
+            TeacherAccountStudentCreateResponseSerializer(
+                {"student": _student_payload(enrollment.student)}
+            ).data
+        )
+
+
+class CourseStudentVisibilityView(TeacherAccountManagementApiView):
+    def _scope(self, user, course_id, class_id):
+        if not settings.CLASS_CENTER_ENABLED:
+            raise NotFound()
+        course, class_group = _course_and_class(user, course_id, class_id)
+        policy = get_object_or_404(
+            ClassStudentAnalyticsPolicy, class_group=class_group
+        )
+        return course, class_group, policy
+
+    @extend_schema(
+        operation_id="teacher_course_class_student_visibility",
+        responses=StudentVisibilityPolicySerializer,
+    )
+    def get(self, request, course_id, class_id):
+        course, _class_group, policy = self._scope(
+            request.user, course_id, class_id
+        )
+        return Response(
+            StudentVisibilityPolicySerializer(
+                _policy_payload(
+                    policy,
+                    is_read_only=course.status == course.Status.ARCHIVED,
+                )
+            ).data
+        )
+
+    @extend_schema(
+        operation_id="teacher_course_class_student_visibility_update",
+        request=StudentVisibilityPolicyRequestSerializer,
+        responses=StudentVisibilityPolicySerializer,
+    )
+    def patch(self, request, course_id, class_id):
+        course, class_group, _policy = self._scope(request.user, course_id, class_id)
+        data = _form_data(
+            request.data,
+            POLICY_FIELD_NAMES,
+            boolean_fields=set(POLICY_FIELD_NAMES) - {"rank_mode"},
+        )
+        form = ClassStudentAnalyticsPolicyForm(data)
+        if not form.is_valid():
+            raise ValidationError(form.errors)
+        try:
+            policy = update_class_student_analytics_policy(
+                class_group=class_group,
+                actor=request.user,
+                changes=form.cleaned_data,
+            )
+        except DjangoValidationError as exc:
+            if hasattr(exc, "message_dict"):
+                raise ValidationError(exc.message_dict) from exc
+            raise ValidationError("; ".join(exc.messages)) from exc
+        return Response(
+            StudentVisibilityPolicySerializer(
+                _policy_payload(policy, is_read_only=course.status != course.Status.ACTIVE)
+            ).data
+        )
+
+
+class CourseStudentImportTemplateView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_class_student_import_template",
+        responses={200: OpenApiTypes.BINARY},
+    )
+    def get(self, request, course_id, class_id):
+        course, class_group = _course_and_class(request.user, course_id, class_id)
+        _require_active_class(class_group, "新增学生")
+        content = build_student_import_workbook(
+            [class_group],
+            scope_label=(
+                f"{course.name}（{course.code} · {course.term}） / {class_group}"
+            ),
+        )
+        response = HttpResponse(
+            content,
+            content_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+        )
+        encoded_name = quote(f"{course.code}-{class_group.name}-学生导入模板.xlsx")
+        response["Content-Disposition"] = (
+            "attachment; filename=student_import_template.xlsx; "
+            f"filename*=UTF-8''{encoded_name}"
+        )
+        return response

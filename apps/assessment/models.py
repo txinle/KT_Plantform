@@ -316,6 +316,16 @@ class Attempt(models.Model):
     terminal_recorded_at = models.DateTimeField(null=True, blank=True)
     draft_answer = models.JSONField(null=True, blank=True)
     draft_saved_at = models.DateTimeField(null=True, blank=True)
+    active_response_event = models.ForeignKey(
+        "AssessmentEvent", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="active_for_attempts",
+    )
+    response_version = models.PositiveIntegerField(default=0)
+    final_response_event = models.ForeignKey(
+        "AssessmentEvent", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="final_for_attempts",
+    )
+    formal_capture_boundary = models.JSONField(default=dict, blank=True)
     # Durable pointers to immutable response snapshots.  These are the sole
     # source of truth for text responses across requests; draft_answer/final_answer
     # remain compatibility projections for existing callers.
@@ -549,6 +559,14 @@ class GradeRecord(models.Model):
     grading_method = models.CharField(max_length=32, default="automatic")
     grading_version = models.CharField(max_length=64, blank=True, default="")
     grader_version = models.CharField(max_length=64, blank=True, default="")
+    grader = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="graded_grade_records",
+    )
+    comment = models.TextField(blank=True, default="")
     graded_at = models.DateTimeField(null=True, blank=True)
     voided_at = models.DateTimeField(null=True, blank=True)
     voided_by = models.ForeignKey(

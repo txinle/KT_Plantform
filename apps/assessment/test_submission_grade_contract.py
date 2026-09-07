@@ -112,6 +112,61 @@ class SubmissionGradeContractTests(TestCase):
         self.assertEqual(str(submitted.score), "0.50")
         self.assertFalse(submitted.is_correct)
 
+    def test_automatic_submission_grade_has_an_actorless_empty_comment_baseline(self):
+        save_draft(self.attempt.pk, "a")
+        submitted_attempt = submit_attempt(self.attempt.pk, uuid.uuid4())
+        submission = Submission.objects.get(attempt=submitted_attempt)
+
+        baseline = submission.grade_records.get(version=1)
+
+        self.assertEqual(str(baseline.score), "1.00")
+        self.assertIsNone(baseline.grader)
+        self.assertEqual(baseline.comment, "")
+
+    def test_manual_reviews_append_actor_and_verbatim_comment_history(self):
+        first_reviewer = User.objects.create_user(
+            username="b1-reviewer-1",
+            role=User.Role.TEACHER,
+        )
+        second_reviewer = User.objects.create_user(
+            username="b1-reviewer-2",
+            role=User.Role.TEACHER,
+        )
+        save_draft(self.attempt.pk, "a")
+        submitted_attempt = submit_attempt(self.attempt.pk, uuid.uuid4())
+        submission = Submission.objects.get(attempt=submitted_attempt)
+        baseline = submission.grade_records.get(version=1)
+
+        first_review = grade_submission(
+            submission.pk,
+            score="0.50",
+            is_correct=False,
+            actor=first_reviewer,
+            comment="第一次人工复核：保留原始措辞。\n",
+        )
+        second_review = grade_submission(
+            submission.pk,
+            score="1.00",
+            is_correct=True,
+            actor=second_reviewer,
+            comment="第二次人工复核：恢复满分。",
+        )
+
+        baseline.refresh_from_db()
+        first_review.refresh_from_db()
+        second_review.refresh_from_db()
+        self.assertEqual(str(baseline.score), "1.00")
+        self.assertIsNone(baseline.grader)
+        self.assertEqual(baseline.comment, "")
+        self.assertEqual(first_review.version, 2)
+        self.assertEqual(first_review.grader, first_reviewer)
+        self.assertEqual(first_review.comment, "第一次人工复核：保留原始措辞。\n")
+        self.assertEqual(str(first_review.score), "0.50")
+        self.assertEqual(second_review.version, 3)
+        self.assertEqual(second_review.grader, second_reviewer)
+        self.assertEqual(second_review.comment, "第二次人工复核：恢复满分。")
+        self.assertEqual(str(second_review.score), "1.00")
+
     def test_voiding_effective_grade_clears_compatibility_projection(self):
         save_draft(self.attempt.pk, "a")
         submitted_attempt = submit_attempt(self.attempt.pk, uuid.uuid4())

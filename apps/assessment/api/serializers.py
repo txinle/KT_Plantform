@@ -81,6 +81,8 @@ class StudentRuntimeNavigationItemSerializer(serializers.Serializer):
 
 
 class StudentRuntimeActionsSerializer(serializers.Serializer):
+    research_tools_url = serializers.CharField(required=False)
+    resolve_branch_url = serializers.CharField(required=False)
     save_draft_url = serializers.CharField()
     submit_url = serializers.CharField()
     skip_url = serializers.CharField()
@@ -88,6 +90,11 @@ class StudentRuntimeActionsSerializer(serializers.Serializer):
 
 
 class StudentRuntimeProcessSerializer(serializers.Serializer):
+    writer_lease_acquire_url = serializers.CharField(required=False)
+    writer_lease_renew_url = serializers.CharField(required=False)
+    capture_version = serializers.CharField(required=False)
+    active_response_event_id = serializers.CharField(allow_null=True, required=False)
+    response_version = serializers.IntegerField(required=False)
     session_id = serializers.IntegerField()
     attempt_id = serializers.IntegerField()
     event_batch_url = serializers.CharField()
@@ -99,6 +106,8 @@ class StudentRuntimeProcessSerializer(serializers.Serializer):
 
 
 class StudentRuntimeQuestionEntrySerializer(serializers.Serializer):
+    presented_deadline_at = serializers.DateTimeField(required=False, allow_null=True)
+    research_tools = serializers.JSONField(required=False)
     task_id = serializers.IntegerField()
     session_id = serializers.IntegerField()
     session_status = serializers.CharField()
@@ -290,6 +299,28 @@ class StudentLearningQuestionOptionSerializer(serializers.Serializer):
     is_correct = serializers.BooleanField(required=False)
 
 
+class StudentFeedbackCaptureAuthorizationSerializer(serializers.Serializer):
+    correctness = serializers.BooleanField()
+    correct_answer = serializers.BooleanField()
+    explanation = serializers.BooleanField()
+
+
+class StudentFeedbackCaptureSerializer(serializers.Serializer):
+    capture_version = serializers.CharField()
+    session_id = serializers.IntegerField()
+    attempt_id = serializers.IntegerField()
+    event_batch_url = serializers.CharField()
+    checkpoint_url = serializers.CharField()
+    time_sync_create_url = serializers.CharField()
+    time_sync_finalize_url = serializers.CharField()
+    app_version = serializers.CharField()
+    heartbeat_interval_seconds = serializers.IntegerField()
+    answer_event_id = serializers.UUIDField(allow_null=True)
+    snapshot_id = serializers.UUIDField(allow_null=True)
+    mode = serializers.ChoiceField(choices=("correctness", "full"))
+    authorized = StudentFeedbackCaptureAuthorizationSerializer()
+
+
 class StudentLearningQuestionSerializer(serializers.Serializer):
     generated_at = serializers.DateTimeField()
     course_id = serializers.IntegerField()
@@ -308,6 +339,7 @@ class StudentLearningQuestionSerializer(serializers.Serializer):
     )
     final_answer = serializers.CharField()
     options = StudentLearningQuestionOptionSerializer(many=True)
+    feedback_capture = StudentFeedbackCaptureSerializer(required=False)
     score = StudentLearningScoreSerializer(required=False)
     correct_answer = serializers.CharField(required=False, allow_null=True)
     explanation = serializers.CharField(required=False, allow_blank=True)

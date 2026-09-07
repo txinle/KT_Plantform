@@ -136,6 +136,8 @@ class Experiment(models.Model):
         "sampling_match_scope",
         "ordering_mode",
         "feedback_mode",
+        "feedback_release_policy",
+        "research_tools",
         "time_mode",
         "total_time_limit_minutes",
         "per_question_time_limit_seconds",
@@ -174,6 +176,10 @@ class Experiment(models.Model):
         NONE = "none", "仅显示已提交"
         CORRECTNESS = "correctness", "显示正误"
         FULL = "full", "显示正误、答案与解析"
+    class FeedbackReleasePolicy(models.TextChoices):
+        AFTER_PERSONAL_SUBMISSION = "after_personal_submission", "学生完成后"
+        AFTER_ASSIGNMENT_DEADLINE = "after_assignment_deadline", "班级任务截止后"
+        MANUAL_RELEASE = "manual_release", "教师人工发布"
     class TimeMode(models.TextChoices):
         NONE = "none", "无时限"
         TOTAL = "total", "实验总时限"
@@ -240,6 +246,12 @@ class Experiment(models.Model):
     )
     ordering_mode = models.CharField(max_length=24, choices=Ordering.choices, default=Ordering.FIXED)
     feedback_mode = models.CharField(max_length=16, choices=Feedback.choices, default=Feedback.NONE)
+    feedback_release_policy = models.CharField(
+        max_length=32,
+        choices=FeedbackReleasePolicy.choices,
+        default=FeedbackReleasePolicy.AFTER_PERSONAL_SUBMISSION,
+    )
+    research_tools = models.JSONField(default=dict, blank=True)
     time_mode = models.CharField(max_length=20, choices=TimeMode.choices, default=TimeMode.NONE)
     total_time_limit_minutes = models.PositiveIntegerField(null=True, blank=True)
     per_question_time_limit_seconds = models.PositiveIntegerField(null=True, blank=True)
@@ -789,6 +801,14 @@ class ClassExperimentTask(models.Model):
     cancelled_at = models.DateTimeField(null=True, blank=True)
     manual_closed_at = models.DateTimeField(null=True, blank=True)
     invalidated_at = models.DateTimeField(null=True, blank=True)
+    feedback_released_at = models.DateTimeField(null=True, blank=True)
+    feedback_released_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="released_feedback_class_experiment_tasks",
+    )
     terminal_reason = models.CharField(max_length=64, blank=True, default="")
     provenance = models.CharField(max_length=64, default="native")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -854,6 +874,8 @@ class ClassExperimentTask(models.Model):
                 "cancelled_at",
                 "manual_closed_at",
                 "invalidated_at",
+                "feedback_released_at",
+                "feedback_released_by",
                 "terminal_reason",
             }
             changed = {

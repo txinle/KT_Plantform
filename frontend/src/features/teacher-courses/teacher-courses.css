@@ -1,0 +1,101 @@
+.kt-teacher-courses { min-height: 100vh; color: var(--kt-ink); }
+.kt-teacher-courses-page,
+.kt-teacher-courses-form-page { max-width: 1320px; }
+.kt-teacher-courses-heading,
+.kt-teacher-course-overview-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+.kt-teacher-courses-heading p,
+.kt-teacher-course-overview-header p { margin: 0 0 8px; color: var(--kt-action-600); font-size: 14px; font-weight: 700; }
+.kt-teacher-courses-heading h1,
+.kt-teacher-course-overview-header h1 { margin: 0 0 8px; color: var(--kt-ink); font-size: var(--kt-font-title); line-height: 1.35; }
+.kt-teacher-courses-heading span,
+.kt-teacher-course-overview-header span { display: block; max-width: 720px; color: var(--kt-muted); line-height: 1.65; }
+.kt-teacher-course-overview-header small { display: block; margin-top: 12px; color: var(--kt-muted); font-size: 14px; }
+.kt-teacher-course-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 16px; }
+.kt-teacher-course-card { display: flex; min-width: 0; flex-direction: column; overflow: hidden; padding: 0; }
+.kt-teacher-course-card__cover { display: flex; min-height: 100px; align-items: end; padding: 16px; background: var(--kt-action-050); color: var(--kt-action-600); }
+.kt-teacher-course-card__cover span { font-size: 16px; font-weight: 750; letter-spacing: .04em; }
+.kt-teacher-course-card__body { display: grid; flex: 1; gap: 10px; padding: 20px; }
+.kt-teacher-course-card__meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--kt-muted); font-size: 14px; }
+.kt-teacher-course-card h2 { margin: 0; color: var(--kt-ink); font-size: 19px; }
+.kt-teacher-course-card p { min-height: 44px; margin: 0; color: var(--kt-muted); font-size: 14px; line-height: 1.55; }
+.kt-teacher-course-card small { color: var(--kt-muted); }
+.kt-teacher-course-card dl { display: grid; grid-template-columns: repeat(3, 1fr); margin: 4px 0 0; border-top: 1px solid var(--kt-border); padding-top: 12px; }
+.kt-teacher-course-card dl > div { display: grid; gap: 3px; }
+.kt-teacher-course-card dt { color: var(--kt-muted); font-size: 12px; }
+.kt-teacher-course-card dd { margin: 0; color: var(--kt-ink); font-weight: 750; font-variant-numeric: tabular-nums; }
+.kt-teacher-course-card > .kt-button { margin: 0 20px 20px; }
+.kt-teacher-course-empty { max-width: 500px; padding: 28px; }
+.kt-teacher-course-empty h2 { margin: 0 0 8px; font-size: 20px; }
+.kt-teacher-course-empty p { margin: 0 0 18px; color: var(--kt-muted); }
+.kt-teacher-course-form { display: grid; max-width: 720px; gap: 16px; padding: 24px; }
+.kt-teacher-course-form label { display: grid; gap: 8px; color: var(--kt-ink); font-size: 14px; font-weight: 700; }
+.kt-teacher-course-form input,
+.kt-teacher-course-form textarea,
+.kt-teacher-course-form select { width: 100%; min-height: 44px; border: 1px solid var(--kt-border); border-radius: 8px; padding: 9px 11px; background: var(--kt-surface); color: var(--kt-ink); font: inherit; font-weight: 400; }
+.kt-teacher-course-form textarea { min-height: 120px; resize: vertical; }
+.kt-teacher-course-form label > small,
+.kt-teacher-course-form fieldset > small { color: var(--kt-danger); font-weight: 400; }
+.kt-teacher-course-form fieldset { display: grid; gap: 8px; margin: 0; border: 1px solid var(--kt-border); border-radius: 8px; padding: 16px; }
+.kt-teacher-course-form legend { padding: 0 5px; color: var(--kt-ink); font-size: 14px; font-weight: 700; }
+.kt-teacher-course-checkbox { display: flex !important; align-items: center; gap: 8px; font-weight: 500 !important; }
+.kt-teacher-course-checkbox input { flex: none; width: 18px; height: 18px; min-height: 18px; padding: 0; }
+.kt-teacher-course-checkbox small { color: var(--kt-muted); font-weight: 400; }
+.kt-teacher-course-form__actions,
+.kt-teacher-course-overview-header__actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.kt-teacher-course-overview-header__actions { justify-content: flex-end; }
+.kt-teacher-course-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 14px 0 26px; }
+.kt-teacher-course-metrics article { display: grid; gap: 6px; padding: 16px; }
+.kt-teacher-course-metrics span { color: var(--kt-muted); font-size: 14px; }
+.kt-teacher-course-metrics strong { color: var(--kt-muted); font-size: 26px; font-variant-numeric: tabular-nums; }
+.kt-teacher-course-overview-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr); gap: 20px; margin-bottom: 26px; }
+.kt-teacher-course-overview-grid h2,
+.kt-teacher-course-purge h2,
+.kt-teacher-course-governance h2 { margin: 0; color: var(--kt-ink); font-size: 19px; }
+.kt-teacher-course-workflow { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.kt-teacher-course-workflow a { display: grid; min-height: 116px; gap: 8px; padding: 16px; color: var(--kt-ink); text-decoration: none; }
+.kt-teacher-course-workflow span { color: var(--kt-muted); font-size: 14px; line-height: 1.5; }
+.kt-teacher-course-resource-list { display: grid; margin-top: 14px; padding: 0; overflow: hidden; }
+.kt-teacher-course-resource-list a { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--kt-border); padding: 16px; color: var(--kt-ink); text-decoration: none; }
+.kt-teacher-course-resource-list a:last-child { border-bottom: 0; }
+.kt-teacher-course-resource-list strong,
+.kt-teacher-course-resource-list small { display: block; }
+.kt-teacher-course-resource-list small { margin-top: 5px; color: var(--kt-muted); }
+.kt-teacher-course-resource-list p { margin: 0; padding: 20px; color: var(--kt-muted); }
+.kt-teacher-course-table { margin-top: 14px; padding: 0; overflow-x: auto; }
+.kt-teacher-course-table table,
+.kt-teacher-course-purge table { width: 100%; border-collapse: collapse; }
+.kt-teacher-course-table th, .kt-teacher-course-purge th { white-space: nowrap; }
+.kt-teacher-course-table th,
+.kt-teacher-course-table td,
+.kt-teacher-course-purge th,
+.kt-teacher-course-purge td { border-bottom: 1px solid var(--kt-border); padding: 12px 16px; text-align: left; }
+.kt-teacher-course-table th,
+.kt-teacher-course-purge th { background: var(--kt-surface-subtle); color: var(--kt-muted); font-size: 14px; }
+.kt-teacher-course-table td a { color: var(--kt-action-600); text-decoration: none; }
+.kt-teacher-course-table td small { display: block; margin-top: 4px; color: var(--kt-muted); }
+.kt-teacher-course-settings-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 20px; align-items: start; }
+.kt-teacher-course-settings-grid .kt-teacher-course-form { max-width: none; }
+.kt-teacher-course-danger { display: grid; gap: 16px; padding: 24px; }
+.kt-teacher-course-danger h2,
+.kt-teacher-course-danger p,
+.kt-teacher-course-governance h3 { margin: 0; }
+.kt-teacher-course-danger p,
+.kt-teacher-course-governance p { color: var(--kt-muted); line-height: 1.6; }
+.kt-teacher-course-governance,
+.kt-teacher-course-purge { display: grid; gap: 16px; margin-top: 20px; padding: 24px; }
+.kt-teacher-course-governance form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.kt-teacher-course-governance label { display: grid; min-width: min(100%, 280px); gap: 8px; color: var(--kt-muted); font-size: 14px; font-weight: 700; }
+.kt-teacher-course-governance select { min-height: 44px; border: 1px solid var(--kt-border); border-radius: 8px; padding: 8px 10px; background: var(--kt-surface); font: inherit; }
+@media (max-width: 1023px) { .kt-teacher-course-overview-grid { grid-template-columns: 1fr; } }
+@media (max-width: 767px) {
+  .kt-teacher-courses-heading,
+  .kt-teacher-course-overview-header { flex-direction: column; }
+  .kt-teacher-course-metrics,
+  .kt-teacher-course-workflow,
+  .kt-teacher-course-settings-grid { grid-template-columns: 1fr; }
+  .kt-teacher-courses-heading .kt-button,
+  .kt-teacher-course-overview-header__actions { width: 100%; }
+  .kt-teacher-course-overview-header__actions > * { flex: 1; }
+  .kt-teacher-course-table,
+  .kt-teacher-course-purge { overflow-x: auto; }
+}

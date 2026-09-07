@@ -32,7 +32,10 @@ describe('TeacherDataCenterLayout', () => {
     const wrapper = mount(TeacherDataCenterLayout)
     await flushPromises()
 
-    expect(wrapper.get('nav[aria-label="数据中心导航"]')).toBeTruthy()
+    const navigation = wrapper.get('[aria-label="课程导航"]').element
+    const links = Array.from(navigation.children).filter((item): item is HTMLAnchorElement => item instanceof HTMLAnchorElement)
+    expect(links.map((link) => link.textContent?.trim())).toEqual(['我的课程', '概览', '题库', '班级', '实验', '数据', '设置'])
+    expect(wrapper.get('nav[aria-label="数据中心导航"]').classes()).toContain('kt-sidebar-secondary-nav')
     const form = wrapper.get('form[action="/teacher/courses/7/data/scope/"]')
     expect(form.attributes('method')).toBe('post')
     expect(form.get('input[name="csrfmiddlewaretoken"]').attributes('value')).toBe('csrf-token')

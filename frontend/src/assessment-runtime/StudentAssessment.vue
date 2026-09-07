@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 
 import { getBootstrapContext } from '@/app/bootstrap'
@@ -13,6 +13,10 @@ import type {
 } from './api'
 import { getStudentAssessmentApi } from './api'
 import { createProcessRuntime, type StudentProcessRuntime } from './process-bridge'
+import { ResponseTrajectory } from './response-trajectory'
+import StudentResearchTools from './StudentResearchTools.vue'
+import { prepareOfflineQuestion } from './offline-cache'
+import { createWriterLease, isWriterLeaseConflict, type WriterLease } from './writer-lease'
 import {
   createTextObservation,
   materializeTextObservation,
@@ -25,6 +29,7 @@ const route = useRoute()
 const router = useRouter()
 const state = ref<StudentRuntimeQuestionEntry>()
 const answer = ref<unknown>(null)
+const hasLocalResponse = computed(() => Array.isArray(answer.value) ? answer.value.length > 0 : answer.value !== null && answer.value !== undefined && answer.value !== '')
 const loading = ref(true)
 const error = ref('')
 const saveStatus = ref('尚未保存')
@@ -42,10 +47,16 @@ const confidenceStatus = ref('等待评价')
 const confidenceResolving = ref(false)
 const feedback = ref<SubmissionResponse>()
 const navigationOpen = ref(false)
+const responseConflict = ref<Record<string, unknown>>()
+const captureReady = ref(false)
 let countdown: ReturnType<typeof globalThis.setInterval> | undefined
+let recoveryTimer: ReturnType<typeof globalThis.setInterval> | undefined
+let leaseRetryNeeded = false
+let reconnecting = false
 let textSaveTimer: ReturnType<typeof globalThis.setTimeout> | undefined
 let textObservationTimer: ReturnType<typeof globalThis.setTimeout> | undefined
 let lastSavedAnswer = 'null'
+let lastQueuedAnswer = 'null'
 let saveQueue = Promise.resolve<unknown>(undefined)
 let inputStarted = false
 let processRuntime: StudentProcessRuntime | undefined
@@ -54,6 +65,12 @@ let lastRecordedResponseState: unknown = null
 let lastStableText = ''
 let pendingTextObservation: TextObservation | undefined
 let routeTransitionPrepared = false
+let trajectory: ResponseTrajectory | undefined
+let writerLease: WriterLease | undefined
+let responseVersion = 0
+let composing = false
+let compositionInitial = ''
+let inputOperationId: string | undefined
 
 interface ConfidenceContract {
   confidence_assignment_id: string
@@ -78,6 +95,8 @@ const answerLocked = computed(() => (
     || ['submitted', 'timed_out', 'unanswered'].includes(state.value.assignment.status)
   )
 ))
+const responseDisabled = computed(() => answerLocked.value || submitting.value || loading.value || !!responseConflict.value
+  || (state.value?.process.capture_version === 'capture-v2' && !captureReady.value))
 
 function statusLabel(status: string) {
   return {
@@ -259,30 +278,50 @@ async function recordTextSnapshot(
 
 async function saveDraft(force = false) {
   if (!state.value) return
-  const serialized = JSON.stringify(answer.value)
-  if (!force && serialized === lastSavedAnswer) return
+  const currentState = state.value
+  const fixedAnswer = cloneJson(answer.value)
+  const fixedRuntime = processRuntime
+  const fixedTrajectory = trajectory
+  const fixedLease = writerLease
+  const targetEventId = fixedTrajectory?.head
+  const clientTime = new Date().toISOString()
+  const serialized = JSON.stringify(fixedAnswer)
+  if (!force && serialized === lastQueuedAnswer) return
+  lastQueuedAnswer = serialized
+  if (fixedTrajectory) await fixedTrajectory.settled()
   if (!online.value) {
-    saveStatus.value = '当前离线，等待恢复后保存'
+    saveStatus.value = fixedTrajectory ? '已保存到本机，等待联网同步' : '当前离线，等待恢复后保存'
     if (force) throw new Error('当前离线，草稿尚未保存。')
     return
   }
   saveStatus.value = '正在保存'
   const operation = async () => {
     try {
-      const questionType = state.value!.question.question_type
-      if (questionType !== 'short_answer') {
-        await recordChoiceState(questionType, answer.value, force)
+      const questionType = currentState.question.question_type
+      if (fixedTrajectory) {
+        if (!targetEventId) return
+        await fixedRuntime?.flushBounded(1500)
+      } else if (questionType !== 'short_answer') {
+        await recordChoiceState(questionType, fixedAnswer, force)
       }
       const response = await getStudentAssessmentApi().saveDraft(
-        state.value!.actions.save_draft_url,
-        answer.value,
-        new Date().toISOString(),
+        currentState.actions.save_draft_url,
+        fixedAnswer,
+        clientTime,
+        ...(fixedTrajectory ? [{ target_event_id: targetEventId || null, expected_version: responseVersion, ...await fixedLease?.beforePointerWrite() }] : []),
       )
-      if (questionType === 'short_answer') await recordTextSnapshot(response, force)
+      if (!fixedTrajectory && questionType === 'short_answer') await recordTextSnapshot(response, force)
+      if (response.response_version !== undefined) responseVersion = response.response_version
       lastSavedAnswer = serialized
       saveStatus.value = '草稿已保存'
+      leaseRetryNeeded = false
       error.value = ''
     } catch (caught) {
+      if (isWriterLeaseConflict(caught)) { fixedLease?.invalidate(); leaseRetryNeeded = true }
+      if (caught instanceof ApiError && caught.code === 'RESPONSE_VERSION_CONFLICT') {
+        responseConflict.value = { ...caught.fields, candidate_event_id: fixedTrajectory?.head || caught.fields.candidate_event_id,
+          candidate_answer: cloneJson(answer.value) }
+      }
       saveStatus.value = '草稿保存失败'
       error.value = `${caught instanceof Error ? caught.message : '草稿保存失败。'} 当前答案仍保留在本页，请不要关闭页面。`
       throw caught
@@ -293,9 +332,10 @@ async function saveDraft(force = false) {
   return pending
 }
 
-async function chooseSingle(value: string) {
+async function chooseSingle(value: string | null) {
   answer.value = value
-  await noteInputStarted()
+  void noteInputStarted()
+  captureChange(value, value === null ? 'clear' : 'select', { option_key: value, option_action: value === null ? 'clear' : 'select' })
   await saveDraft().catch(() => undefined)
 }
 
@@ -304,7 +344,8 @@ async function toggleMultiple(value: string, selected: boolean) {
   if (selected) values.add(value)
   else values.delete(value)
   answer.value = [...values].sort()
-  await noteInputStarted()
+  void noteInputStarted()
+  captureChange(answer.value, selected ? 'select' : 'deselect', { option_key: value, option_action: selected ? 'select' : 'deselect' })
   await saveDraft().catch(() => undefined)
 }
 
@@ -316,6 +357,14 @@ function toggleMultipleFromEvent(value: string, event: unknown) {
 function updateText(event: unknown) {
   const value = String((event as { target?: { value?: unknown } }).target?.value ?? '')
   answer.value = value
+  if (trajectory) {
+    const details = event as InputEvent
+    if (composing || details.isComposing) return
+    void noteInputStarted()
+    captureChange(value, details.inputType || 'input')
+    scheduleTextSave()
+    return
+  }
   queueTextObservation(value, event)
   void noteInputStarted()
   saveStatus.value = '等待自动保存'
@@ -325,8 +374,79 @@ function updateText(event: unknown) {
   }, 800)
 }
 
+function captureChange(value: unknown, inputType: string, extra = {}) {
+  if (!trajectory) return
+  trajectory.change(value, inputType, inputOperationId || crypto.randomUUID(), extra)
+  inputOperationId = undefined
+  void trajectory.settled().then(() => {
+    saveStatus.value = '已保存到本机，等待同步'
+  }).catch((caught) => {
+    captureReady.value = false
+    saveStatus.value = '本地保存失败'
+    error.value = `无法持久化作答轨迹：${caught instanceof Error ? caught.message : '存储不可用'}。请勿关闭本页。`
+  })
+}
+
+function scheduleTextSave() {
+  if (textSaveTimer !== undefined) globalThis.clearTimeout(textSaveTimer)
+  textSaveTimer = globalThis.setTimeout(() => { void saveDraft().catch(() => undefined) }, 800)
+}
+
+async function chooseResponseBranch(side: 'current' | 'candidate') {
+  if (!state.value?.actions.resolve_branch_url || !responseConflict.value || !processRuntime) return
+  await trajectory?.settled()
+  await processRuntime.flushBounded(1500)
+  const conflict = responseConflict.value
+  const result = await getStudentAssessmentApi().post<{ response_version: number; active_response_event_id: string; answer: unknown }>(
+    state.value.actions.resolve_branch_url, {
+      candidate_event_ids: [conflict.current_event_id, conflict.candidate_event_id],
+      selected_event_id: conflict[`${side}_event_id`], expected_version: conflict.expected_version,
+      operation_id: crypto.randomUUID(),
+      ...await writerLease?.beforePointerWrite(),
+    },
+  ).catch((caught) => { error.value = caught instanceof Error ? caught.message : '版本选择失败。'; return undefined })
+  if (!result) return
+  await processRuntime.clearResponseRecovery?.()
+  answer.value = cloneJson(result.answer)
+  responseVersion = result.response_version
+  lastSavedAnswer = JSON.stringify(answer.value)
+  const runtime = processRuntime
+  trajectory = new ResponseTrajectory(state.value.question.question_type, answer.value, result.active_response_event_id,
+    (type, payload, options) => runtime.record(type, payload, options))
+  responseConflict.value = undefined
+  error.value = ''
+  saveStatus.value = '已保存所选版本'
+}
+
+function beforeTextInput(event: Event) {
+  if (!trajectory) return
+  const input = event as InputEvent
+  const target = input.target as HTMLInputElement | HTMLTextAreaElement
+  inputOperationId = inputOperationId || crypto.randomUUID()
+  trajectory.operation(input.inputType || 'input', composing ? 'updating' : 'none', target.selectionStart, target.selectionEnd, inputOperationId)
+  void noteInputStarted()
+}
+
+function startComposition(event: Event) {
+  composing = true
+  compositionInitial = String(answer.value ?? '')
+  inputOperationId = crypto.randomUUID()
+  const target = event.target as HTMLInputElement | HTMLTextAreaElement
+  trajectory?.operation('insertCompositionText', 'started', target.selectionStart, target.selectionEnd, inputOperationId)
+  void noteInputStarted()
+}
+
 function finishComposition(event: unknown) {
   const value = String((event as { target?: { value?: unknown } }).target?.value ?? '')
+  composing = false
+  if (trajectory) {
+    const operationId = inputOperationId || crypto.randomUUID()
+    trajectory.operation('insertCompositionText', value === compositionInitial ? 'cancelled' : 'confirmed', null, null, operationId)
+    answer.value = value
+    captureChange(value, 'insertCompositionText')
+    scheduleTextSave()
+    return
+  }
   queueTextObservation(value, { inputType: 'insertCompositionText' })
   void flushTextObservation()
 }
@@ -336,6 +456,7 @@ function openSubmitDialog() {
 }
 
 async function navigate(url: string, runtimePrepared = false) {
+  await processRuntime?.flushBounded(1500)
   if (/^\/student\/sessions\/\d+\/questions\/\d+\//.test(url)) {
     routeTransitionPrepared = runtimePrepared
     try {
@@ -355,21 +476,27 @@ async function confirmSubmit() {
   submitDialogOpen.value = false
   error.value = ''
   try {
-    await flushTextObservation()
-    await saveDraft(true)
+    if (composing) throw new Error('请先完成当前输入法文字，再确认提交。')
+    const submittedState = trajectory?.head
+    const clickedAt = new Date().toISOString()
+    const clickedMonotonic = performance.now()
     const submissionToken = globalThis.crypto.randomUUID()
-    await recordProcessEvent(
+    const commitRecorded = recordProcessEvent(
       'response_commit_requested',
       { submission_token: submissionToken },
-      { correlationId: submissionToken },
+      { correlationId: submissionToken, wallTime: clickedAt, monotonicMs: clickedMonotonic },
     )
+    const fixedSave = trajectory ? saveDraft(true) : undefined
+    await commitRecorded
+    await flushTextObservation()
+    if (fixedSave) await fixedSave
+    else await saveDraft(true)
     await processRuntime?.checkpoint('commit')
     await processRuntime?.flushBounded(1500)
-    const response = await getStudentAssessmentApi().submit(
-      state.value.actions.submit_url,
-      submissionToken,
-      new Date().toISOString(),
-    )
+    const api = getStudentAssessmentApi()
+    const response = trajectory
+      ? await api.submit(state.value.actions.submit_url, submissionToken, clickedAt, submittedState, await writerLease?.beforePointerWrite())
+      : await api.submit(state.value.actions.submit_url, submissionToken, clickedAt)
     await processRuntime?.closeAttempt('submit')
     if (response.confidence_required) {
       pendingConfidence.value = confidenceContract(response.confidence)
@@ -389,6 +516,12 @@ async function confirmSubmit() {
 
 async function showConfidencePrompt() {
   if (!pendingConfidence.value) return
+  await nextTick()
+  if (trajectory) await processRuntime?.record('confidence_observed', {
+    capture_version: 'capture-v2', operation_id: crypto.randomUUID(),
+    confidence_assignment_id: pendingConfidence.value.confidence_assignment_id,
+    stage: 'presented', answer_event_id: trajectory.head, probability: null, feedback_phase: 'before_feedback',
+  })
   confidenceStatus.value = '正在确认评价表已显示'
   confidencePromptPromise = getStudentAssessmentApi().post(
     pendingConfidence.value.prompt_shown_url,
@@ -405,6 +538,7 @@ async function showConfidencePrompt() {
 
 async function showFeedback(response: SubmissionResponse) {
   feedback.value = response
+  await nextTick()
   await recordProcessEvent('feedback_shown', {
     feedback_mode: response.feedback_mode || 'none',
     included_correctness: response.is_correct !== undefined,
@@ -425,6 +559,12 @@ async function resolveConfidence(skip: boolean) {
   error.value = ''
   try {
     await confidencePromptPromise
+    if (trajectory) await processRuntime?.record('confidence_observed', {
+      capture_version: 'capture-v2', operation_id: crypto.randomUUID(),
+      confidence_assignment_id: pendingConfidence.value.confidence_assignment_id,
+      stage: skip ? 'skipped' : 'responded', answer_event_id: trajectory.head,
+      probability: skip ? null : confidenceValue.value, feedback_phase: 'before_feedback',
+    })
     const response = await getStudentAssessmentApi().post<SubmissionResponse>(
       skip ? pendingConfidence.value.skip_url : pendingConfidence.value.commit_url,
       skip ? {} : { probability: confidenceValue.value },
@@ -514,17 +654,32 @@ function handleOffline() {
   saveStatus.value = '当前离线，等待恢复后保存'
 }
 
-function handleOnline() {
+async function handleOnline() {
+  if (reconnecting) return
+  reconnecting = true
   online.value = true
-  if (JSON.stringify(answer.value) !== lastSavedAnswer) {
-    void saveDraft(true).catch(() => undefined)
-  }
+  try {
+    if (trajectory && state.value) {
+      await trajectory.settled()
+      await processRuntime?.flushBounded(1500)
+      const current = await getStudentAssessmentApi().question(state.value.session_id, state.value.assignment.assignment_id, 'resume')
+      if (current.offline_recovery) { online.value = false; return }
+      responseVersion = current.process.response_version || 0
+      state.value.assignment.status = current.assignment.status
+      if (answerLocked.value) return
+    }
+    if (JSON.stringify(answer.value) !== lastSavedAnswer) await saveDraft(true)
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '重新同步失败，请重试。'
+  } finally { reconnecting = false }
 }
 
 function disposeQuestionRuntime() {
   if (countdown !== undefined) globalThis.clearInterval(countdown)
   if (textSaveTimer !== undefined) globalThis.clearTimeout(textSaveTimer)
   if (textObservationTimer !== undefined) globalThis.clearTimeout(textObservationTimer)
+  if (recoveryTimer !== undefined) globalThis.clearInterval(recoveryTimer)
+  recoveryTimer = undefined
   countdown = undefined
   textSaveTimer = undefined
   textObservationTimer = undefined
@@ -534,6 +689,14 @@ function disposeQuestionRuntime() {
 }
 
 function resetQuestionState() {
+  captureReady.value = false
+  responseConflict.value = undefined
+  trajectory = undefined
+  writerLease = undefined
+  leaseRetryNeeded = false
+  responseVersion = 0
+  composing = false
+  inputOperationId = undefined
   state.value = undefined
   answer.value = null
   pendingConfidence.value = undefined
@@ -546,6 +709,7 @@ function resetQuestionState() {
   timedOut.value = false
   inputStarted = false
   lastSavedAnswer = 'null'
+  lastQueuedAnswer = 'null'
   lastRecordedResponseState = null
   lastStableText = ''
   saveQueue = Promise.resolve(undefined)
@@ -565,18 +729,53 @@ async function loadQuestion(targetRoute = route) {
         : 'navigation_click',
     )
     answer.value = cloneJson(state.value.draft_answer)
+    if (state.value.offline_recovery) online.value = false
     lastSavedAnswer = JSON.stringify(answer.value)
+    lastQueuedAnswer = lastSavedAnswer
     lastRecordedResponseState = cloneJson(state.value.initial_response_state)
     lastStableText = typeof state.value.draft_answer === 'string'
       ? state.value.draft_answer
       : ''
     saveStatus.value = state.value.draft_answer === null ? '尚未保存' : '已恢复草稿'
     secondsRemaining.value = state.value.remaining_seconds
+    if (state.value.presented_deadline_at) secondsRemaining.value = Math.max(0, Math.floor((Date.parse(state.value.presented_deadline_at) - Date.now()) / 1000))
     processRuntime = await createProcessRuntime(
       state.value.process,
       state.value.assignment.status,
       getBootstrapContext().csrf_token,
     )
+    if (state.value.process.capture_version === 'capture-v2') {
+      const process = state.value.process
+      if (!process.writer_lease_acquire_url || !process.writer_lease_renew_url || !processRuntime.clientInstanceId) throw new Error('缺少写入租约契约，无法保存正式答案。')
+      writerLease = createWriterLease({ client: getStudentAssessmentApi(), clientInstanceId: processRuntime.clientInstanceId,
+        acquireUrl: process.writer_lease_acquire_url, renewUrl: process.writer_lease_renew_url })
+      responseVersion = state.value.process.response_version || 0
+      let head = state.value.process.active_response_event_id || null
+      const restored = !answerLocked.value && processRuntime.restoredResponse
+      if (restored && restored.event_id !== head) {
+        answer.value = cloneJson(restored.payload.after_state.value)
+        head = restored.event_id
+        saveStatus.value = '已恢复本机答案，等待同步'
+      }
+      const kind = state.value.question.question_type
+      const initial = answer.value ?? (kind === 'multiple_choice' ? [] : ['short_answer', 'fill_blank', 'numeric'].includes(kind) ? '' : null)
+      const runtime = processRuntime
+      trajectory = new ResponseTrajectory(kind, initial, head, (type, payload, options) => runtime.record(type, payload, options))
+      await prepareOfflineQuestion(state.value)
+      captureReady.value = true
+      recoveryTimer = globalThis.setInterval(() => {
+        if (!online.value) {
+          void fetch('/health/', { cache: 'no-store' }).then((response) => {
+            if (response.ok) void handleOnline()
+          }).catch(() => undefined)
+        } else if (leaseRetryNeeded && !responseConflict.value && !answerLocked.value) {
+          void saveDraft(true).catch(() => undefined)
+        }
+      }, 5000)
+    }
+    loading.value = false
+    await nextTick()
+    await processRuntime.record('item_rendered', { presentation_state: 'interactive' })
     pendingConfidence.value = confidenceContract(state.value.pending_confidence)
     if (pendingConfidence.value) await showConfidencePrompt()
     startCountdown()
@@ -649,6 +848,13 @@ onBeforeUnmount(() => {
     <p v-else-if="loading" role="status">正在加载作答页面…</p>
     <p v-else-if="!state && error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
     <div v-else-if="state" class="kt-assessment-layout">
+      <header class="kt-assessment-topbar">
+        <div><span class="kt-assessment-topbar__label">作业</span><strong>{{ state.experiment_name }}</strong></div>
+        <div class="kt-assessment-topbar__status">
+          <span v-if="secondsRemaining !== null" role="timer" aria-live="off">剩余 {{ timerLabel(secondsRemaining) }}</span>
+          <p class="kt-assessment-save-status" role="status" data-save-status>{{ saveStatus }}</p>
+        </div>
+      </header>
       <FocusAssessmentHeader
         class="kt-assessment-mobile-header"
         data-mobile-assessment-header
@@ -666,27 +872,6 @@ onBeforeUnmount(() => {
           题目导航
         </button>
       </FocusAssessmentHeader>
-      <aside class="kt-assessment-nav" aria-labelledby="assessment-navigation-title">
-        <div class="kt-assessment-nav__header">
-          <h2 id="assessment-navigation-title">题目导航</h2>
-          <span>{{ state.progress.submitted }}/{{ state.progress.total }}</span>
-        </div>
-        <nav aria-label="题目状态">
-          <a
-            v-for="item in state.navigation"
-            :key="item.assignment_id"
-            :href="item.url"
-            class="kt-assessment-nav__item"
-            :aria-current="item.current ? 'step' : undefined"
-            :data-nav-assignment="item.assignment_id"
-            @click.prevent="navigateToAssignment(item)"
-          >
-            <span>第 {{ item.sequence_index }} 题</span>
-            <small>{{ statusLabel(item.status) }}</small>
-          </a>
-        </nav>
-        <button type="button" class="kt-button kt-button--danger-secondary" data-finish-request :disabled="timedOut || finishing" @click="finishDialogOpen = true">结束实验</button>
-      </aside>
 
       <section class="kt-assessment-question" aria-labelledby="assessment-question-title">
         <header class="kt-assessment-question__header">
@@ -694,12 +879,9 @@ onBeforeUnmount(() => {
             <p class="kt-kicker">{{ state.experiment_name }}</p>
             <h1 id="assessment-question-title">{{ sequenceLabel }}</h1>
           </div>
-          <span v-if="secondsRemaining !== null" role="timer" aria-live="off">
-            剩余 {{ timerLabel(secondsRemaining) }}
-          </span>
         </header>
         <p class="kt-assessment-context">
-          {{ state.question.stable_code || state.question.code }} · 主 KC：{{ state.question.primary_kc }}
+          {{ state.question.stable_code || state.question.code }}<span v-if="state.question.primary_kc"> · 主 KC：{{ state.question.primary_kc }}</span>
         </p>
         <p class="kt-assessment-stem">{{ state.question.text }}</p>
         <fieldset v-if="['single_choice', 'multiple_choice', 'true_false'].includes(state.question.question_type)">
@@ -709,20 +891,30 @@ onBeforeUnmount(() => {
               name="answer"
               :type="state.question.question_type === 'multiple_choice' ? 'checkbox' : 'radio'"
               :value="option.key"
-              :disabled="answerLocked"
+              :disabled="responseDisabled"
               :checked="state.question.question_type === 'multiple_choice' ? Array.isArray(answer) && answer.map(String).includes(option.key) : answer === option.key"
               @change="state.question.question_type === 'multiple_choice' ? toggleMultipleFromEvent(option.key, $event) : chooseSingle(option.key)"
             >
             <strong>{{ option.key }}</strong>
             <span>{{ option.text }}</span>
           </label>
+          <button v-if="trajectory && state.question.question_type !== 'multiple_choice'" type="button" class="kt-button kt-button--secondary" :disabled="responseDisabled || answer === null" @click="chooseSingle(null)">清除选择</button>
         </fieldset>
         <label v-else class="kt-assessment-text-answer">
           <span>你的答案</span>
-          <textarea v-if="state.question.question_type === 'short_answer'" name="answer" rows="6" :disabled="answerLocked" :value="String(answer ?? '')" @input="updateText" @compositionend="finishComposition" @blur="flushTextObservation" />
-          <input v-else name="answer" :disabled="answerLocked" :inputmode="state.question.question_type === 'numeric' ? 'decimal' : undefined" :value="String(answer ?? '')" @input="updateText" @compositionend="finishComposition" @blur="flushTextObservation">
+          <textarea v-if="state.question.question_type === 'short_answer'" name="answer" rows="6" :disabled="responseDisabled" :value="String(answer ?? '')" @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition" @compositionend="finishComposition" @blur="flushTextObservation" />
+          <input v-else name="answer" :disabled="responseDisabled" :inputmode="state.question.question_type === 'numeric' ? 'decimal' : undefined" :value="String(answer ?? '')" @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition" @compositionend="finishComposition" @blur="flushTextObservation">
         </label>
+        <StudentResearchTools v-if="trajectory && processRuntime && state.actions.research_tools_url && !answerLocked && captureReady && online" :endpoint="state.actions.research_tools_url" :runtime="processRuntime" :answer-event-id="trajectory.head" :wait-for-capture="() => trajectory!.settled()" @interaction="noteInputStarted" />
         <p v-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
+        <button v-if="trajectory && online && captureReady && !answerLocked && saveStatus.includes('失败')" class="kt-button kt-button--secondary" type="button" @click="saveDraft(true).catch(() => undefined)">重试同步</button>
+        <section v-if="responseConflict" class="kt-alert kt-alert--warning" aria-label="选择答案版本">
+          <p>另一设备保存了不同答案。请选择接下来使用的版本。</p>
+          <p>已保存版本：{{ formatCorrectAnswer(responseConflict.current_answer) }}</p>
+          <button class="kt-button kt-button--secondary" type="button" @click="chooseResponseBranch('current')">继续使用已保存版本</button>
+          <p>本机版本：{{ formatCorrectAnswer(responseConflict.candidate_answer) }}</p>
+          <button class="kt-button" type="button" @click="chooseResponseBranch('candidate')">继续使用本机版本</button>
+        </section>
         <p v-if="!online" class="kt-alert kt-alert--warning" role="status" data-connectivity-status>当前离线。答案保留在本页，恢复网络后将自动保存。</p>
         <p v-if="answerLocked" class="kt-alert kt-alert--info">本题已提交并锁定，答案不可再修改。</p>
         <section v-if="pendingConfidence" class="kt-assessment-confidence" data-confidence-panel aria-labelledby="confidence-title">
@@ -752,12 +944,35 @@ onBeforeUnmount(() => {
           <div v-if="feedback.correct_answer !== undefined"><strong>正确答案：</strong>{{ formatCorrectAnswer(feedback.correct_answer) }}</div>
           <div v-if="feedback.explanation"><strong>解析：</strong>{{ feedback.explanation }}</div>
         </div>
-        <p class="kt-assessment-save-status" role="status" data-save-status>{{ saveStatus }}</p>
         <div v-if="!answerLocked" class="kt-assessment-actions">
           <button type="button" class="kt-button kt-button--secondary" data-skip-request @click="skipCurrent">标记跳过</button>
           <button type="button" class="kt-button" data-submit-request :disabled="submitting" @click="openSubmitDialog">确认提交本题</button>
         </div>
       </section>
+      <aside class="kt-assessment-nav" aria-labelledby="assessment-navigation-title">
+        <div class="kt-assessment-nav__header">
+          <h2 id="assessment-navigation-title">题目导航</h2>
+          <span>{{ state.progress.submitted }}/{{ state.progress.total }}</span>
+        </div>
+        <nav aria-label="题目状态">
+          <a
+            v-for="item in state.navigation"
+            :key="item.assignment_id"
+            :href="item.url"
+            class="kt-assessment-nav__item"
+            :data-answer-status="item.status"
+            :data-has-response="item.current ? hasLocalResponse : ['draft', 'submitted'].includes(item.status)"
+            :aria-current="item.current ? 'step' : undefined"
+            :data-nav-assignment="item.assignment_id"
+            @click.prevent="navigateToAssignment(item)"
+          >
+            <span>第 {{ item.sequence_index }} 题</span>
+            <small>{{ item.current && hasLocalResponse && !answerLocked ? '待提交' : statusLabel(item.status) }}</small>
+          </a>
+        </nav>
+        <button type="button" class="kt-button kt-button--danger-secondary" data-finish-request :disabled="timedOut || finishing" @click="finishDialogOpen = true">结束实验</button>
+      </aside>
+
       <Drawer
         id="assessment-mobile-navigation"
         :open="navigationOpen"
@@ -771,11 +986,13 @@ onBeforeUnmount(() => {
             :key="item.assignment_id"
             :href="item.url"
             class="kt-assessment-nav__item"
+            :data-answer-status="item.status"
+            :data-has-response="item.current ? hasLocalResponse : ['draft', 'submitted'].includes(item.status)"
             :aria-current="item.current ? 'step' : undefined"
             @click.prevent="navigateFromDrawer(item)"
           >
             <span>第 {{ item.sequence_index }} 题</span>
-            <small>{{ statusLabel(item.status) }}</small>
+            <small>{{ item.current && hasLocalResponse && !answerLocked ? '待提交' : statusLabel(item.status) }}</small>
           </a>
         </nav>
         <button

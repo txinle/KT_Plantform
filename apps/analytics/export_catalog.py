@@ -4,7 +4,7 @@ PACKAGE_TABLES = {
         "subjects", "sessions", "assignments", "item_instances", "attempts",
         "assessment_events", "response_events", "navigation_events",
         "exposure_events", "telemetry_events", "simulation_events",
-        "simulation_snapshots", "item_snapshots",
+        "simulation_snapshots", "item_snapshots", "question_content",
         "kc_dictionary", "item_kc_mapping", "q_matrix",
         "kc_dictionary_v2", "question_kc_structure_v2", "q_matrix_v2",
         "participant_question_attribution_v2",
@@ -12,11 +12,13 @@ PACKAGE_TABLES = {
         "cd_response_matrix", "calibration_features", "response_snapshots",
         "response_input_observations", "submissions", "grade_records",
         "condition_assignments", "class_snapshots", "participant_snapshots",
-        "release_metadata", "class_experiment_tasks", "schedule_revisions",
+        "release_metadata", "research_tools", "class_experiment_tasks", "schedule_revisions",
         "release_question_mappings", "publish_preview_runs",
         "publish_preview_class_results",
         "capture_contracts", "client_time_syncs", "client_capture_checkpoints",
-        "recording_coverage_sessions", "recording_coverage_attempts",
+        "recording_coverage_runs", "recording_coverage_sessions",
+        "recording_coverage_attempts",
+        "response_trajectory", "response_replay", "session_summary",
     ),
     "kt": ("subjects", "attempts", "question_kc_structure_v2", "kt_sequences"),
     "cd": ("subjects", "attempts", "q_matrix_v2", "cd_response_matrix"),
@@ -26,11 +28,14 @@ PACKAGE_TABLES = {
         "exposure_events", "telemetry_events", "response_snapshots",
         "response_input_observations", "submissions", "grade_records",
         "condition_assignments", "class_snapshots", "participant_snapshots",
-        "release_metadata", "class_experiment_tasks", "schedule_revisions",
+        "release_metadata", "research_tools", "class_experiment_tasks", "schedule_revisions",
         "release_question_mappings", "publish_preview_runs",
         "publish_preview_class_results",
         "capture_contracts", "client_time_syncs", "client_capture_checkpoints",
-        "recording_coverage_sessions", "recording_coverage_attempts",
+        "recording_coverage_runs", "recording_coverage_sessions",
+        "recording_coverage_attempts",
+        "question_content", "response_trajectory", "response_replay",
+        "session_summary",
     ),
     "confidence": (
         "subjects", "attempts", "confidence_assignments", "calibration_features",
@@ -60,6 +65,7 @@ TABLE_PATHS = {
     "class_snapshots": "01_design_metadata/class_snapshots.csv",
     "participant_snapshots": "01_design_metadata/participant_snapshots.csv",
     "release_metadata": "01_design_metadata/release_metadata.csv",
+    "research_tools": "01_design_metadata/research_tools.csv",
     "class_experiment_tasks": "01_design_metadata/class_experiment_tasks.csv",
     "schedule_revisions": "01_design_metadata/schedule_revisions.csv",
     "release_question_mappings": "01_design_metadata/release_question_mappings.csv",
@@ -68,9 +74,11 @@ TABLE_PATHS = {
     "capture_contracts": "01_design_metadata/capture_contracts.csv",
     "client_time_syncs": "03_raw_events/client_time_syncs.csv",
     "client_capture_checkpoints": "03_raw_events/client_capture_checkpoints.csv",
+    "recording_coverage_runs": "07_quality/recording_coverage_runs.csv",
     "recording_coverage_sessions": "07_quality/recording_coverage_sessions.csv",
     "recording_coverage_attempts": "07_quality/recording_coverage_attempts.csv",
     "item_snapshots": "01_design_metadata/item_snapshots.csv",
+    "question_content": "01_design_metadata/question_content.csv",
     "kc_dictionary": "01_design_metadata/kc_dictionary.csv",
     "item_kc_mapping": "01_design_metadata/item_kc_mapping.csv",
     "q_matrix": "01_design_metadata/q_matrix.csv",
@@ -83,6 +91,9 @@ TABLE_PATHS = {
     "kt_sequences": "06_derived/kt_sequences.csv",
     "cd_response_matrix": "06_derived/cd_response_matrix.csv",
     "calibration_features": "06_derived/calibration_features.csv",
+    "response_trajectory": "06_derived/response_trajectory.csv",
+    "response_replay": "06_derived/response_replay.csv",
+    "session_summary": "06_derived/session_summary.csv",
 }
 
 TABLE_LABELS = {
@@ -97,6 +108,7 @@ TABLE_LABELS = {
     "exposure_events": "暴露事件",
     "telemetry_events": "页面遥测",
     "item_snapshots": "题目快照",
+    "question_content": "完整题目内容",
     "kc_dictionary": "知识点字典",
     "item_kc_mapping": "题目-KC对应",
     "q_matrix": "Q矩阵",
@@ -115,6 +127,7 @@ TABLE_LABELS = {
     "class_snapshots": "班级快照",
     "participant_snapshots": "版本参与者快照",
     "release_metadata": "实验正式版本",
+    "research_tools": "研究工具冻结配置",
     "class_experiment_tasks": "班级实验任务",
     "schedule_revisions": "班级开放排期版本",
     "release_question_mappings": "正式版本题目映射",
@@ -123,12 +136,16 @@ TABLE_LABELS = {
     "capture_contracts": "采集契约",
     "client_time_syncs": "客户端时间同步",
     "client_capture_checkpoints": "客户端采集检查点",
+    "recording_coverage_runs": "记录完整性运行来源",
     "recording_coverage_sessions": "会话记录完整性",
     "recording_coverage_attempts": "作答记录完整性",
     "attempt_features": "作答特征",
     "kt_sequences": "KT序列",
     "cd_response_matrix": "CD响应矩阵",
     "calibration_features": "信心校准",
+    "response_trajectory": "作答状态轨迹",
+    "response_replay": "作答回放",
+    "session_summary": "会话采集摘要",
 }
 
 TABLE_FIELD_DESCRIPTIONS = {
@@ -187,6 +204,10 @@ TABLE_FIELD_DESCRIPTIONS = {
         "score": "得分",
         "first_open_sequence_index": "首次打开顺序",
         "submission_sequence_index": "提交顺序",
+        "active_response_event_id": "当前选中的响应状态事件",
+        "response_version": "响应状态版本号",
+        "final_response_event_id": "正式提交的响应状态事件",
+        "formal_capture_boundary": "正式提交时的采集边界",
     },
     "assessment_events": {
         "student_number": "平台学生学号",
@@ -204,7 +225,14 @@ TABLE_FIELD_DESCRIPTIONS = {
         "server_received_at": "服务端接收时间",
         "capture_mode": "采集模式",
         "quality_flags": "数据质量标记",
-        "payload": "事件负载",
+        "payload": "事件负载；response_pointer_conflict_observed 表示一次由服务器观察到的 409 响应指针写入冲突，保存候选/当前引用和版本，不保存答案正文；每行是一次观察，不是去重后的冲突次数。",
+    },
+    "response_events": {
+        "event_type": "从 assessment_events 筛选的响应过程事件；包括 capture-v2 input_operation，以及 response_pointer_conflict_observed 的服务器 409 观察。",
+        "payload": "响应过程事件负载；capture-v2 input_operation 保留 IME/输入操作数据。response_pointer_conflict_observed 只保存候选/当前引用、版本和请求客户端实例，不保存答案正文，且每行对应一次服务器观察。",
+    },
+    "response_input_observations": {
+        "source_event_id": "旧采集协议的稳定输入观测来源事件；capture-v2 输入操作应从 response_events 的 input_operation 或完整 assessment_events 分析。",
     },
     "confidence_assignments": {
         "student_number": "平台学生学号",
@@ -219,6 +247,87 @@ TABLE_FIELD_DESCRIPTIONS = {
         "probability": "学生主观信心概率（百分比）",
         "assigned_at": "分配时间",
         "committed_at": "信心提交时间",
+    },
+    "question_content": {
+        "question_code": "题库唯一编号",
+        "question_snapshot_id": "题目快照唯一标识",
+        "text": "冻结题干正文",
+        "options": "冻结选项内容",
+        "correct_answer": "冻结标准答案",
+        "accepted_answers": "冻结可接受答案",
+        "explanation": "冻结题目解析",
+        "release_fingerprint": "题目发布指纹",
+    },
+    "research_tools": {
+        "experiment_id": "实验唯一标识",
+        "version_id": "实验版本唯一标识",
+        "version_number": "实验版本号",
+        "research_tools": "该正式版本冻结的研究工具配置",
+        "research_tools_sha256": "冻结研究工具配置的 SHA-256 校验值",
+    },
+    "release_metadata": {
+        "feedback_mode": "正式版本冻结的反馈内容级别",
+        "feedback_release_policy": "正式版本冻结的反馈发布策略",
+    },
+    "grade_records": {
+        "grader_id": "本次评分记录的评分者用户标识；自动评分为空。",
+        "comment": "评分者提交的原始评语文本，保留换行和空白。",
+        "grader_version": "本次评分实际使用的评分器或量规版本。",
+        "voided_by_id": "撤销本次评分记录的用户标识；未撤销时为空。",
+        "created_at": "本次评分记录写入服务端的时间；用于重建评分历史顺序。",
+    },
+    "recording_coverage_runs": {
+        "coverage_run_id": "不可变 RecordingCoverage 运行唯一标识。",
+        "scope_type": "Coverage 运行的数据范围类型。",
+        "scope_definition": "Coverage 运行冻结的数据范围定义。",
+        "scope_hash": "冻结范围定义的 SHA-256 校验值。",
+        "coverage_version": "Coverage 输出契约版本。",
+        "algorithm_version": "Coverage 派生算法版本。",
+        "code_version": "生成该 Coverage 运行的应用代码版本。",
+        "parameter_document": "Coverage 派生参数的完整冻结文档。",
+        "parameter_hash": "Coverage 派生参数文档的 SHA-256 校验值。",
+        "source_cutoff_at": "Coverage 读取原始采集事实的截止时间。",
+        "source_high_water_marks": "Coverage 读取原始采集事实的高水位标记。",
+        "capture_contract_hashes": "Coverage 所用采集契约的 SHA-256 校验值。",
+        "source_hash": "Coverage 输入事实清单的 SHA-256 校验值。",
+        "run_status": "Coverage 运行完成状态。",
+        "generated_at": "Coverage 运行生成时间。",
+    },
+    "class_experiment_tasks": {
+        "feedback_released_at": "人工反馈正式发布的服务端时间",
+        "feedback_released_by_id": "执行人工反馈发布的教师标识",
+    },
+    "exposure_events": {
+        "payload": "事件负载；feedback_exposure 记录实际反馈阶段，research_tool* 与 confidence_observed 记录研究工具交互或实际呈现。",
+    },
+    "kt_sequences": {
+        "sequence_type": "标准 KT 序列类型；当前仅 formal_submission",
+        "sequence_index": "正式提交顺序，不等同于题目分配顺序",
+        "outcome": "已评分正式提交的二元结果（1=正确，0=错误）",
+    },
+    "calibration_features": {
+        "signed_prediction_error": "主观概率减去二元结果（p−y），用于校准分析",
+        "calibration_error": "已废弃的兼容别名，数值等同于 signed_prediction_error；不是能力校准指标。",
+    },
+    "response_trajectory": {
+        "event_id": "响应状态转换事件唯一标识",
+        "parent_event_id": "上一响应状态转换事件标识",
+        "before_state": "转换前完整规范状态",
+        "after_state": "转换后完整规范状态",
+        "before_state_hash": "转换前规范状态哈希",
+        "after_state_hash": "转换后规范状态哈希",
+        "before_snapshot_id": "转换前不可变响应快照",
+        "after_snapshot_id": "转换后不可变响应快照",
+    },
+    "response_replay": {
+        "active_replay_chain": "当前选中响应状态的完整冻结回放链",
+        "final_replay_chain": "正式提交响应状态的完整冻结回放链",
+        "branch_resolutions": "候选分支与服务端选择记录",
+    },
+    "session_summary": {
+        "response_transition_count": "响应状态转换事件数量",
+        "response_branch_resolved_count": "响应分支选择事件数量",
+        "formal_capture_boundary_count": "具有正式采集边界的作答数量",
     },
 }
 
@@ -307,7 +416,79 @@ COMMON_FIELD_DESCRIPTIONS = {
     "assignment_version": "分配版本",
     "committed_at": "提交时间",
     "snapshot_id": "快照唯一标识",
+    "capture_contract_id": "采集契约唯一标识",
+    "active_response_event_id": "服务端当前选中的响应事件标识；与 parent_event_id DAG 一起决定当前回放路径。",
+    "final_response_event_id": "服务端正式提交时选中的响应事件标识；与 parent_event_id DAG 一起决定正式回放路径。",
+    "response_version": "响应状态版本号",
+    "formal_capture_boundary": "正式提交时由服务端冻结的采集边界和选中响应指针，是正式回放的权威范围。",
+    "operation_id": "客户端操作唯一标识",
+    "branch_id": "客户端轨迹实例标识；页面重载后可变化，不能作为跨实例的逻辑分支键。",
+    "parent_event_id": "父响应状态事件标识；与状态哈希和服务端选中指针共同构成回放的权威有向无环图。",
+    "before_state": "转换前完整规范状态",
+    "after_state": "转换后完整规范状态",
+    "before_state_hash": "转换前规范状态哈希",
+    "after_state_hash": "转换后规范状态哈希",
+    "before_snapshot_id": "转换前不可变响应快照标识",
+    "after_snapshot_id": "转换后不可变响应快照标识",
+    "active_state": "当前选中响应的规范状态",
+    "active_state_hash": "当前选中响应的规范状态哈希",
+    "final_state": "正式提交响应的规范状态",
+    "final_state_hash": "正式提交响应的规范状态哈希",
+    "active_replay_chain": "当前选中响应的完整冻结回放链",
+    "final_replay_chain": "正式提交响应的完整冻结回放链",
+    "branch_resolutions": "候选分支与服务端选择记录",
+    "response_transition_count": "响应状态转换数量",
+    "input_operation_count": "输入操作数量",
+    "response_branch_resolved_count": "响应分支选择数量",
+    "feedback_mode": "反馈内容级别",
+    "feedback_release_policy": "反馈发布策略",
+    "feedback_released_at": "人工反馈正式发布时间",
+    "feedback_released_by_id": "人工反馈发布者标识",
+    "grader_id": "评分者用户标识；自动评分为空",
+    "grader_version": "本次评分实际使用的评分器或量规版本",
+    "voided_by_id": "撤销评分记录的用户标识；未撤销时为空",
+    "comment": "评分者提交的原始评语文本",
+    "sequence_type": "KT 序列类型",
+    "sequence_index": "序列顺序",
+    "outcome": "二元结果",
+    "root_kc_code": "根知识点编码",
+    "confidence_probability": "学生主观信心概率（百分比）",
+    "signed_prediction_error": "主观概率减二元结果（p−y）",
+    "calibration_error": "已废弃兼容别名，等同 signed_prediction_error，不表示能力校准。",
 }
+
+
+def build_field_dictionary(*, table_headers, table_paths):
+    """Return only the field facts the export catalog actually records.
+
+    The catalog currently describes fields but does not declare semantic data
+    types or database nullability for every CSV projection.  Those values stay
+    ``None`` instead of being inferred from a particular export's values.
+    """
+    tables = []
+    for table, headers in table_headers.items():
+        descriptions = TABLE_FIELD_DESCRIPTIONS.get(table, {})
+        tables.append({
+            "table": table,
+            "label": TABLE_LABELS.get(table),
+            "path": table_paths.get(table),
+            "columns": [
+                {
+                    "name": header,
+                    "definition": descriptions.get(
+                        header,
+                        COMMON_FIELD_DESCRIPTIONS.get(header),
+                    ),
+                    "type": None,
+                    "nullable": None,
+                }
+                for header in headers
+            ],
+        })
+    return {
+        "field_dictionary_version": 1,
+        "tables": tables,
+    }
 
 # All advertised derived tables are now deterministic projections.  A table
 # with no qualifying source rows is reported as ``no_observation`` rather than
@@ -316,11 +497,14 @@ PLACEHOLDER_TABLES = frozenset()
 
 RESPONSE_EVENT_TYPES = {
     "response_input_started", "text_edit_observed", "response_state_changed", "response_commit_requested",
-    "response_committed", "response_commit_rejected", "attempt_closed",
+    "response_committed", "response_commit_rejected", "attempt_closed", "response_transition",
+    "input_operation", "response_pointer_conflict_observed",
 }
 EXPOSURE_EVENT_TYPES = {
     "feedback_shown", "explanation_shown", "hint_opened", "hint_closed",
     "resource_opened", "resource_closed",
+    "feedback_exposure", "research_tool", "research_tool_requested",
+    "research_tool_observed", "confidence_observed",
 }
 SIMULATION_EVENT_TYPES = {
     "simulation_parameter_changed", "simulation_run_started",

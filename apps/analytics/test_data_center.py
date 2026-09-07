@@ -558,6 +558,9 @@ class DataCenterContractTests(TransactionTestCase):
         self.assertEqual(job.status, ExportJob.Status.EXPIRED)
 
     def test_package_catalog_produces_distinct_research_files(self):
+        ExperimentVersion.objects.create(
+            experiment=self.experiment, version_number=1, published_by=self.teacher
+        )
         expected = {
             "kt": {"02_core/subjects.csv", "06_derived/kt_sequences.csv"},
             "cd": {"01_design_metadata/q_matrix_v2.csv", "06_derived/cd_response_matrix.csv"},

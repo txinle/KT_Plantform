@@ -17,6 +17,7 @@ describe('assessment process bridge', () => {
   const outbox = { name: 'existing-indexed-db-outbox' }
   const collector = {
     record: vi.fn(),
+    dispose: vi.fn(),
     checkpoint: vi.fn(),
     flushBounded: vi.fn(),
     flush: vi.fn(),
@@ -58,6 +59,7 @@ describe('assessment process bridge', () => {
       outbox,
     })
     expect(bindLifecycle).toHaveBeenCalledWith(collector, {
+      deferRendered: true,
       heartbeatIntervalSeconds: 30,
       attemptOpen: true,
       onlineOptions: {
@@ -87,5 +89,6 @@ describe('assessment process bridge', () => {
     )
     expect(lifecycle.closeAttempt).toHaveBeenCalledWith('navigation', 14)
     expect(lifecycle.dispose).toHaveBeenCalledOnce()
+    expect(collector.dispose).toHaveBeenCalledOnce()
   })
 })

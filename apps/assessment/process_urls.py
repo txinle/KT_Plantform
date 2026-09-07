@@ -6,6 +6,10 @@ from . import process_views
 app_name = "assessment_process"
 
 urlpatterns = [
+    path('capture-v2/offline-worker.js', process_views.offline_worker, name='offline_worker'),
+    path("capture-v2/attempts/<int:attempt_id>/tools/", process_views.research_tools, name="research_tools"),
+    path("capture-v2/attempts/<int:attempt_id>/resolve/", process_views.resolve_branch, name="resolve_branch"),
+    path("capture-v2/batch/", process_views.capture_v2_batch, name="capture_v2_batch"),
     path("events/batch/", process_views.event_batch, name="event_batch"),
     path("capture-checkpoints/", process_views.capture_checkpoint, name="capture_checkpoint"),
     path(

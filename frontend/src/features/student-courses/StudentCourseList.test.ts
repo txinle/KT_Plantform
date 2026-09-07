@@ -27,6 +27,7 @@ describe('StudentCourseList', () => {
 
     expect(wrapper.get('h1').text()).toBe('我的课程')
     expect(wrapper.text()).toContain('知识追踪研究方法')
+    expect(wrapper.get('.kt-student-course-card__cover').text()).toContain('KT101')
     expect(wrapper.get('a.kt-button').attributes('href')).toBe('/student/courses/7/')
   })
 })

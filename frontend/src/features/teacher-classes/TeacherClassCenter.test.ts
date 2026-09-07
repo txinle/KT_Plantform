@@ -93,6 +93,7 @@ describe('TeacherClassCenter', () => {
     await flushPromises()
 
     expect(wrapper.get('h1').text()).toBe('实验一班')
+    expect(wrapper.get('[aria-label="班级中心"]').classes()).toContain('kt-sidebar-secondary-nav')
     expect(wrapper.text()).toContain('总体正确率')
     expect(wrapper.text()).toContain('暂无可计算的正确率')
     const manage = wrapper.get('a[href*="section=manage"]')
@@ -107,5 +108,38 @@ describe('TeacherClassCenter', () => {
     expect(wrapper.text()).toContain('测试学生')
     expect(wrapper.text()).toContain('未参与')
     expect(wrapper.get('a[href$="/analysis/"]').attributes('href')).toContain('/students/23/')
+  })
+
+  it('shows no-data distribution separately from zero accuracy', async () => {
+    const wrapper = mount(TeacherClassCenter)
+    await flushPromises()
+    expect(wrapper.find('[data-accuracy-ring] [data-ring-value]').exists()).toBe(false)
+    expect(wrapper.get('[data-distribution-total]').text()).toContain('1')
+    expect(wrapper.get('[data-bin="no_data"]').text()).toContain('100.0%')
+  })
+
+  it('uses distribution counts and experiment-unit denominators rather than the student page size', async () => {
+    const payload = centerPayload()
+    payload.correct_rate_distribution = [{ key: 'lt_60', label: '<60%', count: 2 }, { key: 'no_data', label: '无数据', count: 3 }]
+    Object.assign(payload.overview.completion_rate, { numerator: '4', denominator: '10', ratio: '0.4', state: 'available', percent_display: '40.0%' })
+    Object.assign(payload.overview.correct_rate, { numerator: '0', denominator: '4', ratio: '0', state: 'available', percent_display: '0.0%' })
+    mocks.api.center.mockResolvedValue(payload)
+    const wrapper = mount(TeacherClassCenter)
+    await flushPromises()
+    expect(wrapper.get('[data-distribution-total]').text()).toContain('5')
+    expect(wrapper.get('[data-bin="lt_60"]').text()).toContain('40.0%')
+    expect(wrapper.get('[data-completion-units]').text()).toContain('4 / 10')
+    expect(wrapper.get('[data-accuracy-ring] [data-ring-value]').attributes('stroke-dasharray')).toBe('0 100')
+  })
+
+  it('does not invent sectors or percentages for an empty cohort', async () => {
+    const payload = centerPayload()
+    payload.correct_rate_distribution = [{ key: 'no_data', label: '无数据', count: 0 }]
+    payload.participation.not_participated = 0
+    mocks.api.center.mockResolvedValue(payload)
+    const wrapper = mount(TeacherClassCenter)
+    await flushPromises()
+    expect(wrapper.findAll('[data-distribution-ring] [data-sector]')).toHaveLength(0)
+    expect(wrapper.get('[data-bin="no_data"]').text()).toContain('—')
   })
 })

@@ -47,6 +47,12 @@ from .permissions import role_required
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def course_list(request):
+    if is_vue_module_enabled("teacher_courses", request.user):
+        return render_vue_shell(
+            request,
+            module="teacher-courses",
+            title="我的课程 | KT Data Lab",
+        )
     courses = accessible_courses(request.user).annotate(
         class_count=Count("classes", distinct=True),
         bank_count=Count("question_banks", distinct=True),
@@ -57,6 +63,14 @@ def course_list(request):
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def course_create(request):
+    if request.method == "GET" and is_vue_module_enabled(
+        "teacher_courses", request.user
+    ):
+        return render_vue_shell(
+            request,
+            module="teacher-courses",
+            title="新建课程 | KT Data Lab",
+        )
     form = CourseForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
         course = form.save(commit=False)
@@ -76,6 +90,13 @@ def course_create(request):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def course_detail(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
+    if is_vue_module_enabled("teacher_courses", request.user, course=course):
+        return render_vue_shell(
+            request,
+            module="teacher-courses",
+            title=f"{course.name} | KT Data Lab",
+            course=course,
+        )
     recent_experiments = course.experiments.select_related("question_bank")[:5]
     recent_banks = course.question_banks.annotate(
         question_count=Count("questions", distinct=True),
@@ -647,31 +668,19 @@ def _teaching_rows(scope):
     return sessions, attempts, build_teaching_roster(scope)
 
 
-@role_required(User.Role.TEACHER, User.Role.ADMIN)
-def course_data_teaching(request, course_pk):
-    course = get_accessible_course(request.user, course_pk)
-    scope = _teaching_scope_from_request(request, course)
-    if settings.CLASS_CENTER_ENABLED:
-        if scope.class_id is None:
-            return redirect("courses:classes", course.pk)
-        target = reverse(
-            "courses:class_detail",
-            args=[course.pk, scope.class_id],
-        )
-        query = "section=overview"
-        if scope.experiment_id is not None:
-            query = f"section=experiments&experiment_id={scope.experiment_id}"
-        return redirect(f"{target}?{query}")
+def _teaching_page_context(request, scope):
+    """Build the legacy teaching-page facts for both template and API delivery."""
     if not scope.is_complete:
-        return _render_data_center(
-            request,
-            "teacher/data_center/teaching.html",
-            course,
-            scope,
-            active="teaching",
-            blocked_message="请先选择实验和班级",
-            student_summaries=[],
-        )
+        return {
+            "blocked_message": "请先选择实验和班级",
+            "student_summaries": [],
+            "student_search": "",
+            "total_roster_count": 0,
+            "selected_student_id": None,
+            "selected_session_id": None,
+            "session_rows": [],
+            "attempt_rows": [],
+        }
     sessions, attempts, student_summaries = _teaching_rows(scope)
     query = request.GET.get("q", "").strip()
     if query:
@@ -698,7 +707,9 @@ def course_data_teaching(request, course_pk):
         for session in sessions:
             if session.student_id != selected_student_id:
                 continue
-            current_attempts = [attempt for attempt in attempts if attempt.session_id == session.pk]
+            current_attempts = [
+                attempt for attempt in attempts if attempt.session_id == session.pk
+            ]
             session_rows.append(
                 {
                     "session": session,
@@ -730,20 +741,47 @@ def course_data_teaching(request, course_pk):
                     "timeline": attempt_timeline(attempt),
                 }
             )
+    return {
+        "blocked_message": "",
+        "student_summaries": student_summaries,
+        "student_search": query,
+        "total_roster_count": len(roster_student_ids),
+        "selected_student_id": selected_student_id,
+        "selected_session_id": selected_session_id,
+        "session_rows": session_rows,
+        "attempt_rows": attempt_rows,
+    }
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
+def course_data_teaching(request, course_pk):
+    course = get_accessible_course(request.user, course_pk)
+    scope = _teaching_scope_from_request(request, course)
+    if settings.CLASS_CENTER_ENABLED:
+        if scope.class_id is None:
+            return redirect("courses:classes", course.pk)
+        target = reverse(
+            "courses:class_detail",
+            args=[course.pk, scope.class_id],
+        )
+        query = "section=overview"
+        if scope.experiment_id is not None:
+            query = f"section=experiments&experiment_id={scope.experiment_id}"
+        return redirect(f"{target}?{query}")
+    if getattr(request, "_kt_standalone", False) or is_vue_module_enabled("teacher_teaching_data", request.user, course):
+        return render_vue_shell(
+            request,
+            module="teacher-teaching-data",
+            title=f"教学数据 | {course.name}",
+            course=course,
+        )
     return _render_data_center(
         request,
         "teacher/data_center/teaching.html",
         course,
         scope,
         active="teaching",
-        blocked_message="",
-        student_summaries=student_summaries,
-        student_search=query,
-        total_roster_count=len(roster_student_ids),
-        selected_student_id=selected_student_id,
-        selected_session_id=selected_session_id,
-        session_rows=session_rows,
-        attempt_rows=attempt_rows,
+        **_teaching_page_context(request, scope),
     )
 
 
@@ -934,6 +972,15 @@ def course_quality(request, course_pk):
 def course_settings(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
     require_course_manager(course, request.user)
+    if request.method == "GET" and is_vue_module_enabled(
+        "teacher_courses", request.user, course=course
+    ):
+        return render_vue_shell(
+            request,
+            module="teacher-courses",
+            title=f"{course.name}设置 | KT Data Lab",
+            course=course,
+        )
     form = CourseSettingsForm(request.POST or None, instance=course)
     if request.method == "POST" and form.is_valid():
         saved = False

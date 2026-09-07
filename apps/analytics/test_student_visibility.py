@@ -20,6 +20,9 @@ from apps.assessment.models import (
     StudentQuestionAssignment,
     SubmissionEvent,
 )
+from apps.assessment.event_services import append_assessment_event
+from apps.assessment.recording_capture_services import ensure_capture_contract_v2
+from apps.assessment.response_snapshot_services import create_response_snapshot
 from apps.experiments.models import Experiment, ExperimentQuestion
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.experiments.services import (
@@ -128,6 +131,7 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
         excluded_students=(),
         questions=None,
         leave_last_ungraded_for_first=False,
+        capture_contract=None,
     ):
         questions = tuple(questions or (self.question,))
         experiment = Experiment.objects.create(
@@ -160,6 +164,7 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
                 student=student,
                 class_snapshot=class_snapshot,
                 class_snapshot_name=class_snapshot.display_name,
+                capture_contract=capture_contract,
                 status=ExperimentSession.Status.COMPLETED,
                 completed_at=timezone.now(),
             )
@@ -474,6 +479,103 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
                 experiment_id=self.experiments["none"].pk,
                 require_results=True,
             )
+
+    def test_capture_v2_question_detail_exposes_only_server_authorized_capture_data(self):
+        experiment = self._publish_and_submit(
+            name="反馈过程采集实验",
+            feedback_mode=Experiment.Feedback.FULL,
+            students=self.students,
+            capture_contract=ensure_capture_contract_v2(),
+        )
+        version = experiment.versions.get()
+        session = ExperimentSession.objects.get(
+            version=version,
+            student=self.students[0],
+        )
+        attempt = session.attempts.get()
+        submission = SubmissionEvent.objects.get(attempt=attempt)
+        response_snapshot = create_response_snapshot(attempt=attempt, content="B")
+        submission.final_response_snapshot = response_snapshot
+        submission.save(update_fields=["final_response_snapshot"])
+        committed = append_assessment_event(
+            event_type="response_committed",
+            event_version=1,
+            event_domain="assessment",
+            actor_source="server",
+            session=session,
+            attempt=attempt,
+            correlation_id=submission.submission_token,
+            payload={
+                "submission_token": str(submission.submission_token),
+                "submission_id": submission.pk,
+                "grading_status": submission.grading_status,
+                "final_response_snapshot_id": str(response_snapshot.pk),
+                "committed_at": submission.committed_at.isoformat(),
+            },
+            app_version="server",
+        )
+        attempt.final_response_event = committed
+        attempt.final_response_snapshot = response_snapshot
+        attempt.save(
+            update_fields=["final_response_event", "final_response_snapshot"]
+        )
+
+        question_id = version.question_snapshots.get().pk
+        detail = build_student_question_projection(
+            self.enrollment,
+            experiment_id=experiment.pk,
+            question_id=question_id,
+        ).to_dict()
+
+        self.assertEqual(
+            detail["feedback_capture"],
+            {
+                "capture_version": "capture-v2",
+                "session_id": session.pk,
+                "attempt_id": attempt.pk,
+                "event_batch_url": "/assessment/process/capture-v2/batch/",
+                "checkpoint_url": "/assessment/process/capture-checkpoints/",
+                "time_sync_create_url": "/assessment/process/time-sync/create/",
+                "time_sync_finalize_url": "/assessment/process/time-sync/finalize/",
+                "app_version": "2026.08.29.2",
+                "heartbeat_interval_seconds": 30,
+                "answer_event_id": str(committed.pk),
+                "snapshot_id": str(response_snapshot.pk),
+                "mode": "full",
+                "authorized": {
+                    "correctness": True,
+                    "correct_answer": True,
+                    "explanation": True,
+                },
+            },
+        )
+
+        GradeRecord.objects.filter(submission=submission).delete()
+        GradeRecord.objects.create(
+            submission=submission,
+            version=2,
+            status=GradeRecord.Status.PENDING,
+            validity_status=GradeRecord.ValidityStatus.CANDIDATE,
+            grading_method="manual_short_answer_v1",
+        )
+        pending_detail = build_student_question_projection(
+            self.enrollment,
+            experiment_id=experiment.pk,
+            question_id=question_id,
+        ).to_dict()
+
+        self.assertEqual(pending_detail["final_answer"], "B：正确选项")
+        self.assertEqual(pending_detail["result_state"], "pending")
+        self.assertNotIn("correct_answer", pending_detail)
+        self.assertNotIn("explanation", pending_detail)
+        self.assertEqual(
+            pending_detail["feedback_capture"]["authorized"],
+            {
+                "correctness": False,
+                "correct_answer": False,
+                "explanation": False,
+            },
+        )
 
     def test_item_policy_forbidden_is_403_but_cross_scope_is_not_found(self):
         policy = self.class_group.student_analytics_policy

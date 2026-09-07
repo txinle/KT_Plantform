@@ -46,10 +46,11 @@ describe('StudentTaskList', () => {
     const wrapper = mount(StudentTaskList)
     await flushPromises()
 
-    expect(wrapper.get('h1').text()).toBe('实验任务')
+    expect(wrapper.get('h1').text()).toBe('作业')
     expect(wrapper.text()).toContain('反馈策略实验')
     expect(wrapper.text()).toContain('0 / 8')
-    expect(wrapper.get('[data-task-action="start"]').text()).toBe('开始实验')
+    expect(wrapper.get('.kt-student-task-row').text()).toContain('作业')
+    expect(wrapper.get('[data-task-action="start"]').text()).toBe('开始作业')
     expect(wrapper.text()).not.toContain('正确')
     expect(wrapper.text()).not.toContain('错误')
   })

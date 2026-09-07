@@ -9,6 +9,8 @@ from django.views.decorators.http import require_GET, require_POST
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.accounts.permissions import role_required
 from apps.accounts.course_access import accessible_courses, lock_writable_course
+from apps.api.rollout import is_vue_module_enabled
+from apps.api.shell import render_vue_shell
 from apps.audit.services import log_action
 from .access import lock_question_bank, lock_writable_bank_content, require_writable_bank_content
 from .audit import bank_metadata_audit_details
@@ -26,6 +28,18 @@ def _owned_bank(request, pk):
         else QuestionBank.objects.filter(Q(owner=request.user) | Q(course__in=accessible_courses(request.user)))
     )
     return get_object_or_404(qs, pk=pk)
+
+
+def _standalone_question_bank_vue_shell(request, title):
+    if request.method == "GET" and is_vue_module_enabled(
+        "teacher_question_banks", request.user
+    ):
+        return render_vue_shell(
+            request,
+            module="teacher-question-banks",
+            title=title,
+        )
+    return None
 
 
 def _fixture_download(filename):
@@ -76,6 +90,8 @@ def bank_list(request):
     course_ids = list(courses.values_list("pk", flat=True)[:2])
     if request.method == "GET" and course_ids:
         return redirect("courses:list")
+    if shell := _standalone_question_bank_vue_shell(request, "题库 | KT Data Lab"):
+        return shell
     banks = QuestionBank.objects.filter(owner=request.user).annotate(question_count=Count("questions"))
     shared_banks = QuestionBank.objects.filter(visibility=QuestionBank.Visibility.SHARED).exclude(owner=request.user)
     if request.method == "POST":
@@ -108,6 +124,10 @@ def bank_detail(request, pk):
     bank = _owned_bank(request, pk)
     if bank.course_id:
         return redirect("courses:bank_detail", bank.course_id, bank.pk)
+    if shell := _standalone_question_bank_vue_shell(
+        request, f"{bank.name} | KT Data Lab"
+    ):
+        return shell
     return render(request, "teacher/bank_detail.html", {"bank": bank, "questions": bank.questions.prefetch_related("options", "concept_links__concept")})
 
 
@@ -153,6 +173,10 @@ def question_edit(request, bank_pk, question_pk):
     else:
         require_writable_bank_content(bank)
         question = get_object_or_404(bank.questions, pk=question_pk)
+        if shell := _standalone_question_bank_vue_shell(
+            request, f"编辑题目 | {bank.name}"
+        ):
+            return shell
         form = QuestionEditForm(instance=question)
     return render(request, "teacher/question_edit.html", {"bank": bank, "question": question, "form": form})
 
@@ -163,6 +187,10 @@ def question_import(request, pk):
         from . import course_views
         return course_views.question_import(request, bank.course_id, bank.pk)
     require_writable_bank_content(bank)
+    if shell := _standalone_question_bank_vue_shell(
+        request, f"导入题目 | {bank.name}"
+    ):
+        return shell
     preview = None
     upload_name = ""
     if request.method == "POST" and request.POST.get("action") == "confirm":
@@ -200,6 +228,10 @@ def kc_import(request, pk):
         from . import course_views
         return course_views.kc_import(request, bank.course_id, bank.pk)
     require_writable_bank_content(bank)
+    if shell := _standalone_question_bank_vue_shell(
+        request, f"导入 KC | {bank.name}"
+    ):
+        return shell
     preview = None
     upload_name = ""
     if request.method == "POST" and request.POST.get("action") == "confirm":
@@ -225,6 +257,8 @@ def kc_import(request, pk):
 def concept_list(request):
     if accessible_courses(request.user).exists():
         return redirect("courses:list")
+    if shell := _standalone_question_bank_vue_shell(request, "知识点 | KT Data Lab"):
+        return shell
     if request.user.is_superuser or request.user.role == "admin":
         concepts = Concept.objects.all()
     else:

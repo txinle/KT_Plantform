@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     reviseSchedule: vi.fn(),
     cancel: vi.fn(),
     manualClose: vi.fn(),
+    releaseFeedback: vi.fn(),
   },
   push: vi.fn(),
 }))
@@ -37,6 +38,7 @@ describe('TeacherExperimentDetail', () => {
       selection_mode_label: '全量题池',
       ordering_mode_label: '固定顺序',
       feedback_mode_label: '仅显示已提交',
+      feedback_release_policy_label: '学生完成后',
       time_mode_label: '无时限',
       total_time_limit_minutes: 45,
       per_question_time_limit_seconds: 90,
@@ -49,6 +51,7 @@ describe('TeacherExperimentDetail', () => {
     mocks.api.classTasks.mockResolvedValue({ items: [] })
     mocks.api.progress.mockResolvedValue({ total_participants: 0, not_started: 0, in_progress: 0, completed: 0 })
     mocks.api.startPlan.mockResolvedValue({ id: 23 })
+    mocks.api.releaseFeedback.mockResolvedValue({ id: 31 })
   })
 
   it('renders authoritative readiness and resumes the server publish plan', async () => {
@@ -71,9 +74,10 @@ describe('TeacherExperimentDetail', () => {
 
     const tabs = wrapper.get('.kt-experiment-tabs').findAll('[role="tab"]')
     expect(tabs.map((tab) => tab.text())).toEqual(['实验定义', '班级发布', '采集状态'])
+    expect(wrapper.get('.kt-experiment-tabs').classes()).toContain('kt-sidebar-secondary-nav')
     expect(wrapper.find('.kt-experiment-draft-grid').exists()).toBe(true)
     expect(tabs[0]?.attributes('aria-selected')).toBe('true')
-    expect(wrapper.findAll('[data-summary-icon]')).toHaveLength(8)
+    expect(wrapper.findAll('[data-summary-icon]')).toHaveLength(9)
     expect(wrapper.get('.kt-definition-summary').text()).not.toContain('时限模式')
     expect(wrapper.get('.kt-definition-summary').text()).toContain('总限时')
     expect(wrapper.get('.kt-definition-summary').text()).toContain('45 分钟')
@@ -95,6 +99,7 @@ describe('TeacherExperimentDetail', () => {
       selection_mode_label: '全量题池',
       ordering_mode_label: '固定顺序',
       feedback_mode_label: '仅显示已提交',
+      feedback_release_policy_label: '教师人工发布',
       time_mode_label: '无时限',
       resume_mode_label: '允许断点续答',
       confidence_mode_label: '不采集',
@@ -110,7 +115,7 @@ describe('TeacherExperimentDetail', () => {
         opens_at: '2026-09-01T00:00:00Z',
         closes_at: '2026-09-03T00:00:00Z',
         business_status: '采集中',
-        available_actions: ['revise_schedule', 'manual_close'],
+        available_actions: ['revise_schedule', 'manual_close', 'release_feedback'],
       }],
     })
     mocks.api.progress.mockResolvedValue({ total_participants: 36, not_started: 11, in_progress: 8, completed: 17 })
@@ -122,5 +127,13 @@ describe('TeacherExperimentDetail', () => {
     expect(wrapper.get('.kt-published-task-table').text()).toContain('实验班')
     expect(wrapper.get('[data-action="revise-schedule"]').text()).toBe('修订排期')
     expect(wrapper.get('[data-action="manual-close"]').text()).toBe('提前结束')
+    expect(wrapper.get('[data-action="release-feedback"]').text()).toBe('发布反馈')
+
+    await wrapper.get('[data-action="release-feedback"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.releaseFeedback).toHaveBeenCalledWith(31)
+    expect(mocks.api.detail).toHaveBeenCalledTimes(2)
+    expect(mocks.api.classTasks).toHaveBeenCalledTimes(2)
   })
 })

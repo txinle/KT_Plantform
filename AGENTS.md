@@ -21,6 +21,9 @@
 
 ## Data, environment, and verification
 
+- Raw behavioral evidence is append-only. Draft saves, content deduplication and conflict resolution must never replace or delete response trajectories. Capture-v2 keeps each confirmed transition, including empty states and returns to prior content.
+- V1 scope is short-response capture, time, confidence, frozen KC, hint/check behavior and feedback exposure. Do not implement structured steps, workspaces, complex planning/reflection or correction attempts for this release.
+
 - Current local data is disposable demo data. Rebuild the development database when an unshipped schema changes; do not add migrations solely to adapt intermediate demo states. Never apply this rule to real or deployed data.
 - For Phase 6, do not migrate existing local question-bank rows. Clear the current development-only question-bank data plus the minimum required demo dependency closure, then recreate representative banks, questions, and KC mappings through `seed_demo`. Preserve production lifecycle and schema contracts; never apply this deletion rule to real or deployed data.
 - Runtime baselines are Python 3.13, Django 5.2.16, PostgreSQL 17, Node 24 LTS, Vue 3.5, Vite 8, npm, and `package-lock.json`. Do not add a third-party icon library; use approved SVG assets or text controls.

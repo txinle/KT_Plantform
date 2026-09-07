@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
+import uuid
 from collections import defaultdict
 from datetime import timedelta
 
@@ -16,8 +17,12 @@ from apps.assessment.models import (
     ClientTimeSync,
     ExperimentSession,
     GradeRecord,
+    SubmissionEvent,
 )
-from apps.assessment.response_snapshot_services import canonical_response_state
+from apps.assessment.response_snapshot_services import (
+    TEXT_LIKE_QUESTION_TYPES,
+    canonical_response_state,
+)
 
 from .models import (
     RecordingCoverageAttempt,
@@ -28,12 +33,15 @@ from .models import (
 
 COVERAGE_VERSION = "coverage-v1"
 ALGORITHM_VERSION = "recording-coverage-v1"
+CAPTURE_V2_COVERAGE_VERSION = "coverage-v3"
+CAPTURE_V2_ALGORITHM_VERSION = "recording-coverage-v3"
 COVERAGE_PARAMETERS = {
     "terminal_grace_seconds": 300,
     "time_sync_interval_seconds": 900,
     "time_sync_validity_seconds": 1200,
     "active_time_idle_threshold_seconds": [30, 60, 120],
     "heartbeat_resets_active_time": False,
+    "text_input_operation_linkage": "each_text_transition_operation_id",
 }
 
 
@@ -249,6 +257,40 @@ def _ordered_response_events(events, syncs=()):
 
 
 def _response_chain(events, syncs=()):
+    transitions = {str(event.event_id): event for event in events if event.event_type == 'response_transition'}
+    if transitions:
+        reasons = set()
+        visited = set()
+        for key, event in transitions.items():
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            for side in ('before', 'after'):
+                if _hash(payload.get(f'{side}_state')) != payload.get(f'{side}_state_hash'):
+                    reasons.add('response_state_hash_mismatch')
+            if payload.get('before_state_hash') == payload.get('after_state_hash'):
+                reasons.add('response_transition_unchanged')
+            parent_id = payload.get('parent_event_id')
+            parent = transitions.get(str(parent_id)) if parent_id else None
+            if parent_id and parent is None:
+                reasons.add('response_parent_missing')
+            parent_payload = parent.payload if parent is not None and isinstance(parent.payload, dict) else {}
+            if parent is not None and parent_payload.get('after_state_hash') != payload.get('before_state_hash'):
+                reasons.add('response_chain_break')
+            before_state = payload.get('before_state')
+            if not parent_id and (
+                not isinstance(before_state, dict)
+                or before_state.get('value') not in (None, '', [])
+            ):
+                reasons.add('response_root_not_empty')
+            path = set()
+            current = key
+            while current in transitions and current not in visited:
+                if current in path:
+                    reasons.add('response_causal_cycle')
+                    break
+                path.add(current)
+                current = str(transitions[current].payload.get('parent_event_id'))
+            visited.update(path)
+        return ('partial', sorted(reasons)) if reasons else ('complete', [])
     response_events, cross_instance_uncertain = _ordered_response_events(
         events, syncs
     )
@@ -283,10 +325,317 @@ def _exact_delta_ms(left, right):
     return max(0, int(right.client_monotonic_ms - left.client_monotonic_ms))
 
 
+def _same_client_clock(left, right):
+    return bool(
+        getattr(left, 'client_instance_id', None)
+        and getattr(left, 'client_instance_id', None)
+        == getattr(right, 'client_instance_id', None)
+        and getattr(left, 'client_time_origin', None)
+        and getattr(left, 'client_time_origin', None)
+        == getattr(right, 'client_time_origin', None)
+        and getattr(left, 'client_monotonic_ms', None) is not None
+        and getattr(right, 'client_monotonic_ms', None) is not None
+    )
+
+
+def _causal_delta_ms(left, right, syncs=()):
+    """Return a duration only when the causal edge has time evidence."""
+    if _same_client_clock(left, right):
+        delta = right.client_monotonic_ms - left.client_monotonic_ms
+        return int(delta) if delta >= 0 else None
+    left_time = _derived_event_time(left, syncs)
+    right_time = _derived_event_time(right, syncs)
+    if left_time is None or right_time is None:
+        return None
+    delta = int((right_time - left_time).total_seconds() * 1000)
+    return delta if delta >= 0 else None
+
+
+def _capture_v2_path(transitions, head_event_id):
+    """Follow immutable parent references; never infer an inter-client order."""
+    path = []
+    seen = set()
+    current = str(head_event_id) if head_event_id else None
+    while current:
+        if current in seen:
+            return None
+        seen.add(current)
+        event = transitions.get(current)
+        if event is None:
+            return None
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        before = payload.get('before_state')
+        after = payload.get('after_state')
+        before_hash = payload.get('before_state_hash')
+        after_hash = payload.get('after_state_hash')
+        if (
+            not isinstance(before, dict)
+            or not isinstance(after, dict)
+            or _hash(before) != before_hash
+            or _hash(after) != after_hash
+            or before_hash == after_hash
+        ):
+            return None
+        parent_id = payload.get('parent_event_id')
+        parent = transitions.get(str(parent_id)) if parent_id else None
+        if parent_id:
+            if parent is None:
+                return None
+            parent_payload = parent.payload if isinstance(parent.payload, dict) else {}
+            if parent_payload.get('after_state_hash') != before_hash:
+                return None
+        elif before.get('value') not in (None, '', []):
+            return None
+        path.append(event)
+        current = str(parent_id) if parent_id else None
+    return list(reversed(path))
+
+
+def _capture_v2_heads(transitions):
+    parents = {
+        str(event.payload.get('parent_event_id'))
+        for event in transitions.values()
+        if isinstance(event.payload, dict)
+        and event.payload.get('parent_event_id') in transitions
+    }
+    return sorted(set(transitions) - parents)
+
+
+def _capture_v2_selected_head(attempt, heads):
+    if attempt is None:
+        return (heads[0] if len(heads) == 1 else None), False, {}
+    boundary = getattr(attempt, 'formal_capture_boundary', None) or {}
+    boundary_head = boundary.get('active_response_event_id') if isinstance(boundary, dict) else None
+    if boundary_head:
+        return str(boundary_head), True, boundary
+    final_head = getattr(attempt, 'final_response_event_id', None)
+    if final_head:
+        return str(final_head), True, {}
+    active_head = getattr(attempt, 'active_response_event_id', None)
+    if active_head:
+        return str(active_head), False, {}
+    return (heads[0] if len(heads) == 1 else None), False, {}
+
+
+def _within_formal_boundary(event, boundary):
+    if not boundary:
+        return True
+    sequence = boundary.get('server_ingest_sequence_no')
+    if sequence is None:
+        return False
+    try:
+        return int(event.server_ingest_sequence_no) <= int(sequence)
+    except (TypeError, ValueError):
+        return False
+
+
+def _rendered_anchor_for(first_response, rendered_events, syncs):
+    same_clock = [
+        event for event in rendered_events
+        if _same_client_clock(event, first_response)
+        and event.client_monotonic_ms <= first_response.client_monotonic_ms
+    ]
+    if same_clock:
+        return max(same_clock, key=lambda event: event.client_monotonic_ms)
+    timed = [
+        event for event in rendered_events
+        if _causal_delta_ms(event, first_response, syncs) is not None
+    ]
+    return timed[0] if len(timed) == 1 else None
+
+
+def _formal_commit_request(events, attempt, boundary):
+    if attempt is None or not boundary:
+        return None
+    submission = getattr(attempt, 'submission_event', None)
+    token = getattr(submission, 'submission_token', None)
+    if token is None:
+        return None
+    candidates = [
+        event for event in events
+        if event.event_type == 'response_commit_requested'
+        and _within_formal_boundary(event, boundary)
+        and str((event.payload or {}).get('submission_token', '')) == str(token)
+    ]
+    return max(candidates, key=lambda event: event.server_ingest_sequence_no) if candidates else None
+
+
+def _capture_v2_path_metrics(path, rendered_events, requested, syncs):
+    first = path[0]
+    holding = [
+        _causal_delta_ms(left, right, syncs)
+        for left, right in zip(path, path[1:])
+    ]
+    if requested is not None:
+        holding.append(_causal_delta_ms(path[-1], requested, syncs))
+    revision_count = sum(
+        left.payload.get('after_state_hash') != right.payload.get('after_state_hash')
+        for left, right in zip(path, path[1:])
+    )
+    anchor = _rendered_anchor_for(first, rendered_events, syncs)
+    transition_holding = holding[:len(path) - 1]
+    return {
+        'revision_count': revision_count,
+        'first_response_latency_ms': (
+            _causal_delta_ms(anchor, first, syncs) if anchor is not None else None
+        ),
+        'revision_latency_ms': (
+            sum(transition_holding)
+            if transition_holding and all(value is not None for value in transition_holding)
+            else None
+        ),
+        'post_revision_time_ms': (
+            _causal_delta_ms(path[-1], requested, syncs)
+            if requested is not None else None
+        ),
+        'state_holding_time_ms': holding,
+    }
+
+
+def _capture_v2_derived_features(
+    events, *, attempt, run_id, input_status, time_quality, missing_reasons, syncs,
+):
+    ordered = sorted(events, key=lambda event: event.server_ingest_sequence_no)
+    transitions = {
+        str(event.event_id): event
+        for event in events
+        if event.event_type == 'response_transition'
+    }
+    heads = _capture_v2_heads(transitions)
+    selected_head, is_formal, boundary = _capture_v2_selected_head(attempt, heads)
+    metric_heads = sorted(set(heads) | ({selected_head} if selected_head else set()))
+    rendered_events = [event for event in ordered if event.event_type == 'item_rendered']
+    analysis_events = [
+        event for event in ordered if _within_formal_boundary(event, boundary)
+    ] if boundary else ordered
+    analysis_rendered = [
+        event for event in analysis_events if event.event_type == 'item_rendered'
+    ]
+    requested = _formal_commit_request(events, attempt, boundary) if is_formal else None
+    branch_metrics = []
+    metrics_by_head = {}
+    for head in metric_heads:
+        path = _capture_v2_path(transitions, head)
+        if not path:
+            continue
+        metrics = _capture_v2_path_metrics(
+            path,
+            rendered_events,
+            requested if head == selected_head else None,
+            syncs,
+        )
+        record = {
+            'branch_id': str((path[-1].payload or {}).get('branch_id', '')),
+            'head_event_id': head,
+            'path_event_ids': [str(event.event_id) for event in path],
+            **metrics,
+        }
+        branch_metrics.append(record)
+        metrics_by_head[head] = record
+
+    selected_metrics = metrics_by_head.get(selected_head)
+    selected_path = _capture_v2_path(transitions, selected_head)
+    if selected_metrics and boundary:
+        if not selected_path or not all(
+            _within_formal_boundary(event, boundary)
+            for event in selected_path
+        ):
+            selected_metrics = None
+        else:
+            selected_metrics = _capture_v2_path_metrics(
+                selected_path, analysis_rendered, requested, syncs,
+            ) | {
+                'path_event_ids': [str(event.event_id) for event in selected_path],
+            }
+    entered = [event for event in analysis_events if event.event_type == 'item_entered']
+    left_events = [event for event in analysis_events if event.event_type == 'item_left']
+    rendered = analysis_rendered[0] if analysis_rendered else None
+    left = left_events[-1] if left_events else None
+    features = {
+        'derivation_version': 'coverage-v2',
+        'parameter_hash': _hash(COVERAGE_PARAMETERS),
+        'coverage_run_id': str(run_id) if run_id else None,
+        'input_status': input_status,
+        'time_quality': time_quality,
+        'missing_reason': sorted(set(missing_reasons)),
+        'revision_count': selected_metrics['revision_count'] if selected_metrics else None,
+        'first_response_latency_ms': (
+            selected_metrics['first_response_latency_ms'] if selected_metrics else None
+        ),
+        'revision_latency_ms': (
+            selected_metrics['revision_latency_ms'] if selected_metrics else None
+        ),
+        'post_revision_time_ms': (
+            selected_metrics['post_revision_time_ms'] if selected_metrics else None
+        ),
+        'state_holding_time_ms': (
+            selected_metrics['state_holding_time_ms'] if selected_metrics else None
+        ),
+        'formal_path_event_ids': (
+            selected_metrics['path_event_ids'] if selected_metrics else []
+        ),
+        'branch_metrics': branch_metrics,
+        'visit_duration_ms': (
+            _exact_delta_ms(rendered, left) if rendered and left else None
+        ),
+        'return_count': max(0, max(len(entered), len(analysis_rendered)) - 1),
+        'return_latency_ms': (
+            _exact_delta_ms(left_events[0], entered[1])
+            if left_events and len(entered) > 1 else None
+        ),
+        'wall_clock_item_time_ms': (
+            _exact_delta_ms(rendered, left or requested)
+            if rendered and (left or requested) else None
+        ),
+    }
+    for threshold in (30, 60, 120):
+        has_visibility_baseline = any(
+            event.event_type in {"document_visible", "document_hidden"}
+            for event in analysis_events
+        )
+        has_focus_baseline = any(
+            event.event_type in {"window_focused", "window_blurred"}
+            for event in analysis_events
+        )
+        if not has_visibility_baseline or not has_focus_baseline:
+            features[f"active_response_time_ms_{threshold}s"] = None
+            continue
+        activity_boundaries = [
+            event for event in analysis_events if event.event_type != "activity_heartbeat"
+        ]
+        active = 0
+        visible = None
+        focused = None
+        for prior, current in zip(activity_boundaries, activity_boundaries[1:]):
+            if prior.event_type == "document_hidden":
+                visible = False
+            elif prior.event_type == "document_visible":
+                visible = True
+            elif prior.event_type == "window_blurred":
+                focused = False
+            elif prior.event_type == "window_focused":
+                focused = True
+            delta = _exact_delta_ms(prior, current)
+            if visible is True and focused is True and delta is not None:
+                active += min(delta, threshold * 1000)
+        features[f"active_response_time_ms_{threshold}s"] = active
+    return features
+
+
 def _derived_features(
     events, *, run_id=None, input_status="partial", time_quality="unknown",
-    missing_reasons=(), syncs=()
+    missing_reasons=(), syncs=(), attempt=None,
 ):
+    if any(event.event_type == 'response_transition' for event in events):
+        return _capture_v2_derived_features(
+            events,
+            attempt=attempt,
+            run_id=run_id,
+            input_status=input_status,
+            time_quality=time_quality,
+            missing_reasons=missing_reasons,
+            syncs=syncs,
+        )
     ordered = sorted(events, key=lambda event: event.server_ingest_sequence_no)
     rendered_events = [event for event in ordered if event.event_type == "item_rendered"]
     rendered = rendered_events[0] if rendered_events else None
@@ -398,8 +747,73 @@ def _authoritative_mismatch_reasons(attempt, events):
     return sorted(set(reasons))
 
 
+def _capture_v2_text_input_coverage(attempt, events):
+    """Match analyzed text transitions to persisted input-operation IDs."""
+    boundary = getattr(attempt, "formal_capture_boundary", None) or {}
+    analysis_events = [
+        event
+        for event in events
+        if not boundary or _within_formal_boundary(event, boundary)
+    ]
+    attempt_id = str(attempt.pk)
+
+    def operation_id_for(event):
+        if str(getattr(event, "attempt_id", "")) != attempt_id:
+            return None
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        try:
+            return str(uuid.UUID(str(payload.get("operation_id"))))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    input_operation_ids = {
+        operation_id
+        for event in analysis_events
+        if event.event_type == "input_operation"
+        for operation_id in [operation_id_for(event)]
+        if operation_id is not None
+    }
+    transition_operation_ids = [
+        operation_id_for(event)
+        for event in analysis_events
+        if event.event_type == "response_transition"
+        and str(getattr(event, "attempt_id", "")) == attempt_id
+    ]
+    has_unmatched_transition = any(
+        operation_id not in input_operation_ids
+        for operation_id in transition_operation_ids
+    )
+    has_reused_transition_operation = (
+        len(transition_operation_ids) != len(set(transition_operation_ids))
+    )
+    return (
+        bool(input_operation_ids)
+        and not has_unmatched_transition
+        and not has_reused_transition_operation,
+        has_unmatched_transition,
+        has_reused_transition_operation,
+    )
+
+
 def _attempt_result(*, run, attempt, events, session_reasons, gap_count, syncs):
     types = {event.event_type for event in events}
+    question_type = attempt.assignment.snapshot.question_type
+    capture_contract = getattr(
+        getattr(attempt, "session", None), "capture_contract", None,
+    )
+    capture_v2_text_attempt = (
+        getattr(capture_contract, "contract_name", None) == "capture-v2"
+        and question_type in TEXT_LIKE_QUESTION_TYPES
+    )
+    text_input_operations_complete = False
+    unmatched_text_transition_operation = False
+    reused_text_transition_operation = False
+    if capture_v2_text_attempt:
+        (
+            text_input_operations_complete,
+            unmatched_text_transition_operation,
+            reused_text_transition_operation,
+        ) = _capture_v2_text_input_coverage(attempt, events)
     response_status, response_reasons = _response_chain(events, syncs)
     reasons = list(response_reasons)
     enter_status = "complete" if "item_entered" in types else "partial"
@@ -414,6 +828,12 @@ def _attempt_result(*, run, attempt, events, session_reasons, gap_count, syncs):
     submission = getattr(attempt, "submission_event", None)
     if submission is not None and submission.final_response_snapshot_id is None:
         reasons.append("missing_final_snapshot")
+    if capture_v2_text_attempt and not text_input_operations_complete:
+        reasons.append("missing_input_operation")
+    if unmatched_text_transition_operation:
+        reasons.append("missing_input_operation_for_response_transition")
+    if reused_text_transition_operation:
+        reasons.append("reused_input_operation_for_response_transition")
     time_quality = _event_time_quality(events, syncs)
     if time_quality in {"client_wall_unsynchronized", "server_only", "unknown"}:
         reasons.append("time_sync_unavailable")
@@ -432,7 +852,7 @@ def _attempt_result(*, run, attempt, events, session_reasons, gap_count, syncs):
         reasons.append("legacy_contract")
         overall = "legacy_unknown"
     response_count = sum(
-        event.event_type == "response_state_changed" for event in events
+        event.event_type in {"response_state_changed", "response_transition"} for event in events
     )
     effective_grade_exists = bool(
         submission
@@ -442,8 +862,43 @@ def _attempt_result(*, run, attempt, events, session_reasons, gap_count, syncs):
             validity_status=GradeRecord.ValidityStatus.EFFECTIVE,
         ).exists()
     )
+    grading_pending = bool(
+        submission
+        and not effective_grade_exists
+        and (
+            submission.grading_status == SubmissionEvent.GradingStatus.PENDING
+            or GradeRecord.objects.filter(
+                submission=submission,
+                status=GradeRecord.Status.PENDING,
+            ).exists()
+        )
+    )
+    if authoritative_reasons:
+        outcome_usable = False
+        outcome_missing_reasons = authoritative_reasons
+        outcome_status = "invalid"
+    elif submission is None:
+        outcome_usable = False
+        outcome_missing_reasons = ["submission_chain_mismatch"]
+        outcome_status = "insufficient"
+    elif effective_grade_exists:
+        outcome_usable = True
+        outcome_missing_reasons = []
+        outcome_status = "complete"
+    elif grading_pending:
+        outcome_usable = False
+        outcome_missing_reasons = [
+            "grading_pending",
+            "effective_grade_unavailable",
+        ]
+        outcome_status = "insufficient"
+    else:
+        outcome_usable = False
+        outcome_missing_reasons = ["effective_grade_unavailable"]
+        outcome_status = "insufficient"
     features = _derived_features(
         events,
+        attempt=attempt,
         run_id=run.pk,
         input_status=overall,
         time_quality=time_quality,
@@ -452,23 +907,11 @@ def _attempt_result(*, run, attempt, events, session_reasons, gap_count, syncs):
     )
     eligibility = {
         "outcome": _eligibility(
-            usable=submission is not None and effective_grade_exists,
-            missing_reasons=(
-                []
-                if submission is not None and effective_grade_exists
-                else ["submission_chain_mismatch"]
-            ),
+            usable=outcome_usable,
+            missing_reasons=outcome_missing_reasons,
             time_quality="server_only",
             run_id=run.pk,
-            status=(
-                "invalid"
-                if authoritative_reasons
-                else (
-                    "complete"
-                    if submission is not None and effective_grade_exists
-                    else "insufficient"
-                )
-            ),
+            status=outcome_status,
         ),
         "first_response": _eligibility(
             usable=response_count > 0,
@@ -572,28 +1015,65 @@ def _attempt_result(*, run, attempt, events, session_reasons, gap_count, syncs):
         ),
         "text_editing": _eligibility(
             usable=(
-                attempt.assignment.snapshot.question_type == "short_answer"
-                and any(event.event_type == "text_edit_observed" for event in events)
-                and attempt.final_response_snapshot_id is not None
+                text_input_operations_complete
+                if capture_v2_text_attempt
+                else (
+                    question_type == "short_answer"
+                    and any(
+                        event.event_type == "text_edit_observed"
+                        for event in events
+                    )
+                    and attempt.final_response_snapshot_id is not None
+                )
             ),
             missing_reasons=(
                 []
-                if attempt.assignment.snapshot.question_type != "short_answer"
-                or (
-                    any(event.event_type == "text_edit_observed" for event in events)
-                    and attempt.final_response_snapshot_id is not None
+                if capture_v2_text_attempt and text_input_operations_complete
+                else (
+                    [
+                        "missing_input_operation",
+                        *(
+                            ["missing_input_operation_for_response_transition"]
+                            if unmatched_text_transition_operation else []
+                        ),
+                        *(
+                            ["reused_input_operation_for_response_transition"]
+                            if reused_text_transition_operation else []
+                        ),
+                    ]
+                    if capture_v2_text_attempt
+                    else (
+                        []
+                        if question_type != "short_answer"
+                        or (
+                            any(
+                                event.event_type == "text_edit_observed"
+                                for event in events
+                            )
+                            and attempt.final_response_snapshot_id is not None
+                        )
+                        else ["missing_response_state"]
+                    )
                 )
-                else ["missing_response_state"]
             ),
             time_quality=time_quality,
             run_id=run.pk,
             status=(
                 "not_applicable"
-                if attempt.assignment.snapshot.question_type != "short_answer"
+                if not capture_v2_text_attempt and question_type != "short_answer"
                 else (
                     "complete"
-                    if any(event.event_type == "text_edit_observed" for event in events)
-                    and attempt.final_response_snapshot_id is not None
+                    if (
+                        text_input_operations_complete
+                        if capture_v2_text_attempt
+                        else (
+                            any(
+                                event.event_type == "text_edit_observed"
+                                for event in events
+                            )
+                            and attempt.final_response_snapshot_id is not None
+                        )
+                    )
                     else "insufficient"
                 )
             ),
@@ -757,6 +1237,7 @@ def _materialize_session_result(
             reasons.append("missing_item_left")
         if (
             "response_state_changed" not in event_types
+            and "response_transition" not in event_types
             and any(
                 attempt.final_response_snapshot_id
                 or getattr(attempt, "submission_event", None) is not None
@@ -879,6 +1360,7 @@ def generate_scope_coverage(
     attempts = list(
         sessions[0].attempts.model.objects.filter(session_id__in=session_ids)
         .select_related(
+            "session__capture_contract",
             "final_response_snapshot",
             "assignment__snapshot",
             "submission_event__final_response_snapshot",
@@ -901,6 +1383,14 @@ def generate_scope_coverage(
             (event.server_ingest_sequence_no for event in events), default=0
         ),
     }
+    has_capture_v2 = any(session.capture_contract_id and session.capture_contract.contract_name == 'capture-v2' for session in sessions)
+    if has_capture_v2:
+        source_document['coverage_version'] = CAPTURE_V2_COVERAGE_VERSION
+        source_document['algorithm_version'] = CAPTURE_V2_ALGORITHM_VERSION
+        source_document['response_heads'] = [
+            [attempt.pk, str(attempt.active_response_event_id), str(attempt.final_response_event_id), attempt.response_version]
+            for attempt in attempts
+        ]
     source_hash = _hash(source_document)
     if not force:
         existing = (
@@ -927,8 +1417,12 @@ def generate_scope_coverage(
         scope_type=scope_type,
         scope_definition=scope_definition,
         scope_hash=_hash(scope_definition),
-        coverage_version=COVERAGE_VERSION,
-        algorithm_version=ALGORITHM_VERSION,
+        coverage_version=(
+            CAPTURE_V2_COVERAGE_VERSION if has_capture_v2 else COVERAGE_VERSION
+        ),
+        algorithm_version=(
+            CAPTURE_V2_ALGORITHM_VERSION if has_capture_v2 else ALGORITHM_VERSION
+        ),
         code_version=_code_version(),
         parameter_document=COVERAGE_PARAMETERS,
         parameter_hash=_hash(COVERAGE_PARAMETERS),

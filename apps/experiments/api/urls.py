@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     TeacherClassTaskCancelView,
     TeacherClassTaskDetailView,
+    TeacherClassTaskFeedbackReleaseView,
     TeacherClassTaskManualCloseView,
     TeacherClassTaskProgressView,
     TeacherClassTaskScheduleRevisionView,
@@ -21,9 +22,47 @@ from .views import (
     TeacherPublishParticipantExportView,
     TeacherPublishParticipantListView,
 )
+from .standalone_views import (
+    TeacherStandaloneExperimentCollectionView,
+    TeacherStandaloneExperimentDetailView,
+    TeacherStandaloneExperimentPublishView,
+    TeacherStandaloneExperimentResultsView,
+    TeacherStandaloneExperimentStudentsView,
+    TeacherStandaloneExperimentSyncQuestionsView,
+)
 
 
 urlpatterns = [
+    path(
+        "standalone-experiments/",
+        TeacherStandaloneExperimentCollectionView.as_view(),
+        name="teacher-standalone-experiment-collection",
+    ),
+    path(
+        "standalone-experiments/<int:experiment_id>/",
+        TeacherStandaloneExperimentDetailView.as_view(),
+        name="teacher-standalone-experiment-detail",
+    ),
+    path(
+        "standalone-experiments/<int:experiment_id>/students/",
+        TeacherStandaloneExperimentStudentsView.as_view(),
+        name="teacher-standalone-experiment-students",
+    ),
+    path(
+        "standalone-experiments/<int:experiment_id>/publish/",
+        TeacherStandaloneExperimentPublishView.as_view(),
+        name="teacher-standalone-experiment-publish",
+    ),
+    path(
+        "standalone-experiments/<int:experiment_id>/sync-questions/",
+        TeacherStandaloneExperimentSyncQuestionsView.as_view(),
+        name="teacher-standalone-experiment-sync-questions",
+    ),
+    path(
+        "standalone-experiments/<int:experiment_id>/results/",
+        TeacherStandaloneExperimentResultsView.as_view(),
+        name="teacher-standalone-experiment-results",
+    ),
     path(
         "courses/<int:course_id>/experiments/",
         TeacherExperimentCollectionView.as_view(),
@@ -118,5 +157,10 @@ urlpatterns = [
         "class-tasks/<int:task_id>/manual-close/",
         TeacherClassTaskManualCloseView.as_view(),
         name="teacher-class-task-manual-close",
+    ),
+    path(
+        "class-tasks/<int:task_id>/feedback-release/",
+        TeacherClassTaskFeedbackReleaseView.as_view(),
+        name="teacher-class-task-feedback-release",
     ),
 ]

@@ -110,26 +110,47 @@ def main():
     legacy_only = os.getenv("KT_LEGACY_ONLY") == "1"
     environment = os.environ.copy()
     if legacy_only:
+        environment["VUE_STANDALONE_ENABLED"] = "0"
+        environment["VUE_TEACHER_COURSES_ENABLED"] = "0"
         environment["VUE_TEACHER_EXPERIMENTS_ENABLED"] = "0"
         environment["VUE_TEACHER_QUESTION_BANKS_ENABLED"] = "0"
+        environment["VUE_TEACHER_CLASSES_ENABLED"] = "0"
+        environment["VUE_TEACHER_DATA_CENTER_ENABLED"] = "0"
+        environment["VUE_STUDENT_COURSES_ENABLED"] = "0"
+        environment["VUE_STUDENT_ASSESSMENT_ENABLED"] = "0"
         return subprocess.call(
             [sys.executable, "manage.py", "runserver", "0.0.0.0:8000"],
             cwd=ROOT,
             env=environment,
         )
 
+    environment["VUE_TEACHER_COURSES_ENABLED"] = "1"
     environment["VUE_TEACHER_EXPERIMENTS_ENABLED"] = "1"
     environment["VUE_TEACHER_QUESTION_BANKS_ENABLED"] = "1"
+    environment["VUE_TEACHER_CLASSES_ENABLED"] = "1"
+    environment["VUE_TEACHER_DATA_CENTER_ENABLED"] = "1"
+    environment["VUE_STUDENT_COURSES_ENABLED"] = "1"
+    environment["VUE_STUDENT_ASSESSMENT_ENABLED"] = "1"
     node_directory, npm = find_node_directory()
     environment["PATH"] = f"{node_directory}{os.pathsep}{environment.get('PATH', '')}"
-    vite_port = find_available_vite_port()
-    vite_url = f"http://127.0.0.1:{vite_port}"
-    environment["VITE_DEV_SERVER_URL"] = vite_url
     ensure_frontend_dependencies(npm)
+    standalone = environment.get("VUE_STANDALONE_ENABLED", "1") == "1"
+    if standalone:
+        environment["VUE_STANDALONE_ENABLED"] = "1"
+        environment["VITE_DEV_SERVER_URL"] = ""
+        subprocess.run([str(npm), "run", "build"], cwd=FRONTEND, env=environment, check=True)
+        frontend_command = [str(npm), "run", "build", "--", "--watch"]
+        frontend_display = "independent Vite build (watch); same-origin http://127.0.0.1:8000"
+    else:
+        vite_port = find_available_vite_port()
+        vite_url = f"http://127.0.0.1:{vite_port}"
+        environment["VITE_DEV_SERVER_URL"] = vite_url
+        frontend_command = vite_command(npm, vite_port)
+        frontend_display = vite_url
     print(f"Checkout: {ROOT}", flush=True)
-    print(f"Frontend: {vite_url}", flush=True)
+    print(f"Frontend: {frontend_display}", flush=True)
     vite = subprocess.Popen(
-        vite_command(npm, vite_port),
+        frontend_command,
         cwd=FRONTEND,
         env=environment,
         **process_creation_kwargs(),

@@ -16,6 +16,8 @@ class ExportSnapshot(models.Model):
     source_cutoff_at = models.DateTimeField(default=timezone.now)
     event_high_watermark = models.PositiveBigIntegerField(default=0)
     schema_manifest_hash = models.CharField(max_length=64, blank=True, default="")
+    source_bundle = models.JSONField(null=True, blank=True)
+    source_bundle_hash = models.CharField(max_length=64, blank=True, default="")
     invalidated_at = models.DateTimeField(null=True, blank=True)
     invalidated_reason = models.CharField(max_length=255, blank=True, default="")
     database_snapshot_strategy = models.CharField(max_length=32, default="single_read_transaction")
@@ -39,6 +41,7 @@ class ExportSnapshot(models.Model):
     _FROZEN_FIELDS = frozenset({
         "course_id", "experiment_id", "research_study_id", "cutoff_at",
         "source_cutoff_at", "event_high_watermark", "schema_manifest_hash",
+        "source_bundle", "source_bundle_hash",
         "database_snapshot_strategy", "selected_versions", "filter_definition",
         "scope_hash", "coverage_run_id", "created_by_id",
     })

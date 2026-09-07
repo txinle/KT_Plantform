@@ -31,10 +31,28 @@ class TeacherClassSummarySerializer(serializers.Serializer):
     detail_url = serializers.CharField()
 
 
+class TeacherClassCapabilitiesSerializer(serializers.Serializer):
+    can_create = serializers.BooleanField()
+
+
 class TeacherClassCollectionSerializer(serializers.Serializer):
     items = TeacherClassSummarySerializer(many=True)
     page = TeacherClassPageMetadataSerializer()
     course = CourseReferenceSerializer()
+    capabilities = TeacherClassCapabilitiesSerializer()
+
+
+class TeacherClassCreateRequestSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=120)
+    academic_year = serializers.CharField(
+        max_length=32,
+        allow_blank=True,
+        required=False,
+    )
+
+
+class TeacherClassCreateResponseSerializer(serializers.Serializer):
+    class_group = TeacherClassSummarySerializer()
 
 
 class MetricValueSerializer(serializers.Serializer):

@@ -130,9 +130,12 @@ def table_export_create(request, course_pk):
         return HttpResponse("导出范围不属于当前课程", status=404, content_type="text/plain; charset=utf-8")
     except ScopeValidationError as error:
         return HttpResponse(str(error), status=400, content_type="text/plain; charset=utf-8")
-    snapshot = create_export_snapshot(
-        course=course, experiment=experiment, created_by=request.user, scope=scope,
-    )
+    try:
+        snapshot = create_export_snapshot(
+            course=course, experiment=experiment, created_by=request.user, scope=scope,
+        )
+    except ExportContractError as error:
+        return HttpResponse(str(error), status=400, content_type="text/plain; charset=utf-8")
     job = _prepare_export_job(
         course=course,
         experiment=experiment,

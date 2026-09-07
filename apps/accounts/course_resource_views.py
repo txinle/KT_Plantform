@@ -1,8 +1,7 @@
 from django.contrib import messages
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
-from django.db.models.deletion import ProtectedError
+from django.db import transaction
 from django.db.models import Q
 from django.http import Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
@@ -20,6 +19,12 @@ from .course_access import (
     lock_writable_course,
     require_writable_course,
 )
+from .class_management_services import (
+    CourseClassDeletionError,
+    create_course_class_group,
+    delete_course_class_group,
+    update_course_class_group,
+)
 from .enrollment_services import (
     copy_class_enrollments,
     enroll_parsed_students,
@@ -35,7 +40,6 @@ from .forms import (
     PasswordResetForm,
     StudentBatchUploadForm,
     StudentClassCopyForm,
-    class_group_state_token_matches,
 )
 from .models import ClassGroup, ClassStudentAnalyticsPolicy, CourseEnrollment, User
 from .permissions import role_required
@@ -46,26 +50,6 @@ from .student_import import (
     build_student_import_workbook,
     parse_student_workbook,
 )
-
-
-CLASS_GROUP_AUDIT_FIELDS = ("name", "academic_year", "is_active")
-
-
-def _class_group_audit_details(course, class_group, previous_values, changed_fields):
-    changed_fields = [
-        field for field in CLASS_GROUP_AUDIT_FIELDS if field in changed_fields
-    ]
-    return {
-        "course_id": course.pk,
-        "changed_fields": changed_fields,
-        "changes": {
-            field: {
-                "before": previous_values[field],
-                "after": getattr(class_group, field),
-            }
-            for field in changed_fields
-        },
-    }
 
 
 def _inactive_target_class_response(request, course, class_group, action):
@@ -87,15 +71,16 @@ def class_list(request, course_pk):
             title=f"{course.name} · 班级",
             course=course,
         )
-    if request.method == "POST":
-        require_writable_course(course)
     form = ClassGroupForm(request.POST or None)
-    if request.method == "POST" and form.is_valid():
-        class_group = form.save(commit=False)
-        class_group.course = course
-        class_group.owner = course.owner
-        class_group.save()
-        log_action(request, "class.create", class_group, {"course_id": course.pk})
+    if request.method == "POST":
+        class_group = create_course_class_group(
+            request=request,
+            course=course,
+            form=form,
+        )
+    else:
+        class_group = None
+    if class_group is not None:
         messages.success(request, "班级已创建。")
         return redirect("courses:class_detail", course.pk, class_group.pk)
     query = request.GET.get("q", "").strip()
@@ -123,36 +108,15 @@ def class_delete(request, course_pk, class_pk):
     require_writable_course(course)
     if request.POST.get("confirmation") != "delete":
         return HttpResponseBadRequest("请在二次确认后再删除班级。")
-    with transaction.atomic():
-        course = lock_writable_course(course)
-        class_group = get_object_or_404(
-            ClassGroup.objects.select_for_update(),
-            pk=class_pk,
-            course_id=course.pk,
+    class_group = get_object_or_404(course.classes, pk=class_pk)
+    try:
+        delete_course_class_group(
+            request=request,
+            course=course,
+            class_group=class_group,
         )
-        if (
-            class_group.enrollments.exists()
-            or class_group.students.exists()
-            or class_group.experiment_participant_class_links.exists()
-        ):
-            return HttpResponseBadRequest(
-                "班级仍有关联学生或实验参与规则，请先迁移学生并移除参与规则。"
-            )
-        details = {
-            "class_id": class_group.pk,
-            "course_id": course.pk,
-            "name": class_group.name,
-            "academic_year": class_group.academic_year,
-        }
-        try:
-            with transaction.atomic():
-                ClassStudentAnalyticsPolicy.objects.filter(
-                    class_group_id=class_group.pk
-                ).delete()
-                class_group.delete()
-        except ProtectedError:
-            return HttpResponseBadRequest("班级仍被历史数据引用，不能删除。")
-        log_action(request, "class.delete", details=details)
+    except CourseClassDeletionError as exc:
+        return HttpResponseBadRequest("; ".join(exc.messages))
     messages.success(request, "班级已删除。")
     return redirect("courses:classes", course.pk)
 
@@ -185,46 +149,12 @@ def class_update(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     class_group = get_object_or_404(course.classes, pk=class_pk)
-    form = ClassGroupUpdateForm(request.POST, instance=class_group)
-    saved_class_group = None
-    try:
-        with transaction.atomic():
-            class_group = get_object_or_404(
-                ClassGroup.objects.select_for_update(),
-                pk=class_pk,
-                course_id=course.pk,
-            )
-            form = ClassGroupUpdateForm(request.POST, instance=class_group)
-            previous_values = {
-                "name": class_group.name,
-                "academic_year": class_group.academic_year,
-                "is_active": class_group.is_active,
-            }
-            if not class_group_state_token_matches(
-                request.POST.get("state_token", ""),
-                class_group,
-            ):
-                form.add_error(None, "班级信息已被其他操作更新，请刷新后重试。")
-            elif form.is_valid():
-                changed_fields = [
-                    field
-                    for field, previous_value in previous_values.items()
-                    if form.cleaned_data[field] != previous_value
-                ]
-                saved_class_group = form.save()
-                log_action(
-                    request,
-                    "class.update",
-                    saved_class_group,
-                    _class_group_audit_details(
-                        course,
-                        saved_class_group,
-                        previous_values,
-                        changed_fields,
-                    ),
-                )
-    except IntegrityError:
-        form.add_error(None, "同一课程和年级中已存在该班级名称。")
+    saved_class_group, form = update_course_class_group(
+        request=request,
+        course=course,
+        class_group=class_group,
+        form_data=request.POST,
+    )
     if saved_class_group:
         messages.success(request, "班级设置已保存。")
         if settings.CLASS_CENTER_ENABLED:

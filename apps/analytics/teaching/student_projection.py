@@ -7,6 +7,7 @@ from types import MappingProxyType
 
 from django.core.exceptions import PermissionDenied
 from django.db.models import F
+from django.urls import reverse
 
 from apps.accounts.models import (
     ClassStudentAnalyticsPolicy,
@@ -19,6 +20,7 @@ from apps.assessment.models import (
     GradeRecord,
     SubmissionEvent,
 )
+from apps.assessment.feedback_services import feedback_availability
 from apps.experiments.models import (
     ClassExperimentTask,
     Experiment,
@@ -125,6 +127,7 @@ class _StudentFactBundle:
     policy: ClassStudentAnalyticsPolicy
     tasks: tuple
     feedback_by_task: Mapping
+    feedback_availability_by_task: Mapping
     eligible_by_task: Mapping
     current_student_ids: frozenset
     student_by_id: Mapping
@@ -218,7 +221,7 @@ def _load_bundle(enrollment, generated_at):
             version_id__in={task.release_snapshot_id for task in tasks},
             class_snapshot_id__in={task.class_snapshot_id for task in tasks},
             student_id__in=eligible_student_ids,
-        ).select_related("student")
+        ).select_related("student", "capture_contract")
         if (session.version_id, session.class_snapshot_id) in task_by_pair
         and session.student_id
         in eligible_by_task[
@@ -274,6 +277,16 @@ def _load_bundle(enrollment, generated_at):
         )
         for task in tasks
     }
+    feedback_availability_by_task = {
+        task.pk: feedback_availability(
+            task,
+            session_by_task_student.get(
+                (task.pk, current_enrollment.student_id)
+            ),
+            at=generated_at,
+        )
+        for task in tasks
+    }
     context = StudentVisibilityContext(
         generated_at=generated_at,
         enrollment_id=current_enrollment.pk,
@@ -292,6 +305,7 @@ def _load_bundle(enrollment, generated_at):
             if current_enrollment.student_id in eligible_by_task[task.pk]
         ),
         feedback_by_task=MappingProxyType(feedback_by_task),
+        feedback_availability_by_task=MappingProxyType(feedback_availability_by_task),
         eligible_by_task=MappingProxyType(
             {key: frozenset(value) for key, value in eligible_by_task.items()}
         ),
@@ -305,7 +319,10 @@ def _load_bundle(enrollment, generated_at):
 
 
 def _feedback_allows_results(bundle, task):
-    return bundle.feedback_by_task[task.pk] in _RESULT_FEEDBACK_MODES
+    return (
+        bundle.feedback_by_task[task.pk] in _RESULT_FEEDBACK_MODES
+        and bundle.feedback_availability_by_task[task.pk].released
+    )
 
 
 def _task_attempts(bundle, task, student_id):
@@ -757,14 +774,61 @@ def _question_options(question, student_answer, *, include_correct):
     return tuple(rows)
 
 
+def _feedback_capture(*, task, session, attempt, availability):
+    if (
+        session.capture_contract_id is None
+        or session.capture_contract.contract_name != "capture-v2"
+    ):
+        return None
+    return StudentAllowListDTO(
+        capture_version="capture-v2",
+        session_id=session.pk,
+        attempt_id=attempt.pk,
+        event_batch_url=reverse("assessment_process:capture_v2_batch"),
+        checkpoint_url=reverse("assessment_process:capture_checkpoint"),
+        time_sync_create_url=reverse("assessment_process:time_sync_create"),
+        time_sync_finalize_url=reverse("assessment_process:time_sync_finalize"),
+        app_version="2026.08.29.2",
+        heartbeat_interval_seconds=task.release_snapshot.configuration.get(
+            "heartbeat_interval_seconds", 30
+        ),
+        answer_event_id=(
+            str(attempt.final_response_event_id)
+            if attempt.final_response_event_id is not None
+            else None
+        ),
+        snapshot_id=(
+            str(attempt.final_response_snapshot_id)
+            if attempt.final_response_snapshot_id is not None
+            else None
+        ),
+        mode=availability.feedback_mode,
+        authorized=StudentAllowListDTO(
+            correctness=availability.allows_correctness,
+            correct_answer=availability.allows_full,
+            explanation=availability.allows_full,
+        ),
+    )
+
+
 def _item_rows(bundle, task):
     rows = []
+    session = bundle.session_by_task_student.get(
+        (task.pk, bundle.context.student_id)
+    )
     for attempt in _task_attempts(bundle, task, bundle.context.student_id):
         submission = bundle.submission_by_attempt.get(attempt.pk)
         if submission is None:
             continue
         question = attempt.assignment.snapshot
         grade = bundle.grade_by_attempt.get(attempt.pk)
+        availability = feedback_availability(
+            task,
+            session,
+            attempt=attempt,
+            effective_grade=grade,
+            at=bundle.context.generated_at,
+        )
         result_label = "待评分"
         if grade is not None and grade.is_correct is not None:
             result_label = "正确" if grade.is_correct else "错误"
@@ -782,7 +846,7 @@ def _item_rows(bundle, task):
             )
             or "（空）",
         }
-        if bundle.policy.show_scores and grade is not None:
+        if bundle.policy.show_scores and availability.allows_correctness:
             values["score"] = StudentAllowListDTO(
                 generated_at=bundle.context.generated_at,
                 value=grade.score,
@@ -879,11 +943,20 @@ def build_student_question_projection(
             raise LookupError("Student has no formal submission for this question.")
         submission = bundle.submission_by_attempt[attempt.pk]
         grade = bundle.grade_by_attempt.get(attempt.pk)
+        availability = feedback_availability(
+            task,
+            bundle.session_by_task_student.get(
+                (task.pk, bundle.context.student_id)
+            ),
+            attempt=attempt,
+            effective_grade=grade,
+            at=generated_at,
+        )
         result_label = "待评分"
         if grade is not None and grade.is_correct is not None:
             result_label = "正确" if grade.is_correct else "错误"
         options = options_for_snapshot(question)
-        include_correct = bundle.feedback_by_task[task.pk] == Experiment.Feedback.FULL
+        include_correct = availability.allows_full
         values = {
             "generated_at": generated_at,
             "course_id": bundle.enrollment.course_id,
@@ -910,7 +983,18 @@ def build_student_question_projection(
                 include_correct=include_correct,
             ),
         }
-        if bundle.policy.show_scores and grade is not None:
+        feedback_capture = _feedback_capture(
+            task=task,
+            session=bundle.session_by_task_student[(
+                task.pk,
+                bundle.context.student_id,
+            )],
+            attempt=attempt,
+            availability=availability,
+        )
+        if feedback_capture is not None:
+            values["feedback_capture"] = feedback_capture
+        if bundle.policy.show_scores and availability.allows_correctness:
             values["score"] = StudentAllowListDTO(
                 generated_at=generated_at,
                 value=grade.score,

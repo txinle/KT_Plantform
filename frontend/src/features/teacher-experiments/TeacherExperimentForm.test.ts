@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     concepts: vi.fn(),
     detail: vi.fn(),
     samplingInventory: vi.fn(),
+    readiness: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
   },
@@ -50,6 +51,12 @@ describe('TeacherExperimentForm', () => {
         { question_type: 'true_false', label: '判断题', available: 0 },
       ],
     })
+    mocks.api.readiness.mockResolvedValue({
+      ready: true,
+      issues: [],
+      candidate_count: 12,
+      inventory_buckets: [],
+    })
     mocks.api.concepts.mockResolvedValue({
       items: [
         { id: 10, kc_code: 'KC000001', name: '数学', description: '', status: 'active', role_counts: { level_1: 0, level_2: 0, level_3: 0 }, question_count: 0, bank_count: 0, distribution: [], can_rename: true, can_delete: true, rename_url: null, delete_url: null },
@@ -65,9 +72,10 @@ describe('TeacherExperimentForm', () => {
     await flushPromises()
 
     const sections = wrapper.findAll('.kt-numbered-form-section')
-    expect(sections).toHaveLength(4)
+    expect(sections).toHaveLength(5)
     expect(sections.map((section) => section.text())).toEqual(expect.arrayContaining([
       expect.stringContaining('基本信息'),
+      expect.stringContaining('题目工具'),
       expect.stringContaining('题目与呈现'),
       expect.stringContaining('作答规则'),
       expect.stringContaining('研究采集'),
@@ -98,7 +106,8 @@ describe('TeacherExperimentForm', () => {
           type_quotas: [],
         },
         ordering_mode: 'fixed',
-        feedback_mode: 'none',
+        feedback_mode: 'full',
+        feedback_release_policy: 'after_personal_submission',
         time_mode: 'total',
         total_time_limit_minutes: 25,
         per_question_time_limit_seconds: null,
@@ -106,6 +115,47 @@ describe('TeacherExperimentForm', () => {
       }),
     )
     expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/19/')
+  })
+
+  it('preserves existing feedback settings when editing an experiment', async () => {
+    mocks.route.name = 'teacher-experiment-edit'
+    mocks.route.params = { courseId: '7', experimentId: '19' }
+    mocks.api.detail.mockResolvedValue({
+      id: 19,
+      name: '已有反馈设置的实验',
+      description: '',
+      question_bank: { id: 3, name: '认知诊断题库' },
+      sampling_mode: 'total_count',
+      sampling_total_count: 1,
+      sampling_match_scope: 'any_level',
+      sampling_kcs: [{ kc_code: 'KC000002', quota: null, match_scope: 'any_level' }],
+      sampling: { mode: 'total_count', total_count: 1, match_scope: 'any_level', nodes: [], type_quotas: [] },
+      ordering_mode: 'fixed',
+      feedback_mode: 'none',
+      feedback_release_policy: 'manual_release',
+      time_mode: 'none',
+      resume_mode: 'resumable',
+      confidence_mode: 'off',
+      confidence_sampling_unit: 'attempt',
+    })
+    mocks.api.update.mockResolvedValue({ id: 19 })
+
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+
+    expect((wrapper.get('input[name="feedback_mode"][value="none"]').element as HTMLInputElement).checked).toBe(true)
+    expect((wrapper.get('input[name="feedback_release_policy"][value="manual_release"]').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.api.update).toHaveBeenCalledWith(
+      7,
+      19,
+      expect.objectContaining({
+        feedback_mode: 'none',
+        feedback_release_policy: 'manual_release',
+      }),
+    )
   })
 
   it('selects an exact question-type composition from server inventory', async () => {

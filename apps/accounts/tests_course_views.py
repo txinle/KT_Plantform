@@ -226,6 +226,29 @@ class CourseWorkspaceViewTests(TestCase):
         self.assertNotContains(by_year, "认知追踪实验班")
         self.assertContains(by_year, "清除筛选")
 
+    def test_class_list_create_keeps_course_owner_and_audit_behavior(self):
+        self.client.force_login(self.collaborator)
+
+        response = self.client.post(
+            reverse("courses:classes", args=[self.course.pk]),
+            {"name": "协作教师创建班", "academic_year": "2027"},
+        )
+
+        class_group = ClassGroup.objects.get(
+            course=self.course,
+            name="协作教师创建班",
+        )
+        self.assertRedirects(
+            response,
+            reverse("courses:class_detail", args=[self.course.pk, class_group.pk]),
+        )
+        self.assertEqual(class_group.owner_id, self.course.owner_id)
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="class.create", object_id=str(class_group.pk)
+            ).exists()
+        )
+
     def test_class_grade_uses_four_digit_validation_and_visible_guidance(self):
         valid = ClassGroupForm({"name": "电子信息工程一班", "academic_year": "2025"})
         blank = ClassGroupForm({"name": "不设年级班", "academic_year": ""})

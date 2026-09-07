@@ -6,6 +6,8 @@ Read this file before changing UI code that can affect navigation, drafts, submi
 - `first_opened_at` is the server time of the first successful entry into a question.
 - `last_opened_at` is the server time of the last successful entry before formal submission.
 - Draft autosave must never create a formal submission.
+- Raw behavioral evidence is append-only; draft saving, content reuse and conflict resolution cannot replace or delete transitions. Capture-v2 records each confirmed state, including empty states, before asynchronous transport.
+- Rendering, first interaction, first nonempty answer, formal submission and feedback exposure are distinct observations. Initialization and restored state are not student actions.
 - `submitted_at` is the server time at which the database transaction succeeds.
 - Lock answers after formal submission.
 - Allow only one effective formal submission for each question.
@@ -13,7 +15,7 @@ Read this file before changing UI code that can affect navigation, drafts, submi
 - Do not encode skipped, unanswered, or timed-out attempts as incorrect automatically.
 - In no-feedback mode, do not expose correctness, correct answers, or explanations.
 - Later question-bank edits must not alter snapshots already published to an experiment.
-- Do not include student number, name, or class in the anonymous KT export by default.
+- Preserve the identified export contract in docs/changes/2026-08-27-identified-data-contract.md; frozen export identity must not drift on rerun.
 - UI changes must not alter CSRF, authorization, database transactions, idempotency tokens, or export semantics.
 
 Any change to a file that implements one of these rules requires automated regression coverage.

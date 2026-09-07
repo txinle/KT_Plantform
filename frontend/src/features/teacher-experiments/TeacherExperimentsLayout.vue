@@ -5,7 +5,7 @@ import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { createApiClient } from '@/api/client'
 import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
-import AppHeader from '@/design-system/components/AppHeader.vue'
+import WorkspaceShell from '@/design-system/components/WorkspaceShell.vue'
 
 import './teacher-experiments.css'
 
@@ -16,40 +16,40 @@ const course = ref<components['schemas']['CourseContext']>()
 
 provide('teacher-experiments-course', course)
 
+const contextError = ref('')
+
 onMounted(async () => {
-  course.value = await createApiClient({
-    getCsrfToken: () => bootstrap.csrf_token,
-  }).get<components['schemas']['CourseContext']>(`/api/v1/courses/${courseId}/context/`)
+  try {
+    course.value = await createApiClient({
+      getCsrfToken: () => bootstrap.csrf_token,
+    }).get<components['schemas']['CourseContext']>(`/api/v1/courses/${courseId}/context/`)
+  } catch (caught) {
+    contextError.value = caught instanceof Error ? caught.message : '课程信息加载失败，请刷新重试。'
+  }
 })
 </script>
 
 <template>
   <div class="kt-teacher-experiments">
-    <a class="kt-skip-link" href="#experiment-main">跳到主要内容</a>
-    <AppHeader
+    <WorkspaceShell
       :user-name="bootstrap.user.display_name"
       :user-meta="bootstrap.user.username"
       :csrf-token="bootstrap.csrf_token"
-      show-logout
+      :course-name="course?.name || '课程'"
+      :course-meta="course ? `${course.code} · ${course.term}` : undefined"
+      main-id="experiment-main"
     >
-      <a href="/teacher/courses/">我的课程</a>
-      <a :href="`/teacher/courses/${courseId}/`">概览</a>
-      <a :href="`/teacher/courses/${courseId}/banks/`">题库</a>
-      <a :href="`/teacher/courses/${courseId}/classes/`">班级</a>
-      <RouterLink :to="`/teacher/courses/${courseId}/experiments/`" aria-current="page">实验</RouterLink>
-      <a :href="`/teacher/courses/${courseId}/data/`">数据</a>
-      <a :href="`/teacher/courses/${courseId}/settings/`">设置</a>
-    </AppHeader>
-    <div class="kt-course-bar">
-      <div class="kt-shell">
-        <div class="kt-course-context">
-          <strong>{{ course?.name || '课程' }}</strong>
-          <span v-if="course">{{ course.code }} · {{ course.term }}</span>
-        </div>
-      </div>
-    </div>
-    <main id="experiment-main" class="kt-shell kt-page-main kt-experiment-shell-main" tabindex="-1">
-      <RouterView />
-    </main>
+      <template #navigation>
+        <a href="/teacher/courses/">我的课程</a>
+        <a :href="`/teacher/courses/${courseId}/`">概览</a>
+        <a :href="`/teacher/courses/${courseId}/banks/`">题库</a>
+        <a :href="`/teacher/courses/${courseId}/classes/`">班级</a>
+        <RouterLink :to="`/teacher/courses/${courseId}/experiments/`" aria-current="page">实验</RouterLink>
+        <a :href="`/teacher/courses/${courseId}/data/`">数据</a>
+        <a :href="`/teacher/courses/${courseId}/settings/`">设置</a>
+      </template>
+      <p v-if="contextError" class="kt-alert kt-alert--danger" role="alert">{{ contextError }}</p>
+      <RouterView v-else />
+    </WorkspaceShell>
   </div>
 </template>

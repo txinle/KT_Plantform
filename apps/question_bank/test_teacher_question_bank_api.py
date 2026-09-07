@@ -314,6 +314,67 @@ class TeacherQuestionBankVueShellTests(TestCase):
             self.assertContains(response, 'id="kt-app"')
             self.assertContains(response, 'data-module="teacher-question-banks"')
 
+    def test_pilot_course_receives_vue_shell_on_remaining_management_get_routes(self):
+        archived = QuestionBank.objects.create(
+            course=self.course,
+            created_by=self.teacher,
+            name="归档题库",
+            visibility=QuestionBank.Visibility.ARCHIVED,
+        )
+        question = Question.objects.create(
+            bank=self.bank,
+            sequence=1,
+            question_type=Question.Type.SHORT,
+            text="待编辑题目",
+            correct_answer="答案",
+            status=Question.Status.DRAFT,
+        )
+        source_owner = User.objects.create_user(
+            username="question-bank-shell-source",
+            role=User.Role.TEACHER,
+        )
+        source_course = Course.objects.create(
+            owner=source_owner,
+            name="共享来源课程",
+            code="SHELL-SOURCE",
+            term="2026 秋",
+        )
+        source_bank = QuestionBank.objects.create(
+            course=source_course,
+            created_by=source_owner,
+            name="共享来源题库",
+            visibility=QuestionBank.Visibility.SHARED,
+        )
+        urls = [
+            reverse("courses:archived_banks", args=[self.course.pk]),
+            reverse("courses:shared_sources", args=[self.course.pk]),
+            reverse("courses:shared_creators", args=[self.course.pk, source_course.pk]),
+            reverse(
+                "courses:shared_creator_banks",
+                args=[self.course.pk, source_course.pk, source_owner.pk],
+            ),
+            reverse("courses:bank_edit", args=[self.course.pk, self.bank.pk]),
+            reverse("courses:question_import", args=[self.course.pk, self.bank.pk]),
+            reverse("courses:kc_import", args=[self.course.pk, self.bank.pk]),
+            reverse(
+                "courses:question_edit",
+                args=[self.course.pk, self.bank.pk, question.pk],
+            ),
+        ]
+
+        with self.rollout_env(
+            VUE_TEACHER_QUESTION_BANKS_ENABLED="1",
+            VUE_TEACHER_QUESTION_BANKS_COURSE_IDS=str(self.course.pk),
+        ):
+            responses = [self.client.get(url) for url in urls]
+
+        self.assertEqual(source_bank.visibility, QuestionBank.Visibility.SHARED)
+        self.assertEqual(archived.visibility, QuestionBank.Visibility.ARCHIVED)
+        for response in responses:
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertContains(response, 'id="kt-app"')
+            self.assertContains(response, 'data-module="teacher-question-banks"')
+
     def test_nonpilot_and_invalid_create_keep_the_legacy_document_flow(self):
         other_course = Course.objects.create(
             owner=self.teacher,

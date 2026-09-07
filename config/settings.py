@@ -4,6 +4,10 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "local-development-key-change-before-production")
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
+CAPTURE_V2_ENABLED = os.getenv('CAPTURE_V2_ENABLED', '0') == '1'
+DATA_UPLOAD_MAX_MEMORY_SIZE = 8 * 1024 * 1024
+CAPTURE_V2_USER_IDS = frozenset(filter(None, os.getenv('CAPTURE_V2_USER_IDS', '').split(',')))
+CAPTURE_V2_COURSE_IDS = frozenset(filter(None, os.getenv('CAPTURE_V2_COURSE_IDS', '').split(',')))
 CLASS_CENTER_ENABLED = os.getenv("CLASS_CENTER_ENABLED") == "1"
 STUDENT_LEARNING_ANALYTICS_ENABLED = (
     CLASS_CENTER_ENABLED
@@ -37,6 +41,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "apps.api.frontend_entry.IndependentFrontendMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]

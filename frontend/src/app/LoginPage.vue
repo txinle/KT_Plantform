@@ -1,0 +1,60 @@
+<script setup lang="ts">
+import { reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
+
+import { ApiError } from '@/api/client'
+
+import { login, safeNextPath } from './auth'
+
+const route = useRoute()
+const credentials = reactive({ username: '', password: '' })
+const error = ref('')
+const submitting = ref(false)
+
+async function submit() {
+  submitting.value = true
+  error.value = ''
+  try {
+    const context = await login(credentials.username, credentials.password)
+    window.location.assign(safeNextPath(route.query.next, context.user.home_url))
+  } catch (caught) {
+    error.value = caught instanceof ApiError || caught instanceof Error
+      ? caught.message
+      : '登录失败，请稍后重试。'
+  } finally {
+    submitting.value = false
+  }
+}
+</script>
+
+<template>
+  <main class="kt-login-page">
+    <section class="kt-login-card kt-card kt-card--raised" aria-labelledby="login-title">
+      <p class="kt-kicker">教育科研数据采集</p>
+      <h1 id="login-title">登录 KT Data Lab</h1>
+      <p class="kt-login-card__intro">学生使用学号，教师使用教师账号。</p>
+      <p v-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
+      <form @submit.prevent="submit">
+        <div class="kt-field">
+          <label for="login-username">账号或学号</label>
+          <input id="login-username" v-model="credentials.username" name="username" autocomplete="username" required>
+        </div>
+        <div class="kt-field">
+          <label for="login-password">密码</label>
+          <input id="login-password" v-model="credentials.password" name="password" type="password" autocomplete="current-password" required>
+        </div>
+        <button class="kt-button kt-login-card__submit" type="submit" :disabled="submitting">
+          {{ submitting ? '正在登录…' : '登录' }}
+        </button>
+      </form>
+    </section>
+  </main>
+</template>
+
+<style scoped>
+.kt-login-page { display: grid; min-height: 100vh; place-items: center; padding: 1.5rem; }
+.kt-login-card { width: min(100%, 29rem); }
+.kt-login-card__intro { color: var(--kt-color-muted); }
+.kt-login-card form { display: grid; gap: 1rem; }
+.kt-login-card__submit { width: 100%; margin-top: 0.5rem; }
+</style>

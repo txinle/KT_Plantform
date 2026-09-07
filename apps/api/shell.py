@@ -1,4 +1,5 @@
 import json
+import os
 import re
 
 from django.conf import settings
@@ -56,6 +57,9 @@ def render_vue_shell(
     course=None,
     classic_scripts=(),
 ):
+    if getattr(request, '_kt_standalone', False) or os.getenv('FRONTEND_INTERNAL_REDIRECT'):
+        from .frontend_entry import frontend_response
+        return frontend_response()
     bootstrap = {
         "module": module,
         "csrf_token": get_token(request),

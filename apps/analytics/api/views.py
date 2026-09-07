@@ -6,16 +6,22 @@ from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from drf_spectacular.utils import OpenApiParameter, extend_schema
-from rest_framework.exceptions import NotFound
+from rest_framework import status
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.class_management_services import (
+    can_create_course_class_group,
+    create_course_class_group,
+)
 from apps.accounts.course_views import (
     _scope_display,
     _scope_from_request,
     _teaching_scope_display,
     _teaching_scope_from_request,
 )
+from apps.accounts.forms import ClassGroupForm
 from apps.accounts.models import ClassGroup, Course, User
 from apps.api.pagination import FixedPageNumberPagination
 from apps.assessment.models import ExperimentSession, SubmissionEvent
@@ -35,6 +41,8 @@ from .serializers import (
     DataCenterQualityCollectionSerializer,
     DataCenterScopeSerializer,
     TeacherClassCenterSerializer,
+    TeacherClassCreateRequestSerializer,
+    TeacherClassCreateResponseSerializer,
     TeacherClassCollectionSerializer,
 )
 
@@ -449,8 +457,20 @@ def _class_detail_url(course_id, class_id):
     return reverse("courses:class_detail", args=[course_id, class_id])
 
 
+def _teacher_class_summary_payload(course, class_group, active_student_count):
+    return {
+        "id": class_group.pk,
+        "name": class_group.name,
+        "academic_year": class_group.academic_year,
+        "is_active": class_group.is_active,
+        "active_student_count": active_student_count,
+        "detail_url": _class_detail_url(course.pk, class_group.pk),
+    }
+
+
 class TeacherClassCollectionView(APIView):
     @extend_schema(
+        operation_id="teacher_course_class_list",
         parameters=[OpenApiParameter("q", str, required=False)],
         responses=TeacherClassCollectionSerializer,
     )
@@ -476,19 +496,47 @@ class TeacherClassCollectionView(APIView):
         paginator = FixedPageNumberPagination()
         page = paginator.paginate_queryset(classes, request, view=self)
         items = [
-            {
-                "id": class_group.pk,
-                "name": class_group.name,
-                "academic_year": class_group.academic_year,
-                "is_active": class_group.is_active,
-                "active_student_count": class_group.active_student_count,
-                "detail_url": _class_detail_url(course.pk, class_group.pk),
-            }
+            _teacher_class_summary_payload(
+                course,
+                class_group,
+                class_group.active_student_count,
+            )
             for class_group in page
         ]
         response = paginator.get_paginated_response(items)
         response.data["course"] = _course_payload(course)
+        response.data["capabilities"] = {
+            "can_create": can_create_course_class_group(course, request.user)
+        }
         return response
+
+    @extend_schema(
+        operation_id="teacher_course_class_create",
+        request=TeacherClassCreateRequestSerializer,
+        responses={201: TeacherClassCreateResponseSerializer},
+    )
+    def post(self, request, course_id):
+        course = _course_for_teacher(request.user, course_id)
+        form = ClassGroupForm(request.data)
+        class_group = create_course_class_group(
+            request=request,
+            course=course,
+            form=form,
+        )
+        if class_group is None:
+            raise ValidationError(form.errors)
+        return Response(
+            TeacherClassCreateResponseSerializer(
+                {
+                    "class_group": _teacher_class_summary_payload(
+                        course,
+                        class_group,
+                        0,
+                    )
+                }
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class TeacherClassCenterView(APIView):

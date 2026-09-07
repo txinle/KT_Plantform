@@ -103,6 +103,9 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
     feedback_mode_label = serializers.CharField(
         source="get_feedback_mode_display", read_only=True
     )
+    feedback_release_policy_label = serializers.CharField(
+        source="get_feedback_release_policy_display", read_only=True
+    )
     time_mode_label = serializers.CharField(
         source="get_time_mode_display", read_only=True
     )
@@ -139,7 +142,10 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "ordering_mode",
             "ordering_mode_label",
             "feedback_mode",
+            "feedback_release_policy",
+            "research_tools",
             "feedback_mode_label",
+            "feedback_release_policy_label",
             "time_mode",
             "time_mode_label",
             "total_time_limit_minutes",
@@ -176,11 +182,13 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             return representation
         configuration = instance.frozen_release_snapshot.configuration
         frozen_fields = (
+            "research_tools",
             "selection_mode",
             "sampling_mode",
             "sampling_total_count",
             "ordering_mode",
             "feedback_mode",
+            "feedback_release_policy",
             "time_mode",
             "total_time_limit_minutes",
             "per_question_time_limit_seconds",
@@ -221,6 +229,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "sampling_mode": Experiment.SamplingMode,
             "ordering_mode": Experiment.Ordering,
             "feedback_mode": Experiment.Feedback,
+            "feedback_release_policy": Experiment.FeedbackReleasePolicy,
             "time_mode": Experiment.TimeMode,
             "resume_mode": Experiment.ResumeMode,
             "confidence_mode": Experiment.ConfidenceMode,
@@ -241,6 +250,13 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         if bank.visibility == QuestionBank.Visibility.ARCHIVED:
             raise serializers.ValidationError("归档题库不能用于实验。")
         return bank
+
+    def validate_research_tools(self, value):
+        from apps.experiments.research_tool_config import validate_research_tools
+        try:
+            return validate_research_tools(value)
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.messages) from error
 
     def validate_question_quotas(self, quotas):
         question_types = [quota["question_type"] for quota in quotas]

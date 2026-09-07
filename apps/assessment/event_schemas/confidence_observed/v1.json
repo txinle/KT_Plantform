@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capture_version",
+    "operation_id",
+    "confidence_assignment_id",
+    "stage",
+    "answer_event_id",
+    "probability",
+    "feedback_phase"
+  ],
+  "properties": {
+    "capture_version": {
+      "const": "capture-v2"
+    },
+    "operation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "confidence_assignment_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "stage": {
+      "enum": [
+        "presented",
+        "responded",
+        "skipped"
+      ]
+    },
+    "answer_event_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "snapshot_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "probability": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 100,
+      "multipleOf": 10
+    },
+    "feedback_phase": {
+      "enum": [
+        "before_feedback",
+        "after_feedback",
+        "unknown"
+      ]
+    }
+  }
+}

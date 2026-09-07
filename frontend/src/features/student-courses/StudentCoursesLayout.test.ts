@@ -36,25 +36,25 @@ describe('StudentCoursesLayout', () => {
     const wrapper = mount(StudentCoursesLayout)
     await flushPromises()
 
-    expect(wrapper.get('.kt-global-nav').text()).toBe('我的课程')
+    expect(wrapper.get('.kt-workspace-sidebar').text()).toContain('我的课程')
     expect(wrapper.get('.kt-user-name').text()).toContain('学生一')
     expect(wrapper.get('.kt-user-name').text()).toContain('STUDENT-001')
-    expect(wrapper.get('.kt-course-nav').text()).toContain('实验任务')
-    expect(wrapper.get('.kt-course-nav').text()).toContain('我的学习')
+    expect(wrapper.get('.kt-workspace-navigation').text()).toContain('作业')
+    expect(wrapper.get('.kt-workspace-navigation').text()).toContain('班级中心')
     expect(wrapper.text()).not.toContain('通知')
   })
 
-  it('uses the feedback shell without the global nav or course bar on P3 and P4', async () => {
+  it('keeps course links in the sidebar on feedback pages without another task request', async () => {
     mocks.route.name = 'student-result'
 
     const wrapper = mount(StudentCoursesLayout)
     await flushPromises()
 
     expect(mocks.api.tasks).not.toHaveBeenCalled()
-    expect(wrapper.get('.kt-app-header').classes()).toContain('kt-app-header--feedback')
-    expect(wrapper.get('.kt-global-nav').text()).toBe('')
+    expect(wrapper.get('.kt-workspace-sidebar').text()).toContain('班级中心')
+    expect(wrapper.get('.kt-global-nav').text()).toBe('菜单')
     expect(wrapper.find('.kt-course-bar').exists()).toBe(false)
-    expect(wrapper.get('#student-main').classes()).toContain('kt-feedback-main')
+    expect(wrapper.get('#student-main').classes()).toContain('kt-workspace-main')
     expect(wrapper.get('.kt-logout-button').text()).toBe('退出')
   })
 })

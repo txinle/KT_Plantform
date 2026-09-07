@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   api: { list: vi.fn(), courseConcepts: vi.fn(), createBank: vi.fn(), createCourseConcept: vi.fn(), previewCourseConceptImport: vi.fn(), confirmCourseConceptImport: vi.fn() },
+  managementApi: { archiveBank: vi.fn(), updateCourseConcept: vi.fn(), deleteCourseConcept: vi.fn() },
   push: vi.fn(),
   route: { params: { courseId: '7' }, query: {} as Record<string, string> },
 }))
@@ -13,6 +14,7 @@ vi.mock('vue-router', () => ({
   RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
 }))
 vi.mock('./api', () => ({ getTeacherQuestionBankApi: () => mocks.api }))
+vi.mock('../teacher-bank-management/api', () => ({ getTeacherBankManagementApi: () => mocks.managementApi }))
 vi.mock('@/app/bootstrap', () => ({ getBootstrapContext: () => ({ csrf_token: 'csrf-token' }) }))
 
 import TeacherQuestionBankList from './TeacherQuestionBankList.vue'
@@ -33,6 +35,9 @@ describe('TeacherQuestionBankList', () => {
       page: { number: 1, size: 20, total_items: 1, total_pages: 1, start: 1, end: 1 },
       summary: { total: 1, active: 1, used: 1, archived: 0 },
     })
+    mocks.managementApi.archiveBank.mockResolvedValue({ id: 11, visibility: 'archived' })
+    mocks.managementApi.updateCourseConcept.mockResolvedValue({ id: 23, kc_code: 'KC1', name: '更新名称', description: '更新说明', status: 'active' })
+    mocks.managementApi.deleteCourseConcept.mockResolvedValue({ id: 23, status: 'archived' })
   })
 
   it('uses the confirmed two-tab bank-management desktop structure by default', async () => {
@@ -40,6 +45,7 @@ describe('TeacherQuestionBankList', () => {
     await flushPromises()
     expect(wrapper.get('h1').text()).toBe('题库')
     expect(wrapper.get('[aria-label="层级目录"]').text()).toContain('研究方法')
+    expect(wrapper.get('[aria-label="题库模块"]').classes()).toContain('kt-sidebar-secondary-nav')
     expect(wrapper.get('[data-tab="banks"]').classes()).toContain('is-active')
     expect(wrapper.find('[data-panel="course-kcs"]').exists()).toBe(false)
     expect(wrapper.get('[data-panel="banks"] h2').text()).toBe('课程题库')
@@ -47,7 +53,9 @@ describe('TeacherQuestionBankList', () => {
     expect(wrapper.text()).toContain('课程 KC 总库')
     expect(wrapper.get('a[href="/teacher/courses/7/banks/archived/"]').text()).toContain('2')
     expect(wrapper.get('form[data-create-bank] input[name="name"]')).toBeTruthy()
-    expect(wrapper.get('form[action="/teacher/courses/7/banks/11/archive/"]')).toBeTruthy()
+    await wrapper.get('[data-bank-archive]').trigger('click')
+    await flushPromises()
+    expect(mocks.managementApi.archiveBank).toHaveBeenCalledWith(7, 11)
   })
 
   it('renders only the KC overview/list/create/import composition on the KC tab', async () => {
@@ -95,5 +103,26 @@ describe('TeacherQuestionBankList', () => {
     await flushPromises()
     expect(mocks.api.confirmCourseConceptImport).toHaveBeenCalledWith(7, 'batch-1')
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+  })
+
+  it.each(['.kt-qb-desktop-table', '.kt-qb-mobile-list'])('renames and archives course KCs through the JSON API from %s', async (selector) => {
+    mocks.route.query = { tab: 'course-kcs' }
+    const wrapper = mount(TeacherQuestionBankList)
+    await flushPromises()
+
+    const list = wrapper.get(selector)
+    await list.get('[data-concept-rename]').trigger('click')
+    const renameForm = list.get('[data-concept-rename-form]')
+    await renameForm.get('input[name="name"]').setValue('更新名称')
+    await renameForm.get('textarea[name="description"]').setValue('更新说明')
+    await renameForm.trigger('submit')
+    await flushPromises()
+    expect(mocks.managementApi.updateCourseConcept).toHaveBeenCalledWith(7, 23, {
+      name: '更新名称', description: '更新说明',
+    })
+
+    await wrapper.get(selector).get('[data-concept-delete]').trigger('click')
+    await flushPromises()
+    expect(mocks.managementApi.deleteCourseConcept).toHaveBeenCalledWith(7, 23)
   })
 })

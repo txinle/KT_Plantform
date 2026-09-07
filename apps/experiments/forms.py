@@ -14,6 +14,7 @@ class ExperimentForm(forms.ModelForm):
             "selection_mode",
             "ordering_mode",
             "feedback_mode",
+            "feedback_release_policy",
             "time_mode",
             "total_time_limit_minutes",
             "per_question_time_limit_seconds",
@@ -34,6 +35,7 @@ class ExperimentForm(forms.ModelForm):
             "selection_mode": "选题方式",
             "ordering_mode": "题目顺序",
             "feedback_mode": "反馈模式",
+            "feedback_release_policy": "反馈发布时间",
             "time_mode": "时间模式",
             "total_time_limit_minutes": "实验总时限（分钟）",
             "per_question_time_limit_seconds": "单题时限（秒）",
@@ -51,6 +53,7 @@ class ExperimentForm(forms.ModelForm):
     def __init__(self, *args, owner=None, course=None, **kwargs):
         super().__init__(*args, **kwargs)
         for field_name in (
+            "feedback_release_policy",
             "confidence_mode",
             "confidence_sampling_unit",
             "confidence_probability",
@@ -102,6 +105,7 @@ class ExperimentForm(forms.ModelForm):
     def clean(self):
         cleaned = super().clean()
         for field_name in (
+            "feedback_release_policy",
             "confidence_mode",
             "confidence_sampling_unit",
             "confidence_probability",

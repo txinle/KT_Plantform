@@ -1,7 +1,11 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ api: { learningQuestion: vi.fn() } }))
+const mocks = vi.hoisted(() => ({ api: { learningQuestion: vi.fn(), learningExperiment: vi.fn() }, record: vi.fn(), dispose: vi.fn() }))
+vi.mock('@/assessment-runtime/process-bridge', () => ({ createProcessRuntime: async () => ({
+  record: mocks.record, dispose: mocks.dispose, flushBounded: async () => true,
+}) }))
+vi.mock('@/app/bootstrap', () => ({ getBootstrapContext: () => ({ csrf_token: 'csrf' }) }))
 
 vi.mock('vue-router', () => ({
   useRoute: () => ({ params: { courseId: '7', experimentId: '11', questionId: '73' } }),
@@ -41,7 +45,37 @@ const fullQuestion = {
 }
 
 describe('StudentLearningQuestion', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.learningExperiment.mockResolvedValue({
+      item_results: [
+        { question_id: 73, code: 'Q0073', final_answer: '15' },
+        { question_id: 90, code: 'Q0090', final_answer: '质数' },
+      ],
+    })
+  })
+
+  it('capture-v2 logs actual expansion stages against a single detail visit', async () => {
+    mocks.api.learningQuestion.mockResolvedValue({ ...fullQuestion, feedback_capture: {
+      capture_version: 'capture-v2', mode: 'full', answer_event_id: 'answer-event', snapshot_id: 'snapshot',
+      authorized: { correctness: true, correct_answer: true, explanation: true },
+    } })
+    const wrapper = mount(StudentLearningQuestion)
+    await flushPromises()
+    expect(wrapper.text()).not.toContain(fullQuestion.explanation)
+    expect(wrapper.find('.kt-feedback-option--correct').exists()).toBe(false)
+    await wrapper.get('[data-show-answer]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-show-explanation]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain(fullQuestion.explanation)
+    wrapper.unmount()
+    await flushPromises()
+    const payloads = mocks.record.mock.calls.map((call) => call[1])
+    expect(payloads.map((row) => row.stage)).toEqual(['detail_entered', 'answer_presented', 'explanation_presented', 'detail_left'])
+    expect(new Set(payloads.map((row) => row.operation_id)).size).toBe(1)
+    expect(payloads.at(-1)).toMatchObject({ included_correctness: true, included_correct_answer: true, included_explanation: true })
+  })
 
   it('renders the P3 choice feedback with student and correct option states', async () => {
     mocks.api.learningQuestion.mockResolvedValue(fullQuestion)
@@ -52,9 +86,15 @@ describe('StudentLearningQuestion', () => {
     expect(wrapper.text()).toContain('12 + 3 等于多少？')
     expect(wrapper.text()).toContain('统计生成时间：2026-08-31 11:10:43')
     expect(wrapper.findAll('.kt-feedback-option')).toHaveLength(4)
+    expect(wrapper.find('.kt-question-detail-layout').exists()).toBe(true)
+    expect(mocks.api.learningExperiment).toHaveBeenCalledWith(7, 11)
+    expect(wrapper.findAll('.kt-question-directory a')).toHaveLength(2)
+    expect(wrapper.get('.kt-question-directory a[aria-current="page"]').attributes('href')).toBe('/student/courses/7/learning/experiments/11/questions/73/')
     expect(wrapper.find('.kt-feedback-option--student').text()).toContain('我的作答')
     expect(wrapper.find('.kt-feedback-option--correct').text()).toContain('正确答案')
     expect(wrapper.findAll('.kt-feedback-answer-panel')).toHaveLength(3)
+    expect(wrapper.find('.kt-feedback-answer-pair').exists()).toBe(true)
+    expect(wrapper.find('.kt-feedback-answer-pair').element.compareDocumentPosition(wrapper.find('.kt-feedback-answer-panel--analysis').element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(wrapper.text()).toContain('D：16')
     expect(wrapper.text()).toContain(fullQuestion.explanation)
   })
@@ -76,7 +116,7 @@ describe('StudentLearningQuestion', () => {
     const wrapper = mount(StudentLearningQuestion)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('学生作答')
+    expect(wrapper.text()).toContain('我的正式作答')
     expect(wrapper.text()).not.toContain('正确答案')
     expect(wrapper.text()).not.toContain('答案解析')
     expect(wrapper.find('.kt-feedback-option--student').exists()).toBe(true)

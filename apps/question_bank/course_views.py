@@ -99,6 +99,19 @@ def _metadata_question_bank_form(data=None, *, instance):
     return form
 
 
+def _question_bank_vue_shell(request, course, title):
+    if request.method == "GET" and is_vue_module_enabled(
+        "teacher_question_banks", request.user, course
+    ):
+        return render_vue_shell(
+            request,
+            module="teacher-question-banks",
+            title=title,
+            course=course,
+        )
+    return None
+
+
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def bank_list(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
@@ -178,6 +191,8 @@ def bank_list(request, course_pk):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def archived_bank_list(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
+    if shell := _question_bank_vue_shell(request, course, f"{course.name}归档题库 | KT Data Lab"):
+        return shell
     banks = course.question_banks.filter(
         visibility=QuestionBank.Visibility.ARCHIVED
     ).select_related("created_by", "owner").annotate(question_count=Count("questions"))
@@ -198,6 +213,8 @@ def _shared_banks_for(course):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def shared_source_courses(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
+    if shell := _question_bank_vue_shell(request, course, f"{course.name}共享题库 | KT Data Lab"):
+        return shell
     source_courses = (
         Course.objects.filter(question_banks__in=_shared_banks_for(course))
         .annotate(
@@ -228,6 +245,8 @@ def shared_creators(request, course_pk, source_course_pk):
         Course.objects.filter(question_banks__in=_shared_banks_for(course)).distinct(),
         pk=source_course_pk,
     )
+    if shell := _question_bank_vue_shell(request, course, f"{source_course.name}共享题库 | KT Data Lab"):
+        return shell
     creators = (
         User.objects.filter(
             created_question_banks__course=source_course,
@@ -270,6 +289,8 @@ def shared_creator_banks(request, course_pk, source_course_pk, creator_pk):
         ).distinct(),
         pk=creator_pk,
     )
+    if shell := _question_bank_vue_shell(request, course, f"{creator.shown_name}创建的题库 | KT Data Lab"):
+        return shell
     banks = _shared_banks_for(course).filter(
         course=source_course,
         created_by=creator,
@@ -334,6 +355,8 @@ def bank_edit(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     bank = _bank(course, pk)
     _require_bank_metadata_editor(request, course, bank)
+    if shell := _question_bank_vue_shell(request, course, f"编辑 {bank.name} | KT Data Lab"):
+        return shell
     form = _metadata_question_bank_form(instance=bank)
     return render(
         request,
@@ -613,6 +636,10 @@ def question_delete(request, course_pk, bank_pk, question_pk):
 def question_edit(request, course_pk, bank_pk, question_pk):
     course = get_accessible_course(request.user, course_pk)
     bank = _bank(course, bank_pk)
+    if request.method == "GET":
+        require_writable_bank_content(bank)
+        if shell := _question_bank_vue_shell(request, course, f"编辑题目 | {bank.name}"):
+            return shell
     if request.method == "POST":
         with transaction.atomic():
             course, bank = lock_writable_course_bank(course, bank, content=True)
@@ -624,7 +651,6 @@ def question_edit(request, course_pk, bank_pk, question_pk):
                 messages.success(request, "题目已保存。")
                 return redirect("courses:bank_detail", course.pk, bank.pk)
     else:
-        require_writable_bank_content(bank)
         question = get_object_or_404(bank.questions, pk=question_pk)
         form = QuestionEditForm(instance=question, course=course)
     return render(
@@ -653,6 +679,8 @@ def question_import(request, course_pk, pk):
     if request.method == "POST":
         require_writable_course(course)
     require_writable_bank_content(bank)
+    if shell := _question_bank_vue_shell(request, course, f"导入题目 | {bank.name}"):
+        return shell
     session_key = f"course_question_import:{course.pk}:{bank.pk}"
     preview = None
     upload_name = ""
@@ -716,6 +744,8 @@ def kc_import(request, course_pk, pk):
     if request.method == "POST":
         require_writable_course(course)
     require_writable_bank_content(bank)
+    if shell := _question_bank_vue_shell(request, course, f"导入 KC | {bank.name}"):
+        return shell
     session_key = f"course_kc_import:{course.pk}:{bank.pk}"
     preview = None
     preview_v2 = None

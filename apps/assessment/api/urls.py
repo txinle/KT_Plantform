@@ -1,4 +1,5 @@
 from django.urls import path
+from .session_summary import StudentSessionSummaryView
 
 from .views import (
     StudentCourseCollectionView,
@@ -14,6 +15,7 @@ from .views import (
 
 
 urlpatterns = [
+    path('sessions/<int:session_id>/summary/', StudentSessionSummaryView.as_view(), name='student-session-summary'),
     path("courses/", StudentCourseCollectionView.as_view(), name="student-courses"),
     path(
         "courses/<int:course_id>/tasks/",

@@ -3,6 +3,8 @@ import json
 from django.core.exceptions import ValidationError
 from django.views.decorators.http import require_POST
 from django.http import JsonResponse
+from django.http import FileResponse
+from django.conf import settings
 from django.urls import reverse
 
 from apps.accounts.permissions import role_required
@@ -40,6 +42,13 @@ from .writer_lease_services import (
 MAX_PROCESS_REQUEST_BYTES = 256 * 1024
 
 
+def offline_worker(request):
+    response = FileResponse((settings.BASE_DIR / 'static/js/capture-v2-offline-worker.js').open('rb'), content_type='application/javascript')
+    response['Service-Worker-Allowed'] = '/student/sessions/'
+    response['Cache-Control'] = 'no-cache'
+    return response
+
+
 def _error(code, *, status):
     return JsonResponse(
         {
@@ -53,7 +62,7 @@ def _error(code, *, status):
     )
 
 
-def _json_document(request):
+def _json_document(request, *, max_bytes=MAX_PROCESS_REQUEST_BYTES):
     content_type = request.content_type or ""
     if content_type.lower() != "application/json":
         raise ProcessRequestError("json_required", status=415)
@@ -61,9 +70,9 @@ def _json_document(request):
         declared_length = int(request.META.get("CONTENT_LENGTH") or 0)
     except (TypeError, ValueError):
         declared_length = 0
-    if declared_length > MAX_PROCESS_REQUEST_BYTES:
+    if declared_length > max_bytes:
         raise ProcessRequestError("request_too_large", status=413)
-    if len(request.body) > MAX_PROCESS_REQUEST_BYTES:
+    if len(request.body) > max_bytes:
         raise ProcessRequestError("request_too_large", status=413)
     try:
         document = json.loads(request.body.decode("utf-8"))
@@ -84,6 +93,55 @@ def _sync_document(sample):
         "estimated_clock_offset_ms": sample.estimated_clock_offset_ms,
         "estimated_rtt_ms": sample.estimated_rtt_ms,
     }
+
+
+@role_required("student")
+@require_POST
+def research_tools(request, attempt_id):
+    from .research_tool_services import available_tools, due_rules, record_tool_action
+    from .models import Attempt
+    try:
+        document = _json_document(request)
+        attempt = Attempt.objects.select_related('session__version', 'assignment__snapshot').filter(pk=attempt_id, session__student=request.user).first()
+        if attempt is None:
+            return _error('not_found', status=404)
+        if not document:
+            return JsonResponse({'success': True, **available_tools(attempt), 'rules': due_rules(attempt)})
+        require_exact_mapping(document, allowed=frozenset({'tool', 'stage', 'operation_id', 'data', 'answer_event_id', 'initiation_type'}),
+                              required=frozenset({'tool', 'stage', 'operation_id'}))
+        result = record_tool_action(student=request.user, attempt_id=attempt_id, **document)
+        return JsonResponse({'success': True, **result})
+    except (ValidationError, ValueError) as error:
+        return _error(str(error), status=409)
+
+
+@role_required("student")
+@require_POST
+def resolve_branch(request, attempt_id):
+    from .capture_v2_services import resolve_response_branch
+    try:
+        document = _json_document(request)
+        require_exact_mapping(document, allowed=frozenset({'candidate_event_ids', 'selected_event_id', 'expected_version', 'operation_id', 'writer_lease_token', 'writer_client_instance_id'}),
+            required=frozenset({'candidate_event_ids', 'selected_event_id', 'expected_version', 'operation_id'}))
+        attempt = resolve_response_branch(student=request.user, attempt_id=attempt_id, **document)
+        return JsonResponse({'success': True, 'response_version': attempt.response_version,
+                             'active_response_event_id': str(attempt.active_response_event_id),
+                             'answer': attempt.draft_answer})
+    except WriterLeaseConflict:
+        return _error('writer_lease_conflict', status=409)
+    except (ValidationError, ValueError) as error:
+        return _error(str(error), status=409)
+
+
+@role_required("student")
+@require_POST
+def capture_v2_batch(request):
+    from .capture_v2_services import ingest_capture_batch
+    try:
+        acknowledgements = ingest_capture_batch(student=request.user, document=_json_document(request, max_bytes=8 * 1024 * 1024))
+        return JsonResponse({'success': True, 'acknowledgements': acknowledgements, 'rejections': []})
+    except (ProcessConflictError, ProcessRequestError) as error:
+        return _error(error.code, status=error.status)
 
 
 @role_required("student")

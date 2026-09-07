@@ -6,6 +6,7 @@ import type { components } from '@/api/generated/schema'
 import Alert from '@/design-system/components/Alert.vue'
 import Button from '@/design-system/components/Button.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
+import SidebarSection from '@/design-system/components/SidebarSection.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 import Icon from '@/design-system/Icon.vue'
 
@@ -140,6 +141,19 @@ async function applyTerminalAction() {
   }
 }
 
+async function releaseFeedback(taskId: number) {
+  working.value = true
+  error.value = ''
+  try {
+    await api.releaseFeedback(taskId)
+    await load()
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '反馈发布失败。'
+  } finally {
+    working.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -162,11 +176,13 @@ onMounted(load)
       </div>
     </header>
 
-    <nav class="kt-experiment-tabs" role="tablist" aria-label="实验详情导航">
-      <button id="experiment-tab-definition" type="button" role="tab" :aria-selected="activeTab === 'definition'" aria-controls="experiment-panel-definition" :class="{ 'is-active': activeTab === 'definition' }" @click="activeTab = 'definition'">实验定义</button>
-      <button id="experiment-tab-tasks" type="button" role="tab" :aria-selected="activeTab === 'tasks'" aria-controls="experiment-panel-tasks" :class="{ 'is-active': activeTab === 'tasks' }" @click="activeTab = 'tasks'">班级发布</button>
-      <button id="experiment-tab-collection" type="button" role="tab" :aria-selected="activeTab === 'collection'" aria-controls="experiment-panel-collection" :class="{ 'is-active': activeTab === 'collection' }" @click="activeTab = 'collection'">采集状态</button>
-    </nav>
+    <SidebarSection>
+      <nav class="kt-experiment-tabs kt-sidebar-secondary-nav" role="tablist" aria-label="实验详情导航" aria-orientation="vertical">
+        <button id="experiment-tab-definition" type="button" role="tab" :aria-selected="activeTab === 'definition'" aria-controls="experiment-panel-definition" :class="{ 'is-active': activeTab === 'definition' }" @click="activeTab = 'definition'">实验定义</button>
+        <button id="experiment-tab-tasks" type="button" role="tab" :aria-selected="activeTab === 'tasks'" aria-controls="experiment-panel-tasks" :class="{ 'is-active': activeTab === 'tasks' }" @click="activeTab = 'tasks'">班级发布</button>
+        <button id="experiment-tab-collection" type="button" role="tab" :aria-selected="activeTab === 'collection'" aria-controls="experiment-panel-collection" :class="{ 'is-active': activeTab === 'collection' }" @click="activeTab = 'collection'">采集状态</button>
+      </nav>
+    </SidebarSection>
 
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
 
@@ -179,6 +195,7 @@ onMounted(load)
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="definition" :size="17" /></span><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}<span v-if="experiment.sampling_mode === 'total_count'"> · {{ experiment.sampling_total_count }} 题</span></dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="summary" :size="17" /></span><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>反馈</dt><dd>{{ experiment.feedback_mode_label }}</dd></div>
+            <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>反馈发布</dt><dd>{{ experiment.feedback_release_policy_label || '未设置' }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>总限时</dt><dd>{{ displayLimit(experiment.total_time_limit_minutes, '分钟') }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>单题限时</dt><dd>{{ displayLimit(experiment.per_question_time_limit_seconds, '秒') }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="data" :size="17" /></span><dt>中断续答</dt><dd>{{ experiment.resume_mode_label }}</dd></div>
@@ -234,6 +251,7 @@ onMounted(load)
                         <button v-if="task.available_actions.includes('revise_schedule')" data-action="revise-schedule" class="kt-text-button" type="button" @click="editSchedule(task)">修订排期</button>
                         <button v-if="task.available_actions.includes('cancel')" data-action="cancel-task" class="kt-text-button kt-text-button--danger" type="button" @click="requestTerminalAction(task.id, 'cancel')">取消任务</button>
                         <button v-if="task.available_actions.includes('manual_close')" data-action="manual-close" class="kt-text-button kt-text-button--danger" type="button" @click="requestTerminalAction(task.id, 'manual_close')">提前结束</button>
+                        <button v-if="task.available_actions.includes('release_feedback')" data-action="release-feedback" class="kt-text-button" type="button" :disabled="working" @click="releaseFeedback(task.id)">发布反馈</button>
                       </div>
                     </td>
                   </tr>

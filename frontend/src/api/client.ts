@@ -11,7 +11,7 @@ export interface PagedCollection<T> {
   summary?: Record<string, unknown>
 }
 
-interface ApiErrorBody {
+export interface ApiErrorBody {
   error?: string | {
     code?: string
     message?: string

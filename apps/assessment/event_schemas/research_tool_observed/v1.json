@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capture_version",
+    "operation_id",
+    "server_event_id",
+    "tool",
+    "stage",
+    "initiation_type",
+    "answer_event_id",
+    "content_version",
+    "data"
+  ],
+  "properties": {
+    "capture_version": {
+      "const": "capture-v2"
+    },
+    "operation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "server_event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tool": {
+      "enum": [
+        "doubt",
+        "check",
+        "hint",
+        "confidence"
+      ]
+    },
+    "stage": {
+      "enum": [
+        "presented",
+        "closed"
+      ]
+    },
+    "initiation_type": {
+      "enum": [
+        "self_initiated",
+        "system_prompted",
+        "task_required"
+      ]
+    },
+    "answer_event_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "snapshot_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "content_version": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "data": {
+      "type": "object"
+    }
+  }
+}

@@ -25,6 +25,12 @@ MONOTONIC_QUANTUM_MS = Decimal("0.001")
 
 CLIENT_BATCH_EVENT_TYPES = frozenset(
     {
+        "response_transition",
+        "input_operation",
+        "research_tool_observed",
+        "research_tool_requested",
+        "confidence_observed",
+        "feedback_exposure",
         "item_rendered",
         "item_left",
         "response_input_started",
@@ -296,6 +302,25 @@ def append_event_batch(*, student, document):
     acknowledgements = []
     try:
         for parsed in events:
+            payload = parsed.payload
+            if parsed.event_type == 'input_operation':
+                from .capture_v2_services import prepare_input_operation
+                payload = prepare_input_operation(parsed)
+            if parsed.event_type == "response_transition":
+                from .capture_v2_services import prepare_transition
+                payload = prepare_transition(parsed)
+            if parsed.event_type == 'research_tool_observed':
+                from .research_tool_services import prepare_tool_observation
+                payload = prepare_tool_observation(parsed)
+            if parsed.event_type == 'confidence_observed':
+                from .research_tool_services import prepare_confidence_observation
+                payload = prepare_confidence_observation(parsed)
+            if parsed.event_type == 'feedback_exposure':
+                from .feedback_services import prepare_feedback_exposure
+                payload = prepare_feedback_exposure(parsed)
+            if parsed.event_type == 'research_tool_requested':
+                from .research_tool_services import prepare_tool_request
+                payload = prepare_tool_request(parsed)
             event_domain = (
                 "telemetry"
                 if parsed.event_type in TELEMETRY_EVENTS
@@ -320,7 +345,7 @@ def append_event_batch(*, student, document):
                 time_sync=parsed.time_sync,
                 capture_mode="native",
                 quality_flags=parsed.quality_flags,
-                payload=parsed.payload,
+                payload=payload,
                 app_version=parsed.app_version,
                 event_id=parsed.event_id,
                 envelope_version=2,
@@ -361,6 +386,8 @@ def append_event_batch(*, student, document):
                 )
     except EventIdempotencyConflict as error:
         raise ProcessConflictError() from error
+    except ProcessRequestError:
+        raise
     except (ValueError, ValidationError) as error:
         raise ProcessRequestError("invalid_event") from error
     return acknowledgements

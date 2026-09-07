@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   api: { detail: vi.fn(), questions: vi.fn(), bankConcepts: vi.fn() },
+  managementApi: { archiveBank: vi.fn(), restoreBank: vi.fn(), deleteBank: vi.fn(), deleteQuestion: vi.fn() },
   push: vi.fn(),
 }))
 
@@ -12,6 +13,7 @@ vi.mock('vue-router', () => ({
   RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
 }))
 vi.mock('./api', () => ({ getTeacherQuestionBankApi: () => mocks.api }))
+vi.mock('../teacher-bank-management/api', () => ({ getTeacherBankManagementApi: () => mocks.managementApi }))
 vi.mock('@/app/bootstrap', () => ({
   getBootstrapContext: () => ({ csrf_token: 'csrf-token' }),
 }))
@@ -77,9 +79,13 @@ describe('TeacherQuestionBankDetail', () => {
       }],
       page: { number: 1, size: 20, total_items: 1, total_pages: 1, start: 1, end: 1 },
     })
+    mocks.managementApi.archiveBank.mockResolvedValue({ id: 11, visibility: 'archived' })
+    mocks.managementApi.restoreBank.mockResolvedValue({ id: 11, visibility: 'private' })
+    mocks.managementApi.deleteBank.mockResolvedValue(undefined)
+    mocks.managementApi.deleteQuestion.mockResolvedValue(undefined)
   })
 
-  it('renders list-safe question facts and preserves legacy edit, import, archive, and delete posts', async () => {
+  it('renders list-safe question facts and delegates management actions to the JSON API', async () => {
     const wrapper = mount(TeacherQuestionBankDetail)
     await flushPromises()
 
@@ -90,15 +96,15 @@ describe('TeacherQuestionBankDetail', () => {
     expect(wrapper.text()).toContain('C000001')
     expect(wrapper.text()).toContain('基础运算')
     expect(wrapper.text()).not.toContain('correct_answer')
-    expect(wrapper.get('a[href="/teacher/courses/7/banks/11/edit/"]')).toBeTruthy()
-    expect(wrapper.get('a[href="/teacher/courses/7/banks/11/import/"]')).toBeTruthy()
-    expect(wrapper.get('a[href="/teacher/courses/7/banks/11/kc-import/"]')).toBeTruthy()
+    expect(wrapper.get('[data-bank-edit]').attributes('href')).toBe('/teacher/courses/7/banks/11/edit/')
+    expect(wrapper.get('[data-question-import]').attributes('href')).toBe('/teacher/courses/7/banks/11/import/')
+    expect(wrapper.get('[data-kc-import]').attributes('href')).toBe('/teacher/courses/7/banks/11/kc-import/')
+    await wrapper.get('[data-bank-archive]').trigger('click')
+    await flushPromises()
+    expect(mocks.managementApi.archiveBank).toHaveBeenCalledWith(7, 11)
 
-    const archive = wrapper.get('form[action="/teacher/courses/7/banks/11/archive/"]')
-    expect(archive.get('input[name="csrfmiddlewaretoken"]').attributes('value')).toBe('csrf-token')
-    const deleteBank = wrapper.get('form[action="/teacher/courses/7/banks/11/delete/"]')
-    expect(deleteBank.get('input[name="confirmation"]').attributes('value')).toBe('delete')
-    const deleteQuestion = wrapper.get('form[action="/teacher/courses/7/banks/11/questions/31/delete/"]')
-    expect(deleteQuestion.get('input[name="confirmation"]').attributes('value')).toBe('delete')
+    await wrapper.get('[data-delete-question]').trigger('click')
+    await flushPromises()
+    expect(mocks.managementApi.deleteQuestion).toHaveBeenCalledWith(7, 11, 31)
   })
 })

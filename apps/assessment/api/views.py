@@ -427,7 +427,10 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                 "assigned_sequence_index"
             )
         )
+        from ..research_tool_services import available_tools
+        research_tools = available_tools(attempt)
         payload = {
+            'research_tools': research_tools,
             "task_id": session.class_task_id,
             "session_id": session.pk,
             "session_status": session.status,
@@ -453,7 +456,7 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                 "code": assignment.snapshot.code,
                 "question_type": assignment.snapshot.question_type,
                 "text": assignment.snapshot.text,
-                "primary_kc": assignment.snapshot.primary_kc,
+                "primary_kc": assignment.snapshot.primary_kc if research_tools['kc_visible'] else '',
                 "options": _runtime_options(assignment),
             },
             "draft_answer": attempt.draft_answer,
@@ -476,15 +479,22 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                 for item in assignments
             ],
             "actions": {
+                "research_tools_url": reverse('assessment_process:research_tools', args=[attempt.pk]),
+                "resolve_branch_url": reverse('assessment_process:resolve_branch', args=[attempt.pk]),
                 "save_draft_url": reverse("assessment:save_draft", args=[attempt.pk]),
                 "submit_url": reverse("assessment:submit", args=[attempt.pk]),
                 "skip_url": reverse("assessment:skip", args=[attempt.pk]),
                 "finish_url": reverse("assessment:finish", args=[session.pk]),
             },
             "process": {
+                "writer_lease_acquire_url": reverse('assessment_process:writer_lease_acquire', args=[attempt.pk]),
+                "writer_lease_renew_url": reverse('assessment_process:writer_lease_renew', args=[attempt.pk]),
+                "capture_version": session.capture_contract.contract_name if session.capture_contract_id else 'legacy',
+                "active_response_event_id": str(attempt.active_response_event_id) if attempt.active_response_event_id else None,
+                "response_version": attempt.response_version,
                 "session_id": session.pk,
                 "attempt_id": attempt.pk,
-                "event_batch_url": reverse("assessment_process:event_batch"),
+                "event_batch_url": reverse("assessment_process:capture_v2_batch" if session.capture_contract_id and session.capture_contract.contract_name == 'capture-v2' else "assessment_process:event_batch"),
                 "checkpoint_url": reverse(
                     "assessment_process:capture_checkpoint"
                 ),
@@ -500,7 +510,23 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                 ),
             },
         }
-        return Response(StudentRuntimeQuestionEntrySerializer(payload).data)
+        if not session.capture_contract_id or session.capture_contract.contract_name != 'capture-v2':
+            payload.pop('research_tools', None)
+            payload['actions'].pop('research_tools_url', None)
+            payload['actions'].pop('resolve_branch_url', None)
+            for key in ('capture_version', 'active_response_event_id', 'response_version', 'writer_lease_acquire_url', 'writer_lease_renew_url'):
+                payload['process'].pop(key, None)
+        else:
+            from datetime import timedelta
+            remaining = payload['remaining_seconds']
+            payload['presented_deadline_at'] = request_received_at + timedelta(seconds=remaining) if remaining is not None else None
+        response_payload = StudentRuntimeQuestionEntrySerializer(payload).data
+        if "presented_deadline_at" not in payload:
+            response_payload.pop("presented_deadline_at", None)
+        response = Response(response_payload)
+        if payload.get('research_tools') is not None:
+            response['X-Capture-Contract'] = 'capture-v2'
+        return response
 
 
 class StudentTaskResultView(StudentApiMixin, APIView):

@@ -144,7 +144,7 @@ def _event_matches(existing, values) -> bool:
     return all(getattr(existing, field) == values[field] for field in comparable_fields)
 
 
-def _resolve_idempotent_replay(*, client_instance_id, client_sequence_no, values):
+def _resolve_idempotent_replay(*, client_instance_id, client_sequence_no, values, requested_event_id=None):
     if client_instance_id is None:
         return None
     existing = AssessmentEvent.objects.filter(
@@ -152,7 +152,11 @@ def _resolve_idempotent_replay(*, client_instance_id, client_sequence_no, values
         client_sequence_no=client_sequence_no,
     ).first()
     if existing is None:
-        return None
+        existing = AssessmentEvent.objects.filter(event_id=values['event_id']).first()
+        if existing is None:
+            return None
+    if requested_event_id is not None and str(existing.event_id) != str(requested_event_id):
+        raise EventIdempotencyConflict(existing.event_id)
     if _event_matches(existing, values):
         return existing
     raise EventIdempotencyConflict(existing.event_id)
@@ -358,6 +362,7 @@ def append_assessment_event(
             client_instance_id=client_instance_id,
             client_sequence_no=client_sequence_no,
             values=values,
+            requested_event_id=event_id,
         )
         if replay is not None:
             return replay
@@ -384,6 +389,7 @@ def append_assessment_event(
                 client_instance_id=client_instance_id,
                 client_sequence_no=client_sequence_no,
                 values=values,
+                requested_event_id=event_id,
             )
             if replay is not None:
                 return replay

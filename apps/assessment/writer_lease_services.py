@@ -52,8 +52,15 @@ def acquire_attempt_writer_lease(attempt, *, client_instance_id, now=None, durat
     with transaction.atomic():
         current = Attempt.objects.select_for_update().get(pk=attempt.pk)
         active = current.writer_lease_expires_at and current.writer_lease_expires_at > now
-        if active and current.writer_client_instance_id != client_instance_id:
-            raise WriterLeaseConflict("attempt writer lease is held by another client")
+        if active:
+            if current.writer_client_instance_id != client_instance_id:
+                raise WriterLeaseConflict("attempt writer lease is held by another client")
+            if current.writer_lease_token is not None:
+                return WriterLease(
+                    current.writer_lease_token,
+                    client_instance_id,
+                    current.writer_lease_expires_at,
+                )
         token = uuid.uuid4()
         expires_at = now + duration
         current.writer_lease_token = token

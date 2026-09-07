@@ -451,6 +451,23 @@ class CourseExperimentSessionReportTests(TestCase):
         self.assertNotIn("answers", audit.details)
         self.assertNotIn("question_text", audit.details)
 
+    def test_word_report_keeps_the_formal_answer_when_grading_is_pending(self):
+        attempt = self.submitted_assignment.attempt
+        attempt.draft_answer = ["A"]
+        attempt.final_answer = ["B", "C"]
+        attempt.is_correct = None
+        attempt.save(update_fields=["draft_answer", "final_answer", "is_correct"])
+
+        response = self.client.post(self.word_url)
+
+        self.assertEqual(response.status_code, 200)
+        text = "\n".join(
+            paragraph.text for paragraph in Document(BytesIO(response.content)).paragraphs
+        )
+        self.assertIn("B：可以结合历史交互预测下一步表现", text)
+        self.assertIn("C：可用于诊断知识状态", text)
+        self.assertIn("已提交，正误未判定", text)
+
     def test_word_builder_closes_its_memory_stream_after_response_bytes_are_read(self):
         TrackingBytesIO.instances.clear()
 

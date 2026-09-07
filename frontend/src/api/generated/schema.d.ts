@@ -20,6 +20,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/login/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["auth_login_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["auth_logout_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/session/": {
         parameters: {
             query?: never;
@@ -164,6 +196,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/student/sessions/{session_id}/summary/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["student_sessions_summary_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/student/tasks/{task_id}/results/": {
         parameters: {
             query?: never;
@@ -212,6 +260,422 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/accounts/classes/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_account_class_list"];
+        put?: never;
+        post: operations["teacher_account_class_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/delete/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_class_delete"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/manage/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_course_class_management"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["teacher_course_class_management_update"];
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/student-visibility/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_course_class_student_visibility"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["teacher_course_class_student_visibility_update"];
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/{student_id}/move/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_class_student_move"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/{student_id}/remove/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_class_student_remove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/{student_id}/reset-password/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_class_student_password_reset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/copy/confirm/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_class_copy_confirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/copy/preview/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_class_copy_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/import-template.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_course_class_student_import_template"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/import/confirm/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_class_student_import_confirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/import/preview/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_class_student_import_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/manual/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_class_manual_enrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/students/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_account_student_list"];
+        put?: never;
+        post: operations["teacher_account_student_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/students/{student_id}/reset-password/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_account_student_password_reset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/students/import/confirm/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_account_student_import_confirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/students/import/preview/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_account_student_import_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/banks/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_standalone_question_bank_list"];
+        put?: never;
+        post: operations["teacher_standalone_question_bank_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/banks/{bank_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_standalone_question_bank_resolve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/banks/{bank_id}/imports/kc/confirm/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_standalone_question_bank_kc_import_confirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/banks/{bank_id}/imports/kc/preview/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_standalone_question_bank_kc_import_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/banks/{bank_id}/imports/questions/confirm/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_standalone_question_bank_question_import_confirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/banks/{bank_id}/imports/questions/preview/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_standalone_question_bank_question_import_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/banks/{bank_id}/questions/{question_id}/editor/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_standalone_question_bank_question_editor_retrieve"];
+        put: operations["teacher_standalone_question_bank_question_editor_update"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/banks/{bank_id}/visibility/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["teacher_standalone_question_bank_visibility_update"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/banks/shared/{source_bank_id}/copy/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_standalone_question_bank_shared_copy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/class-tasks/{task_id}/": {
         parameters: {
             query?: never;
@@ -238,6 +702,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["teacher_class_task_cancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/class-tasks/{task_id}/feedback-release/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_class_task_feedback_release"];
         delete?: never;
         options?: never;
         head?: never;
@@ -292,6 +772,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/concepts/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_standalone_question_bank_concept_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_course_list"];
+        put?: never;
+        post: operations["teacher_course_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_course_detail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/banks/": {
         parameters: {
             query?: never;
@@ -318,6 +846,22 @@ export interface paths {
         get: operations["teacher_question_banks_retrieve"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/archive/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_question_bank_archive"];
         delete?: never;
         options?: never;
         head?: never;
@@ -372,6 +916,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/delete/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["teacher_question_bank_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/editor/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_question_bank_editor_retrieve"];
+        put: operations["teacher_question_bank_editor_update"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/imports/kc/confirm/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_question_bank_kc_import_confirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/imports/kc/preview/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_question_bank_kc_import_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/imports/questions/confirm/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_question_bank_question_import_confirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/imports/questions/preview/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_question_bank_question_import_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/questions/": {
         parameters: {
             query?: never;
@@ -388,6 +1028,134 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/questions/{question_id}/delete/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["teacher_question_bank_question_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/questions/{question_id}/editor/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_question_bank_question_editor_retrieve"];
+        put: operations["teacher_question_bank_question_editor_update"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/restore/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_question_bank_restore"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/archived/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_question_bank_archived_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/shared/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_question_bank_shared_source_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/shared/{source_course_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_question_bank_shared_creator_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/shared/{source_course_id}/creators/{creator_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_question_bank_shared_bank_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/shared/{source_course_id}/creators/{creator_id}/banks/{bank_id}/copy/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_question_bank_shared_bank_copy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/classes/": {
         parameters: {
             query?: never;
@@ -395,9 +1163,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["teacher_courses_classes_retrieve"];
+        get: operations["teacher_course_class_list"];
         put?: never;
-        post?: never;
+        post: operations["teacher_course_class_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -420,6 +1188,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/classes/{class_id}/experiments/{experiment_id}/questions/{question_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Serve teacher-only frozen fact projections for class drilldown pages. */
+        get: operations["teacher_courses_classes_experiments_questions_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/classes/{class_id}/experiments/{experiment_id}/questions/{question_id}/students/{student_id}/process/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Serve teacher-only frozen fact projections for class drilldown pages. */
+        get: operations["teacher_courses_classes_experiments_questions_students_process_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/classes/{class_id}/students/{student_id}/analysis/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Serve teacher-only frozen fact projections for class drilldown pages. */
+        get: operations["teacher_courses_classes_students_analysis_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/classes/{class_id}/students/{student_id}/experiments/{experiment_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Serve teacher-only frozen fact projections for class drilldown pages. */
+        get: operations["teacher_courses_classes_students_experiments_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/concepts/": {
         parameters: {
             query?: never;
@@ -431,6 +1267,22 @@ export interface paths {
         put?: never;
         post: operations["teacher_courses_concepts_create"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/concepts/{concept_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["teacher_question_bank_course_concept_update"];
+        post?: never;
+        delete: operations["teacher_question_bank_course_concept_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -564,6 +1416,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/data/teaching/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Serialize the existing legacy teaching-workbench presentation facts. */
+        get: operations["teacher_legacy_teaching_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/experiments/": {
         parameters: {
             query?: never;
@@ -628,6 +1497,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/results/resolve/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Resolve historical result URLs without asking Vue to infer task scope. */
+        get: operations["teacher_courses_experiments_results_resolve_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/sessions/{session_id}/resolve/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Resolve historical result URLs without asking Vue to infer task scope. */
+        get: operations["teacher_courses_experiments_sessions_resolve_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/experiments/sampling-inventory/": {
         parameters: {
             query?: never;
@@ -638,6 +1541,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["teacher_experiment_sampling_inventory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/settings/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_course_settings"];
+        put?: never;
+        post: operations["teacher_course_settings_update"];
         delete?: never;
         options?: never;
         head?: never;
@@ -788,14 +1707,164 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/standalone-experiments/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_standalone_experiment_list"];
+        put?: never;
+        post: operations["teacher_standalone_experiment_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/standalone-experiments/{experiment_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_standalone_experiment_retrieve"];
+        put?: never;
+        post?: never;
+        delete: operations["teacher_standalone_experiment_delete"];
+        options?: never;
+        head?: never;
+        patch: operations["teacher_standalone_experiment_update"];
+        trace?: never;
+    };
+    "/api/v1/teacher/standalone-experiments/{experiment_id}/publish/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_standalone_experiment_publish"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/standalone-experiments/{experiment_id}/results/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_standalone_experiment_results"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/standalone-experiments/{experiment_id}/students/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_standalone_experiment_assign_students"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/standalone-experiments/{experiment_id}/sync-questions/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_standalone_experiment_sync_questions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description * `create` - create
+         *     * `reuse` - reuse
+         * @enum {string}
+         */
+        AccountActionEnum: "create" | "reuse";
+        /**
+         * @description * `confirm` - confirm
+         * @enum {string}
+         */
+        ActionEnum: "confirm";
         ApiUser: {
             id: number;
             role: string;
             display_name: string;
+            username: string;
+            student_number: string | null;
+            home_url: string;
+        };
+        AttemptProcess: {
+            question_type: string;
+            completeness: components["schemas"]["CompletenessEnum"];
+            completeness_label: string;
+            steps: components["schemas"]["ProcessStep"][];
+            first_value: string | null;
+            final_value: string | null;
+            revision_count: number | null;
+        };
+        AttemptProcessActions: {
+            back_url: string;
+        };
+        AttemptProcessDetail: {
+            /** Format: date-time */
+            generated_at: string;
+            experiment_id: number;
+            experiment_name: string;
+            question_id: number;
+            question_code: string;
+            question_text: string;
+            student_id: number;
+            student_number: string;
+            display_name: string;
+            is_current_member: boolean;
+            result_label: string;
+            score_display: string;
+            process: components["schemas"]["AttemptProcess"];
+            coverage_status_title: string;
+            coverage_status_description: string;
+            coverage_time_title: string;
+            coverage_time_description: string;
+            coverage_reason_labels: string[];
+            has_cross_instance_order_uncertainty: boolean;
+        };
+        AttemptProcessResponse: {
+            course: components["schemas"]["CourseReference"];
+            class_group: components["schemas"]["TeacherAnalysisClassGroup"];
+            detail: components["schemas"]["AttemptProcessDetail"];
+            actions: components["schemas"]["AttemptProcessActions"];
         };
         BankConceptCollection: {
             items: components["schemas"]["BankConceptSummary"][];
@@ -879,6 +1948,12 @@ export interface components {
             invalidated: number;
         };
         /**
+         * @description * `complete` - complete
+         *     * `incomplete` - incomplete
+         * @enum {string}
+         */
+        CompletenessEnum: "complete" | "incomplete";
+        /**
          * @description * `off` - 不采集
          *     * `all` - 全部采集
          *     * `sampled` - 抽样采集
@@ -892,6 +1967,44 @@ export interface components {
          * @enum {string}
          */
         ConfidenceSamplingUnitEnum: "student" | "session" | "attempt";
+        /**
+         * @description * `delete` - delete
+         * @enum {string}
+         */
+        ConfirmationEnum: "delete";
+        CourseClassCopyConfirmRequest: {
+            action?: components["schemas"]["ActionEnum"];
+        };
+        CourseClassCopyPreview: {
+            source_class: components["schemas"]["ManagedClassSourceOption"];
+            preview: components["schemas"]["CourseClassCopyPreviewRow"][];
+        };
+        CourseClassCopyPreviewRequest: {
+            source_class: number;
+        };
+        CourseClassCopyPreviewRow: {
+            student: components["schemas"]["TeacherAccountStudent"];
+            skip: boolean;
+        };
+        CourseClassCopyResult: {
+            copied: number;
+            skipped: number;
+        };
+        CourseClassDeleteRequest: {
+            confirmation: components["schemas"]["ConfirmationEnum"];
+        };
+        CourseClassDeleteResponse: {
+            deleted: boolean;
+        };
+        CourseClassManagement: {
+            course: components["schemas"]["TeacherAccountCourse"];
+            class_group: components["schemas"]["ManagedClass"];
+            enrollments: components["schemas"]["ManagedEnrollment"][];
+            target_classes: components["schemas"]["TeacherAccountClassOption"][];
+            source_classes: components["schemas"]["ManagedClassSourceOption"][];
+            capabilities: components["schemas"]["ManagedClassCapabilities"];
+            actions: components["schemas"]["ManagedClassActions"];
+        };
         CourseConceptCollection: {
             items: components["schemas"]["CourseConceptSummary"][];
             page: components["schemas"]["QuestionBankPageMetadata"];
@@ -935,14 +2048,8 @@ export interface components {
             readonly code: string;
             /** 学期 */
             readonly term: string;
-            readonly status: components["schemas"]["CourseContextStatusEnum"];
+            readonly status: components["schemas"]["Status558Enum"];
         };
-        /**
-         * @description * `active` - 进行中
-         *     * `archived` - 已归档
-         * @enum {string}
-         */
-        CourseContextStatusEnum: "active" | "archived";
         CourseKCImportResult: {
             created: number;
             unchanged: number;
@@ -953,6 +2060,13 @@ export interface components {
             code: string;
             term: string;
             status: string;
+        };
+        CourseStudentImportConfirmRequest: {
+            action?: components["schemas"]["ActionEnum"];
+        };
+        CourseStudentImportResult: {
+            created_accounts: number;
+            enrollments: number;
         };
         CsrfToken: {
             csrf_token: string;
@@ -1157,6 +2271,20 @@ export interface components {
             score_rate: components["schemas"]["MetricValue"];
             analysis_url: string;
         };
+        /**
+         * @description * `none` - 仅显示已提交
+         *     * `correctness` - 显示正误
+         *     * `full` - 显示正误、答案与解析
+         * @enum {string}
+         */
+        FeedbackMode433Enum: "none" | "correctness" | "full";
+        /**
+         * @description * `after_personal_submission` - 学生完成后
+         *     * `after_assignment_deadline` - 班级任务截止后
+         *     * `manual_release` - 教师人工发布
+         * @enum {string}
+         */
+        FeedbackReleasePolicyEnum: "after_personal_submission" | "after_assignment_deadline" | "manual_release";
         FileImportRequest: {
             /** Format: uri */
             file: string;
@@ -1187,6 +2315,403 @@ export interface components {
             level_3: number;
         };
         /**
+         * @description * `standalone` - standalone
+         *     * `canonical` - canonical
+         * @enum {string}
+         */
+        KindE91Enum: "standalone" | "canonical";
+        LegacyStudentImportPreview: {
+            preview: components["schemas"]["StudentImportPreviewRow"][];
+        };
+        LegacyStudentImportResult: {
+            imported: number;
+        };
+        LoginRequest: {
+            username: string;
+            password: string;
+        };
+        ManagedClass: {
+            id: number;
+            name: string;
+            academic_year: string;
+            is_active: boolean;
+            state_token: string;
+            detail_url: string;
+        };
+        ManagedClassActions: {
+            detail_url: string;
+            classes_url: string;
+            add_students_url: string;
+            visibility_url: string;
+            import_template_url: string;
+        };
+        ManagedClassCapabilities: {
+            can_update: boolean;
+            can_delete: boolean;
+            can_add_students: boolean;
+            can_move_students: boolean;
+            can_remove_students: boolean;
+            can_reset_passwords: boolean;
+            can_update_visibility: boolean;
+        };
+        ManagedClassSourceOption: {
+            id: number;
+            course_id: number;
+            course_name: string;
+            course_code: string;
+            course_term: string;
+            name: string;
+            academic_year: string;
+            display_name: string;
+        };
+        ManagedEnrollment: {
+            enrollment_id: number;
+            student: components["schemas"]["TeacherAccountStudent"];
+        };
+        ManagementArchivedBank: {
+            id: number;
+            name: string;
+            description: string;
+            question_count: number;
+            created_by_name: string;
+            /** Format: date-time */
+            updated_at: string;
+            detail_url: string;
+            can_edit_metadata: boolean;
+        };
+        ManagementArchivedBankCollection: {
+            course: components["schemas"]["QuestionBankCourse"];
+            page: components["schemas"]["QuestionBankPageMetadata"];
+            items: components["schemas"]["ManagementArchivedBank"][];
+        };
+        ManagementBankEditorRequest: {
+            name: string;
+            description: string;
+            visibility: components["schemas"]["VisibilityE8aEnum"];
+        };
+        ManagementBankEditorResponse: {
+            id: number;
+            name: string;
+            description: string;
+            visibility: components["schemas"]["VisibilityE8aEnum"];
+            visibility_choices: components["schemas"]["ManagementChoice"][];
+            course: components["schemas"]["QuestionBankCourse"];
+            detail_url: string;
+        };
+        ManagementBankReference: {
+            id: number;
+            name: string;
+        };
+        ManagementBankVisibilityResult: {
+            id: number;
+            visibility: components["schemas"]["VisibilityE8aEnum"];
+        };
+        ManagementChoice: {
+            value: string;
+            label: string;
+        };
+        ManagementCourseConceptDeleteResponse: {
+            id: number;
+            status: string;
+        };
+        ManagementCourseConceptEditRequest: {
+            name: string;
+            description: string;
+        };
+        ManagementCourseConceptEditResponse: {
+            id: number;
+            kc_code: string;
+            name: string;
+            description: string;
+            status: string;
+        };
+        ManagementErrorDetail: {
+            code: string;
+            message: string;
+            fields?: {
+                [key: string]: unknown;
+            };
+        };
+        ManagementErrorResponse: {
+            error: components["schemas"]["ManagementErrorDetail"];
+        };
+        ManagementKCImportConfirmRequest: {
+            /** Format: uuid */
+            batch_id: string;
+        };
+        ManagementKCImportPreviewPayload: {
+            mode: components["schemas"]["ManagementKCImportPreviewPayloadModeEnum"];
+            confirmable: boolean;
+            schema_version?: string;
+            trees?: components["schemas"]["ManagementKCPreviewTree"][];
+            rows?: components["schemas"]["ManagementKCPreviewLegacyRow"][];
+            nodes?: components["schemas"]["ManagementKCPreviewWorkbookNode"][];
+            questions?: components["schemas"]["ManagementKCPreviewWorkbookQuestion"][];
+        };
+        /**
+         * @description * `tree_v2` - tree_v2
+         *     * `workbook` - workbook
+         *     * `legacy` - legacy
+         * @enum {string}
+         */
+        ManagementKCImportPreviewPayloadModeEnum: "tree_v2" | "workbook" | "legacy";
+        ManagementKCImportPreviewResponse: {
+            /** Format: uuid */
+            batch_id: string;
+            preview: components["schemas"]["ManagementKCImportPreviewPayload"];
+        };
+        ManagementKCPreviewLegacyRow: {
+            sequence: number;
+            primary: string;
+            secondary: string[];
+        };
+        ManagementKCPreviewMatchTrace: {
+            raw_token: string;
+            normalized_token: string;
+            method: string;
+            kc_code: string;
+            final_name: string;
+            /** Format: double */
+            distance: number | null;
+        };
+        ManagementKCPreviewTree: {
+            sequence: number;
+            question_id: number;
+            root_kc_code: string;
+            nodes: components["schemas"]["ManagementKCPreviewTreeNode"][];
+            match_trace: components["schemas"]["ManagementKCPreviewMatchTrace"][];
+        };
+        ManagementKCPreviewTreeNode: {
+            kc_code: string;
+            parent_kc_code: string | null;
+            order: number;
+        };
+        ManagementKCPreviewWorkbookNode: {
+            code: string;
+            name: string;
+            description: string;
+            status: string;
+        };
+        ManagementKCPreviewWorkbookQuestion: {
+            stable_question_code: string;
+            root_kc_code: string;
+        };
+        ManagementQuestionEditorConcept: {
+            id: number;
+            kc_code: string;
+            name: string;
+            description: string;
+        };
+        ManagementQuestionEditorOptions: {
+            a: string;
+            b: string;
+            c: string;
+            d: string;
+            e: string;
+            f: string;
+        };
+        ManagementQuestionEditorQuestion: {
+            id: number;
+            sequence: number;
+            code: string;
+            text: string;
+            question_type: components["schemas"]["QuestionType128Enum"];
+            status: components["schemas"]["StatusB97Enum"];
+            teacher_difficulty: string;
+            absolute_tolerance: string;
+            relative_tolerance: string;
+            explanation: string;
+            correct_answer_text: string;
+            accepted_answers_text: string;
+            options: components["schemas"]["ManagementQuestionEditorOptions"];
+            kc_mapping?: components["schemas"]["QuestionKCMapping"];
+        };
+        ManagementQuestionEditorRequest: {
+            text: string;
+            question_type: components["schemas"]["QuestionType128Enum"];
+            status: components["schemas"]["StatusB97Enum"];
+            teacher_difficulty?: string;
+            absolute_tolerance?: string;
+            relative_tolerance?: string;
+            explanation?: string;
+            correct_answer_text?: string;
+            accepted_answers_text?: string;
+            option_a?: string;
+            option_b?: string;
+            option_c?: string;
+            option_d?: string;
+            option_e?: string;
+            option_f?: string;
+            kc_mapping_json?: string;
+        };
+        ManagementQuestionEditorResponse: {
+            course?: components["schemas"]["QuestionBankCourse"];
+            bank: components["schemas"]["ManagementBankReference"];
+            question: components["schemas"]["ManagementQuestionEditorQuestion"];
+            question_types: components["schemas"]["ManagementChoice"][];
+            statuses: components["schemas"]["ManagementChoice"][];
+            concepts: components["schemas"]["ManagementQuestionEditorConcept"][];
+            detail_url: string;
+        };
+        ManagementQuestionImportConfirmRequest: {
+            /** Format: uuid */
+            preview_id: string;
+        };
+        ManagementQuestionImportConfirmResponse: {
+            created: number;
+            detail_url: string;
+        };
+        ManagementQuestionImportPreviewPayload: {
+            rows: components["schemas"]["ManagementQuestionImportPreviewRow"][];
+        };
+        ManagementQuestionImportPreviewResponse: {
+            /** Format: uuid */
+            preview_id: string;
+            preview: components["schemas"]["ManagementQuestionImportPreviewPayload"];
+        };
+        ManagementQuestionImportPreviewRow: {
+            sequence: number;
+            text: string;
+            question_type: components["schemas"]["QuestionType128Enum"];
+            question_type_label: string;
+            option_count: number;
+            teacher_difficulty: string | null;
+        };
+        ManagementQuestionsUpdatedResponse: {
+            questions_updated: number;
+        };
+        ManagementSharedBank: {
+            id: number;
+            name: string;
+            description: string;
+            question_count: number;
+        };
+        ManagementSharedCreator: {
+            id: number;
+            name: string;
+            username: string;
+            shared_bank_count: number;
+        };
+        ManagementSharedCreatorCollection: {
+            course: components["schemas"]["QuestionBankCourse"];
+            source_course: components["schemas"]["QuestionBankCourse"];
+            items: components["schemas"]["ManagementSharedCreator"][];
+        };
+        ManagementSharedQuestionBankCollection: {
+            course: components["schemas"]["QuestionBankCourse"];
+            source_course: components["schemas"]["QuestionBankCourse"];
+            creator: components["schemas"]["ManagementSharedCreator"];
+            items: components["schemas"]["ManagementSharedBank"][];
+        };
+        ManagementSharedQuestionBankCopy: {
+            id: number;
+            name: string;
+            detail_url: string;
+        };
+        ManagementSharedSourceCourse: {
+            id: number;
+            name: string;
+            code: string;
+            term: string;
+            shared_bank_count: number;
+            shared_creator_count: number;
+        };
+        ManagementSharedSourceCourseCollection: {
+            course: components["schemas"]["QuestionBankCourse"];
+            items: components["schemas"]["ManagementSharedSourceCourse"][];
+        };
+        ManagementStandaloneBank: {
+            id: number;
+            name: string;
+            description: string;
+            visibility: components["schemas"]["VisibilityE8aEnum"];
+            visibility_label: string;
+            question_count: number;
+            detail_url: string;
+            question_import_url: string;
+            kc_import_url: string;
+        };
+        ManagementStandaloneBankCollection: {
+            redirect_url?: string;
+            banks?: components["schemas"]["ManagementStandaloneBank"][];
+            shared_banks?: components["schemas"]["ManagementStandaloneSharedBank"][];
+            visibility_choices?: components["schemas"]["ManagementChoice"][];
+        };
+        ManagementStandaloneBankCreateRequest: {
+            name: string;
+            description?: string;
+            visibility?: components["schemas"]["VisibilityE8aEnum"];
+        };
+        ManagementStandaloneBankDetail: {
+            redirect_url?: string;
+            bank?: components["schemas"]["ManagementStandaloneBank"];
+            can_edit_metadata?: boolean;
+            can_edit_content?: boolean;
+            questions?: components["schemas"]["ManagementStandaloneQuestion"][];
+        };
+        ManagementStandaloneConcept: {
+            id: number;
+            code: string;
+            name: string;
+            description: string;
+            scope: string;
+            scope_label: string;
+            status: string;
+            status_label: string;
+            path: string;
+        };
+        ManagementStandaloneConceptCollection: {
+            redirect_url?: string;
+            items?: components["schemas"]["ManagementStandaloneConcept"][];
+        };
+        ManagementStandaloneKCImportPreviewPayload: {
+            rows: components["schemas"]["ManagementKCPreviewLegacyRow"][];
+        };
+        ManagementStandaloneKCImportPreviewResponse: {
+            /** Format: uuid */
+            preview_id: string;
+            preview: components["schemas"]["ManagementStandaloneKCImportPreviewPayload"];
+        };
+        ManagementStandaloneQuestion: {
+            id: number;
+            sequence: number;
+            code: string;
+            text: string;
+            question_type: components["schemas"]["QuestionType128Enum"];
+            question_type_label: string;
+            status: components["schemas"]["StatusB97Enum"];
+            status_label: string;
+            teacher_difficulty: string | null;
+            kc_mapping: components["schemas"]["QuestionKCMapping"];
+            edit_url: string;
+        };
+        ManagementStandaloneQuestionEditorResponse: {
+            bank: components["schemas"]["ManagementBankReference"];
+            question: components["schemas"]["ManagementQuestionEditorQuestion"];
+            question_types: components["schemas"]["ManagementChoice"][];
+            statuses: components["schemas"]["ManagementChoice"][];
+            concepts: number[];
+            detail_url: string;
+        };
+        ManagementStandaloneSharedBank: {
+            id: number;
+            name: string;
+            description: string;
+            question_count: number;
+            created_by_name: string;
+        };
+        ManagementStandaloneVisibilityRequest: {
+            visibility: components["schemas"]["VisibilityE8aEnum"];
+        };
+        ManualEnrollmentRequest: {
+            student_number: string;
+            display_name: string;
+        };
+        ManualEnrollmentResponse: {
+            student: components["schemas"]["TeacherAccountStudent"];
+            created_account: boolean;
+        };
+        /**
          * @description * `primary` - 主 KC
          *     * `any_level` - 任意层级
          * @enum {string}
@@ -1215,8 +2740,20 @@ export interface components {
          * @enum {string}
          */
         Mode9dfEnum: "total_count" | "kc_quota";
+        MoveEnrollmentRequest: {
+            class_group: number;
+        };
+        MoveEnrollmentResponse: {
+            class_group: components["schemas"]["TeacherAccountClassOption"];
+        };
         /** @enum {unknown} */
         NullEnum: null;
+        OptionDistribution: {
+            key: string;
+            label: string;
+            count: number;
+            is_correct: boolean;
+        };
         /**
          * @description * `fixed` - 固定顺序
          *     * `random` - 随机顺序
@@ -1237,6 +2774,47 @@ export interface components {
             in_progress: number;
             not_participated: number;
         };
+        PasswordResetRequest: {
+            password: string;
+        };
+        PatchedCourseClassUpdateRequest: {
+            name?: string;
+            academic_year?: string;
+            is_active?: boolean;
+            state_token?: string;
+        };
+        PatchedStandaloneExperimentInput: {
+            name?: string;
+            description?: string;
+            question_bank_id?: number;
+            selection_mode?: components["schemas"]["SelectionModeEnum"];
+            question_quotas?: components["schemas"]["StandaloneQuestionQuotaInput"][];
+            ordering_mode?: components["schemas"]["OrderingModeEnum"];
+            feedback_mode?: components["schemas"]["FeedbackMode433Enum"];
+            feedback_release_policy?: components["schemas"]["FeedbackReleasePolicyEnum"];
+            time_mode?: components["schemas"]["TimeModeEnum"];
+            total_time_limit_minutes?: number | null;
+            per_question_time_limit_seconds?: number | null;
+            resume_mode?: components["schemas"]["ResumeModeEnum"];
+            confidence_mode?: components["schemas"]["ConfidenceModeEnum"];
+            confidence_sampling_unit?: components["schemas"]["ConfidenceSamplingUnitEnum"];
+            /** Format: decimal */
+            confidence_probability?: string | null;
+            confidence_randomization_seed?: string;
+            confidence_assignment_version?: string;
+            confidence_scale_version?: string;
+            confidence_prompt_version?: string;
+            heartbeat_interval_seconds?: number;
+        };
+        PatchedStudentVisibilityPolicyRequest: {
+            show_scores?: boolean;
+            show_correct_rate?: boolean;
+            show_item_results?: boolean;
+            show_class_average?: boolean;
+            rank_mode?: components["schemas"]["RankModeEnum"];
+            show_kc_rates?: boolean;
+            show_trend?: boolean;
+        };
         PatchedTeacherExperiment: {
             readonly id?: number;
             name?: string;
@@ -1256,13 +2834,14 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label?: string;
-            feedback_mode?: components["schemas"]["TeacherExperimentFeedbackModeEnum"];
+            feedback_mode?: components["schemas"]["FeedbackMode433Enum"];
+            feedback_release_policy?: components["schemas"]["FeedbackReleasePolicyEnum"];
+            research_tools?: unknown;
             readonly feedback_mode_label?: string;
+            readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
-            /** Format: int64 */
             total_time_limit_minutes?: number | null;
-            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -1277,6 +2856,16 @@ export interface components {
             readonly created_at?: string;
             /** Format: date-time */
             readonly updated_at?: string;
+        };
+        ProcessStep: {
+            label: string;
+            /** Format: date-time */
+            occurred_at: string | null;
+            value: string | null;
+            length_before: number | null;
+            length_after: number | null;
+            time_source: string;
+            interval_ms: number | null;
         };
         PublishCommit: {
             tasks: components["schemas"]["PublishedTask"][];
@@ -1425,8 +3014,14 @@ export interface components {
         QuestionBankCreateRequest: {
             name: string;
             description?: string;
-            visibility?: components["schemas"]["VisibilityEnum"];
+            visibility?: components["schemas"]["QuestionBankCreateRequestVisibilityEnum"];
         };
+        /**
+         * @description * `private` - private
+         *     * `shared` - shared
+         * @enum {string}
+         */
+        QuestionBankCreateRequestVisibilityEnum: "private" | "shared";
         QuestionBankCreateResponse: {
             id: number;
             name: string;
@@ -1500,6 +3095,39 @@ export interface components {
             question_types: components["schemas"]["FilterChoice"][];
             statuses: components["schemas"]["FilterChoice"][];
         };
+        QuestionDetail: {
+            /** Format: date-time */
+            generated_at: string;
+            experiment_id: number;
+            experiment_name: string;
+            question_id: number;
+            code: string;
+            text: string;
+            question_type: string;
+            kcs: string[];
+            eligible_count: number;
+            current_member_count: number;
+            historical_participant_count: number;
+            answer_count: number;
+            correct_count: number;
+            incorrect_count: number;
+            correct_rate: components["schemas"]["MetricValue"];
+            timing: components["schemas"]["QuestionTiming"];
+            chain_coverage: components["schemas"]["MetricValue"];
+            option_rows: components["schemas"]["OptionDistribution"][];
+            transition_applicability: components["schemas"]["TransitionApplicabilityEnum"];
+            transition_rows: components["schemas"]["Transition"][];
+            participants: components["schemas"]["QuestionParticipant"][];
+        };
+        QuestionDetailActions: {
+            back_url: string;
+        };
+        QuestionDetailResponse: {
+            course: components["schemas"]["CourseReference"];
+            class_group: components["schemas"]["TeacherAnalysisClassGroup"];
+            detail: components["schemas"]["QuestionDetail"];
+            actions: components["schemas"]["QuestionDetailActions"];
+        };
         QuestionKCImportResult: {
             questions_updated: number;
         };
@@ -1518,8 +3146,19 @@ export interface components {
             parent_kc_code: string | null;
             order: number;
         };
+        QuestionParticipant: {
+            student_id: number;
+            student_number: string;
+            display_name: string;
+            is_current_member: boolean;
+            result_label: string;
+            final_answer: string;
+            process_complete: boolean;
+            student_experiment_url: string;
+            process_url: string;
+        };
         QuestionQuota: {
-            question_type: components["schemas"]["QuestionTypeEnum"];
+            question_type: components["schemas"]["QuestionType334Enum"];
             amount: number;
         };
         QuestionSummary: {
@@ -1553,6 +3192,22 @@ export interface components {
             average_answer_time_display: string;
             detail_url: string;
         };
+        QuestionTiming: {
+            median_display: string;
+            iqr_display: string;
+            sample_size: number;
+            quality: components["schemas"]["TimingQuality"];
+        };
+        /**
+         * @description * `single_choice` - single_choice
+         *     * `multiple_choice` - multiple_choice
+         *     * `numeric` - numeric
+         *     * `short_answer` - short_answer
+         *     * `fill_blank` - fill_blank
+         *     * `true_false` - true_false
+         * @enum {string}
+         */
+        QuestionType128Enum: "single_choice" | "multiple_choice" | "numeric" | "short_answer" | "fill_blank" | "true_false";
         /**
          * @description * `single_choice` - 单选题
          *     * `multiple_choice` - 多选题
@@ -1562,7 +3217,19 @@ export interface components {
          *     * `true_false` - 判断题
          * @enum {string}
          */
-        QuestionTypeEnum: "single_choice" | "multiple_choice" | "numeric" | "short_answer" | "fill_blank" | "true_false";
+        QuestionType334Enum: "single_choice" | "multiple_choice" | "numeric" | "short_answer" | "fill_blank" | "true_false";
+        /**
+         * @description * `none` - 不展示
+         *     * `self` - 仅本人
+         * @enum {string}
+         */
+        RankModeEnum: "none" | "self";
+        RemoveEnrollmentRequest: {
+            confirmation: components["schemas"]["ConfirmationEnum"];
+        };
+        RemoveEnrollmentResponse: {
+            removed: boolean;
+        };
         /**
          * @description * `correct` - correct
          *     * `incorrect` - incorrect
@@ -1602,7 +3269,7 @@ export interface components {
          */
         SamplingModeEnum: "total_count" | "kc_quota";
         SamplingQuestionTypeQuota: {
-            question_type: components["schemas"]["QuestionTypeEnum"];
+            question_type: components["schemas"]["QuestionType334Enum"];
             amount: number;
         };
         /**
@@ -1634,6 +3301,151 @@ export interface components {
          * @enum {string}
          */
         SetupStatusEnum: "empty" | "incomplete" | "complete";
+        StandaloneChoice: {
+            value: string;
+            label: string;
+        };
+        StandaloneExperiment: {
+            id: number;
+            name: string;
+            description: string;
+            question_bank: components["schemas"]["StandaloneQuestionBank"];
+            status: string;
+            status_label: string;
+            selection_mode: string;
+            selection_mode_label: string;
+            ordering_mode: string;
+            ordering_mode_label: string;
+            feedback_mode: string;
+            feedback_mode_label: string;
+            feedback_release_policy: string;
+            feedback_release_policy_label: string;
+            time_mode: string;
+            time_mode_label: string;
+            total_time_limit_minutes: number | null;
+            per_question_time_limit_seconds: number | null;
+            resume_mode: string;
+            resume_mode_label: string;
+            confidence_mode: string;
+            confidence_mode_label: string;
+            confidence_sampling_unit: string;
+            confidence_sampling_unit_label: string;
+            /** Format: decimal */
+            confidence_probability: string | null;
+            confidence_randomization_seed: string;
+            confidence_assignment_version: string;
+            confidence_scale_version: string;
+            confidence_prompt_version: string;
+            heartbeat_interval_seconds: number;
+            question_count: number;
+            student_count: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        StandaloneExperimentCollection: {
+            kind: components["schemas"]["KindE91Enum"];
+            canonical_url?: string | null;
+            items?: components["schemas"]["StandaloneExperimentListItem"][];
+            question_banks?: components["schemas"]["StandaloneQuestionBank"][];
+            choices?: {
+                [key: string]: unknown;
+            };
+        };
+        StandaloneExperimentDetail: {
+            kind: components["schemas"]["KindE91Enum"];
+            canonical_url?: string | null;
+            experiment?: components["schemas"]["StandaloneExperiment"];
+            selection?: {
+                [key: string]: unknown;
+            };
+            students?: components["schemas"]["StandaloneStudent"][];
+            available_students?: components["schemas"]["StandaloneStudent"][];
+            question_banks?: components["schemas"]["StandaloneQuestionBank"][];
+            actions?: {
+                [key: string]: unknown;
+            };
+            choices?: {
+                [key: string]: unknown;
+            };
+        };
+        StandaloneExperimentInput: {
+            name?: string;
+            description?: string;
+            question_bank_id?: number;
+            selection_mode?: components["schemas"]["SelectionModeEnum"];
+            question_quotas?: components["schemas"]["StandaloneQuestionQuotaInput"][];
+            ordering_mode?: components["schemas"]["OrderingModeEnum"];
+            feedback_mode?: components["schemas"]["FeedbackMode433Enum"];
+            feedback_release_policy?: components["schemas"]["FeedbackReleasePolicyEnum"];
+            time_mode?: components["schemas"]["TimeModeEnum"];
+            total_time_limit_minutes?: number | null;
+            per_question_time_limit_seconds?: number | null;
+            resume_mode?: components["schemas"]["ResumeModeEnum"];
+            confidence_mode?: components["schemas"]["ConfidenceModeEnum"];
+            confidence_sampling_unit?: components["schemas"]["ConfidenceSamplingUnitEnum"];
+            /** Format: decimal */
+            confidence_probability?: string | null;
+            confidence_randomization_seed?: string;
+            confidence_assignment_version?: string;
+            confidence_scale_version?: string;
+            confidence_prompt_version?: string;
+            heartbeat_interval_seconds?: number;
+        };
+        StandaloneExperimentListItem: {
+            id: number;
+            name: string;
+            description: string;
+            question_bank: components["schemas"]["StandaloneQuestionBank"];
+            ordering_mode_label: string;
+            student_count: number;
+            status: string;
+            status_label: string;
+            /** Format: date-time */
+            updated_at: string;
+            detail_url: string;
+        };
+        StandaloneExperimentResults: {
+            kind: components["schemas"]["KindE91Enum"];
+            canonical_url?: string | null;
+            experiment?: components["schemas"]["StandaloneExperiment"];
+            sessions?: components["schemas"]["StandaloneSession"][];
+            session_status_choices?: components["schemas"]["StandaloneChoice"][];
+            selected_status?: string;
+            export_field_groups?: unknown[];
+            actions?: {
+                [key: string]: unknown;
+            };
+        };
+        StandaloneQuestionBank: {
+            id: number;
+            name: string;
+        };
+        StandaloneQuestionQuotaInput: {
+            question_type: components["schemas"]["QuestionType334Enum"];
+            amount: number;
+        };
+        StandaloneSession: {
+            id: number;
+            student_number: string | null;
+            student_name: string;
+            status: string;
+            status_label: string;
+            /** Format: date-time */
+            started_at: string | null;
+            submission_count: number;
+        };
+        StandaloneStudent: {
+            id: number;
+            student_number: string | null;
+            display_name: string;
+            class_name: string;
+            selected: boolean;
+        };
+        StandaloneStudentAssignmentInput: {
+            student_ids: number[];
+        };
         /**
          * @description * `available` - available
          *     * `no_data` - no_data
@@ -1642,6 +3454,19 @@ export interface components {
          * @enum {string}
          */
         StateEnum: "available" | "no_data" | "partial" | "conflict";
+        /**
+         * @description * `active` - 进行中
+         *     * `archived` - 已归档
+         * @enum {string}
+         */
+        Status558Enum: "active" | "archived";
+        /**
+         * @description * `draft` - draft
+         *     * `active` - active
+         *     * `archived` - archived
+         * @enum {string}
+         */
+        StatusB97Enum: "draft" | "active" | "archived";
         StudentCollection: {
             items: components["schemas"]["StudentSummaryRow"][];
             page: components["schemas"]["TeacherClassPageMetadata"];
@@ -1674,6 +3499,132 @@ export interface components {
         };
         StudentCourseCollection: {
             items: components["schemas"]["StudentCourse"][];
+        };
+        StudentDetail: {
+            /** Format: date-time */
+            generated_at: string;
+            student_id: number;
+            student_number: string;
+            display_name: string;
+            completed_experiments: number;
+            eligible_experiments: number;
+            correct_rate: components["schemas"]["MetricValue"];
+            score_rate: components["schemas"]["MetricValue"];
+            /** Format: decimal */
+            average_answer_time_ms: string | null;
+            average_answer_time_display: string;
+            experiments: components["schemas"]["StudentExperimentPerformance"][];
+            trend_rows: components["schemas"]["StudentTrend"][];
+            show_trend_chart: boolean;
+            kc_rows: components["schemas"]["StudentKCComparison"][];
+        };
+        StudentDetailActions: {
+            back_url: string;
+        };
+        StudentDetailResponse: {
+            course: components["schemas"]["CourseReference"];
+            class_group: components["schemas"]["TeacherAnalysisClassGroup"];
+            detail: components["schemas"]["StudentDetail"];
+            actions: components["schemas"]["StudentDetailActions"];
+        };
+        StudentExperimentDetail: {
+            /** Format: date-time */
+            generated_at: string;
+            experiment_id: number;
+            experiment_name: string;
+            student_id: number;
+            student_number: string;
+            display_name: string;
+            is_current_member: boolean;
+            completed: boolean;
+            correct_rate: components["schemas"]["MetricValue"];
+            score_rate: components["schemas"]["MetricValue"];
+            /** Format: decimal */
+            average_answer_time_ms: string | null;
+            average_answer_time_display: string;
+            rank: number | null;
+            rank_sample_size: number;
+            questions: components["schemas"]["StudentExperimentQuestion"][];
+        };
+        StudentExperimentDetailActions: {
+            back_url: string;
+        };
+        StudentExperimentDetailResponse: {
+            course: components["schemas"]["CourseReference"];
+            class_group: components["schemas"]["TeacherAnalysisClassGroup"];
+            detail: components["schemas"]["StudentExperimentDetail"];
+            actions: components["schemas"]["StudentExperimentDetailActions"];
+        };
+        StudentExperimentPerformance: {
+            experiment_id: number;
+            name: string;
+            completed: boolean;
+            correct_rate: components["schemas"]["MetricValue"];
+            score_rate: components["schemas"]["MetricValue"];
+            rank: number | null;
+            rank_sample_size: number;
+            /** Format: decimal */
+            average_answer_time_ms: string | null;
+            average_answer_time_display: string;
+            detail_url: string;
+        };
+        StudentExperimentQuestion: {
+            question_id: number;
+            code: string;
+            kcs: string[];
+            result_label: string;
+            first_answer: string | null;
+            final_answer: string;
+            revision_count: number | null;
+            /** Format: decimal */
+            answer_time_ms: string | null;
+            answer_time_display: string;
+            process_complete: boolean;
+            question_url: string;
+            process_url: string;
+        };
+        StudentFeedbackCapture: {
+            capture_version: string;
+            session_id: number;
+            attempt_id: number;
+            event_batch_url: string;
+            checkpoint_url: string;
+            time_sync_create_url: string;
+            time_sync_finalize_url: string;
+            app_version: string;
+            heartbeat_interval_seconds: number;
+            /** Format: uuid */
+            answer_event_id: string | null;
+            /** Format: uuid */
+            snapshot_id: string | null;
+            mode: components["schemas"]["StudentFeedbackCaptureModeEnum"];
+            authorized: components["schemas"]["StudentFeedbackCaptureAuthorization"];
+        };
+        StudentFeedbackCaptureAuthorization: {
+            correctness: boolean;
+            correct_answer: boolean;
+            explanation: boolean;
+        };
+        /**
+         * @description * `correctness` - correctness
+         *     * `full` - full
+         * @enum {string}
+         */
+        StudentFeedbackCaptureModeEnum: "correctness" | "full";
+        StudentImportPreviewRequest: {
+            /** Format: uri */
+            file: string;
+        };
+        StudentImportPreviewRow: {
+            student_number: string;
+            display_name: string;
+            class_id: number;
+            class_name: string;
+            account_action: components["schemas"]["AccountActionEnum"];
+        };
+        StudentKCComparison: {
+            name: string;
+            comparison: components["schemas"]["StudentComparison"];
         };
         StudentLearningExperiment: {
             /** Format: date-time */
@@ -1771,6 +3722,7 @@ export interface components {
             result_state: components["schemas"]["ResultStateEnum"];
             final_answer: string;
             options: components["schemas"]["StudentLearningQuestionOption"][];
+            feedback_capture?: components["schemas"]["StudentFeedbackCapture"];
             score?: components["schemas"]["StudentLearningScore"];
             correct_answer?: string | null;
             explanation?: string;
@@ -1890,6 +3842,8 @@ export interface components {
             percent: string;
         };
         StudentRuntimeActions: {
+            research_tools_url?: string;
+            resolve_branch_url?: string;
             save_draft_url: string;
             submit_url: string;
             skip_url: string;
@@ -1913,6 +3867,11 @@ export interface components {
             text: string;
         };
         StudentRuntimeProcess: {
+            writer_lease_acquire_url?: string;
+            writer_lease_renew_url?: string;
+            capture_version?: string;
+            active_response_event_id?: string | null;
+            response_version?: number;
             session_id: number;
             attempt_id: number;
             event_batch_url: string;
@@ -1936,6 +3895,9 @@ export interface components {
             options: components["schemas"]["StudentRuntimeOption"][];
         };
         StudentRuntimeQuestionEntry: {
+            /** Format: date-time */
+            presented_deadline_at?: string | null;
+            research_tools?: unknown;
             task_id: number;
             session_id: number;
             session_status: string;
@@ -1955,6 +3917,15 @@ export interface components {
             task_id: number;
             session_id: number;
             question_url: string;
+        };
+        StudentSessionSummary: {
+            session_id: number;
+            experiment_name: string;
+            status: string;
+            status_label: string;
+            submission_count: number;
+            attempt_count: number;
+            return_url: string;
         };
         StudentSummaryRow: {
             student_id: number;
@@ -2001,8 +3972,95 @@ export interface components {
             completed: number;
             total: number;
         };
+        StudentTrend: {
+            experiment_id: number;
+            name: string;
+            student_correct_rate: components["schemas"]["MetricValue"];
+            class_average_correct_rate: components["schemas"]["MetricValue"];
+            /** Format: decimal */
+            x: string;
+            /** Format: decimal */
+            student_y: string;
+            /** Format: decimal */
+            class_y: string;
+        };
+        StudentVisibilityPolicy: {
+            show_scores: boolean;
+            show_correct_rate: boolean;
+            show_item_results: boolean;
+            show_class_average: boolean;
+            rank_mode: components["schemas"]["RankModeEnum"];
+            show_kc_rates: boolean;
+            show_trend: boolean;
+            is_read_only: boolean;
+        };
         TaskReason: {
             reason?: string;
+        };
+        TeacherAccountClass: {
+            id: number;
+            name: string;
+            academic_year: string;
+            is_active: boolean;
+            course_id: number | null;
+            student_count: number;
+        };
+        TeacherAccountClassCollection: {
+            items: components["schemas"]["TeacherAccountClass"][];
+        };
+        TeacherAccountClassCreateRequest: {
+            name: string;
+            academic_year?: string;
+        };
+        TeacherAccountClassCreateResponse: {
+            class_group: components["schemas"]["TeacherAccountClass"];
+        };
+        TeacherAccountClassOption: {
+            id: number;
+            name: string;
+            academic_year: string;
+            display_name: string;
+            is_active: boolean;
+        };
+        TeacherAccountCourse: {
+            id: number;
+            name: string;
+            code: string;
+            term: string;
+            status: components["schemas"]["Status558Enum"];
+        };
+        TeacherAccountStudent: {
+            id: number;
+            student_number: string;
+            display_name: string;
+            username: string;
+            class_group: components["schemas"]["TeacherAccountClassOption"] | null;
+        };
+        TeacherAccountStudentCollection: {
+            items: components["schemas"]["TeacherAccountStudent"][];
+            class_options: components["schemas"]["TeacherAccountClassOption"][];
+            query: string;
+            selected_class_id: number | null;
+        };
+        TeacherAccountStudentCreateRequest: {
+            student_number: string;
+            display_name: string;
+            class_group: number;
+            password: string;
+        };
+        TeacherAccountStudentCreateResponse: {
+            student: components["schemas"]["TeacherAccountStudent"];
+        };
+        TeacherAccountStudentImportConfirmRequest: {
+            action?: components["schemas"]["ActionEnum"];
+        };
+        TeacherAnalysisClassGroup: {
+            id: number;
+            name: string;
+            academic_year: string;
+        };
+        TeacherClassCapabilities: {
+            can_create: boolean;
         };
         TeacherClassCenter: {
             course: components["schemas"]["CourseReference"];
@@ -2029,6 +4087,14 @@ export interface components {
             items: components["schemas"]["TeacherClassSummary"][];
             page: components["schemas"]["TeacherClassPageMetadata"];
             course: components["schemas"]["CourseReference"];
+            capabilities: components["schemas"]["TeacherClassCapabilities"];
+        };
+        TeacherClassCreateRequest: {
+            name: string;
+            academic_year?: string;
+        };
+        TeacherClassCreateResponse: {
+            class_group: components["schemas"]["TeacherClassSummary"];
         };
         TeacherClassPageMetadata: {
             number: number;
@@ -2045,6 +4111,136 @@ export interface components {
             is_active: boolean;
             active_student_count: number;
             detail_url: string;
+        };
+        TeacherCourseCollection: {
+            items: components["schemas"]["TeacherCourseSummary"][];
+            create_url: string;
+        };
+        TeacherCourseCreateRequest: {
+            name: string;
+            code: string;
+            term: string;
+            description?: string;
+        };
+        TeacherCourseCreateResponse: {
+            course: components["schemas"]["TeacherCourseSummary"];
+        };
+        TeacherCourseDetail: {
+            course: components["schemas"]["TeacherCourseDetailCourse"];
+            metrics: components["schemas"]["TeacherCourseMetrics"];
+            recent_experiments: components["schemas"]["TeacherCourseRecentExperiment"][];
+            recent_banks: components["schemas"]["TeacherCourseRecentBank"][];
+            class_center_enabled: boolean;
+            is_course_owner: boolean;
+        };
+        TeacherCourseDetailCourse: {
+            id: number;
+            name: string;
+            code: string;
+            term: string;
+            description: string;
+            owner_name: string;
+            status: components["schemas"]["Status558Enum"];
+            status_label: string;
+            /** Format: date-time */
+            updated_at: string;
+            detail_url: string;
+            banks_url: string;
+            classes_url: string;
+            experiments_url: string;
+            data_url: string;
+            settings_url: string;
+        };
+        TeacherCourseMetrics: {
+            class_count: number;
+            bank_count: number;
+            experiment_count: number;
+            student_count: number;
+        };
+        TeacherCoursePurgeRequest: {
+            /** Format: uuid */
+            purge_request_id: string;
+            preview_session_count: number;
+            preview_event_count: number;
+            status: string;
+            status_label: string;
+            execute_url: string | null;
+        };
+        TeacherCourseRecentBank: {
+            id: number;
+            name: string;
+            description: string;
+            question_count: number;
+            visibility: string;
+            visibility_label: string;
+            /** Format: date-time */
+            updated_at: string;
+            detail_url: string;
+        };
+        TeacherCourseRecentExperiment: {
+            id: number;
+            name: string;
+            question_bank_name: string;
+            status: string;
+            status_label: string;
+            detail_url: string;
+        };
+        TeacherCourseSettings: {
+            course: components["schemas"]["TeacherCourseSettingsCourse"];
+            form: components["schemas"]["TeacherCourseSettingsForm"];
+            capabilities: components["schemas"]["TeacherCourseSettingsCapabilities"];
+            archive_url: string;
+            purge_request_create_url: string;
+            purge_requests: components["schemas"]["TeacherCoursePurgeRequest"][];
+        };
+        TeacherCourseSettingsCapabilities: {
+            can_update: boolean;
+            can_archive: boolean;
+        };
+        TeacherCourseSettingsCourse: {
+            id: number;
+            name: string;
+            code: string;
+            term: string;
+            description: string;
+            status: components["schemas"]["Status558Enum"];
+            status_label: string;
+        };
+        TeacherCourseSettingsForm: {
+            name: string;
+            code: string;
+            term: string;
+            description: string;
+            state_token: string;
+            teachers: number[];
+            teacher_options: components["schemas"]["TeacherCourseTeacherOption"][];
+        };
+        TeacherCourseSettingsRequest: {
+            name: string;
+            code: string;
+            term: string;
+            description?: string;
+            state_token: string;
+            teachers?: number[];
+        };
+        TeacherCourseSummary: {
+            id: number;
+            name: string;
+            code: string;
+            term: string;
+            description: string;
+            owner_name: string;
+            status: components["schemas"]["Status558Enum"];
+            status_label: string;
+            class_count: number;
+            bank_count: number;
+            experiment_count: number;
+            detail_url: string;
+        };
+        TeacherCourseTeacherOption: {
+            id: number;
+            display_name: string;
+            username: string;
         };
         TeacherExperiment: {
             readonly id: number;
@@ -2065,13 +4261,14 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label: string;
-            feedback_mode?: components["schemas"]["TeacherExperimentFeedbackModeEnum"];
+            feedback_mode?: components["schemas"]["FeedbackMode433Enum"];
+            feedback_release_policy?: components["schemas"]["FeedbackReleasePolicyEnum"];
+            research_tools?: unknown;
             readonly feedback_mode_label: string;
+            readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
-            /** Format: int64 */
             total_time_limit_minutes?: number | null;
-            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -2098,13 +4295,6 @@ export interface components {
             page: components["schemas"]["PageMetadata"];
             summary: components["schemas"]["TeacherExperimentSummary"];
         };
-        /**
-         * @description * `none` - 仅显示已提交
-         *     * `correctness` - 显示正误
-         *     * `full` - 显示正误、答案与解析
-         * @enum {string}
-         */
-        TeacherExperimentFeedbackModeEnum: "none" | "correctness" | "full";
         TeacherExperimentInventoryBucket: {
             kc_code: string;
             kc_name: string;
@@ -2133,6 +4323,61 @@ export interface components {
             descendant_kc_id?: number;
             descendant_kc_path?: string;
         };
+        TeacherExperimentReference: {
+            id: number;
+            name: string;
+            status: string;
+        };
+        TeacherExperimentResultsActions: {
+            back_url: string;
+            clear_filter_url: string;
+        };
+        TeacherExperimentResultsResolution: {
+            kind: components["schemas"]["TeacherExperimentResultsResolutionKindEnum"];
+            canonical_url: string | null;
+            course: components["schemas"]["CourseReference"];
+            experiment: components["schemas"]["TeacherExperimentReference"];
+            tasks: components["schemas"]["TeacherExperimentTaskCompatibility"][];
+            sessions: components["schemas"]["TeacherExperimentSessionCompatibility"][];
+            session_status_choices: components["schemas"]["TeacherSessionStatusChoice"][];
+            selected_status: string;
+            actions: components["schemas"]["TeacherExperimentResultsActions"];
+        };
+        /**
+         * @description * `canonical` - canonical
+         *     * `class_tasks` - class_tasks
+         *     * `sessions` - sessions
+         * @enum {string}
+         */
+        TeacherExperimentResultsResolutionKindEnum: "canonical" | "class_tasks" | "sessions";
+        TeacherExperimentSessionActions: {
+            back_url: string;
+            word_url: string | null;
+        };
+        TeacherExperimentSessionCompatibility: {
+            student_number: string;
+            display_name: string;
+            status: string;
+            status_label: string;
+            /** Format: date-time */
+            started_at: string;
+            submission_count: number;
+            detail_url: string;
+        };
+        TeacherExperimentSessionResolution: {
+            kind: components["schemas"]["TeacherExperimentSessionResolutionKindEnum"];
+            canonical_url: string | null;
+            course: components["schemas"]["CourseReference"];
+            experiment: components["schemas"]["TeacherExperimentReference"];
+            report: components["schemas"]["TeacherSessionReport"] | null;
+            actions: components["schemas"]["TeacherExperimentSessionActions"];
+        };
+        /**
+         * @description * `canonical` - canonical
+         *     * `legacy_report` - legacy_report
+         * @enum {string}
+         */
+        TeacherExperimentSessionResolutionKindEnum: "canonical" | "legacy_report";
         /**
          * @description * `draft` - 草稿
          *     * `frozen` - 已冻结
@@ -2146,12 +4391,18 @@ export interface components {
             question_banks: components["schemas"]["QuestionBankReference"][];
             classes: components["schemas"]["TeacherExperimentClassOption"][];
         };
+        TeacherExperimentTaskCompatibility: {
+            academic_year: string;
+            class_name: string;
+            class_snapshot_name: string;
+            analysis_url: string;
+        };
         TeacherQuestionBankReference: {
             id: number;
             name: string;
         };
         TeacherSamplingInventoryQuestionType: {
-            question_type: components["schemas"]["QuestionTypeEnum"];
+            question_type: components["schemas"]["QuestionType334Enum"];
             label: string;
             available: number;
         };
@@ -2164,6 +4415,105 @@ export interface components {
             candidate_count: number;
             question_types: components["schemas"]["TeacherSamplingInventoryQuestionType"][];
         };
+        TeacherSessionReport: {
+            student_name: string;
+            student_number: string;
+            class_snapshot_name: string;
+            version_number: number;
+            session_status: string;
+            question_count: number;
+            questions: components["schemas"]["TeacherSessionReportQuestion"][];
+        };
+        TeacherSessionReportOption: {
+            key: string;
+            text: string;
+            display: string;
+        };
+        TeacherSessionReportQuestion: {
+            assigned_sequence_index: number;
+            stable_code: string;
+            question_type: string;
+            question_type_label: string;
+            text: string;
+            options: components["schemas"]["TeacherSessionReportOption"][];
+            student_answer: string;
+            correct_answer: string;
+            answer_status: string;
+        };
+        TeacherSessionStatusChoice: {
+            value: string;
+            label: string;
+        };
+        TeachingLegacyAttempt: {
+            id: number;
+            question_code: string;
+            status: string;
+            status_label: string;
+            /** Format: decimal */
+            grade_score: string | null;
+            timing: components["schemas"]["TeachingLegacyTiming"];
+            timeline: components["schemas"]["TeachingLegacyTimelineEvent"][];
+            raw_events_url: string;
+        };
+        TeachingLegacyFilters: {
+            q: string;
+            student_id: number | null;
+            session_id: number | null;
+        };
+        TeachingLegacyResponse: {
+            course: components["schemas"]["CourseReference"];
+            scope: components["schemas"]["TeachingLegacyScope"];
+            blocked_message: string;
+            filters: components["schemas"]["TeachingLegacyFilters"];
+            total_roster_count: number;
+            student_summaries: components["schemas"]["TeachingLegacyStudentSummary"][];
+            sessions: components["schemas"]["TeachingLegacySession"][];
+            attempts: components["schemas"]["TeachingLegacyAttempt"][];
+        };
+        TeachingLegacyScope: {
+            values: {
+                [key: string]: number;
+            };
+            experiment_id: number | null;
+            class_id: number | null;
+            is_complete: boolean;
+            display: string;
+        };
+        TeachingLegacySession: {
+            id: number;
+            status: string;
+            status_label: string;
+            attempt_count: number;
+            submitted_count: number;
+            /** Format: date-time */
+            started_at: string;
+        };
+        TeachingLegacyStudentSummary: {
+            student_id: number;
+            student_number: string;
+            display_name: string;
+            data_status: string;
+            data_status_label: string;
+            attempt_count: number | null;
+            submitted_count: number | null;
+            graded_count: number | null;
+            correct_rate: number | null;
+            /** Format: decimal */
+            score: string | null;
+            /** Format: decimal */
+            max_score: string | null;
+        };
+        TeachingLegacyTimelineEvent: {
+            event_id: string;
+            event_type: string;
+            /** Format: date-time */
+            occurred_at: string;
+            interval_quality: string;
+        };
+        TeachingLegacyTiming: {
+            display_duration_ms: number | null;
+            display_label: string;
+        };
         /**
          * @description * `none` - 无时限
          *     * `total` - 实验总时限
@@ -2171,12 +4521,31 @@ export interface components {
          * @enum {string}
          */
         TimeModeEnum: "none" | "total" | "per_question";
+        TimingQuality: {
+            submitted_count: number;
+            exact_count: number;
+            estimated_count: number;
+            wall_clock_count: number;
+            unavailable_count: number;
+        };
+        Transition: {
+            key: string;
+            label: string;
+            count: number;
+        };
+        /**
+         * @description * `applicable` - applicable
+         *     * `not_applicable` - not_applicable
+         * @enum {string}
+         */
+        TransitionApplicabilityEnum: "applicable" | "not_applicable";
         /**
          * @description * `private` - private
          *     * `shared` - shared
+         *     * `archived` - archived
          * @enum {string}
          */
-        VisibilityEnum: "private" | "shared";
+        VisibilityE8aEnum: "private" | "shared" | "archived";
     };
     responses: never;
     parameters: never;
@@ -2202,6 +4571,49 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CsrfToken"];
                 };
+            };
+        };
+    };
+    auth_login_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["LoginRequest"];
+                "multipart/form-data": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionContext"];
+                };
+            };
+        };
+    };
+    auth_logout_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -2392,6 +4804,27 @@ export interface operations {
             };
         };
     };
+    student_sessions_summary_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudentSessionSummary"];
+                };
+            };
+        };
+    };
     student_tasks_results_retrieve: {
         parameters: {
             query?: never;
@@ -2463,6 +4896,880 @@ export interface operations {
             };
         };
     };
+    teacher_account_class_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherAccountClassCollection"];
+                };
+            };
+        };
+    };
+    teacher_account_class_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeacherAccountClassCreateRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["TeacherAccountClassCreateRequest"];
+                "multipart/form-data": components["schemas"]["TeacherAccountClassCreateRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherAccountClassCreateResponse"];
+                };
+            };
+        };
+    };
+    teacher_course_class_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CourseClassDeleteRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["CourseClassDeleteRequest"];
+                "multipart/form-data": components["schemas"]["CourseClassDeleteRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CourseClassDeleteResponse"];
+                };
+            };
+        };
+    };
+    teacher_course_class_management: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CourseClassManagement"];
+                };
+            };
+        };
+    };
+    teacher_course_class_management_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PatchedCourseClassUpdateRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PatchedCourseClassUpdateRequest"];
+                "multipart/form-data": components["schemas"]["PatchedCourseClassUpdateRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CourseClassManagement"];
+                };
+            };
+        };
+    };
+    teacher_course_class_student_visibility: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudentVisibilityPolicy"];
+                };
+            };
+        };
+    };
+    teacher_course_class_student_visibility_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PatchedStudentVisibilityPolicyRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PatchedStudentVisibilityPolicyRequest"];
+                "multipart/form-data": components["schemas"]["PatchedStudentVisibilityPolicyRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudentVisibilityPolicy"];
+                };
+            };
+        };
+    };
+    teacher_course_class_student_move: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+                student_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveEnrollmentRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["MoveEnrollmentRequest"];
+                "multipart/form-data": components["schemas"]["MoveEnrollmentRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoveEnrollmentResponse"];
+                };
+            };
+        };
+    };
+    teacher_course_class_student_remove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+                student_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoveEnrollmentRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["RemoveEnrollmentRequest"];
+                "multipart/form-data": components["schemas"]["RemoveEnrollmentRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoveEnrollmentResponse"];
+                };
+            };
+        };
+    };
+    teacher_course_class_student_password_reset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+                student_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PasswordResetRequest"];
+                "multipart/form-data": components["schemas"]["PasswordResetRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherAccountStudentCreateResponse"];
+                };
+            };
+        };
+    };
+    teacher_course_class_copy_confirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CourseClassCopyConfirmRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["CourseClassCopyConfirmRequest"];
+                "multipart/form-data": components["schemas"]["CourseClassCopyConfirmRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CourseClassCopyResult"];
+                };
+            };
+        };
+    };
+    teacher_course_class_copy_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CourseClassCopyPreviewRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["CourseClassCopyPreviewRequest"];
+                "multipart/form-data": components["schemas"]["CourseClassCopyPreviewRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CourseClassCopyPreview"];
+                };
+            };
+        };
+    };
+    teacher_course_class_student_import_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
+                };
+            };
+        };
+    };
+    teacher_course_class_student_import_confirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CourseStudentImportConfirmRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["CourseStudentImportConfirmRequest"];
+                "multipart/form-data": components["schemas"]["CourseStudentImportConfirmRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CourseStudentImportResult"];
+                };
+            };
+        };
+    };
+    teacher_course_class_student_import_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StudentImportPreviewRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["StudentImportPreviewRequest"];
+                "multipart/form-data": components["schemas"]["StudentImportPreviewRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyStudentImportPreview"];
+                };
+            };
+        };
+    };
+    teacher_course_class_manual_enrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualEnrollmentRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManualEnrollmentRequest"];
+                "multipart/form-data": components["schemas"]["ManualEnrollmentRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualEnrollmentResponse"];
+                };
+            };
+        };
+    };
+    teacher_account_student_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherAccountStudentCollection"];
+                };
+            };
+        };
+    };
+    teacher_account_student_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeacherAccountStudentCreateRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["TeacherAccountStudentCreateRequest"];
+                "multipart/form-data": components["schemas"]["TeacherAccountStudentCreateRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherAccountStudentCreateResponse"];
+                };
+            };
+        };
+    };
+    teacher_account_student_password_reset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                student_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PasswordResetRequest"];
+                "multipart/form-data": components["schemas"]["PasswordResetRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherAccountStudentCreateResponse"];
+                };
+            };
+        };
+    };
+    teacher_account_student_import_confirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TeacherAccountStudentImportConfirmRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["TeacherAccountStudentImportConfirmRequest"];
+                "multipart/form-data": components["schemas"]["TeacherAccountStudentImportConfirmRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyStudentImportResult"];
+                };
+            };
+        };
+    };
+    teacher_account_student_import_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StudentImportPreviewRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["StudentImportPreviewRequest"];
+                "multipart/form-data": components["schemas"]["StudentImportPreviewRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyStudentImportPreview"];
+                };
+            };
+        };
+    };
+    teacher_standalone_question_bank_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementStandaloneBankCollection"];
+                };
+            };
+        };
+    };
+    teacher_standalone_question_bank_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagementStandaloneBankCreateRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManagementStandaloneBankCreateRequest"];
+                "multipart/form-data": components["schemas"]["ManagementStandaloneBankCreateRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementStandaloneBank"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_standalone_question_bank_resolve: {
+        parameters: {
+            query?: {
+                /** @description Legacy standalone URL action to resolve for a course-backed bank. */
+                destination?: "detail" | "kc_import" | "question_editor" | "question_import";
+                /** @description Required only when destination is question_editor. */
+                question_id?: number;
+            };
+            header?: never;
+            path: {
+                bank_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementStandaloneBankDetail"];
+                };
+            };
+        };
+    };
+    teacher_standalone_question_bank_kc_import_confirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagementQuestionImportConfirmRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManagementQuestionImportConfirmRequest"];
+                "multipart/form-data": components["schemas"]["ManagementQuestionImportConfirmRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementQuestionsUpdatedResponse"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_standalone_question_bank_kc_import_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileImportRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["FileImportRequest"];
+                "multipart/form-data": components["schemas"]["FileImportRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementStandaloneKCImportPreviewResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_standalone_question_bank_question_import_confirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagementQuestionImportConfirmRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManagementQuestionImportConfirmRequest"];
+                "multipart/form-data": components["schemas"]["ManagementQuestionImportConfirmRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementQuestionImportConfirmResponse"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_standalone_question_bank_question_import_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileImportRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["FileImportRequest"];
+                "multipart/form-data": components["schemas"]["FileImportRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementQuestionImportPreviewResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_standalone_question_bank_question_editor_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                question_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementStandaloneQuestionEditorResponse"];
+                };
+            };
+        };
+    };
+    teacher_standalone_question_bank_question_editor_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                question_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagementQuestionEditorRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManagementQuestionEditorRequest"];
+                "multipart/form-data": components["schemas"]["ManagementQuestionEditorRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementStandaloneQuestionEditorResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_standalone_question_bank_visibility_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagementStandaloneVisibilityRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManagementStandaloneVisibilityRequest"];
+                "multipart/form-data": components["schemas"]["ManagementStandaloneVisibilityRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementStandaloneBank"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_standalone_question_bank_shared_copy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_bank_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementStandaloneBank"];
+                };
+            };
+        };
+    };
     teacher_class_task_retrieve: {
         parameters: {
             query?: never;
@@ -2485,6 +5792,33 @@ export interface operations {
         };
     };
     teacher_class_task_cancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TaskReason"];
+                "application/x-www-form-urlencoded": components["schemas"]["TaskReason"];
+                "multipart/form-data": components["schemas"]["TaskReason"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClassTask"];
+                };
+            };
+        };
+    };
+    teacher_class_task_feedback_release: {
         parameters: {
             query?: never;
             header?: never;
@@ -2586,6 +5920,90 @@ export interface operations {
             };
         };
     };
+    teacher_standalone_question_bank_concept_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementStandaloneConceptCollection"];
+                };
+            };
+        };
+    };
+    teacher_course_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherCourseCollection"];
+                };
+            };
+        };
+    };
+    teacher_course_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeacherCourseCreateRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["TeacherCourseCreateRequest"];
+                "multipart/form-data": components["schemas"]["TeacherCourseCreateRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherCourseCreateResponse"];
+                };
+            };
+        };
+    };
+    teacher_course_detail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherCourseDetail"];
+                };
+            };
+        };
+    };
     teacher_question_banks_list: {
         parameters: {
             query?: {
@@ -2654,6 +6072,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QuestionBankDetail"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_archive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementBankVisibilityResult"];
                 };
             };
         };
@@ -2738,6 +6178,245 @@ export interface operations {
             };
         };
     };
+    teacher_question_bank_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_editor_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementBankEditorResponse"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_editor_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagementBankEditorRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManagementBankEditorRequest"];
+                "multipart/form-data": components["schemas"]["ManagementBankEditorRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementBankEditorResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_kc_import_confirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagementKCImportConfirmRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManagementKCImportConfirmRequest"];
+                "multipart/form-data": components["schemas"]["ManagementKCImportConfirmRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementQuestionsUpdatedResponse"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_kc_import_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileImportRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["FileImportRequest"];
+                "multipart/form-data": components["schemas"]["FileImportRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementKCImportPreviewResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_question_import_confirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagementQuestionImportConfirmRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManagementQuestionImportConfirmRequest"];
+                "multipart/form-data": components["schemas"]["ManagementQuestionImportConfirmRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementQuestionImportConfirmResponse"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_question_import_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileImportRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["FileImportRequest"];
+                "multipart/form-data": components["schemas"]["FileImportRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementQuestionImportPreviewResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
     teacher_courses_banks_questions_retrieve: {
         parameters: {
             query?: {
@@ -2764,7 +6443,238 @@ export interface operations {
             };
         };
     };
-    teacher_courses_classes_retrieve: {
+    teacher_question_bank_question_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+                question_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_question_editor_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+                question_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementQuestionEditorResponse"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_question_editor_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+                question_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagementQuestionEditorRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManagementQuestionEditorRequest"];
+                "multipart/form-data": components["schemas"]["ManagementQuestionEditorRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementQuestionEditorResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_restore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementBankVisibilityResult"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_archived_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementArchivedBankCollection"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_shared_source_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementSharedSourceCourseCollection"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_shared_creator_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+                source_course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementSharedCreatorCollection"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_shared_bank_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+                creator_id: number;
+                source_course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementSharedQuestionBankCollection"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_shared_bank_copy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+                creator_id: number;
+                source_course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementSharedQuestionBankCopy"];
+                };
+            };
+        };
+    };
+    teacher_course_class_list: {
         parameters: {
             query?: {
                 q?: string;
@@ -2783,6 +6693,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeacherClassCollection"];
+                };
+            };
+        };
+    };
+    teacher_course_class_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeacherClassCreateRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["TeacherClassCreateRequest"];
+                "multipart/form-data": components["schemas"]["TeacherClassCreateRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherClassCreateResponse"];
                 };
             };
         };
@@ -2811,6 +6748,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeacherClassCenter"];
+                };
+            };
+        };
+    };
+    teacher_courses_classes_experiments_questions_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+                experiment_id: number;
+                question_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuestionDetailResponse"];
+                };
+            };
+        };
+    };
+    teacher_courses_classes_experiments_questions_students_process_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+                experiment_id: number;
+                question_id: number;
+                student_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttemptProcessResponse"];
+                };
+            };
+        };
+    };
+    teacher_courses_classes_students_analysis_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+                student_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudentDetailResponse"];
+                };
+            };
+        };
+    };
+    teacher_courses_classes_students_experiments_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+                experiment_id: number;
+                student_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudentExperimentDetailResponse"];
                 };
             };
         };
@@ -2863,6 +6896,71 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CourseConceptCreateResponse"];
                 };
+            };
+        };
+    };
+    teacher_question_bank_course_concept_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                concept_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagementCourseConceptEditRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManagementCourseConceptEditRequest"];
+                "multipart/form-data": components["schemas"]["ManagementCourseConceptEditRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementCourseConceptEditResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_question_bank_course_concept_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                concept_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementCourseConceptDeleteResponse"];
+                };
+            };
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -3049,6 +7147,34 @@ export interface operations {
             };
         };
     };
+    teacher_legacy_teaching_retrieve: {
+        parameters: {
+            query?: {
+                class_id?: number;
+                class_snapshot_id?: number;
+                experiment_id?: number;
+                q?: string;
+                session_id?: number;
+                student_id?: number;
+            };
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeachingLegacyResponse"];
+                };
+            };
+        };
+    };
     teacher_experiment_list: {
         parameters: {
             query?: never;
@@ -3199,6 +7325,53 @@ export interface operations {
             };
         };
     };
+    teacher_courses_experiments_results_resolve_retrieve: {
+        parameters: {
+            query?: {
+                status?: string;
+            };
+            header?: never;
+            path: {
+                course_id: number;
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherExperimentResultsResolution"];
+                };
+            };
+        };
+    };
+    teacher_courses_experiments_sessions_resolve_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+                experiment_id: number;
+                session_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherExperimentSessionResolution"];
+                };
+            };
+        };
+    };
     teacher_experiment_sampling_inventory: {
         parameters: {
             query?: never;
@@ -3222,6 +7395,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeacherSamplingInventoryResponse"];
+                };
+            };
+        };
+    };
+    teacher_course_settings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherCourseSettings"];
+                };
+            };
+        };
+    };
+    teacher_course_settings_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeacherCourseSettingsRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["TeacherCourseSettingsRequest"];
+                "multipart/form-data": components["schemas"]["TeacherCourseSettingsRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherCourseSettings"];
                 };
             };
         };
@@ -3430,6 +7651,208 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublishPlan"];
+                };
+            };
+        };
+    };
+    teacher_standalone_experiment_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandaloneExperimentCollection"];
+                };
+            };
+        };
+    };
+    teacher_standalone_experiment_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["StandaloneExperimentInput"];
+                "application/x-www-form-urlencoded": components["schemas"]["StandaloneExperimentInput"];
+                "multipart/form-data": components["schemas"]["StandaloneExperimentInput"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandaloneExperimentDetail"];
+                };
+            };
+        };
+    };
+    teacher_standalone_experiment_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandaloneExperimentDetail"];
+                };
+            };
+        };
+    };
+    teacher_standalone_experiment_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    teacher_standalone_experiment_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PatchedStandaloneExperimentInput"];
+                "application/x-www-form-urlencoded": components["schemas"]["PatchedStandaloneExperimentInput"];
+                "multipart/form-data": components["schemas"]["PatchedStandaloneExperimentInput"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandaloneExperimentDetail"];
+                };
+            };
+        };
+    };
+    teacher_standalone_experiment_publish: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandaloneExperimentDetail"];
+                };
+            };
+        };
+    };
+    teacher_standalone_experiment_results: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandaloneExperimentResults"];
+                };
+            };
+        };
+    };
+    teacher_standalone_experiment_assign_students: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StandaloneStudentAssignmentInput"];
+                "application/x-www-form-urlencoded": components["schemas"]["StandaloneStudentAssignmentInput"];
+                "multipart/form-data": components["schemas"]["StandaloneStudentAssignmentInput"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandaloneExperimentDetail"];
+                };
+            };
+        };
+    };
+    teacher_standalone_experiment_sync_questions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandaloneExperimentDetail"];
                 };
             };
         };

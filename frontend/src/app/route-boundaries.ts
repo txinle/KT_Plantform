@@ -1,31 +1,52 @@
 import type { RouteRecordRaw } from 'vue-router'
+import { teacherStandaloneExperimentRoutes } from '@/features/teacher-experiments/standalone-routes'
+import { teacherTeachingDataRoutes } from '@/features/teacher-teaching-data/routes'
+import { teacherStandaloneQuestionBankRoutes } from '@/features/teacher-bank-management/standalone-routes'
+import { teacherAnalysisRoutes } from '@/features/teacher-analysis/routes'
+import { teacherBankManagementRoutes } from '@/features/teacher-bank-management/routes'
+import { teacherAccountManagementRoutes } from '@/features/teacher-account-management/routes'
+const TeacherCourseList = () => import('@/features/teacher-courses/TeacherCourseList.vue')
+const TeacherCourseCreate = () => import('@/features/teacher-courses/TeacherCourseCreate.vue')
+const TeacherCourseOverview = () => import('@/features/teacher-courses/TeacherCourseOverview.vue')
+const TeacherCourseSettings = () => import('@/features/teacher-courses/TeacherCourseSettings.vue')
 
-import TeacherExperimentDetail from '@/features/teacher-experiments/TeacherExperimentDetail.vue'
-import TeacherExperimentForm from '@/features/teacher-experiments/TeacherExperimentForm.vue'
-import TeacherExperimentList from '@/features/teacher-experiments/TeacherExperimentList.vue'
-import TeacherExperimentPublishPlan from '@/features/teacher-experiments/TeacherExperimentPublishPlan.vue'
-import TeacherExperimentsLayout from '@/features/teacher-experiments/TeacherExperimentsLayout.vue'
-import TeacherQuestionBankDetail from '@/features/teacher-question-banks/TeacherQuestionBankDetail.vue'
-import TeacherQuestionBankList from '@/features/teacher-question-banks/TeacherQuestionBankList.vue'
-import TeacherQuestionBanksLayout from '@/features/teacher-question-banks/TeacherQuestionBanksLayout.vue'
-import TeacherDataAdvanced from '@/features/teacher-data-center/TeacherDataAdvanced.vue'
-import TeacherDataCenterLayout from '@/features/teacher-data-center/TeacherDataCenterLayout.vue'
-import TeacherDataExportHistory from '@/features/teacher-data-center/TeacherDataExportHistory.vue'
-import TeacherDataExports from '@/features/teacher-data-center/TeacherDataExports.vue'
-import TeacherDataOverview from '@/features/teacher-data-center/TeacherDataOverview.vue'
-import TeacherDataQuality from '@/features/teacher-data-center/TeacherDataQuality.vue'
-import StudentCourseList from '@/features/student-courses/StudentCourseList.vue'
-import StudentCoursesLayout from '@/features/student-courses/StudentCoursesLayout.vue'
-import StudentTaskList from '@/features/student-courses/StudentTaskList.vue'
-import StudentLearning from '@/features/student-learning/StudentLearning.vue'
-import StudentLearningQuestion from '@/features/student-learning/StudentLearningQuestion.vue'
-import StudentResult from '@/features/student-results/StudentResult.vue'
-import StudentAssessment from '@/assessment-runtime/StudentAssessment.vue'
-import TeacherClassCenter from '@/features/teacher-classes/TeacherClassCenter.vue'
-import TeacherClassList from '@/features/teacher-classes/TeacherClassList.vue'
-import TeacherClassesLayout from '@/features/teacher-classes/TeacherClassesLayout.vue'
+const TeacherExperimentDetail = () => import('@/features/teacher-experiments/TeacherExperimentDetail.vue')
+const TeacherExperimentForm = () => import('@/features/teacher-experiments/TeacherExperimentForm.vue')
+const TeacherExperimentList = () => import('@/features/teacher-experiments/TeacherExperimentList.vue')
+const TeacherExperimentPublishPlan = () => import('@/features/teacher-experiments/TeacherExperimentPublishPlan.vue')
+const TeacherExperimentsLayout = () => import('@/features/teacher-experiments/TeacherExperimentsLayout.vue')
+const TeacherQuestionBankDetail = () => import('@/features/teacher-question-banks/TeacherQuestionBankDetail.vue')
+const TeacherQuestionBankList = () => import('@/features/teacher-question-banks/TeacherQuestionBankList.vue')
+const TeacherQuestionBanksLayout = () => import('@/features/teacher-question-banks/TeacherQuestionBanksLayout.vue')
+const TeacherDataAdvanced = () => import('@/features/teacher-data-center/TeacherDataAdvanced.vue')
+const TeacherDataCenterLayout = () => import('@/features/teacher-data-center/TeacherDataCenterLayout.vue')
+const TeacherDataExportHistory = () => import('@/features/teacher-data-center/TeacherDataExportHistory.vue')
+const TeacherDataExports = () => import('@/features/teacher-data-center/TeacherDataExports.vue')
+const TeacherDataOverview = () => import('@/features/teacher-data-center/TeacherDataOverview.vue')
+const TeacherDataQuality = () => import('@/features/teacher-data-center/TeacherDataQuality.vue')
+const StudentCourseList = () => import('@/features/student-courses/StudentCourseList.vue')
+const StudentCoursesLayout = () => import('@/features/student-courses/StudentCoursesLayout.vue')
+const StudentTaskList = () => import('@/features/student-courses/StudentTaskList.vue')
+const StudentLearning = () => import('@/features/student-learning/StudentLearning.vue')
+const StudentLearningQuestion = () => import('@/features/student-learning/StudentLearningQuestion.vue')
+const StudentResult = () => import('@/features/student-results/StudentResult.vue')
+const StudentAssessment = () => import('@/assessment-runtime/StudentAssessment.vue')
+const TeacherClassCenter = () => import('@/features/teacher-classes/TeacherClassCenter.vue')
+const TeacherClassList = () => import('@/features/teacher-classes/TeacherClassList.vue')
+const TeacherClassesLayout = () => import('@/features/teacher-classes/TeacherClassesLayout.vue')
 
 export const migratedRoutes: RouteRecordRaw[] = [
+  ...teacherStandaloneExperimentRoutes,
+  ...teacherTeachingDataRoutes,
+  ...teacherAccountManagementRoutes,
+  ...teacherBankManagementRoutes,
+  ...teacherStandaloneQuestionBankRoutes,
+  ...teacherAnalysisRoutes,
+  { path: '/student/sessions/:sessionId/complete/', name: 'student-session-complete', component: () => import('@/features/student-results/StudentSessionComplete.vue') },
+  { path: '/teacher/courses/', name: 'teacher-courses', component: TeacherCourseList },
+  { path: '/teacher/courses/create/', name: 'teacher-course-create', component: TeacherCourseCreate },
+  { path: '/teacher/courses/:courseId/', name: 'teacher-course-overview', component: TeacherCourseOverview },
+  { path: '/teacher/courses/:courseId/settings/', name: 'teacher-course-settings', component: TeacherCourseSettings },
   {
     path: '/teacher/courses/:courseId/banks/',
     component: TeacherQuestionBanksLayout,
@@ -66,6 +87,7 @@ export const migratedRoutes: RouteRecordRaw[] = [
       { path: 'exports/', name: 'teacher-data-exports', component: TeacherDataExports },
       { path: 'quality/', name: 'teacher-data-quality', component: TeacherDataQuality },
       { path: 'exports/history/', name: 'teacher-data-export-history', component: TeacherDataExportHistory },
+      { path: 'tables/', name: 'teacher-data-tables', component: TeacherDataAdvanced },
       { path: 'advanced/', name: 'teacher-data-advanced', component: TeacherDataAdvanced },
     ],
   },

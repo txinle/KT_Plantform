@@ -77,6 +77,15 @@ SESSION_ONLY_EVENTS = frozenset(
 
 ATTEMPT_EVENTS = frozenset(
     {
+        "research_tool",
+        "research_tool_observed",
+        "research_tool_requested",
+        "confidence_observed",
+        "feedback_exposure",
+        "response_transition",
+        "input_operation",
+        "response_branch_resolved",
+        "response_pointer_conflict_observed",
         "item_entered",
         "item_rendered",
         "item_left",
@@ -248,6 +257,10 @@ def _validate_payload_links(
 
 
 def _validate_submission_invariants(*, event_type, actor_source, payload, attempt):
+    if event_type == "response_pointer_conflict_observed" and actor_source != "server":
+        raise EventInvariantError(
+            "response_pointer_conflict_observed is an authoritative server event."
+        )
     if event_type == "response_committed":
         if actor_source != "server":
             raise EventInvariantError(
@@ -298,7 +311,7 @@ def _validate_submission_invariants(*, event_type, actor_source, payload, attemp
             raise EventInvariantError(
                 "response_committed correctness differs from the authoritative submission."
             )
-    if event_type in {"feedback_shown", "explanation_shown"}:
+    if event_type in {"feedback_shown", "explanation_shown", "feedback_exposure"}:
         if not AssessmentEvent.objects.filter(
             attempt=attempt,
             event_type="response_committed",

@@ -21,6 +21,7 @@ const commands = [['manage.py', 'migrate', '--noinput']]
 commands.push(['manage.py', 'flush', '--noinput'])
 commands.push(['manage.py', 'seed_demo'])
 commands.push(['manage.py', 'seed_e2e_student_feedback'])
+if (process.argv.includes('--capture-v2')) commands.push(['manage.py', 'seed_e2e_capture_v2'])
 
 for (const args of commands) {
   const result = spawnSync(python, args, {

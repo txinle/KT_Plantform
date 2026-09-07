@@ -6,6 +6,7 @@ from apps.accounts.models import ClassStudentAnalyticsPolicy
 from apps.experiments.models import Experiment
 from apps.experiments.presentation import display_text, format_answer, options_for_snapshot
 
+from .feedback_services import feedback_availability
 from .models import Attempt, ExperimentSession, GradeRecord, SubmissionEvent
 
 
@@ -221,12 +222,13 @@ def build_student_task_result(task, student):
         )
     }
     grades = _effective_grades(attempts)
+    availability = feedback_availability(task, session)
     result = {
         "feedback_mode": feedback_mode,
         "task_id": task.pk,
         **_status_projection(session, attempts, submissions, grades),
     }
-    if feedback_mode == Experiment.Feedback.NONE:
+    if feedback_mode == Experiment.Feedback.NONE or not availability.released:
         return result
 
     policy = task.class_group.student_analytics_policy
@@ -239,6 +241,12 @@ def build_student_task_result(task, student):
             snapshot = attempt.assignment.snapshot
             options = options_for_snapshot(snapshot)
             grade = grades.get(attempt.pk)
+            item_availability = feedback_availability(
+                task,
+                session,
+                attempt=attempt,
+                effective_grade=grade,
+            )
             item = {
                 "question_id": snapshot.pk,
                 "question_code": snapshot.code,
@@ -249,17 +257,12 @@ def build_student_task_result(task, student):
                 )
                 or "（空）",
             }
-            if policy.show_correct_rate and grade is not None:
+            if policy.show_correct_rate and item_availability.allows_correctness:
                 item["is_correct"] = grade.is_correct
-            if policy.show_scores and grade is not None:
+            if policy.show_scores and item_availability.allows_correctness:
                 item["score"] = grade.score
                 item["max_score"] = grade.max_score
-            if (
-                feedback_mode == Experiment.Feedback.FULL
-                and session is not None
-                and session.status == ExperimentSession.Status.COMPLETED
-                and grade is not None
-            ):
+            if item_availability.allows_full:
                 item["correct_answer"] = format_answer(
                     snapshot.question_type,
                     snapshot.correct_answer,

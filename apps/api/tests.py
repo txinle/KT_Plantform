@@ -36,7 +36,7 @@ class ApiFoundationContractTests(TestCase):
             response.headers["X-Request-ID"],
         )
 
-    def test_session_returns_only_authenticated_user_context(self):
+    def test_session_returns_authenticated_user_context(self):
         self.client.force_login(self.owner)
 
         response = self.client.get("/api/v1/auth/session/")
@@ -49,6 +49,9 @@ class ApiFoundationContractTests(TestCase):
                     "id": self.owner.pk,
                     "role": User.Role.TEACHER,
                     "display_name": "课程负责人",
+                    "username": "api-owner",
+                    "student_number": None,
+                    "home_url": "/teacher/courses/",
                 }
             },
         )

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capture_version",
+    "operation_id",
+    "branch_id",
+    "parent_event_id",
+    "input_type",
+    "composition",
+    "selection_start",
+    "selection_end"
+  ],
+  "properties": {
+    "capture_version": {
+      "const": "capture-v2"
+    },
+    "operation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "branch_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "parent_event_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "input_type": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "composition": {
+      "enum": [
+        "none",
+        "started",
+        "updating",
+        "confirmed",
+        "cancelled"
+      ]
+    },
+    "selection_start": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "selection_end": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    }
+  }
+}

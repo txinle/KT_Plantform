@@ -2,7 +2,7 @@ import json
 from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.http import Http404, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.db.models import F
 from django.shortcuts import get_object_or_404, redirect, render
 from django.templatetags.static import static
@@ -27,6 +27,7 @@ from .confidence_services import (
     frozen_feedback_payload,
 )
 from .response_snapshot_services import canonical_response_state
+from .writer_lease_services import WriterLeaseConflict
 from .services import (
     SubmissionValidationError,
     finish_session,
@@ -301,6 +302,7 @@ def student_learning_question(request, course_id, experiment_id, question_id):
             module="student-courses",
             title=f"题目结果 | {enrollment.course.name}",
             course=enrollment.course,
+            classic_scripts=(f"{static('js/process-event-collector.js')}?v=20260906.capture-v2",),
         )
     from apps.analytics.teaching.student_projection import (
         build_student_question_projection,
@@ -375,7 +377,7 @@ def question_page(request, session_id, assignment_id):
         pk=session_id,
         student=request.user,
     )
-    if is_vue_module_enabled(
+    if getattr(request, '_kt_standalone', False) or is_vue_module_enabled(
         "student_assessment",
         request.user,
         task=session.class_task,
@@ -385,14 +387,20 @@ def question_page(request, session_id, assignment_id):
             pk=assignment_id,
             session=session,
         )
-        return render_vue_shell(
+        response = render_vue_shell(
             request,
             module="student-assessment",
             title=f"作答 | {session.version.experiment.name}",
             classic_scripts=(
-                f"{static('js/process-event-collector.js')}?v=20260829.2",
+                f"{static('js/process-event-collector.js')}?v=20260906.capture-v2",
             ),
         )
+        if session.capture_contract_id and session.capture_contract.contract_name == 'capture-v2':
+            response['X-Capture-Contract'] = 'capture-v2'
+        return response
+    from .capture_v2_services import uses_capture_v2
+    if uses_capture_v2(session):
+        return HttpResponse('当前采集版本暂不可用。请保留本机作答记录，稍后从此任务继续。', status=503)
     pending_confidence = (
         ConfidenceAssignment.objects.select_related("attempt__assignment")
         .filter(
@@ -487,8 +495,14 @@ def save_draft_api(request, attempt_id):
             data.get("answer"),
             _client_time(data.get("client_occurred_at")),
             request_received_at=request_received_at,
+            target_event_id=data.get('target_event_id'),
+            expected_version=data.get('expected_version'),
+            writer_lease_token=data.get('writer_lease_token'),
+            writer_client_instance_id=data.get('writer_client_instance_id'),
         )
-        response = {"success": True, "saved_at": attempt.draft_saved_at.isoformat()}
+        response = {"success": True, "saved_at": attempt.draft_saved_at.isoformat(),
+                    "response_version": attempt.response_version,
+                    "active_response_event_id": str(attempt.active_response_event_id) if attempt.active_response_event_id else None}
         if attempt.saved_response_snapshot is not None:
             response.update(
                 {
@@ -507,7 +521,21 @@ def save_draft_api(request, attempt_id):
         }:
             response["response_state_after"] = None
         return JsonResponse(response)
+    except WriterLeaseConflict:
+        return JsonResponse({'success': False, 'error': {'code': 'writer_lease_conflict', 'message': '另一设备正在保存此题，请稍后重试；本机轨迹仍保留。'}}, status=409)
     except ValidationError as exc:
+        from .capture_v2_services import (
+            ResponseVersionConflict,
+            record_response_pointer_conflict,
+        )
+        if isinstance(exc, ResponseVersionConflict):
+            record_response_pointer_conflict(
+                attempt=attempt,
+                conflict=exc,
+                requested_expected_version=data.get('expected_version'),
+                request_client_instance_id=data.get('writer_client_instance_id'),
+            )
+            return JsonResponse({'success': False, 'error': {'code': 'RESPONSE_VERSION_CONFLICT', 'message': str(exc), 'fields': exc.document}}, status=409)
         return JsonResponse({"success": False, "error": "; ".join(exc.messages)}, status=409)
 
 
@@ -523,6 +551,9 @@ def submit_api(request, attempt_id):
             data.get("submission_token"),
             _client_time(data.get("client_clicked_at")),
             request_received_at=request_received_at,
+            target_event_id=data.get('target_event_id'),
+            writer_lease_token=data.get('writer_lease_token'),
+            writer_client_instance_id=data.get('writer_client_instance_id'),
         )
         confidence = ensure_confidence_assignment(attempt)
         prompt_pending = (
@@ -551,6 +582,8 @@ def submit_api(request, attempt_id):
         else:
             response.update(frozen_feedback_payload(attempt))
         return JsonResponse(response)
+    except WriterLeaseConflict:
+        return JsonResponse({'success': False, 'error': {'code': 'writer_lease_conflict', 'message': '另一设备正在保存此题，请稍后重试；本机轨迹仍保留。'}}, status=409)
     except SubmissionValidationError as exc:
         record_submission_rejection(
             attempt_id=attempt.pk,

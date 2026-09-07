@@ -16,6 +16,30 @@ export interface MetricDisplay {
   value_display?: string
 }
 
+export interface StudentLearningComparison {
+  student_value?: MetricDisplay
+  class_average?: MetricDisplay
+}
+
+export interface StudentLearningCoverage {
+  graded?: number
+  submitted?: number
+  is_partial?: boolean
+}
+
+export interface StudentLearningKCRow {
+  name: string
+  student_value: MetricDisplay
+  class_average?: MetricDisplay
+}
+
+export interface StudentLearningTrendRow {
+  experiment_id: number
+  name: string
+  student_value: MetricDisplay
+  class_average?: MetricDisplay
+}
+
 export interface StudentLearningSummary {
   generated_at: string
   course_id: number
@@ -30,6 +54,11 @@ export interface StudentLearningSummary {
   }
   correct_rate?: MetricDisplay
   score_rate?: MetricDisplay
+  score_grading_coverage?: StudentLearningCoverage
+  comparisons?: {
+    correct_rate?: StudentLearningComparison
+    score_rate?: StudentLearningComparison
+  }
   experiments: Array<{
     experiment_id: number
     name: string
@@ -40,7 +69,10 @@ export interface StudentLearningSummary {
     results_available: boolean
     correct_rate?: MetricDisplay
     score_rate?: MetricDisplay
+    grading_coverage?: StudentLearningCoverage
   }>
+  kc_rows?: StudentLearningKCRow[]
+  trend_rows?: StudentLearningTrendRow[]
 }
 
 interface StudentApiClient {

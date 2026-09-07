@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capture_version",
+    "candidate_event_id",
+    "current_event_id",
+    "requested_expected_version",
+    "current_response_version",
+    "request_client_instance_id"
+  ],
+  "properties": {
+    "capture_version": {
+      "const": "capture-v2"
+    },
+    "candidate_event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "current_event_id": {
+      "type": ["string", "null"],
+      "format": "uuid"
+    },
+    "requested_expected_version": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "current_response_version": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "request_client_instance_id": {
+      "type": ["string", "null"],
+      "format": "uuid"
+    }
+  }
+}

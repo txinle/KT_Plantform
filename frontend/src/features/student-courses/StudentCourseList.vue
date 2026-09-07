@@ -8,6 +8,7 @@ import './student-courses.css'
 const courses = ref<StudentCourse[]>([])
 const loading = ref(true)
 const error = ref('')
+const courseStatusLabels: Record<string, string> = { active: '进行中', archived: '已归档' }
 
 onMounted(async () => {
   try {
@@ -21,22 +22,27 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="kt-student-dashboard">
-    <div class="kt-page-header">
-      <div class="kt-page-header__copy">
-        <p class="kt-kicker">Student workspace</p>
+  <section class="kt-student-dashboard kt-student-courses-page">
+    <header class="kt-student-page-heading">
+      <div>
+        <p class="kt-student-page-heading__eyebrow">课程工作区</p>
         <h1>我的课程</h1>
-        <p>进入课程查看教师正式发布给你的实验任务与学习记录。</p>
+        <p>选择课程后可查看作业和班级中心。</p>
       </div>
-    </div>
+    </header>
     <p v-if="loading" role="status">正在加载课程…</p>
     <p v-else-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
     <div v-else-if="courses.length" class="kt-student-course-grid">
       <article v-for="course in courses" :key="course.course_id" class="kt-card kt-student-course-card">
-        <div>
-          <span class="kt-status kt-status--neutral">{{ course.course_status }}</span>
+        <div class="kt-student-course-card__cover" aria-hidden="true">
+          <span>{{ course.course_code }}</span>
+        </div>
+        <div class="kt-student-course-card__body">
+          <div class="kt-student-course-card__meta">
+            <span class="kt-status kt-status--neutral">{{ courseStatusLabels[course.course_status] || course.course_status }}</span>
+            <span>{{ course.course_term }}</span>
+          </div>
           <h2>{{ course.course_name }}</h2>
-          <p>{{ course.course_code }} · {{ course.course_term }}</p>
           <p>{{ course.class_name }}</p>
         </div>
         <a class="kt-button" :href="`/student/courses/${course.course_id}/`">进入课程</a>

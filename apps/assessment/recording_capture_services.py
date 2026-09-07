@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
+from django.conf import settings
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -72,6 +74,32 @@ def ensure_capture_contract_v1():
     ):
         raise RuntimeError("capture-v1 contract drift detected")
     return contract
+
+
+CAPTURE_CONTRACT_V2 = deepcopy(CAPTURE_CONTRACT_V1)
+CAPTURE_CONTRACT_V2['contract_version'] = 2
+CAPTURE_CONTRACT_V2['requirements'].update({
+    'response_states': 'every_confirmed_transition', 'input_operations': 'required_for_text',
+    'branch_causality': 'required', 'formal_response_reference': 'required',
+})
+CAPTURE_CONTRACT_V2['parameters'].update({'stable_state_idle_ms': 0, 'draft_autosave_idle_ms': 800})
+
+
+def ensure_capture_contract_v2():
+    digest = _canonical_hash(CAPTURE_CONTRACT_V2)
+    contract, created = CaptureContractArtifact.objects.get_or_create(
+        contract_name='capture-v2', defaults={
+            'contract_version': 2, 'schema_document': CAPTURE_CONTRACT_V2, 'schema_sha256': digest,
+        },
+    )
+    if not created and (contract.schema_sha256 != digest or contract.schema_document != CAPTURE_CONTRACT_V2):
+        raise RuntimeError('capture-v2 contract drift detected')
+    return contract
+
+
+def capture_contract_for_start(student, experiment):
+    allowed = str(student.pk) in settings.CAPTURE_V2_USER_IDS or str(experiment.course_id) in settings.CAPTURE_V2_COURSE_IDS
+    return ensure_capture_contract_v2() if settings.CAPTURE_V2_ENABLED and allowed else ensure_capture_contract_v1()
 
 
 CHECKPOINT_FIELDS = frozenset(

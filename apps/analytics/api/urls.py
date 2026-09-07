@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import include, path
 
 from .views import (
     TeacherClassCenterView,
@@ -13,6 +13,8 @@ from .views import (
 
 
 urlpatterns = [
+    path("", include("apps.analytics.api.teaching_legacy_urls")),
+    path("", include("apps.analytics.api.drilldown_urls")),
     path(
         "courses/<int:course_id>/data/scope/",
         TeacherDataCenterScopeView.as_view(),

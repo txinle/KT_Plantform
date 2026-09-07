@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capture_version",
+    "operation_id",
+    "branch_id",
+    "parent_event_id",
+    "before_state",
+    "after_state",
+    "before_state_hash",
+    "after_state_hash",
+    "input_type",
+    "source"
+  ],
+  "properties": {
+    "capture_version": {
+      "const": "capture-v2"
+    },
+    "operation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "branch_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "parent_event_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "before_state": {
+      "type": "object",
+      "required": [
+        "question_type",
+        "value"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "question_type": {
+          "enum": [
+            "single_choice",
+            "multiple_choice",
+            "true_false",
+            "fill_blank",
+            "short_answer",
+            "numeric"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "after_state": {
+      "type": "object",
+      "required": [
+        "question_type",
+        "value"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "question_type": {
+          "enum": [
+            "single_choice",
+            "multiple_choice",
+            "true_false",
+            "fill_blank",
+            "short_answer",
+            "numeric"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "before_state_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "after_state_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "before_snapshot_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "after_snapshot_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "input_type": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "source": {
+      "enum": [
+        "student"
+      ]
+    },
+    "option_key": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "option_action": {
+      "enum": [
+        "select",
+        "deselect",
+        "clear",
+        null
+      ]
+    }
+  }
+}

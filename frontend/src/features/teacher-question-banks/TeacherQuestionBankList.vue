@@ -2,15 +2,16 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
-import { getBootstrapContext } from '@/app/bootstrap'
 import Alert from '@/design-system/components/Alert.vue'
+import SidebarSection from '@/design-system/components/SidebarSection.vue'
 
 import { getTeacherQuestionBankApi, type CourseConceptCollection, type CourseConceptImportPreview, type QuestionBankCollection } from './api'
+import { getTeacherBankManagementApi } from '../teacher-bank-management/api'
 
 const route = useRoute()
 const router = useRouter()
 const api = getTeacherQuestionBankApi()
-const bootstrap = getBootstrapContext()
+const managementApi = getTeacherBankManagementApi()
 const courseId = Number(route.params.courseId)
 const banks = ref<QuestionBankCollection>()
 const concepts = ref<CourseConceptCollection>()
@@ -23,6 +24,8 @@ const generatedCode = computed(() => Number(conceptForm.sequence) > 0 ? `KC${Num
 const importInput = ref<HTMLInputElement>()
 const importPreview = ref<CourseConceptImportPreview>()
 const importBusy = ref(false)
+const actionBusy = ref(false)
+const conceptRename = reactive({ id: 0, name: '', description: '' })
 
 async function load() {
   loading.value = true
@@ -102,6 +105,57 @@ async function confirmCourseConceptImport() {
   }
 }
 
+async function archiveBank(bankId: number) {
+  actionBusy.value = true
+  error.value = ''
+  try {
+    await managementApi.archiveBank(courseId, bankId)
+    await load()
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '归档题库失败。'
+  } finally {
+    actionBusy.value = false
+  }
+}
+
+function prepareConceptRename(concept: CourseConceptCollection['items'][number]) {
+  Object.assign(conceptRename, {
+    id: concept.id,
+    name: concept.name,
+    description: concept.description,
+  })
+}
+
+async function renameConcept(conceptId: number) {
+  actionBusy.value = true
+  error.value = ''
+  try {
+    await managementApi.updateCourseConcept(courseId, conceptId, {
+      name: conceptRename.name,
+      description: conceptRename.description,
+    })
+    conceptRename.id = 0
+    await load()
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '重命名 KC 失败。'
+  } finally {
+    actionBusy.value = false
+  }
+}
+
+async function deleteConcept(conceptId: number) {
+  actionBusy.value = true
+  error.value = ''
+  try {
+    await managementApi.deleteCourseConcept(courseId, conceptId)
+    await load()
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '归档 KC 失败。'
+  } finally {
+    actionBusy.value = false
+  }
+}
+
 function importClassificationLabel(value: string) {
   return ({ new: '可新增', unchanged: '已存在', archived_unchanged: '已归档', conflict: '冲突' } as Record<string, string>)[value] || value
 }
@@ -131,20 +185,22 @@ onMounted(load)
     </div>
   </header>
 
-  <nav v-if="banks && concepts" class="kt-qb-tabs" :class="`is-${activeTab}`" aria-label="题库模块">
-    <button data-tab="banks" :class="{ 'is-active': activeTab === 'banks' }" type="button" @click="selectTab('banks')">
-      题库管理 <span>{{ banks.page.total_items }}</span>
-    </button>
-    <button data-tab="course-kcs" :class="{ 'is-active': activeTab === 'course-kcs' }" type="button" @click="selectTab('course-kcs')">
-      课程 KC 总库 <span>{{ concepts.summary.total }}</span>
-    </button>
-  </nav>
+  <SidebarSection v-if="banks && concepts">
+    <nav class="kt-qb-tabs kt-sidebar-secondary-nav" :class="`is-${activeTab}`" role="tablist" aria-label="题库模块" aria-orientation="vertical">
+      <button id="question-bank-tab-banks" data-tab="banks" :class="{ 'is-active': activeTab === 'banks' }" type="button" role="tab" :aria-selected="activeTab === 'banks'" aria-controls="question-bank-panel" @click="selectTab('banks')">
+        题库管理 <span>{{ banks.page.total_items }}</span>
+      </button>
+      <button id="question-bank-tab-course-kcs" data-tab="course-kcs" :class="{ 'is-active': activeTab === 'course-kcs' }" type="button" role="tab" :aria-selected="activeTab === 'course-kcs'" aria-controls="course-kc-panel" @click="selectTab('course-kcs')">
+        课程 KC 总库 <span>{{ concepts.summary.total }}</span>
+      </button>
+    </nav>
+  </SidebarSection>
 
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <p v-if="loading" class="kt-qb-loading" role="status">正在加载题库…</p>
 
   <template v-else-if="banks && concepts">
-    <div v-if="activeTab === 'banks'" class="kt-qb-grid" data-panel="banks">
+    <div v-if="activeTab === 'banks'" id="question-bank-panel" class="kt-qb-grid" data-panel="banks" role="tabpanel" aria-labelledby="question-bank-tab-banks">
       <div class="kt-qb-main-column">
         <section class="kt-qb-card kt-qb-bank-card" aria-labelledby="course-bank-heading">
           <div class="kt-qb-card-title"><h2 id="course-bank-heading">课程题库</h2><span>{{ banks.page.total_items }} 个</span></div>
@@ -157,12 +213,12 @@ onMounted(load)
                   <td>{{ bank.question_count }}</td>
                   <td><span class="kt-qb-badge" :class="`is-${bank.visibility}`">{{ bank.visibility_label }}</span></td>
                   <td>{{ formattedDate(bank.updated_at) }}</td>
-                  <td><div class="kt-qb-row-actions"><RouterLink class="kt-qb-btn kt-qb-btn--outline" :to="bank.detail_url">管理</RouterLink><form v-if="bank.archive_url" method="post" :action="bank.archive_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><button class="kt-qb-btn kt-qb-btn--outline" type="submit">归档</button></form></div></td>
+                  <td><div class="kt-qb-row-actions"><RouterLink class="kt-qb-btn kt-qb-btn--outline" :to="bank.detail_url">管理</RouterLink><button v-if="bank.archive_url" data-bank-archive class="kt-qb-btn kt-qb-btn--outline" type="button" :disabled="actionBusy" @click="archiveBank(bank.id)">归档</button></div></td>
                 </tr>
               </tbody>
             </table>
           </div>
-          <ul class="kt-qb-mobile-list"><li v-for="bank in banks.items" :key="bank.id"><div><RouterLink :to="bank.detail_url"><strong>{{ bank.name }}</strong></RouterLink><span class="kt-qb-badge">{{ bank.visibility_label }}</span></div><p>{{ bank.description }}</p><dl><div><dt>题目数</dt><dd>{{ bank.question_count }}</dd></div><div><dt>创建者</dt><dd>{{ bank.created_by_name }}</dd></div></dl><RouterLink class="kt-qb-btn kt-qb-btn--outline" :to="bank.detail_url">管理</RouterLink></li></ul>
+          <ul class="kt-qb-mobile-list"><li v-for="bank in banks.items" :key="bank.id"><div><RouterLink :to="bank.detail_url"><strong>{{ bank.name }}</strong></RouterLink><span class="kt-qb-badge" :class="`is-${bank.visibility}`">{{ bank.visibility_label }}</span></div><p>{{ bank.description }}</p><dl><div><dt>题目数</dt><dd>{{ bank.question_count }}</dd></div><div><dt>创建者</dt><dd>{{ bank.created_by_name }}</dd></div></dl><div class="kt-qb-row-actions"><RouterLink class="kt-qb-btn kt-qb-btn--outline" :to="bank.detail_url">管理</RouterLink><button v-if="bank.archive_url" data-bank-archive class="kt-qb-btn kt-qb-btn--outline" type="button" :disabled="actionBusy" @click="archiveBank(bank.id)">归档</button></div></li></ul>
         </section>
 
         <section class="kt-qb-card kt-qb-kc-entry" aria-labelledby="kc-entry-heading">
@@ -182,7 +238,7 @@ onMounted(load)
       </aside>
     </div>
 
-    <div v-else class="kt-qb-grid" data-panel="course-kcs">
+    <div v-else id="course-kc-panel" class="kt-qb-grid" data-panel="course-kcs" role="tabpanel" aria-labelledby="question-bank-tab-course-kcs">
       <div class="kt-qb-main-column kt-qb-main-column--kc">
         <section class="kt-qb-card kt-qb-overview" aria-labelledby="kc-overview-heading">
           <h2 id="kc-overview-heading">课程 KC 总览</h2>
@@ -194,11 +250,11 @@ onMounted(load)
           <div class="kt-qb-table-wrap kt-qb-desktop-table">
             <table class="kt-qb-table">
               <thead><tr><th>KC</th><th>使用题目</th><th>题库分布</th><th>角色分布</th><th>状态</th><th>操作</th></tr></thead><tbody>
-                <tr v-for="concept in concepts.items" :key="concept.id"><td><strong>{{ concept.name }}</strong><small>{{ concept.kc_code }}</small></td><td>{{ concept.question_count }}</td><td>{{ concept.bank_count }}</td><td>一级 {{ concept.role_counts.level_1 }} · 二级 {{ concept.role_counts.level_2 }} · 三级 {{ concept.role_counts.level_3 }}</td><td><span class="kt-qb-badge" :class="concept.status === 'active' ? 'is-active' : 'is-archived'">{{ concept.status === 'active' ? '有效' : '已归档' }}</span></td><td><div class="kt-qb-row-actions"><details v-if="concept.rename_url"><summary class="kt-qb-btn kt-qb-btn--outline">重命名</summary><form class="kt-qb-popover" method="post" :action="concept.rename_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><input name="name" :value="concept.name" required><textarea name="description" :value="concept.description" /><button class="kt-qb-btn kt-qb-btn--primary" type="submit">保存</button></form></details><form v-if="concept.delete_url" method="post" :action="concept.delete_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><button class="kt-qb-btn kt-qb-btn--outline" type="submit">归档</button></form></div></td></tr>
+                <tr v-for="concept in concepts.items" :key="concept.id"><td><strong>{{ concept.name }}</strong><small>{{ concept.kc_code }}</small></td><td>{{ concept.question_count }}</td><td>{{ concept.bank_count }}</td><td>一级 {{ concept.role_counts.level_1 }} · 二级 {{ concept.role_counts.level_2 }} · 三级 {{ concept.role_counts.level_3 }}</td><td><span class="kt-qb-badge" :class="concept.status === 'active' ? 'is-active' : 'is-archived'">{{ concept.status === 'active' ? '有效' : '已归档' }}</span></td><td><div class="kt-qb-row-actions"><details v-if="concept.rename_url"><summary data-concept-rename class="kt-qb-btn kt-qb-btn--outline" @click="prepareConceptRename(concept)">重命名</summary><form v-if="conceptRename.id === concept.id" data-concept-rename-form class="kt-qb-popover" @submit.prevent="renameConcept(concept.id)"><input v-model="conceptRename.name" name="name" required><textarea v-model="conceptRename.description" name="description" /><button class="kt-qb-btn kt-qb-btn--primary" type="submit" :disabled="actionBusy">保存</button></form></details><button v-if="concept.delete_url" data-concept-delete class="kt-qb-btn kt-qb-btn--outline" type="button" :disabled="actionBusy" @click="deleteConcept(concept.id)">归档</button></div></td></tr>
               </tbody>
             </table>
           </div>
-          <ul class="kt-qb-mobile-list"><li v-for="concept in concepts.items" :key="concept.id"><div><strong>{{ concept.name }}</strong><span class="kt-qb-badge">{{ concept.status === 'active' ? '有效' : '已归档' }}</span></div><p>{{ concept.kc_code }} · {{ concept.question_count }} 道题</p><p>一级 {{ concept.role_counts.level_1 }} · 二级 {{ concept.role_counts.level_2 }} · 三级 {{ concept.role_counts.level_3 }}</p></li></ul>
+          <ul class="kt-qb-mobile-list"><li v-for="concept in concepts.items" :key="concept.id"><div><strong>{{ concept.name }}</strong><span class="kt-qb-badge" :class="concept.status === 'active' ? 'is-active' : 'is-archived'">{{ concept.status === 'active' ? '有效' : '已归档' }}</span></div><p>{{ concept.kc_code }} · {{ concept.question_count }} 道题</p><p>一级 {{ concept.role_counts.level_1 }} · 二级 {{ concept.role_counts.level_2 }} · 三级 {{ concept.role_counts.level_3 }}</p><div class="kt-qb-row-actions"><details v-if="concept.rename_url"><summary data-concept-rename class="kt-qb-btn kt-qb-btn--outline" @click="prepareConceptRename(concept)">重命名</summary><form v-if="conceptRename.id === concept.id" data-concept-rename-form class="kt-qb-popover" @submit.prevent="renameConcept(concept.id)"><label>知识点名称<input v-model="conceptRename.name" name="name" required></label><label>说明<textarea v-model="conceptRename.description" name="description" /></label><button class="kt-qb-btn kt-qb-btn--primary" type="submit" :disabled="actionBusy">保存</button></form></details><button v-if="concept.delete_url" data-concept-delete class="kt-qb-btn kt-qb-btn--outline" type="button" :disabled="actionBusy" @click="deleteConcept(concept.id)">归档</button></div></li></ul>
         </section>
       </div>
 

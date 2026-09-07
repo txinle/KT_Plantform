@@ -16,7 +16,20 @@
   ]);
 
   const PAYLOAD_FIELDS = Object.freeze({
-    item_rendered: [],
+    feedback_exposure: ['capture_version', 'operation_id', 'feedback_mode', 'stage', 'answer_event_id', 'snapshot_id',
+      'included_correctness', 'included_correct_answer', 'included_explanation'],
+    research_tool_requested: ['capture_version', 'operation_id', 'tool', 'stage', 'initiation_type',
+      'answer_event_id', 'content_version', 'data'],
+    confidence_observed: ['capture_version', 'operation_id', 'confidence_assignment_id', 'stage',
+      'answer_event_id', 'probability', 'feedback_phase'],
+    research_tool_observed: ['capture_version', 'operation_id', 'server_event_id', 'tool', 'stage',
+      'initiation_type', 'answer_event_id', 'content_version', 'data'],
+    response_transition: ['capture_version', 'operation_id', 'branch_id', 'parent_event_id',
+      'before_state', 'after_state', 'before_state_hash', 'after_state_hash', 'input_type', 'source',
+      'option_key', 'option_action'],
+    input_operation: ['capture_version', 'operation_id', 'branch_id', 'parent_event_id',
+      'input_type', 'composition', 'selection_start', 'selection_end'],
+    item_rendered: ['presentation_state'],
     item_left: ['leave_reason', 'to_assignment_id'],
     response_input_started: ['question_type'],
     text_edit_observed: [
@@ -149,6 +162,7 @@
       this.checkpoints = [];
       this.deadLetters = [];
       this.lock = Promise.resolve();
+      this.responseHeads = new Map();
     }
 
     _locked(operation) {
@@ -169,8 +183,18 @@
           event: clone(event),
         });
         this.nextOrder += 1;
+        if (event.event_type === 'response_transition') {
+          this.responseHeads.set(`${event.session_id}:${event.attempt_id}`, clone(event));
+        }
         return clone(event);
       });
+    }
+
+    async restoreResponse(sessionId, attemptId) {
+      return clone(this.responseHeads.get(`${sessionId}:${attemptId}`) || null);
+    }
+    async clearResponseRecovery(sessionId, attemptId) {
+      this.responseHeads.delete(`${sessionId}:${attemptId}`);
     }
 
     peekBatch(limit = MAX_BATCH_SIZE) {
@@ -314,8 +338,26 @@
         outbox_order: outboxOrder,
         event: clone(event),
       });
+      if (event.event_type === 'response_transition') {
+        meta.put({ key: `response-head:${event.session_id}:${event.attempt_id}`, value: clone(event) });
+        meta.put({ key: `response-state:${event.attempt_id}:${event.payload.after_state_hash}`, value: clone(event.payload.after_state) });
+      }
       await completed;
       return clone(event);
+    }
+
+    async restoreResponse(sessionId, attemptId) {
+      const transaction = this.database.transaction('meta', 'readonly');
+      const completed = transactionResult(transaction);
+      const row = await requestResult(transaction.objectStore('meta').get(`response-head:${sessionId}:${attemptId}`));
+      await completed;
+      return row?.value || null;
+    }
+    async clearResponseRecovery(sessionId, attemptId) {
+      const transaction = this.database.transaction('meta', 'readwrite');
+      const completed = transactionResult(transaction);
+      transaction.objectStore('meta').delete(`response-head:${sessionId}:${attemptId}`);
+      await completed;
     }
 
     async peekBatch(limit = MAX_BATCH_SIZE) {
@@ -545,7 +587,7 @@
       if (createCheckpoint) {
         await collector.checkpoint?.(reason === 'navigation' ? 'navigation' : 'session_end');
       }
-      if (flush) collector.flushBounded?.(1500, { ignoreVisibility: true, keepalive: true });
+      if (flush) await collector.flushBounded?.(1500, { ignoreVisibility: true, keepalive: true });
     };
     const dispose = () => {
       stopHeartbeat();
@@ -556,7 +598,7 @@
       // item_rendered is the compatibility event name; the payload makes its
       // measurement boundary explicit: stem and controls are interactive.
       ready: (async () => {
-        await record('item_rendered', { presentation_state: 'interactive' });
+        if (!options.deferRendered) await record('item_rendered', { presentation_state: 'interactive' });
         await record('pageshow', { persisted: false });
         await record(visible ? 'document_visible' : 'document_hidden', {});
         await record(focused ? 'window_focused' : 'window_blurred', {});
@@ -599,6 +641,7 @@
       this.retryTimer = null;
       this.syncTimer = null;
       this.flushPromise = null;
+      this.recordQueue = Promise.resolve();
     }
 
     _qualityFlags() {
@@ -610,13 +653,16 @@
     }
 
     async record(eventType, payload, options = {}) {
-      const sanitized = sanitizePayload(eventType, payload);
-      const wallTime = this.wallNow().toISOString();
-      const monotonicMs = normalizeMonotonic(this.monotonicNow());
+      const wallTime = options.wallTime || this.wallNow().toISOString();
+      const monotonicMs = normalizeMonotonic(options.monotonicMs ?? this.monotonicNow());
       const qualityFlags = [...new Set([
         ...this._qualityFlags(),
         ...(options.qualityFlags || []),
       ])];
+      const materialized = options.materialize ? options.materialize() : Promise.resolve(payload);
+      void materialized.catch(() => {});
+      const operation = this.recordQueue.then(async () => {
+      const sanitized = sanitizePayload(eventType, await materialized);
       const event = await this.outbox.enqueue(
         this.clientInstanceId,
         (sequence) => {
@@ -634,12 +680,17 @@
             app_version: this.appVersion,
           };
           if (options.correlationId) document.correlation_id = options.correlationId;
+          if (options.eventId) document.event_id = options.eventId;
           if (this.timeSyncId) document.time_sync_id = this.timeSyncId;
           return document;
         },
       );
       if (this.autoSchedule) this.scheduleUpload(this.uploadDelayMs);
       return event;
+      });
+      this.recordQueue = operation;
+      void operation.catch(() => {});
+      return operation;
     }
 
     scheduleUpload(delay = 0) {
@@ -657,6 +708,7 @@
       while (this.isOnline() && (options.ignoreVisibility || this.isVisible())) {
         const batch = await this.outbox.peekBatch(MAX_BATCH_SIZE);
         if (!batch) break;
+        while (batch.events.length > 1 && new TextEncoder().encode(JSON.stringify(batch.events)).byteLength > 48 * 1024) batch.events.pop();
         const body = JSON.stringify({
           client_instance_id: batch.clientInstanceId,
           events: batch.events,
@@ -672,7 +724,7 @@
             },
             body,
             credentials: 'same-origin',
-            keepalive: Boolean(options.keepalive),
+            keepalive: Boolean(options.keepalive) && new TextEncoder().encode(body).byteLength < 60 * 1024,
           });
           responseDocument = await response.json();
         } catch (_error) {
@@ -683,7 +735,8 @@
           const permanentResponse = response.status >= 400
             && response.status < 500
             && response.status !== 408
-            && response.status !== 429;
+            && response.status !== 429
+            && !this.endpoint.includes('/capture-v2/');
           if (permanentResponse) {
             for (const event of batch.events) {
               await this.outbox.moveToDeadLetter?.(
@@ -732,7 +785,7 @@
           && state.highestContiguousAcked > this.lastCheckpointedContiguousAck
         ) {
           this.lastCheckpointedContiguousAck = state.highestContiguousAcked;
-          await this.checkpoint('ack_progress');
+          await this.checkpoint('ack_progress', { keepalive: Boolean(options.keepalive) });
         }
       } else {
         const delay = backoffDelay(this.failureCount);
@@ -751,10 +804,15 @@
     }
 
     async flushBounded(timeoutMs = 1500, options = {}) {
-      if (!this.setTimeout) return this.flush(options);
+      const flushLatest = async () => {
+        await this.recordQueue;
+        if (this.flushPromise) await this.flushPromise;
+        return this.flush(options);
+      };
+      if (!this.setTimeout) return flushLatest();
       let timeoutId;
       return Promise.race([
-        this.flush(options),
+        flushLatest(),
         new Promise((resolve) => {
           timeoutId = this.setTimeout(() => resolve(false), timeoutMs);
         }),
@@ -763,7 +821,7 @@
       });
     }
 
-    async checkpoint(trigger) {
+    async checkpoint(trigger, options = {}) {
       if (!this.checkpointEndpoint || !this.fetch || !this.outbox.captureState) return null;
       const state = await this.outbox.captureState(this.clientInstanceId);
       const document = {
@@ -794,7 +852,7 @@
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrfToken },
             body: JSON.stringify(checkpoint),
             credentials: 'same-origin',
-            keepalive: trigger === 'pagehide' || trigger === 'session_end',
+            keepalive: Boolean(options.keepalive) || trigger === 'pagehide' || trigger === 'session_end',
           });
           if (!response.ok) break;
           result = await response.json();

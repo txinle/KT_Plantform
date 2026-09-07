@@ -870,6 +870,7 @@ def _preview_definition_fingerprint(experiment, candidates):
             "sampling_kcs": sampling_kcs,
             "ordering_mode": frozen.get("ordering_mode") if frozen else experiment.ordering_mode,
             "feedback_mode": frozen.get("feedback_mode") if frozen else experiment.feedback_mode,
+            "research_tools": frozen.get("research_tools", {}) if frozen else experiment.research_tools,
             "resume_mode": frozen.get("resume_mode") if frozen else experiment.resume_mode,
             "assignment_unit_type": frozen.get("assignment_unit_type") if frozen else experiment.assignment_unit_type,
             "total_time_limit_minutes": frozen.get("total_time_limit_minutes") if frozen else experiment.total_time_limit_minutes,
@@ -1032,9 +1033,12 @@ def generate_preview(plan, actor, *, expected_revision):
 
 
 def _release_configuration(experiment, candidates):
+    from .research_tool_config import validate_research_tools
     configuration = {
+        "research_tools": validate_research_tools(experiment.research_tools),
         "ordering_mode": experiment.ordering_mode,
         "feedback_mode": experiment.feedback_mode,
+        "feedback_release_policy": experiment.feedback_release_policy,
         "time_mode": experiment.time_mode,
         "total_time_limit_minutes": experiment.total_time_limit_minutes,
         "per_question_time_limit_seconds": experiment.per_question_time_limit_seconds,

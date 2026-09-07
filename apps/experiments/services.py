@@ -17,6 +17,7 @@ from apps.question_bank.models import Question, QuestionBank
 from apps.question_bank.services.numeric import normalize_finite_decimal
 from apps.question_bank.services.scoring import normalize_true_false_answer
 from apps.assessment.models import ExperimentSession
+from .research_tool_config import validate_research_tools
 from .models import (
     ClassExperimentTask,
     Experiment,
@@ -796,7 +797,10 @@ def _publish_legacy_experiment(experiment, actor):
         _replace_experiment_students(experiment, roster)
     version_number = (experiment.versions.order_by("-version_number").values_list("version_number", flat=True).first() or 0) + 1
     config = {
-        "ordering_mode": experiment.ordering_mode, "feedback_mode": experiment.feedback_mode,
+        "research_tools": validate_research_tools(experiment.research_tools),
+        "ordering_mode": experiment.ordering_mode,
+        "feedback_mode": experiment.feedback_mode,
+        "feedback_release_policy": experiment.feedback_release_policy,
         "time_mode": experiment.time_mode, "total_time_limit_minutes": experiment.total_time_limit_minutes,
         "per_question_time_limit_seconds": experiment.per_question_time_limit_seconds,
         "resume_mode": experiment.resume_mode,

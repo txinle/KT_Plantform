@@ -17,6 +17,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/CsrfToken'
           description: ''
+  /api/v1/auth/login/:
+    post:
+      operationId: auth_login_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionContext'
+          description: ''
+  /api/v1/auth/logout/:
+    post:
+      operationId: auth_logout_create
+      tags:
+      - auth
+      security:
+      - SessionAuth: []
+      responses:
+        '204':
+          description: No response body
   /api/v1/auth/session/:
     get:
       operationId: auth_session_retrieve
@@ -199,6 +235,26 @@ paths:
               schema:
                 $ref: '#/components/schemas/StudentRuntimeQuestionEntry'
           description: ''
+  /api/v1/student/sessions/{session_id}/summary/:
+    get:
+      operationId: student_sessions_summary_retrieve
+      parameters:
+      - in: path
+        name: session_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - student
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentSessionSummary'
+          description: ''
   /api/v1/student/tasks/{task_id}/results/:
     get:
       operationId: student_tasks_results_retrieve
@@ -265,6 +321,1016 @@ paths:
               schema:
                 $ref: '#/components/schemas/StudentSessionEntry'
           description: ''
+  /api/v1/teacher/accounts/classes/:
+    get:
+      operationId: teacher_account_class_list
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherAccountClassCollection'
+          description: ''
+    post:
+      operationId: teacher_account_class_create
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeacherAccountClassCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TeacherAccountClassCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TeacherAccountClassCreateRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherAccountClassCreateResponse'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/delete/:
+    post:
+      operationId: teacher_course_class_delete
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseClassDeleteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CourseClassDeleteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CourseClassDeleteRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseClassDeleteResponse'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/manage/:
+    get:
+      operationId: teacher_course_class_management
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseClassManagement'
+          description: ''
+    patch:
+      operationId: teacher_course_class_management_update
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCourseClassUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCourseClassUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCourseClassUpdateRequest'
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseClassManagement'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/student-visibility/:
+    get:
+      operationId: teacher_course_class_student_visibility
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentVisibilityPolicy'
+          description: ''
+    patch:
+      operationId: teacher_course_class_student_visibility_update
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedStudentVisibilityPolicyRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedStudentVisibilityPolicyRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedStudentVisibilityPolicyRequest'
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentVisibilityPolicy'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/{student_id}/move/:
+    post:
+      operationId: teacher_course_class_student_move
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: student_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveEnrollmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/MoveEnrollmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/MoveEnrollmentRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoveEnrollmentResponse'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/{student_id}/remove/:
+    post:
+      operationId: teacher_course_class_student_remove
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: student_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemoveEnrollmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RemoveEnrollmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RemoveEnrollmentRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoveEnrollmentResponse'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/{student_id}/reset-password/:
+    post:
+      operationId: teacher_course_class_student_password_reset
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: student_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherAccountStudentCreateResponse'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/copy/confirm/:
+    post:
+      operationId: teacher_course_class_copy_confirm
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseClassCopyConfirmRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CourseClassCopyConfirmRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CourseClassCopyConfirmRequest'
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseClassCopyResult'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/copy/preview/:
+    post:
+      operationId: teacher_course_class_copy_preview
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseClassCopyPreviewRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CourseClassCopyPreviewRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CourseClassCopyPreviewRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseClassCopyPreview'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/import-template.xlsx:
+    get:
+      operationId: teacher_course_class_student_import_template
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/import/confirm/:
+    post:
+      operationId: teacher_course_class_student_import_confirm
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseStudentImportConfirmRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CourseStudentImportConfirmRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CourseStudentImportConfirmRequest'
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseStudentImportResult'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/import/preview/:
+    post:
+      operationId: teacher_course_class_student_import_preview
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentImportPreviewRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StudentImportPreviewRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StudentImportPreviewRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyStudentImportPreview'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/manual/:
+    post:
+      operationId: teacher_course_class_manual_enrollment
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManualEnrollmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManualEnrollmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManualEnrollmentRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManualEnrollmentResponse'
+          description: ''
+  /api/v1/teacher/accounts/students/:
+    get:
+      operationId: teacher_account_student_list
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherAccountStudentCollection'
+          description: ''
+    post:
+      operationId: teacher_account_student_create
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeacherAccountStudentCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TeacherAccountStudentCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TeacherAccountStudentCreateRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherAccountStudentCreateResponse'
+          description: ''
+  /api/v1/teacher/accounts/students/{student_id}/reset-password/:
+    post:
+      operationId: teacher_account_student_password_reset
+      parameters:
+      - in: path
+        name: student_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherAccountStudentCreateResponse'
+          description: ''
+  /api/v1/teacher/accounts/students/import/confirm/:
+    post:
+      operationId: teacher_account_student_import_confirm
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeacherAccountStudentImportConfirmRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TeacherAccountStudentImportConfirmRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TeacherAccountStudentImportConfirmRequest'
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyStudentImportResult'
+          description: ''
+  /api/v1/teacher/accounts/students/import/preview/:
+    post:
+      operationId: teacher_account_student_import_preview
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentImportPreviewRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StudentImportPreviewRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StudentImportPreviewRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyStudentImportPreview'
+          description: ''
+  /api/v1/teacher/banks/:
+    get:
+      operationId: teacher_standalone_question_bank_list
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementStandaloneBankCollection'
+          description: ''
+    post:
+      operationId: teacher_standalone_question_bank_create
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementStandaloneBankCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManagementStandaloneBankCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManagementStandaloneBankCreateRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementStandaloneBank'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/banks/{bank_id}/:
+    get:
+      operationId: teacher_standalone_question_bank_resolve
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: destination
+        schema:
+          type: string
+          enum:
+          - detail
+          - kc_import
+          - question_editor
+          - question_import
+        description: Legacy standalone URL action to resolve for a course-backed bank.
+      - in: query
+        name: question_id
+        schema:
+          type: integer
+        description: Required only when destination is question_editor.
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementStandaloneBankDetail'
+          description: ''
+  /api/v1/teacher/banks/{bank_id}/imports/kc/confirm/:
+    post:
+      operationId: teacher_standalone_question_bank_kc_import_confirm
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionImportConfirmRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionImportConfirmRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionImportConfirmRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementQuestionsUpdatedResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/banks/{bank_id}/imports/kc/preview/:
+    post:
+      operationId: teacher_standalone_question_bank_kc_import_preview
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementStandaloneKCImportPreviewResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/banks/{bank_id}/imports/questions/confirm/:
+    post:
+      operationId: teacher_standalone_question_bank_question_import_confirm
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionImportConfirmRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionImportConfirmRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionImportConfirmRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementQuestionImportConfirmResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/banks/{bank_id}/imports/questions/preview/:
+    post:
+      operationId: teacher_standalone_question_bank_question_import_preview
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementQuestionImportPreviewResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/banks/{bank_id}/questions/{question_id}/editor/:
+    get:
+      operationId: teacher_standalone_question_bank_question_editor_retrieve
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: question_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementStandaloneQuestionEditorResponse'
+          description: ''
+    put:
+      operationId: teacher_standalone_question_bank_question_editor_update
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: question_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionEditorRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionEditorRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionEditorRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementStandaloneQuestionEditorResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/banks/{bank_id}/visibility/:
+    put:
+      operationId: teacher_standalone_question_bank_visibility_update
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementStandaloneVisibilityRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManagementStandaloneVisibilityRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManagementStandaloneVisibilityRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementStandaloneBank'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/banks/shared/{source_bank_id}/copy/:
+    post:
+      operationId: teacher_standalone_question_bank_shared_copy
+      parameters:
+      - in: path
+        name: source_bank_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementStandaloneBank'
+          description: ''
   /api/v1/teacher/class-tasks/{task_id}/:
     get:
       operationId: teacher_class_task_retrieve
@@ -288,6 +1354,37 @@ paths:
   /api/v1/teacher/class-tasks/{task_id}/cancel/:
     post:
       operationId: teacher_class_task_cancel
+      parameters:
+      - in: path
+        name: task_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskReason'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TaskReason'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TaskReason'
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassTask'
+          description: ''
+  /api/v1/teacher/class-tasks/{task_id}/feedback-release/:
+    post:
+      operationId: teacher_class_task_feedback_release
       parameters:
       - in: path
         name: task_id
@@ -399,6 +1496,79 @@ paths:
               schema:
                 $ref: '#/components/schemas/ClassTask'
           description: ''
+  /api/v1/teacher/concepts/:
+    get:
+      operationId: teacher_standalone_question_bank_concept_list
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementStandaloneConceptCollection'
+          description: ''
+  /api/v1/teacher/courses/:
+    get:
+      operationId: teacher_course_list
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherCourseCollection'
+          description: ''
+    post:
+      operationId: teacher_course_create
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeacherCourseCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TeacherCourseCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TeacherCourseCreateRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherCourseCreateResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/:
+    get:
+      operationId: teacher_course_detail
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherCourseDetail'
+          description: ''
   /api/v1/teacher/courses/{course_id}/banks/:
     get:
       operationId: teacher_question_banks_list
@@ -478,6 +1648,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/QuestionBankDetail'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/archive/:
+    post:
+      operationId: teacher_question_bank_archive
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementBankVisibilityResult'
           description: ''
   /api/v1/teacher/courses/{course_id}/banks/{bank_id}/concepts/:
     get:
@@ -582,6 +1777,278 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImportPreviewResponse'
           description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/delete/:
+    delete:
+      operationId: teacher_question_bank_delete
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '204':
+          description: No response body
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/editor/:
+    get:
+      operationId: teacher_question_bank_editor_retrieve
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementBankEditorResponse'
+          description: ''
+    put:
+      operationId: teacher_question_bank_editor_update
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementBankEditorRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManagementBankEditorRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManagementBankEditorRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementBankEditorResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/imports/kc/confirm/:
+    post:
+      operationId: teacher_question_bank_kc_import_confirm
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementKCImportConfirmRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManagementKCImportConfirmRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManagementKCImportConfirmRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementQuestionsUpdatedResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/imports/kc/preview/:
+    post:
+      operationId: teacher_question_bank_kc_import_preview
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementKCImportPreviewResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/imports/questions/confirm/:
+    post:
+      operationId: teacher_question_bank_question_import_confirm
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionImportConfirmRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionImportConfirmRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionImportConfirmRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementQuestionImportConfirmResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/imports/questions/preview/:
+    post:
+      operationId: teacher_question_bank_question_import_preview
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FileImportRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementQuestionImportPreviewResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
   /api/v1/teacher/courses/{course_id}/banks/{bank_id}/questions/:
     get:
       operationId: teacher_courses_banks_questions_retrieve
@@ -619,9 +2086,279 @@ paths:
               schema:
                 $ref: '#/components/schemas/QuestionCollection'
           description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/questions/{question_id}/delete/:
+    delete:
+      operationId: teacher_question_bank_question_delete
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: question_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '204':
+          description: No response body
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/questions/{question_id}/editor/:
+    get:
+      operationId: teacher_question_bank_question_editor_retrieve
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: question_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementQuestionEditorResponse'
+          description: ''
+    put:
+      operationId: teacher_question_bank_question_editor_update
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: question_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionEditorRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionEditorRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionEditorRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementQuestionEditorResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/restore/:
+    post:
+      operationId: teacher_question_bank_restore
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementBankVisibilityResult'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/archived/:
+    get:
+      operationId: teacher_question_bank_archived_list
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementArchivedBankCollection'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/shared/:
+    get:
+      operationId: teacher_question_bank_shared_source_list
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementSharedSourceCourseCollection'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/shared/{source_course_id}/:
+    get:
+      operationId: teacher_question_bank_shared_creator_list
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: source_course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementSharedCreatorCollection'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/shared/{source_course_id}/creators/{creator_id}/:
+    get:
+      operationId: teacher_question_bank_shared_bank_list
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: creator_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: source_course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementSharedQuestionBankCollection'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/shared/{source_course_id}/creators/{creator_id}/banks/{bank_id}/copy/:
+    post:
+      operationId: teacher_question_bank_shared_bank_copy
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: creator_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: source_course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementSharedQuestionBankCopy'
+          description: ''
   /api/v1/teacher/courses/{course_id}/classes/:
     get:
-      operationId: teacher_courses_classes_retrieve
+      operationId: teacher_course_class_list
       parameters:
       - in: path
         name: course_id
@@ -642,6 +2379,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TeacherClassCollection'
+          description: ''
+    post:
+      operationId: teacher_course_class_create
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeacherClassCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TeacherClassCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TeacherClassCreateRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherClassCreateResponse'
           description: ''
   /api/v1/teacher/courses/{course_id}/classes/{class_id}/center/:
     get:
@@ -687,6 +2455,154 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TeacherClassCenter'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/classes/{class_id}/experiments/{experiment_id}/questions/{question_id}/:
+    get:
+      operationId: teacher_courses_classes_experiments_questions_retrieve
+      description: Serve teacher-only frozen fact projections for class drilldown
+        pages.
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: question_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionDetailResponse'
+          description: ''
+  ? /api/v1/teacher/courses/{course_id}/classes/{class_id}/experiments/{experiment_id}/questions/{question_id}/students/{student_id}/process/
+  : get:
+      operationId: teacher_courses_classes_experiments_questions_students_process_retrieve
+      description: Serve teacher-only frozen fact projections for class drilldown
+        pages.
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: question_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: student_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttemptProcessResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/classes/{class_id}/students/{student_id}/analysis/:
+    get:
+      operationId: teacher_courses_classes_students_analysis_retrieve
+      description: Serve teacher-only frozen fact projections for class drilldown
+        pages.
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: student_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentDetailResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/classes/{class_id}/students/{student_id}/experiments/{experiment_id}/:
+    get:
+      operationId: teacher_courses_classes_students_experiments_retrieve
+      description: Serve teacher-only frozen fact projections for class drilldown
+        pages.
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: student_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentExperimentDetailResponse'
           description: ''
   /api/v1/teacher/courses/{course_id}/concepts/:
     get:
@@ -746,6 +2662,75 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CourseConceptCreateResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/concepts/{concept_id}/:
+    put:
+      operationId: teacher_question_bank_course_concept_update
+      parameters:
+      - in: path
+        name: concept_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementCourseConceptEditRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManagementCourseConceptEditRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManagementCourseConceptEditRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementCourseConceptEditResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+    delete:
+      operationId: teacher_question_bank_course_concept_delete
+      parameters:
+      - in: path
+        name: concept_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '204':
+          description: No response body
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementCourseConceptDeleteResponse'
           description: ''
   /api/v1/teacher/courses/{course_id}/concepts/import/confirm/:
     post:
@@ -939,6 +2924,51 @@ paths:
               schema:
                 $ref: '#/components/schemas/DataCenterScope'
           description: ''
+  /api/v1/teacher/courses/{course_id}/data/teaching/:
+    get:
+      operationId: teacher_legacy_teaching_retrieve
+      description: Serialize the existing legacy teaching-workbench presentation facts.
+      parameters:
+      - in: query
+        name: class_id
+        schema:
+          type: integer
+      - in: query
+        name: class_snapshot_id
+        schema:
+          type: integer
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: experiment_id
+        schema:
+          type: integer
+      - in: query
+        name: q
+        schema:
+          type: string
+      - in: query
+        name: session_id
+        schema:
+          type: integer
+      - in: query
+        name: student_id
+        schema:
+          type: integer
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeachingLegacyResponse'
+          description: ''
   /api/v1/teacher/courses/{course_id}/experiments/:
     get:
       operationId: teacher_experiment_list
@@ -1106,6 +3136,69 @@ paths:
               schema:
                 $ref: '#/components/schemas/TeacherExperimentReadiness'
           description: ''
+  /api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/results/resolve/:
+    get:
+      operationId: teacher_courses_experiments_results_resolve_retrieve
+      description: Resolve historical result URLs without asking Vue to infer task
+        scope.
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: status
+        schema:
+          type: string
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherExperimentResultsResolution'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/sessions/{session_id}/resolve/:
+    get:
+      operationId: teacher_courses_experiments_sessions_resolve_retrieve
+      description: Resolve historical result URLs without asking Vue to infer task
+        scope.
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: session_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherExperimentSessionResolution'
+          description: ''
   /api/v1/teacher/courses/{course_id}/experiments/sampling-inventory/:
     post:
       operationId: teacher_experiment_sampling_inventory
@@ -1137,6 +3230,57 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TeacherSamplingInventoryResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/settings/:
+    get:
+      operationId: teacher_course_settings
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherCourseSettings'
+          description: ''
+    post:
+      operationId: teacher_course_settings_update
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeacherCourseSettingsRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TeacherCourseSettingsRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TeacherCourseSettingsRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherCourseSettings'
           description: ''
   /api/v1/teacher/experiments/{experiment_id}/class-tasks/:
     get:
@@ -1360,8 +3504,216 @@ paths:
               schema:
                 $ref: '#/components/schemas/PublishPlan'
           description: ''
+  /api/v1/teacher/standalone-experiments/:
+    get:
+      operationId: teacher_standalone_experiment_list
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandaloneExperimentCollection'
+          description: ''
+    post:
+      operationId: teacher_standalone_experiment_create
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StandaloneExperimentInput'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StandaloneExperimentInput'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StandaloneExperimentInput'
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandaloneExperimentDetail'
+          description: ''
+  /api/v1/teacher/standalone-experiments/{experiment_id}/:
+    get:
+      operationId: teacher_standalone_experiment_retrieve
+      parameters:
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandaloneExperimentDetail'
+          description: ''
+    patch:
+      operationId: teacher_standalone_experiment_update
+      parameters:
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedStandaloneExperimentInput'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedStandaloneExperimentInput'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedStandaloneExperimentInput'
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandaloneExperimentDetail'
+          description: ''
+    delete:
+      operationId: teacher_standalone_experiment_delete
+      parameters:
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/teacher/standalone-experiments/{experiment_id}/publish/:
+    post:
+      operationId: teacher_standalone_experiment_publish
+      parameters:
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandaloneExperimentDetail'
+          description: ''
+  /api/v1/teacher/standalone-experiments/{experiment_id}/results/:
+    get:
+      operationId: teacher_standalone_experiment_results
+      parameters:
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandaloneExperimentResults'
+          description: ''
+  /api/v1/teacher/standalone-experiments/{experiment_id}/students/:
+    post:
+      operationId: teacher_standalone_experiment_assign_students
+      parameters:
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StandaloneStudentAssignmentInput'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StandaloneStudentAssignmentInput'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StandaloneStudentAssignmentInput'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandaloneExperimentDetail'
+          description: ''
+  /api/v1/teacher/standalone-experiments/{experiment_id}/sync-questions/:
+    post:
+      operationId: teacher_standalone_experiment_sync_questions
+      parameters:
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandaloneExperimentDetail'
+          description: ''
 components:
   schemas:
+    AccountActionEnum:
+      enum:
+      - create
+      - reuse
+      type: string
+      description: |-
+        * `create` - create
+        * `reuse` - reuse
+    ActionEnum:
+      enum:
+      - confirm
+      type: string
+      description: '* `confirm` - confirm'
     ApiUser:
       type: object
       properties:
@@ -1371,10 +3723,138 @@ components:
           type: string
         display_name:
           type: string
+        username:
+          type: string
+        student_number:
+          type: string
+          nullable: true
+        home_url:
+          type: string
       required:
       - display_name
+      - home_url
       - id
       - role
+      - student_number
+      - username
+    AttemptProcess:
+      type: object
+      properties:
+        question_type:
+          type: string
+        completeness:
+          $ref: '#/components/schemas/CompletenessEnum'
+        completeness_label:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProcessStep'
+        first_value:
+          type: string
+          nullable: true
+        final_value:
+          type: string
+          nullable: true
+        revision_count:
+          type: integer
+          minimum: 0
+          nullable: true
+      required:
+      - completeness
+      - completeness_label
+      - final_value
+      - first_value
+      - question_type
+      - revision_count
+      - steps
+    AttemptProcessActions:
+      type: object
+      properties:
+        back_url:
+          type: string
+      required:
+      - back_url
+    AttemptProcessDetail:
+      type: object
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        experiment_id:
+          type: integer
+        experiment_name:
+          type: string
+        question_id:
+          type: integer
+        question_code:
+          type: string
+        question_text:
+          type: string
+        student_id:
+          type: integer
+        student_number:
+          type: string
+        display_name:
+          type: string
+        is_current_member:
+          type: boolean
+        result_label:
+          type: string
+        score_display:
+          type: string
+        process:
+          $ref: '#/components/schemas/AttemptProcess'
+        coverage_status_title:
+          type: string
+        coverage_status_description:
+          type: string
+        coverage_time_title:
+          type: string
+        coverage_time_description:
+          type: string
+        coverage_reason_labels:
+          type: array
+          items:
+            type: string
+        has_cross_instance_order_uncertainty:
+          type: boolean
+      required:
+      - coverage_reason_labels
+      - coverage_status_description
+      - coverage_status_title
+      - coverage_time_description
+      - coverage_time_title
+      - display_name
+      - experiment_id
+      - experiment_name
+      - generated_at
+      - has_cross_instance_order_uncertainty
+      - is_current_member
+      - process
+      - question_code
+      - question_id
+      - question_text
+      - result_label
+      - score_display
+      - student_id
+      - student_number
+    AttemptProcessResponse:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/CourseReference'
+        class_group:
+          $ref: '#/components/schemas/TeacherAnalysisClassGroup'
+        detail:
+          $ref: '#/components/schemas/AttemptProcessDetail'
+        actions:
+          $ref: '#/components/schemas/AttemptProcessActions'
+      required:
+      - actions
+      - class_group
+      - course
+      - detail
     BankConceptCollection:
       type: object
       properties:
@@ -1621,6 +4101,14 @@ components:
       - not_started
       - task_id
       - total_participants
+    CompletenessEnum:
+      enum:
+      - complete
+      - incomplete
+      type: string
+      description: |-
+        * `complete` - complete
+        * `incomplete` - incomplete
     ConfidenceModeEnum:
       enum:
       - 'off'
@@ -1641,6 +4129,102 @@ components:
         * `student` - 学生
         * `session` - 会话
         * `attempt` - 作答
+    ConfirmationEnum:
+      enum:
+      - delete
+      type: string
+      description: '* `delete` - delete'
+    CourseClassCopyConfirmRequest:
+      type: object
+      properties:
+        action:
+          $ref: '#/components/schemas/ActionEnum'
+    CourseClassCopyPreview:
+      type: object
+      properties:
+        source_class:
+          $ref: '#/components/schemas/ManagedClassSourceOption'
+        preview:
+          type: array
+          items:
+            $ref: '#/components/schemas/CourseClassCopyPreviewRow'
+      required:
+      - preview
+      - source_class
+    CourseClassCopyPreviewRequest:
+      type: object
+      properties:
+        source_class:
+          type: integer
+      required:
+      - source_class
+    CourseClassCopyPreviewRow:
+      type: object
+      properties:
+        student:
+          $ref: '#/components/schemas/TeacherAccountStudent'
+        skip:
+          type: boolean
+      required:
+      - skip
+      - student
+    CourseClassCopyResult:
+      type: object
+      properties:
+        copied:
+          type: integer
+          minimum: 0
+        skipped:
+          type: integer
+          minimum: 0
+      required:
+      - copied
+      - skipped
+    CourseClassDeleteRequest:
+      type: object
+      properties:
+        confirmation:
+          $ref: '#/components/schemas/ConfirmationEnum'
+      required:
+      - confirmation
+    CourseClassDeleteResponse:
+      type: object
+      properties:
+        deleted:
+          type: boolean
+      required:
+      - deleted
+    CourseClassManagement:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/TeacherAccountCourse'
+        class_group:
+          $ref: '#/components/schemas/ManagedClass'
+        enrollments:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagedEnrollment'
+        target_classes:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherAccountClassOption'
+        source_classes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagedClassSourceOption'
+        capabilities:
+          $ref: '#/components/schemas/ManagedClassCapabilities'
+        actions:
+          $ref: '#/components/schemas/ManagedClassActions'
+      required:
+      - actions
+      - capabilities
+      - class_group
+      - course
+      - enrollments
+      - source_classes
+      - target_classes
     CourseConceptCollection:
       type: object
       properties:
@@ -1762,7 +4346,7 @@ components:
           title: 学期
         status:
           allOf:
-          - $ref: '#/components/schemas/CourseContextStatusEnum'
+          - $ref: '#/components/schemas/Status558Enum'
           readOnly: true
       required:
       - code
@@ -1770,14 +4354,6 @@ components:
       - name
       - status
       - term
-    CourseContextStatusEnum:
-      enum:
-      - active
-      - archived
-      type: string
-      description: |-
-        * `active` - 进行中
-        * `archived` - 已归档
     CourseKCImportResult:
       type: object
       properties:
@@ -1809,6 +4385,23 @@ components:
       - name
       - status
       - term
+    CourseStudentImportConfirmRequest:
+      type: object
+      properties:
+        action:
+          $ref: '#/components/schemas/ActionEnum'
+    CourseStudentImportResult:
+      type: object
+      properties:
+        created_accounts:
+          type: integer
+          minimum: 0
+        enrollments:
+          type: integer
+          minimum: 0
+      required:
+      - created_accounts
+      - enrollments
     CsrfToken:
       type: object
       properties:
@@ -2402,6 +4995,26 @@ components:
       - participated_count
       - published_at
       - score_rate
+    FeedbackMode433Enum:
+      enum:
+      - none
+      - correctness
+      - full
+      type: string
+      description: |-
+        * `none` - 仅显示已提交
+        * `correctness` - 显示正误
+        * `full` - 显示正误、答案与解析
+    FeedbackReleasePolicyEnum:
+      enum:
+      - after_personal_submission
+      - after_assignment_deadline
+      - manual_release
+      type: string
+      description: |-
+        * `after_personal_submission` - 学生完成后
+        * `after_assignment_deadline` - 班级任务截止后
+        * `manual_release` - 教师人工发布
     FileImportRequest:
       type: object
       properties:
@@ -2471,6 +5084,1074 @@ components:
       - level_1
       - level_2
       - level_3
+    KindE91Enum:
+      enum:
+      - standalone
+      - canonical
+      type: string
+      description: |-
+        * `standalone` - standalone
+        * `canonical` - canonical
+    LegacyStudentImportPreview:
+      type: object
+      properties:
+        preview:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentImportPreviewRow'
+      required:
+      - preview
+    LegacyStudentImportResult:
+      type: object
+      properties:
+        imported:
+          type: integer
+          minimum: 0
+      required:
+      - imported
+    LoginRequest:
+      type: object
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+      required:
+      - password
+      - username
+    ManagedClass:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        academic_year:
+          type: string
+        is_active:
+          type: boolean
+        state_token:
+          type: string
+        detail_url:
+          type: string
+      required:
+      - academic_year
+      - detail_url
+      - id
+      - is_active
+      - name
+      - state_token
+    ManagedClassActions:
+      type: object
+      properties:
+        detail_url:
+          type: string
+        classes_url:
+          type: string
+        add_students_url:
+          type: string
+        visibility_url:
+          type: string
+        import_template_url:
+          type: string
+      required:
+      - add_students_url
+      - classes_url
+      - detail_url
+      - import_template_url
+      - visibility_url
+    ManagedClassCapabilities:
+      type: object
+      properties:
+        can_update:
+          type: boolean
+        can_delete:
+          type: boolean
+        can_add_students:
+          type: boolean
+        can_move_students:
+          type: boolean
+        can_remove_students:
+          type: boolean
+        can_reset_passwords:
+          type: boolean
+        can_update_visibility:
+          type: boolean
+      required:
+      - can_add_students
+      - can_delete
+      - can_move_students
+      - can_remove_students
+      - can_reset_passwords
+      - can_update
+      - can_update_visibility
+    ManagedClassSourceOption:
+      type: object
+      properties:
+        id:
+          type: integer
+        course_id:
+          type: integer
+        course_name:
+          type: string
+        course_code:
+          type: string
+        course_term:
+          type: string
+        name:
+          type: string
+        academic_year:
+          type: string
+        display_name:
+          type: string
+      required:
+      - academic_year
+      - course_code
+      - course_id
+      - course_name
+      - course_term
+      - display_name
+      - id
+      - name
+    ManagedEnrollment:
+      type: object
+      properties:
+        enrollment_id:
+          type: integer
+        student:
+          $ref: '#/components/schemas/TeacherAccountStudent'
+      required:
+      - enrollment_id
+      - student
+    ManagementArchivedBank:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        question_count:
+          type: integer
+          minimum: 0
+        created_by_name:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+        detail_url:
+          type: string
+        can_edit_metadata:
+          type: boolean
+      required:
+      - can_edit_metadata
+      - created_by_name
+      - description
+      - detail_url
+      - id
+      - name
+      - question_count
+      - updated_at
+    ManagementArchivedBankCollection:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/QuestionBankCourse'
+        page:
+          $ref: '#/components/schemas/QuestionBankPageMetadata'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementArchivedBank'
+      required:
+      - course
+      - items
+      - page
+    ManagementBankEditorRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 160
+        description:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/VisibilityE8aEnum'
+      required:
+      - description
+      - name
+      - visibility
+    ManagementBankEditorResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/VisibilityE8aEnum'
+        visibility_choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementChoice'
+        course:
+          $ref: '#/components/schemas/QuestionBankCourse'
+        detail_url:
+          type: string
+      required:
+      - course
+      - description
+      - detail_url
+      - id
+      - name
+      - visibility
+      - visibility_choices
+    ManagementBankReference:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+      required:
+      - id
+      - name
+    ManagementBankVisibilityResult:
+      type: object
+      properties:
+        id:
+          type: integer
+        visibility:
+          $ref: '#/components/schemas/VisibilityE8aEnum'
+      required:
+      - id
+      - visibility
+    ManagementChoice:
+      type: object
+      properties:
+        value:
+          type: string
+        label:
+          type: string
+      required:
+      - label
+      - value
+    ManagementCourseConceptDeleteResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        status:
+          type: string
+      required:
+      - id
+      - status
+    ManagementCourseConceptEditRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 160
+        description:
+          type: string
+      required:
+      - description
+      - name
+    ManagementCourseConceptEditResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        kc_code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+      required:
+      - description
+      - id
+      - kc_code
+      - name
+      - status
+    ManagementErrorDetail:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        fields:
+          type: object
+          additionalProperties: {}
+      required:
+      - code
+      - message
+    ManagementErrorResponse:
+      type: object
+      properties:
+        error:
+          $ref: '#/components/schemas/ManagementErrorDetail'
+      required:
+      - error
+    ManagementKCImportConfirmRequest:
+      type: object
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+      required:
+      - batch_id
+    ManagementKCImportPreviewPayload:
+      type: object
+      properties:
+        mode:
+          $ref: '#/components/schemas/ManagementKCImportPreviewPayloadModeEnum'
+        confirmable:
+          type: boolean
+        schema_version:
+          type: string
+        trees:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementKCPreviewTree'
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementKCPreviewLegacyRow'
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementKCPreviewWorkbookNode'
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementKCPreviewWorkbookQuestion'
+      required:
+      - confirmable
+      - mode
+    ManagementKCImportPreviewPayloadModeEnum:
+      enum:
+      - tree_v2
+      - workbook
+      - legacy
+      type: string
+      description: |-
+        * `tree_v2` - tree_v2
+        * `workbook` - workbook
+        * `legacy` - legacy
+    ManagementKCImportPreviewResponse:
+      type: object
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+        preview:
+          $ref: '#/components/schemas/ManagementKCImportPreviewPayload'
+      required:
+      - batch_id
+      - preview
+    ManagementKCPreviewLegacyRow:
+      type: object
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+        primary:
+          type: string
+        secondary:
+          type: array
+          items:
+            type: string
+      required:
+      - primary
+      - secondary
+      - sequence
+    ManagementKCPreviewMatchTrace:
+      type: object
+      properties:
+        raw_token:
+          type: string
+        normalized_token:
+          type: string
+        method:
+          type: string
+        kc_code:
+          type: string
+        final_name:
+          type: string
+        distance:
+          type: number
+          format: double
+          nullable: true
+      required:
+      - distance
+      - final_name
+      - kc_code
+      - method
+      - normalized_token
+      - raw_token
+    ManagementKCPreviewTree:
+      type: object
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+        question_id:
+          type: integer
+        root_kc_code:
+          type: string
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementKCPreviewTreeNode'
+        match_trace:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementKCPreviewMatchTrace'
+      required:
+      - match_trace
+      - nodes
+      - question_id
+      - root_kc_code
+      - sequence
+    ManagementKCPreviewTreeNode:
+      type: object
+      properties:
+        kc_code:
+          type: string
+        parent_kc_code:
+          type: string
+          nullable: true
+        order:
+          type: integer
+          minimum: 1
+      required:
+      - kc_code
+      - order
+      - parent_kc_code
+    ManagementKCPreviewWorkbookNode:
+      type: object
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+      required:
+      - code
+      - description
+      - name
+      - status
+    ManagementKCPreviewWorkbookQuestion:
+      type: object
+      properties:
+        stable_question_code:
+          type: string
+        root_kc_code:
+          type: string
+      required:
+      - root_kc_code
+      - stable_question_code
+    ManagementQuestionEditorConcept:
+      type: object
+      properties:
+        id:
+          type: integer
+        kc_code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+      required:
+      - description
+      - id
+      - kc_code
+      - name
+    ManagementQuestionEditorOptions:
+      type: object
+      properties:
+        a:
+          type: string
+        b:
+          type: string
+        c:
+          type: string
+        d:
+          type: string
+        e:
+          type: string
+        f:
+          type: string
+      required:
+      - a
+      - b
+      - c
+      - d
+      - e
+      - f
+    ManagementQuestionEditorQuestion:
+      type: object
+      properties:
+        id:
+          type: integer
+        sequence:
+          type: integer
+          minimum: 1
+        code:
+          type: string
+        text:
+          type: string
+        question_type:
+          $ref: '#/components/schemas/QuestionType128Enum'
+        status:
+          $ref: '#/components/schemas/StatusB97Enum'
+        teacher_difficulty:
+          type: string
+        absolute_tolerance:
+          type: string
+        relative_tolerance:
+          type: string
+        explanation:
+          type: string
+        correct_answer_text:
+          type: string
+        accepted_answers_text:
+          type: string
+        options:
+          $ref: '#/components/schemas/ManagementQuestionEditorOptions'
+        kc_mapping:
+          $ref: '#/components/schemas/QuestionKCMapping'
+      required:
+      - absolute_tolerance
+      - accepted_answers_text
+      - code
+      - correct_answer_text
+      - explanation
+      - id
+      - options
+      - question_type
+      - relative_tolerance
+      - sequence
+      - status
+      - teacher_difficulty
+      - text
+    ManagementQuestionEditorRequest:
+      type: object
+      properties:
+        text:
+          type: string
+        question_type:
+          $ref: '#/components/schemas/QuestionType128Enum'
+        status:
+          $ref: '#/components/schemas/StatusB97Enum'
+        teacher_difficulty:
+          type: string
+        absolute_tolerance:
+          type: string
+        relative_tolerance:
+          type: string
+        explanation:
+          type: string
+        correct_answer_text:
+          type: string
+        accepted_answers_text:
+          type: string
+        option_a:
+          type: string
+        option_b:
+          type: string
+        option_c:
+          type: string
+        option_d:
+          type: string
+        option_e:
+          type: string
+        option_f:
+          type: string
+        kc_mapping_json:
+          type: string
+      required:
+      - question_type
+      - status
+      - text
+    ManagementQuestionEditorResponse:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/QuestionBankCourse'
+        bank:
+          $ref: '#/components/schemas/ManagementBankReference'
+        question:
+          $ref: '#/components/schemas/ManagementQuestionEditorQuestion'
+        question_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementChoice'
+        statuses:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementChoice'
+        concepts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementQuestionEditorConcept'
+        detail_url:
+          type: string
+      required:
+      - bank
+      - concepts
+      - detail_url
+      - question
+      - question_types
+      - statuses
+    ManagementQuestionImportConfirmRequest:
+      type: object
+      properties:
+        preview_id:
+          type: string
+          format: uuid
+      required:
+      - preview_id
+    ManagementQuestionImportConfirmResponse:
+      type: object
+      properties:
+        created:
+          type: integer
+          minimum: 0
+        detail_url:
+          type: string
+      required:
+      - created
+      - detail_url
+    ManagementQuestionImportPreviewPayload:
+      type: object
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementQuestionImportPreviewRow'
+      required:
+      - rows
+    ManagementQuestionImportPreviewResponse:
+      type: object
+      properties:
+        preview_id:
+          type: string
+          format: uuid
+        preview:
+          $ref: '#/components/schemas/ManagementQuestionImportPreviewPayload'
+      required:
+      - preview
+      - preview_id
+    ManagementQuestionImportPreviewRow:
+      type: object
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+        text:
+          type: string
+        question_type:
+          $ref: '#/components/schemas/QuestionType128Enum'
+        question_type_label:
+          type: string
+        option_count:
+          type: integer
+          minimum: 0
+        teacher_difficulty:
+          type: string
+          nullable: true
+      required:
+      - option_count
+      - question_type
+      - question_type_label
+      - sequence
+      - teacher_difficulty
+      - text
+    ManagementQuestionsUpdatedResponse:
+      type: object
+      properties:
+        questions_updated:
+          type: integer
+          minimum: 0
+      required:
+      - questions_updated
+    ManagementSharedBank:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        question_count:
+          type: integer
+          minimum: 0
+      required:
+      - description
+      - id
+      - name
+      - question_count
+    ManagementSharedCreator:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        username:
+          type: string
+        shared_bank_count:
+          type: integer
+          minimum: 0
+      required:
+      - id
+      - name
+      - shared_bank_count
+      - username
+    ManagementSharedCreatorCollection:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/QuestionBankCourse'
+        source_course:
+          $ref: '#/components/schemas/QuestionBankCourse'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementSharedCreator'
+      required:
+      - course
+      - items
+      - source_course
+    ManagementSharedQuestionBankCollection:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/QuestionBankCourse'
+        source_course:
+          $ref: '#/components/schemas/QuestionBankCourse'
+        creator:
+          $ref: '#/components/schemas/ManagementSharedCreator'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementSharedBank'
+      required:
+      - course
+      - creator
+      - items
+      - source_course
+    ManagementSharedQuestionBankCopy:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        detail_url:
+          type: string
+      required:
+      - detail_url
+      - id
+      - name
+    ManagementSharedSourceCourse:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        code:
+          type: string
+        term:
+          type: string
+        shared_bank_count:
+          type: integer
+          minimum: 0
+        shared_creator_count:
+          type: integer
+          minimum: 0
+      required:
+      - code
+      - id
+      - name
+      - shared_bank_count
+      - shared_creator_count
+      - term
+    ManagementSharedSourceCourseCollection:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/QuestionBankCourse'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementSharedSourceCourse'
+      required:
+      - course
+      - items
+    ManagementStandaloneBank:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/VisibilityE8aEnum'
+        visibility_label:
+          type: string
+        question_count:
+          type: integer
+          minimum: 0
+        detail_url:
+          type: string
+        question_import_url:
+          type: string
+        kc_import_url:
+          type: string
+      required:
+      - description
+      - detail_url
+      - id
+      - kc_import_url
+      - name
+      - question_count
+      - question_import_url
+      - visibility
+      - visibility_label
+    ManagementStandaloneBankCollection:
+      type: object
+      properties:
+        redirect_url:
+          type: string
+        banks:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementStandaloneBank'
+        shared_banks:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementStandaloneSharedBank'
+        visibility_choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementChoice'
+    ManagementStandaloneBankCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 160
+        description:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/VisibilityE8aEnum'
+      required:
+      - name
+    ManagementStandaloneBankDetail:
+      type: object
+      properties:
+        redirect_url:
+          type: string
+        bank:
+          $ref: '#/components/schemas/ManagementStandaloneBank'
+        can_edit_metadata:
+          type: boolean
+        can_edit_content:
+          type: boolean
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementStandaloneQuestion'
+    ManagementStandaloneConcept:
+      type: object
+      properties:
+        id:
+          type: integer
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        scope:
+          type: string
+        scope_label:
+          type: string
+        status:
+          type: string
+        status_label:
+          type: string
+        path:
+          type: string
+      required:
+      - code
+      - description
+      - id
+      - name
+      - path
+      - scope
+      - scope_label
+      - status
+      - status_label
+    ManagementStandaloneConceptCollection:
+      type: object
+      properties:
+        redirect_url:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementStandaloneConcept'
+    ManagementStandaloneKCImportPreviewPayload:
+      type: object
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementKCPreviewLegacyRow'
+      required:
+      - rows
+    ManagementStandaloneKCImportPreviewResponse:
+      type: object
+      properties:
+        preview_id:
+          type: string
+          format: uuid
+        preview:
+          $ref: '#/components/schemas/ManagementStandaloneKCImportPreviewPayload'
+      required:
+      - preview
+      - preview_id
+    ManagementStandaloneQuestion:
+      type: object
+      properties:
+        id:
+          type: integer
+        sequence:
+          type: integer
+          minimum: 1
+        code:
+          type: string
+        text:
+          type: string
+        question_type:
+          $ref: '#/components/schemas/QuestionType128Enum'
+        question_type_label:
+          type: string
+        status:
+          $ref: '#/components/schemas/StatusB97Enum'
+        status_label:
+          type: string
+        teacher_difficulty:
+          type: string
+          nullable: true
+        kc_mapping:
+          $ref: '#/components/schemas/QuestionKCMapping'
+        edit_url:
+          type: string
+      required:
+      - code
+      - edit_url
+      - id
+      - kc_mapping
+      - question_type
+      - question_type_label
+      - sequence
+      - status
+      - status_label
+      - teacher_difficulty
+      - text
+    ManagementStandaloneQuestionEditorResponse:
+      type: object
+      properties:
+        bank:
+          $ref: '#/components/schemas/ManagementBankReference'
+        question:
+          $ref: '#/components/schemas/ManagementQuestionEditorQuestion'
+        question_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementChoice'
+        statuses:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementChoice'
+        concepts:
+          type: array
+          items:
+            type: integer
+        detail_url:
+          type: string
+      required:
+      - bank
+      - concepts
+      - detail_url
+      - question
+      - question_types
+      - statuses
+    ManagementStandaloneSharedBank:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        question_count:
+          type: integer
+          minimum: 0
+        created_by_name:
+          type: string
+      required:
+      - created_by_name
+      - description
+      - id
+      - name
+      - question_count
+    ManagementStandaloneVisibilityRequest:
+      type: object
+      properties:
+        visibility:
+          $ref: '#/components/schemas/VisibilityE8aEnum'
+      required:
+      - visibility
+    ManualEnrollmentRequest:
+      type: object
+      properties:
+        student_number:
+          type: string
+        display_name:
+          type: string
+      required:
+      - display_name
+      - student_number
+    ManualEnrollmentResponse:
+      type: object
+      properties:
+        student:
+          $ref: '#/components/schemas/TeacherAccountStudent'
+        created_account:
+          type: boolean
+      required:
+      - created_account
+      - student
     MatchScopeEnum:
       enum:
       - primary
@@ -2526,9 +6207,40 @@ components:
       description: |-
         * `total_count` - 按总题数抽题
         * `kc_quota` - 按知识点配额抽题
+    MoveEnrollmentRequest:
+      type: object
+      properties:
+        class_group:
+          type: integer
+      required:
+      - class_group
+    MoveEnrollmentResponse:
+      type: object
+      properties:
+        class_group:
+          $ref: '#/components/schemas/TeacherAccountClassOption'
+      required:
+      - class_group
     NullEnum:
       enum:
       - null
+    OptionDistribution:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        count:
+          type: integer
+          minimum: 0
+        is_correct:
+          type: boolean
+      required:
+      - count
+      - is_correct
+      - key
+      - label
     OrderingModeEnum:
       enum:
       - fixed
@@ -2577,6 +6289,102 @@ components:
       - completed
       - in_progress
       - not_participated
+    PasswordResetRequest:
+      type: object
+      properties:
+        password:
+          type: string
+          writeOnly: true
+      required:
+      - password
+    PatchedCourseClassUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        academic_year:
+          type: string
+        is_active:
+          type: boolean
+        state_token:
+          type: string
+    PatchedStandaloneExperimentInput:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 180
+        description:
+          type: string
+        question_bank_id:
+          type: integer
+          minimum: 1
+        selection_mode:
+          $ref: '#/components/schemas/SelectionModeEnum'
+        question_quotas:
+          type: array
+          items:
+            $ref: '#/components/schemas/StandaloneQuestionQuotaInput'
+        ordering_mode:
+          $ref: '#/components/schemas/OrderingModeEnum'
+        feedback_mode:
+          $ref: '#/components/schemas/FeedbackMode433Enum'
+        feedback_release_policy:
+          $ref: '#/components/schemas/FeedbackReleasePolicyEnum'
+        time_mode:
+          $ref: '#/components/schemas/TimeModeEnum'
+        total_time_limit_minutes:
+          type: integer
+          minimum: 1
+          nullable: true
+        per_question_time_limit_seconds:
+          type: integer
+          minimum: 1
+          nullable: true
+        resume_mode:
+          $ref: '#/components/schemas/ResumeModeEnum'
+        confidence_mode:
+          $ref: '#/components/schemas/ConfidenceModeEnum'
+        confidence_sampling_unit:
+          $ref: '#/components/schemas/ConfidenceSamplingUnitEnum'
+        confidence_probability:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,1}(?:\.\d{0,3})?$
+          nullable: true
+        confidence_randomization_seed:
+          type: string
+          maxLength: 128
+        confidence_assignment_version:
+          type: string
+          maxLength: 64
+        confidence_scale_version:
+          type: string
+          maxLength: 64
+        confidence_prompt_version:
+          type: string
+          maxLength: 64
+        heartbeat_interval_seconds:
+          type: integer
+          maximum: 120
+          minimum: 15
+    PatchedStudentVisibilityPolicyRequest:
+      type: object
+      properties:
+        show_scores:
+          type: boolean
+        show_correct_rate:
+          type: boolean
+        show_item_results:
+          type: boolean
+        show_class_average:
+          type: boolean
+        rank_mode:
+          $ref: '#/components/schemas/RankModeEnum'
+        show_kc_rates:
+          type: boolean
+        show_trend:
+          type: boolean
     PatchedTeacherExperiment:
       type: object
       properties:
@@ -2645,8 +6453,14 @@ components:
           type: string
           readOnly: true
         feedback_mode:
-          $ref: '#/components/schemas/TeacherExperimentFeedbackModeEnum'
+          $ref: '#/components/schemas/FeedbackMode433Enum'
+        feedback_release_policy:
+          $ref: '#/components/schemas/FeedbackReleasePolicyEnum'
+        research_tools: {}
         feedback_mode_label:
+          type: string
+          readOnly: true
+        feedback_release_policy_label:
           type: string
           readOnly: true
         time_mode:
@@ -2656,15 +6470,13 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -2697,6 +6509,40 @@ components:
           type: string
           format: date-time
           readOnly: true
+    ProcessStep:
+      type: object
+      properties:
+        label:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+          nullable: true
+        value:
+          type: string
+          nullable: true
+        length_before:
+          type: integer
+          minimum: 0
+          nullable: true
+        length_after:
+          type: integer
+          minimum: 0
+          nullable: true
+        time_source:
+          type: string
+        interval_ms:
+          type: integer
+          minimum: 0
+          nullable: true
+      required:
+      - interval_ms
+      - label
+      - length_after
+      - length_before
+      - occurred_at
+      - time_source
+      - value
     PublishCommit:
       type: object
       properties:
@@ -3119,9 +6965,17 @@ components:
         description:
           type: string
         visibility:
-          $ref: '#/components/schemas/VisibilityEnum'
+          $ref: '#/components/schemas/QuestionBankCreateRequestVisibilityEnum'
       required:
       - name
+    QuestionBankCreateRequestVisibilityEnum:
+      enum:
+      - private
+      - shared
+      type: string
+      description: |-
+        * `private` - private
+        * `shared` - shared
     QuestionBankCreateResponse:
       type: object
       properties:
@@ -3347,6 +7201,111 @@ components:
       - question_types
       - status
       - statuses
+    QuestionDetail:
+      type: object
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        experiment_id:
+          type: integer
+        experiment_name:
+          type: string
+        question_id:
+          type: integer
+        code:
+          type: string
+        text:
+          type: string
+        question_type:
+          type: string
+        kcs:
+          type: array
+          items:
+            type: string
+        eligible_count:
+          type: integer
+          minimum: 0
+        current_member_count:
+          type: integer
+          minimum: 0
+        historical_participant_count:
+          type: integer
+          minimum: 0
+        answer_count:
+          type: integer
+          minimum: 0
+        correct_count:
+          type: integer
+          minimum: 0
+        incorrect_count:
+          type: integer
+          minimum: 0
+        correct_rate:
+          $ref: '#/components/schemas/MetricValue'
+        timing:
+          $ref: '#/components/schemas/QuestionTiming'
+        chain_coverage:
+          $ref: '#/components/schemas/MetricValue'
+        option_rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/OptionDistribution'
+        transition_applicability:
+          $ref: '#/components/schemas/TransitionApplicabilityEnum'
+        transition_rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transition'
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionParticipant'
+      required:
+      - answer_count
+      - chain_coverage
+      - code
+      - correct_count
+      - correct_rate
+      - current_member_count
+      - eligible_count
+      - experiment_id
+      - experiment_name
+      - generated_at
+      - historical_participant_count
+      - incorrect_count
+      - kcs
+      - option_rows
+      - participants
+      - question_id
+      - question_type
+      - text
+      - timing
+      - transition_applicability
+      - transition_rows
+    QuestionDetailActions:
+      type: object
+      properties:
+        back_url:
+          type: string
+      required:
+      - back_url
+    QuestionDetailResponse:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/CourseReference'
+        class_group:
+          $ref: '#/components/schemas/TeacherAnalysisClassGroup'
+        detail:
+          $ref: '#/components/schemas/QuestionDetail'
+        actions:
+          $ref: '#/components/schemas/QuestionDetailActions'
+      required:
+      - actions
+      - class_group
+      - course
+      - detail
     QuestionKCImportResult:
       type: object
       properties:
@@ -3403,11 +7362,42 @@ components:
       - order
       - parent_kc_code
       - status
+    QuestionParticipant:
+      type: object
+      properties:
+        student_id:
+          type: integer
+        student_number:
+          type: string
+        display_name:
+          type: string
+        is_current_member:
+          type: boolean
+        result_label:
+          type: string
+        final_answer:
+          type: string
+        process_complete:
+          type: boolean
+        student_experiment_url:
+          type: string
+        process_url:
+          type: string
+      required:
+      - display_name
+      - final_answer
+      - is_current_member
+      - process_complete
+      - process_url
+      - result_label
+      - student_experiment_url
+      - student_id
+      - student_number
     QuestionQuota:
       type: object
       properties:
         question_type:
-          $ref: '#/components/schemas/QuestionTypeEnum'
+          $ref: '#/components/schemas/QuestionType334Enum'
         amount:
           type: integer
           minimum: 0
@@ -3513,7 +7503,40 @@ components:
       - kcs
       - question_snapshot_id
       - text
-    QuestionTypeEnum:
+    QuestionTiming:
+      type: object
+      properties:
+        median_display:
+          type: string
+        iqr_display:
+          type: string
+        sample_size:
+          type: integer
+          minimum: 0
+        quality:
+          $ref: '#/components/schemas/TimingQuality'
+      required:
+      - iqr_display
+      - median_display
+      - quality
+      - sample_size
+    QuestionType128Enum:
+      enum:
+      - single_choice
+      - multiple_choice
+      - numeric
+      - short_answer
+      - fill_blank
+      - true_false
+      type: string
+      description: |-
+        * `single_choice` - single_choice
+        * `multiple_choice` - multiple_choice
+        * `numeric` - numeric
+        * `short_answer` - short_answer
+        * `fill_blank` - fill_blank
+        * `true_false` - true_false
+    QuestionType334Enum:
       enum:
       - single_choice
       - multiple_choice
@@ -3529,6 +7552,28 @@ components:
         * `short_answer` - 简答题
         * `fill_blank` - 填空题
         * `true_false` - 判断题
+    RankModeEnum:
+      enum:
+      - none
+      - self
+      type: string
+      description: |-
+        * `none` - 不展示
+        * `self` - 仅本人
+    RemoveEnrollmentRequest:
+      type: object
+      properties:
+        confirmation:
+          $ref: '#/components/schemas/ConfirmationEnum'
+      required:
+      - confirmation
+    RemoveEnrollmentResponse:
+      type: object
+      properties:
+        removed:
+          type: boolean
+      required:
+      - removed
     ResultStateEnum:
       enum:
       - correct
@@ -3610,7 +7655,7 @@ components:
       type: object
       properties:
         question_type:
-          $ref: '#/components/schemas/QuestionTypeEnum'
+          $ref: '#/components/schemas/QuestionType334Enum'
         amount:
           type: integer
           minimum: 1
@@ -3667,6 +7712,390 @@ components:
         * `empty` - empty
         * `incomplete` - incomplete
         * `complete` - complete
+    StandaloneChoice:
+      type: object
+      properties:
+        value:
+          type: string
+        label:
+          type: string
+      required:
+      - label
+      - value
+    StandaloneExperiment:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        question_bank:
+          $ref: '#/components/schemas/StandaloneQuestionBank'
+        status:
+          type: string
+        status_label:
+          type: string
+        selection_mode:
+          type: string
+        selection_mode_label:
+          type: string
+        ordering_mode:
+          type: string
+        ordering_mode_label:
+          type: string
+        feedback_mode:
+          type: string
+        feedback_mode_label:
+          type: string
+        feedback_release_policy:
+          type: string
+        feedback_release_policy_label:
+          type: string
+        time_mode:
+          type: string
+        time_mode_label:
+          type: string
+        total_time_limit_minutes:
+          type: integer
+          nullable: true
+        per_question_time_limit_seconds:
+          type: integer
+          nullable: true
+        resume_mode:
+          type: string
+        resume_mode_label:
+          type: string
+        confidence_mode:
+          type: string
+        confidence_mode_label:
+          type: string
+        confidence_sampling_unit:
+          type: string
+        confidence_sampling_unit_label:
+          type: string
+        confidence_probability:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,1}(?:\.\d{0,3})?$
+          nullable: true
+        confidence_randomization_seed:
+          type: string
+        confidence_assignment_version:
+          type: string
+        confidence_scale_version:
+          type: string
+        confidence_prompt_version:
+          type: string
+        heartbeat_interval_seconds:
+          type: integer
+          minimum: 15
+        question_count:
+          type: integer
+          minimum: 0
+        student_count:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+      - confidence_assignment_version
+      - confidence_mode
+      - confidence_mode_label
+      - confidence_probability
+      - confidence_prompt_version
+      - confidence_randomization_seed
+      - confidence_sampling_unit
+      - confidence_sampling_unit_label
+      - confidence_scale_version
+      - created_at
+      - description
+      - feedback_mode
+      - feedback_mode_label
+      - feedback_release_policy
+      - feedback_release_policy_label
+      - heartbeat_interval_seconds
+      - id
+      - name
+      - ordering_mode
+      - ordering_mode_label
+      - per_question_time_limit_seconds
+      - question_bank
+      - question_count
+      - resume_mode
+      - resume_mode_label
+      - selection_mode
+      - selection_mode_label
+      - status
+      - status_label
+      - student_count
+      - time_mode
+      - time_mode_label
+      - total_time_limit_minutes
+      - updated_at
+    StandaloneExperimentCollection:
+      type: object
+      properties:
+        kind:
+          $ref: '#/components/schemas/KindE91Enum'
+        canonical_url:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/StandaloneExperimentListItem'
+        question_banks:
+          type: array
+          items:
+            $ref: '#/components/schemas/StandaloneQuestionBank'
+        choices:
+          type: object
+          additionalProperties: {}
+      required:
+      - kind
+    StandaloneExperimentDetail:
+      type: object
+      properties:
+        kind:
+          $ref: '#/components/schemas/KindE91Enum'
+        canonical_url:
+          type: string
+          nullable: true
+        experiment:
+          $ref: '#/components/schemas/StandaloneExperiment'
+        selection:
+          type: object
+          additionalProperties: {}
+        students:
+          type: array
+          items:
+            $ref: '#/components/schemas/StandaloneStudent'
+        available_students:
+          type: array
+          items:
+            $ref: '#/components/schemas/StandaloneStudent'
+        question_banks:
+          type: array
+          items:
+            $ref: '#/components/schemas/StandaloneQuestionBank'
+        actions:
+          type: object
+          additionalProperties: {}
+        choices:
+          type: object
+          additionalProperties: {}
+      required:
+      - kind
+    StandaloneExperimentInput:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 180
+        description:
+          type: string
+        question_bank_id:
+          type: integer
+          minimum: 1
+        selection_mode:
+          $ref: '#/components/schemas/SelectionModeEnum'
+        question_quotas:
+          type: array
+          items:
+            $ref: '#/components/schemas/StandaloneQuestionQuotaInput'
+        ordering_mode:
+          $ref: '#/components/schemas/OrderingModeEnum'
+        feedback_mode:
+          $ref: '#/components/schemas/FeedbackMode433Enum'
+        feedback_release_policy:
+          $ref: '#/components/schemas/FeedbackReleasePolicyEnum'
+        time_mode:
+          $ref: '#/components/schemas/TimeModeEnum'
+        total_time_limit_minutes:
+          type: integer
+          minimum: 1
+          nullable: true
+        per_question_time_limit_seconds:
+          type: integer
+          minimum: 1
+          nullable: true
+        resume_mode:
+          $ref: '#/components/schemas/ResumeModeEnum'
+        confidence_mode:
+          $ref: '#/components/schemas/ConfidenceModeEnum'
+        confidence_sampling_unit:
+          $ref: '#/components/schemas/ConfidenceSamplingUnitEnum'
+        confidence_probability:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,1}(?:\.\d{0,3})?$
+          nullable: true
+        confidence_randomization_seed:
+          type: string
+          maxLength: 128
+        confidence_assignment_version:
+          type: string
+          maxLength: 64
+        confidence_scale_version:
+          type: string
+          maxLength: 64
+        confidence_prompt_version:
+          type: string
+          maxLength: 64
+        heartbeat_interval_seconds:
+          type: integer
+          maximum: 120
+          minimum: 15
+    StandaloneExperimentListItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        question_bank:
+          $ref: '#/components/schemas/StandaloneQuestionBank'
+        ordering_mode_label:
+          type: string
+        student_count:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+        status_label:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+        detail_url:
+          type: string
+      required:
+      - description
+      - detail_url
+      - id
+      - name
+      - ordering_mode_label
+      - question_bank
+      - status
+      - status_label
+      - student_count
+      - updated_at
+    StandaloneExperimentResults:
+      type: object
+      properties:
+        kind:
+          $ref: '#/components/schemas/KindE91Enum'
+        canonical_url:
+          type: string
+          nullable: true
+        experiment:
+          $ref: '#/components/schemas/StandaloneExperiment'
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/StandaloneSession'
+        session_status_choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/StandaloneChoice'
+        selected_status:
+          type: string
+        export_field_groups:
+          type: array
+          items: {}
+        actions:
+          type: object
+          additionalProperties: {}
+      required:
+      - kind
+    StandaloneQuestionBank:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+      required:
+      - id
+      - name
+    StandaloneQuestionQuotaInput:
+      type: object
+      properties:
+        question_type:
+          $ref: '#/components/schemas/QuestionType334Enum'
+        amount:
+          type: integer
+          minimum: 0
+      required:
+      - amount
+      - question_type
+    StandaloneSession:
+      type: object
+      properties:
+        id:
+          type: integer
+        student_number:
+          type: string
+          nullable: true
+        student_name:
+          type: string
+        status:
+          type: string
+        status_label:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        submission_count:
+          type: integer
+          minimum: 0
+      required:
+      - id
+      - started_at
+      - status
+      - status_label
+      - student_name
+      - student_number
+      - submission_count
+    StandaloneStudent:
+      type: object
+      properties:
+        id:
+          type: integer
+        student_number:
+          type: string
+          nullable: true
+        display_name:
+          type: string
+        class_name:
+          type: string
+        selected:
+          type: boolean
+      required:
+      - class_name
+      - display_name
+      - id
+      - selected
+      - student_number
+    StandaloneStudentAssignmentInput:
+      type: object
+      properties:
+        student_ids:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+      required:
+      - student_ids
     StateEnum:
       enum:
       - available
@@ -3679,6 +8108,24 @@ components:
         * `no_data` - no_data
         * `partial` - partial
         * `conflict` - conflict
+    Status558Enum:
+      enum:
+      - active
+      - archived
+      type: string
+      description: |-
+        * `active` - 进行中
+        * `archived` - 已归档
+    StatusB97Enum:
+      enum:
+      - draft
+      - active
+      - archived
+      type: string
+      description: |-
+        * `draft` - draft
+        * `active` - active
+        * `archived` - archived
     StudentCollection:
       type: object
       properties:
@@ -3754,6 +8201,361 @@ components:
             $ref: '#/components/schemas/StudentCourse'
       required:
       - items
+    StudentDetail:
+      type: object
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        student_id:
+          type: integer
+        student_number:
+          type: string
+        display_name:
+          type: string
+        completed_experiments:
+          type: integer
+          minimum: 0
+        eligible_experiments:
+          type: integer
+          minimum: 0
+        correct_rate:
+          $ref: '#/components/schemas/MetricValue'
+        score_rate:
+          $ref: '#/components/schemas/MetricValue'
+        average_answer_time_ms:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,17}(?:\.\d{0,3})?$
+          nullable: true
+        average_answer_time_display:
+          type: string
+        experiments:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentExperimentPerformance'
+        trend_rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentTrend'
+        show_trend_chart:
+          type: boolean
+        kc_rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentKCComparison'
+      required:
+      - average_answer_time_display
+      - average_answer_time_ms
+      - completed_experiments
+      - correct_rate
+      - display_name
+      - eligible_experiments
+      - experiments
+      - generated_at
+      - kc_rows
+      - score_rate
+      - show_trend_chart
+      - student_id
+      - student_number
+      - trend_rows
+    StudentDetailActions:
+      type: object
+      properties:
+        back_url:
+          type: string
+      required:
+      - back_url
+    StudentDetailResponse:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/CourseReference'
+        class_group:
+          $ref: '#/components/schemas/TeacherAnalysisClassGroup'
+        detail:
+          $ref: '#/components/schemas/StudentDetail'
+        actions:
+          $ref: '#/components/schemas/StudentDetailActions'
+      required:
+      - actions
+      - class_group
+      - course
+      - detail
+    StudentExperimentDetail:
+      type: object
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        experiment_id:
+          type: integer
+        experiment_name:
+          type: string
+        student_id:
+          type: integer
+        student_number:
+          type: string
+        display_name:
+          type: string
+        is_current_member:
+          type: boolean
+        completed:
+          type: boolean
+        correct_rate:
+          $ref: '#/components/schemas/MetricValue'
+        score_rate:
+          $ref: '#/components/schemas/MetricValue'
+        average_answer_time_ms:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,17}(?:\.\d{0,3})?$
+          nullable: true
+        average_answer_time_display:
+          type: string
+        rank:
+          type: integer
+          minimum: 1
+          nullable: true
+        rank_sample_size:
+          type: integer
+          minimum: 0
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentExperimentQuestion'
+      required:
+      - average_answer_time_display
+      - average_answer_time_ms
+      - completed
+      - correct_rate
+      - display_name
+      - experiment_id
+      - experiment_name
+      - generated_at
+      - is_current_member
+      - questions
+      - rank
+      - rank_sample_size
+      - score_rate
+      - student_id
+      - student_number
+    StudentExperimentDetailActions:
+      type: object
+      properties:
+        back_url:
+          type: string
+      required:
+      - back_url
+    StudentExperimentDetailResponse:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/CourseReference'
+        class_group:
+          $ref: '#/components/schemas/TeacherAnalysisClassGroup'
+        detail:
+          $ref: '#/components/schemas/StudentExperimentDetail'
+        actions:
+          $ref: '#/components/schemas/StudentExperimentDetailActions'
+      required:
+      - actions
+      - class_group
+      - course
+      - detail
+    StudentExperimentPerformance:
+      type: object
+      properties:
+        experiment_id:
+          type: integer
+        name:
+          type: string
+        completed:
+          type: boolean
+        correct_rate:
+          $ref: '#/components/schemas/MetricValue'
+        score_rate:
+          $ref: '#/components/schemas/MetricValue'
+        rank:
+          type: integer
+          minimum: 1
+          nullable: true
+        rank_sample_size:
+          type: integer
+          minimum: 0
+        average_answer_time_ms:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,17}(?:\.\d{0,3})?$
+          nullable: true
+        average_answer_time_display:
+          type: string
+        detail_url:
+          type: string
+      required:
+      - average_answer_time_display
+      - average_answer_time_ms
+      - completed
+      - correct_rate
+      - detail_url
+      - experiment_id
+      - name
+      - rank
+      - rank_sample_size
+      - score_rate
+    StudentExperimentQuestion:
+      type: object
+      properties:
+        question_id:
+          type: integer
+        code:
+          type: string
+        kcs:
+          type: array
+          items:
+            type: string
+        result_label:
+          type: string
+        first_answer:
+          type: string
+          nullable: true
+        final_answer:
+          type: string
+        revision_count:
+          type: integer
+          minimum: 0
+          nullable: true
+        answer_time_ms:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,17}(?:\.\d{0,3})?$
+          nullable: true
+        answer_time_display:
+          type: string
+        process_complete:
+          type: boolean
+        question_url:
+          type: string
+        process_url:
+          type: string
+      required:
+      - answer_time_display
+      - answer_time_ms
+      - code
+      - final_answer
+      - first_answer
+      - kcs
+      - process_complete
+      - process_url
+      - question_id
+      - question_url
+      - result_label
+      - revision_count
+    StudentFeedbackCapture:
+      type: object
+      properties:
+        capture_version:
+          type: string
+        session_id:
+          type: integer
+        attempt_id:
+          type: integer
+        event_batch_url:
+          type: string
+        checkpoint_url:
+          type: string
+        time_sync_create_url:
+          type: string
+        time_sync_finalize_url:
+          type: string
+        app_version:
+          type: string
+        heartbeat_interval_seconds:
+          type: integer
+        answer_event_id:
+          type: string
+          format: uuid
+          nullable: true
+        snapshot_id:
+          type: string
+          format: uuid
+          nullable: true
+        mode:
+          $ref: '#/components/schemas/StudentFeedbackCaptureModeEnum'
+        authorized:
+          $ref: '#/components/schemas/StudentFeedbackCaptureAuthorization'
+      required:
+      - answer_event_id
+      - app_version
+      - attempt_id
+      - authorized
+      - capture_version
+      - checkpoint_url
+      - event_batch_url
+      - heartbeat_interval_seconds
+      - mode
+      - session_id
+      - snapshot_id
+      - time_sync_create_url
+      - time_sync_finalize_url
+    StudentFeedbackCaptureAuthorization:
+      type: object
+      properties:
+        correctness:
+          type: boolean
+        correct_answer:
+          type: boolean
+        explanation:
+          type: boolean
+      required:
+      - correct_answer
+      - correctness
+      - explanation
+    StudentFeedbackCaptureModeEnum:
+      enum:
+      - correctness
+      - full
+      type: string
+      description: |-
+        * `correctness` - correctness
+        * `full` - full
+    StudentImportPreviewRequest:
+      type: object
+      properties:
+        file:
+          type: string
+          format: uri
+      required:
+      - file
+    StudentImportPreviewRow:
+      type: object
+      properties:
+        student_number:
+          type: string
+        display_name:
+          type: string
+        class_id:
+          type: integer
+        class_name:
+          type: string
+        account_action:
+          $ref: '#/components/schemas/AccountActionEnum'
+      required:
+      - account_action
+      - class_id
+      - class_name
+      - display_name
+      - student_number
+    StudentKCComparison:
+      type: object
+      properties:
+        name:
+          type: string
+        comparison:
+          $ref: '#/components/schemas/StudentComparison'
+      required:
+      - comparison
+      - name
     StudentLearningExperiment:
       type: object
       properties:
@@ -3940,6 +8742,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/StudentLearningQuestionOption'
+        feedback_capture:
+          $ref: '#/components/schemas/StudentFeedbackCapture'
         score:
           $ref: '#/components/schemas/StudentLearningScore'
         correct_answer:
@@ -4211,6 +9015,10 @@ components:
     StudentRuntimeActions:
       type: object
       properties:
+        research_tools_url:
+          type: string
+        resolve_branch_url:
+          type: string
         save_draft_url:
           type: string
         submit_url:
@@ -4272,6 +9080,17 @@ components:
     StudentRuntimeProcess:
       type: object
       properties:
+        writer_lease_acquire_url:
+          type: string
+        writer_lease_renew_url:
+          type: string
+        capture_version:
+          type: string
+        active_response_event_id:
+          type: string
+          nullable: true
+        response_version:
+          type: integer
         session_id:
           type: integer
         attempt_id:
@@ -4337,6 +9156,11 @@ components:
     StudentRuntimeQuestionEntry:
       type: object
       properties:
+        presented_deadline_at:
+          type: string
+          format: date-time
+          nullable: true
+        research_tools: {}
         task_id:
           type: integer
         session_id:
@@ -4396,6 +9220,31 @@ components:
       - question_url
       - session_id
       - task_id
+    StudentSessionSummary:
+      type: object
+      properties:
+        session_id:
+          type: integer
+        experiment_name:
+          type: string
+        status:
+          type: string
+        status_label:
+          type: string
+        submission_count:
+          type: integer
+        attempt_count:
+          type: integer
+        return_url:
+          type: string
+      required:
+      - attempt_count
+      - experiment_name
+      - return_url
+      - session_id
+      - status
+      - status_label
+      - submission_count
     StudentSummaryRow:
       type: object
       properties:
@@ -4519,12 +9368,249 @@ components:
       required:
       - completed
       - total
+    StudentTrend:
+      type: object
+      properties:
+        experiment_id:
+          type: integer
+        name:
+          type: string
+        student_correct_rate:
+          $ref: '#/components/schemas/MetricValue'
+        class_average_correct_rate:
+          $ref: '#/components/schemas/MetricValue'
+        x:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,12}(?:\.\d{0,8})?$
+        student_y:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,12}(?:\.\d{0,8})?$
+        class_y:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,12}(?:\.\d{0,8})?$
+      required:
+      - class_average_correct_rate
+      - class_y
+      - experiment_id
+      - name
+      - student_correct_rate
+      - student_y
+      - x
+    StudentVisibilityPolicy:
+      type: object
+      properties:
+        show_scores:
+          type: boolean
+        show_correct_rate:
+          type: boolean
+        show_item_results:
+          type: boolean
+        show_class_average:
+          type: boolean
+        rank_mode:
+          $ref: '#/components/schemas/RankModeEnum'
+        show_kc_rates:
+          type: boolean
+        show_trend:
+          type: boolean
+        is_read_only:
+          type: boolean
+      required:
+      - is_read_only
+      - rank_mode
+      - show_class_average
+      - show_correct_rate
+      - show_item_results
+      - show_kc_rates
+      - show_scores
+      - show_trend
     TaskReason:
       type: object
       properties:
         reason:
           type: string
           maxLength: 500
+    TeacherAccountClass:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        academic_year:
+          type: string
+        is_active:
+          type: boolean
+        course_id:
+          type: integer
+          nullable: true
+        student_count:
+          type: integer
+          minimum: 0
+      required:
+      - academic_year
+      - course_id
+      - id
+      - is_active
+      - name
+      - student_count
+    TeacherAccountClassCollection:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherAccountClass'
+      required:
+      - items
+    TeacherAccountClassCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        academic_year:
+          type: string
+      required:
+      - name
+    TeacherAccountClassCreateResponse:
+      type: object
+      properties:
+        class_group:
+          $ref: '#/components/schemas/TeacherAccountClass'
+      required:
+      - class_group
+    TeacherAccountClassOption:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        academic_year:
+          type: string
+        display_name:
+          type: string
+        is_active:
+          type: boolean
+      required:
+      - academic_year
+      - display_name
+      - id
+      - is_active
+      - name
+    TeacherAccountCourse:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        code:
+          type: string
+        term:
+          type: string
+        status:
+          $ref: '#/components/schemas/Status558Enum'
+      required:
+      - code
+      - id
+      - name
+      - status
+      - term
+    TeacherAccountStudent:
+      type: object
+      properties:
+        id:
+          type: integer
+        student_number:
+          type: string
+        display_name:
+          type: string
+        username:
+          type: string
+        class_group:
+          allOf:
+          - $ref: '#/components/schemas/TeacherAccountClassOption'
+          nullable: true
+      required:
+      - class_group
+      - display_name
+      - id
+      - student_number
+      - username
+    TeacherAccountStudentCollection:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherAccountStudent'
+        class_options:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherAccountClassOption'
+        query:
+          type: string
+        selected_class_id:
+          type: integer
+          nullable: true
+      required:
+      - class_options
+      - items
+      - query
+      - selected_class_id
+    TeacherAccountStudentCreateRequest:
+      type: object
+      properties:
+        student_number:
+          type: string
+        display_name:
+          type: string
+        class_group:
+          type: integer
+        password:
+          type: string
+          writeOnly: true
+      required:
+      - class_group
+      - display_name
+      - password
+      - student_number
+    TeacherAccountStudentCreateResponse:
+      type: object
+      properties:
+        student:
+          $ref: '#/components/schemas/TeacherAccountStudent'
+      required:
+      - student
+    TeacherAccountStudentImportConfirmRequest:
+      type: object
+      properties:
+        action:
+          $ref: '#/components/schemas/ActionEnum'
+    TeacherAnalysisClassGroup:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        academic_year:
+          type: string
+      required:
+      - academic_year
+      - id
+      - name
+    TeacherClassCapabilities:
+      type: object
+      properties:
+        can_create:
+          type: boolean
+      required:
+      - can_create
     TeacherClassCenter:
       type: object
       properties:
@@ -4608,10 +9694,31 @@ components:
           $ref: '#/components/schemas/TeacherClassPageMetadata'
         course:
           $ref: '#/components/schemas/CourseReference'
+        capabilities:
+          $ref: '#/components/schemas/TeacherClassCapabilities'
       required:
+      - capabilities
       - course
       - items
       - page
+    TeacherClassCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 120
+        academic_year:
+          type: string
+          maxLength: 32
+      required:
+      - name
+    TeacherClassCreateResponse:
+      type: object
+      properties:
+        class_group:
+          $ref: '#/components/schemas/TeacherClassSummary'
+      required:
+      - class_group
     TeacherClassPageMetadata:
       type: object
       properties:
@@ -4663,6 +9770,380 @@ components:
       - id
       - is_active
       - name
+    TeacherCourseCollection:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherCourseSummary'
+        create_url:
+          type: string
+      required:
+      - create_url
+      - items
+    TeacherCourseCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        code:
+          type: string
+        term:
+          type: string
+        description:
+          type: string
+      required:
+      - code
+      - name
+      - term
+    TeacherCourseCreateResponse:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/TeacherCourseSummary'
+      required:
+      - course
+    TeacherCourseDetail:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/TeacherCourseDetailCourse'
+        metrics:
+          $ref: '#/components/schemas/TeacherCourseMetrics'
+        recent_experiments:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherCourseRecentExperiment'
+        recent_banks:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherCourseRecentBank'
+        class_center_enabled:
+          type: boolean
+        is_course_owner:
+          type: boolean
+      required:
+      - class_center_enabled
+      - course
+      - is_course_owner
+      - metrics
+      - recent_banks
+      - recent_experiments
+    TeacherCourseDetailCourse:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        code:
+          type: string
+        term:
+          type: string
+        description:
+          type: string
+        owner_name:
+          type: string
+        status:
+          $ref: '#/components/schemas/Status558Enum'
+        status_label:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+        detail_url:
+          type: string
+        banks_url:
+          type: string
+        classes_url:
+          type: string
+        experiments_url:
+          type: string
+        data_url:
+          type: string
+        settings_url:
+          type: string
+      required:
+      - banks_url
+      - classes_url
+      - code
+      - data_url
+      - description
+      - detail_url
+      - experiments_url
+      - id
+      - name
+      - owner_name
+      - settings_url
+      - status
+      - status_label
+      - term
+      - updated_at
+    TeacherCourseMetrics:
+      type: object
+      properties:
+        class_count:
+          type: integer
+          minimum: 0
+        bank_count:
+          type: integer
+          minimum: 0
+        experiment_count:
+          type: integer
+          minimum: 0
+        student_count:
+          type: integer
+          minimum: 0
+      required:
+      - bank_count
+      - class_count
+      - experiment_count
+      - student_count
+    TeacherCoursePurgeRequest:
+      type: object
+      properties:
+        purge_request_id:
+          type: string
+          format: uuid
+        preview_session_count:
+          type: integer
+          minimum: 0
+        preview_event_count:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+        status_label:
+          type: string
+        execute_url:
+          type: string
+          nullable: true
+      required:
+      - execute_url
+      - preview_event_count
+      - preview_session_count
+      - purge_request_id
+      - status
+      - status_label
+    TeacherCourseRecentBank:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        question_count:
+          type: integer
+          minimum: 0
+        visibility:
+          type: string
+        visibility_label:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+        detail_url:
+          type: string
+      required:
+      - description
+      - detail_url
+      - id
+      - name
+      - question_count
+      - updated_at
+      - visibility
+      - visibility_label
+    TeacherCourseRecentExperiment:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        question_bank_name:
+          type: string
+        status:
+          type: string
+        status_label:
+          type: string
+        detail_url:
+          type: string
+      required:
+      - detail_url
+      - id
+      - name
+      - question_bank_name
+      - status
+      - status_label
+    TeacherCourseSettings:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/TeacherCourseSettingsCourse'
+        form:
+          $ref: '#/components/schemas/TeacherCourseSettingsForm'
+        capabilities:
+          $ref: '#/components/schemas/TeacherCourseSettingsCapabilities'
+        archive_url:
+          type: string
+        purge_request_create_url:
+          type: string
+        purge_requests:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherCoursePurgeRequest'
+      required:
+      - archive_url
+      - capabilities
+      - course
+      - form
+      - purge_request_create_url
+      - purge_requests
+    TeacherCourseSettingsCapabilities:
+      type: object
+      properties:
+        can_update:
+          type: boolean
+        can_archive:
+          type: boolean
+      required:
+      - can_archive
+      - can_update
+    TeacherCourseSettingsCourse:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        code:
+          type: string
+        term:
+          type: string
+        description:
+          type: string
+        status:
+          $ref: '#/components/schemas/Status558Enum'
+        status_label:
+          type: string
+      required:
+      - code
+      - description
+      - id
+      - name
+      - status
+      - status_label
+      - term
+    TeacherCourseSettingsForm:
+      type: object
+      properties:
+        name:
+          type: string
+        code:
+          type: string
+        term:
+          type: string
+        description:
+          type: string
+        state_token:
+          type: string
+        teachers:
+          type: array
+          items:
+            type: integer
+        teacher_options:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherCourseTeacherOption'
+      required:
+      - code
+      - description
+      - name
+      - state_token
+      - teacher_options
+      - teachers
+      - term
+    TeacherCourseSettingsRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        code:
+          type: string
+        term:
+          type: string
+        description:
+          type: string
+        state_token:
+          type: string
+        teachers:
+          type: array
+          items:
+            type: integer
+      required:
+      - code
+      - name
+      - state_token
+      - term
+    TeacherCourseSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        code:
+          type: string
+        term:
+          type: string
+        description:
+          type: string
+        owner_name:
+          type: string
+        status:
+          $ref: '#/components/schemas/Status558Enum'
+        status_label:
+          type: string
+        class_count:
+          type: integer
+          minimum: 0
+        bank_count:
+          type: integer
+          minimum: 0
+        experiment_count:
+          type: integer
+          minimum: 0
+        detail_url:
+          type: string
+      required:
+      - bank_count
+      - class_count
+      - code
+      - description
+      - detail_url
+      - experiment_count
+      - id
+      - name
+      - owner_name
+      - status
+      - status_label
+      - term
+    TeacherCourseTeacherOption:
+      type: object
+      properties:
+        id:
+          type: integer
+        display_name:
+          type: string
+        username:
+          type: string
+      required:
+      - display_name
+      - id
+      - username
     TeacherExperiment:
       type: object
       properties:
@@ -4731,8 +10212,14 @@ components:
           type: string
           readOnly: true
         feedback_mode:
-          $ref: '#/components/schemas/TeacherExperimentFeedbackModeEnum'
+          $ref: '#/components/schemas/FeedbackMode433Enum'
+        feedback_release_policy:
+          $ref: '#/components/schemas/FeedbackReleasePolicyEnum'
+        research_tools: {}
         feedback_mode_label:
+          type: string
+          readOnly: true
+        feedback_release_policy_label:
           type: string
           readOnly: true
         time_mode:
@@ -4742,15 +10229,13 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -4789,6 +10274,7 @@ components:
       - confidence_sampling_unit_label
       - created_at
       - feedback_mode_label
+      - feedback_release_policy_label
       - id
       - name
       - ordering_mode_label
@@ -4839,16 +10325,6 @@ components:
       - items
       - page
       - summary
-    TeacherExperimentFeedbackModeEnum:
-      enum:
-      - none
-      - correctness
-      - full
-      type: string
-      description: |-
-        * `none` - 仅显示已提交
-        * `correctness` - 显示正误
-        * `full` - 显示正误、答案与解析
     TeacherExperimentInventoryBucket:
       type: object
       properties:
@@ -4937,6 +10413,148 @@ components:
       - field
       - kc_id
       - message
+    TeacherExperimentReference:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        status:
+          type: string
+      required:
+      - id
+      - name
+      - status
+    TeacherExperimentResultsActions:
+      type: object
+      properties:
+        back_url:
+          type: string
+        clear_filter_url:
+          type: string
+      required:
+      - back_url
+      - clear_filter_url
+    TeacherExperimentResultsResolution:
+      type: object
+      properties:
+        kind:
+          $ref: '#/components/schemas/TeacherExperimentResultsResolutionKindEnum'
+        canonical_url:
+          type: string
+          nullable: true
+        course:
+          $ref: '#/components/schemas/CourseReference'
+        experiment:
+          $ref: '#/components/schemas/TeacherExperimentReference'
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherExperimentTaskCompatibility'
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherExperimentSessionCompatibility'
+        session_status_choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherSessionStatusChoice'
+        selected_status:
+          type: string
+        actions:
+          $ref: '#/components/schemas/TeacherExperimentResultsActions'
+      required:
+      - actions
+      - canonical_url
+      - course
+      - experiment
+      - kind
+      - selected_status
+      - session_status_choices
+      - sessions
+      - tasks
+    TeacherExperimentResultsResolutionKindEnum:
+      enum:
+      - canonical
+      - class_tasks
+      - sessions
+      type: string
+      description: |-
+        * `canonical` - canonical
+        * `class_tasks` - class_tasks
+        * `sessions` - sessions
+    TeacherExperimentSessionActions:
+      type: object
+      properties:
+        back_url:
+          type: string
+        word_url:
+          type: string
+          nullable: true
+      required:
+      - back_url
+      - word_url
+    TeacherExperimentSessionCompatibility:
+      type: object
+      properties:
+        student_number:
+          type: string
+        display_name:
+          type: string
+        status:
+          type: string
+        status_label:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        submission_count:
+          type: integer
+          minimum: 0
+        detail_url:
+          type: string
+      required:
+      - detail_url
+      - display_name
+      - started_at
+      - status
+      - status_label
+      - student_number
+      - submission_count
+    TeacherExperimentSessionResolution:
+      type: object
+      properties:
+        kind:
+          $ref: '#/components/schemas/TeacherExperimentSessionResolutionKindEnum'
+        canonical_url:
+          type: string
+          nullable: true
+        course:
+          $ref: '#/components/schemas/CourseReference'
+        experiment:
+          $ref: '#/components/schemas/TeacherExperimentReference'
+        report:
+          allOf:
+          - $ref: '#/components/schemas/TeacherSessionReport'
+          nullable: true
+        actions:
+          $ref: '#/components/schemas/TeacherExperimentSessionActions'
+      required:
+      - actions
+      - canonical_url
+      - course
+      - experiment
+      - kind
+      - report
+    TeacherExperimentSessionResolutionKindEnum:
+      enum:
+      - canonical
+      - legacy_report
+      type: string
+      description: |-
+        * `canonical` - canonical
+        * `legacy_report` - legacy_report
     TeacherExperimentStatusEnum:
       enum:
       - draft
@@ -4965,6 +10583,22 @@ components:
       required:
       - classes
       - question_banks
+    TeacherExperimentTaskCompatibility:
+      type: object
+      properties:
+        academic_year:
+          type: string
+        class_name:
+          type: string
+        class_snapshot_name:
+          type: string
+        analysis_url:
+          type: string
+      required:
+      - academic_year
+      - analysis_url
+      - class_name
+      - class_snapshot_name
     TeacherQuestionBankReference:
       type: object
       properties:
@@ -4979,7 +10613,7 @@ components:
       type: object
       properties:
         question_type:
-          $ref: '#/components/schemas/QuestionTypeEnum'
+          $ref: '#/components/schemas/QuestionType334Enum'
         label:
           type: string
         available:
@@ -5019,6 +10653,298 @@ components:
       required:
       - candidate_count
       - question_types
+    TeacherSessionReport:
+      type: object
+      properties:
+        student_name:
+          type: string
+        student_number:
+          type: string
+        class_snapshot_name:
+          type: string
+        version_number:
+          type: integer
+          minimum: 0
+        session_status:
+          type: string
+        question_count:
+          type: integer
+          minimum: 0
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherSessionReportQuestion'
+      required:
+      - class_snapshot_name
+      - question_count
+      - questions
+      - session_status
+      - student_name
+      - student_number
+      - version_number
+    TeacherSessionReportOption:
+      type: object
+      properties:
+        key:
+          type: string
+        text:
+          type: string
+        display:
+          type: string
+      required:
+      - display
+      - key
+      - text
+    TeacherSessionReportQuestion:
+      type: object
+      properties:
+        assigned_sequence_index:
+          type: integer
+          minimum: 0
+        stable_code:
+          type: string
+        question_type:
+          type: string
+        question_type_label:
+          type: string
+        text:
+          type: string
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherSessionReportOption'
+        student_answer:
+          type: string
+        correct_answer:
+          type: string
+        answer_status:
+          type: string
+      required:
+      - answer_status
+      - assigned_sequence_index
+      - correct_answer
+      - options
+      - question_type
+      - question_type_label
+      - stable_code
+      - student_answer
+      - text
+    TeacherSessionStatusChoice:
+      type: object
+      properties:
+        value:
+          type: string
+        label:
+          type: string
+      required:
+      - label
+      - value
+    TeachingLegacyAttempt:
+      type: object
+      properties:
+        id:
+          type: integer
+        question_code:
+          type: string
+        status:
+          type: string
+        status_label:
+          type: string
+        grade_score:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,18}(?:\.\d{0,2})?$
+          nullable: true
+        timing:
+          $ref: '#/components/schemas/TeachingLegacyTiming'
+        timeline:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeachingLegacyTimelineEvent'
+        raw_events_url:
+          type: string
+      required:
+      - grade_score
+      - id
+      - question_code
+      - raw_events_url
+      - status
+      - status_label
+      - timeline
+      - timing
+    TeachingLegacyFilters:
+      type: object
+      properties:
+        q:
+          type: string
+        student_id:
+          type: integer
+          nullable: true
+        session_id:
+          type: integer
+          nullable: true
+      required:
+      - q
+      - session_id
+      - student_id
+    TeachingLegacyResponse:
+      type: object
+      properties:
+        course:
+          $ref: '#/components/schemas/CourseReference'
+        scope:
+          $ref: '#/components/schemas/TeachingLegacyScope'
+        blocked_message:
+          type: string
+        filters:
+          $ref: '#/components/schemas/TeachingLegacyFilters'
+        total_roster_count:
+          type: integer
+          minimum: 0
+        student_summaries:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeachingLegacyStudentSummary'
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeachingLegacySession'
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeachingLegacyAttempt'
+      required:
+      - attempts
+      - blocked_message
+      - course
+      - filters
+      - scope
+      - sessions
+      - student_summaries
+      - total_roster_count
+    TeachingLegacyScope:
+      type: object
+      properties:
+        values:
+          type: object
+          additionalProperties:
+            type: integer
+        experiment_id:
+          type: integer
+          nullable: true
+        class_id:
+          type: integer
+          nullable: true
+        is_complete:
+          type: boolean
+        display:
+          type: string
+      required:
+      - class_id
+      - display
+      - experiment_id
+      - is_complete
+      - values
+    TeachingLegacySession:
+      type: object
+      properties:
+        id:
+          type: integer
+        status:
+          type: string
+        status_label:
+          type: string
+        attempt_count:
+          type: integer
+          minimum: 0
+        submitted_count:
+          type: integer
+          minimum: 0
+        started_at:
+          type: string
+          format: date-time
+      required:
+      - attempt_count
+      - id
+      - started_at
+      - status
+      - status_label
+      - submitted_count
+    TeachingLegacyStudentSummary:
+      type: object
+      properties:
+        student_id:
+          type: integer
+        student_number:
+          type: string
+        display_name:
+          type: string
+        data_status:
+          type: string
+        data_status_label:
+          type: string
+        attempt_count:
+          type: integer
+          nullable: true
+        submitted_count:
+          type: integer
+          nullable: true
+        graded_count:
+          type: integer
+          nullable: true
+        correct_rate:
+          type: integer
+          nullable: true
+        score:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,18}(?:\.\d{0,2})?$
+          nullable: true
+        max_score:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,18}(?:\.\d{0,2})?$
+          nullable: true
+      required:
+      - attempt_count
+      - correct_rate
+      - data_status
+      - data_status_label
+      - display_name
+      - graded_count
+      - max_score
+      - score
+      - student_id
+      - student_number
+      - submitted_count
+    TeachingLegacyTimelineEvent:
+      type: object
+      properties:
+        event_id:
+          type: string
+        event_type:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        interval_quality:
+          type: string
+      required:
+      - event_id
+      - event_type
+      - interval_quality
+      - occurred_at
+    TeachingLegacyTiming:
+      type: object
+      properties:
+        display_duration_ms:
+          type: integer
+          nullable: true
+        display_label:
+          type: string
+      required:
+      - display_duration_ms
+      - display_label
     TimeModeEnum:
       enum:
       - none
@@ -5029,14 +10955,62 @@ components:
         * `none` - 无时限
         * `total` - 实验总时限
         * `per_question` - 单题时限
-    VisibilityEnum:
+    TimingQuality:
+      type: object
+      properties:
+        submitted_count:
+          type: integer
+          minimum: 0
+        exact_count:
+          type: integer
+          minimum: 0
+        estimated_count:
+          type: integer
+          minimum: 0
+        wall_clock_count:
+          type: integer
+          minimum: 0
+        unavailable_count:
+          type: integer
+          minimum: 0
+      required:
+      - estimated_count
+      - exact_count
+      - submitted_count
+      - unavailable_count
+      - wall_clock_count
+    Transition:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        count:
+          type: integer
+          minimum: 0
+      required:
+      - count
+      - key
+      - label
+    TransitionApplicabilityEnum:
+      enum:
+      - applicable
+      - not_applicable
+      type: string
+      description: |-
+        * `applicable` - applicable
+        * `not_applicable` - not_applicable
+    VisibilityE8aEnum:
       enum:
       - private
       - shared
+      - archived
       type: string
       description: |-
         * `private` - private
         * `shared` - shared
+        * `archived` - archived
   securitySchemes:
     SessionAuth:
       type: apiKey

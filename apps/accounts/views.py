@@ -10,6 +10,7 @@ from django.db import IntegrityError
 from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_GET
 from openpyxl import Workbook
 
@@ -30,13 +31,17 @@ class PlatformLoginView(LoginView):
         return context
 
 
+def resolve_home_url(user):
+    if user.is_superuser or user.role == User.Role.ADMIN:
+        return reverse("admin:index")
+    if user.role == User.Role.TEACHER:
+        return reverse("courses:list")
+    return reverse("assessment:dashboard")
+
+
 @login_required
 def home(request):
-    if request.user.is_superuser or request.user.role == User.Role.ADMIN:
-        return redirect("admin:index")
-    if request.user.role == User.Role.TEACHER:
-        return redirect("courses:list")
-    return redirect("assessment:dashboard")
+    return redirect(resolve_home_url(request.user))
 
 
 def _class_queryset(user):

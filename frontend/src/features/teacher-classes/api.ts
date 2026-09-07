@@ -2,8 +2,18 @@ import { createApiClient } from '@/api/client'
 import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
 
-export type TeacherClassCollection = components['schemas']['TeacherClassCollection']
+export type TeacherClassCollection = components['schemas']['TeacherClassCollection'] & {
+  capabilities: { can_create: boolean }
+}
 export type TeacherClassCenter = components['schemas']['TeacherClassCenter']
+export interface TeacherClassCreateInput {
+  name: string
+  academic_year: string
+}
+
+export interface TeacherClassCreateResponse {
+  class_group: TeacherClassCollection['items'][number]
+}
 
 type ApiClient = ReturnType<typeof createApiClient>
 
@@ -36,6 +46,12 @@ export function createTeacherClassApi(client: ApiClient) {
       const suffix = queryString({ page: query.page ?? 1, q: query.query })
       return client.get<TeacherClassCollection>(
         `/api/v1/teacher/courses/${courseId}/classes/${suffix}`,
+      )
+    },
+    create(courseId: number, input: TeacherClassCreateInput) {
+      return client.mutate<TeacherClassCreateResponse>(
+        `/api/v1/teacher/courses/${courseId}/classes/`,
+        { method: 'POST', body: input },
       )
     },
     center(courseId: number, classId: number, query: ClassCenterQuery = {}) {

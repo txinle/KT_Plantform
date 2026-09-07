@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import csv
@@ -34,6 +35,7 @@ from apps.experiments.models import (
     ScheduleRevision,
 )
 from .export_catalog import (
+    build_field_dictionary,
     EXPOSURE_EVENT_TYPES,
     PACKAGE_TABLES,
     PLACEHOLDER_TABLES,
@@ -54,6 +56,12 @@ class ExportContractError(ValueError):
 
 
 UNRECORDED_CLASS_FILTER = "__unrecorded__"
+EXPORT_DERIVATION_VERSION = "v2"
+LEGACY_EXPORT_DERIVATION_VERSION = "v1"
+FIELD_DICTIONARY_PATH = "00_manifest/field_dictionary.json"
+REPLAY_SCRIPT_PATH = "06_derived/replay_response_trajectory.py"
+IDENTITY_ROSTER_PATH = "01_identity/student_roster.csv"
+FROZEN_RESOURCE_PATHS = (FIELD_DICTIONARY_PATH, REPLAY_SCRIPT_PATH)
 
 
 def _class_snapshot_filter_value(class_name):
@@ -63,6 +71,36 @@ def _class_snapshot_filter_value(class_name):
 def _validate_export_scope(scope, package):
     if package in {"teaching", "kt", "cd"} and not scope.is_single_version:
         raise ExportContractError(f"{package.upper()} 导出必须选择单一实验版本")
+
+
+def _set_export_freeze_isolation():
+    """Start a PostgreSQL source capture on one repeatable-read snapshot."""
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cursor:
+            cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+
+
+def _export_freeze_strategy(*, entered_with_outer_transaction):
+    if connection.vendor != "postgresql":
+        return "source_bundle"
+    if not entered_with_outer_transaction:
+        return "repeatable_read_source_bundle"
+    if any(
+        getattr(block, "_from_testcase", False)
+        for block in getattr(connection, "atomic_blocks", ())
+    ):
+        # Django TestCase owns the surrounding transaction.  It cannot change
+        # isolation after setup queries, and it does not permit concurrent
+        # writers, so retain a truthful test-only provenance label.
+        return "testcase_source_bundle"
+    with connection.cursor() as cursor:
+        cursor.execute("SHOW transaction_isolation")
+        isolation = cursor.fetchone()[0].lower()
+    if isolation != "repeatable read":
+        raise ExportContractError(
+            "导出源冻结需要自动提交调用，或外层 PostgreSQL REPEATABLE READ 事务。"
+        )
+    return "repeatable_read_source_bundle"
 
 
 def create_export_snapshot(*, course=None, experiment=None, research_study=None,
@@ -76,76 +114,118 @@ def create_export_snapshot(*, course=None, experiment=None, research_study=None,
             raise ExportContractError("导出范围与实验不一致")
         _validate_export_scope(scope, package)
         filter_definition = scope.serialize()
-    versions = []
-    version_queryset = ExperimentVersion.objects.none()
-    if experiment is not None:
-        version_queryset = experiment.versions.order_by("version_number")
-    elif course is not None:
-        version_queryset = ExperimentVersion.objects.filter(
-            experiment__course=course
-        ).order_by("experiment_id", "version_number")
-    if scope is not None and scope.version_id is not None:
-        version_queryset = version_queryset.filter(pk=scope.version_id)
-    if scope is not None and scope.experiment_id is not None:
-        version_queryset = version_queryset.filter(experiment_id=scope.experiment_id)
-    versions = list(version_queryset.values_list("pk", "version_number"))
-    cutoff = timezone.now()
-    event_scope = {"session__version__experiment_id": experiment.pk} if experiment is not None else {"session__version__experiment__course_id": course.pk}
-    if research_study is not None:
-        course_ids = list(research_study.course_links.values_list("course_id", flat=True))
-        event_scope = {"session__version__experiment__course_id__in": course_ids}
-    watermark = AssessmentEvent.objects.filter(**event_scope, server_received_at__lte=cutoff).aggregate(max_seq=models.Max("server_ingest_sequence_no"))["max_seq"] or 0
-    schema_hashes = {
-        f"{row.event_type}:v{row.event_version}": row.schema_sha256
-        for row in EventSchemaArtifact.objects.all().order_by("event_type", "event_version")
-    }
-    schema_manifest_hash = hashlib.sha256(json.dumps(schema_hashes, sort_keys=True).encode()).hexdigest()
     canonical_filter_definition = filter_definition or {}
     scope_hash = hashlib.sha256(
         json.dumps(canonical_filter_definition, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
-    coverage_run = None
-    if course is not None and research_study is None:
-        coverage_mapping = dict(filter_definition or {})
-        if experiment is not None and not coverage_mapping.get("experiment_id"):
-            coverage_mapping["experiment_id"] = experiment.pk
-        coverage_scope = data_scope or DataScope.from_mapping(course, coverage_mapping)
-        finalized_sessions = list(
-            coverage_scope.sessions()
-            .filter(
-                status__in=("completed", "expired", "invalidated"),
-                terminal_at__lte=cutoff - timedelta(seconds=300),
-            )
-            .select_related("capture_contract")
-            .order_by("pk")
-        )
-        if finalized_sessions:
-            from .recording_coverage import generate_scope_coverage
-
-            coverage_run = generate_scope_coverage(
-                finalized_sessions,
-                scope_type="export",
-                scope_definition={
-                    "scope_hash": scope_hash,
-                    "session_ids": [session.pk for session in finalized_sessions],
-                },
-                source_cutoff_at=cutoff,
-            )
-
-    return ExportSnapshot.objects.create(
-        course=course,
-        experiment=experiment,
-        research_study=research_study,
-        created_by=created_by,
-        cutoff_at=cutoff,
-        source_cutoff_at=cutoff,
-        event_high_watermark=watermark,
-        schema_manifest_hash=schema_manifest_hash,
-        selected_versions=[{"id": pk, "version": version} for pk, version in versions],
-        filter_definition=canonical_filter_definition,
-        scope_hash=scope_hash,
-        coverage_run=coverage_run,
+    entered_with_outer_transaction = connection.in_atomic_block
+    database_snapshot_strategy = _export_freeze_strategy(
+        entered_with_outer_transaction=entered_with_outer_transaction,
     )
+    with transaction.atomic():
+        # A production request normally enters from autocommit, so this is the
+        # first statement of the source transaction. Django's TestCase wrapper
+        # owns an already-started transaction and cannot change its isolation.
+        if not entered_with_outer_transaction:
+            _set_export_freeze_isolation()
+
+        version_queryset = ExperimentVersion.objects.none()
+        if experiment is not None:
+            version_queryset = experiment.versions.order_by("version_number")
+        elif course is not None:
+            version_queryset = ExperimentVersion.objects.filter(
+                experiment__course=course
+            ).order_by("experiment_id", "version_number")
+        if scope is not None and scope.version_id is not None:
+            version_queryset = version_queryset.filter(pk=scope.version_id)
+        if scope is not None and scope.experiment_id is not None:
+            version_queryset = version_queryset.filter(experiment_id=scope.experiment_id)
+        versions = list(version_queryset.values_list("pk", "version_number"))
+        if package in {"teaching", "kt", "cd"} and len(versions) != 1:
+            raise ExportContractError(f"{package.upper()} 导出必须选择单一实验版本")
+        cutoff = timezone.now()
+        event_scope = (
+            {"session__version__experiment_id": experiment.pk}
+            if experiment is not None
+            else {"session__version__experiment__course_id": course.pk}
+        )
+        if research_study is not None:
+            course_ids = list(
+                research_study.course_links.values_list("course_id", flat=True)
+            )
+            event_scope = {"session__version__experiment__course_id__in": course_ids}
+        watermark = (
+            AssessmentEvent.objects.filter(
+                **event_scope, server_received_at__lte=cutoff
+            ).aggregate(max_seq=models.Max("server_ingest_sequence_no"))["max_seq"]
+            or 0
+        )
+        schema_hashes = {
+            f"{row.event_type}:v{row.event_version}": row.schema_sha256
+            for row in EventSchemaArtifact.objects.all().order_by(
+                "event_type", "event_version"
+            )
+        }
+        schema_manifest_hash = hashlib.sha256(
+            json.dumps(schema_hashes, sort_keys=True).encode()
+        ).hexdigest()
+        coverage_run = None
+        if course is not None and research_study is None:
+            coverage_mapping = dict(filter_definition or {})
+            if experiment is not None and not coverage_mapping.get("experiment_id"):
+                coverage_mapping["experiment_id"] = experiment.pk
+            coverage_scope = data_scope or DataScope.from_mapping(course, coverage_mapping)
+            finalized_sessions = list(
+                coverage_scope.sessions()
+                .filter(
+                    status__in=("completed", "expired", "invalidated"),
+                    terminal_at__lte=cutoff - timedelta(seconds=300),
+                )
+                .select_related("capture_contract")
+                .order_by("pk")
+            )
+            if finalized_sessions:
+                from .recording_coverage import generate_scope_coverage
+
+                coverage_run = generate_scope_coverage(
+                    finalized_sessions,
+                    scope_type="export",
+                    scope_definition={
+                        "scope_hash": scope_hash,
+                        "session_ids": [session.pk for session in finalized_sessions],
+                    },
+                    source_cutoff_at=cutoff,
+                )
+
+        snapshot = ExportSnapshot(
+            course=course,
+            experiment=experiment,
+            research_study=research_study,
+            created_by=created_by,
+            cutoff_at=cutoff,
+            source_cutoff_at=cutoff,
+            event_high_watermark=watermark,
+            schema_manifest_hash=schema_manifest_hash,
+            database_snapshot_strategy=database_snapshot_strategy,
+            selected_versions=[{"id": pk, "version": version} for pk, version in versions],
+            filter_definition=canonical_filter_definition,
+            scope_hash=scope_hash,
+            coverage_run=coverage_run,
+        )
+        captured = _capture_export_source(
+            SimpleNamespace(
+                snapshot=snapshot,
+                course_id=course.pk,
+                experiment=experiment,
+                experiment_id=experiment.pk if experiment is not None else None,
+                research_study=research_study,
+                research_study_id=research_study.pk if research_study is not None else None,
+            )
+        )
+        snapshot.source_bundle = _build_source_bundle(snapshot, captured)
+        snapshot.source_bundle_hash = _source_bundle_hash(snapshot.source_bundle)
+        snapshot.save(force_insert=True)
+        return snapshot
 
 
 def create_export_job(*, course, snapshot, created_by, experiment=None,
@@ -195,7 +275,8 @@ def _git_commit():
 
 def build_export_manifest(snapshot, *, selected_tables, row_counts=None, data_status=None,
                           experiment_name=None, version_number=None,
-                          session_ids=None, attempt_ids=None):
+                          session_ids=None, attempt_ids=None,
+                          capture_contracts=()):
     schemas = {
         f"{row.event_type}:v{row.event_version}": row.schema_sha256
         for row in EventSchemaArtifact.objects.all()
@@ -211,8 +292,12 @@ def build_export_manifest(snapshot, *, selected_tables, row_counts=None, data_st
     provenance = {
         "export_snapshot": {"id": str(snapshot.snapshot_id), "source_cutoff_at": snapshot.source_cutoff_at.isoformat(), "event_high_watermark": snapshot.event_high_watermark},
         "schema": {"manifest_hash": snapshot.schema_manifest_hash, "event_schema_hashes": schemas},
-        "derivation": {"version": "v1", "deterministic": True, "code_sha": _git_commit()},
-        "source_records": {"sessions": "assessment.ExperimentSession", "attempts": "assessment.Attempt", "events": "assessment.AssessmentEvent", "grades": "assessment.GradeRecord", "confidence": "assessment.ConfidenceAssignment"},
+        "derivation": {
+            "version": EXPORT_DERIVATION_VERSION,
+            "deterministic": True,
+            "code_sha": _git_commit(),
+        },
+        "source_records": {"sessions": "assessment.ExperimentSession", "attempts": "assessment.Attempt", "events": "assessment.AssessmentEvent", "grades": "assessment.GradeRecord", "confidence": "assessment.ConfidenceAssignment", "coverage_runs": "analytics.RecordingCoverageRun"},
     }
     coverage_filter = {
         "session__version__experiment_id": snapshot.experiment_id
@@ -243,6 +328,11 @@ def build_export_manifest(snapshot, *, selected_tables, row_counts=None, data_st
         for item in coverage_results
         if item.session.capture_contract_id
     }
+    contract_rows.update({
+        str(contract.pk): contract
+        for contract in capture_contracts
+        if contract is not None
+    })
     status_counts = {}
     for item in coverage_results:
         status_counts[item.overall_status] = status_counts.get(item.overall_status, 0) + 1
@@ -382,15 +472,9 @@ def _csv_bytes(headers, rows):
     return ("\ufeff" + stream.getvalue()).encode("utf-8")
 
 
-def run_export_job(job):
-    """Build a deterministic, identified ZIP from the job's frozen cutoff."""
+def _capture_export_source(job):
+    """Read the live source only while ``create_export_snapshot`` is open."""
     snapshot = job.snapshot
-    if snapshot.invalidated_at is not None:
-        raise ExportContractError("ExportSnapshot has been invalidated and cannot be rerun.")
-    root = os.path.join(settings.MEDIA_ROOT, "exports", str(job.job_id))
-    os.makedirs(root, exist_ok=True)
-    artifact_extension = "xlsx" if job.package == "teaching" else "zip"
-    artifact_path = os.path.join(root, f"{job.package}-{job.job_id}.{artifact_extension}")
     study_course_ids = list(job.research_study.course_links.values_list("course_id", flat=True)) if job.research_study_id else []
     study_student_ids = list(job.research_study.participants.values_list("student_id", flat=True)) if job.research_study_id else []
     filter_definition = snapshot.filter_definition or {}
@@ -415,13 +499,9 @@ def run_export_job(job):
             session_filter["status"] = filter_definition["status"]
         session_queryset = ExperimentSession.objects.filter(**session_filter)
     with transaction.atomic():
-        if connection_vendor := connection.vendor:
-            if connection_vendor == "postgresql":
-                with connection.cursor() as cursor:
-                    cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         sessions = list(
             session_queryset.filter(started_at__lte=snapshot.source_cutoff_at)
-            .select_related("student", "version")
+            .select_related("student", "version", "capture_contract")
         )
         session_ids = [s.pk for s in sessions]
         attempt_queryset = (
@@ -602,14 +682,14 @@ def run_export_job(job):
             ).select_related("condition")
         )
     roster_rows = []
-    if job.kind == ExportJob.Kind.IDENTITY:
-        selected_tables = ["student_roster"]
-        students = list(job.experiment.students.select_related("class_group")) if job.experiment_id else []
-        roster_rows = [[student.student_number, student.shown_name, str(student.class_group or "")] for student in students]
-    elif job.selected_tables:
-        selected_tables = list(job.selected_tables)
-    else:
-        selected_tables = list(PACKAGE_TABLES.get(job.package, PACKAGE_TABLES["complete"]))
+    if job.experiment_id:
+        students = list(
+            job.experiment.students.select_related("class_group").order_by("pk")
+        )
+        roster_rows = [
+            [student.student_number, student.shown_name, str(student.class_group or "")]
+            for student in students
+        ]
     rows = _table_rows(
         job,
         sessions,
@@ -627,15 +707,6 @@ def run_export_job(job):
         participant_snapshots=participant_snapshots,
         snapshot=snapshot,
     )
-    row_counts = {
-        table: len(roster_rows) if table == "student_roster" else len(rows[table][1])
-        for table in selected_tables
-        if table == "student_roster" or table in rows
-    }
-    data_status = {
-        table: ("no_observation" if row_counts.get(table, 0) == 0 else "observed")
-        for table in selected_tables
-    }
     selected_version_number = None
     if filter_definition.get("version_id"):
         selected_version_number = next(
@@ -644,59 +715,365 @@ def run_export_job(job):
         )
     elif len(snapshot.selected_versions) == 1:
         selected_version_number = snapshot.selected_versions[0]["version"]
-    manifest = build_export_manifest(
+    return {
+        "attempt_ids": [attempt.pk for attempt in attempts],
+        "attempts": attempts,
+        "events": events,
+        "experiment_name": job.experiment.name if job.experiment_id else None,
+        "roster_rows": roster_rows,
+        "rows": rows,
+        "sessions": sessions,
+        "session_ids": session_ids,
+        "submissions": submissions,
+        "version_number": selected_version_number,
+    }
+
+
+def _source_bundle_hash(source_bundle):
+    return sha256_bytes(
+        json.dumps(
+            source_bundle,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+
+
+def _build_source_bundle(snapshot, captured):
+    table_bytes = {}
+    row_counts = {}
+    table_sha256 = {}
+    for table, path in TABLE_PATHS.items():
+        if table not in captured["rows"]:
+            continue
+        headers, values = captured["rows"][table]
+        body = _csv_bytes(headers, values)
+        table_bytes[table] = base64.b64encode(body).decode("ascii")
+        row_counts[table] = len(values)
+        table_sha256[table] = sha256_bytes(body)
+
+    source_tables = list(table_bytes)
+    frozen_table_paths = {
+        table: TABLE_PATHS[table]
+        for table in source_tables
+    }
+    frozen_table_paths["student_roster"] = IDENTITY_ROSTER_PATH
+    frozen_table_headers = {
+        table: captured["rows"][table][0]
+        for table in source_tables
+    }
+    frozen_table_headers["student_roster"] = (
+        "student_number",
+        "student_name",
+        "class_name",
+    )
+    field_dictionary_body = manifest_bytes(build_field_dictionary(
+        table_headers=frozen_table_headers,
+        table_paths=frozen_table_paths,
+    ))
+    from .replay_artifact import standalone_response_replay_script
+
+    replay_script_body = standalone_response_replay_script().encode("utf-8")
+    resource_bodies = {
+        FIELD_DICTIONARY_PATH: field_dictionary_body,
+        REPLAY_SCRIPT_PATH: replay_script_body,
+    }
+    data_status = {
+        table: "no_observation" if row_counts[table] == 0 else "observed"
+        for table in source_tables
+    }
+    source_manifest = build_export_manifest(
         snapshot,
+        selected_tables=source_tables,
+        row_counts=row_counts,
+        data_status=data_status,
+        experiment_name=captured["experiment_name"],
+        version_number=captured["version_number"],
+        session_ids=captured["session_ids"],
+        attempt_ids=captured["attempt_ids"],
+        capture_contracts=(
+            session.capture_contract
+            for session in captured["sessions"]
+            if session.capture_contract_id
+        ),
+    )
+    roster_csv = _csv_bytes(
+        ("student_number", "student_name", "class_name"),
+        captured["roster_rows"],
+    )
+    events_by_attempt = {}
+    for event in captured["events"]:
+        events_by_attempt.setdefault(event.attempt_id, []).append(event)
+    submissions_by_attempt = {
+        submission.attempt_id: submission
+        for submission in captured["submissions"]
+    }
+    from .teaching_data import summarize_attempt_timing
+
+    teaching_timing = {}
+    for attempt in captured["attempts"]:
+        timing = summarize_attempt_timing(
+            attempt,
+            events=events_by_attempt.get(attempt.pk, []),
+            submission=submissions_by_attempt.get(attempt.pk),
+        )
+        teaching_timing[str(attempt.pk)] = {
+            "display_duration_ms": timing.display_duration_ms,
+            "display_kind": str(timing.display_kind),
+            "interval_quality": timing.interval_quality,
+        }
+    return {
+        "version": 1,
+        "manifest": source_manifest,
+        "resource_manifest": {
+            "identity_roster_sha256": sha256_bytes(roster_csv),
+            "row_counts": row_counts,
+            "table_paths": frozen_table_paths,
+            "table_sha256": table_sha256,
+            "resource_freeze_status": "frozen",
+            "resource_sha256": {
+                path: sha256_bytes(body)
+                for path, body in resource_bodies.items()
+            },
+        },
+        "student_roster_csv": base64.b64encode(roster_csv).decode("ascii"),
+        "tables": table_bytes,
+        "resources": {
+            path: base64.b64encode(body).decode("ascii")
+            for path, body in resource_bodies.items()
+        },
+        "teaching_timing": teaching_timing,
+    }
+
+
+def _load_source_bundle(snapshot):
+    source_bundle = getattr(snapshot, "source_bundle", None)
+    if not isinstance(source_bundle, dict) or source_bundle.get("version") != 1:
+        raise ExportContractError(
+            "历史导出快照没有不可变源包，不能声明精确重跑；请创建新的导出快照。"
+        )
+    if not snapshot.source_bundle_hash or (
+        _source_bundle_hash(source_bundle) != snapshot.source_bundle_hash
+    ):
+        raise ExportContractError("导出源包校验失败，不能声明精确重跑。")
+    return source_bundle
+
+
+def _source_table_bytes(source_bundle, table):
+    encoded = source_bundle["tables"].get(table)
+    if not encoded:
+        raise ExportContractError(f"冻结源包缺少 {table} 表，不能声明精确重跑。")
+    return base64.b64decode(encoded.encode("ascii"))
+
+
+def _frozen_resource_status(source_bundle):
+    resource_manifest = source_bundle.get("resource_manifest")
+    if not isinstance(resource_manifest, dict):
+        raise ExportContractError("导出源包缺少资源清单，不能声明精确重跑。")
+    has_resources = "resources" in source_bundle
+    has_resource_hashes = "resource_sha256" in resource_manifest
+    if not has_resources and not has_resource_hashes:
+        return "legacy_unfrozen"
+    resources = source_bundle.get("resources")
+    resource_hashes = resource_manifest.get("resource_sha256")
+    if (
+        resource_manifest.get("resource_freeze_status") != "frozen"
+        or not isinstance(resources, dict)
+        or not isinstance(resource_hashes, dict)
+    ):
+        raise ExportContractError("导出源包冻结资源不完整，不能声明精确重跑。")
+    for path in FROZEN_RESOURCE_PATHS:
+        if not isinstance(resources.get(path), str) or not isinstance(
+            resource_hashes.get(path), str
+        ):
+            raise ExportContractError("导出源包冻结资源不完整，不能声明精确重跑。")
+    return "frozen"
+
+
+def _source_resource_bytes(source_bundle, path):
+    if _frozen_resource_status(source_bundle) != "frozen":
+        raise ExportContractError("历史导出源包没有冻结资源，不能写入当前资源。")
+    try:
+        body = base64.b64decode(
+            source_bundle["resources"][path].encode("ascii"),
+            validate=True,
+        )
+    except (ValueError, UnicodeEncodeError) as error:
+        raise ExportContractError("导出源包冻结资源编码无效，不能声明精确重跑。") from error
+    expected_hash = source_bundle["resource_manifest"]["resource_sha256"][path]
+    if sha256_bytes(body) != expected_hash:
+        raise ExportContractError("导出源包冻结资源校验失败，不能声明精确重跑。")
+    return body
+
+
+def _source_table_path(source_bundle, table):
+    paths = source_bundle["resource_manifest"].get("table_paths")
+    path = paths.get(table) if isinstance(paths, dict) else None
+    if isinstance(path, str) and path:
+        return path
+    if table == "student_roster" and _frozen_resource_status(source_bundle) == "legacy_unfrozen":
+        return IDENTITY_ROSTER_PATH
+    raise ExportContractError(f"冻结源包缺少 {table} 表路径，不能声明精确重跑。")
+
+
+def _frozen_export_manifest(snapshot, source_bundle, *, selected_tables, row_counts,
+                            data_status):
+    manifest = json.loads(json.dumps(source_bundle["manifest"], ensure_ascii=False))
+    manifest["selected_tables"] = list(selected_tables)
+    manifest["row_counts"] = row_counts
+    manifest["data_status"] = data_status
+    config = {
+        "selected_tables": list(selected_tables),
+        "selected_versions": snapshot.selected_versions,
+        "filter_definition": snapshot.filter_definition,
+    }
+    manifest["export_config_hash"] = hashlib.sha256(
+        json.dumps(config, sort_keys=True).encode()
+    ).hexdigest()
+    manifest["source_bundle_hash"] = snapshot.source_bundle_hash
+    manifest["source_bundle_version"] = source_bundle["version"]
+    resource_manifest = json.loads(
+        json.dumps(source_bundle["resource_manifest"], ensure_ascii=False)
+    )
+    resource_status = _frozen_resource_status(source_bundle)
+    resource_manifest["resource_freeze_status"] = resource_status
+    if resource_status == "legacy_unfrozen":
+        resource_manifest["unfrozen_resource_paths"] = list(
+            FROZEN_RESOURCE_PATHS
+        )
+    manifest["resource_manifest"] = resource_manifest
+    return manifest
+
+
+def _frozen_derivation_version(manifest):
+    """Use the version captured with the source; old source bundles are v1."""
+    provenance = manifest.get("provenance") if isinstance(manifest, dict) else None
+    derivation = provenance.get("derivation") if isinstance(provenance, dict) else None
+    version = derivation.get("version") if isinstance(derivation, dict) else None
+    return version or LEGACY_EXPORT_DERIVATION_VERSION
+
+
+def _selected_export_tables(job):
+    if job.kind == ExportJob.Kind.IDENTITY:
+        return ["student_roster"]
+    if job.selected_tables:
+        return list(job.selected_tables)
+    return list(PACKAGE_TABLES.get(job.package, PACKAGE_TABLES["complete"]))
+
+
+def _csv_table_from_bytes(body):
+    rows = list(csv.reader(io.StringIO(body.decode("utf-8-sig"))))
+    return tuple(rows[0]), rows[1:]
+
+
+def run_export_job(job):
+    """Materialize an export from an immutable source bundle only."""
+    snapshot = job.snapshot
+    if snapshot.invalidated_at is not None:
+        raise ExportContractError("ExportSnapshot has been invalidated and cannot be rerun.")
+    if job.package in {"teaching", "kt", "cd"} and len(snapshot.selected_versions) != 1:
+        raise ExportContractError(f"{job.package.upper()} 导出必须选择单一实验版本")
+    if job.selected_fields:
+        raise ExportContractError("固定研究数据包不支持字段级选择，以免破坏冻结表的引用和回放契约。")
+    source_bundle = _load_source_bundle(snapshot)
+    resource_freeze_status = _frozen_resource_status(source_bundle)
+    selected_tables = _selected_export_tables(job)
+    if job.package == "teaching" and job.selected_tables and selected_tables != ["attempts"]:
+        raise ExportContractError("教学包只支持固定的 attempts 成绩投影，不能选择其他表。")
+    resource_manifest = source_bundle["resource_manifest"]
+    row_counts = {
+        table: (
+            0
+            if table == "student_roster"
+            else resource_manifest["row_counts"].get(table, 0)
+        )
+        for table in selected_tables
+        if table == "student_roster" or table in source_bundle["tables"]
+    }
+    if job.kind == ExportJob.Kind.IDENTITY:
+        row_counts["student_roster"] = len(
+            _csv_table_from_bytes(
+                base64.b64decode(source_bundle["student_roster_csv"].encode("ascii"))
+            )[1]
+        )
+    data_status = {
+        table: "no_observation" if row_counts.get(table, 0) == 0 else "observed"
+        for table in selected_tables
+    }
+    manifest = _frozen_export_manifest(
+        snapshot,
+        source_bundle,
         selected_tables=selected_tables,
         row_counts=row_counts,
         data_status=data_status,
-        experiment_name=job.experiment.name if job.experiment_id else None,
-        version_number=selected_version_number,
-        session_ids=session_ids,
-        attempt_ids=[attempt.pk for attempt in attempts],
     )
+    derivation_version = _frozen_derivation_version(manifest)
+    root = os.path.join(settings.MEDIA_ROOT, "exports", str(job.job_id))
+    os.makedirs(root, exist_ok=True)
+    artifact_extension = "xlsx" if job.package == "teaching" else "zip"
+    artifact_path = os.path.join(root, f"{job.package}-{job.job_id}.{artifact_extension}")
     if job.package == "teaching":
         _write_teaching_workbook(
             artifact_path,
-            rows["attempts"],
+            _csv_table_from_bytes(_source_table_bytes(source_bundle, "attempts")),
             manifest,
-            attempts,
-            events=events,
-            submissions=submissions,
+            (),
+            events=(),
+            submissions=(),
+            timing_by_attempt=source_bundle["teaching_timing"],
         )
         return _finalize_export_job(job, artifact_path, manifest)
     with zipfile.ZipFile(artifact_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("00_manifest/manifest.json", manifest_bytes(manifest))
         archive.writestr("00_manifest/derivation_runs.json", manifest_bytes({
-            "derivation_version": "v1",
+            "derivation_version": derivation_version,
             "deterministic": True,
             "source_snapshot_id": str(snapshot.snapshot_id),
             "source_cutoff_at": snapshot.source_cutoff_at.isoformat(),
             "event_high_watermark": snapshot.event_high_watermark,
             "schema_manifest_hash": snapshot.schema_manifest_hash,
-            "application_git_commit_sha": _git_commit(),
+            "application_git_commit_sha": manifest["application_git_commit_sha"],
+            "source_bundle_hash": snapshot.source_bundle_hash,
         }))
+        if resource_freeze_status == "frozen":
+            archive.writestr(
+                FIELD_DICTIONARY_PATH,
+                _source_resource_bytes(source_bundle, FIELD_DICTIONARY_PATH),
+            )
         archive.writestr("01_design_metadata/README.txt", "This package contains direct student identifiers and must be handled as identified research data.\n")
         if job.kind == ExportJob.Kind.IDENTITY:
             archive.writestr(
-                "01_identity/student_roster.csv",
-                _csv_bytes(
-                    ["student_number", "student_name", "class_name"],
-                    roster_rows,
-                ),
+                _source_table_path(source_bundle, "student_roster"),
+                base64.b64decode(source_bundle["student_roster_csv"].encode("ascii")),
             )
             return _finalize_export_job(job, artifact_path, manifest)
         for table in selected_tables:
-            if table == "identity_mapping" or table not in rows:
+            if table == "identity_mapping" or table not in source_bundle["tables"]:
                 continue
-            path = TABLE_PATHS.get(table)
-            if path:
-                headers, values = rows[table]
-                archive.writestr(path, _csv_bytes(headers, values))
+            archive.writestr(
+                _source_table_path(source_bundle, table),
+                _source_table_bytes(source_bundle, table),
+            )
+        replay_validator_tables = {
+            "assessment_events", "attempts", "response_snapshots",
+            "response_trajectory", "response_replay", "session_summary",
+        }
+        if (
+            resource_freeze_status == "frozen"
+            and job.package == "complete"
+            and replay_validator_tables.issubset(selected_tables)
+        ):
+            archive.writestr(
+                REPLAY_SCRIPT_PATH,
+                _source_resource_bytes(source_bundle, REPLAY_SCRIPT_PATH),
+            )
     return _finalize_export_job(job, artifact_path, manifest)
 
 
 def _write_teaching_workbook(
-    artifact_path, attempt_table, manifest, attempts, *, events, submissions
+    artifact_path, attempt_table, manifest, attempts, *, events, submissions,
+    timing_by_attempt=None,
 ):
     """Write the teaching-facing grade workbook from the same frozen rows.
 
@@ -713,23 +1090,24 @@ def _write_teaching_workbook(
     )
     positions = [headers.index(column) for column in requested if column in headers]
     attempt_id_position = headers.index("attempt_id")
-    events_by_attempt = {}
-    for event in events:
-        events_by_attempt.setdefault(event.attempt_id, []).append(event)
-    submissions_by_attempt = {
-        submission.attempt_id: submission
-        for submission in submissions
-    }
-    from .teaching_data import summarize_attempt_timing
+    if timing_by_attempt is None:
+        events_by_attempt = {}
+        for event in events:
+            events_by_attempt.setdefault(event.attempt_id, []).append(event)
+        submissions_by_attempt = {
+            submission.attempt_id: submission
+            for submission in submissions
+        }
+        from .teaching_data import summarize_attempt_timing
 
-    timing_by_attempt = {
-        attempt.pk: summarize_attempt_timing(
-            attempt,
-            events=events_by_attempt.get(attempt.pk, []),
-            submission=submissions_by_attempt.get(attempt.pk),
-        )
-        for attempt in attempts
-    }
+        timing_by_attempt = {
+            attempt.pk: summarize_attempt_timing(
+                attempt,
+                events=events_by_attempt.get(attempt.pk, []),
+                submission=submissions_by_attempt.get(attempt.pk),
+            )
+            for attempt in attempts
+        }
     workbook = Workbook(write_only=True)
     sheet = workbook.create_sheet("教学成绩")
     sheet.append([
@@ -737,12 +1115,23 @@ def _write_teaching_workbook(
         "display_duration_ms", "display_kind", "interval_quality",
     ])
     for row in rows:
-        timing = timing_by_attempt.get(row[attempt_id_position])
+        timing = (
+            timing_by_attempt.get(row[attempt_id_position])
+            or timing_by_attempt.get(str(row[attempt_id_position]))
+        )
+        if isinstance(timing, dict):
+            duration = timing.get("display_duration_ms")
+            kind = timing.get("display_kind", "unavailable")
+            quality = timing.get("interval_quality", "unknown")
+        else:
+            duration = timing.display_duration_ms if timing else None
+            kind = timing.display_kind if timing else "unavailable"
+            quality = timing.interval_quality if timing else "unknown"
         sheet.append([
             *[row[position] for position in positions],
-            timing.display_duration_ms if timing else None,
-            timing.display_kind if timing else "unavailable",
-            timing.interval_quality if timing else "unknown",
+            duration,
+            kind,
+            quality,
         ])
     lineage = workbook.create_sheet("导出血缘")
     lineage.append(["field", "value"])
@@ -1039,6 +1428,13 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
     latest_coverage_attempt = {}
     for result in coverage_attempts:
         latest_coverage_attempt.setdefault(result.attempt_id, result)
+    coverage_runs = {
+        str(result.run_id): result.run
+        for result in [
+            *latest_coverage_session.values(),
+            *latest_coverage_attempt.values(),
+        ]
+    }
 
     event_headers = (
         *identity_headers, "student_id", "question_code", "event_id", "event_type", "event_version", "session_id", "attempt_id",
@@ -1095,13 +1491,25 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
     response_rows = [
         [
             *projection_row(event),
-            json.dumps(event.payload.get("response_state_before"), ensure_ascii=False),
-            json.dumps(event.payload.get("response_state_after"), ensure_ascii=False),
+            json.dumps(
+                event.payload.get("response_state_before")
+                if "response_state_before" in event.payload
+                else event.payload.get("before_state"),
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                event.payload.get("response_state_after")
+                if "response_state_after" in event.payload
+                else event.payload.get("after_state"),
+                ensure_ascii=False,
+            ),
             event.payload.get("before_state_hash", ""),
             event.payload.get("after_state_hash") or event.payload.get("state_hash", ""),
-            event.payload.get("response_snapshot_id", ""),
-            event.payload.get("question_type", ""),
-            event.payload.get("change_source", ""),
+            event.payload.get("response_snapshot_id")
+            or event.payload.get("after_snapshot_id", ""),
+            event.payload.get("question_type")
+            or event.payload.get("after_state", {}).get("question_type", ""),
+            event.payload.get("change_source") or event.payload.get("source", ""),
         ]
         for event in selected_events if event.event_type in RESPONSE_EVENT_TYPES
     ]
@@ -1125,6 +1533,194 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
     def identity_and_question_for_attempt(attempt_id):
         attempt = attempt_by_id[attempt_id]
         return [*identity_for_session(attempt.session_id), attempt.assignment.snapshot.code]
+
+    def export_time(value):
+        return value.isoformat() if value else ""
+
+    transition_events = [
+        event for event in selected_events
+        if event.event_type == "response_transition" and event.attempt_id in attempt_by_id
+    ]
+    transition_by_event_id = {
+        str(event.event_id): event
+        for event in transition_events
+    }
+
+    def transition_record(event):
+        payload = event.payload or {}
+        return {
+            "event_id": str(event.event_id),
+            "parent_event_id": str(payload["parent_event_id"])
+            if payload.get("parent_event_id") else None,
+            "branch_id": payload.get("branch_id"),
+            "operation_id": payload.get("operation_id"),
+            "server_ingest_sequence_no": event.server_ingest_sequence_no,
+            "server_received_at": export_time(event.server_received_at),
+            "before_snapshot_id": payload.get("before_snapshot_id"),
+            "after_snapshot_id": payload.get("after_snapshot_id"),
+            "before_state": payload.get("before_state"),
+            "after_state": payload.get("after_state"),
+            "before_state_hash": payload.get("before_state_hash"),
+            "after_state_hash": payload.get("after_state_hash"),
+        }
+
+    def replay_chain(event_id):
+        chain = []
+        seen = set()
+        current_event_id = str(event_id) if event_id else None
+        if current_event_id is None:
+            return chain, "not_selected"
+        while current_event_id:
+            if current_event_id in seen:
+                return list(reversed(chain)), "cycle_detected"
+            seen.add(current_event_id)
+            event = transition_by_event_id.get(current_event_id)
+            if event is None:
+                return list(reversed(chain)), "missing_transition"
+            record = transition_record(event)
+            chain.append(record)
+            current_event_id = record["parent_event_id"]
+        return list(reversed(chain)), "complete"
+
+    response_snapshot_by_id = {
+        str(item.snapshot_id): item
+        for item in response_snapshots
+        if item.attempt_id in attempt_by_id
+    }
+
+    def response_state_for(event_id, snapshot_id):
+        event = transition_by_event_id.get(str(event_id)) if event_id else None
+        if event is not None:
+            payload = event.payload or {}
+            return payload.get("after_state"), payload.get("after_state_hash") or ""
+        response_snapshot = response_snapshot_by_id.get(str(snapshot_id)) if snapshot_id else None
+        if response_snapshot is not None:
+            return response_snapshot.state_json, response_snapshot.state_hash or ""
+        return None, ""
+
+    branch_resolutions_by_attempt = {}
+    for event in selected_events:
+        if event.event_type != "response_branch_resolved" or event.attempt_id not in attempt_by_id:
+            continue
+        payload = event.payload or {}
+        branch_resolutions_by_attempt.setdefault(event.attempt_id, []).append({
+            "event_id": str(event.event_id),
+            "operation_id": payload.get("operation_id"),
+            "candidate_event_ids": [str(item) for item in payload.get("candidate_event_ids", [])],
+            "selected_event_id": str(payload["selected_event_id"])
+            if payload.get("selected_event_id") else None,
+            "expected_version": payload.get("expected_version"),
+            "server_ingest_sequence_no": event.server_ingest_sequence_no,
+            "server_received_at": export_time(event.server_received_at),
+        })
+
+    response_trajectory_headers = (
+        *identity_headers, "student_id", "question_code", "session_id", "attempt_id", "event_id",
+        "event_version", "server_ingest_sequence_no", "server_received_at",
+        "server_committed_at", "client_instance_id", "client_sequence_no",
+        "capture_version", "operation_id", "branch_id", "parent_event_id",
+        "before_snapshot_id", "after_snapshot_id", "before_state", "after_state",
+        "before_state_hash", "after_state_hash", "input_type", "source",
+        "option_key", "option_action", "capture_mode", "quality_flags",
+    )
+    response_trajectory_rows = [
+        [
+            *identity_for_session(event.session_id), event.student_id,
+            question_code_for_snapshot(event.question_snapshot_id),
+            event.session_id, event.attempt_id, event.event_id, event.event_version,
+            event.server_ingest_sequence_no, export_time(event.server_received_at),
+            export_time(event.server_committed_at), event.client_instance_id or "",
+            event.client_sequence_no or "", event.payload.get("capture_version", ""),
+            event.payload.get("operation_id", ""), event.payload.get("branch_id", ""),
+            event.payload.get("parent_event_id") or "",
+            event.payload.get("before_snapshot_id", ""),
+            event.payload.get("after_snapshot_id", ""),
+            json.dumps(event.payload.get("before_state"), ensure_ascii=False),
+            json.dumps(event.payload.get("after_state"), ensure_ascii=False),
+            event.payload.get("before_state_hash", ""),
+            event.payload.get("after_state_hash", ""),
+            event.payload.get("input_type", ""), event.payload.get("source", ""),
+            event.payload.get("option_key", ""), event.payload.get("option_action", ""),
+            event.capture_mode, json.dumps(event.quality_flags, ensure_ascii=False),
+        ]
+        for event in transition_events
+    ]
+
+    response_replay_headers = (
+        *identity_headers, "student_id", "question_code", "session_id", "attempt_id",
+        "capture_contract_id", "active_response_event_id", "final_response_event_id",
+        "response_version", "formal_capture_boundary", "current_response_snapshot_id",
+        "final_response_snapshot_id", "active_state", "active_state_hash",
+        "final_state", "final_state_hash", "active_replay_status",
+        "active_replay_chain", "final_replay_status", "final_replay_chain",
+        "branch_resolutions",
+    )
+    response_replay_rows = []
+    for attempt in attempts:
+        active_chain, active_replay_status = replay_chain(attempt.active_response_event_id)
+        final_chain, final_replay_status = replay_chain(attempt.final_response_event_id)
+        active_state, active_state_hash = response_state_for(
+            attempt.active_response_event_id,
+            attempt.current_response_snapshot_id,
+        )
+        final_state, final_state_hash = response_state_for(
+            attempt.final_response_event_id,
+            attempt.final_response_snapshot_id,
+        )
+        response_replay_rows.append([
+            *identity_for_session(attempt.session_id), attempt.session.student_id,
+            attempt.assignment.snapshot.code, attempt.session_id, attempt.pk,
+            attempt.session.capture_contract_id or "", attempt.active_response_event_id or "",
+            attempt.final_response_event_id or "", attempt.response_version,
+            json.dumps(attempt.formal_capture_boundary or {}, ensure_ascii=False),
+            attempt.current_response_snapshot_id or "", attempt.final_response_snapshot_id or "",
+            json.dumps(active_state, ensure_ascii=False) if active_state is not None else "",
+            active_state_hash,
+            json.dumps(final_state, ensure_ascii=False) if final_state is not None else "",
+            final_state_hash, active_replay_status,
+            json.dumps(active_chain, ensure_ascii=False), final_replay_status,
+            json.dumps(final_chain, ensure_ascii=False),
+            json.dumps(branch_resolutions_by_attempt.get(attempt.pk, []), ensure_ascii=False),
+        ])
+
+    attempts_by_session = {}
+    for attempt in attempts:
+        attempts_by_session.setdefault(attempt.session_id, []).append(attempt)
+    event_counts_by_session = {}
+    for event in selected_events:
+        counts = event_counts_by_session.setdefault(event.session_id, {
+            "response_transition": 0,
+            "input_operation": 0,
+            "response_branch_resolved": 0,
+            "maximum_server_ingest_sequence_no": 0,
+        })
+        if event.event_type in counts:
+            counts[event.event_type] += 1
+        counts["maximum_server_ingest_sequence_no"] = max(
+            counts["maximum_server_ingest_sequence_no"], event.server_ingest_sequence_no,
+        )
+    session_summary_headers = (
+        *identity_headers, "session_id", "experiment_id", "version", "status",
+        "capture_contract_id", "attempt_count", "response_transition_count",
+        "input_operation_count", "response_branch_resolved_count",
+        "active_response_attempt_count", "final_response_attempt_count",
+        "formal_capture_boundary_count", "maximum_server_ingest_sequence_no",
+    )
+    session_summary_rows = []
+    for session in sessions:
+        session_attempts = attempts_by_session.get(session.pk, [])
+        event_counts = event_counts_by_session.get(session.pk, {})
+        session_summary_rows.append([
+            *identity_for_session(session.pk), session.pk, session.version.experiment_id,
+            session.version.version_number, session.status, session.capture_contract_id or "",
+            len(session_attempts), event_counts.get("response_transition", 0),
+            event_counts.get("input_operation", 0),
+            event_counts.get("response_branch_resolved", 0),
+            sum(bool(item.active_response_event_id) for item in session_attempts),
+            sum(bool(item.final_response_event_id) for item in session_attempts),
+            sum(bool(item.formal_capture_boundary) for item in session_attempts),
+            event_counts.get("maximum_server_ingest_sequence_no", 0),
+        ])
 
     def input_observation_row(item):
         event = item.source_event if item.source_event_id else None
@@ -1351,15 +1947,12 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         for result in preview_results
     }
 
-    def export_time(value):
-        return value.isoformat() if value else ""
-
     rows = {
         "subjects": (identity_headers, subject_values),
         "sessions": ((*identity_headers, "session_id", "experiment_id", "version", "class_task_id", "participant_snapshot_id", "schedule_revision_id", "status", "started_at", "completed_at", "task_opens_at", "task_closes_at", "total_time_limit_seconds", "initial_effective_deadline_at", "timer_semantics_version", "terminal_reason", "authoritative_terminal_at", "terminal_recorded_at"), [[*identity_for_session(session.pk), session.pk, session.version.experiment_id, session.version.version_number, session.class_task_id or "", session.participant_snapshot_id or "", session.schedule_revision_id or "", session.status, session.started_at.isoformat(), session.completed_at.isoformat() if session.completed_at else "", export_time(session.task_opens_at), export_time(session.task_closes_at), session.total_time_limit_seconds or "", export_time(session.initial_effective_deadline_at), session.timer_semantics_version, session.terminal_reason, export_time(session.authoritative_terminal_at), export_time(session.terminal_recorded_at)] for session in sessions]),
         "assignments": ((*identity_headers, "question_code", "assignment_id", "session_id", "question_snapshot_id", "item_instance_id", "assigned_sequence_index"), [[*identity_for_session(assignment.session_id), assignment.snapshot.code, assignment.pk, assignment.session_id, assignment.snapshot_id, assignment.item_instance_id, assignment.assigned_sequence_index] for assignment in assignments]),
         "item_instances": (("question_code", "item_instance_id", "question_snapshot_id", "presentation_variant", "option_order", "parameter_values", "random_seed", "presentation_hash"), [[assignment.snapshot.code, assignment.item_instance_id, assignment.snapshot_id, assignment.item_instance.presentation_variant, json.dumps(assignment.item_instance.option_order), json.dumps(assignment.item_instance.parameter_values), assignment.item_instance.random_seed, assignment.item_instance.presentation_hash] for assignment in _unique_assignments(assignments, "item_instance_id")]),
-        "attempts": ((*identity_headers, "question_code", "attempt_id", "session_id", "question_snapshot_id", "item_instance_id", "status", "first_opened_at", "last_opened_at", "visit_count", "draft_answer", "draft_saved_at", "final_answer", "submitted_at", "first_to_submit_duration_ms", "last_visit_to_submission_ms", "is_correct", "score", "first_open_sequence_index", "submission_sequence_index", "current_response_snapshot_id", "final_response_snapshot_id", "submission_event_id", "submission_grade_status", "grade_version", "grade_is_correct", "grade_score", "grade_max_score", "normalized_response", "grading_method", "grading_version", "grader_version", "graded_at", "item_started_at", "per_item_time_limit_seconds", "item_deadline_at", "initial_effective_deadline_at", "close_reason", "authoritative_terminal_at", "terminal_recorded_at"), [_attempt_export_row(assignment, attempt_by_assignment.get(assignment.pk), session_by_id, grade_by_attempt) for assignment in assignments if assignment.session_id in session_by_id]),
+        "attempts": ((*identity_headers, "question_code", "attempt_id", "session_id", "question_snapshot_id", "item_instance_id", "status", "first_opened_at", "last_opened_at", "visit_count", "draft_answer", "draft_saved_at", "final_answer", "submitted_at", "first_to_submit_duration_ms", "last_visit_to_submission_ms", "is_correct", "score", "first_open_sequence_index", "submission_sequence_index", "active_response_event_id", "response_version", "final_response_event_id", "formal_capture_boundary", "current_response_snapshot_id", "final_response_snapshot_id", "submission_event_id", "submission_grade_status", "grade_version", "grade_is_correct", "grade_score", "grade_max_score", "normalized_response", "grading_method", "grading_version", "grader_version", "graded_at", "item_started_at", "per_item_time_limit_seconds", "item_deadline_at", "initial_effective_deadline_at", "close_reason", "authoritative_terminal_at", "terminal_recorded_at"), [_attempt_export_row(assignment, attempt_by_assignment.get(assignment.pk), session_by_id, grade_by_attempt) for assignment in assignments if assignment.session_id in session_by_id]),
         "assessment_events": (event_headers, event_rows),
         "response_events": (response_headers, response_rows),
         "exposure_events": (projection_headers, exposure_rows),
@@ -1369,6 +1962,35 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         "simulation_snapshots": ((*identity_headers, "question_code", "snapshot_id", "attempt_id", "simulation_version", "state_metadata", "content_hash", "content_size", "created_at"), [[*identity_and_question_for_attempt(simulation.attempt_id), simulation.snapshot_id, simulation.attempt_id, simulation.simulation_version, json.dumps(simulation.state_metadata), simulation.content_hash, simulation.content_size, simulation.created_at.isoformat()] for simulation in selected_simulations]),
         "confidence_assignments": ((*identity_headers, "question_code", "confidence_assignment_id", "attempt_id", "condition", "assignment_unit", "assignment_version", "response_status", "probability", "assigned_at", "committed_at"), [[*identity_and_question_for_attempt(confidence.attempt_id), confidence.confidence_assignment_id, confidence.attempt_id, confidence.condition, confidence.assignment_unit, confidence.assignment_version, confidence.response_status, confidence.probability, confidence.assigned_at.isoformat(), confidence.committed_at.isoformat() if confidence.committed_at else ""] for confidence in selected_confidence]),
         "item_snapshots": (("question_code", "question_snapshot_id", "version_id", "stable_code", "question_type", "primary_kc", "primary_kc_id", "primary_kc_path", "kc_level_1", "kc_level_2", "kc_level_3", "all_kcs", "all_kc_paths", "all_kc_snapshots"), [[item.code, item.pk, item.version_id, item.stable_code, item.question_type, item.primary_kc, item.primary_kc_id_snapshot or "", item.primary_kc_path, primary_level_name(item, 0), primary_level_name(item, 1), primary_level_name(item, 2), json.dumps(item.all_kcs, ensure_ascii=False), json.dumps(item.all_kc_paths, ensure_ascii=False), json.dumps(item.all_kc_snapshots, ensure_ascii=False)] for item in metadata_snapshots]),
+        "question_content": (
+            ("question_code", "question_snapshot_id", "version_id", "source_question_id", "source_sequence", "course_sequence", "stable_code", "source_bank_id", "source_bank_name", "bank_sequence", "question_type", "text", "options", "correct_answer", "accepted_answers", "absolute_tolerance", "relative_tolerance", "explanation", "teacher_difficulty", "empirical_difficulty", "primary_kc", "all_kcs", "primary_kc_id", "primary_kc_path", "primary_kc_levels", "all_kc_paths", "all_kc_snapshots", "root_kc_code", "kc_mapping_snapshot", "kc_mapping_schema_version", "kc_mapping_hash", "release_fingerprint"),
+            [
+                [
+                    item.code, item.pk, item.version_id, item.source_question_id,
+                    item.source_sequence, item.course_sequence or "", item.stable_code,
+                    item.source_bank_id or "", item.source_bank_name,
+                    item.bank_sequence or "", item.question_type, item.text,
+                    json.dumps(item.options, ensure_ascii=False),
+                    json.dumps(item.correct_answer, ensure_ascii=False),
+                    json.dumps(item.accepted_answers, ensure_ascii=False),
+                    item.absolute_tolerance if item.absolute_tolerance is not None else "",
+                    item.relative_tolerance if item.relative_tolerance is not None else "",
+                    item.explanation,
+                    item.teacher_difficulty if item.teacher_difficulty is not None else "",
+                    item.empirical_difficulty if item.empirical_difficulty is not None else "",
+                    item.primary_kc, json.dumps(item.all_kcs, ensure_ascii=False),
+                    item.primary_kc_id_snapshot or "", item.primary_kc_path,
+                    json.dumps(item.primary_kc_levels, ensure_ascii=False),
+                    json.dumps(item.all_kc_paths, ensure_ascii=False),
+                    json.dumps(item.all_kc_snapshots, ensure_ascii=False),
+                    item.root_kc_code,
+                    json.dumps(item.kc_mapping_snapshot, ensure_ascii=False),
+                    item.kc_mapping_schema_version, item.kc_mapping_hash,
+                    item.release_fingerprint,
+                ]
+                for item in metadata_snapshots
+            ],
+        ),
         "item_kc_mapping": (("question_code", "question_snapshot_id", "primary_kc", "primary_kc_id", "primary_kc_path", "kc_level_1", "kc_level_2", "kc_level_3", "all_kcs", "all_kc_paths", "all_kc_snapshots"), [[item.code, item.pk, item.primary_kc, item.primary_kc_id_snapshot or "", item.primary_kc_path, primary_level_name(item, 0), primary_level_name(item, 1), primary_level_name(item, 2), json.dumps(item.all_kcs, ensure_ascii=False), json.dumps(item.all_kc_paths, ensure_ascii=False), json.dumps(item.all_kc_snapshots, ensure_ascii=False)] for item in metadata_snapshots]),
         "q_matrix": (("question_code", "question_snapshot_id", "primary_kc", "primary_kc_id", "primary_kc_path", "kc_level_1", "kc_level_2", "kc_level_3", "all_kcs", "all_kc_paths", "all_kc_snapshots"), [[item.code, item.pk, item.primary_kc, item.primary_kc_id_snapshot or "", item.primary_kc_path, primary_level_name(item, 0), primary_level_name(item, 1), primary_level_name(item, 2), json.dumps(item.all_kcs, ensure_ascii=False), json.dumps(item.all_kc_paths, ensure_ascii=False), json.dumps(item.all_kc_snapshots, ensure_ascii=False)] for item in metadata_snapshots]),
         "kc_dictionary": (("kc_id", "kc_name", "kc_full_path"), kc_dictionary_rows),
@@ -1407,6 +2029,9 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                 if item.attempt_id in attempt_by_id
             ],
         ),
+        "response_trajectory": (response_trajectory_headers, response_trajectory_rows),
+        "response_replay": (response_replay_headers, response_replay_rows),
+        "session_summary": (session_summary_headers, session_summary_rows),
         "response_input_observations": (
             (*identity_headers, "question_code", "observation_id", "source_event_id", "source_event_type", "event_version", "envelope_version", "attempt_id", "client_instance_id", "client_sequence_no", "client_monotonic_ms", "batch_start_client_monotonic_ms", "batch_end_client_monotonic_ms", "client_wall_time_utc", "client_time_origin", "time_sync_id", "estimated_occurred_at_utc", "derived_occurred_at_utc", "server_received_at", "server_committed_at", "server_ingest_sequence_no", "actor_source", "capture_mode", "quality_flags", "time_quality", "coverage_run_id", "app_version", "edit_operation", "content_hash_before", "content_hash_after", "content_length_before", "content_length_after", "input_method", "is_ime", "observed_at"),
             [
@@ -1436,7 +2061,7 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
             ],
         ),
         "grade_records": (
-            (*identity_headers, "question_code", "grade_id", "submission_id", "attempt_id", "version", "status", "validity_status", "score", "max_score", "is_correct", "grading_method", "grading_version", "graded_at", "supersedes_grade_id", "voided_at", "void_reason"),
+            (*identity_headers, "question_code", "grade_id", "submission_id", "attempt_id", "version", "status", "validity_status", "score", "max_score", "is_correct", "grading_method", "grading_version", "graded_at", "supersedes_grade_id", "voided_at", "void_reason", "grader_id", "comment", "grader_version", "voided_by_id", "created_at"),
             [
                 [
                     *identity_and_question_for_attempt(item.submission.attempt_id),
@@ -1455,6 +2080,11 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                     item.supersedes_grade_id or "",
                     item.voided_at.isoformat() if item.voided_at else "",
                     item.void_reason,
+                    item.grader_id or "",
+                    item.comment,
+                    item.grader_version,
+                    item.voided_by_id or "",
+                    item.created_at.isoformat(),
                 ]
                 for item in grade_records
                 if item.submission.attempt_id in attempt_by_id
@@ -1534,11 +2164,34 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         ),
         "client_time_syncs": (
             ("time_sync_id", "session_id", "client_instance_id", "client_wall_time_utc", "client_monotonic_ms", "client_time_origin", "server_received_at", "server_responded_at", "client_received_wall_time_utc", "client_received_monotonic_ms", "estimated_clock_offset_ms", "estimated_rtt_ms", "sync_quality", "finalized_at"),
-            [[item.pk, item.session_id, item.client_instance_id, item.client_wall_time_utc.isoformat(), item.client_monotonic_ms, item.client_time_origin.isoformat(), item.server_received_at.isoformat(), item.server_responded_at.isoformat(), item.client_received_wall_time_utc.isoformat() if item.client_received_wall_time_utc else "", item.client_received_monotonic_ms or "", item.estimated_clock_offset_ms or "", item.estimated_rtt_ms or "", item.sync_quality, item.finalized_at.isoformat() if item.finalized_at else ""] for item in time_syncs],
+            [[item.pk, item.session_id, item.client_instance_id, item.client_wall_time_utc.isoformat(), item.client_monotonic_ms, item.client_time_origin.isoformat(), item.server_received_at.isoformat(), item.server_responded_at.isoformat(), item.client_received_wall_time_utc.isoformat() if item.client_received_wall_time_utc else "", item.client_received_monotonic_ms if item.client_received_monotonic_ms is not None else "", item.estimated_clock_offset_ms if item.estimated_clock_offset_ms is not None else "", item.estimated_rtt_ms if item.estimated_rtt_ms is not None else "", item.sync_quality, item.finalized_at.isoformat() if item.finalized_at else ""] for item in time_syncs],
         ),
         "client_capture_checkpoints": (
             ("checkpoint_id", "session_id", "student_id", "client_instance_id", "highest_emitted_sequence_no", "highest_acked_sequence_no", "highest_contiguous_acked_sequence_no", "pending_event_count", "failed_event_count", "missing_local_sequence_ranges", "client_monotonic_ms", "client_wall_time_utc", "client_time_origin", "time_sync_id", "trigger", "quality_flags", "app_version", "server_received_at"),
             [[item.pk, item.session_id, item.student_id, item.client_instance_id, item.highest_emitted_sequence_no, item.highest_acked_sequence_no, item.highest_contiguous_acked_sequence_no, item.pending_event_count, item.failed_event_count, json.dumps(item.missing_local_sequence_ranges), item.client_monotonic_ms, item.client_wall_time_utc.isoformat(), item.client_time_origin.isoformat(), item.time_sync_id or "", item.trigger, json.dumps(item.quality_flags), item.app_version, item.server_received_at.isoformat()] for item in checkpoints],
+        ),
+        "recording_coverage_runs": (
+            ("coverage_run_id", "scope_type", "scope_definition", "scope_hash", "coverage_version", "algorithm_version", "code_version", "parameter_document", "parameter_hash", "source_cutoff_at", "source_high_water_marks", "capture_contract_hashes", "source_hash", "run_status", "generated_at"),
+            [
+                [
+                    run.run_id,
+                    run.scope_type,
+                    json.dumps(run.scope_definition, ensure_ascii=False, sort_keys=True),
+                    run.scope_hash,
+                    run.coverage_version,
+                    run.algorithm_version,
+                    run.code_version,
+                    json.dumps(run.parameter_document, ensure_ascii=False, sort_keys=True),
+                    run.parameter_hash,
+                    run.source_cutoff_at.isoformat(),
+                    json.dumps(run.source_high_water_marks, ensure_ascii=False, sort_keys=True),
+                    json.dumps(run.capture_contract_hashes, ensure_ascii=False, sort_keys=True),
+                    run.source_hash,
+                    run.run_status,
+                    run.generated_at.isoformat(),
+                ]
+                for _run_id, run in sorted(coverage_runs.items())
+            ],
         ),
         "recording_coverage_sessions": (
             ("coverage_run_id", "coverage_version", "coverage_parameter_hash", "coverage_source_cutoff", "session_id", "overall_status", "lifecycle_status", "navigation_status", "client_sequence_status", "time_sync_status", "telemetry_status", "client_instance_count", "sequence_gap_count", "missing_sequence_ranges", "tail_gap_detected", "missing_reasons", "analysis_eligibility"),
@@ -1556,7 +2209,8 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                     "release_snapshot_id", "experiment_id", "version_number",
                     "published_at", "timer_semantics_version",
                     "randomization_semantics_version", "definition_fingerprint",
-                    "canonicalization_version", "sampling_mode",
+                    "canonicalization_version", "feedback_mode",
+                    "feedback_release_policy", "sampling_mode",
                     "sampling_total_count", "sampling_kcs", "sampling_inventory",
                     "taxonomy_snapshot", "candidate_resolution",
                     "sampling_definition", "timezone",
@@ -1567,6 +2221,8 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                         export_time(release.published_at), release.timer_semantics_version,
                         release.randomization_semantics_version,
                         release.definition_fingerprint, release.canonicalization_version,
+                        release.configuration.get("feedback_mode", ""),
+                        release.configuration.get("feedback_release_policy", ""),
                         release.configuration.get("sampling_mode")
                         or (
                             "type_quota_legacy"
@@ -1584,6 +2240,31 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                     for release in releases
                 ],
             ),
+            "research_tools": (
+                (
+                    "experiment_id", "version_id", "version_number",
+                    "research_tools", "research_tools_sha256",
+                ),
+                [
+                    [
+                        release.experiment_id, release.pk, release.version_number,
+                        json.dumps(
+                            release.configuration.get("research_tools", {}),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        sha256_bytes(
+                            json.dumps(
+                                release.configuration.get("research_tools", {}),
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                            ).encode("utf-8")
+                        ),
+                    ]
+                    for release in releases
+                ],
+            ),
             "class_experiment_tasks": (
                 (
                     "class_task_id", "experiment_id", "release_snapshot_id",
@@ -1591,6 +2272,7 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                     "class_published_at", "randomization_algorithm_version",
                     "root_seed_fingerprint", "preview_class_result_id",
                     "cancelled_at", "manual_closed_at", "invalidated_at",
+                    "feedback_released_at", "feedback_released_by_id",
                     "terminal_reason", "provenance",
                 ),
                 [
@@ -1604,6 +2286,8 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                         if task.randomization_identity_id else "",
                         task.preview_class_result_id or "", export_time(task.cancelled_at),
                         export_time(task.manual_closed_at), export_time(task.invalidated_at),
+                        export_time(task.feedback_released_at),
+                        task.feedback_released_by_id or "",
                         task.terminal_reason or "", task.provenance or "",
                     ]
                     for task in class_tasks
@@ -1682,21 +2366,32 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         }
     )
     derivation_id = str(getattr(snapshot, "snapshot_id", "preview"))
+    derivation_version = EXPORT_DERIVATION_VERSION
     base = (*identity_headers, "question_code", "attempt_id", "derivation_run_id", "derivation_version")
     feature_rows, kt_rows, cd_rows, cal_rows = [], [], [], []
     for attempt in attempts:
-        ident = [*identity_and_question_for_attempt(attempt.pk), attempt.pk, derivation_id, "v1"]
+        ident = [
+            *identity_and_question_for_attempt(attempt.pk),
+            attempt.pk,
+            derivation_id,
+            derivation_version,
+        ]
         feature_rows.append([*ident, attempt.is_correct, attempt.score, attempt.visit_count, attempt.first_opened_at.isoformat() if attempt.first_opened_at else "", attempt.submitted_at.isoformat() if attempt.submitted_at else ""])
-        outcome = "" if attempt.is_correct is None else int(bool(attempt.is_correct))
         item_snapshot = attempt.assignment.snapshot
-        kt_rows.append([
-            *ident,
-            attempt.assignment.assigned_sequence_index,
-            outcome,
-            item_snapshot.root_kc_code
-            if item_snapshot.kc_mapping_schema_version == "question-kc-tree-v2"
-            else item_snapshot.primary_kc or "",
-        ])
+        if (
+            attempt.status == Attempt.Status.SUBMITTED
+            and attempt.submission_sequence_index is not None
+            and attempt.is_correct is not None
+        ):
+            kt_rows.append([
+                *ident,
+                "formal_submission",
+                attempt.submission_sequence_index,
+                int(bool(attempt.is_correct)),
+                item_snapshot.root_kc_code
+                if item_snapshot.kc_mapping_schema_version == "question-kc-tree-v2"
+                else item_snapshot.primary_kc or "",
+            ])
         response_value = attempt.final_answer if attempt.final_answer is not None else attempt.draft_answer
         cd_kcs = (
             [
@@ -1709,13 +2404,30 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         cd_rows.append([*ident, json.dumps(response_value, ensure_ascii=False) if response_value is not None else "", json.dumps(cd_kcs, ensure_ascii=False)])
         confidence = next((c for c in selected_confidence if c.attempt_id == attempt.pk), None)
         probability = confidence.probability if confidence and confidence.probability is not None else ""
-        error = (float(probability) / 100.0 - float(bool(attempt.is_correct))) if probability != "" and attempt.is_correct is not None else ""
-        cal_rows.append([*ident, probability, attempt.is_correct, error, confidence.condition if confidence else ""])
+        signed_prediction_error = (
+            float(probability) / 100.0 - float(bool(attempt.is_correct))
+            if probability != "" and attempt.is_correct is not None
+            else ""
+        )
+        cal_rows.append([
+            *ident,
+            probability,
+            attempt.is_correct,
+            signed_prediction_error,
+            signed_prediction_error,
+            confidence.condition if confidence else "",
+        ])
     rows.update({
         "attempt_features": (base + ("is_correct", "score", "visit_count", "first_opened_at", "submitted_at"), feature_rows),
-        "kt_sequences": (base + ("sequence_index", "outcome", "root_kc_code"), kt_rows),
+        "kt_sequences": (base + ("sequence_type", "sequence_index", "outcome", "root_kc_code"), kt_rows),
         "cd_response_matrix": (base + ("response", "kc_codes"), cd_rows),
-        "calibration_features": (base + ("confidence_probability", "is_correct", "calibration_error", "condition"), cal_rows),
+        "calibration_features": (
+            base + (
+                "confidence_probability", "is_correct", "signed_prediction_error",
+                "calibration_error", "condition",
+            ),
+            cal_rows,
+        ),
     })
     return rows
 
@@ -1736,11 +2448,9 @@ def _attempt_export_row(assignment, attempt, session_by_id, grade_by_attempt=Non
     identity = [session.student.student_number or "", session.student.shown_name, assignment.snapshot.code]
     linkage = [assignment.session_id, assignment.snapshot.pk, assignment.item_instance_id]
     if attempt is None:
-        return [*identity, "", *linkage] + [""] * 28 + [""] * 7
+        return [*identity, "", *linkage] + [""] * 38
     grade = (grade_by_attempt or {}).get(attempt.pk)
     submission = getattr(attempt, "submission_event", None)
-    if attempt is None:
-        return [*identity, "", *linkage, *([""] * 14)]
     return [
         *identity,
         attempt.pk,
@@ -1759,6 +2469,10 @@ def _attempt_export_row(assignment, attempt, session_by_id, grade_by_attempt=Non
         attempt.score,
         attempt.first_open_sequence_index,
         attempt.submission_sequence_index,
+        attempt.active_response_event_id or "",
+        attempt.response_version,
+        attempt.final_response_event_id or "",
+        json.dumps(attempt.formal_capture_boundary or {}, ensure_ascii=False),
         attempt.current_response_snapshot_id,
         attempt.final_response_snapshot_id,
         submission.pk if submission else "",

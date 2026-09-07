@@ -1,0 +1,176 @@
+.kt-teacher-account-management {
+  display: grid;
+  gap: 20px;
+  max-width: 1320px;
+  margin: 0 auto;
+  color: #263449;
+}
+
+.kt-account-management-tabs,
+.kt-account-management-actions,
+.kt-account-management-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.kt-account-management-tabs {
+  border-bottom: 1px solid #dbe3ee;
+  padding-bottom: 10px;
+}
+
+.kt-account-management-tabs button {
+  min-height: 40px;
+  border: 1px solid #c9d5e4;
+  border-radius: 7px;
+  padding: 8px 13px;
+  background: #fff;
+  color: #29425f;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.kt-account-management-tabs button[aria-current='page'] {
+  border-color: #1e5eaa;
+  background: #e9f1fb;
+  color: #164b89;
+}
+
+.kt-account-management-tabs button:disabled {
+  cursor: not-allowed;
+  opacity: .58;
+}
+
+.kt-account-management-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(260px, .7fr);
+  gap: 20px;
+}
+
+.kt-account-management-grid > section {
+  display: grid;
+  gap: 24px;
+}
+
+.kt-account-management-form,
+.kt-account-management-guide,
+.kt-account-management-members,
+.kt-account-management-confirm {
+  display: grid;
+  gap: 15px;
+  padding: 22px;
+}
+
+.kt-account-management-form h2,
+.kt-account-management-guide h2,
+.kt-account-management-members h2,
+.kt-account-management-confirm h2,
+.kt-account-management-form p,
+.kt-account-management-guide p,
+.kt-account-management-confirm p {
+  margin: 0;
+}
+
+.kt-account-management-form > form,
+.kt-account-management-confirm > form {
+  display: grid;
+  gap: 14px;
+}
+
+.kt-account-management-form label,
+.kt-account-management-confirm label {
+  display: grid;
+  gap: 7px;
+  color: #334861;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.kt-account-management-form input,
+.kt-account-management-form select,
+.kt-account-management-confirm input,
+.kt-account-management-inline select {
+  min-height: 42px;
+  border: 1px solid #c9d5e4;
+  border-radius: 7px;
+  padding: 8px 10px;
+  background: #fff;
+  color: #263449;
+  font: inherit;
+}
+
+.kt-account-management-check {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500 !important;
+}
+
+.kt-account-management-check input {
+  min-height: auto;
+  width: 18px;
+}
+
+.kt-account-management-guide {
+  align-content: start;
+  background: #f7f9fc;
+}
+
+.kt-account-management-guide p,
+.kt-account-management-form p,
+.kt-account-management-confirm p {
+  color: #647187;
+  line-height: 1.6;
+}
+
+.kt-account-management-notice {
+  border: 1px solid #c8d9ec;
+  border-radius: 7px;
+  padding: 12px;
+  background: #f2f7fd;
+  color: #2c4869 !important;
+}
+
+.kt-account-management-members {
+  overflow: hidden;
+  padding: 0;
+}
+
+.kt-account-management-members > .kt-section-heading,
+.kt-account-management-members > .kt-empty-state {
+  margin: 20px;
+}
+
+.kt-account-management-members .kt-table-scroll {
+  border-top: 1px solid #e1e7ef;
+}
+
+.kt-account-management-inline {
+  align-items: center;
+  min-width: 240px;
+}
+
+.kt-account-management-inline select {
+  flex: 1;
+  min-width: 130px;
+}
+
+.kt-account-management-confirm {
+  border-color: #e6c4c7;
+}
+
+@media (max-width: 767px) {
+  .kt-account-management-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .kt-account-management-tabs button,
+  .kt-account-management-actions > * {
+    flex: 1 1 auto;
+  }
+
+  .kt-account-management-members .kt-table-scroll {
+    overflow-x: auto;
+  }
+}

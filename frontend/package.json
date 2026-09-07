@@ -15,7 +15,8 @@
     "test:e2e": "node --test scripts/e2e-database.test.mjs && node scripts/prepare-e2e.mjs && playwright test",
     "api:schema": "node scripts/generate-api-schema.mjs",
     "api:generate": "npm run api:schema && openapi-typescript ../openapi-schema.yml -o src/api/generated/schema.d.ts",
-    "api:check": "node scripts/check-api-types.mjs"
+    "api:check": "node scripts/check-api-types.mjs",
+    "test:e2e:capture": "npm run build && node scripts/prepare-e2e.mjs --capture-v2 && playwright test --config playwright.capture-v2.config.ts"
   },
   "dependencies": {
     "pinia": "3.0.4",

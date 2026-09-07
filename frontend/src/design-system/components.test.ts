@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
 import Alert from './components/Alert.vue'
@@ -19,6 +19,23 @@ import StatusBadge from './components/StatusBadge.vue'
 import Icon from './Icon.vue'
 
 describe('design-system foundations', () => {
+  it('keeps keyboard focus inside an open drawer and returns to its trigger', async () => {
+    const trigger = document.createElement('button')
+    document.body.append(trigger)
+    trigger.focus()
+    const drawer = mount(Drawer, { attachTo: document.body, props: { open: false, title: '题目导航' }, slots: { default: '<a href="/student/">返回</a>' } })
+    await drawer.setProps({ open: true })
+    await flushPromises()
+    const last = drawer.get('a')
+    ;(last.element as HTMLElement).focus()
+    await last.trigger('keydown', { key: 'Tab' })
+    expect(document.activeElement).toBe(drawer.get('button').element)
+    await drawer.setProps({ open: false })
+    expect(document.activeElement).toBe(trigger)
+    drawer.unmount()
+    trigger.remove()
+  })
+
   it('keeps decorative and semantic icons distinguishable', () => {
     expect(mount(Icon, { props: { name: 'check' } }).get('svg').attributes('aria-hidden')).toBe('true')
     const semantic = mount(Icon, { props: { name: 'warning', label: '警告' } }).get('svg')

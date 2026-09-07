@@ -172,6 +172,13 @@ export function createTeacherExperimentApi(client: ApiClient) {
         refreshAuthoritativeState: () => this.task(taskId),
       })
     },
+    releaseFeedback(taskId: number, reason?: string) {
+      return client.mutate<ClassTask>(`/api/v1/teacher/class-tasks/${taskId}/feedback-release/`, {
+        method: 'POST',
+        body: reason ? { reason } : {},
+        refreshAuthoritativeState: () => this.task(taskId),
+      })
+    },
   }
 }
 

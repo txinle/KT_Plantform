@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import timedelta
 from decimal import Decimal
@@ -10,6 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
+from apps.audit.models import AuditLog
 from apps.experiments.models import Experiment, ExperimentSamplingKC
 from apps.experiments.models import ScheduleRevision
 from apps.experiments.publication_services import (
@@ -120,19 +122,30 @@ class StudentApiFixtureMixin:
             feedback_mode=self.feedback_mode,
         )
 
-    def publish_task(self, *, name, feedback_mode):
-        experiment = Experiment.objects.create(
-            name=name,
-            course=self.course,
-            question_bank=self.bank,
-            owner=self.teacher,
-            created_by=self.teacher,
-            feedback_mode=feedback_mode,
-            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
-            sampling_total_count=self.bank.questions.filter(
+    def publish_task(
+        self,
+        *,
+        name,
+        feedback_mode,
+        feedback_release_policy=None,
+        opens_at=None,
+        closes_at=None,
+    ):
+        values = {
+            "name": name,
+            "course": self.course,
+            "question_bank": self.bank,
+            "owner": self.teacher,
+            "created_by": self.teacher,
+            "feedback_mode": feedback_mode,
+            "sampling_mode": Experiment.SamplingMode.TOTAL_COUNT,
+            "sampling_total_count": self.bank.questions.filter(
                 status=Question.Status.ACTIVE
             ).count(),
-        )
+        }
+        if feedback_release_policy is not None:
+            values["feedback_release_policy"] = feedback_release_policy
+        experiment = Experiment.objects.create(**values)
         ExperimentSamplingKC.objects.create(
             experiment=experiment,
             concept=self.question.primary_concept,
@@ -149,8 +162,8 @@ class StudentApiFixtureMixin:
             plan,
             self.teacher,
             expected_revision=plan.plan_revision,
-            default_opens_at=None,
-            default_closes_at=None,
+            default_opens_at=opens_at,
+            default_closes_at=closes_at,
             overrides={},
         )
         generate_preview(
@@ -165,6 +178,41 @@ class StudentApiFixtureMixin:
             expected_revision=plan.plan_revision,
         )[0]
         return experiment, task
+
+    def submit_attempt_without_finishing(self, session, *, answer="B", is_correct=True):
+        attempt = session.attempts.get()
+        now = timezone.now()
+        attempt.status = Attempt.Status.SUBMITTED
+        attempt.final_answer = answer
+        attempt.submitted_at = now
+        attempt.submission_sequence_index = attempt.assignment.assigned_sequence_index
+        attempt.save(
+            update_fields=[
+                "status",
+                "final_answer",
+                "submitted_at",
+                "submission_sequence_index",
+            ]
+        )
+        submission = SubmissionEvent.objects.create(
+            attempt=attempt,
+            submission_token=uuid.uuid4(),
+            final_answer=answer,
+            server_received_at=now,
+            committed_at=now,
+            grading_status=SubmissionEvent.GradingStatus.COMPLETED,
+        )
+        GradeRecord.objects.create(
+            submission=submission,
+            version=1,
+            status=GradeRecord.Status.COMPLETED,
+            validity_status=GradeRecord.ValidityStatus.EFFECTIVE,
+            is_correct=is_correct,
+            score=Decimal("1") if is_correct else Decimal("0"),
+            max_score=Decimal("1"),
+            graded_at=now,
+        )
+        return attempt
 
     def start(self, *, task=None, student=None):
         self.client.force_login(student or self.student)
@@ -395,12 +443,18 @@ class StudentTaskApiTests(StudentApiTestCase):
 
 
 class StudentAssessmentApiTests(StudentApiTestCase):
+    @override_settings(
+        CAPTURE_V2_ENABLED=False,
+        CAPTURE_V2_USER_IDS=frozenset(),
+        CAPTURE_V2_COURSE_IDS=frozenset(),
+    )
     def test_question_entry_returns_only_authoritative_student_runtime_state(self):
         self.start()
         session = ExperimentSession.objects.get(
             class_task=self.task,
             student=self.student,
         )
+        self.assertEqual(session.capture_contract.contract_name, "capture-v1")
         assignment = session.assignments.select_related("snapshot").get()
 
         response = self.client.get(
@@ -605,10 +659,154 @@ class StudentResultApiTests(StudentApiTestCase):
         )
 
         self.assertEqual(response.status_code, 200, response.content)
-        item = response.json()["items"][0]
-        self.assertEqual(item["submitted_answer"], "B：4")
-        self.assertNotIn("correct_answer", item)
-        self.assertNotIn("explanation", item)
+        self.assertNotIn("items", response.json())
+
+    def test_new_policy_waits_for_whole_session_completion(self):
+        self.assertEqual(
+            self.experiment.feedback_release_policy,
+            "after_personal_submission",
+        )
+        started = self.start()
+        session = ExperimentSession.objects.get(pk=started.json()["session_id"])
+        self.submit_attempt_without_finishing(session)
+
+        before_completion = self.client.get(
+            f"/api/v1/student/tasks/{self.task.pk}/results/"
+        )
+        self.assertEqual(before_completion.status_code, 200, before_completion.content)
+        self.assertNotIn("items", before_completion.json())
+
+        now = timezone.now()
+        session.status = ExperimentSession.Status.COMPLETED
+        session.completed_at = now
+        session.terminal_at = now
+        session.save(update_fields=["status", "completed_at", "terminal_at"])
+        released = self.client.get(f"/api/v1/student/tasks/{self.task.pk}/results/")
+
+        self.assertEqual(released.status_code, 200, released.content)
+        self.assertEqual(released.json()["items"][0]["correct_answer"], "B：4")
+
+    def test_pending_grade_never_projects_correctness_or_full_feedback(self):
+        started = self.start()
+        session = ExperimentSession.objects.get(pk=started.json()["session_id"])
+        attempt = session.attempts.get()
+        now = timezone.now()
+        attempt.status = Attempt.Status.SUBMITTED
+        attempt.final_answer = "B"
+        attempt.submitted_at = now
+        attempt.save(update_fields=["status", "final_answer", "submitted_at"])
+        submission = SubmissionEvent.objects.create(
+            attempt=attempt,
+            submission_token=uuid.uuid4(),
+            final_answer="B",
+            server_received_at=now,
+            committed_at=now,
+            grading_status=SubmissionEvent.GradingStatus.PENDING,
+        )
+        GradeRecord.objects.create(
+            submission=submission,
+            version=1,
+            status=GradeRecord.Status.PENDING,
+            validity_status=GradeRecord.ValidityStatus.CANDIDATE,
+            grading_method="manual_short_answer_v1",
+        )
+        session.status = ExperimentSession.Status.COMPLETED
+        session.completed_at = now
+        session.terminal_at = now
+        session.save(update_fields=["status", "completed_at", "terminal_at"])
+
+        from .confidence_services import frozen_feedback_payload
+
+        payload = frozen_feedback_payload(attempt)
+        result = self.client.get(f"/api/v1/student/tasks/{self.task.pk}/results/")
+
+        self.assertEqual(
+            payload,
+            {"feedback_mode": "full", "feedback_phase": "pending_grading"},
+        )
+        self.assertEqual(result.status_code, 200, result.content)
+        item = result.json()["items"][0]
+        for forbidden in (
+            "is_correct",
+            "score",
+            "max_score",
+            "correct_answer",
+            "explanation",
+        ):
+            self.assertNotIn(forbidden, item)
+
+    def test_deadline_policy_releases_results_only_after_the_class_deadline(self):
+        now = timezone.now()
+        _experiment, task = self.publish_task(
+            name="截止后反馈任务",
+            feedback_mode=Experiment.Feedback.FULL,
+            feedback_release_policy="after_assignment_deadline",
+            opens_at=now - timedelta(hours=1),
+            closes_at=now + timedelta(hours=1),
+        )
+        started = self.start(task=task)
+        session = ExperimentSession.objects.get(pk=started.json()["session_id"])
+        self.submit_attempt_without_finishing(session)
+
+        before_deadline = self.client.get(
+            f"/api/v1/student/tasks/{task.pk}/results/"
+        )
+        self.assertEqual(before_deadline.status_code, 200, before_deadline.content)
+        self.assertNotIn("items", before_deadline.json())
+
+        with patch(
+            "apps.assessment.feedback_services.timezone.now",
+            return_value=now + timedelta(hours=2),
+        ):
+            released = self.client.get(f"/api/v1/student/tasks/{task.pk}/results/")
+
+        self.assertEqual(released.status_code, 200, released.content)
+        self.assertEqual(released.json()["items"][0]["correct_answer"], "B：4")
+
+    def test_manual_release_is_audited_before_results_are_exposed(self):
+        _experiment, task = self.publish_task(
+            name="人工发布反馈任务",
+            feedback_mode=Experiment.Feedback.FULL,
+            feedback_release_policy="manual_release",
+        )
+        started = self.start(task=task)
+        session = ExperimentSession.objects.get(pk=started.json()["session_id"])
+        self.complete_session(session)
+
+        blocked = self.client.get(f"/api/v1/student/tasks/{task.pk}/results/")
+        self.assertEqual(blocked.status_code, 200, blocked.content)
+        self.assertNotIn("items", blocked.json())
+
+        self.client.force_login(self.teacher)
+        release = self.client.post(
+            f"/api/v1/teacher/class-tasks/{task.pk}/feedback-release/",
+            data=json.dumps({"reason": "评分复核结束"}),
+            content_type="application/json",
+        )
+        self.assertEqual(release.status_code, 200, release.content)
+        released_task = type(task).objects.get(pk=task.pk)
+        self.client.force_login(self.student)
+        released = self.client.get(f"/api/v1/student/tasks/{task.pk}/results/")
+
+        self.assertIsNotNone(released_task.feedback_released_at)
+        self.assertEqual(released_task.feedback_released_by_id, self.teacher.pk)
+        self.assertEqual(released.status_code, 200, released.content)
+        self.assertEqual(released.json()["items"][0]["correct_answer"], "B：4")
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="class_task.feedback_release",
+                object_id=str(task.pk),
+                actor=self.teacher,
+            ).exists()
+        )
+
+    def test_missing_frozen_policy_is_legacy_not_the_new_default(self):
+        from .feedback_services import feedback_release_policy_for_configuration
+
+        self.assertEqual(
+            feedback_release_policy_for_configuration({}),
+            "legacy",
+        )
 
     def test_none_feedback_returns_only_completion_metadata(self):
         none_experiment, none_task = self.publish_task(
@@ -876,6 +1074,135 @@ class StudentLearningApiTests(StudentApiFixtureMixin, TransactionTestCase):
         serialized = str([summary.json(), detail.json(), question.json()])
         self.assertNotIn(self.peer.student_number, serialized)
         self.assertNotIn(self.peer.shown_name, serialized)
+
+    @override_settings(CAPTURE_V2_ENABLED=True)
+    def test_capture_v2_detail_records_only_authorized_feedback_exposure_stages(self):
+        from .capture_v2_services import ingest_capture_batch
+        from .models import AssessmentEvent
+        from .response_snapshot_services import ResponseState
+        from .services import save_draft, submit_attempt
+
+        with override_settings(CAPTURE_V2_USER_IDS=frozenset({str(self.student.pk)})):
+            started = self.start()
+        session = ExperimentSession.objects.get(pk=started.json()["session_id"])
+        attempt = session.attempts.select_related("assignment__snapshot").get()
+        stream = uuid.uuid4()
+        transition_id = uuid.uuid4()
+        before = ResponseState(Question.Type.SINGLE, None)
+        after = ResponseState(Question.Type.SINGLE, "B")
+        now = timezone.now()
+        transition = {
+            "event_id": str(transition_id),
+            "event_type": "response_transition",
+            "event_version": 1,
+            "session_id": session.pk,
+            "attempt_id": attempt.pk,
+            "client_sequence_no": 1,
+            "client_wall_time_utc": now.isoformat(),
+            "client_monotonic_ms": 100,
+            "client_time_origin": "2026-09-06T00:00:00Z",
+            "quality_flags": [],
+            "app_version": "capture-v2-test",
+            "payload": {
+                "capture_version": "capture-v2",
+                "operation_id": str(uuid.uuid4()),
+                "branch_id": str(stream),
+                "parent_event_id": None,
+                "before_state": before.state_json,
+                "after_state": after.state_json,
+                "before_state_hash": before.state_hash,
+                "after_state_hash": after.state_hash,
+                "input_type": "insertText",
+                "source": "student",
+            },
+        }
+        ingest_capture_batch(
+            student=self.student,
+            document={"client_instance_id": str(stream), "events": [transition]},
+        )
+        save_draft(
+            attempt.pk,
+            "ignored-by-capture-v2",
+            target_event_id=str(transition_id),
+            expected_version=0,
+        )
+        final_attempt = submit_attempt(
+            attempt.pk,
+            uuid.uuid4(),
+            target_event_id=str(transition_id),
+        )
+        session.refresh_from_db()
+        session.status = ExperimentSession.Status.COMPLETED
+        session.completed_at = now
+        session.terminal_at = now
+        session.save(update_fields=["status", "completed_at", "terminal_at"])
+
+        question = self.client.get(
+            f"/api/v1/student/courses/{self.course.pk}/learning/"
+            f"experiments/{self.experiment.pk}/questions/"
+            f"{attempt.assignment.snapshot_id}/"
+        )
+
+        self.assertEqual(question.status_code, 200, question.content)
+        capture = question.json()["feedback_capture"]
+        self.assertEqual(capture["capture_version"], "capture-v2")
+        self.assertEqual(capture["answer_event_id"], str(final_attempt.final_response_event_id))
+        self.assertEqual(capture["snapshot_id"], str(final_attempt.final_response_snapshot_id))
+        self.assertEqual(capture["mode"], Experiment.Feedback.FULL)
+        self.assertEqual(
+            capture["authorized"],
+            {"correctness": True, "correct_answer": True, "explanation": True},
+        )
+
+        visit_id = str(uuid.uuid4())
+        stages = (
+            ("detail_entered", (True, False, False)),
+            ("answer_presented", (True, True, False)),
+            ("explanation_presented", (True, True, True)),
+            ("detail_left", (True, True, True)),
+        )
+        events = []
+        for sequence, (stage, flags) in enumerate(stages, start=2):
+            events.append(
+                {
+                    "event_id": str(uuid.uuid4()),
+                    "event_type": "feedback_exposure",
+                    "event_version": 1,
+                    "session_id": session.pk,
+                    "attempt_id": attempt.pk,
+                    "client_sequence_no": sequence,
+                    "client_wall_time_utc": now.isoformat(),
+                    "client_monotonic_ms": sequence * 100,
+                    "client_time_origin": "2026-09-06T00:00:00Z",
+                    "quality_flags": [],
+                    "app_version": "capture-v2-test",
+                    "payload": {
+                        "capture_version": "capture-v2",
+                        "operation_id": visit_id,
+                        "feedback_mode": capture["mode"],
+                        "stage": stage,
+                        "answer_event_id": capture["answer_event_id"],
+                        "snapshot_id": capture["snapshot_id"],
+                        "included_correctness": flags[0],
+                        "included_correct_answer": flags[1],
+                        "included_explanation": flags[2],
+                    },
+                }
+            )
+        ingest_capture_batch(
+            student=self.student,
+            document={"client_instance_id": str(stream), "events": events},
+        )
+
+        exposures = list(
+            AssessmentEvent.objects.filter(
+                attempt=attempt,
+                event_type="feedback_exposure",
+            ).values_list("payload", flat=True)
+        )
+        self.assertEqual([payload["stage"] for payload in exposures], [row[0] for row in stages])
+        self.assertTrue(all(payload["answer_event_id"] == capture["answer_event_id"] for payload in exposures))
+        self.assertTrue(all(payload["snapshot_id"] == capture["snapshot_id"] for payload in exposures))
 
     @override_settings(STUDENT_LEARNING_ANALYTICS_ENABLED=False)
     def test_learning_api_respects_existing_analytics_kill_switch(self):

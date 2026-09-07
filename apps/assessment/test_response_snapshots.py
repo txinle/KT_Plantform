@@ -42,10 +42,12 @@ class ResponseSnapshotServiceTests(TestCase):
             experiment=experiment,
             version_number=1,
             published_by=self.teacher,
+            configuration=getattr(self, 'version_configuration', {}),
         )
         self.session = ExperimentSession.objects.create(
             version=self.version,
             student=self.student,
+            capture_contract=getattr(self, 'capture_contract', None),
         )
         self.attempts = {}
         question_types = (

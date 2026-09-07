@@ -5,6 +5,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .event_services import append_assessment_event
+from .feedback_services import frozen_feedback_payload
 from .models import Attempt, ConfidenceAssignment
 
 
@@ -125,25 +126,6 @@ def confidence_prompt_contract(assignment):
         "maximum": 100,
         "step": 10,
     }
-
-
-def frozen_feedback_payload(attempt):
-    configuration = _configuration(attempt)
-    feedback_mode = configuration.get(
-        "feedback_mode",
-        attempt.session.version.experiment.feedback_mode,
-    )
-    result = {"feedback_mode": feedback_mode}
-    if feedback_mode in {"correctness", "full"}:
-        result["is_correct"] = attempt.is_correct
-    if feedback_mode == "full":
-        result.update(
-            {
-                "correct_answer": attempt.assignment.snapshot.correct_answer,
-                "explanation": attempt.assignment.snapshot.explanation,
-            }
-        )
-    return result
 
 
 def _append_confidence_event(assignment, *, event_type, payload):

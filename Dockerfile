@@ -3,6 +3,7 @@ WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
+COPY static/js/ /static/js/
 RUN npm run build
 
 FROM python:3.13-slim AS python-app
@@ -12,8 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends libpq5 && rm -r
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . ./
-COPY --from=frontend-build /frontend/dist ./frontend/dist
-RUN python manage.py check_vue_assets
 RUN python manage.py collectstatic --noinput
 RUN chmod +x docker/entrypoint.sh
 
@@ -28,3 +27,7 @@ CMD ["python", "manage.py", "run_scheduler"]
 FROM nginx:1.27-alpine AS nginx
 COPY nginx/kt-platform.conf /etc/nginx/conf.d/default.conf
 COPY --from=python-app /app/staticfiles /static
+COPY --from=frontend-build /frontend/dist/spa-assets /static/spa-assets
+COPY --from=frontend-build /frontend/dist/spa-assets/assets /opt/kt-frontend-assets
+COPY docker/20-frontend-assets.sh /docker-entrypoint.d/20-frontend-assets.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.d/20-frontend-assets.sh && chmod +x /docker-entrypoint.d/20-frontend-assets.sh

@@ -142,6 +142,37 @@ describe('StudentAssessment', () => {
     expect(wrapper.text()).not.toContain('回答错误')
   })
 
+  it('places the answer before the number card and moving the drawer does not collect an answer', async () => {
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    expect(wrapper.get('.kt-assessment-topbar').text()).toContain('反馈策略实验')
+    const question = wrapper.get('.kt-assessment-question').element
+    const navigation = wrapper.get('.kt-assessment-nav').element
+    expect(question.compareDocumentPosition(navigation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(wrapper.get('[data-nav-assignment="11"]').attributes('data-answer-status')).toBe('visited')
+    mocks.runtime.record.mockClear()
+    await wrapper.get('[data-mobile-navigation-trigger]').trigger('click')
+    await wrapper.get('[role="dialog"] button').trigger('click')
+    expect(mocks.runtime.record).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('shows a local response on the number card without claiming formal submission', async () => {
+    mocks.api.question.mockResolvedValue({ ...structuredClone(questionState), question: { ...questionState.question, question_type: 'multiple_choice' } })
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    const item = wrapper.get('[data-nav-assignment="11"]')
+    expect(item.attributes('data-has-response')).toBe('false')
+    await wrapper.findAll<HTMLInputElement>('input[name="answer"]')[0]!.setValue(true)
+    expect(item.attributes('data-has-response')).toBe('true')
+    expect(item.text()).toContain('待提交')
+    expect(item.attributes('data-answer-status')).toBe('visited')
+    await wrapper.findAll<HTMLInputElement>('input[name="answer"]')[0]!.setValue(false)
+    expect(item.attributes('data-has-response')).toBe('false')
+    expect(mocks.api.submit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('exposes N/M progress and an accessible question drawer for mobile navigation', async () => {
     const wrapper = mount(StudentAssessment)
     await flushPromises()
@@ -192,6 +223,23 @@ describe('StudentAssessment', () => {
       },
       {},
     )
+  })
+
+  it('saves a return to A while B is still in flight', async () => {
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    const answers = wrapper.findAll<HTMLInputElement>('input[name="answer"]')
+    await answers[0]!.setValue(true)
+    await flushPromises()
+    let complete!: (value: unknown) => void
+    mocks.api.saveDraft.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+    await answers[1]!.setValue(true)
+    await flushPromises()
+    await answers[0]!.setValue(true)
+    complete({ success: true })
+    await flushPromises()
+    expect(mocks.api.saveDraft.mock.calls.map((call) => call[1])).toEqual(['A', 'B', 'A'])
+    wrapper.unmount()
   })
 
   it('records the durable server snapshot transition for a short answer autosave', async () => {
@@ -273,9 +321,11 @@ describe('StudentAssessment', () => {
     expect(mocks.runtime.record).toHaveBeenCalledWith(
       'response_commit_requested',
       { submission_token: '00000000-0000-4000-8000-000000000001' },
-      { correlationId: '00000000-0000-4000-8000-000000000001' },
+      { correlationId: '00000000-0000-4000-8000-000000000001', wallTime: expect.any(String), monotonicMs: expect.any(Number) },
     )
     expect(mocks.runtime.checkpoint).toHaveBeenCalledWith('commit')
+    const commitIndex = mocks.runtime.record.mock.calls.findIndex((call) => call[0] === 'response_commit_requested')
+    expect(mocks.runtime.record.mock.invocationCallOrder[commitIndex]).toBeLessThan(mocks.api.saveDraft.mock.invocationCallOrder.at(-1)!)
     expect(mocks.runtime.flushBounded).toHaveBeenCalledWith(1500)
     expect(mocks.api.submit.mock.calls[0]?.slice(0, 2)).toEqual([
       '/student/attempts/13/submit/',
@@ -476,10 +526,15 @@ describe('StudentAssessment', () => {
     expect(mocks.push).not.toHaveBeenCalled()
     expect(wrapper.get('[data-confidence-panel]').text()).toContain('你对这次答案有多大把握？')
 
+    let releaseFlush!: () => void
+    mocks.runtime.flushBounded.mockReturnValueOnce(new Promise<void>(resolve => { releaseFlush = resolve }))
     await wrapper.get<HTMLInputElement>('[data-confidence-input]').setValue(80)
     await wrapper.get('[data-confidence-submit]').trigger('click')
     await flushPromises()
 
+    expect(mocks.push).not.toHaveBeenCalled()
+    releaseFlush()
+    await flushPromises()
     expect(mocks.api.post).toHaveBeenLastCalledWith(
       '/assessment/process/confidence/13/commit/',
       { probability: 80 },

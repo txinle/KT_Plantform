@@ -1,0 +1,113 @@
+﻿题目序号,一级知识点,二级知识点,三级知识点
+1,EDA技术的基本概念与作用,,
+2,EDA技术的基本概念与作用,,
+3,FPGA设计流程,,
+4,EDA技术的基本概念与作用,EDA技术的特点与优势,
+5,FPGA设计流程,EDA开发工具及工具链,EDA开发工具及工具链>Quartus Prime工程创建与管理
+6,FPGA设计流程,RTL与逻辑综合,RTL与逻辑综合>Analysis & Synthesis
+7,FPGA设计流程,布局布线与资源映射,布局布线与资源映射>TimeQuest静态时序分析
+8,FPGA设计流程,FPGA设计的仿真与验证,FPGA设计的仿真与验证>Signal Tap片上调试
+9,FPGA设计流程,EDA开发工具及工具链,EDA开发工具及工具链>FPGA配置与Programmer
+10,EDA技术的基本概念与作用,EDA技术的特点与优势,
+11,EDA技术的基本概念与作用,EDA技术的特点与优势,EDA技术的特点与优势>FPGA模块化系统集成
+12,EDA技术的基本概念与作用,EDA技术的特点与优势,
+13,EDA技术的发展与趋势,,
+14,EDA技术的发展与趋势,,
+15,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+16,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+17,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+18,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+19,FPGA设计流程,,
+20,FPGA设计流程,RTL与逻辑综合,
+21,FPGA设计流程,布局布线与资源映射,布局布线与资源映射>TimeQuest静态时序分析
+22,FPGA设计流程,RTL与逻辑综合,
+23,FPGA设计流程,RTL与逻辑综合,RTL与逻辑综合>Analysis & Synthesis
+24,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,FPGA总体结构与硬件资源,FPGA总体结构与硬件资源>LUT与组合逻辑实现；FPGA总体结构与硬件资源>FPGA寄存器资源
+25,FPGA设计流程,RTL与逻辑综合,RTL与逻辑综合>Analysis & Synthesis
+26,FPGA设计流程,布局布线与资源映射,
+27,FPGA设计流程,布局布线与资源映射,布局布线与资源映射>Fitter与资源分析
+28,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,FPGA总体结构与硬件资源,FPGA总体结构与硬件资源>FPGA器件资源分析与选型
+29,FPGA设计流程,FPGA设计的仿真与验证,
+30,FPGA设计流程,FPGA设计的仿真与验证,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真
+31,FPGA设计流程,FPGA设计的仿真与验证,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真
+32,EDA技术的发展与趋势,AI辅助EDA基本概念,
+33,EDA技术的发展与趋势,AI辅助EDA基本概念,AI辅助EDA基本概念>自然语言需求与Prompt设计
+34,EDA技术的发展与趋势,AI辅助EDA基本概念,AI辅助EDA基本概念>AI辅助RTL Debug
+35,FPGA设计流程,FPGA设计的仿真与验证；RTL与逻辑综合；布局布线与资源映射；EDA开发工具及工具链,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真；RTL与逻辑综合>Analysis & Synthesis；布局布线与资源映射>Fitter与资源分析；布局布线与资源映射>TimeQuest静态时序分析；EDA开发工具及工具链>FPGA配置与Programmer
+36,EDA技术的基本概念与作用,EDA技术的特点与优势,
+37,EDA技术的发展与趋势,AI辅助EDA基本概念,
+38,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+39,EDA技术的基本概念与作用,EDA技术的特点与优势,
+40,EDA技术的发展与趋势,AI辅助EDA基本概念,
+41,EDA技术的基本概念与作用,EDA技术的特点与优势,
+42,EDA技术的基本概念与作用,,
+43,FPGA设计流程,FPGA设计的仿真与验证,FPGA设计的仿真与验证>Signal Tap片上调试
+44,FPGA设计流程,布局布线与资源映射,布局布线与资源映射>Fitter与资源分析
+45,EDA技术的基本概念与作用,EDA技术的特点与优势,EDA技术的特点与优势>IP核与参数化设计
+46,EDA技术的基本概念与作用,EDA技术的特点与优势,
+47,EDA技术的基本概念与作用,EDA技术的特点与优势,
+48,EDA技术的发展与趋势,,
+49,EDA技术的发展与趋势,AI辅助EDA基本概念,
+50,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+51,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+52,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+53,FPGA设计流程,FPGA设计的仿真与验证,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真
+54,FPGA设计流程,RTL与逻辑综合,RTL与逻辑综合>Analysis & Synthesis
+55,FPGA设计流程,布局布线与资源映射,布局布线与资源映射>TimeQuest静态时序分析
+56,FPGA设计流程,EDA开发工具及工具链；FPGA设计的仿真与验证,EDA开发工具及工具链>FPGA配置与Programmer
+57,FPGA设计流程,RTL与逻辑综合,
+58,FPGA设计流程,RTL与逻辑综合,RTL与逻辑综合>Analysis & Synthesis
+59,FPGA设计流程,RTL与逻辑综合,RTL与逻辑综合>Analysis & Synthesis
+60,FPGA设计流程,布局布线与资源映射,布局布线与资源映射>Fitter与资源分析
+61,FPGA设计流程,布局布线与资源映射,
+62,FPGA设计流程,布局布线与资源映射,布局布线与资源映射>Fitter与资源分析
+63,FPGA设计流程,FPGA设计的仿真与验证,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真
+64,EDA技术的发展与趋势,AI辅助EDA基本概念,AI辅助EDA基本概念>AI辅助RTL生成与修改
+65,EDA技术的发展与趋势,AI辅助EDA基本概念,AI辅助EDA基本概念>AI辅助Testbench与测试用例设计
+66,EDA技术的发展与趋势,AI辅助EDA基本概念,AI辅助EDA基本概念>AI辅助RTL Debug
+67,FPGA设计流程,FPGA设计的仿真与验证；RTL与逻辑综合,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真；RTL与逻辑综合>Analysis & Synthesis
+68,EDA技术的基本概念与作用,EDA技术的特点与优势,EDA技术的特点与优势>IP核与参数化设计
+69,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+70,FPGA设计流程,RTL与逻辑综合,RTL与逻辑综合>Analysis & Synthesis
+71,EDA技术的基本概念与作用,EDA技术的特点与优势,EDA技术的特点与优势>IP核与参数化设计
+72,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+73,FPGA设计流程,RTL与逻辑综合,RTL与逻辑综合>Analysis & Synthesis
+74,FPGA设计流程,RTL与逻辑综合,
+75,EDA技术的发展与趋势,AI辅助EDA基本概念,AI辅助EDA基本概念>AI辅助RTL生成与修改
+76,FPGA设计流程,布局布线与资源映射,布局布线与资源映射>Fitter与资源分析；布局布线与资源映射>TimeQuest静态时序分析
+77,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+78,FPGA设计流程,布局布线与资源映射,布局布线与资源映射>TimeQuest静态时序分析
+79,EDA技术的基本概念与作用,EDA技术的特点与优势,
+80,FPGA设计流程,FPGA设计的仿真与验证；RTL与逻辑综合；布局布线与资源映射,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真；RTL与逻辑综合>Analysis & Synthesis；布局布线与资源映射>Fitter与资源分析；布局布线与资源映射>TimeQuest静态时序分析
+81,EDA技术的基本概念与作用,EDA技术的特点与优势,EDA技术的特点与优势>IP核与参数化设计；EDA技术的特点与优势>FPGA模块化系统集成
+82,EDA技术的发展与趋势,AI辅助EDA基本概念,
+83,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+84,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+85,FPGA设计流程,RTL与逻辑综合；布局布线与资源映射；FPGA设计的仿真与验证；EDA开发工具及工具链,
+86,FPGA设计流程,RTL与逻辑综合,RTL与逻辑综合>Analysis & Synthesis
+87,FPGA设计流程,布局布线与资源映射,布局布线与资源映射>Fitter与资源分析
+88,FPGA设计流程,FPGA设计的仿真与验证,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真
+89,EDA技术的发展与趋势,AI辅助EDA基本概念,AI辅助EDA基本概念>自然语言需求与Prompt设计；AI辅助EDA基本概念>AI辅助RTL生成与修改；AI辅助EDA基本概念>AI辅助Testbench与测试用例设计；AI辅助EDA基本概念>AI辅助RTL Debug；AI辅助EDA基本概念>AI辅助资源与时序优化
+90,EDA技术的发展与趋势,AI辅助EDA基本概念,AI辅助EDA基本概念>自然语言需求与Prompt设计
+91,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+92,FPGA设计流程,RTL与逻辑综合；布局布线与资源映射；FPGA设计的仿真与验证,RTL与逻辑综合>Analysis & Synthesis；布局布线与资源映射>Fitter与资源分析；布局布线与资源映射>TimeQuest静态时序分析
+93,FPGA设计流程,FPGA设计的仿真与验证；布局布线与资源映射,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真；布局布线与资源映射>TimeQuest静态时序分析；FPGA设计的仿真与验证>Signal Tap片上调试
+94,EDA技术的基本概念与作用,EDA技术的特点与优势,EDA技术的特点与优势>FPGA模块化系统集成；EDA技术的特点与优势>IP核与参数化设计
+95,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+96,FPGA设计流程,FPGA设计的仿真与验证,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真；FPGA设计的仿真与验证>Signal Tap片上调试
+97,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+98,EDA技术的发展与趋势,AI辅助EDA基本概念,AI辅助EDA基本概念>AI辅助RTL生成与修改；AI辅助EDA基本概念>AI辅助Testbench与测试用例设计；AI辅助EDA基本概念>AI辅助RTL Debug
+99,FPGA设计流程,布局布线与资源映射；EDA开发工具及工具链,布局布线与资源映射>Fitter与资源分析；布局布线与资源映射>TimeQuest静态时序分析；EDA开发工具及工具链>FPGA配置与Programmer
+100,EDA技术的基本概念与作用,EDA技术的特点与优势,EDA技术的特点与优势>IP核与参数化设计
+101,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+102,FPGA设计流程,,
+103,FPGA设计流程,布局布线与资源映射,布局布线与资源映射>TimeQuest静态时序分析
+104,FPGA设计流程,FPGA设计的仿真与验证,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真；FPGA设计的仿真与验证>Signal Tap片上调试
+105,FPGA设计流程,RTL与逻辑综合；布局布线与资源映射；FPGA设计的仿真与验证,RTL与逻辑综合>Analysis & Synthesis；布局布线与资源映射>Fitter与资源分析；布局布线与资源映射>TimeQuest静态时序分析
+106,EDA技术的发展与趋势,AI辅助EDA基本概念,AI辅助EDA基本概念>AI辅助RTL生成与修改
+107,EDA技术的基本概念与作用,EDA技术的特点与优势,
+108,FPGA设计流程,FPGA设计的仿真与验证；RTL与逻辑综合；布局布线与资源映射；EDA开发工具及工具链,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真；RTL与逻辑综合>Analysis & Synthesis；布局布线与资源映射>Fitter与资源分析；布局布线与资源映射>TimeQuest静态时序分析；FPGA设计的仿真与验证>Signal Tap片上调试；EDA开发工具及工具链>FPGA配置与Programmer
+109,数字系统的硬件实现方式：CPLD、FPGA、ASIC与SoC,,
+110,FPGA设计流程,RTL与逻辑综合；FPGA设计的仿真与验证；布局布线与资源映射；EDA开发工具及工具链,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真；RTL与逻辑综合>Analysis & Synthesis；布局布线与资源映射>Fitter与资源分析；布局布线与资源映射>TimeQuest静态时序分析；EDA开发工具及工具链>FPGA配置与Programmer；FPGA设计的仿真与验证>Signal Tap片上调试
+111,FPGA设计流程,FPGA设计的仿真与验证；RTL与逻辑综合；布局布线与资源映射；EDA开发工具及工具链,FPGA设计的仿真与验证>Testbench与Questa/ModelSim仿真；RTL与逻辑综合>Analysis & Synthesis；布局布线与资源映射>Fitter与资源分析；布局布线与资源映射>TimeQuest静态时序分析；EDA开发工具及工具链>FPGA配置与Programmer；FPGA设计的仿真与验证>Signal Tap片上调试
+112,EDA技术的发展与趋势,AI辅助EDA基本概念,AI辅助EDA基本概念>自然语言需求与Prompt设计；AI辅助EDA基本概念>AI辅助RTL生成与修改；AI辅助EDA基本概念>AI辅助Testbench与测试用例设计

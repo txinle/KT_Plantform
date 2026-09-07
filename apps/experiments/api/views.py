@@ -16,6 +16,7 @@ from apps.api.exceptions import ApiConflict
 from apps.api.pagination import FixedPageNumberPagination
 from apps.api.permissions import RolePermission
 from apps.assessment.deadline_services import DeadlineDecisionService
+from apps.assessment.feedback_services import FeedbackReleaseError, release_task_feedback
 from apps.assessment.models import ExperimentSession
 from apps.audit.services import log_action
 from apps.question_bank.models import Concept, Question, QuestionBank
@@ -201,12 +202,25 @@ def _task_available_actions(task, *, now=None):
     ):
         actions.extend(("revise_schedule", "cancel"))
     actions.append("manual_close")
+    configuration = task.release_snapshot.configuration
+    if (
+        configuration.get("feedback_mode") in {
+            Experiment.Feedback.CORRECTNESS,
+            Experiment.Feedback.FULL,
+        }
+        and configuration.get("feedback_release_policy")
+        == Experiment.FeedbackReleasePolicy.MANUAL_RELEASE
+        and task.feedback_released_at is None
+    ):
+        actions.append("release_feedback")
     return actions
 
 
 def _task_projection(task):
     task = (
-        ClassExperimentTask.objects.select_related("experiment", "class_group")
+        ClassExperimentTask.objects.select_related(
+            "experiment", "class_group", "release_snapshot"
+        )
         .prefetch_related("schedule_revisions")
         .get(pk=task.pk)
     )
@@ -966,4 +980,25 @@ class TeacherClassTaskManualCloseView(TeacherClassTaskMixin, APIView):
         except (PublicationConflict, DjangoValidationError) as exc:
             _raise_api_domain_error(exc)
         log_action(request, "class_task.manual_close", task, {"surface": "api"})
+        return Response(_task_projection(task))
+
+
+class TeacherClassTaskFeedbackReleaseView(TeacherClassTaskMixin, APIView):
+    @extend_schema(
+        operation_id="teacher_class_task_feedback_release",
+        request=TaskReasonSerializer,
+        responses=ClassTaskSerializer,
+    )
+    def post(self, request, task_id):
+        task = self.get_task()
+        serializer = TaskReasonSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            release_task_feedback(
+                task,
+                request.user,
+                reason=serializer.validated_data.get("reason", ""),
+            )
+        except FeedbackReleaseError as exc:
+            raise ValidationError({"non_field_errors": [str(exc)]}) from exc
         return Response(_task_projection(task))

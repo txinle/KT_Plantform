@@ -38,6 +38,8 @@ services:
     environment:
       POSTGRES_HOST: db
       DJANGO_DEBUG: 0
+      VUE_STANDALONE_ENABLED: ${VUE_STANDALONE_ENABLED:-1}
+      FRONTEND_INTERNAL_REDIRECT: /__frontend/index.html
       SEED_DEMO: ${SEED_DEMO:-0}
     depends_on:
       migrate:
@@ -75,7 +77,9 @@ services:
         condition: service_healthy
     volumes:
       - media_data:/media:ro
+      - frontend_assets:/static/spa-assets/assets
 
 volumes:
   postgres_data:
+  frontend_assets:
   media_data:

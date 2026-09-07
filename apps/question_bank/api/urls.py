@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import include, path
 
 from .views import (
     TeacherBankConceptCollectionView,
@@ -14,6 +14,7 @@ from .views import (
 
 
 urlpatterns = [
+    path("", include("apps.question_bank.api.management_urls")),
     path(
         "courses/<int:course_id>/banks/",
         TeacherQuestionBankCollectionView.as_view(),

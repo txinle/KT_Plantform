@@ -58,7 +58,7 @@ describe('StudentResult', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('renders the authoritative learning projection as the P4 result page', async () => {
-    mocks.api.learningExperiment.mockResolvedValue(projection)
+    mocks.api.learningExperiment.mockResolvedValue({ ...projection, rank: { position: 2, sample_size: 8 } })
 
     const wrapper = mount(StudentResult)
     await flushPromises()
@@ -69,6 +69,10 @@ describe('StudentResult', () => {
     expect(wrapper.text()).toContain('统计生成时间：2026-08-31 11:11:56')
     expect(wrapper.findAll('.kt-feedback-metric')).toHaveLength(3)
     expect(wrapper.text()).toContain('33.3%')
+    expect(wrapper.text()).toContain('本次作业排名')
+    expect(wrapper.text()).toContain('第 2 / 8 名')
+    expect(wrapper.find('.kt-result-layout').exists()).toBe(true)
+    expect(wrapper.findAll('.kt-result-question-directory a')).toHaveLength(2)
     expect(wrapper.findAll('.kt-feedback-table tbody tr')).toHaveLength(2)
     expect(wrapper.find('.kt-result-state--incorrect').text()).toBe('错误')
     expect(wrapper.find('.kt-result-state--correct').text()).toBe('正确')

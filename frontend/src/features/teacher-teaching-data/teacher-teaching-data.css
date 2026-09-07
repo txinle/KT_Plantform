@@ -1,0 +1,80 @@
+.kt-teaching-data {
+  display: grid;
+  gap: 24px;
+}
+
+.kt-teaching-roster {
+  display: grid;
+  gap: 24px;
+}
+
+.kt-teaching-search {
+  display: grid;
+  gap: 8px;
+  max-width: 38rem;
+}
+
+.kt-teaching-search > div {
+  display: flex;
+  gap: 8px;
+}
+
+.kt-teaching-search input {
+  min-width: 0;
+  flex: 1;
+}
+
+.kt-teaching-link {
+  border: 0;
+  padding: 0;
+  color: var(--kt-color-link, #2457a5);
+  background: transparent;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.kt-teaching-attempt {
+  display: grid;
+  gap: 16px;
+}
+
+.kt-teaching-attempt > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.kt-teaching-timeline {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 1.5rem;
+}
+
+.kt-teaching-timeline li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.kt-teaching-timeline time,
+.kt-teaching-timeline code {
+  font-variant-numeric: tabular-nums;
+}
+
+.kt-empty-note {
+  margin: 0;
+  color: var(--kt-color-text-muted, #667085);
+}
+
+@media (max-width: 640px) {
+  .kt-teaching-search > div {
+    flex-direction: column;
+  }
+
+  .kt-teaching-search .kt-button {
+    width: 100%;
+  }
+}

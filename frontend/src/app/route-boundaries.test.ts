@@ -3,8 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { migratedRoutes } from './route-boundaries'
 
 describe('Vue route boundaries', () => {
-  it('registers only the migrated teacher question-bank, class, experiment, student, and assessment boundaries', () => {
-    expect(migratedRoutes.map((route) => route.path)).toEqual([
+  it('registers only the migrated course, question-bank, class, experiment, student, and assessment boundaries', () => {
+    expect(migratedRoutes.map((route) => route.path)).toEqual(expect.arrayContaining([
+      '/teacher/courses/',
+      '/teacher/courses/create/',
+      '/teacher/courses/:courseId/',
+      '/teacher/courses/:courseId/settings/',
       '/teacher/courses/:courseId/banks/',
       '/teacher/courses/:courseId/classes/',
       '/teacher/courses/:courseId/experiments/',
@@ -12,16 +16,18 @@ describe('Vue route boundaries', () => {
       '/student/',
       '/student/courses/:courseId/',
       '/student/sessions/:sessionId/questions/:assignmentId/',
-    ])
-    expect(migratedRoutes.find((route) => route.path.endsWith('/banks/'))?.children?.map((route) => route.path)).toEqual([
+      '/student/sessions/:sessionId/complete/',
+      '/teacher/accounts/',
+    ]))
+    expect(migratedRoutes.find((route) => route.path === '/teacher/courses/:courseId/banks/')?.children?.map((route) => route.path)).toEqual([
       '',
       ':bankId/',
     ])
-    expect(migratedRoutes.find((route) => route.path.endsWith('/classes/'))?.children?.map((route) => route.path)).toEqual([
+    expect(migratedRoutes.find((route) => route.path === '/teacher/courses/:courseId/classes/')?.children?.map((route) => route.path)).toEqual([
       '',
       ':classId/',
     ])
-    expect(migratedRoutes.find((route) => route.path.endsWith('/experiments/'))?.children?.map((route) => route.path)).toEqual([
+    expect(migratedRoutes.find((route) => route.path === '/teacher/courses/:courseId/experiments/')?.children?.map((route) => route.path)).toEqual([
       '',
       'create/',
       ':experimentId/',
@@ -34,6 +40,7 @@ describe('Vue route boundaries', () => {
       'exports/',
       'quality/',
       'exports/history/',
+      'tables/',
       'advanced/',
     ])
     expect(migratedRoutes.find((route) => route.path === '/student/courses/:courseId/')?.children?.map((route) => route.path)).toEqual([

@@ -108,6 +108,25 @@ class EventSchemaRegistryContractTests(SimpleTestCase):
             },
         )
 
+    def test_capture_v2_feedback_exposure_has_an_explicit_content_contract(self):
+        registry = load_registry_module()
+
+        registry.validate_event_payload(
+            "feedback_exposure",
+            1,
+            {
+                "capture_version": "capture-v2",
+                "operation_id": str(uuid.uuid4()),
+                "feedback_mode": "full",
+                "stage": "explanation_presented",
+                "answer_event_id": str(uuid.uuid4()),
+                "snapshot_id": str(uuid.uuid4()),
+                "included_correctness": True,
+                "included_correct_answer": True,
+                "included_explanation": True,
+            },
+        )
+
     def test_response_state_payload_accepts_snapshot_references_for_text_like_items(self):
         registry = load_registry_module()
         self.assertIsNotNone(registry)

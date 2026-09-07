@@ -12,6 +12,15 @@ from jsonschema import Draft202012Validator, FormatChecker
 SCHEMA_ROOT = Path(__file__).with_name("event_schemas")
 
 REGISTERED_EVENT_TYPES = (
+    "research_tool",
+    "research_tool_observed",
+    "research_tool_requested",
+    "confidence_observed",
+    "feedback_exposure",
+    "response_transition",
+    "input_operation",
+    "response_branch_resolved",
+    "response_pointer_conflict_observed",
     "session_started",
     "session_completed",
     "session_expired",
@@ -118,7 +127,10 @@ def event_schema_sha256(event_type: str, event_version: int) -> str:
 def registered_event_schemas() -> tuple[tuple[str, int], ...]:
     # Compatibility API: this registry historically enumerates the frozen v1
     # baseline. New versions are addressed explicitly through get_event_schema.
-    registrations = tuple((event_type, 1) for event_type in REGISTERED_EVENT_TYPES)
+    capture_v2_types = {'response_transition', 'input_operation', 'response_branch_resolved',
+                        'research_tool', 'research_tool_observed', 'research_tool_requested', 'confidence_observed',
+                        'feedback_exposure', 'response_pointer_conflict_observed'}
+    registrations = tuple((event_type, 1) for event_type in REGISTERED_EVENT_TYPES if event_type not in capture_v2_types)
     for event_type, event_version in registrations:
         _load_event_schema(event_type, event_version)
     return registrations

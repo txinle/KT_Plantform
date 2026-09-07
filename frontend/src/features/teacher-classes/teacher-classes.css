@@ -39,34 +39,6 @@
   flex: 1;
 }
 
-.kt-local-tabs {
-  display: flex;
-  gap: .5rem;
-  margin-bottom: 1.5rem;
-  border-bottom: 1px solid var(--kt-color-border);
-  overflow-x: auto;
-}
-
-.kt-local-tabs button,
-.kt-local-tabs a {
-  appearance: none;
-  border: 0;
-  border-bottom: 3px solid transparent;
-  background: transparent;
-  color: var(--kt-color-muted);
-  padding: .75rem .9rem;
-  white-space: nowrap;
-  text-decoration: none;
-  font: inherit;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-.kt-local-tabs [aria-current='page'] {
-  border-bottom-color: var(--kt-color-primary);
-  color: var(--kt-color-primary);
-}
-
 .kt-fact-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

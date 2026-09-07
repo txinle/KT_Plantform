@@ -4,6 +4,7 @@ import uuid
 from datetime import timedelta
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 from apps.experiments.models import (
     ClassExperimentTask,
@@ -31,7 +32,7 @@ from .response_snapshot_services import (
     response_snapshot_content,
 )
 from .writer_lease_services import assert_attempt_writer_lease
-from .recording_capture_services import ensure_capture_contract_v1
+from .recording_capture_services import capture_contract_for_start
 from .models import (
     AssessmentEvent,
     Attempt,
@@ -270,7 +271,7 @@ def get_or_create_session(
             "ordering_seed": ordering_seed,
             "sampling_algorithm_version": algorithm_version,
             "assignment_unit_type": version.assignment_unit_type,
-            "capture_contract": ensure_capture_contract_v1(),
+            "capture_contract": capture_contract_for_start(student, experiment),
             "class_task": class_task,
             "participant_snapshot": participant_snapshot,
             "schedule_revision": schedule,
@@ -598,6 +599,9 @@ def _save_draft_transaction(
     writer_lease_token=None,
     writer_client_instance_id=None,
     request_received_at=None,
+    target_event_id=None,
+    expected_version=None,
+    branch_resolution=None,
 ):
     session_id, task_id = Attempt.objects.filter(pk=attempt_id).values_list(
         "session_id", "session__class_task_id"
@@ -626,6 +630,28 @@ def _save_draft_transaction(
         raise ValidationError("该题当前状态不能修改")
     if session.status != ExperimentSession.Status.IN_PROGRESS:
         raise ValidationError("当前会话不可继续作答")
+    from .capture_v2_services import uses_capture_v2, select_response_target
+    if uses_capture_v2(session) or target_event_id is not None:
+        if branch_resolution is not None:
+            prior = AssessmentEvent.objects.filter(pk=branch_resolution['operation_id']).first()
+            if prior is not None:
+                if prior.attempt_id != attempt.pk or prior.payload != branch_resolution:
+                    raise ValidationError('冲突处理标识已被不同操作使用。')
+                return attempt, None
+        target = select_response_target(attempt, target_event_id, expected_version, branch_resolution)
+        if attempt.active_response_event_id == target.pk and branch_resolution is None:
+            return attempt, None
+        attempt.active_response_event = target
+        attempt.response_version += 1
+        attempt.current_response_snapshot_id = target.payload['after_snapshot_id']
+        attempt.draft_answer = target.payload['after_state']['value']
+        attempt.draft_saved_at = timezone.now()
+        attempt.status = Attempt.Status.DRAFT
+        attempt.save(update_fields=['active_response_event', 'response_version', 'current_response_snapshot',
+                                    'draft_answer', 'draft_saved_at', 'status'])
+        DraftSaveEvent.objects.create(attempt=attempt, answer_hash=target.payload['after_state_hash'],
+                                     client_occurred_at=client_time)
+        return attempt, None
     attempt.draft_answer = answer; attempt.draft_saved_at = timezone.now(); attempt.status = Attempt.Status.DRAFT
     # Clear stale pointer before creating a replacement snapshot.  The whole
     # transaction rolls back if snapshot persistence fails.
@@ -656,6 +682,8 @@ def save_draft(
     writer_lease_token=None,
     writer_client_instance_id=None,
     request_received_at=None,
+    target_event_id=None,
+    expected_version=None,
 ):
     attempt, time_error = _save_draft_transaction(
         attempt_id,
@@ -664,6 +692,8 @@ def save_draft(
         writer_lease_token,
         writer_client_instance_id,
         request_received_at,
+        target_event_id,
+        expected_version,
     )
     if time_error:
         raise ValidationError(time_error)
@@ -677,6 +707,7 @@ def _submit_attempt_transaction(
     writer_lease_token=None,
     writer_client_instance_id=None,
     request_received_at=None,
+    target_event_id=None,
 ):
     session_id, task_id = Attempt.objects.filter(pk=attempt_id).values_list(
         "session_id", "session__class_task_id"
@@ -689,11 +720,6 @@ def _submit_attempt_transaction(
     attempt = Attempt.objects.select_for_update().select_related(
         "assignment__snapshot"
     ).get(pk=attempt_id, session=session)
-    assert_attempt_writer_lease(
-        attempt,
-        lease_token=writer_lease_token,
-        client_instance_id=writer_client_instance_id,
-    )
     try:
         _validate_course_access(session)
     except ValidationError as error:
@@ -708,6 +734,11 @@ def _submit_attempt_transaction(
             "该题已经提交",
             reason_code="already_submitted",
         )
+    assert_attempt_writer_lease(
+        attempt,
+        lease_token=writer_lease_token,
+        client_instance_id=writer_client_instance_id,
+    )
     time_error = _validate_session_time(
         session,
         attempt,
@@ -729,6 +760,12 @@ def _submit_attempt_transaction(
             "请先填写答案",
             reason_code="invalid_answer",
         )
+    from .capture_v2_services import uses_capture_v2
+    if uses_capture_v2(session) or target_event_id is not None:
+        from .research_tool_services import assert_required_tools
+        assert_required_tools(attempt)
+        if target_event_id is None or str(attempt.active_response_event_id) != str(target_event_id):
+            raise SubmissionValidationError('提交答案版本已变化，请核对后重试。', reason_code='conflict')
     try: token_value = uuid.UUID(str(token))
     except ValueError:
         raise SubmissionValidationError(
@@ -750,6 +787,9 @@ def _submit_attempt_transaction(
         absolute_tolerance=snapshot.absolute_tolerance,
         relative_tolerance=snapshot.relative_tolerance,
     )
+    from .feedback_services import initial_grading_result
+    grading = initial_grading_result(attempt, correct, score)
+    correct, score = grading.is_correct, grading.score
     now = timezone.now(); session.submission_count += 1
     attempt.status = Attempt.Status.SUBMITTED; attempt.final_answer = attempt.draft_answer
     if attempt.current_response_snapshot is None:
@@ -765,6 +805,14 @@ def _submit_attempt_transaction(
                 response_state=ResponseState(question_type, canonical_state),
             )
     attempt.final_response_snapshot = attempt.current_response_snapshot
+    attempt.final_response_event = attempt.active_response_event
+    attempt.formal_capture_boundary = {
+        'capture_contract_id': str(session.capture_contract_id) if session.capture_contract_id else None,
+        'active_response_event_id': str(attempt.active_response_event_id) if attempt.active_response_event_id else None,
+        'response_version': attempt.response_version,
+        'server_ingest_sequence_no': session.assessment_events.aggregate(maximum=Max('server_ingest_sequence_no'))['maximum'] or 0,
+        'student_id': session.student_id,
+    }
     attempt.submitted_at = now; attempt.submission_sequence_index = session.submission_count
     attempt.is_correct = correct; attempt.score = score; attempt.submission_token = token_value
     if attempt.first_opened_at: attempt.first_to_submit_duration_ms = int((now - attempt.first_opened_at).total_seconds() * 1000)
@@ -774,19 +822,20 @@ def _submit_attempt_transaction(
     submission = SubmissionEvent.objects.create(
         attempt=attempt, submission_token=token_value, final_answer=attempt.final_answer,
         final_response_snapshot=attempt.final_response_snapshot,
-        grading_status=SubmissionEvent.GradingStatus.COMPLETED,
+        grading_status=grading.status,
         is_correct=correct, score=score, client_clicked_at=client_time,
         server_received_at=now, committed_at=now,
     )
     GradeRecord.objects.create(
         submission=submission,
         version=1,
-        status=GradeRecord.Status.COMPLETED,
-        validity_status=GradeRecord.ValidityStatus.EFFECTIVE,
+        status=grading.status,
+        validity_status=GradeRecord.ValidityStatus.EFFECTIVE if grading.status == GradeRecord.Status.COMPLETED else GradeRecord.ValidityStatus.CANDIDATE,
         is_correct=correct,
         score=score,
-        max_score=1,
-        graded_at=now,
+        max_score=grading.max_score,
+        graded_at=now if grading.status == GradeRecord.Status.COMPLETED else None,
+        grading_method=grading.method,
     )
     append_assessment_event(
         event_type="response_committed",
@@ -844,6 +893,8 @@ def grade_submission(
     grading_method="automatic",
     grading_version="",
     grader_version="",
+    actor=None,
+    comment="",
 ):
     """Append a versioned grade and project its completed value onto legacy fields."""
     submission = SubmissionEvent.objects.select_for_update().select_related("attempt").get(pk=submission_id)
@@ -879,6 +930,8 @@ def grade_submission(
         max_score=max_score,
         normalized_response=normalized_response,
         grading_method=grading_method,
+        grader=actor,
+        comment=comment,
         graded_at=now,
         supersedes_grade=supersedes,
     )
@@ -937,6 +990,7 @@ def submit_attempt(
     writer_lease_token=None,
     writer_client_instance_id=None,
     request_received_at=None,
+    target_event_id=None,
 ):
     attempt, time_error = _submit_attempt_transaction(
         attempt_id,
@@ -945,6 +999,7 @@ def submit_attempt(
         writer_lease_token,
         writer_client_instance_id,
         request_received_at,
+        target_event_id,
     )
     if time_error:
         raise SubmissionValidationError(

@@ -1,10 +1,13 @@
 import { createApiClient } from '@/api/client'
 import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
+import type { WriterLeaseCredentials } from './writer-lease'
 
-export type StudentRuntimeQuestionEntry = components['schemas']['StudentRuntimeQuestionEntry']
+export type StudentRuntimeQuestionEntry = components['schemas']['StudentRuntimeQuestionEntry'] & { offline_recovery?: boolean }
 
 export interface DraftMutationResponse {
+  response_version?: number
+  active_response_event_id?: string | null
   success: boolean
   saved_at: string
   response_snapshot_id?: string
@@ -43,18 +46,20 @@ export function createStudentAssessmentApi(client: StudentAssessmentClient) {
         `/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/?reason=${encodeURIComponent(reason)}`,
       )
     ),
-    saveDraft: (url: string, answer: unknown, clientOccurredAt: string) => (
+    saveDraft: (url: string, answer: unknown, clientOccurredAt: string, target?: { target_event_id: string | null; expected_version: number } & Partial<WriterLeaseCredentials>) => (
       client.mutate<DraftMutationResponse>(url, {
         method: 'POST',
-        body: { answer, client_occurred_at: clientOccurredAt },
+        body: { answer, client_occurred_at: clientOccurredAt, ...target },
       })
     ),
-    submit: (url: string, submissionToken: string, clientClickedAt: string) => (
+    submit: (url: string, submissionToken: string, clientClickedAt: string, targetEventId?: string | null, lease?: WriterLeaseCredentials) => (
       client.mutate<SubmissionResponse>(url, {
         method: 'POST',
         body: {
           submission_token: submissionToken,
           client_clicked_at: clientClickedAt,
+          ...lease,
+          ...(targetEventId ? { target_event_id: targetEventId } : {}),
         },
       })
     ),

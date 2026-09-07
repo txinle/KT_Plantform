@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
-import { getBootstrapContext } from '@/app/bootstrap'
 import Alert from '@/design-system/components/Alert.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import MobileCardList from '@/design-system/components/MobileCardList.vue'
@@ -14,7 +13,6 @@ import { getTeacherClassApi, type TeacherClassCollection } from './api'
 
 const route = useRoute()
 const router = useRouter()
-const bootstrap = getBootstrapContext()
 const api = getTeacherClassApi()
 const courseId = Number(route.params.courseId)
 const collection = ref<TeacherClassCollection>()
@@ -22,6 +20,9 @@ const loading = ref(true)
 const error = ref('')
 const search = ref(String(route.query.q || ''))
 const currentPage = computed(() => Number(route.query.page || 1))
+const canCreate = computed(() => collection.value?.capabilities.can_create === true)
+const createForm = ref({ name: '', academic_year: '' })
+const creating = ref(false)
 
 async function load(page = currentPage.value, query = search.value) {
   loading.value = true
@@ -47,13 +48,27 @@ async function navigate(page: number) {
   await load(page, query)
 }
 
+async function createClass() {
+  if (!canCreate.value || creating.value) return
+  creating.value = true
+  error.value = ''
+  try {
+    const created = await api.create(courseId, createForm.value)
+    await router.push(created.class_group.detail_url)
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '班级创建失败。'
+  } finally {
+    creating.value = false
+  }
+}
+
 onMounted(() => load())
 </script>
 
 <template>
   <PageHeader title="班级">
     <template #kicker>教学组织</template>
-    <p>查看班级学生和教学事实；成员管理继续使用经过验证的原有流程。</p>
+    <p>查看课程班级、管理成员并进入教学分析。</p>
   </PageHeader>
 
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
@@ -103,15 +118,14 @@ onMounted(() => load())
       </section>
     </section>
 
-    <aside v-if="collection?.course.status === 'active'" class="kt-card kt-class-create" aria-labelledby="create-class-title">
+    <aside v-if="canCreate" class="kt-card kt-class-create" aria-labelledby="create-class-title">
       <h2 id="create-class-title">创建班级</h2>
-      <form method="post">
-        <input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token">
+      <form class="kt-class-create-form" @submit.prevent="createClass">
         <label for="new-class-name">班级</label>
-        <input id="new-class-name" name="name" maxlength="120" required>
+        <input id="new-class-name" v-model="createForm.name" name="name" maxlength="120" required>
         <label for="new-class-year">年级</label>
-        <input id="new-class-year" name="academic_year" maxlength="32" inputmode="numeric" placeholder="如：2026">
-        <button class="kt-button" type="submit">创建班级</button>
+        <input id="new-class-year" v-model="createForm.academic_year" name="academic_year" maxlength="32" inputmode="numeric" placeholder="如：2026">
+        <button class="kt-button" type="submit" :disabled="creating">{{ creating ? '创建中…' : '创建班级' }}</button>
       </form>
     </aside>
   </div>

@@ -1,4 +1,58 @@
 :root {
+  color-scheme: light;
+  --kt-brand-900: #0c3266;
+  --kt-brand-800: #123f7b;
+  --kt-brand-700: #4d49fc;
+  --kt-brand-100: #e2dfff;
+  --kt-brand-050: #f0efff;
+  --kt-action-600: #4d49fc;
+  --kt-action-700: #3734c9;
+  --kt-action-050: #f0efff;
+  --kt-ink: #242429;
+  --kt-muted: #62626c;
+  --kt-page: #f7f7f8;
+  --kt-surface: #ffffff;
+  --kt-surface-subtle: #f2f2f5;
+  --kt-border: #dedee5;
+  --kt-border-strong: #9898a5;
+  --kt-success: #16713e;
+  --kt-success-bg: #edf8f0;
+  --kt-warning: #875b0a;
+  --kt-warning-bg: #fff3dc;
+  --kt-danger: #b52e37;
+  --kt-danger-bg: #fff0f0;
+  --kt-info: #3734c9;
+  --kt-info-bg: #f0efff;
+  --kt-font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --kt-font-xs: 0.75rem;
+  --kt-font-sm: 0.875rem;
+  --kt-font-base: 0.9375rem;
+  --kt-font-lg: 1.125rem;
+  --kt-font-title: 1.625rem;
+  --kt-space-1: 0.25rem;
+  --kt-space-2: 0.5rem;
+  --kt-space-3: 0.75rem;
+  --kt-space-4: 1rem;
+  --kt-space-5: 1.25rem;
+  --kt-space-6: 1.5rem;
+  --kt-space-8: 2rem;
+  --kt-space-10: 2.5rem;
+  --kt-space-12: 3rem;
+  --kt-radius-badge: 0.375rem;
+  --kt-radius-control: 0.5rem;
+  --kt-radius-surface: 0.625rem;
+  --kt-radius-dialog: 0.625rem;
+  --kt-shadow-raised: 0 0.75rem 2.4rem rgb(12 50 102 / 7.5%);
+  --kt-shadow-control: none;
+  --kt-motion-fast: 120ms;
+  --kt-motion-base: 180ms;
+  --kt-content-max: 90rem;
+  --kt-z-nav: 20;
+  --kt-z-actions: 30;
+  --kt-z-dialog: 50;
+
+  --kt-focus: #3734c9;
+
   --kt-color-page: var(--kt-page);
   --kt-color-surface: var(--kt-surface);
   --kt-color-text: var(--kt-ink);
@@ -13,3 +67,5 @@
   --kt-color-danger: var(--kt-danger);
   --kt-color-danger-bg: var(--kt-danger-bg);
 }
+
+@media (max-width: 63.99rem) { :root { --kt-font-title: 1.5rem; } }

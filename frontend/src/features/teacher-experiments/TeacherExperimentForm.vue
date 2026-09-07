@@ -7,6 +7,8 @@ import type { components } from '@/api/generated/schema'
 import Alert from '@/design-system/components/Alert.vue'
 import Button from '@/design-system/components/Button.vue'
 import FormField from '@/design-system/components/FormField.vue'
+import ResearchToolsEditor from './ResearchToolsEditor.vue'
+import { emptyResearchTools, type ResearchTools } from './research-tools'
 
 import {
   getTeacherExperimentApi,
@@ -32,6 +34,7 @@ const courseId = Number(route.params.courseId)
 const experimentId = computed(() => Number(route.params.experimentId || 0))
 const editing = computed(() => route.name === 'teacher-experiment-edit')
 const loading = ref(true)
+const researchTools = ref<ResearchTools>(emptyResearchTools())
 const saving = ref(false)
 const error = ref('')
 const fieldErrors = ref<Record<string, string>>({})
@@ -69,7 +72,8 @@ const form = reactive({
   selected_question_types: {} as Record<ExperimentQuestionType, boolean>,
   type_quotas: {} as Record<ExperimentQuestionType, number>,
   ordering_mode: 'fixed' as 'fixed' | 'random' | 'stratified_random',
-  feedback_mode: 'none' as 'none' | 'correctness' | 'full',
+  feedback_mode: 'full' as 'none' | 'correctness' | 'full',
+  feedback_release_policy: 'after_personal_submission' as 'after_personal_submission' | 'after_assignment_deadline' | 'manual_release',
   time_mode: 'none' as 'none' | 'total' | 'per_question',
   total_time_limit_minutes: null as number | null,
   per_question_time_limit_seconds: null as number | null,
@@ -188,6 +192,8 @@ function definitionInput(): ExperimentDefinitionInput {
     question_bank_id: Number(form.question_bank_id),
     ordering_mode: form.ordering_mode,
     feedback_mode: form.feedback_mode,
+    feedback_release_policy: form.feedback_release_policy,
+    research_tools: researchTools.value,
     time_mode: form.time_mode,
     total_time_limit_minutes: form.time_mode === 'total'
       ? normalizeNumber(form.total_time_limit_minutes)
@@ -257,6 +263,8 @@ async function load() {
       form.sampling_match_scope = experiment.sampling_match_scope || 'any_level'
       form.ordering_mode = experiment.ordering_mode || 'fixed'
       form.feedback_mode = experiment.feedback_mode || 'none'
+      form.feedback_release_policy = experiment.feedback_release_policy || 'after_personal_submission'
+      researchTools.value = { ...emptyResearchTools(), ...(experiment.research_tools as Partial<ResearchTools> || {}) }
       form.time_mode = experiment.time_mode || 'none'
       form.total_time_limit_minutes = experiment.total_time_limit_minutes || null
       form.per_question_time_limit_seconds = experiment.per_question_time_limit_seconds || null
@@ -366,6 +374,7 @@ onMounted(load)
         </div>
         <fieldset class="kt-radio-group kt-compact-form-row"><legend>题目顺序</legend><div class="kt-radio-options"><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="fixed"><span>固定顺序</span></label><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="random"><span>随机顺序</span></label><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="stratified_random"><span>分层随机</span></label></div><p v-if="fieldErrors.ordering_mode" class="kt-field__error" role="alert">{{ fieldErrors.ordering_mode }}</p></fieldset>
         <fieldset class="kt-radio-group kt-compact-form-row"><legend>反馈</legend><div class="kt-radio-options"><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="none"><span>仅显示已提交</span></label><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="correctness"><span>显示正误</span></label><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="full"><span>显示正误、答案与解析</span></label></div><p v-if="fieldErrors.feedback_mode" class="kt-field__error" role="alert">{{ fieldErrors.feedback_mode }}</p></fieldset>
+        <fieldset class="kt-radio-group kt-compact-form-row"><legend>反馈发布</legend><div class="kt-radio-options"><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="after_personal_submission"><span>学生完成后</span></label><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="after_assignment_deadline"><span>班级任务截止后</span></label><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="manual_release"><span>教师人工发布</span></label></div><p v-if="fieldErrors.feedback_release_policy" class="kt-field__error" role="alert">{{ fieldErrors.feedback_release_policy }}</p></fieldset>
       </div>
     </section>
 
@@ -391,6 +400,11 @@ onMounted(load)
           <Alert tone="info">系统会在正式发布时自动生成版本快照与随机化标识，用于审计与复现。</Alert>
         </div>
       </details>
+    </section>
+
+    <section :inert="legacySampling" class="kt-numbered-form-section" aria-labelledby="definition-tools">
+      <div class="kt-numbered-form-section__heading"><span aria-hidden="true">5</span><h2 id="definition-tools">题目工具</h2></div>
+      <ResearchToolsEditor v-model="researchTools" class="kt-numbered-form-section__content" />
     </section>
 
     <div class="kt-form-actions kt-experiment-form-actions">
