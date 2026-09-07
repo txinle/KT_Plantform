@@ -1,19 +1,23 @@
 import { expect, test } from '@playwright/test'
 import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
 
 const root = join(import.meta.dirname, '../..')
-const python = join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
+const localPython = join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
+const python = process.env.PYTHON || (existsSync(localPython) ? localPython : 'python')
 function django(args: string[]) {
   const result = spawnSync(python, ['manage.py', ...args], { cwd: root, encoding: 'utf8',
     env: { ...process.env, ...requireIsolatedPostgres(process.env), PYTHONUTF8: '1' } })
+  if (result.error) throw result.error
   if (result.status !== 0) throw new Error(result.stderr || result.stdout)
   return JSON.parse(result.stdout.trim().split('\n').at(-1)!)
 }
 
-test('five short-response types retain trajectories through offline reload, IME and formal feedback', async ({ page, context }, testInfo) => {
+test('five short-response types retain trajectories through offline reload, IME and formal feedback', async ({ browserName, page, context }, testInfo) => {
   test.setTimeout(240_000)
+  test.skip(browserName !== 'chromium', 'Chromium provides the CDP IME controls used by this capture journey.')
   const fixture = django(['seed_e2e_capture_v2'])
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))

@@ -76,6 +76,10 @@ from apps.question_bank.services.question_kc_import import (
     preview_question_kc_trees,
 )
 from apps.question_bank.services.question_kc_mapping import project_question_kc_mapping
+from apps.question_bank.services.unified_import import (
+    SelectedRowIdsValidationError,
+    UnifiedQuestionImportService,
+)
 
 from .views import (
     _bank_for_course,
@@ -747,34 +751,14 @@ class TeacherQuestionImportPreviewView(TeacherQuestionBankManagementApiView):
         require_writable_bank_content(bank)
         uploaded = request.FILES.get("file")
         if uploaded is None:
-            raise ValidationError({"file": "请选择 CSV 或 Excel 文件。"})
-        sequence_floor = bank.questions.aggregate(value=Max("sequence"))["value"] or 0
+            raise ValidationError({"file": "请选择 Excel、CSV 或 Word 文件。"})
         try:
-            parsed = parse_question_rows(
-                read_uploaded_rows(uploaded), sequence_floor=sequence_floor
+            result = UnifiedQuestionImportService.preview(
+                bank=bank, actor=request.user, session_key=_session_key(request), uploaded=uploaded,
             )
-            incoming = [item.sequence for item in parsed]
-            existing = list(
-                bank.questions.filter(sequence__in=incoming)
-                .order_by("sequence")
-                .values_list("sequence", flat=True)
-            )
-            if existing:
-                raise ValueError(f"题库中已存在以下序号：{existing}。请先修改序号或编辑现有题目。")
         except ValueError as error:
             raise ValidationError({"file": str(error)}) from error
-        preview_id = str(uuid.uuid4())
-        request.session[_question_import_session_key(course, bank)] = {
-            "preview_id": preview_id,
-            "rows": [asdict(item) for item in parsed],
-        }
-        request.session.modified = True
-        return Response(
-            {
-                "preview_id": preview_id,
-                "preview": {"rows": [_question_import_preview_row(item) for item in parsed]},
-            }
-        )
+        return Response(result)
 
 
 class TeacherQuestionImportConfirmView(TeacherQuestionBankManagementApiView):
@@ -786,45 +770,24 @@ class TeacherQuestionImportConfirmView(TeacherQuestionBankManagementApiView):
     def post(self, request, course_id, bank_id):
         course = _course_for_teacher(request.user, course_id)
         bank = _bank_for_course(course, bank_id)
-        stored = request.session.get(_question_import_session_key(course, bank), {})
-        if (
-            not stored
-            or stored.get("preview_id") != request.data.get("preview_id")
-            or not stored.get("rows")
-        ):
-            return _api_error_response(
-                "question_import_preview_invalid",
-                "导入预览已失效，请重新上传文件。",
-                status.HTTP_409_CONFLICT,
-            )
-        parsed = [ParsedQuestion(**item) for item in stored["rows"]]
         try:
-            with transaction.atomic():
-                course, bank = lock_writable_course_bank(course, bank, content=True)
-                imported = import_questions(bank, parsed)
-                log_action(
-                    request,
-                    "question.import",
-                    bank,
-                    {"course_id": course.pk, "count": len(imported)},
-                )
-        except ValueError as error:
-            request.session.pop(_question_import_session_key(course, bank), None)
-            request.session.modified = True
-            return _api_error_response(
-                "question_import_preview_stale",
-                f"导入预览已失效：{error}。请重新上传文件。",
-                status.HTTP_409_CONFLICT,
+            result = UnifiedQuestionImportService.confirm(
+                bank=bank, actor=request.user, session_key=_session_key(request),
+                preview_id=request.data.get("preview_id"),
+                selected_row_ids=(
+                    request.data.get("selected_row_ids")
+                    if "selected_row_ids" in request.data
+                    else None
+                ),
+                audit_request=request,
             )
-        request.session.pop(_question_import_session_key(course, bank), None)
-        request.session.modified = True
-        return Response(
-            {
-                "created": len(imported),
-                "detail_url": reverse("courses:bank_detail", args=[course.pk, bank.pk]),
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        except SelectedRowIdsValidationError as error:
+            raise ValidationError({"selected_row_ids": str(error)}) from error
+        except ImportPreviewBatchConflict as error:
+            return _api_error_response(
+                error.code, str(error), status.HTTP_409_CONFLICT,
+            )
+        return Response(result, status=status.HTTP_201_CREATED)
 
 
 class TeacherQuestionKCImportWorkflowPreviewView(TeacherQuestionBankManagementApiView):

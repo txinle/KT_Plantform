@@ -12,6 +12,7 @@ const python = process.env.PYTHON || (existsSync(localPython) ? localPython : 'p
 const pythonCommand = JSON.stringify(python)
 const vitePort = Number(process.env.E2E_VITE_PORT || '5173')
 const viteUrl = `http://127.0.0.1:${vitePort}`
+const defaultDjangoUrl = 'http://127.0.0.1:8000'
 const databaseEnvironment = requireIsolatedPostgres(process.env)
 const commonDjangoEnvironment = {
   ...process.env,
@@ -28,6 +29,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
+    baseURL: defaultDjangoUrl,
     viewport: { width: 1440, height: 900 },
     trace: 'retain-on-failure',
   },
@@ -40,6 +42,27 @@ export default defineConfig({
     {
       command: `npm run dev -- --host 127.0.0.1 --port ${vitePort}`,
       url: viteUrl,
+      reuseExistingServer: false,
+    },
+    {
+      command: `${pythonCommand} ../manage.py runserver 127.0.0.1:8000 --noreload`,
+      url: `${defaultDjangoUrl}/health/`,
+      env: {
+        ...commonDjangoEnvironment,
+        VUE_STANDALONE_ENABLED: '1',
+        VUE_STUDENT_ASSESSMENT_ENABLED: '1',
+        VUE_STUDENT_COURSES_ENABLED: '1',
+        VUE_TEACHER_COURSES_ENABLED: '1',
+        VUE_TEACHER_EXPERIMENTS_ENABLED: '1',
+        VUE_TEACHER_QUESTION_BANKS_ENABLED: '1',
+        VUE_TEACHER_CLASSES_ENABLED: '1',
+        VUE_TEACHER_DATA_CENTER_ENABLED: '1',
+        CLASS_CENTER_ENABLED: '1',
+        STUDENT_LEARNING_ANALYTICS_ENABLED: '1',
+        CAPTURE_V2_ENABLED: '1',
+        CAPTURE_V2_USER_IDS: '4',
+        CAPTURE_V2_COURSE_IDS: '1,2',
+      },
       reuseExistingServer: false,
     },
     {

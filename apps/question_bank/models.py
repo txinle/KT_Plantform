@@ -217,6 +217,7 @@ class ImportPreviewBatch(models.Model):
     class Kind(models.TextChoices):
         COURSE_KC = "course_kc", "课程 KC"
         QUESTION_KC = "question_kc", "题目 KC"
+        QUESTION_CONTENT = "question_content", "题库统一导入"
 
     class Status(models.TextChoices):
         PENDING = "pending", "待确认"

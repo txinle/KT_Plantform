@@ -8,37 +8,78 @@ async function login(page: import('@playwright/test').Page) {
   await expect(page.locator('.kt-workspace')).toBeVisible()
 }
 
-test('question import preview keeps an intentionally wide table inside its own scroller', async ({ page }, info) => {
+test('question import uses mobile cards and keeps its desktop table inside a local scroller', async ({ page }, info) => {
   await login(page)
   await page.route('**/api/v1/teacher/courses/1/banks/1/imports/questions/preview/', route => route.fulfill({
     json: {
       preview_id: 'layout-preview',
       preview: {
         rows: [{
+          row_id: 'layout-row',
           sequence: 1,
+          source_label: 'CSV 第 2 行',
           text: '超长连续题干标识ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.repeat(8),
           question_type: 'short_answer',
           question_type_label: '简答题',
           option_count: 0,
           teacher_difficulty: '0.75',
+          options: [],
+          answer: '用于布局验证的完整答案',
+          accepted_answers: [],
+          explanation: '用于验证完整内容和 KC 映射不会挤出页面。',
+          kc_mapping: {
+            root_kc_code: 'KC001',
+            nodes: [{ kc_code: 'KC001', name: '超长连续知识点ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.repeat(3), parent_kc_code: null, order: 1 }],
+          },
+          classification: 'ready',
+          errors: [],
         }],
+        summary: { ready: 1, duplicate: 0, invalid: 0 },
+        confirmable: true,
       },
     },
   }))
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/teacher/courses/1/banks/1/import/')
-  await expect(page.getByRole('heading', { name: '导入题目文件' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '导入题库', exact: true })).toBeVisible()
   await page.locator('input[type="file"]').setInputFiles({ name: 'layout.csv', mimeType: 'text/csv', buffer: Buffer.from('sequence,text\\n1,test') })
-  const preview = page.getByRole('dialog', { name: '题目导入预览' })
+  const preview = page.locator('[data-import-preview]')
   await expect(preview).toBeVisible()
-  const geometry = await preview.locator('.kt-table-scroll').evaluate((scroller) => ({
+  await expect(page.locator('[data-import-mobile-row="layout-row"]')).toBeVisible()
+  const mobileGeometry = await page.evaluate(() => ({
+    pageOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+  }))
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await page.screenshot({ path: info.outputPath('question-import-preview-mobile-390.png'), fullPage: true })
+  expect(mobileGeometry.pageOverflow, 'the mobile cards must not scroll the page horizontally').toBe(false)
+
+  await page.locator('[data-import-mobile-row="layout-row"] button').click()
+  const detail = page.locator('[data-question-detail]')
+  await expect(detail.getByText('超长连续知识点ABCDEFGHIJKLMNOPQRSTUVWXYZ', { exact: false }).first()).toBeVisible()
+  const expandedMobileGeometry = await page.evaluate(() => ({
+    pageOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+  }))
+  expect(expandedMobileGeometry.pageOverflow, 'the expanded KC mapping must not scroll the phone page horizontally').toBe(false)
+
+  await page.setViewportSize({ width: 720, height: 450 })
+  await expect(detail).toBeVisible()
+  const zoomGeometry = await page.evaluate(() => ({
+    pageOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+  }))
+  await page.screenshot({ path: info.outputPath('question-import-preview-zoom-200-720.png'), fullPage: true })
+  expect(zoomGeometry.pageOverflow, 'the 200 percent equivalent view must not scroll the page horizontally').toBe(false)
+
+  await detail.getByRole('button', { name: '关闭题目详情' }).click()
+  await page.setViewportSize({ width: 769, height: 844 })
+  const table = preview.locator('.kt-table-scroll')
+  await expect(table).toBeVisible()
+  const desktopGeometry = await table.evaluate((scroller) => ({
     pageOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
     localOverflow: scroller.scrollWidth > scroller.clientWidth + 1,
   }))
-  await page.evaluate(() => window.scrollTo(0, 0))
-  await page.screenshot({ path: info.outputPath('question-import-preview-390-before.png'), fullPage: true })
-  expect(geometry.pageOverflow, 'the page must not scroll horizontally').toBe(false)
-  expect(geometry.localOverflow, 'the preview table must use its local scroller for wide data').toBe(true)
+  await page.screenshot({ path: info.outputPath('question-import-preview-table-769.png'), fullPage: true })
+  expect(desktopGeometry.pageOverflow, 'the desktop preview must not scroll the page horizontally').toBe(false)
+  expect(desktopGeometry.localOverflow, 'the desktop preview table must use its local scroller for wide data').toBe(true)
 })
 
 async function captureNoPageOverflow(page: import('@playwright/test').Page, info: import('@playwright/test').TestInfo, name: string) {
@@ -73,7 +114,7 @@ test('long editable question content and validation errors stay within desktop, 
 
   await page.route('**/api/v1/teacher/courses/1/banks/1/imports/questions/preview/', route => route.fulfill({
     status: 400,
-    json: { detail: '第 1 行的题目编号与当前题库中已冻结的题目快照发生冲突：请更换为未使用的稳定题目编号。'.repeat(5) },
+    json: { detail: '第 1 行的 KC“未知知识点”尚未在课程知识点总库中创建，请先修正完整文件后重新上传。'.repeat(5) },
   }))
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/teacher/courses/1/banks/1/import/')

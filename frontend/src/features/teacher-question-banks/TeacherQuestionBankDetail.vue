@@ -149,8 +149,7 @@ onMounted(load)
         <button v-if="bank.archive_url" data-bank-archive class="kt-button kt-button--secondary" type="button" @click="archiveBank">归档题库</button>
         <button v-if="bank.restore_url" data-bank-restore class="kt-button kt-button--secondary" type="button" @click="restoreBank">恢复为私有</button>
         <details v-if="bank.delete_url" class="kt-header-danger"><summary class="kt-button kt-button--danger-outline">永久删除</summary><section class="kt-inline-panel kt-inline-panel--danger"><p>永久删除会移除题库及未被研究数据引用的题目；已被实验或快照引用时，服务器会拒绝操作。</p><button data-bank-delete class="kt-button kt-button--danger" type="button" @click="deleteBank">确认永久删除</button></section></details>
-        <a v-if="bank.question_import_url" data-question-import class="kt-button" :href="bank.question_import_url">导入题目文件</a>
-        <a v-if="bank.kc_import_url" data-kc-import class="kt-button kt-button--secondary" :href="bank.kc_import_url">导入 KC 对应表</a>
+        <a v-if="bank.question_import_url" data-question-import class="kt-button" :href="bank.question_import_url">导入题库</a>
       </template>
     </PageHeader>
 
@@ -161,7 +160,7 @@ onMounted(load)
       <span>更新：{{ new Date(bank.updated_at).toLocaleString('zh-CN') }}</span>
     </div>
     <Alert v-if="bank.visibility === 'archived'" tone="warning">题库已归档。可查看历史题目与 KC 映射，但不能修改题目内容。</Alert>
-    <Alert v-else tone="info">题目文件用于创建题干、选项和答案；KC 对应表只维护当前题库与课程 KC 的映射。</Alert>
+    <Alert v-else tone="info">导入题库文件可同时创建题干、选项、答案和 KC 映射；也可在单题编辑页维护课程 KC。</Alert>
 
     <section class="kt-section kt-bank-question-section" aria-labelledby="question-list-title">
       <div class="kt-section-heading"><h2 id="question-list-title">题目清单</h2><span>{{ questions.page.total_items }} 题</span></div>

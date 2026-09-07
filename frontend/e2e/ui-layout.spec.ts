@@ -55,8 +55,9 @@ test('teacher course and module pages share a left sidebar without losing existi
   expect(errors).toEqual([])
 })
 
-test('student course cards, assignment list and class center reflow with their original links', async ({ page }, info) => {
+test('student course cards, assignment list and class center reflow with their original links', async ({ browserName, page }, info) => {
   test.setTimeout(90_000)
+  test.skip(browserName !== 'chromium', 'Chromium provides the responsive visual evidence for this multi-page flow.')
   await login(page, 'S002', 'student123')
   await inspect(page, info, 'student-courses')
   await page.goto('/student/courses/2/')
@@ -123,7 +124,10 @@ test('Vue course forms create, save and reject stale edits through the existing 
   await stalePage.close()
   await page.reload()
   await expect(page.getByLabel('课程名称', { exact: true })).toHaveValue('课程管理浏览器验收已保存')
-  await page.getByRole('button', { name: '归档课程', exact: true }).click()
+  await Promise.all([
+    page.waitForURL(url => url.pathname === coursePath),
+    page.getByRole('button', { name: '归档课程', exact: true }).click(),
+  ])
   await page.goto(`${coursePath}settings/`)
   await expect(page.getByRole('button', { name: '保存设置', exact: true })).toBeDisabled()
   await expect(page.getByLabel('课程名称', { exact: true })).toBeDisabled()

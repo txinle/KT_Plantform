@@ -1948,6 +1948,13 @@ export interface components {
             invalidated: number;
         };
         /**
+         * @description * `ready` - ready
+         *     * `duplicate` - duplicate
+         *     * `invalid` - invalid
+         * @enum {string}
+         */
+        ClassificationEnum: "ready" | "duplicate" | "invalid";
+        /**
          * @description * `complete` - complete
          *     * `incomplete` - incomplete
          * @enum {string}
@@ -2556,13 +2563,23 @@ export interface components {
         ManagementQuestionImportConfirmRequest: {
             /** Format: uuid */
             preview_id: string;
+            selected_row_ids?: string[];
         };
         ManagementQuestionImportConfirmResponse: {
             created: number;
             detail_url: string;
+            skipped?: number;
+            failed?: number;
+            rows?: {
+                [key: string]: unknown;
+            }[];
         };
         ManagementQuestionImportPreviewPayload: {
             rows: components["schemas"]["ManagementQuestionImportPreviewRow"][];
+            summary?: {
+                [key: string]: number;
+            };
+            confirmable?: boolean;
         };
         ManagementQuestionImportPreviewResponse: {
             /** Format: uuid */
@@ -2572,10 +2589,23 @@ export interface components {
         ManagementQuestionImportPreviewRow: {
             sequence: number;
             text: string;
-            question_type: components["schemas"]["QuestionType128Enum"];
+            question_type: string;
             question_type_label: string;
             option_count: number;
             teacher_difficulty: string | null;
+            /** Format: uuid */
+            row_id?: string;
+            source_label?: string;
+            options?: {
+                [key: string]: unknown;
+            }[];
+            answer?: unknown;
+            accepted_answers?: string[];
+            explanation?: string;
+            kc_mapping?: unknown;
+            classification?: components["schemas"]["ClassificationEnum"];
+            errors?: string[];
+            existing_question_id?: number | null;
         };
         ManagementQuestionsUpdatedResponse: {
             questions_updated: number;
@@ -2841,7 +2871,9 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -4268,7 +4300,9 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;

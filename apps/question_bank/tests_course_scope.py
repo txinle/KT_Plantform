@@ -275,37 +275,23 @@ class CourseQuestionBankScopeTests(TestCase):
         )
         self.assertNotContains(response, self.student.student_number)
 
-    def test_course_bank_imports_questions_then_course_scoped_kc(self):
+    def test_course_bank_imports_questions_with_course_scoped_kc(self):
+        from .test_unified_question_import import question_row, upload_rows
         bank = QuestionBank.objects.create(
             course=self.course_a,
             created_by=self.teacher,
             name="课程题库",
         )
         question_url = reverse("courses:question_import", args=[self.course_a.pk, bank.pk])
-        question_file = SimpleUploadedFile(
-            "questions.csv",
-            "sequence,question,option_a,option_b,option_c,option_d,option_e,option_f,answer\n1,2+2=?,3,4,,,,,B\n".encode(),
-            content_type="text/csv",
-        )
+        Concept.objects.create(course=self.course_a, code="KC1", name="加法")
+        Concept.objects.create(course=self.course_a, code="KC2", name="整数")
+        question_file = upload_rows([question_row(题目='2+2=?', 题型='单选题', 选项A='3', 选项B='4', 答案='B', 三级知识点='')])
 
         preview = self.client.post(question_url, {"file": question_file})
         self.assertContains(preview, "2+2=?")
-        self.client.post(question_url, {"action": "confirm"})
-
-        Concept.objects.create(course=self.course_a, code="KC1", name="加法")
-        Concept.objects.create(course=self.course_a, code="KC2", name="整数")
-
-        kc_url = reverse("courses:kc_import", args=[self.course_a.pk, bank.pk])
-        kc_file = SimpleUploadedFile(
-            "kcs.csv",
-            "题目序号,一级知识点,二级知识点,三级知识点\n1,加法,KC2,\n".encode("utf-8-sig"),
-            content_type="text/csv",
-        )
-        preview = self.client.post(kc_url, {"file": kc_file})
-        self.assertContains(preview, "Question-KC tree v2")
-        response = self.client.post(kc_url, {"action": "confirm"})
-
-        self.assertRedirects(response, reverse("courses:bank_detail", args=[self.course_a.pk, bank.pk]))
+        self.assertFalse(bank.questions.exists())
+        response = self.client.post(question_url, {"action": "confirm", "preview_id": preview.context['preview_id']})
+        self.assertContains(response, '已导入 1 道题')
         question = bank.questions.get(sequence=1)
         self.assertEqual(question.primary_concept.course, self.course_a)
         self.assertEqual(

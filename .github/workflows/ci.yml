@@ -56,6 +56,7 @@ jobs:
           apps.assessment.test_deadline_decisions
           apps.assessment.tests_postgresql_events
           apps.assessment.tests_postgresql_enrollment_race
+          apps.analytics.test_export_lineage_v2.ExportLineageV2Tests.test_outer_read_committed_transaction_is_rejected_for_source_freeze
 
   frontend:
     runs-on: ubuntu-latest

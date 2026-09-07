@@ -2,7 +2,7 @@ from dataclasses import asdict
 from django.conf import settings
 from django.contrib import messages
 from django.db import transaction
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, HttpResponse
 from django.db.models import Count, Max
 from django.db.models import Q
 from django.views.decorators.http import require_GET, require_POST
@@ -19,6 +19,10 @@ from .models import Concept, Question, QuestionBank
 from .services.file_reader import read_uploaded_rows
 from .services.import_parsing import ParsedKCMapping, ParsedQuestion, parse_kc_rows, parse_question_rows
 from .services.import_service import copy_shared_bank, import_kc_mappings, import_questions
+from .services.import_templates import (
+    build_question_import_template_excel,
+    build_question_import_template_word,
+)
 
 
 def _owned_bank(request, pk):
@@ -54,10 +58,36 @@ def _fixture_download(filename):
     )
 
 
+def _memory_download(content, filename, content_type):
+    response = HttpResponse(content, content_type=content_type)
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
 @role_required("teacher", "admin")
 @require_GET
 def question_import_template(request):
     return _fixture_download("question_import_template.csv")
+
+
+@role_required("teacher", "admin")
+@require_GET
+def question_import_template_excel(request):
+    return _memory_download(
+        build_question_import_template_excel(),
+        "question_import_template.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@role_required("teacher", "admin")
+@require_GET
+def question_import_template_word(request):
+    return _memory_download(
+        build_question_import_template_word(),
+        "question_import_template.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 
 @role_required("teacher", "admin")

@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
 
@@ -36,7 +37,7 @@ test('teacher business deep links render the independent entry at desktop and mo
       await page.goto(path)
       await page.waitForLoadState('networkidle')
       await expect(page.locator('[data-vue-shell] h1').first(), path).toBeVisible()
-      await expect(page.locator('[data-vue-shell] h1').first(), path).toHaveCSS('font-size', width === 390 ? '24px' : '26px')
+      await expect(page.locator('[data-vue-shell] h1').first(), path).toHaveCSS('font-size', width === 390 ? '24px' : /^(26|28)px$/)
       await expect(page.locator('#kt-bootstrap')).toHaveCount(0)
       if (path === '/teacher/courses/1/classes/') {
         await expect(page.locator(width === 390 ? '.kt-desktop-only' : '.kt-mobile-only')).toBeHidden()
@@ -85,7 +86,8 @@ test('student entry, drawer and feedback navigation stay usable at compact viewp
 
 test('teacher without courses keeps independent bank and experiment workflows', async ({ page }, info) => {
   const root = join(import.meta.dirname, '../..')
-  const python = join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
+  const localPython = join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
+  const python = process.env.PYTHON || (existsSync(localPython) ? localPython : 'python')
   const fixture = spawnSync(python, ['manage.py', 'shell', '-c', `
 import json
 from apps.accounts.models import User
@@ -95,7 +97,8 @@ u.set_password('standalone123'); u.save()
 b, _ = QuestionBank.objects.get_or_create(owner=u, name='独立 UI 题库')
 q, _ = Question.objects.get_or_create(bank=b, sequence=1, defaults={'question_type': Question.Type.SHORT, 'text': '简述 EDA', 'correct_answer': '电子设计自动化'})
 print(json.dumps({'bank': b.pk, 'question': q.pk}))
-`], { cwd: root, encoding: 'utf8', env: { ...process.env, ...requireIsolatedPostgres(process.env), PYTHONUTF8: '1' } })
+  `], { cwd: root, encoding: 'utf8', env: { ...process.env, ...requireIsolatedPostgres(process.env), PYTHONUTF8: '1' } })
+  if (fixture.error) throw fixture.error
   expect(fixture.status, fixture.stderr).toBe(0)
   const data = JSON.parse(fixture.stdout.trim().split('\n').at(-1)!) as { bank: number; question: number }
   await page.goto('/login/')

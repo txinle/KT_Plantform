@@ -192,15 +192,27 @@ class ManagementQuestionEditorRequestSerializer(serializers.Serializer):
 
 class ManagementQuestionImportPreviewRowSerializer(serializers.Serializer):
     sequence = serializers.IntegerField(min_value=1)
-    text = serializers.CharField()
-    question_type = serializers.ChoiceField(choices=QUESTION_TYPE_CHOICES)
+    text = serializers.CharField(allow_blank=True)
+    question_type = serializers.CharField(allow_blank=True)
     question_type_label = serializers.CharField()
     option_count = serializers.IntegerField(min_value=0)
     teacher_difficulty = serializers.CharField(allow_null=True)
+    row_id = serializers.UUIDField(required=False)
+    source_label = serializers.CharField(required=False)
+    options = serializers.ListField(child=serializers.DictField(), required=False)
+    answer = serializers.JSONField(required=False, allow_null=True)
+    accepted_answers = serializers.ListField(child=serializers.CharField(), required=False)
+    explanation = serializers.CharField(required=False, allow_blank=True)
+    kc_mapping = serializers.JSONField(required=False, allow_null=True)
+    classification = serializers.ChoiceField(choices=('ready', 'duplicate', 'invalid'), required=False)
+    errors = serializers.ListField(child=serializers.CharField(), required=False)
+    existing_question_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class ManagementQuestionImportPreviewPayloadSerializer(serializers.Serializer):
     rows = ManagementQuestionImportPreviewRowSerializer(many=True)
+    summary = serializers.DictField(child=serializers.IntegerField(min_value=0), required=False)
+    confirmable = serializers.BooleanField(required=False)
 
 
 class ManagementQuestionImportPreviewResponseSerializer(serializers.Serializer):
@@ -210,11 +222,17 @@ class ManagementQuestionImportPreviewResponseSerializer(serializers.Serializer):
 
 class ManagementQuestionImportConfirmRequestSerializer(serializers.Serializer):
     preview_id = serializers.UUIDField()
+    selected_row_ids = serializers.ListField(
+        child=serializers.UUIDField(), required=False, allow_empty=False
+    )
 
 
 class ManagementQuestionImportConfirmResponseSerializer(serializers.Serializer):
     created = serializers.IntegerField(min_value=0)
     detail_url = serializers.CharField()
+    skipped = serializers.IntegerField(min_value=0, required=False)
+    failed = serializers.IntegerField(min_value=0, required=False)
+    rows = serializers.ListField(child=serializers.DictField(), required=False)
 
 
 class ManagementKCPreviewTreeNodeSerializer(serializers.Serializer):

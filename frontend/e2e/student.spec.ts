@@ -9,13 +9,13 @@ function legacyDemoTask(page: Page) {
 }
 
 function vueDemoTask(page: Page) {
-  return page.locator('.kt-student-task-card').filter({
+  return page.locator('.kt-student-task-row').filter({
     has: page.getByRole('heading', { name: demoExperimentName, exact: true }),
   })
 }
 
 function vueFullFeedbackTask(page: Page) {
-  return page.locator('.kt-student-task-card').filter({
+  return page.locator('.kt-student-task-row').filter({
     has: page.getByRole('heading', { name: '完整反馈视觉验证', exact: true }),
   })
 }
@@ -87,16 +87,16 @@ test('student flag ON mounts courses, task cards, and learning cards on existing
   test.setTimeout(300_000)
   await loginStudent(page, 'http://127.0.0.1:8014', 'S002')
   await expect(page.getByRole('heading', { name: '我的课程' })).toBeVisible({ timeout: 90_000 })
-  await page.getByRole('link', { name: '进入课程' }).click()
+  await page.locator('a.kt-button[href="/student/courses/1/"]').click()
   await expect(page).toHaveURL(/\/student\/courses\/1\/$/)
-  await expect(page.getByRole('heading', { name: '实验任务' })).toBeVisible({ timeout: 90_000 })
+  await expect(page.getByRole('heading', { name: '作业', exact: true })).toBeVisible({ timeout: 90_000 })
   await expect(vueDemoTask(page)).toBeVisible()
   await expect(vueDemoTask(page).getByText(/^0 \/ \d+$/)).toBeVisible()
   await expect(page.getByText('正确', { exact: true })).toHaveCount(0)
   await expect(page.getByText('错误', { exact: true })).toHaveCount(0)
 
-  await page.getByRole('link', { name: '我的学习' }).click()
-  await expect(page.getByRole('heading', { name: '我的学习' })).toBeVisible({ timeout: 90_000 })
+  await page.getByRole('link', { name: '班级中心' }).click()
+  await expect(page.getByRole('heading', { name: '班级中心', exact: true })).toBeVisible({ timeout: 90_000 })
   await expect(page.locator('table')).toHaveCount(0)
   await expect(page.getByText('排名')).toHaveCount(0)
 })
@@ -116,7 +116,7 @@ test('student completes the isolated full-feedback task and sees P4, P3, and leg
   const progress = await vueFullFeedbackTask(page).getByText(/^0 \/ \d+$/).textContent()
   const questionCount = Number(progress?.split('/')[1].trim())
   expect(questionCount).toBe(1)
-  await vueFullFeedbackTask(page).getByRole('button', { name: /^(开始实验|继续作答)$/ }).click()
+  await vueFullFeedbackTask(page).getByRole('button', { name: /^(开始作业|继续作答)$/ }).click()
   await expect(page).toHaveURL(/\/student\/sessions\/\d+\/questions\/\d+\/$/)
   await page.locator('.kt-assessment-question').waitFor({ state: 'visible' })
 
@@ -130,16 +130,19 @@ test('student completes the isolated full-feedback task and sees P4, P3, and leg
   await expect(page.getByText('已完成', { exact: true })).toBeVisible()
 
   await page.goto('http://127.0.0.1:8014/student/courses/1/learning/')
-  const fullFeedbackCard = page.locator('.kt-learning-card').filter({
+  const fullFeedbackCard = page.locator('.kt-learning-experiment-row').filter({
     has: page.getByRole('heading', { name: '完整反馈视觉验证', exact: true }),
   })
-  await fullFeedbackCard.getByRole('link', { name: '查看实验记录' }).click()
+  await fullFeedbackCard.getByRole('link', { name: '查看作答详情' }).click()
   await expect(page.getByRole('heading', { name: '完整反馈视觉验证' })).toBeVisible()
   await expect(page.locator('.kt-feedback-metric')).toHaveCount(3)
   await expect(page.locator('.kt-feedback-table tbody tr')).toHaveCount(1)
   await expect(page.locator('.kt-course-bar')).toHaveCount(0)
-  await page.locator('.kt-feedback-table tbody tr').focus()
-  await expect(page.locator('.kt-feedback-table tbody tr')).toHaveCSS('outline-style', 'solid')
+  const resultRow = page.locator('.kt-feedback-table tbody tr')
+  await page.getByRole('link', { name: '返回班级中心' }).focus()
+  await page.keyboard.press('Tab')
+  await expect(resultRow).toBeFocused()
+  await expect(resultRow).toHaveCSS('outline-style', 'solid')
   const resultPath = new URL(page.url()).pathname
   for (const viewport of [
     { name: 'result-reference-1448x1086', width: 1448, height: 1086 },
@@ -185,7 +188,7 @@ test('assessment runtime retains an offline answer and saves it after reconnecti
   test.skip(browserName !== 'chromium', 'One browser covers the network transition contract.')
   await loginStudent(page, 'http://127.0.0.1:8014', 'S003')
   await page.goto('http://127.0.0.1:8014/student/courses/1/')
-  await vueDemoTask(page).getByRole('button', { name: /^(开始实验|继续作答)$/ }).click()
+  await vueDemoTask(page).getByRole('button', { name: /^(开始作业|继续作答)$/ }).click()
   await page.locator('.kt-assessment-question').waitFor({ state: 'visible' })
 
   await context.setOffline(true)
@@ -216,7 +219,7 @@ test('assessment runtime reflows at desktop, mobile, and 200 percent zoom equiva
   test.skip(browserName !== 'chromium', 'One rendering engine provides the required viewport evidence.')
   await loginStudent(page, 'http://127.0.0.1:8014', 'S002')
   await page.goto('http://127.0.0.1:8014/student/courses/1/')
-  await vueDemoTask(page).getByRole('button', { name: /^(开始实验|继续作答)$/ }).click()
+  await vueDemoTask(page).getByRole('button', { name: /^(开始作业|继续作答)$/ }).click()
   await page.locator('.kt-assessment-question').waitFor({ state: 'visible' })
 
   for (const viewport of [
@@ -252,14 +255,14 @@ test('student pages reflow without horizontal page overflow', async ({ browserNa
   ]) {
     await page.setViewportSize(viewport)
     await page.goto('http://127.0.0.1:8014/student/courses/1/')
-    await expect(page.getByRole('heading', { name: '实验任务' })).toBeInViewport()
+    await expect(page.getByRole('heading', { name: '作业', exact: true })).toBeInViewport()
     await expect(page.getByText('演示交互数据采集')).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false)
     await page.screenshot({ path: testInfo.outputPath(`task-${viewport.name}.png`), fullPage: true })
 
     await page.goto('http://127.0.0.1:8014/student/courses/1/learning/')
-    await expect(page.getByRole('heading', { name: '我的学习' })).toBeInViewport()
-    await expect(page.getByRole('heading', { name: '实验完成' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '班级中心', exact: true })).toBeInViewport()
+    await expect(page.getByText('实验完成', { exact: true })).toBeVisible()
     await expect(page.getByText('演示交互数据采集')).toBeVisible()
     await expect(page.getByText('正在加载学习记录…')).toHaveCount(0)
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false)

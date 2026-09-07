@@ -13,7 +13,7 @@ test('business labels, controls and long text fit their actual layout', async ({
     '/teacher/accounts/classes/', '/teacher/accounts/students/', '/teacher/accounts/students/import/',
     '/teacher/courses/1/banks/', '/teacher/courses/1/banks/1/',
     '/teacher/courses/1/banks/1/edit/', '/teacher/courses/1/banks/1/import/',
-    '/teacher/courses/1/banks/1/kc-import/', '/teacher/courses/1/banks/archived/',
+    '/teacher/courses/1/banks/archived/',
     '/teacher/courses/1/banks/shared/', '/teacher/banks/', '/teacher/concepts/',
     '/teacher/courses/1/classes/', '/teacher/courses/1/classes/1/',
     '/teacher/courses/1/classes/1/?section=manage', '/teacher/courses/1/classes/1/edit/',
@@ -85,10 +85,23 @@ test('business labels, controls and long text fit their actual layout', async ({
   expect(failures, `${failures.length} page/viewport states have text or control layout issues`).toEqual([])
 })
 
-
-test('long names and mobile question-bank actions remain usable', async ({ page }, info) => {
+test('retired course KC import URL redirects to the unified import view', async ({ page }) => {
   await page.goto('/login/')
   await page.getByLabel('账号或学号').fill('teacher')
+  await page.getByLabel('密码').fill('teacher123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page).toHaveURL(/\/teacher\/courses\/$/)
+  await page.goto('/teacher/courses/1/banks/1/kc-import/')
+  await expect(page).toHaveURL(/\/teacher\/courses\/1\/banks\/1\/import\/$/)
+  await expect(page.getByRole('heading', { name: '导入题库', exact: true })).toBeVisible()
+})
+
+
+test('long names and mobile question-bank actions remain usable', async ({ page }, info) => {
+  await page.goto('/login/', { waitUntil: 'commit' })
+  const accountField = page.getByLabel('账号或学号')
+  await expect(accountField).toBeVisible()
+  await accountField.fill('teacher')
   await page.getByLabel('密码').fill('teacher123')
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/$/)
@@ -117,12 +130,31 @@ test('long names and mobile question-bank actions remain usable', async ({ page 
 
 test('student records and feedback keep readable controls across responsive boundaries', async ({ page }, info) => {
   test.setTimeout(180_000)
-  await page.goto('/login/')
+  await page.goto('/login/', { waitUntil: 'commit' })
   await page.getByLabel('账号或学号').fill('S002')
   await page.getByLabel('密码').fill('student123')
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page).toHaveURL(/\/student\/$/)
-  await page.goto('/student/courses/2/learning/')
+  await page.goto('/student/courses/1/')
+  const feedbackTask = page.locator('.kt-student-task-row').filter({
+    has: page.getByRole('heading', { name: '完整反馈视觉验证', exact: true }),
+  })
+  await expect(feedbackTask).toBeVisible()
+  const startAction = feedbackTask.getByRole('button', { name: /^(开始作业|继续作答)$/ })
+  if (await startAction.isVisible()) {
+    await startAction.click()
+    const answer = page.locator('.kt-assessment-question [name="answer"]').first()
+    await expect(answer).toBeEnabled()
+    const draftSaved = page.waitForResponse(response => response.url().includes('/draft/') && response.ok())
+    await answer.check()
+    await draftSaved
+    await page.getByRole('button', { name: '确认提交本题', exact: true }).click()
+    await Promise.all([
+      page.waitForURL(/\/student\/sessions\/\d+\/complete\/$/),
+      page.getByRole('dialog').getByRole('button', { name: '提交并锁定', exact: true }).click(),
+    ])
+  }
+  await page.goto('/student/courses/1/learning/')
   const result = page.getByRole('link', { name: '查看作答详情', exact: true }).first()
   await expect(result).toBeVisible()
   const resultPath = (await result.getAttribute('href'))!
@@ -130,7 +162,7 @@ test('student records and feedback keep readable controls across responsive boun
   const question = page.getByRole('link', { name: '查看题目反馈', exact: true }).first()
   await expect(question).toBeVisible()
   const questionPath = (await question.getAttribute('href'))!
-  const paths = ['/student/', '/student/courses/2/', '/student/courses/2/learning/', resultPath, questionPath]
+  const paths = ['/student/', '/student/courses/1/', '/student/courses/1/learning/', resultPath, questionPath]
   for (const [index, path] of paths.entries()) {
     for (const width of [1440, 1024, 768, 720, 390]) {
       await page.setViewportSize({ width, height: width === 720 ? 450 : 900 })

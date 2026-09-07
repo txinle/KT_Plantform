@@ -11,10 +11,11 @@ import uuid
 import zipfile
 from datetime import timedelta, timezone as dt_timezone
 from io import StringIO
+from unittest import skipUnless
 from unittest.mock import patch
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.test import TransactionTestCase
 from django.utils import timezone
 
@@ -84,6 +85,7 @@ class ExportLineageV2Tests(TransactionTestCase):
         with self.assertRaises(ValueError):
             snapshot.save(update_fields=["event_high_watermark"])
 
+    @skipUnless(connection.vendor == "postgresql", "PostgreSQL isolation contract")
     def test_outer_read_committed_transaction_is_rejected_for_source_freeze(self):
         with transaction.atomic():
             with self.assertRaisesRegex(ExportContractError, "REPEATABLE READ"):

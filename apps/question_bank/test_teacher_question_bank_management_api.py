@@ -234,6 +234,7 @@ class TeacherQuestionBankManagementApiTests(TestCase):
         )
 
     def test_question_import_preview_and_confirmation_do_not_write_until_confirmed(self):
+        from .test_unified_question_import import question_row, upload_rows
         preview_url = self.course_url(
             f"banks/{self.bank.pk}/imports/questions/preview/"
         )
@@ -249,16 +250,12 @@ class TeacherQuestionBankManagementApiTests(TestCase):
         preview = self.client.post(
             preview_url,
             {
-                "file": SimpleUploadedFile(
-                    "questions.csv",
-                    "序号,题目,题型,答案\n2,导入题目,判断题,正确\n".encode("utf-8-sig"),
-                    content_type="text/csv",
-                )
+                "file": upload_rows([question_row(题目='导入题目', 题型='判断题', 答案='正确', 二级知识点='', 三级知识点='')])
             },
         )
         self.assertEqual(preview.status_code, 200, preview.content)
         self.assertEqual(self.bank.questions.count(), 1)
-        self.assertEqual(preview.json()["preview"]["rows"][0]["sequence"], 2)
+        self.assertEqual(preview.json()["preview"]["rows"][0]["classification"], 'ready')
 
         confirmed = self.client.post(
             self.course_url(f"banks/{self.bank.pk}/imports/questions/confirm/"),

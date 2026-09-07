@@ -4101,6 +4101,16 @@ components:
       - not_started
       - task_id
       - total_participants
+    ClassificationEnum:
+      enum:
+      - ready
+      - duplicate
+      - invalid
+      type: string
+      description: |-
+        * `ready` - ready
+        * `duplicate` - duplicate
+        * `invalid` - invalid
     CompletenessEnum:
       enum:
       - complete
@@ -5720,6 +5730,11 @@ components:
         preview_id:
           type: string
           format: uuid
+        selected_row_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
       required:
       - preview_id
     ManagementQuestionImportConfirmResponse:
@@ -5730,6 +5745,17 @@ components:
           minimum: 0
         detail_url:
           type: string
+        skipped:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        rows:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
       required:
       - created
       - detail_url
@@ -5740,6 +5766,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ManagementQuestionImportPreviewRow'
+        summary:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 0
+        confirmable:
+          type: boolean
       required:
       - rows
     ManagementQuestionImportPreviewResponse:
@@ -5762,7 +5795,7 @@ components:
         text:
           type: string
         question_type:
-          $ref: '#/components/schemas/QuestionType128Enum'
+          type: string
         question_type_label:
           type: string
         option_count:
@@ -5770,6 +5803,35 @@ components:
           minimum: 0
         teacher_difficulty:
           type: string
+          nullable: true
+        row_id:
+          type: string
+          format: uuid
+        source_label:
+          type: string
+        options:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        answer:
+          nullable: true
+        accepted_answers:
+          type: array
+          items:
+            type: string
+        explanation:
+          type: string
+        kc_mapping:
+          nullable: true
+        classification:
+          $ref: '#/components/schemas/ClassificationEnum'
+        errors:
+          type: array
+          items:
+            type: string
+        existing_question_id:
+          type: integer
           nullable: true
       required:
       - option_count
@@ -6470,13 +6532,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -10229,13 +10293,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'

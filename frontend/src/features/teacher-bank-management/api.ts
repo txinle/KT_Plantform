@@ -76,18 +76,50 @@ export interface QuestionEditor {
   detail_url: string
 }
 
+export type QuestionImportClassification = 'ready' | 'duplicate' | 'invalid'
+
+export interface QuestionImportPreviewRow {
+  row_id: string
+  sequence: number
+  source_label: string
+  text: string
+  question_type: string
+  question_type_label: string
+  option_count: number
+  teacher_difficulty: string | null
+  options: Array<{ key: string; text: string }>
+  answer: unknown
+  accepted_answers: string[]
+  explanation: string
+  kc_mapping: {
+    root_kc_code: string | null
+    nodes: Array<{ kc_code: string; name: string; parent_kc_code: string | null; order: number }>
+  } | null
+  classification: QuestionImportClassification
+  errors: string[]
+  existing_question_id?: number | null
+}
+
 export interface QuestionImportPreview {
   preview_id: string
   preview: {
-    rows: Array<{
-      sequence: number
-      text: string
-      question_type: string
-      question_type_label: string
-      option_count: number
-      teacher_difficulty: string | null
-    }>
+    rows: QuestionImportPreviewRow[]
+    summary: { ready: number; duplicate: number; invalid: number }
+    confirmable: boolean
   }
+}
+
+export interface QuestionImportConfirmation {
+  created: number
+  skipped: number
+  failed: number
+  detail_url: string
+  rows: Array<{
+    row_id: string
+    status: 'created' | 'duplicate' | 'invalid' | 'unselected'
+    question_id?: number | null
+    errors: string[]
+  }>
 }
 
 export interface KCImportPreview {
@@ -190,10 +222,10 @@ export function createTeacherBankManagementApi(client: ApiClient) {
         { method: 'POST', body },
       )
     },
-    confirmQuestionImport(courseId: number, bankId: number, previewId: string) {
-      return client.mutate<{ created: number; detail_url: string }>(
+    confirmQuestionImport(courseId: number, bankId: number, previewId: string, selectedRowIds?: string[]) {
+      return client.mutate<QuestionImportConfirmation>(
         `/api/v1/teacher/courses/${courseId}/banks/${bankId}/imports/questions/confirm/`,
-        { method: 'POST', body: { preview_id: previewId } },
+        { method: 'POST', body: { preview_id: previewId, ...(selectedRowIds ? { selected_row_ids: selectedRowIds } : {}) } },
       )
     },
     previewKCImport(courseId: number, bankId: number, file: File) {

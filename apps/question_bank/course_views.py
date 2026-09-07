@@ -4,7 +4,7 @@ from collections import Counter
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Max, Prefetch, Q
+from django.db.models import Count, Prefetch, Q
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -24,25 +24,22 @@ from apps.audit.services import log_action
 from .access import lock_writable_course_bank, require_writable_bank_content
 from .audit import bank_metadata_audit_details
 from .forms import CourseConceptForm, QuestionBankForm, QuestionBankVisibilityForm, QuestionEditForm, UploadForm
-from .models import Concept, QuestionBank, QuestionConcept
+from .models import Concept, ImportPreviewBatch, QuestionBank, QuestionConcept
 from .services.file_reader import read_uploaded_rows, read_uploaded_workbook
 from .services.import_parsing import (
     ParsedKCMapping,
     ParsedKCNode,
     ParsedKCWorkbook,
-    ParsedQuestion,
     ParsedQuestionKCRelation,
     ParsedQuestionKCRoot,
     parse_kc_rows,
     parse_kc_workbook,
     parse_question_kc_tree_rows,
-    parse_question_rows,
 )
 from .services.import_service import (
     copy_shared_bank,
     import_kc_mappings,
     import_kc_workbook,
-    import_questions,
 )
 from .services.question_kc_import import (
     apply_question_kc_tree_import,
@@ -54,6 +51,8 @@ from .services.lifecycle import (
     delete_question,
     delete_question_bank,
 )
+from .services.preview_batch import ImportPreviewBatchConflict
+from .services.unified_import import UnifiedQuestionImportService, _project_row
 
 
 def _bank(course, pk):
@@ -679,60 +678,61 @@ def question_import(request, course_pk, pk):
     if request.method == "POST":
         require_writable_course(course)
     require_writable_bank_content(bank)
-    if shell := _question_bank_vue_shell(request, course, f"导入题目 | {bank.name}"):
+    if shell := _question_bank_vue_shell(request, course, f"导入题库 | {bank.name}"):
         return shell
-    session_key = f"course_question_import:{course.pk}:{bank.pk}"
+    if not request.session.session_key:
+        request.session.save()
     preview = None
-    upload_name = ""
+    preview_id = None
+    result = None
     form = UploadForm()
+    form.fields['file'].label = 'Excel、CSV 或 Word 文件'
+    form.fields['file'].widget.attrs['accept'] = '.csv,.xlsx,.docx'
     if request.method == "POST":
         if request.POST.get("action") == "confirm":
-            parsed = [ParsedQuestion(**item) for item in request.session.get(session_key, [])]
-            if not parsed:
-                messages.error(request, "导入预览已失效，请重新上传文件。")
+            preview_id = request.POST.get('preview_id')
+            try:
+                result = UnifiedQuestionImportService.confirm(
+                    bank=bank, actor=request.user, session_key=request.session.session_key,
+                    preview_id=preview_id, audit_request=request,
+                )
+            except ImportPreviewBatchConflict as error:
+                messages.error(request, str(error))
             else:
-                try:
-                    with transaction.atomic():
-                        course, bank = lock_writable_course_bank(course, bank, content=True)
-                        import_questions(bank, parsed)
-                        log_action(request, "question.import", bank, {"course_id": course.pk, "count": len(parsed)})
-                except ValueError as exc:
-                    request.session.pop(session_key, None)
-                    messages.error(request, f"导入预览已失效：{exc}。请重新上传文件。")
-                else:
-                    request.session.pop(session_key, None)
-                    messages.success(request, f"已导入 {len(parsed)} 道题。")
-                    return redirect("courses:bank_detail", course.pk, bank.pk)
+                batch = ImportPreviewBatch.objects.get(pk=preview_id)
+                outcomes = {row['row_id']: row for row in result['rows']}
+                rows = []
+                for ordinal, stored in enumerate(batch.payload['rows'], 1):
+                    row = _project_row(stored, ordinal, f'第 {ordinal} 条')
+                    row['errors'] = outcomes[row['row_id']]['errors']
+                    row['outcome'] = outcomes[row['row_id']]['status']
+                    rows.append(row)
+                preview = {'rows': rows, 'summary': batch.summary, 'confirmable': False}
         else:
-            request.session.pop(session_key, None)
             form = UploadForm(request.POST, request.FILES)
+            form.fields['file'].label = 'Excel、CSV 或 Word 文件'
+            form.fields['file'].widget.attrs['accept'] = '.csv,.xlsx,.docx'
             if form.is_valid():
-                upload_name = form.cleaned_data["file"].name
                 try:
-                    sequence_floor = bank.questions.aggregate(value=Max("sequence"))["value"] or 0
-                    parsed = parse_question_rows(
-                        read_uploaded_rows(form.cleaned_data["file"]),
-                        sequence_floor=sequence_floor,
+                    data = UnifiedQuestionImportService.preview(
+                        bank=bank, actor=request.user, session_key=request.session.session_key,
+                        uploaded=form.cleaned_data['file'],
                     )
-                    incoming = [item.sequence for item in parsed]
-                    existing = list(bank.questions.filter(sequence__in=incoming).values_list("sequence", flat=True))
-                    if existing:
-                        raise ValueError(f"题库中已存在以下序号：{sorted(existing)}。请先修改序号或编辑现有题目。")
                 except ValueError as exc:
                     form.add_error("file", str(exc))
                 else:
-                    request.session[session_key] = [asdict(item) for item in parsed]
-                    preview = parsed
+                    preview, preview_id = data['preview'], data['preview_id']
     return render(
         request,
-        "teacher/import_questions.html",
+        "teacher/import_question_bank.html",
         {
             "course": course,
             "current_course": course,
             "bank": bank,
             "form": form,
             "preview": preview,
-            "upload_name": upload_name,
+            "preview_id": preview_id,
+            "result": result,
         },
     )
 
@@ -744,6 +744,8 @@ def kc_import(request, course_pk, pk):
     if request.method == "POST":
         require_writable_course(course)
     require_writable_bank_content(bank)
+    if request.method == 'GET':
+        return redirect('courses:question_import', course.pk, bank.pk)
     if shell := _question_bank_vue_shell(request, course, f"导入 KC | {bank.name}"):
         return shell
     session_key = f"course_kc_import:{course.pk}:{bank.pk}"

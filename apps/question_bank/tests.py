@@ -68,19 +68,22 @@ class ImportTemplateDownloadTests(TransactionTestCase):
                 "可接受答案",
                 "解析",
                 "难度",
+                "一级知识点",
+                "二级知识点",
+                "三级知识点",
             ],
         )
         parsed_questions = parse_question_rows(question_rows)
         self.assertEqual(len(parsed_questions), 6)
         self.assertEqual(
             [item.question_type for item in parsed_questions],
-            ["single_choice", "multiple_choice", "numeric", "short_answer", "fill_blank", "true_false"],
+            ["single_choice", "multiple_choice", "true_false", "fill_blank", "short_answer", "numeric"],
         )
-        self.assertEqual(parsed_questions[4].accepted_answers, ["知识跟踪", "KT"])
-        self.assertIs(parsed_questions[5].answer, False)
-        self.assertEqual(parsed_questions[0].explanation, "4 是唯一正确答案。")
+        self.assertEqual(parsed_questions[3].accepted_answers, ["知识跟踪", "KT"])
+        self.assertIs(parsed_questions[2].answer, False)
+        self.assertEqual(parsed_questions[0].explanation, "4 是唯一正确答案。\n这是基础运算示例。")
         self.assertEqual(parsed_questions[0].teacher_difficulty, "0.100")
-        self.assertIsNone(parsed_questions[3].teacher_difficulty)
+        self.assertIsNone(parsed_questions[4].teacher_difficulty)
 
         kc_bytes = (settings.BASE_DIR / "fixtures" / "kc_mapping_template.csv").read_bytes()
         self.assertTrue(kc_bytes.startswith(b"\xef\xbb\xbf"))
@@ -206,6 +209,7 @@ class QuestionImportTests(TestCase):
         self.assertEqual(question.options.count(), 2)
 
     def test_course_import_previews_generated_sequences_and_persists_analysis_and_difficulty(self):
+        from .test_unified_question_import import question_row, upload_rows
         Question.objects.create(
             bank=self.bank,
             sequence=10,
@@ -216,59 +220,44 @@ class QuestionImportTests(TestCase):
         )
         self.client.force_login(self.teacher)
         url = reverse("courses:question_import", args=[self.course.pk, self.bank.pk])
-        upload = SimpleUploadedFile(
-            "questions.csv",
-            (
-                "序号,题目,题型,答案,解析 ,难度\n"
-                ",自动编号题,判断题,正确,自动编号解析,0.125\n"
-                "20,显式编号题,判断题,错误,显式编号解析,\n"
-            ).encode("utf-8-sig"),
-            content_type="text/csv",
-        )
+        upload = upload_rows([
+            question_row(序号='', 题目='自动编号题', 题型='判断题', 答案='正确', 解析='自动编号解析', 难度='0.125', 二级知识点='', 三级知识点=''),
+            question_row(序号='20', 题目='显式编号题', 题型='判断题', 答案='错误', 解析='显式编号解析', 难度='', 二级知识点='', 三级知识点=''),
+        ])
 
         preview = self.client.post(url, {"file": upload})
 
         self.assertEqual(preview.status_code, 200)
-        self.assertContains(preview, "21")
         self.assertContains(preview, "自动编号解析")
         self.assertContains(preview, "0.125")
-        confirmed = self.client.post(url, {"action": "confirm"})
-        self.assertRedirects(
-            confirmed,
-            reverse("courses:bank_detail", args=[self.course.pk, self.bank.pk]),
-        )
-        generated = self.bank.questions.get(sequence=21)
+        confirmed = self.client.post(url, {"action": "confirm", "preview_id": preview.context['preview_id']})
+        self.assertContains(confirmed, '已导入 2 道题')
+        generated = self.bank.questions.get(sequence=11)
         self.assertEqual(generated.explanation, "自动编号解析")
         self.assertEqual(str(generated.teacher_difficulty), "0.125")
-        self.assertIsNone(self.bank.questions.get(sequence=20).teacher_difficulty)
+        self.assertIsNone(self.bank.questions.get(sequence=12).teacher_difficulty)
 
-    def test_course_import_confirmation_is_atomic_when_previewed_sequence_becomes_occupied(self):
+    def test_course_import_confirmation_allocates_after_concurrent_append(self):
+        from .test_unified_question_import import question_row, upload_rows
         self.client.force_login(self.teacher)
         url = reverse("courses:question_import", args=[self.course.pk, self.bank.pk])
-        upload = SimpleUploadedFile(
-            "questions.csv",
-            "序号,题目,题型,答案\n,预览题,判断题,正确\n".encode("utf-8-sig"),
-            content_type="text/csv",
-        )
+        upload = upload_rows([question_row(题目='预览题', 二级知识点='', 三级知识点='')])
         preview = self.client.post(url, {"file": upload})
         self.assertEqual(preview.status_code, 200)
-        previewed_sequence = self.client.session[
-            f"course_question_import:{self.course.pk}:{self.bank.pk}"
-        ][0]["sequence"]
         Question.objects.create(
             bank=self.bank,
-            sequence=previewed_sequence,
+            sequence=1,
             question_type=Question.Type.TRUE_FALSE,
             text="并发写入",
             correct_answer=True,
             status=Question.Status.DRAFT,
         )
 
-        confirmed = self.client.post(url, {"action": "confirm"}, follow=True)
+        confirmed = self.client.post(url, {"action": "confirm", "preview_id": preview.context['preview_id']})
 
         self.assertEqual(confirmed.status_code, 200)
-        self.assertContains(confirmed, "导入预览已失效")
-        self.assertFalse(self.bank.questions.filter(text="预览题").exists())
+        self.assertContains(confirmed, "已导入 1 道题")
+        self.assertTrue(self.bank.questions.filter(text="预览题", sequence=2).exists())
 
 
 class QuestionBankVisibilityTests(TestCase):

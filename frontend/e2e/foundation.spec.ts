@@ -19,6 +19,21 @@ async function selectFirstKnowledgeComponent(page: Page) {
     .check()
 }
 
+const unifiedQuestionImportHeaders = [
+  '序号', '题目', '题型', '选项A', '选项B', '选项C', '选项D', '选项E', '选项F',
+  '答案', '可接受答案', '解析', '难度', '一级知识点', '二级知识点', '三级知识点',
+]
+
+function unifiedQuestionImportCsv(rows: Array<{ sequence: number; text: string; root: string }>) {
+  const escape = (value: string) => /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+  return [
+    unifiedQuestionImportHeaders.join(','),
+    ...rows.map(({ sequence, text, root }) => [
+      String(sequence), text, '简答题', '', '', '', '', '', '', '知识追踪', '', '浏览器验收解析。', '0.500', root, 'KC2', 'KC2>KC3',
+    ].map(escape).join(',')),
+  ].join('\n')
+}
+
 test('Flag OFF keeps the legacy template', async ({ page }) => {
   await login(page, 'http://127.0.0.1:8010')
   await page.goto('http://127.0.0.1:8010/teacher/courses/1/experiments/')
@@ -173,8 +188,11 @@ test('approved shell prevents button wrapping and keeps reduced-motion focus vis
   )
   expect(wrappedButtons).toEqual([])
 
-  await page.keyboard.press('Tab')
-  const focusStyle = await page.locator(':focus-visible').first().evaluate((element) => {
+  const focusTarget = page.locator('.kt-skip-link')
+  await focusTarget.focus()
+  await expect(focusTarget).toBeFocused()
+  await expect(focusTarget).toBeInViewport()
+  const focusStyle = await focusTarget.evaluate((element) => {
     const style = getComputedStyle(element)
     return { outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth }
   })
@@ -282,7 +300,7 @@ test('question-bank flag ON mounts list and detail on the existing URLs', async 
   await page.goto('http://127.0.0.1:8017/teacher/courses/1/banks/')
   await expect(page.locator('#kt-app')).toBeVisible()
   await expect(page.getByRole('heading', { name: '题库', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: /课程 KC 总库 \d+/ })).toBeVisible()
+  await expect(page.getByRole('tab', { name: /课程 KC 总库 \d+/ })).toBeVisible()
   await page.getByRole('link', { name: '演示题库', exact: true }).first().click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/banks\/\d+\/$/)
   await expect(page.getByRole('heading', { name: '演示题库', exact: true })).toBeVisible()
@@ -291,24 +309,157 @@ test('question-bank flag ON mounts list and detail on the existing URLs', async 
   await expect(page.getByRole('heading', { name: '演示题库', exact: true })).toBeVisible()
 })
 
-test('question-bank Vue keeps create and import operations in Django document flows', async ({ browserName, page }) => {
-  test.skip(browserName !== 'chromium', 'One browser covers the document POST and import handoff.')
+test('question-bank Vue imports CSV, Excel and Word templates, then retries corrected rows', async ({ browserName, page }, testInfo) => {
+  test.skip(browserName !== 'chromium', 'One browser covers the uploaded-file and download workflow.')
+  test.setTimeout(120_000)
+  const runId = `${browserName}-${Date.now()}`
+  const bankName = `浏览器统一导入验收-${runId}`
   await login(page, 'http://127.0.0.1:8017')
   await page.goto('http://127.0.0.1:8017/teacher/courses/1/banks/')
 
   const createForm = page.locator('form[data-create-bank]')
-  await createForm.getByLabel('名称').fill('浏览器验收题库')
-  await createForm.getByLabel('说明').fill('验证同 URL 创建和旧写入事务')
+  await createForm.getByLabel('名称').fill(bankName)
+  await createForm.getByLabel('说明').fill('验证统一导入的文件预览和确认写入')
   await createForm.getByLabel('可见性').selectOption('private')
   await createForm.getByRole('button', { name: '创建题库' }).click()
 
-  await page.getByRole('link', { name: '浏览器验收题库', exact: true }).click()
+  await page.getByRole('link', { name: bankName, exact: true }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/banks\/\d+\/$/)
-  await expect(page.getByRole('heading', { name: '浏览器验收题库', exact: true })).toBeVisible()
-  await page.getByRole('link', { name: '导入题目文件' }).click()
+  await expect(page.getByRole('heading', { name: bankName, exact: true })).toBeVisible()
+  await page.locator('[data-question-import]').click()
   await expect(page).toHaveURL(/\/import\/$/)
-  await expect(page.locator('#kt-app')).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: '导入题目文件' })).toBeVisible()
+  await expect(page.locator('#kt-app')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '导入题库', exact: true })).toBeVisible()
+
+  const fileInput = page.locator('input[type="file"]')
+  const preview = page.locator('[data-import-preview]')
+  const summary = page.getByLabel('预览状态汇总')
+  const uploadDownloadedTemplate = async (format: 'csv' | 'xlsx' | 'docx') => {
+    const templateLink = page.locator(`[data-question-template="${format}"]`)
+    if (!await templateLink.isVisible()) {
+      await page.locator('summary[aria-label="文件格式与模板"]').click()
+    }
+    const downloadEvent = page.waitForEvent('download')
+    await templateLink.click()
+    const download = await downloadEvent
+    const filename = download.suggestedFilename()
+    expect(filename).toMatch(new RegExp(`\\.${format}$`))
+    const downloadPath = testInfo.outputPath(`template-${format}-${filename}`)
+    await download.saveAs(downloadPath)
+
+    const response = page.waitForResponse((candidate) => (
+      candidate.request().method() === 'POST'
+      && candidate.url().includes('/imports/questions/preview/')
+    ))
+    await fileInput.setInputFiles(downloadPath!)
+    expect((await response).status()).toBe(200)
+    await expect(preview).toBeVisible()
+    await expect(summary).toContainText('可导入 6')
+    return downloadPath!
+  }
+
+  const csvTemplate = await uploadDownloadedTemplate('csv')
+  await uploadDownloadedTemplate('xlsx')
+  await page.locator('summary[aria-label="文件格式与模板"]').click()
+  await page.getByLabel('Word .docx').check()
+  await expect(fileInput).toHaveAttribute('accept', '.docx')
+  await uploadDownloadedTemplate('docx')
+  await page.locator('summary[aria-label="文件格式与模板"]').click()
+  await page.getByLabel('Excel / CSV').check()
+  await expect(fileInput).toHaveAttribute('accept', '.csv,.xlsx')
+
+  const captureImportViewport = async (name: string, width: number, height: number) => {
+    await page.setViewportSize({ width, height })
+    await expect(page.getByRole('heading', { name: '导入题库', exact: true })).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), name).toBe(false)
+    await page.evaluate(() => window.scrollTo(0, 0))
+    await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true })
+  }
+  await captureImportViewport('question-import-preview-1440x900', 1440, 900)
+  await page.setViewportSize({ width: 390, height: 844 })
+  let response = page.waitForResponse((candidate) => (
+    candidate.request().method() === 'POST'
+    && candidate.url().includes('/imports/questions/preview/')
+  ))
+  await fileInput.setInputFiles(csvTemplate)
+  expect((await response).status()).toBe(200)
+  await expect(preview.locator('[data-import-mobile-row]').first()).toBeVisible()
+  await captureImportViewport('question-import-preview-390x844', 390, 844)
+  await captureImportViewport('question-import-preview-zoom-200', 720, 450)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.locator('[data-confirm-import]')).toBeEnabled()
+  response = page.waitForResponse((candidate) => (
+    candidate.request().method() === 'POST'
+    && candidate.url().includes('/imports/questions/confirm/')
+  ))
+  await page.locator('[data-confirm-import]').click()
+  expect((await response).status()).toBe(201)
+  const result = page.getByRole('status').filter({ hasText: '本次导入已完成。' })
+  await expect(result).toContainText('新增 6 道，跳过 0 道，未完成 0 道。')
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await expect(page.locator('[data-confirm-import]')).toBeDisabled()
+
+  const createdText = `E2E-${runId}-首次导入题目`
+  const repairedText = `E2E-${runId}-修正后题目`
+  response = page.waitForResponse((candidate) => (
+    candidate.request().method() === 'POST'
+    && candidate.url().includes('/imports/questions/preview/')
+  ))
+  await fileInput.setInputFiles({
+    name: `partial-${runId}.csv`, mimeType: 'text/csv',
+    buffer: Buffer.from(unifiedQuestionImportCsv([
+      { sequence: 1, text: createdText, root: 'KC1' },
+      { sequence: 2, text: repairedText, root: 'UNKNOWN_KC' },
+      { sequence: 3, text: createdText, root: 'KC1' },
+    ]), 'utf8'),
+  })
+  expect((await response).status()).toBe(200)
+  await expect(result).toHaveCount(0)
+  await expect(summary).toContainText('可导入 1')
+  await expect(summary).toContainText('重复 1')
+  await expect(summary).toContainText('需修正 1')
+  response = page.waitForResponse((candidate) => (
+    candidate.request().method() === 'POST'
+    && candidate.url().includes('/imports/questions/confirm/')
+  ))
+  await page.locator('[data-confirm-import]').click()
+  expect((await response).status()).toBe(201)
+  await expect(result).toContainText('新增 1 道，跳过 1 道，未完成 1 道。')
+  await expect(preview.locator('.kt-question-import__table .kt-question-import__errors').filter({ hasText: 'UNKNOWN_KC' })).toBeVisible()
+
+  response = page.waitForResponse((candidate) => (
+    candidate.request().method() === 'POST'
+    && candidate.url().includes('/imports/questions/preview/')
+  ))
+  await fileInput.setInputFiles({
+    name: `repaired-complete-${runId}.csv`, mimeType: 'text/csv',
+    buffer: Buffer.from(unifiedQuestionImportCsv([
+      { sequence: 1, text: createdText, root: 'KC1' },
+      { sequence: 2, text: repairedText, root: 'KC1' },
+    ]), 'utf8'),
+  })
+  expect((await response).status()).toBe(200)
+  await expect(result).toHaveCount(0)
+  await expect(summary).toContainText('可导入 1')
+  await expect(summary).toContainText('重复 1')
+  await expect(summary).toContainText('需修正 0')
+  await expect(preview).not.toContainText('UNKNOWN_KC')
+  response = page.waitForResponse((candidate) => (
+    candidate.request().method() === 'POST'
+    && candidate.url().includes('/imports/questions/confirm/')
+  ))
+  await page.locator('[data-confirm-import]').click()
+  expect((await response).status()).toBe(201)
+  await expect(result).toContainText('新增 1 道，跳过 1 道，未完成 0 道。')
+  await page.locator('[data-return-detail]').click()
+  await expect(page.getByRole('heading', { name: bankName, exact: true })).toBeVisible()
+  await expect(page.locator('.kt-bank-question-section .kt-desktop-only').getByText(repairedText, { exact: true })).toBeVisible()
+
+  const retiredKcImport = new URL(page.url())
+  retiredKcImport.pathname = `${retiredKcImport.pathname}kc-import/`
+  await page.goto(retiredKcImport.toString())
+  await expect(page).toHaveURL(/\/teacher\/courses\/1\/banks\/\d+\/import\/$/)
+  await expect(page.getByRole('heading', { name: '导入题库', exact: true })).toBeVisible()
 })
 
 test('question-bank pages reflow without horizontal page overflow', async ({ browserName, page }, testInfo) => {

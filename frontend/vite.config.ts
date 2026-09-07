@@ -4,8 +4,8 @@ import { readFileSync } from 'node:fs'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vitest/config'
 
-export default defineConfig({
-  base: '/static/spa-assets/',
+export default defineConfig(({ command }) => ({
+  base: command === 'serve' ? '/' : '/static/spa-assets/',
   plugins: [vue(), {
     name: 'capture-offline-worker',
     generateBundle() {
@@ -19,6 +19,9 @@ export default defineConfig({
     },
   },
   server: {
+    watch: {
+      ignored: ['**/.e2e-results/**'],
+    },
     fs: {
       allow: [
         fileURLToPath(new URL('.', import.meta.url)),
@@ -41,4 +44,4 @@ export default defineConfig({
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
   },
-})
+}))

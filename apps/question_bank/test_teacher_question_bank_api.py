@@ -355,7 +355,6 @@ class TeacherQuestionBankVueShellTests(TestCase):
             ),
             reverse("courses:bank_edit", args=[self.course.pk, self.bank.pk]),
             reverse("courses:question_import", args=[self.course.pk, self.bank.pk]),
-            reverse("courses:kc_import", args=[self.course.pk, self.bank.pk]),
             reverse(
                 "courses:question_edit",
                 args=[self.course.pk, self.bank.pk, question.pk],

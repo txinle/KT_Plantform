@@ -11,6 +11,7 @@ const canvas = ref<HTMLElement>()
 const expanded = ref(false)
 const editing = ref(false)
 const dialog = ref<HTMLDialogElement>()
+let dialogTrigger: HTMLElement | undefined
 watch(() => props.error, error => { if (error) expanded.value = true }, { immediate: true })
 const nodes = computed(() => props.modelValue.nodes)
 const root = computed(() => props.modelValue.root_kc_code)
@@ -102,11 +103,20 @@ function describe(code: string, seen = new Set<string>()): string {
   const branch = children(code)
   return name(code) + (branch.length ? ` → ${branch.length > 1 ? '{ ' : ''}${branch.map(n => describe(n.kc_code, nextSeen)).join('；')}${branch.length > 1 ? ' }' : ''}` : '')
 }
-async function openTree(edit = false) {
+async function openTree(edit = false, event?: Event) {
+  dialogTrigger = event?.currentTarget instanceof HTMLElement ? event.currentTarget : undefined
   editing.value = edit
   await nextTick()
   dialog.value?.showModal()
   void observeCards()
+}
+function restoreDialogFocus() {
+  const trigger = dialogTrigger
+  globalThis.setTimeout(() => trigger?.focus(), 0)
+}
+function handleDialogClose() {
+  editing.value = false
+  restoreDialogFocus()
 }
 watch(editing, observeCards)
 
@@ -115,10 +125,10 @@ watch(editing, observeCards)
 <template>
   <section :class="['kt-card kt-kc-editor', { 'is-compact': stackSize > 1, 'is-dense': stackSize >= 4 }]" aria-labelledby="kc-mapping-title">
     <button type="button" class="kt-editor-section-toggle" data-kc-toggle :aria-expanded="expanded" aria-controls="kc-mapping-actions" @click="expanded = !expanded"><h2 id="kc-mapping-title">课程 KC 映射</h2><span class="kt-editor-section-summary" /><span>{{ expanded ? '收起' : '点击展开' }}</span><Icon name="chevron-down" :size="16" :class="{ 'is-expanded': expanded }" /></button>
-    <div class="kt-kc-editor-summary"><strong>当前结构：</strong><span>{{ root ? describe(root) : '未映射' }}</span><button type="button" class="kt-button kt-button--secondary" data-preview @click="openTree()">查看结构图</button></div>
-    <div v-show="expanded" id="kc-mapping-actions" class="kt-editor-section-body"><p>从课程 KC 总库逐级建立题目结构。编辑后需保存题目。</p><div class="kt-inline-actions"><button type="button" class="kt-button kt-button--secondary" data-edit-mapping @click="openTree(true)">编辑关联</button><button type="button" class="kt-button kt-button--secondary kt-kc-clear" data-clear @click="write([], '')">清空关联</button></div></div>
+    <div class="kt-kc-editor-summary"><strong>当前结构：</strong><span>{{ root ? describe(root) : '未映射' }}</span><button type="button" class="kt-button kt-button--secondary" data-preview @click="openTree(false, $event)">查看结构图</button></div>
+    <div v-show="expanded" id="kc-mapping-actions" class="kt-editor-section-body"><p>从课程 KC 总库逐级建立题目结构。编辑后需保存题目。</p><div class="kt-inline-actions"><button type="button" class="kt-button kt-button--secondary" data-edit-mapping @click="openTree(true, $event)">编辑关联</button><button type="button" class="kt-button kt-button--secondary kt-kc-clear" data-clear @click="write([], '')">清空关联</button></div></div>
     <p v-if="error" role="alert" class="kt-field__error">{{ error }}</p>
-    <dialog ref="dialog" class="kt-kc-dialog" :class="{ 'is-editing': editing }" aria-labelledby="kc-dialog-title" @close="editing = false">
+    <dialog ref="dialog" class="kt-kc-dialog" :class="{ 'is-editing': editing }" aria-labelledby="kc-dialog-title" @cancel="restoreDialogFocus" @close="handleDialogClose">
       <header><div><h2 id="kc-dialog-title">{{ editing ? '编辑 KC 关联' : '结构图预览' }}</h2><p>{{ editing ? '修改保留在当前表单，保存题目后生效。' : '查看当前题目的 KC 层级关系' }}</p></div><button type="button" class="kt-button kt-button--secondary" aria-label="关闭结构图" @click="dialog?.close()">×</button></header>
       <div class="kt-kc-dialog-scroll">
         <div ref="canvas" class="kt-kc-editor-canvas" :class="{ 'is-single-path': children(root).length === 1 && children(children(root)[0]!.kc_code).length <= 1 }" tabindex="-1" aria-label="课程 KC 结构图">
