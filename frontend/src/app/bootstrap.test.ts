@@ -12,6 +12,26 @@ async function loadBootstrap() {
   return import('./bootstrap')
 }
 
+function installValidOfflineBootstrap() {
+  document.body.innerHTML = `<script id="kt-offline-bootstrap" type="application/json">${JSON.stringify({
+    version: 1,
+    page_path: '/student/sessions/17/questions/23/',
+    assessment_session_id: 17,
+    assignment_id: 23,
+    csrf_token: 'offline-csrf-token',
+    user: {
+      id: 7,
+      role: 'student',
+      display_name: '离线学生',
+      username: 'S20260001',
+      student_number: 'S20260001',
+      home_url: '/student/',
+      must_change_password: false,
+    },
+  })}</script>`
+  window.history.replaceState({}, '', '/student/sessions/17/questions/23/')
+}
+
 describe('bootstrap initialization', () => {
   afterEach(() => {
     document.body.innerHTML = ''
@@ -138,6 +158,63 @@ describe('bootstrap initialization', () => {
       user: { id: 7, must_change_password: false },
     })
     expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('uses a valid offline envelope for a WebKit-shaped fetch rejection', async () => {
+    installValidOfflineBootstrap()
+    const fetchImpl = vi.fn().mockRejectedValue(new Error('Load failed'))
+    const bootstrap = await loadBootstrap()
+
+    await expect(bootstrap.initializeBootstrapContext({
+      fetchImpl: fetchImpl as typeof fetch,
+    })).resolves.toMatchObject({
+      csrf_token: 'offline-csrf-token',
+      user: { id: 7, home_url: '/student/' },
+    })
+    expect(fetchImpl).toHaveBeenCalledOnce()
+  })
+
+  it('keeps an HTTP bootstrap failure hard when an offline envelope exists', async () => {
+    installValidOfflineBootstrap()
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({}, 503))
+    const bootstrap = await loadBootstrap()
+
+    await expect(bootstrap.initializeBootstrapContext({
+      fetchImpl: fetchImpl as typeof fetch,
+    })).rejects.toThrow('CSRF bootstrap failed with status 503')
+  })
+
+  it('keeps malformed live JSON hard when an offline envelope exists', async () => {
+    installValidOfflineBootstrap()
+    const fetchImpl = vi.fn().mockResolvedValue(new Response('not-json', { status: 200 }))
+    const bootstrap = await loadBootstrap()
+
+    await expect(bootstrap.initializeBootstrapContext({
+      fetchImpl: fetchImpl as typeof fetch,
+    })).rejects.toBeInstanceOf(SyntaxError)
+  })
+
+  it('keeps an invalid live identity hard when an offline envelope exists', async () => {
+    installValidOfflineBootstrap()
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ csrf_token: 'live-csrf-token' }))
+      .mockResolvedValueOnce(jsonResponse({ user: { id: 7 } }))
+    const bootstrap = await loadBootstrap()
+
+    await expect(bootstrap.initializeBootstrapContext({
+      fetchImpl: fetchImpl as typeof fetch,
+    })).rejects.toThrow('Session bootstrap response is invalid')
+  })
+
+  it('does not use an offline envelope whose page scope is stale', async () => {
+    installValidOfflineBootstrap()
+    window.history.replaceState({}, '', '/student/sessions/17/questions/24/')
+    const fetchImpl = vi.fn().mockRejectedValue(new Error('Load failed'))
+    const bootstrap = await loadBootstrap()
+
+    await expect(bootstrap.initializeBootstrapContext({
+      fetchImpl: fetchImpl as typeof fetch,
+    })).rejects.toThrow('Bootstrap network request failed')
   })
 
   it('does not use an offline envelope after a live session endpoint returns 401', async () => {

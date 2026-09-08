@@ -1,6 +1,6 @@
 /* Only previously authorized capture-v2 question pages are available offline. */
 const CACHE = 'kt-capture-v2-runtime-1';
-const questionPage = /^\/student\/sessions\/\d+\/questions\/\d+\/$/;
+const questionPage = /^\/student\/sessions\/(\d+)\/questions\/(\d+)\/$/;
 const questionApi = /^\/api\/v1\/student\/sessions\/\d+\/questions\/\d+\/$/;
 const asset = (url) => url.origin === self.location.origin && url.pathname.startsWith('/static/');
 self.addEventListener('install', () => self.skipWaiting());
@@ -35,8 +35,14 @@ self.addEventListener('message', (event) => {
   event.waitUntil((async () => {
     try {
       const page = new URL(event.data.page);
+      if (!event.source?.url) throw new Error('invalid_scope');
       const source = new URL(event.source.url);
-      if (page.origin !== self.location.origin || page.href !== source.href || !questionPage.test(page.pathname)) throw new Error('invalid_scope');
+      const pageScope = questionPage.exec(page.pathname);
+      const sourceScope = questionPage.exec(source.pathname);
+      if (page.origin !== self.location.origin || source.origin !== self.location.origin
+          || !pageScope || !sourceScope || pageScope[1] !== sourceScope[1]) throw new Error('invalid_scope');
+      if (Number(pageScope[1]) !== Number(event.data.state?.session_id)
+          || Number(pageScope[2]) !== Number(event.data.state?.assignment?.assignment_id)) throw new Error('invalid_question_scope');
       const cache = await caches.open(CACHE);
       const response = await fetch(page.href, { credentials: 'same-origin' });
       if (!response.ok || response.headers.get('X-Capture-Contract') !== 'capture-v2') throw new Error('capture_contract_unavailable');

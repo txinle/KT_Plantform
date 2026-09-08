@@ -42,6 +42,18 @@ SOURCE_TYPES = (
 
 class Command(BaseCommand):
     help = "Create the isolated five-item capture-v2 browser fixture in kt_e2e."
+    course_code = COURSE_CODE
+    course_term = COURSE_TERM
+    class_name = CLASS_NAME
+    experiment_name = EXPERIMENT_NAME
+    bank_name = BANK_NAME
+    source_types = SOURCE_TYPES
+    fixture_source_types = SOURCE_TYPES
+    leaf_codes = ("KC2", "KC2", "KC3", "KC4", "KC5")
+    course_name = "KT101 Capture V2 E2E"
+    course_description = "Isolated browser fixture for replaying five response types."
+    bank_description = "First item of each type from eda_chapter1_193.csv."
+    experiment_description = "One item each for single, true/false, multiple, fill blank, and short answer."
 
     def handle(self, *args, **options):
         if str(connection.settings_dict["NAME"]) != "kt_e2e":
@@ -55,16 +67,16 @@ class Command(BaseCommand):
         teacher = self._teacher()
         course, _ = Course.objects.get_or_create(
             owner=teacher,
-            code=COURSE_CODE,
-            term=COURSE_TERM,
+            code=self.course_code,
+            term=self.course_term,
             defaults={
-                "name": "KT101 Capture V2 E2E",
-                "description": "Isolated browser fixture for replaying five response types.",
+                "name": self.course_name,
+                "description": self.course_description,
             },
         )
         class_group, _ = ClassGroup.objects.get_or_create(
             course=course,
-            name=CLASS_NAME,
+            name=self.class_name,
             academic_year="2026",
             defaults={"owner": teacher},
         )
@@ -77,7 +89,7 @@ class Command(BaseCommand):
 
         experiment = Experiment.objects.filter(
             course=course,
-            name=EXPERIMENT_NAME,
+            name=self.experiment_name,
         ).first()
         if experiment is not None:
             task = (
@@ -94,11 +106,11 @@ class Command(BaseCommand):
 
         bank, _ = QuestionBank.objects.get_or_create(
             course=course,
-            name=BANK_NAME,
+            name=self.bank_name,
             defaults={
                 "owner": teacher,
                 "created_by": teacher,
-                "description": "First item of each type from eda_chapter1_193.csv.",
+                "description": self.bank_description,
             },
         )
         root, leaves = self._concepts(course)
@@ -107,11 +119,11 @@ class Command(BaseCommand):
         if experiment is None:
             experiment = Experiment.objects.create(
                 course=course,
-                name=EXPERIMENT_NAME,
+                name=self.experiment_name,
                 created_by=teacher,
                 owner=teacher,
                 question_bank=bank,
-                description="One item each for single, true/false, multiple, fill blank, and short answer.",
+                description=self.experiment_description,
                 selection_mode=Experiment.SelectionMode.ALL,
                 sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
                 sampling_total_count=len(questions),
@@ -233,9 +245,8 @@ class Command(BaseCommand):
 
     def _questions(self, bank, root, leaves):
         rows = self._source_rows()
-        leaf_codes = ("KC2", "KC2", "KC3", "KC4", "KC5")
         questions = []
-        for (source_type, question_type), leaf_code in zip(SOURCE_TYPES, leaf_codes):
+        for (source_type, question_type), leaf_code in zip(self.source_types, self.leaf_codes):
             row = rows[source_type]
             sequence = int(row["序号"])
             question, created = Question.objects.get_or_create(
@@ -293,8 +304,7 @@ class Command(BaseCommand):
             if answer.strip()
         ]
 
-    @staticmethod
-    def _source_rows():
+    def _source_rows(self):
         fixture = (
             Path(__file__).resolve().parents[3]
             / "assessment"
@@ -305,7 +315,7 @@ class Command(BaseCommand):
             rows = list(csv.DictReader(source))
         return {
             source_type: next(row for row in rows if row["题型"] == source_type)
-            for source_type, _question_type in SOURCE_TYPES
+            for source_type, _question_type in self.fixture_source_types
         }
 
     @staticmethod

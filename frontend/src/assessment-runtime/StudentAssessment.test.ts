@@ -15,8 +15,15 @@ const mocks = vi.hoisted(() => ({
     params: { sessionId: string; assignmentId: string }
     query: Record<string, string>
   }) => Promise<unknown>),
+  afterRouteEach: undefined as undefined | ((to: {
+    params: { sessionId: string; assignmentId: string }
+    query: Record<string, string>
+  }) => void),
+  removeAfterEach: vi.fn(),
   createProcessRuntime: vi.fn(),
+  prepareOfflineQuestion: vi.fn(),
   runtime: {
+    clientInstanceId: '00000000-0000-4000-8000-000000000002',
     record: vi.fn(),
     checkpoint: vi.fn(),
     flushBounded: vi.fn(),
@@ -27,7 +34,14 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('vue-router', () => ({
   useRoute: () => ({ params: { sessionId: '7', assignmentId: '11' }, query: {} }),
-  useRouter: () => ({ push: mocks.push, replace: mocks.replace }),
+  useRouter: () => ({
+    push: mocks.push,
+    replace: mocks.replace,
+    afterEach: (callback: typeof mocks.afterRouteEach) => {
+      mocks.afterRouteEach = callback
+      return mocks.removeAfterEach
+    },
+  }),
   onBeforeRouteUpdate: (callback: typeof mocks.beforeRouteUpdate) => {
     mocks.beforeRouteUpdate = callback
   },
@@ -35,6 +49,9 @@ vi.mock('vue-router', () => ({
 vi.mock('./api', () => ({ getStudentAssessmentApi: () => mocks.api }))
 vi.mock('./process-bridge', () => ({
   createProcessRuntime: (...args: unknown[]) => mocks.createProcessRuntime(...args),
+}))
+vi.mock('./offline-cache', () => ({
+  prepareOfflineQuestion: (...args: unknown[]) => mocks.prepareOfflineQuestion(...args),
 }))
 vi.mock('@/app/bootstrap', () => ({
   getBootstrapContext: () => ({ csrf_token: 'csrf-token' }),
@@ -88,10 +105,35 @@ const questionState = {
   },
 }
 
+function captureV2Question(overrides: Record<string, unknown> = {}) {
+  return {
+    ...structuredClone(questionState),
+    draft_answer: 'B',
+    remaining_seconds: 10,
+    process: {
+      ...structuredClone(questionState.process),
+      capture_version: 'capture-v2',
+      response_version: 0,
+      active_response_event_id: null,
+      writer_lease_acquire_url: '/assessment/process/capture-v2/attempts/13/lease/acquire/',
+      writer_lease_renew_url: '/assessment/process/capture-v2/attempts/13/lease/renew/',
+    },
+    ...overrides,
+  }
+}
+
+function preparationFailure() {
+  return Object.assign(
+    new Error('离线恢复准备失败：Error: capture_contract_unavailable'),
+    { code: 'capture_contract_unavailable' },
+  )
+}
+
 describe('StudentAssessment', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.beforeRouteUpdate = undefined
+    mocks.afterRouteEach = undefined
     vi.stubGlobal('indexedDB', {})
     Object.defineProperty(globalThis.navigator, 'onLine', { configurable: true, value: true })
     vi.stubGlobal('crypto', {
@@ -119,6 +161,7 @@ describe('StudentAssessment', () => {
       is_correct: true,
     })
     mocks.createProcessRuntime.mockResolvedValue(mocks.runtime)
+    mocks.prepareOfflineQuestion.mockResolvedValue(undefined)
     mocks.runtime.record.mockResolvedValue({ recorded: true })
     document.querySelector('[data-runtime-finish-form]')?.remove()
   })
@@ -424,6 +467,42 @@ describe('StudentAssessment', () => {
     expect(wrapper.get('[aria-current="step"]').text()).toContain('第 2 题')
   })
 
+  it('defers routed-question offline preparation until the route guard has committed', async () => {
+    const secondQuestion = captureV2Question({
+      assignment: { assignment_id: 12, attempt_id: 14, status: 'visited', sequence_index: 2 },
+      navigation: questionState.navigation.map(item => ({
+        ...item,
+        current: item.assignment_id === 12,
+      })),
+      process: {
+        ...captureV2Question().process,
+        attempt_id: 14,
+      },
+    })
+    mocks.api.question
+      .mockResolvedValueOnce(structuredClone(questionState))
+      .mockResolvedValueOnce(secondQuestion)
+
+    mount(StudentAssessment)
+    await flushPromises()
+    mocks.prepareOfflineQuestion.mockClear()
+
+    await mocks.beforeRouteUpdate?.({
+      params: { sessionId: '7', assignmentId: '12' },
+      query: { reason: 'navigation_click' },
+    })
+
+    expect(mocks.prepareOfflineQuestion).not.toHaveBeenCalled()
+    expect(mocks.afterRouteEach).toBeTypeOf('function')
+    mocks.afterRouteEach?.({
+      params: { sessionId: '7', assignmentId: '12' },
+      query: { reason: 'navigation_click' },
+    })
+    await flushPromises()
+    expect(mocks.prepareOfflineQuestion).toHaveBeenCalledOnce()
+    expect(mocks.prepareOfflineQuestion).toHaveBeenCalledWith(secondQuestion)
+  })
+
   it('keeps an unsaved answer in memory while offline and retries when connectivity returns', async () => {
     const wrapper = mount(StudentAssessment)
     await flushPromises()
@@ -619,5 +698,176 @@ describe('StudentAssessment', () => {
     await flushPromises()
 
     expect(mocks.replace).toHaveBeenCalledWith('/student/sessions/7/questions/10/')
+  })
+
+  it('blocks assessment writes and question navigation when capture preparation fails', async () => {
+    mocks.api.question.mockResolvedValue(captureV2Question())
+    mocks.prepareOfflineQuestion.mockRejectedValueOnce(preparationFailure())
+
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+
+    expect(wrapper.get('[data-init-state]').attributes('data-init-state')).toBe('failed')
+    expect(wrapper.get('[data-init-failure]').text()).toContain('安全作答环境准备失败')
+    expect(wrapper.get('[data-init-failure]').text()).toContain('作答环境准备失败，当前暂不能作答。请重试；持续失败请联系教师。')
+    expect(wrapper.get('[data-init-technical-details]').text()).toContain('capture_contract_unavailable')
+    expect(wrapper.get('[data-init-return]').attributes('href')).toBe('/student/')
+    expect(wrapper.findAll<HTMLInputElement>('input[name="answer"]').every(input => input.element.disabled)).toBe(true)
+    expect(wrapper.get('[data-clear-response]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-submit-request]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-skip-request]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-finish-request]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-nav-assignment="12"]').attributes('aria-disabled')).toBe('true')
+    expect(wrapper.get('[data-nav-assignment="12"]').attributes('href')).toBeUndefined()
+
+    await wrapper.findAll('input[name="answer"]')[0]!.trigger('change')
+    await wrapper.get('[data-clear-response]').trigger('click')
+    await wrapper.get('[data-submit-request]').trigger('click')
+    await wrapper.get('[data-skip-request]').trigger('click')
+    const finishButton = wrapper.get('[data-finish-request]')
+    finishButton.element.removeAttribute('disabled')
+    await finishButton.trigger('click')
+    await wrapper.get('[data-nav-assignment="12"]').trigger('click')
+    const routeResult = await mocks.beforeRouteUpdate?.({
+      params: { sessionId: '7', assignmentId: '12' },
+      query: { reason: 'navigation_click' },
+    })
+
+    expect(routeResult).toBe(false)
+    expect(mocks.api.saveDraft).not.toHaveBeenCalled()
+    expect(mocks.api.submit).not.toHaveBeenCalled()
+    expect(mocks.api.skip).not.toHaveBeenCalled()
+    expect(mocks.push).not.toHaveBeenCalled()
+    expect(mocks.runtime.closeAttempt).not.toHaveBeenCalled()
+    expect(mocks.runtime.record).not.toHaveBeenCalled()
+    expect(wrapper.find('[aria-labelledby="submit-dialog-title"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-labelledby="finish-dialog-title"]').exists()).toBe(false)
+  })
+
+  it('retries only offline preparation as a single flight without resetting the deadline timer', async () => {
+    vi.useFakeTimers()
+    let finishRetry!: () => void
+    const retry = new Promise<void>(resolve => { finishRetry = resolve })
+    mocks.api.question.mockResolvedValue(captureV2Question())
+    mocks.prepareOfflineQuestion
+      .mockRejectedValueOnce(preparationFailure())
+      .mockReturnValueOnce(retry)
+
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    expect(wrapper.get('[role="timer"]').text()).toContain('00:10')
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    const retryButton = wrapper.get('[data-init-retry]')
+    retryButton.element.dispatchEvent(new MouseEvent('click'))
+    retryButton.element.dispatchEvent(new MouseEvent('click'))
+    await flushPromises()
+
+    expect(wrapper.get('[data-init-state]').attributes('data-init-state')).toBe('preparing')
+    expect(mocks.prepareOfflineQuestion).toHaveBeenCalledTimes(2)
+    expect(mocks.api.question).toHaveBeenCalledOnce()
+    expect(mocks.createProcessRuntime).toHaveBeenCalledOnce()
+    expect(mocks.runtime.record).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    finishRetry()
+    await flushPromises()
+
+    expect(wrapper.get('[data-init-state]').attributes('data-init-state')).toBe('ready')
+    expect(wrapper.get('[role="timer"]').text()).toContain('00:07')
+    expect(mocks.runtime.record).toHaveBeenCalledOnce()
+    expect(mocks.runtime.record).toHaveBeenCalledWith('item_rendered', { presentation_state: 'interactive' })
+    expect(wrapper.findAll<HTMLInputElement>('input[name="answer"]').every(input => !input.element.disabled)).toBe(true)
+  })
+
+  it('enables the answer controls before recording interactive item rendering', async () => {
+    mocks.api.question.mockResolvedValue(captureV2Question())
+    let controlsEnabled = () => false
+    mocks.runtime.record.mockImplementationOnce(async (eventType: string) => {
+      expect(eventType).toBe('item_rendered')
+      expect(controlsEnabled()).toBe(true)
+      return { recorded: true }
+    })
+
+    const wrapper = mount(StudentAssessment)
+    controlsEnabled = () => wrapper.findAll<HTMLInputElement>('input[name="answer"]').every(input => !input.element.disabled)
+    await flushPromises()
+
+    expect(wrapper.get('[data-init-state]').attributes('data-init-state')).toBe('ready')
+  })
+
+  it('withdraws readiness when recording interactive item rendering fails', async () => {
+    mocks.api.question.mockResolvedValue(captureV2Question())
+    mocks.runtime.record.mockRejectedValueOnce(new Error('item_rendered_persistence_failed'))
+
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+
+    expect(wrapper.get('[data-init-state]').attributes('data-init-state')).toBe('failed')
+    expect(wrapper.findAll<HTMLInputElement>('input[name="answer"]').every(input => input.element.disabled)).toBe(true)
+    expect(wrapper.get('[data-init-technical-details]').text()).toContain('item_rendered_persistence_failed')
+    expect(wrapper.find('[data-init-retry]').exists()).toBe(true)
+  })
+
+  it('does not let a disposed preparation promise record rendering or unlock interaction', async () => {
+    let finishPreparation!: () => void
+    mocks.api.question.mockResolvedValue(captureV2Question())
+    mocks.prepareOfflineQuestion.mockReturnValueOnce(new Promise<void>(resolve => { finishPreparation = resolve }))
+
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    expect(wrapper.get('[data-init-state]').attributes('data-init-state')).toBe('preparing')
+
+    wrapper.unmount()
+    finishPreparation()
+    await flushPromises()
+
+    expect(mocks.runtime.record).not.toHaveBeenCalled()
+  })
+
+  it('does not start a runtime when the question response arrives after unmount', async () => {
+    let finishQuestion!: (value: typeof questionState) => void
+    mocks.api.question.mockReturnValueOnce(new Promise(resolve => { finishQuestion = resolve }))
+
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    wrapper.unmount()
+    finishQuestion(structuredClone(questionState))
+    await flushPromises()
+
+    expect(mocks.createProcessRuntime).not.toHaveBeenCalled()
+    expect(mocks.prepareOfflineQuestion).not.toHaveBeenCalled()
+    expect(mocks.runtime.record).not.toHaveBeenCalled()
+  })
+
+  it('disposes a runtime that finishes initializing after unmount', async () => {
+    let finishRuntime!: (value: typeof mocks.runtime) => void
+    mocks.api.question.mockResolvedValue(captureV2Question())
+    mocks.createProcessRuntime.mockReturnValueOnce(new Promise(resolve => { finishRuntime = resolve }))
+
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    wrapper.unmount()
+    finishRuntime(mocks.runtime)
+    await flushPromises()
+
+    expect(mocks.runtime.dispose).toHaveBeenCalledOnce()
+    expect(mocks.prepareOfflineQuestion).not.toHaveBeenCalled()
+    expect(mocks.runtime.record).not.toHaveBeenCalled()
+  })
+
+  it('keeps an offline-recovered capture question answerable from its cached trajectory', async () => {
+    Object.defineProperty(globalThis.navigator, 'onLine', { configurable: true, value: false })
+    mocks.api.question.mockResolvedValue(captureV2Question({ offline_recovery: true }))
+
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+
+    expect(wrapper.get('[data-init-state]').attributes('data-init-state')).toBe('ready')
+    expect(wrapper.findAll<HTMLInputElement>('input[name="answer"]').every(input => !input.element.disabled)).toBe(true)
+    await wrapper.findAll<HTMLInputElement>('input[name="answer"]')[0]!.setValue(true)
+    await flushPromises()
+    expect(mocks.api.saveDraft).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-save-status]').text()).toContain('已保存到本机')
   })
 })

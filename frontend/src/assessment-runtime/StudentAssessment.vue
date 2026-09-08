@@ -49,6 +49,8 @@ const feedback = ref<SubmissionResponse>()
 const navigationOpen = ref(false)
 const responseConflict = ref<Record<string, unknown>>()
 const captureReady = ref(false)
+const initializationState = ref<'loading' | 'preparing' | 'failed' | 'ready'>('loading')
+const initializationError = ref<{ message: string; technicalDetails: string }>()
 let countdown: ReturnType<typeof globalThis.setInterval> | undefined
 let recoveryTimer: ReturnType<typeof globalThis.setInterval> | undefined
 let leaseRetryNeeded = false
@@ -71,6 +73,10 @@ let responseVersion = 0
 let composing = false
 let compositionInitial = ''
 let inputOperationId: string | undefined
+let initializationGeneration = 0
+let preparationPromise: Promise<void> | undefined
+let itemRenderedRecorded = false
+let pendingRouteInitialization: { generation: number; sessionId: number; assignmentId: number } | undefined
 
 interface ConfidenceContract {
   confidence_assignment_id: string
@@ -96,7 +102,11 @@ const answerLocked = computed(() => (
   )
 ))
 const responseDisabled = computed(() => answerLocked.value || submitting.value || loading.value || !!responseConflict.value
-  || (state.value?.process.capture_version === 'capture-v2' && !captureReady.value))
+  || !captureReady.value)
+
+function interactionAllowed() {
+  return !!state.value && captureReady.value && initializationState.value === 'ready'
+}
 
 function statusLabel(status: string) {
   return {
@@ -171,7 +181,7 @@ function startCountdown() {
 }
 
 async function noteInputStarted() {
-  if (inputStarted || !state.value) return
+  if (!interactionAllowed() || inputStarted || !state.value) return
   inputStarted = true
   await processRuntime?.record('response_input_started', {
     question_type: state.value.question.question_type,
@@ -183,7 +193,7 @@ async function flushTextObservation() {
   textObservationTimer = undefined
   const observation = pendingTextObservation
   pendingTextObservation = undefined
-  if (!observation || observation.before === observation.after || !state.value) return
+  if (!interactionAllowed() || !observation || observation.before === observation.after || !state.value) return
   lastStableText = observation.after
   const payload = await materializeTextObservation(
     state.value.question.question_type,
@@ -193,6 +203,7 @@ async function flushTextObservation() {
 }
 
 function queueTextObservation(value: string, event: unknown) {
+  if (!interactionAllowed()) return
   const details = event as { inputType?: string; isComposing?: boolean }
   if (details.isComposing) return
   const monotonicMs = Math.round(globalThis.performance.now() * 1000) / 1000
@@ -277,7 +288,7 @@ async function recordTextSnapshot(
 }
 
 async function saveDraft(force = false) {
-  if (!state.value) return
+  if (!interactionAllowed() || !state.value) return
   const currentState = state.value
   const fixedAnswer = cloneJson(answer.value)
   const fixedRuntime = processRuntime
@@ -333,6 +344,7 @@ async function saveDraft(force = false) {
 }
 
 async function chooseSingle(value: string | null) {
+  if (!interactionAllowed()) return
   answer.value = value
   void noteInputStarted()
   captureChange(value, value === null ? 'clear' : 'select', { option_key: value, option_action: value === null ? 'clear' : 'select' })
@@ -340,6 +352,7 @@ async function chooseSingle(value: string | null) {
 }
 
 async function toggleMultiple(value: string, selected: boolean) {
+  if (!interactionAllowed()) return
   const values = new Set(Array.isArray(answer.value) ? answer.value.map(String) : [])
   if (selected) values.add(value)
   else values.delete(value)
@@ -350,11 +363,13 @@ async function toggleMultiple(value: string, selected: boolean) {
 }
 
 function toggleMultipleFromEvent(value: string, event: unknown) {
+  if (!interactionAllowed()) return
   const selected = Boolean((event as { target?: { checked?: boolean } }).target?.checked)
   void toggleMultiple(value, selected)
 }
 
 function updateText(event: unknown) {
+  if (!interactionAllowed()) return
   const value = String((event as { target?: { value?: unknown } }).target?.value ?? '')
   answer.value = value
   if (trajectory) {
@@ -375,7 +390,7 @@ function updateText(event: unknown) {
 }
 
 function captureChange(value: unknown, inputType: string, extra = {}) {
-  if (!trajectory) return
+  if (!interactionAllowed() || !trajectory) return
   trajectory.change(value, inputType, inputOperationId || crypto.randomUUID(), extra)
   inputOperationId = undefined
   void trajectory.settled().then(() => {
@@ -388,12 +403,13 @@ function captureChange(value: unknown, inputType: string, extra = {}) {
 }
 
 function scheduleTextSave() {
+  if (!interactionAllowed()) return
   if (textSaveTimer !== undefined) globalThis.clearTimeout(textSaveTimer)
   textSaveTimer = globalThis.setTimeout(() => { void saveDraft().catch(() => undefined) }, 800)
 }
 
 async function chooseResponseBranch(side: 'current' | 'candidate') {
-  if (!state.value?.actions.resolve_branch_url || !responseConflict.value || !processRuntime) return
+  if (!interactionAllowed() || !state.value?.actions.resolve_branch_url || !responseConflict.value || !processRuntime) return
   await trajectory?.settled()
   await processRuntime.flushBounded(1500)
   const conflict = responseConflict.value
@@ -419,7 +435,7 @@ async function chooseResponseBranch(side: 'current' | 'candidate') {
 }
 
 function beforeTextInput(event: Event) {
-  if (!trajectory) return
+  if (!interactionAllowed() || !trajectory) return
   const input = event as InputEvent
   const target = input.target as HTMLInputElement | HTMLTextAreaElement
   inputOperationId = inputOperationId || crypto.randomUUID()
@@ -428,6 +444,7 @@ function beforeTextInput(event: Event) {
 }
 
 function startComposition(event: Event) {
+  if (!interactionAllowed()) return
   composing = true
   compositionInitial = String(answer.value ?? '')
   inputOperationId = crypto.randomUUID()
@@ -437,6 +454,7 @@ function startComposition(event: Event) {
 }
 
 function finishComposition(event: unknown) {
+  if (!interactionAllowed()) return
   const value = String((event as { target?: { value?: unknown } }).target?.value ?? '')
   composing = false
   if (trajectory) {
@@ -452,10 +470,22 @@ function finishComposition(event: unknown) {
 }
 
 function openSubmitDialog() {
+  if (!interactionAllowed()) return
   submitDialogOpen.value = true
 }
 
+function openNavigation() {
+  if (!interactionAllowed()) return
+  navigationOpen.value = true
+}
+
+function openFinishDialog() {
+  if (!interactionAllowed()) return
+  finishDialogOpen.value = true
+}
+
 async function navigate(url: string, runtimePrepared = false) {
+  if (!interactionAllowed()) return
   await processRuntime?.flushBounded(1500)
   if (/^\/student\/sessions\/\d+\/questions\/\d+\//.test(url)) {
     routeTransitionPrepared = runtimePrepared
@@ -471,7 +501,7 @@ async function navigate(url: string, runtimePrepared = false) {
 }
 
 async function confirmSubmit() {
-  if (!state.value || submitting.value) return
+  if (!interactionAllowed() || !state.value || submitting.value) return
   submitting.value = true
   submitDialogOpen.value = false
   error.value = ''
@@ -515,7 +545,7 @@ async function confirmSubmit() {
 }
 
 async function showConfidencePrompt() {
-  if (!pendingConfidence.value) return
+  if (!interactionAllowed() || !pendingConfidence.value) return
   await nextTick()
   if (trajectory) await processRuntime?.record('confidence_observed', {
     capture_version: 'capture-v2', operation_id: crypto.randomUUID(),
@@ -553,7 +583,7 @@ async function showFeedback(response: SubmissionResponse) {
 }
 
 async function resolveConfidence(skip: boolean) {
-  if (!pendingConfidence.value || confidenceResolving.value) return
+  if (!interactionAllowed() || !pendingConfidence.value || confidenceResolving.value) return
   confidenceResolving.value = true
   confidenceStatus.value = '正在保存评价'
   error.value = ''
@@ -580,7 +610,7 @@ async function resolveConfidence(skip: boolean) {
 }
 
 async function navigateToAssignment(item: StudentRuntimeQuestionEntry['navigation'][number]) {
-  if (item.current || !state.value) return
+  if (!interactionAllowed() || item.current || !state.value) return
   error.value = ''
   try {
     await flushTextObservation()
@@ -595,17 +625,19 @@ async function navigateToAssignment(item: StudentRuntimeQuestionEntry['navigatio
 }
 
 async function navigateFromDrawer(item: StudentRuntimeQuestionEntry['navigation'][number]) {
+  if (!interactionAllowed()) return
   navigationOpen.value = false
   await navigateToAssignment(item)
 }
 
 function requestFinishFromDrawer() {
+  if (!interactionAllowed()) return
   navigationOpen.value = false
   finishDialogOpen.value = true
 }
 
 async function skipCurrent() {
-  if (!state.value || answerLocked.value) return
+  if (!interactionAllowed() || !state.value || answerLocked.value) return
   error.value = ''
   try {
     await flushTextObservation()
@@ -633,7 +665,7 @@ function submitFinishForm(url: string) {
 }
 
 async function confirmFinish() {
-  if (!state.value || finishing.value || timedOut.value) return
+  if (!interactionAllowed() || !state.value || finishing.value || timedOut.value) return
   finishing.value = true
   finishDialogOpen.value = false
   navigationOpen.value = false
@@ -655,7 +687,7 @@ function handleOffline() {
 }
 
 async function handleOnline() {
-  if (reconnecting) return
+  if (!interactionAllowed() || reconnecting) return
   reconnecting = true
   online.value = true
   try {
@@ -674,7 +706,100 @@ async function handleOnline() {
   } finally { reconnecting = false }
 }
 
+function isCurrentInitialization(
+  generation: number,
+  currentState: StudentRuntimeQuestionEntry,
+  runtime: StudentProcessRuntime,
+) {
+  return generation === initializationGeneration
+    && state.value === currentState
+    && processRuntime === runtime
+    && !timedOut.value
+}
+
+function preparationErrorDetails(caught: unknown) {
+  const message = caught instanceof Error ? caught.message : '离线恢复组件未返回可识别的错误。'
+  const code = typeof (caught as { code?: unknown })?.code === 'string'
+    ? (caught as { code: string }).code
+    : ''
+  return {
+    message: '作答环境准备失败，当前暂不能作答。请重试；持续失败请联系教师。',
+    technicalDetails: code && !message.includes(code) ? `${code}: ${message}` : message,
+  }
+}
+
+function startRecoveryTimer() {
+  if (recoveryTimer !== undefined) return
+  recoveryTimer = globalThis.setInterval(() => {
+    if (!online.value) {
+      void fetch('/health/', { cache: 'no-store' }).then((response) => {
+        if (response.ok) void handleOnline()
+      }).catch(() => undefined)
+    } else if (leaseRetryNeeded && !responseConflict.value && !answerLocked.value) {
+      void saveDraft(true).catch(() => undefined)
+    }
+  }, 5000)
+}
+
+async function finishInitialization(
+  generation: number,
+  currentState: StudentRuntimeQuestionEntry,
+  runtime: StudentProcessRuntime,
+) {
+  if (!isCurrentInitialization(generation, currentState, runtime)) return
+  captureReady.value = true
+  initializationState.value = 'ready'
+  initializationError.value = undefined
+  await nextTick()
+  if (!isCurrentInitialization(generation, currentState, runtime)) return
+  if (!itemRenderedRecorded) {
+    await runtime.record('item_rendered', { presentation_state: 'interactive' })
+    if (!isCurrentInitialization(generation, currentState, runtime)) return
+    itemRenderedRecorded = true
+  }
+  pendingConfidence.value = confidenceContract(currentState.pending_confidence)
+  if (currentState.process.capture_version === 'capture-v2') startRecoveryTimer()
+  if (pendingConfidence.value) await showConfidencePrompt()
+}
+
+async function prepareCaptureInitialization(generation = initializationGeneration) {
+  if (preparationPromise) return preparationPromise
+  const currentState = state.value
+  const runtime = processRuntime
+  if (!currentState || !runtime || currentState.process.capture_version !== 'capture-v2') return
+  captureReady.value = false
+  initializationState.value = 'preparing'
+  initializationError.value = undefined
+  const pending = (async () => {
+    try {
+      await prepareOfflineQuestion(currentState)
+      await finishInitialization(generation, currentState, runtime)
+    } catch (caught) {
+      if (isCurrentInitialization(generation, currentState, runtime)) {
+        captureReady.value = false
+        initializationState.value = 'failed'
+        initializationError.value = preparationErrorDetails(caught)
+      }
+    }
+  })()
+  preparationPromise = pending
+  try {
+    await pending
+  } finally {
+    if (preparationPromise === pending) preparationPromise = undefined
+  }
+}
+
+async function retryCaptureInitialization() {
+  if (initializationState.value !== 'failed' && initializationState.value !== 'preparing') return
+  await prepareCaptureInitialization()
+}
+
 function disposeQuestionRuntime() {
+  initializationGeneration += 1
+  preparationPromise = undefined
+  pendingRouteInitialization = undefined
+  captureReady.value = false
   if (countdown !== undefined) globalThis.clearInterval(countdown)
   if (textSaveTimer !== undefined) globalThis.clearTimeout(textSaveTimer)
   if (textObservationTimer !== undefined) globalThis.clearTimeout(textObservationTimer)
@@ -690,6 +815,9 @@ function disposeQuestionRuntime() {
 
 function resetQuestionState() {
   captureReady.value = false
+  initializationState.value = 'loading'
+  initializationError.value = undefined
+  itemRenderedRecorded = false
   responseConflict.value = undefined
   trajectory = undefined
   writerLease = undefined
@@ -715,19 +843,24 @@ function resetQuestionState() {
   saveQueue = Promise.resolve(undefined)
 }
 
-async function loadQuestion(targetRoute = route) {
+async function loadQuestion(targetRoute = route, deferCapturePreparation = false) {
+  const generation = ++initializationGeneration
   const sessionId = Number(targetRoute.params.sessionId)
   const assignmentId = Number(targetRoute.params.assignmentId)
   loading.value = true
+  initializationState.value = 'loading'
+  initializationError.value = undefined
   error.value = ''
   try {
-    state.value = await getStudentAssessmentApi().question(
+    const loadedState = await getStudentAssessmentApi().question(
       sessionId,
       assignmentId,
       typeof targetRoute.query.reason === 'string'
         ? targetRoute.query.reason
         : 'navigation_click',
     )
+    if (generation !== initializationGeneration) return
+    state.value = loadedState
     answer.value = cloneJson(state.value.draft_answer)
     if (state.value.offline_recovery) online.value = false
     lastSavedAnswer = JSON.stringify(answer.value)
@@ -739,11 +872,17 @@ async function loadQuestion(targetRoute = route) {
     saveStatus.value = state.value.draft_answer === null ? '尚未保存' : '已恢复草稿'
     secondsRemaining.value = state.value.remaining_seconds
     if (state.value.presented_deadline_at) secondsRemaining.value = Math.max(0, Math.floor((Date.parse(state.value.presented_deadline_at) - Date.now()) / 1000))
-    processRuntime = await createProcessRuntime(
+    startCountdown()
+    const loadedRuntime = await createProcessRuntime(
       state.value.process,
       state.value.assignment.status,
       getBootstrapContext().csrf_token,
     )
+    if (generation !== initializationGeneration) {
+      loadedRuntime.dispose()
+      return
+    }
+    processRuntime = loadedRuntime
     if (state.value.process.capture_version === 'capture-v2') {
       const process = state.value.process
       if (!process.writer_lease_acquire_url || !process.writer_lease_renew_url || !processRuntime.clientInstanceId) throw new Error('缺少写入租约契约，无法保存正式答案。')
@@ -761,25 +900,21 @@ async function loadQuestion(targetRoute = route) {
       const initial = answer.value ?? (kind === 'multiple_choice' ? [] : ['short_answer', 'fill_blank', 'numeric'].includes(kind) ? '' : null)
       const runtime = processRuntime
       trajectory = new ResponseTrajectory(kind, initial, head, (type, payload, options) => runtime.record(type, payload, options))
-      await prepareOfflineQuestion(state.value)
-      captureReady.value = true
-      recoveryTimer = globalThis.setInterval(() => {
-        if (!online.value) {
-          void fetch('/health/', { cache: 'no-store' }).then((response) => {
-            if (response.ok) void handleOnline()
-          }).catch(() => undefined)
-        } else if (leaseRetryNeeded && !responseConflict.value && !answerLocked.value) {
-          void saveDraft(true).catch(() => undefined)
-        }
-      }, 5000)
     }
     loading.value = false
+    initializationState.value = 'preparing'
     await nextTick()
-    await processRuntime.record('item_rendered', { presentation_state: 'interactive' })
-    pendingConfidence.value = confidenceContract(state.value.pending_confidence)
-    if (pendingConfidence.value) await showConfidencePrompt()
-    startCountdown()
+    if (state.value.process.capture_version === 'capture-v2') {
+      if (deferCapturePreparation) {
+        pendingRouteInitialization = { generation, sessionId, assignmentId }
+      } else {
+        await prepareCaptureInitialization(generation)
+      }
+    } else {
+      await finishInitialization(generation, state.value, processRuntime)
+    }
   } catch (caught) {
+    if (generation !== initializationGeneration) return
     const confidenceQuestionUrl = caught instanceof ApiError
       && caught.code === 'CONFIDENCE_REQUIRED'
       && typeof caught.fields.question_url === 'string'
@@ -794,15 +929,29 @@ async function loadQuestion(targetRoute = route) {
     }
     error.value = caught instanceof Error ? caught.message : '作答页面加载失败。'
   } finally {
-    loading.value = false
+    if (generation === initializationGeneration) loading.value = false
   }
 }
+
+const removeAfterEach = router.afterEach((to, _from, failure) => {
+  if (failure) return
+  const pending = pendingRouteInitialization
+  if (
+    !pending
+    || pending.generation !== initializationGeneration
+    || Number(to.params.sessionId) !== pending.sessionId
+    || Number(to.params.assignmentId) !== pending.assignmentId
+  ) return
+  pendingRouteInitialization = undefined
+  void prepareCaptureInitialization(pending.generation)
+})
 
 onBeforeRouteUpdate(async (to) => {
   if (
     String(to.params.sessionId) === String(route.params.sessionId)
     && String(to.params.assignmentId) === String(route.params.assignmentId)
   ) return
+  if (state.value && !interactionAllowed()) return false
   const targetAssignmentId = Number(to.params.assignmentId)
   try {
     if (!routeTransitionPrepared && state.value) {
@@ -813,7 +962,7 @@ onBeforeRouteUpdate(async (to) => {
     routeTransitionPrepared = false
     disposeQuestionRuntime()
     resetQuestionState()
-    await loadQuestion(to)
+    await loadQuestion(to, true)
   } catch (caught) {
     routeTransitionPrepared = false
     error.value = caught instanceof Error ? caught.message : '切换题目失败，请重试。'
@@ -833,13 +982,14 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   disposeQuestionRuntime()
+  removeAfterEach()
   globalThis.removeEventListener('offline', handleOffline)
   globalThis.removeEventListener('online', handleOnline)
 })
 </script>
 
 <template>
-  <main class="kt-assessment-focus">
+  <main class="kt-assessment-focus" :data-init-state="initializationState">
     <section v-if="missingCapabilities.length" class="kt-assessment-capability" role="alert">
       <h1>当前浏览器无法安全保存作答过程</h1>
       <p>请升级浏览器或更换受支持的浏览器后再进入实验。</p>
@@ -867,7 +1017,8 @@ onBeforeUnmount(() => {
           data-mobile-navigation-trigger
           aria-controls="assessment-mobile-navigation"
           :aria-expanded="navigationOpen"
-          @click="navigationOpen = true"
+          :disabled="!captureReady"
+          @click="openNavigation"
         >
           题目导航
         </button>
@@ -898,7 +1049,7 @@ onBeforeUnmount(() => {
             <strong>{{ option.key }}</strong>
             <span>{{ option.text }}</span>
           </label>
-          <button v-if="trajectory && state.question.question_type !== 'multiple_choice'" type="button" class="kt-button kt-button--secondary" :disabled="responseDisabled || answer === null" @click="chooseSingle(null)">清除选择</button>
+          <button v-if="trajectory && state.question.question_type !== 'multiple_choice'" type="button" class="kt-button kt-button--secondary" data-clear-response :disabled="responseDisabled || answer === null" @click="chooseSingle(null)">清除选择</button>
         </fieldset>
         <label v-else class="kt-assessment-text-answer">
           <span>你的答案</span>
@@ -906,14 +1057,24 @@ onBeforeUnmount(() => {
           <input v-else name="answer" :disabled="responseDisabled" :inputmode="state.question.question_type === 'numeric' ? 'decimal' : undefined" :value="String(answer ?? '')" @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition" @compositionend="finishComposition" @blur="flushTextObservation">
         </label>
         <StudentResearchTools v-if="trajectory && processRuntime && state.actions.research_tools_url && !answerLocked && captureReady && online" :endpoint="state.actions.research_tools_url" :runtime="processRuntime" :answer-event-id="trajectory.head" :wait-for-capture="() => trajectory!.settled()" @interaction="noteInputStarted" />
+        <p v-if="initializationState === 'preparing'" class="kt-alert kt-alert--info" role="status" data-init-preparing>正在准备安全作答环境，请稍候…</p>
+        <section v-else-if="initializationState === 'failed' && initializationError" class="kt-alert kt-alert--danger" role="alert" data-init-failure>
+          <h2>安全作答环境准备失败</h2>
+          <p>{{ initializationError.message }}</p>
+          <p data-init-technical-details><strong>技术信息：</strong><code>{{ initializationError.technicalDetails }}</code></p>
+          <div class="kt-assessment-actions">
+            <button type="button" class="kt-button" data-init-retry @click="retryCaptureInitialization">重新准备</button>
+            <a class="kt-button kt-button--secondary" data-init-return href="/student/">返回任务列表</a>
+          </div>
+        </section>
         <p v-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
         <button v-if="trajectory && online && captureReady && !answerLocked && saveStatus.includes('失败')" class="kt-button kt-button--secondary" type="button" @click="saveDraft(true).catch(() => undefined)">重试同步</button>
         <section v-if="responseConflict" class="kt-alert kt-alert--warning" aria-label="选择答案版本">
           <p>另一设备保存了不同答案。请选择接下来使用的版本。</p>
           <p>已保存版本：{{ formatCorrectAnswer(responseConflict.current_answer) }}</p>
-          <button class="kt-button kt-button--secondary" type="button" @click="chooseResponseBranch('current')">继续使用已保存版本</button>
+          <button class="kt-button kt-button--secondary" type="button" :disabled="!captureReady" @click="chooseResponseBranch('current')">继续使用已保存版本</button>
           <p>本机版本：{{ formatCorrectAnswer(responseConflict.candidate_answer) }}</p>
-          <button class="kt-button" type="button" @click="chooseResponseBranch('candidate')">继续使用本机版本</button>
+          <button class="kt-button" type="button" :disabled="!captureReady" @click="chooseResponseBranch('candidate')">继续使用本机版本</button>
         </section>
         <p v-if="!online" class="kt-alert kt-alert--warning" role="status" data-connectivity-status>当前离线。答案保留在本页，恢复网络后将自动保存。</p>
         <p v-if="answerLocked" class="kt-alert kt-alert--info">本题已提交并锁定，答案不可再修改。</p>
@@ -929,12 +1090,12 @@ onBeforeUnmount(() => {
             :min="pendingConfidence.minimum"
             :max="pendingConfidence.maximum"
             :step="pendingConfidence.step"
-            :disabled="confidenceResolving"
+            :disabled="confidenceResolving || !captureReady"
           >
           <p role="status">{{ confidenceStatus }}</p>
           <div class="kt-assessment-actions">
-            <button type="button" class="kt-button kt-button--secondary" :disabled="confidenceResolving" @click="resolveConfidence(true)">跳过评价</button>
-            <button type="button" class="kt-button" data-confidence-submit :disabled="confidenceResolving" @click="resolveConfidence(false)">提交信心评价</button>
+            <button type="button" class="kt-button kt-button--secondary" :disabled="confidenceResolving || !captureReady" @click="resolveConfidence(true)">跳过评价</button>
+            <button type="button" class="kt-button" data-confidence-submit :disabled="confidenceResolving || !captureReady" @click="resolveConfidence(false)">提交信心评价</button>
           </div>
         </section>
         <div v-if="feedback" class="kt-alert kt-alert--success" data-feedback>
@@ -945,8 +1106,8 @@ onBeforeUnmount(() => {
           <div v-if="feedback.explanation"><strong>解析：</strong>{{ feedback.explanation }}</div>
         </div>
         <div v-if="!answerLocked" class="kt-assessment-actions">
-          <button type="button" class="kt-button kt-button--secondary" data-skip-request @click="skipCurrent">标记跳过</button>
-          <button type="button" class="kt-button" data-submit-request :disabled="submitting" @click="openSubmitDialog">确认提交本题</button>
+          <button type="button" class="kt-button kt-button--secondary" data-skip-request :disabled="!captureReady" @click="skipCurrent">标记跳过</button>
+          <button type="button" class="kt-button" data-submit-request :disabled="submitting || !captureReady" @click="openSubmitDialog">确认提交本题</button>
         </div>
       </section>
       <aside class="kt-assessment-nav" aria-labelledby="assessment-navigation-title">
@@ -958,11 +1119,13 @@ onBeforeUnmount(() => {
           <a
             v-for="item in state.navigation"
             :key="item.assignment_id"
-            :href="item.url"
+            :href="captureReady ? item.url : undefined"
             class="kt-assessment-nav__item"
             :data-answer-status="item.status"
             :data-has-response="item.current ? hasLocalResponse : ['draft', 'submitted'].includes(item.status)"
             :aria-current="item.current ? 'step' : undefined"
+            :aria-disabled="!captureReady ? 'true' : undefined"
+            :tabindex="!captureReady ? -1 : undefined"
             :data-nav-assignment="item.assignment_id"
             @click.prevent="navigateToAssignment(item)"
           >
@@ -970,7 +1133,7 @@ onBeforeUnmount(() => {
             <small>{{ item.current && hasLocalResponse && !answerLocked ? '待提交' : statusLabel(item.status) }}</small>
           </a>
         </nav>
-        <button type="button" class="kt-button kt-button--danger-secondary" data-finish-request :disabled="timedOut || finishing" @click="finishDialogOpen = true">结束实验</button>
+        <button type="button" class="kt-button kt-button--danger-secondary" data-finish-request :disabled="timedOut || finishing || !captureReady" @click="openFinishDialog">结束实验</button>
       </aside>
 
       <Drawer
@@ -984,11 +1147,13 @@ onBeforeUnmount(() => {
           <a
             v-for="item in state.navigation"
             :key="item.assignment_id"
-            :href="item.url"
+            :href="captureReady ? item.url : undefined"
             class="kt-assessment-nav__item"
             :data-answer-status="item.status"
             :data-has-response="item.current ? hasLocalResponse : ['draft', 'submitted'].includes(item.status)"
             :aria-current="item.current ? 'step' : undefined"
+            :aria-disabled="!captureReady ? 'true' : undefined"
+            :tabindex="!captureReady ? -1 : undefined"
             @click.prevent="navigateFromDrawer(item)"
           >
             <span>第 {{ item.sequence_index }} 题</span>
@@ -998,7 +1163,7 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="kt-button kt-button--danger-secondary"
-          :disabled="timedOut || finishing"
+          :disabled="timedOut || finishing || !captureReady"
           @click="requestFinishFromDrawer"
         >
           结束实验
@@ -1011,7 +1176,7 @@ onBeforeUnmount(() => {
         <p id="submit-dialog-description">提交后答案将立即锁定，不能修改。草稿会在提交前再次保存。</p>
         <div class="kt-dialog__actions">
           <button type="button" class="kt-button kt-button--secondary" @click="submitDialogOpen = false">取消</button>
-          <button type="button" class="kt-button" data-submit-confirm @click="confirmSubmit">提交并锁定</button>
+          <button type="button" class="kt-button" data-submit-confirm :disabled="!captureReady" @click="confirmSubmit">提交并锁定</button>
         </div>
       </section>
     </div>
@@ -1021,7 +1186,7 @@ onBeforeUnmount(() => {
         <p id="finish-dialog-description">未正式提交的题目将记录为未作答。此操作会结束当前会话。</p>
         <div class="kt-dialog__actions">
           <button type="button" class="kt-button kt-button--secondary" @click="finishDialogOpen = false">取消</button>
-          <button type="button" class="kt-button kt-button--danger" data-finish-confirm @click="confirmFinish">结束实验</button>
+          <button type="button" class="kt-button kt-button--danger" data-finish-confirm :disabled="!captureReady" @click="confirmFinish">结束实验</button>
         </div>
       </section>
     </div>

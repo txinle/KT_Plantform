@@ -25,6 +25,14 @@ interface BootstrapInitializationOptions {
   force?: boolean
 }
 
+class BootstrapNetworkError extends Error {
+  constructor(path: string, readonly cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause)
+    super(`Bootstrap network request failed for ${path}: ${detail}`)
+    this.name = 'BootstrapNetworkError'
+  }
+}
+
 let cachedContext: BootstrapContext | undefined
 let csrfToken: string | undefined
 let pendingInitialization: Promise<BootstrapContext | null> | undefined
@@ -73,11 +81,15 @@ function offlineBootstrapContext(): BootstrapContext | undefined {
 }
 
 async function jsonResponse(fetchImpl: typeof fetch, path: string): Promise<Response> {
-  return fetchImpl(path, {
-    method: 'GET',
-    credentials: 'same-origin',
-    headers: { Accept: 'application/json' },
-  })
+  try {
+    return await fetchImpl(path, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+    })
+  } catch (error) {
+    throw new BootstrapNetworkError(path, error)
+  }
 }
 
 async function initializeLiveBootstrap(fetchImpl: typeof fetch): Promise<BootstrapContext | null> {
@@ -133,7 +145,7 @@ export async function initializeBootstrapContext(
       cachedContext = context || undefined
       return context
     } catch (error) {
-      if (error instanceof TypeError && offlineContext) {
+      if (error instanceof BootstrapNetworkError && offlineContext) {
         cachedContext = offlineContext
         csrfToken = offlineContext.csrf_token
         return offlineContext

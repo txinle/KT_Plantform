@@ -397,6 +397,8 @@ def question_page(request, session_id, assignment_id):
         )
         if session.capture_contract_id and session.capture_contract.contract_name == 'capture-v2':
             response['X-Capture-Contract'] = 'capture-v2'
+            if response.has_header('X-Accel-Redirect'):
+                response['X-Accel-Redirect'] = '/__frontend/capture-v2.html'
         return response
     from .capture_v2_services import uses_capture_v2
     if uses_capture_v2(session):

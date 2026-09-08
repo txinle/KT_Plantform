@@ -2513,67 +2513,216 @@ def _finalize_export_job(job, zip_path, manifest):
 def execute_purge_request(purge_request, *, executed_by):
     from apps.accounts.models import DataPurgeRequest
     from apps.assessment.models import (
-        AssessmentEvent, Attempt, ClientTimeSync, ConfidenceAssignment,
-        DraftSaveEvent, ExperimentSession, QuestionVisitEvent, ResponseInputObservation, ResponseSnapshot,
-        SimulationSnapshot, StudentQuestionAssignment, SubmissionEvent, GradeRecord,
+        AssessmentEvent, Attempt, ClientCaptureCheckpoint, ClientTimeSync,
+        ConfidenceAssignment, DraftSaveEvent, ExperimentSession,
+        QuestionVisitEvent, ResponseInputObservation, ResponseSnapshot,
+        SimulationSnapshot, StudentQuestionAssignment, SubmissionEvent,
+        GradeRecord,
     )
-    course_id = purge_request.scope_definition.get("course_id")
-    if not course_id:
-        raise ValueError("purge scope missing course_id")
-    with transaction.atomic():
-        affected_snapshots = list(
-            ExportSnapshot.objects.filter(course_id=course_id)
+    from apps.experiments.models import ConditionAssignment
+
+    using = purge_request._state.db or "default"
+
+    def remove_committed_artifacts(job_ids, reason):
+        for job in ExportJob.objects.using(using).filter(pk__in=job_ids):
+            remove_export_artifact(job, reason=reason, invalidated=True)
+
+    with transaction.atomic(using=using):
+        locked_request = (
+            DataPurgeRequest.objects.using(using)
+            .select_for_update()
+            .get(pk=purge_request.pk)
         )
-        session_ids = list(ExperimentSession.objects.filter(version__experiment__course_id=course_id).values_list("pk", flat=True))
-        attempt_ids = list(Attempt.objects.filter(session_id__in=session_ids).values_list("pk", flat=True))
-        counts = {"sessions": len(session_ids), "attempts": len(attempt_ids), "events": AssessmentEvent.objects.filter(session_id__in=session_ids).count()}
-        # Clear durable pointers before removing immutable snapshots that they
-        # intentionally protect during ordinary operation.
-        Attempt.objects.filter(pk__in=attempt_ids).update(
+        course_id = locked_request.scope_definition.get("course_id")
+        if locked_request.scope_type != "course" or not course_id:
+            raise ValueError("purge scope missing course_id")
+
+        reason = f"purge:{locked_request.reason_code}"
+        if locked_request.status == DataPurgeRequest.Status.EXECUTED:
+            pending_job_ids = list(
+                ExportJob.objects.using(using)
+                .filter(
+                    course_id=course_id,
+                    status=ExportJob.Status.INVALIDATED,
+                )
+                .exclude(artifact_path="")
+                .values_list("pk", flat=True)
+            )
+            if pending_job_ids:
+                transaction.on_commit(
+                    lambda: remove_committed_artifacts(pending_job_ids, reason),
+                    using=using,
+                )
+            return dict(locked_request.result_counts)
+
+        session_ids = list(
+            ExperimentSession.objects.using(using)
+            .select_for_update()
+            .filter(version__experiment__course_id=course_id)
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
+        attempt_ids = list(
+            Attempt.objects.using(using)
+            .select_for_update()
+            .filter(session_id__in=session_ids)
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
+        counts = {
+            "sessions": len(session_ids),
+            "attempts": len(attempt_ids),
+            "events": AssessmentEvent.objects.using(using).filter(
+                session_id__in=session_ids
+            ).count(),
+        }
+
+        def purge_rows(key, queryset):
+            count = queryset.count()
+            counts[key] = count
+            if count:
+                queryset._raw_delete(using=using)
+
+        # Coverage and randomization rows protect their source runtime records.
+        # They are derived session results, while their run/condition identities
+        # remain available as provenance for unaffected courses.
+        purge_rows(
+            "recording_coverage_attempts",
+            RecordingCoverageAttempt.objects.using(using).filter(
+                attempt_id__in=attempt_ids
+            ),
+        )
+        purge_rows(
+            "recording_coverage_sessions",
+            RecordingCoverageSession.objects.using(using).filter(
+                session_id__in=session_ids
+            ),
+        )
+        purge_rows(
+            "condition_assignments",
+            ConditionAssignment.objects.using(using).filter(
+                session_id__in=session_ids
+            ),
+        )
+        purge_rows(
+            "client_capture_checkpoints",
+            ClientCaptureCheckpoint.objects.using(using).filter(
+                session_id__in=session_ids
+            ),
+        )
+        purge_rows(
+            "response_input_observations",
+            ResponseInputObservation.objects.using(using).filter(
+                attempt_id__in=attempt_ids
+            ),
+        )
+        purge_rows(
+            "grade_records",
+            GradeRecord.objects.using(using).filter(
+                submission__attempt_id__in=attempt_ids
+            ),
+        )
+        purge_rows(
+            "submission_events",
+            SubmissionEvent.objects.using(using).filter(
+                attempt_id__in=attempt_ids
+            ),
+        )
+        purge_rows(
+            "confidence_assignments",
+            ConfidenceAssignment.objects.using(using).filter(
+                attempt_id__in=attempt_ids
+            ),
+        )
+        purge_rows(
+            "simulation_snapshots",
+            SimulationSnapshot.objects.using(using).filter(
+                attempt_id__in=attempt_ids
+            ),
+        )
+        purge_rows(
+            "draft_save_events",
+            DraftSaveEvent.objects.using(using).filter(attempt_id__in=attempt_ids),
+        )
+        purge_rows(
+            "question_visit_events",
+            QuestionVisitEvent.objects.using(using).filter(
+                session_id__in=session_ids
+            ),
+        )
+
+        # Clear the four capture-v2 response heads and the session assignment
+        # head before erasing their immutable targets through this explicit
+        # governance path.
+        Attempt.objects.using(using).filter(pk__in=attempt_ids).update(
+            active_response_event_id=None,
+            final_response_event_id=None,
             current_response_snapshot_id=None,
             final_response_snapshot_id=None,
         )
-        for model, field, ids in (
-            (AssessmentEvent, "session_id", session_ids),
-            (ConfidenceAssignment, "attempt_id", attempt_ids),
-            (SimulationSnapshot, "attempt_id", attempt_ids),
-            (ResponseInputObservation, "attempt_id", attempt_ids),
-            (DraftSaveEvent, "attempt_id", attempt_ids),
-            (QuestionVisitEvent, "session_id", session_ids),
-            (GradeRecord, "submission__attempt_id", attempt_ids),
-            (SubmissionEvent, "attempt_id", attempt_ids),
-            # The durable snapshot pointers must be nulled before their
-            # referenced immutable records can be physically erased.
-            (ResponseSnapshot, "attempt_id", attempt_ids),
-            (Attempt, "pk", attempt_ids),
-            (StudentQuestionAssignment, "session_id", session_ids),
-            (ClientTimeSync, "session_id", session_ids),
-            (ExperimentSession, "pk", session_ids),
-        ):
-            if ids:
-                counts[model.__name__.lower()] = model.objects.filter(**{f"{field}__in": ids}).count() if field != "pk" else len(ids)
-                model.objects.filter(**{f"{field}__in": ids})._raw_delete(using="default")
-        affected_jobs = list(ExportJob.objects.filter(course_id=course_id))
+        ExperimentSession.objects.using(using).filter(pk__in=session_ids).update(
+            current_assignment_id=None
+        )
+        purge_rows(
+            "events",
+            AssessmentEvent.objects.using(using).filter(session_id__in=session_ids),
+        )
+        purge_rows(
+            "response_snapshots",
+            ResponseSnapshot.objects.using(using).filter(attempt_id__in=attempt_ids),
+        )
+        purge_rows(
+            "attempts",
+            Attempt.objects.using(using).filter(pk__in=attempt_ids),
+        )
+        purge_rows(
+            "student_question_assignments",
+            StudentQuestionAssignment.objects.using(using).filter(
+                session_id__in=session_ids
+            ),
+        )
+        purge_rows(
+            "client_time_syncs",
+            ClientTimeSync.objects.using(using).filter(session_id__in=session_ids),
+        )
+        purge_rows(
+            "sessions",
+            ExperimentSession.objects.using(using).filter(pk__in=session_ids),
+        )
+
         invalidated_at = timezone.now()
-        for snapshot in affected_snapshots:
-            ExportSnapshot.objects.filter(pk=snapshot.pk).update(
-                invalidated_at=invalidated_at,
-                invalidated_reason=f"purge:{purge_request.reason_code}",
-                filter_definition={"scope_redacted": True},
-                scope_hash="",
-                redacted_at=invalidated_at,
+        snapshots = ExportSnapshot.objects.using(using).filter(course_id=course_id)
+        counts["export_snapshots_invalidated"] = snapshots.count()
+        snapshots.update(
+            invalidated_at=invalidated_at,
+            invalidated_reason=reason,
+            filter_definition={"scope_redacted": True},
+            scope_hash="",
+            source_bundle=None,
+            redacted_at=invalidated_at,
+        )
+        jobs = ExportJob.objects.using(using).select_for_update().filter(
+            course_id=course_id
+        )
+        job_ids = list(jobs.values_list("pk", flat=True))
+        counts["export_jobs_invalidated"] = len(job_ids)
+        jobs.update(
+            status=ExportJob.Status.INVALIDATED,
+            artifact_removal_reason=reason,
+        )
+
+        locked_request.status = DataPurgeRequest.Status.EXECUTED
+        locked_request.executed_by = executed_by
+        locked_request.executed_at = timezone.now()
+        locked_request.result_counts = counts
+        locked_request.save(
+            update_fields=["status", "executed_by", "executed_at", "result_counts"]
+        )
+        if job_ids:
+            transaction.on_commit(
+                lambda: remove_committed_artifacts(job_ids, reason),
+                using=using,
             )
-        for job in affected_jobs:
-            remove_export_artifact(
-                job,
-                reason=f"purge:{purge_request.reason_code}",
-                invalidated=True,
-            )
-        purge_request.status = DataPurgeRequest.Status.EXECUTED
-        purge_request.executed_by = executed_by
-        purge_request.executed_at = timezone.now()
-        purge_request.result_counts = counts
-        purge_request.save(update_fields=["status", "executed_by", "executed_at", "result_counts"])
     return counts
 
 
