@@ -133,7 +133,7 @@ class CourseEnrollmentImportTests(TestCase):
             display_name="学生丙",
             role=User.Role.STUDENT,
         )
-        with self.assertRaisesMessage(ValidationError, "姓名不一致"):
+        with self.assertRaisesMessage(ValidationError, "登记姓名与当前输入不一致"):
             enroll_single_student(self.course_b, self.class_b, "S3", "另一个姓名")
 
         CourseEnrollment.objects.create(
@@ -141,7 +141,7 @@ class CourseEnrollmentImportTests(TestCase):
             class_group=self.class_b,
             student=student,
         )
-        with self.assertRaisesMessage(ValidationError, "已加入当前课程"):
+        with self.assertRaisesMessage(ValidationError, "已在当前班级"):
             enroll_single_student(self.course_b, self.class_b, "S3", "学生丙")
 
     def test_manual_enrollment_rejects_an_inactive_target_class(self):

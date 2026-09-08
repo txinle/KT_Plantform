@@ -52,6 +52,7 @@ class ApiFoundationContractTests(TestCase):
                     "username": "api-owner",
                     "student_number": None,
                     "home_url": "/teacher/courses/",
+                    "must_change_password": False,
                 }
             },
         )

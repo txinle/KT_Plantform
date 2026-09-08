@@ -5,6 +5,7 @@ export interface AuthenticatedUser {
   username: string
   student_number: string | null
   home_url: string
+  must_change_password: boolean
 }
 
 export interface BootstrapContext {
@@ -39,6 +40,7 @@ function isAuthenticatedUser(value: unknown): value is AuthenticatedUser {
     && (typeof user.student_number === 'string' || user.student_number === null)
     && typeof user.home_url === 'string'
     && user.home_url.startsWith('/')
+    && typeof user.must_change_password === 'boolean'
   )
 }
 
@@ -48,6 +50,11 @@ function offlineBootstrapContext(): BootstrapContext | undefined {
 
   try {
     const envelope = JSON.parse(element.textContent) as Partial<OfflineBootstrapEnvelope>
+    const rawOfflineUser = (envelope as { user?: unknown }).user
+    const offlineUser = rawOfflineUser && typeof rawOfflineUser === 'object'
+      && !('must_change_password' in rawOfflineUser)
+      ? { ...rawOfflineUser, must_change_password: false }
+      : rawOfflineUser
     const match = /^\/student\/sessions\/(\d+)\/questions\/(\d+)\/$/.exec(window.location.pathname)
     if (
       !match
@@ -57,9 +64,9 @@ function offlineBootstrapContext(): BootstrapContext | undefined {
       || envelope.assignment_id !== Number(match[2])
       || typeof envelope.csrf_token !== 'string'
       || !envelope.csrf_token
-      || !isAuthenticatedUser(envelope.user)
+      || !isAuthenticatedUser(offlineUser)
     ) return undefined
-    return { csrf_token: envelope.csrf_token, user: envelope.user }
+    return { csrf_token: envelope.csrf_token, user: offlineUser }
   } catch {
     return undefined
   }

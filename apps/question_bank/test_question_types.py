@@ -81,7 +81,7 @@ class QuestionTypeEditingTests(TestCase):
         self.assertEqual(question.accepted_answers, [])
         self.assertFalse(question.options.exists())
 
-    def test_numeric_answer_rejects_nonfinite_decimal_values(self):
+    def test_numeric_nonfinite_answers_remain_unavailable_drafts(self):
         for answer in ("NaN", "sNaN", "Infinity", "-Infinity"):
             with self.subTest(answer=answer):
                 form = QuestionEditForm(
@@ -92,8 +92,12 @@ class QuestionTypeEditingTests(TestCase):
                     instance=self.question,
                 )
 
-                self.assertFalse(form.is_valid())
-                self.assertIn("correct_answer_text", form.errors)
+                self.assertTrue(form.is_valid(), form.errors)
+                question = form.save()
+                self.assertEqual(question.status, Question.Status.DRAFT)
+                self.assertEqual(question.correct_answer, answer)
+                from .services.question_readiness import readiness_issues
+                self.assertTrue(any("数值题答案" in issue for issue in readiness_issues(question)))
 
     def test_converting_a_choice_question_to_fill_blank_clears_stale_options(self):
         QuestionOption.objects.create(

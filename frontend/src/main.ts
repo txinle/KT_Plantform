@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import { createApp } from 'vue'
 
 import App from './app/App.vue'
+import { authenticatedEntryRedirect } from './app/auth'
 import { initializeBootstrapContext } from './app/bootstrap'
 import { router } from './app/router'
 
@@ -42,9 +43,12 @@ export async function startApplication() {
     window.location.assign(loginUrl())
     return
   }
-  if (context && isLoginPath()) {
-    window.location.assign(context.user.home_url)
-    return
+  if (context) {
+    const redirect = authenticatedEntryRedirect(context.user, window.location.pathname)
+    if (redirect) {
+      window.location.assign(redirect)
+      return
+    }
   }
   createApp(App).use(createPinia()).use(router).mount('#kt-app')
 }

@@ -163,4 +163,21 @@ describe('API client', () => {
       '/login/?next=%2Fteacher%2Fcourses%2F7%2Fexperiments%2F%3Fpage%3D2',
     )
   })
+
+  it('routes a password-change gate by structured error code', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        error: {
+          code: 'PASSWORD_CHANGE_REQUIRED',
+          message: 'This text is deliberately not inspected.',
+          fields: {},
+        },
+      }, 403),
+    )
+    const onPasswordChangeRequired = vi.fn()
+    const client = createApiClient({ fetchImpl, onPasswordChangeRequired })
+
+    await expect(client.get('/api/v1/teacher/accounts/classes/')).rejects.toBeInstanceOf(ApiError)
+    expect(onPasswordChangeRequired).toHaveBeenCalledWith('/password/change/')
+  })
 })

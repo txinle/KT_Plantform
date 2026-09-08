@@ -7,6 +7,7 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login/', name: 'login', component: LoginPage },
+    { path: '/password/change/', name: 'password-change', component: () => import('./PasswordChangePage.vue') },
     ...migratedRoutes,
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./PageUnavailable.vue') },
   ],

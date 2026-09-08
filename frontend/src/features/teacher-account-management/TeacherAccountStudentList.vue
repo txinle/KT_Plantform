@@ -19,9 +19,8 @@ const error = ref('')
 const success = ref('')
 const query = ref(String(route.query.q || ''))
 const selectedClass = ref(String(route.query.class_id || ''))
-const form = reactive({ student_number: '', display_name: '', class_group: '', password: '' })
-const resetStudent = ref<{ id: number; display_name: string }>()
-const replacementPassword = ref('')
+const form = reactive({ student_number: '', display_name: '', class_group: '' })
+const resetStudent = ref<{ id: number; student_number: string; display_name: string }>()
 
 function message(caught: unknown, fallback: string) {
   return caught instanceof Error ? caught.message : fallback
@@ -68,12 +67,10 @@ async function createStudent() {
       student_number: form.student_number,
       display_name: form.display_name,
       class_group: classGroupId,
-      password: form.password,
     })
     form.student_number = ''
     form.display_name = ''
     form.class_group = ''
-    form.password = ''
     await load()
     success.value = '学生账号已创建。'
   } catch (caught) {
@@ -89,10 +86,9 @@ async function resetPassword() {
   error.value = ''
   success.value = ''
   try {
-    await api.resetLegacyStudentPassword(resetStudent.value.id, replacementPassword.value)
+    await api.resetLegacyStudentPassword(resetStudent.value.id)
     success.value = `${resetStudent.value.display_name} 的密码已重置。`
     resetStudent.value = undefined
-    replacementPassword.value = ''
   } catch (caught) {
     error.value = message(caught, '密码重置失败。')
   } finally {
@@ -128,18 +124,17 @@ onMounted(load)
           <section class="kt-card kt-account-management-members" aria-labelledby="account-student-list-title">
             <div class="kt-section-heading"><h2 id="account-student-list-title">学生账号</h2><span>{{ collection.items.length }} 人</span></div>
             <EmptyState v-if="!collection.items.length" title="没有符合条件的学生"><p>调整筛选条件，或在右侧创建学生账号。</p></EmptyState>
-            <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>学号</th><th>姓名</th><th>所属班级</th><th>密码操作</th></tr></thead><tbody><tr v-for="student in collection.items" :key="student.id"><td>{{ student.student_number }}</td><td>{{ student.display_name }}</td><td>{{ student.class_group?.display_name || '未归属班级' }}</td><td><button class="kt-button kt-button--secondary" type="button" @click="resetStudent = student">重置密码</button></td></tr></tbody></table></div>
+            <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>学号</th><th>姓名</th><th>所属班级</th><th>密码操作</th></tr></thead><tbody><tr v-for="student in collection.items" :key="student.id"><td>{{ student.student_number }}</td><td>{{ student.display_name }}</td><td>{{ student.class_group?.display_name || '未归属班级' }}</td><td><button class="kt-button kt-button--secondary" data-reset-student-password type="button" @click="resetStudent = student">重置密码</button></td></tr></tbody></table></div>
           </section>
         </section>
 
         <aside class="kt-card kt-account-management-form">
           <h2>创建学生账号</h2>
-          <p>此处创建的是全局账号；初始密码须由教师明确输入。</p>
+          <p>此处创建的是全局账号；初始密码为 S + 学号。</p>
           <form data-account-student-create @submit.prevent="createStudent">
             <label>学号<input v-model="form.student_number" name="student_number" maxlength="64" required :disabled="submitting"></label>
             <label>姓名<input v-model="form.display_name" name="display_name" maxlength="80" required :disabled="submitting"></label>
             <label>所属班级<select v-model="form.class_group" name="class_group" required :disabled="submitting"><option value="">请选择班级</option><option v-for="classGroup in collection.class_options" :key="classGroup.id" :value="classGroup.id">{{ classGroup.display_name }}</option></select></label>
-            <label>初始密码<input v-model="form.password" name="password" minlength="8" required type="password" autocomplete="new-password" :disabled="submitting"></label>
             <button class="kt-button" type="submit" :disabled="submitting">创建学生账号</button>
           </form>
         </aside>
@@ -147,7 +142,8 @@ onMounted(load)
 
       <section v-if="resetStudent" class="kt-card kt-account-management-confirm" aria-labelledby="legacy-reset-password-title">
         <h2 id="legacy-reset-password-title">重置 {{ resetStudent.display_name }} 的密码</h2>
-        <form @submit.prevent="resetPassword"><label>新密码<input v-model="replacementPassword" minlength="8" required type="password" autocomplete="new-password"></label><div class="kt-account-management-actions"><button class="kt-button" type="submit" :disabled="submitting">确认重置</button><button class="kt-button kt-button--secondary" type="button" :disabled="submitting" @click="resetStudent = undefined">取消</button></div></form>
+        <p>重置后密码将变为 S + 当前学号（S{{ resetStudent.student_number }}），该学生现有登录会话将全部失效。</p>
+        <div class="kt-account-management-actions"><button class="kt-button" data-reset-student-password-confirm type="button" :disabled="submitting" @click="resetPassword">确认重置</button><button class="kt-button kt-button--secondary" type="button" :disabled="submitting" @click="resetStudent = undefined">取消</button></div>
       </section>
     </template>
   </section>

@@ -142,6 +142,7 @@
 .kt-question-import .qimp-summary .qimp-total { min-width: 104px; color: #253555; }
 .kt-question-import .qimp-summary span strong { display: block; font-size: 20px; line-height: 1; }
 .kt-question-import .qimp-summary .is-ready strong { color: #079451; }
+.kt-question-import .qimp-summary .is-draft strong { color: #986514; }
 .kt-question-import .qimp-summary .is-duplicate strong { color: #63718a; }
 .kt-question-import .qimp-summary .is-invalid strong { color: #e38313; }
 
@@ -354,6 +355,8 @@
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
+.kt-question-import .kt-question-import__errors.is-draft-reasons { color: #7a560f; }
+.kt-question-import .qimp-detail-errors.is-draft-reasons { border-color: #e8c889; background: #fff8e9; color: #7a560f; }
 .kt-question-import .qimp-link {
   display: inline-flex;
   min-height: 30px;

@@ -53,6 +53,9 @@ class ParsedQuestion:
     accepted_answers: list[str] = field(default_factory=list)
     explanation: str = ""
     teacher_difficulty: str | None = None
+    raw_primary_kc: str = ""
+    raw_secondary_kcs: str = ""
+    raw_tertiary_kcs: str = ""
 
 
 @dataclass(frozen=True)
@@ -107,7 +110,7 @@ class ParsedKCWorkbook:
 
 
 def _clean(value: Any) -> str:
-    return " ".join(str(value or "").strip().split())
+    return " ".join(str("" if value is None else value).strip().split())
 
 
 def _first(row: Mapping[str, Any], *keys: str) -> Any:
@@ -139,7 +142,8 @@ def _split_choices(value: str) -> list[str]:
 
 
 def _split_accepted_answers(value: Any) -> list[str]:
-    answers = [_clean(item) for item in str(value or "").replace("；", ";").split(";")]
+    raw = "" if value is None else str(value)
+    answers = [_clean(item) for item in raw.replace("；", ";").split(";")]
     return list(dict.fromkeys(answer for answer in answers if answer))
 
 
@@ -279,6 +283,7 @@ def parse_question_rows(
     rows: Iterable[Mapping[str, Any]],
     *,
     sequence_floor: int = 0,
+    allow_incomplete: bool = False,
 ) -> list[ParsedQuestion]:
     source_rows = [
         (row_number, row)
@@ -305,7 +310,7 @@ def parse_question_rows(
             sequence = next_sequence
             next_sequence += 1
         text = _clean(_first(row, "题目", "题干", "question", "question_text"))
-        if not text:
+        if not text and not allow_incomplete:
             raise ValueError(f"第 {row_number} 行缺少题目")
         options = {
             key: _clean(_first(row, f"选项{key}", f"option_{key.lower()}", key))
@@ -313,7 +318,7 @@ def parse_question_rows(
         }
         options = {key: value for key, value in options.items() if value}
         raw_answer = _clean(_first(row, "答案", "正确答案", "answer", "correct_answer"))
-        if not raw_answer:
+        if not raw_answer and not allow_incomplete:
             raise ValueError(f"第 {row_number} 行缺少答案")
 
         explicit_type = _clean(_first(row, "题型", "题目类型", "question_type", "type"))
@@ -327,7 +332,7 @@ def parse_question_rows(
         )
         if explicit_type:
             question_type = _explicit_question_type(explicit_type, row_number)
-            if question_type in {
+            if not allow_incomplete and question_type in {
                 "numeric",
                 "fill_blank",
                 "true_false",
@@ -338,28 +343,45 @@ def parse_question_rows(
                 choice_answer = raw_answer
                 if question_type == "multiple_choice" and accepted_answers:
                     choice_answer = ";".join([raw_answer, *accepted_answers])
-                answer = _parse_choice_answer(choice_answer, options, question_type, row_number)
-                if question_type == "multiple_choice":
-                    accepted_answers = []
+                try:
+                    answer = _parse_choice_answer(choice_answer, options, question_type, row_number)
+                except ValueError:
+                    if not allow_incomplete:
+                        raise
+                    answer = raw_answer
+                else:
+                    if question_type == "multiple_choice":
+                        accepted_answers = []
             elif question_type == "numeric":
                 try:
                     normalize_finite_decimal(raw_answer)
                 except ValueError:
-                    raise ValueError(f"第 {row_number} 行数值题答案必须是有效数字") from None
+                    if not allow_incomplete:
+                        raise ValueError(f"第 {row_number} 行数值题答案必须是有效数字") from None
                 answer = raw_answer
             elif question_type == "true_false":
                 answer = normalize_true_false_answer(raw_answer)
                 if answer is None:
-                    raise ValueError(f"第 {row_number} 行判断题答案必须为正确或错误")
+                    if not allow_incomplete:
+                        raise ValueError(f"第 {row_number} 行判断题答案必须为正确或错误")
+                    answer = raw_answer
             else:
                 answer = raw_answer
         elif options:
+            if not raw_answer:
+                raise ValueError(f"第 {row_number} 行缺少题型，且无法根据空答案推断题型")
             choices = _split_choices(raw_answer)
             if not choices or any(choice not in options for choice in choices):
-                raise ValueError(f"第 {row_number} 行答案必须对应已有的 A-F 选项")
-            question_type = "multiple_choice" if len(set(choices)) > 1 else "single_choice"
-            answer = sorted(set(choices)) if question_type == "multiple_choice" else choices[0]
+                if not allow_incomplete:
+                    raise ValueError(f"第 {row_number} 行答案必须对应已有的 A-F 选项")
+                question_type = "single_choice"
+                answer = raw_answer
+            else:
+                question_type = "multiple_choice" if len(set(choices)) > 1 else "single_choice"
+                answer = sorted(set(choices)) if question_type == "multiple_choice" else choices[0]
         else:
+            if not raw_answer:
+                raise ValueError(f"第 {row_number} 行缺少题型，且无法根据空答案推断题型")
             try:
                 normalize_finite_decimal(raw_answer)
                 question_type = "numeric"
@@ -379,6 +401,9 @@ def parse_question_rows(
                 accepted_answers,
                 explanation,
                 teacher_difficulty,
+                _clean(_first(row, "一级知识点")),
+                _clean(_first(row, "二级知识点")),
+                _clean(_first(row, "三级知识点")),
             )
         )
     if not parsed:

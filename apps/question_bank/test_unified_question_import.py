@@ -63,6 +63,8 @@ class UnifiedQuestionImportTests(TestCase):
         persisted = json.dumps(batch.payload, ensure_ascii=False)
         for source_key in ['source_label', '_location', 'questions.csv', '序号']:
             self.assertNotIn(source_key, persisted)
+        self.assertEqual(batch.payload['rows'][0]['errors'], [])
+        self.assertEqual(batch.payload['rows'][0]['raw']['一级知识点'], 'KC1')
         result = self.confirm(preview)
         self.assertEqual(result.status_code, 201, result.content)
         question = self.bank.questions.get()
@@ -77,19 +79,19 @@ class UnifiedQuestionImportTests(TestCase):
         bad = question_row(题目='第二题', 一级知识点='KC99')
         preview = self.preview([good, bad, good])
         self.assertIn('summary', preview['preview'])
-        self.assertEqual(preview['preview']['summary'], {'ready': 1, 'duplicate': 1, 'invalid': 1})
+        self.assertEqual(preview['preview']['summary'], {'ready': 1, 'draft': 1, 'duplicate': 1, 'invalid': 0})
         response = self.confirm(preview)
         self.assertEqual(response.status_code, 201, response.content)
-        self.assertEqual(response.json()['created'], 1)
-        question = self.bank.questions.get()
+        self.assertEqual(response.json()['created'], 2)
+        question = self.bank.questions.get(status=Question.Status.ACTIVE)
         identity = question.course_identity.stable_code
         repeat = self.confirm(preview)
         self.assertEqual(repeat.json(), response.json())
         fixed = question_row(题目='第二题')
         second = self.preview([good, fixed])
-        self.assertEqual(second['preview']['summary'], {'ready': 1, 'duplicate': 1, 'invalid': 0})
+        self.assertEqual(second['preview']['summary'], {'ready': 1, 'draft': 0, 'duplicate': 1, 'invalid': 0})
         self.assertEqual(self.confirm(second).json()['created'], 1)
-        self.assertEqual(list(self.bank.questions.values_list('sequence', flat=True)), [1, 2])
+        self.assertEqual(list(self.bank.questions.values_list('sequence', flat=True)), [1, 2, 3])
         self.assertEqual(Question.objects.get(pk=question.pk).course_identity.stable_code, identity)
 
     def test_original_numbers_are_ignored_and_neighbors_keep_their_own_mapping(self):
@@ -101,16 +103,18 @@ class UnifiedQuestionImportTests(TestCase):
         self.assertEqual([(q.sequence, q.text, q.primary_concept.code) for q in self.bank.questions.all()],
                          [(1, '甲', 'KC1'), (2, '乙', 'KC3')])
 
-    def test_unknown_or_fuzzy_kc_is_invalid_and_changed_content_does_not_overwrite(self):
+    def test_unknown_or_fuzzy_kc_is_draft_and_changed_content_does_not_overwrite(self):
         typo = question_row(一级知识点='FPGA基出')
         preview = self.preview([typo])
         self.assertIn('summary', preview['preview'])
-        self.assertEqual(preview['preview']['summary']['invalid'], 1)
-        self.assertFalse(preview['preview']['confirmable'])
+        self.assertEqual(preview['preview']['summary']['draft'], 1)
+        self.assertTrue(preview['preview']['confirmable'])
+        imported = self.confirm(preview).json()
+        self.assertEqual((imported['created'], imported['draft']), (1, 1))
         self.confirm(self.preview([question_row()]))
         result = self.confirm(self.preview([question_row(解析='新的解释')]))
         self.assertEqual(result.json()['created'], 1)
-        self.assertEqual(self.bank.questions.count(), 2)
+        self.assertEqual(self.bank.questions.count(), 3)
 
     def test_confirm_revalidates_kc_and_does_not_partially_write_question(self):
         preview = self.preview([question_row()])
@@ -118,8 +122,10 @@ class UnifiedQuestionImportTests(TestCase):
         Concept.objects.filter(course=self.course, code='KC3').update(status=Concept.Status.ARCHIVED)
         response = self.confirm(preview)
         self.assertEqual(response.status_code, 201, response.content)
-        self.assertEqual(response.json()['failed'], 1)
-        self.assertFalse(self.bank.questions.exists())
+        self.assertEqual((response.json()['created'], response.json()['draft']), (1, 1))
+        question = self.bank.questions.get()
+        self.assertEqual(question.status, Question.Status.DRAFT)
+        self.assertFalse(question.concept_links.exists())
 
     def test_unexpected_write_failure_rolls_back_all_rows_and_batch_consumption(self):
         from .services.question_kc_mapping import replace_question_kc_mapping
@@ -204,14 +210,14 @@ class UnifiedQuestionImportTests(TestCase):
         response = self.client.post(self.base + 'preview/', {'file': SimpleUploadedFile('zero.xlsx', output.getvalue())})
         self.assertEqual(response.status_code, 200, response.content)
         preview = response.json()
-        self.assertEqual(preview['preview']['summary'], {'ready': 1, 'duplicate': 0, 'invalid': 1})
+        self.assertEqual(preview['preview']['summary'], {'ready': 1, 'draft': 0, 'duplicate': 0, 'invalid': 1})
         self.assertEqual(preview['preview']['rows'][0]['answer'], '0')
         self.assertEqual(self.confirm(preview).json()['created'], 1)
 
-    def test_invalid_content_keeps_full_business_fields_for_correction(self):
+    def test_draft_content_keeps_full_business_fields_for_correction(self):
         preview = self.preview([question_row(题型='单选题', 选项A='甲\n内容', 选项B='乙', 答案='Z')])
         row = preview['preview']['rows'][0]
-        self.assertEqual(row['classification'], 'invalid')
+        self.assertEqual(row['classification'], 'draft')
         self.assertEqual(row['answer'], 'Z')
         self.assertEqual(row['options'][0]['text'], '甲\n内容')
         self.assertEqual(row['explanation'], question_row()['解析'])
@@ -225,16 +231,16 @@ class UnifiedQuestionImportTests(TestCase):
         rows = preview['preview']['rows']
         self.assertEqual(
             [row['classification'] for row in rows],
-            ['ready', 'duplicate', 'ready', 'invalid'],
+            ['ready', 'duplicate', 'ready', 'draft'],
         )
 
         response = self.confirm(preview, [rows[2]['row_id']])
         self.assertEqual(response.status_code, 201, response.content)
         result = response.json()
-        self.assertEqual((result['created'], result['skipped'], result['failed']), (1, 1, 1))
+        self.assertEqual((result['created'], result['skipped'], result['failed']), (1, 1, 0))
         self.assertEqual(
             [row['status'] for row in result['rows']],
-            ['unselected', 'duplicate', 'created', 'invalid'],
+            ['unselected', 'duplicate', 'created', 'unselected'],
         )
         self.assertEqual(
             set(self.bank.questions.values_list('text', flat=True)),
@@ -251,7 +257,7 @@ class UnifiedQuestionImportTests(TestCase):
         preview = self.preview([
             ready,
             ready,
-            question_row(题目='预览无效题目', 一级知识点='KC99'),
+            question_row(题目='预览无效题目', 题型='连线题'),
         ])
         row_id = preview['preview']['rows'][0]['row_id']
         duplicate_row_id = preview['preview']['rows'][1]['row_id']

@@ -20,6 +20,7 @@ describe('standalone question-bank API', () => {
     await api.detail(11)
     await api.updateVisibility(11, 'shared')
     await api.questionEditor(11, 31)
+    await api.recheckQuestions(11)
     await api.previewQuestionImport(11, file)
     await api.confirmQuestionImport(11, 'preview-id')
     await api.previewKCImport(11, file)
@@ -37,15 +38,16 @@ describe('standalone question-bank API', () => {
       method: 'PUT', body: { visibility: 'shared' },
     })
     expect(client.get).toHaveBeenNthCalledWith(3, '/api/v1/teacher/banks/11/questions/31/editor/')
+    expect(client.mutate).toHaveBeenNthCalledWith(3, '/api/v1/teacher/banks/11/questions/recheck/', { method: 'POST' })
     expect(client.mutateForm).toHaveBeenNthCalledWith(1, '/api/v1/teacher/banks/11/imports/questions/preview/', expect.objectContaining({ method: 'POST' }))
-    expect(client.mutate).toHaveBeenNthCalledWith(3, '/api/v1/teacher/banks/11/imports/questions/confirm/', {
+    expect(client.mutate).toHaveBeenNthCalledWith(4, '/api/v1/teacher/banks/11/imports/questions/confirm/', {
       method: 'POST', body: { preview_id: 'preview-id' },
     })
     expect(client.mutateForm).toHaveBeenNthCalledWith(2, '/api/v1/teacher/banks/11/imports/kc/preview/', expect.objectContaining({ method: 'POST' }))
-    expect(client.mutate).toHaveBeenNthCalledWith(4, '/api/v1/teacher/banks/11/imports/kc/confirm/', {
+    expect(client.mutate).toHaveBeenNthCalledWith(5, '/api/v1/teacher/banks/11/imports/kc/confirm/', {
       method: 'POST', body: { preview_id: 'kc-preview-id' },
     })
-    expect(client.mutate).toHaveBeenNthCalledWith(5, '/api/v1/teacher/banks/shared/17/copy/', { method: 'POST' })
+    expect(client.mutate).toHaveBeenNthCalledWith(6, '/api/v1/teacher/banks/shared/17/copy/', { method: 'POST' })
     expect(client.get).toHaveBeenNthCalledWith(4, '/api/v1/teacher/concepts/')
     expect(client.get).toHaveBeenNthCalledWith(
       5,

@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 
 import { ApiError } from '@/api/client'
 
-import { login, safeNextPath } from './auth'
+import { login, loginDestination } from './auth'
 
 const route = useRoute()
 const credentials = reactive({ username: '', password: '' })
@@ -16,7 +16,7 @@ async function submit() {
   error.value = ''
   try {
     const context = await login(credentials.username, credentials.password)
-    window.location.assign(safeNextPath(route.query.next, context.user.home_url))
+    window.location.assign(loginDestination(context.user, route.query.next))
   } catch (caught) {
     error.value = caught instanceof ApiError || caught instanceof Error
       ? caught.message

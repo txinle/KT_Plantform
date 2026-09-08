@@ -52,7 +52,6 @@ class TeacherAccountStudentCreateRequestSerializer(serializers.Serializer):
     student_number = serializers.CharField()
     display_name = serializers.CharField()
     class_group = serializers.IntegerField()
-    password = serializers.CharField(write_only=True)
 
 
 class TeacherAccountStudentCreateResponseSerializer(serializers.Serializer):
@@ -60,7 +59,7 @@ class TeacherAccountStudentCreateResponseSerializer(serializers.Serializer):
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
-    password = serializers.CharField(write_only=True)
+    confirmation = serializers.ChoiceField(choices=("reset",))
 
 
 class StudentImportPreviewRequestSerializer(serializers.Serializer):
@@ -107,6 +106,8 @@ class ManagedClassSerializer(serializers.Serializer):
 class ManagedEnrollmentSerializer(serializers.Serializer):
     enrollment_id = serializers.IntegerField()
     student = TeacherAccountStudentSerializer()
+    identity_state_token = serializers.CharField()
+    affects_other_courses = serializers.BooleanField()
 
 
 class ManagedClassSourceOptionSerializer(serializers.Serializer):
@@ -127,6 +128,7 @@ class ManagedClassCapabilitiesSerializer(serializers.Serializer):
     can_move_students = serializers.BooleanField()
     can_remove_students = serializers.BooleanField()
     can_reset_passwords = serializers.BooleanField()
+    can_edit_students = serializers.BooleanField()
     can_update_visibility = serializers.BooleanField()
 
 
@@ -166,6 +168,19 @@ class CourseClassDeleteResponseSerializer(serializers.Serializer):
 class ManualEnrollmentRequestSerializer(serializers.Serializer):
     student_number = serializers.CharField()
     display_name = serializers.CharField()
+    confirmation_token = serializers.CharField(required=False, allow_blank=False)
+
+
+class StudentIdentityUpdateRequestSerializer(serializers.Serializer):
+    student_number = serializers.CharField(max_length=64)
+    display_name = serializers.CharField(max_length=80)
+    state_token = serializers.CharField()
+
+
+class StudentIdentityUpdateResponseSerializer(serializers.Serializer):
+    student = TeacherAccountStudentSerializer()
+    identity_state_token = serializers.CharField()
+    affects_other_courses = serializers.BooleanField()
 
 
 class ManualEnrollmentResponseSerializer(serializers.Serializer):

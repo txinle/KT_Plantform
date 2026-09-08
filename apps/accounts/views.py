@@ -6,17 +6,20 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
 from django.core.exceptions import PermissionDenied
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_http_methods
+from django.core.exceptions import ValidationError
 from openpyxl import Workbook
 
 from .enrollment_services import import_legacy_students
 from .forms import ClassGroupForm, PasswordResetForm, StudentBatchUploadForm, StudentCreateForm
 from .models import ClassGroup, User
+from .password_services import change_student_password, password_change_required, reset_student_initial_password
+from .forms import StudentPasswordChangeForm
 from .permissions import role_required
 from .student_import import ParsedStudent, StudentImportError, parse_student_workbook
 from apps.audit.services import log_action
@@ -25,6 +28,11 @@ from apps.audit.services import log_action
 class PlatformLoginView(LoginView):
     template_name = "registration/login.html"
 
+    def get_success_url(self):
+        if password_change_required(self.request.user):
+            return reverse("password-change")
+        return super().get_success_url()
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["show_demo_credentials"] = settings.DEBUG
@@ -32,11 +40,29 @@ class PlatformLoginView(LoginView):
 
 
 def resolve_home_url(user):
+    if password_change_required(user):
+        return reverse("password-change")
     if user.is_superuser or user.role == User.Role.ADMIN:
         return reverse("admin:index")
     if user.role == User.Role.TEACHER:
         return reverse("courses:list")
     return reverse("assessment:dashboard")
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def password_change(request):
+    if not password_change_required(request.user):
+        return redirect(resolve_home_url(request.user))
+    form = StudentPasswordChangeForm(request.POST or None, user=request.user)
+    if request.method == "POST" and form.is_valid():
+        try:
+            student = change_student_password(request=request, data=request.POST)
+        except ValidationError as exc:
+            form.add_error(None, exc)
+        else:
+            return redirect(resolve_home_url(student))
+    return render(request, "registration/password_change.html", {"form": form})
 
 
 @login_required
@@ -80,10 +106,15 @@ def class_list(request):
 def student_list(request):
     form = StudentCreateForm(request.POST or None, owner=request.user)
     if request.method == "POST" and form.is_valid():
-        student = form.save()
-        log_action(request, "student.create", student, {"student_number": student.student_number, "class": str(student.class_group or "")})
-        messages.success(request, "学生账号已创建")
-        return redirect("accounts:student_list")
+        try:
+            with transaction.atomic():
+                student = form.save()
+                log_action(request, "student.create", student, {"student_number": student.student_number, "class": str(student.class_group or "")})
+        except IntegrityError:
+            form.add_error("student_number", "账号创建失败，请确认学号和登录用户名未被占用，并刷新班级列表。")
+        else:
+            messages.success(request, "学生账号已创建")
+            return redirect("accounts:student_list")
     classes = _class_queryset(request.user)
     students = _student_queryset(request.user)
     query = request.GET.get("q", "").strip()
@@ -196,10 +227,8 @@ def reset_student_password(request, pk):
         raise PermissionDenied
     form = PasswordResetForm(request.POST)
     if form.is_valid():
-        student.set_password(form.cleaned_data["password"])
-        student.save(update_fields=["password"])
-        log_action(request, "student.password_reset", student)
-        messages.success(request, f"{student.shown_name} 的密码已重置")
+        student = reset_student_initial_password(request=request, student_id=student.pk)
+        messages.success(request, f"{student.shown_name} 的初始密码已重置为 S + 当前学号，下次登录必须修改密码。")
     else:
-        messages.error(request, "密码至少需要 8 个字符")
+        messages.error(request, "请确认重置初始密码。")
     return redirect("accounts:student_list")

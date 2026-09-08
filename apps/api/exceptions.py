@@ -12,14 +12,19 @@ STATUS_CODES = {
 }
 
 
-class ApiConflict(APIException):
+class ApiBusinessError(APIException):
     status_code = 409
     default_code = "CONFLICT"
 
-    def __init__(self, detail, *, code="CONFLICT", fields=None):
+    def __init__(self, detail, *, code="CONFLICT", fields=None, status=409):
+        self.status_code = status
         self.default_code = code
         self.fields = fields or {}
         super().__init__(detail=detail, code=code)
+
+
+class ApiConflict(ApiBusinessError):
+    pass
 
 
 def api_exception_handler(exc, context):
@@ -28,7 +33,7 @@ def api_exception_handler(exc, context):
         return None
     request = context.get("request")
     detail = response.data
-    if isinstance(exc, ApiConflict):
+    if isinstance(exc, ApiBusinessError):
         message = (
             str(detail["detail"])
             if isinstance(detail, dict) and set(detail) == {"detail"}
@@ -41,12 +46,15 @@ def api_exception_handler(exc, context):
     elif isinstance(detail, dict):
         message = "请求数据无效。"
         fields = detail
+    elif isinstance(detail, (list, tuple)):
+        message = "；".join(str(item) for item in detail)
+        fields = {}
     else:
         message = str(detail)
         fields = {}
     code = (
         getattr(exc, "default_code", "CONFLICT")
-        if response.status_code == 409
+        if isinstance(exc, ApiBusinessError)
         else STATUS_CODES.get(response.status_code, "API_ERROR")
     )
     if response.status_code == 403 and message.startswith("CSRF Failed:"):

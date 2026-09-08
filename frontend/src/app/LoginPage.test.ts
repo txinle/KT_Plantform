@@ -1,14 +1,14 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ login: vi.fn() }))
+const mocks = vi.hoisted(() => ({ login: vi.fn(), loginDestination: vi.fn() }))
 
 vi.mock('vue-router', () => ({
   useRoute: () => ({ query: { next: '/student/' } }),
 }))
 vi.mock('./auth', () => ({
   login: mocks.login,
-  safeNextPath: () => '/student/',
+  loginDestination: mocks.loginDestination,
 }))
 
 import LoginPage from './LoginPage.vue'

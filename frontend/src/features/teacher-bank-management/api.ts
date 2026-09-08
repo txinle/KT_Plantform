@@ -64,6 +64,7 @@ export interface QuestionEditor {
     correct_answer_text: string
     accepted_answers_text: string
     options: Record<string, string>
+    draft_reasons: string[]
     kc_mapping: {
       schema_version: string
       root_kc_code: string | null
@@ -76,7 +77,7 @@ export interface QuestionEditor {
   detail_url: string
 }
 
-export type QuestionImportClassification = 'ready' | 'duplicate' | 'invalid'
+export type QuestionImportClassification = 'ready' | 'draft' | 'duplicate' | 'invalid'
 
 export interface QuestionImportPreviewRow {
   row_id: string
@@ -104,22 +105,38 @@ export interface QuestionImportPreview {
   preview_id: string
   preview: {
     rows: QuestionImportPreviewRow[]
-    summary: { ready: number; duplicate: number; invalid: number }
+    summary: { ready: number; draft: number; duplicate: number; invalid: number }
     confirmable: boolean
   }
 }
 
 export interface QuestionImportConfirmation {
   created: number
+  active?: number
+  draft?: number
   skipped: number
   failed: number
   detail_url: string
   rows: Array<{
     row_id: string
-    status: 'created' | 'duplicate' | 'invalid' | 'unselected'
+    status: 'created'
+    question_id: number
+    question_status: 'active' | 'draft'
+    draft_reasons: string[]
+    errors: string[]
+  } | {
+    row_id: string
+    status: 'duplicate' | 'invalid' | 'unselected'
     question_id?: number | null
     errors: string[]
   }>
+}
+
+export interface QuestionRecheckResult {
+  checked: number
+  activated: number
+  draft: number
+  rows: Array<{ id: number; code: string; status: string; draft_reasons: string[] }>
 }
 
 export interface KCImportPreview {
@@ -214,6 +231,12 @@ export function createTeacherBankManagementApi(client: ApiClient) {
         { method: 'PUT', body },
       )
     },
+    recheckQuestions(courseId: number, bankId: number) {
+      return client.mutate<QuestionRecheckResult>(
+        `/api/v1/teacher/courses/${courseId}/banks/${bankId}/questions/recheck/`,
+        { method: 'POST' },
+      )
+    },
     previewQuestionImport(courseId: number, bankId: number, file: File) {
       const body = new FormData()
       body.append('file', file)
@@ -252,6 +275,12 @@ export function createTeacherBankManagementApi(client: ApiClient) {
       return client.mutate<{ id: number; status: string } | void>(
         `/api/v1/teacher/courses/${courseId}/concepts/${conceptId}/`,
         { method: 'DELETE' },
+      )
+    },
+    setCourseConceptStatus(courseId: number, conceptId: number, status: 'active' | 'archived') {
+      return client.mutate<{ id: number; status: string }>(
+        `/api/v1/teacher/courses/${courseId}/concepts/${conceptId}/`,
+        { method: 'PATCH', body: { status } },
       )
     },
   }

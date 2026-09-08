@@ -241,6 +241,7 @@ def question_import(request, pk):
             parsed = parse_question_rows(
                 read_uploaded_rows(form.cleaned_data["file"]),
                 sequence_floor=sequence_floor,
+                allow_incomplete=True,
             )
             incoming = [item.sequence for item in parsed]
             existing = list(bank.questions.filter(sequence__in=incoming).values_list("sequence", flat=True))

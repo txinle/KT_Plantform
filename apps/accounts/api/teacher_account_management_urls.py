@@ -12,6 +12,7 @@ from .teacher_account_management_views import (
     CourseStudentMoveView,
     CourseStudentRemoveView,
     CourseStudentResetView,
+    CourseStudentIdentityView,
     CourseStudentVisibilityView,
     TeacherAccountClassCollectionView,
     TeacherAccountStudentCollectionView,
@@ -22,6 +23,11 @@ from .teacher_account_management_views import (
 
 
 urlpatterns = [
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/<int:student_id>/identity/",
+        CourseStudentIdentityView.as_view(),
+        name="teacher-course-student-identity-update",
+    ),
     path("classes/", TeacherAccountClassCollectionView.as_view(), name="teacher-account-class-list"),
     path("students/", TeacherAccountStudentCollectionView.as_view(), name="teacher-account-student-list"),
     path(

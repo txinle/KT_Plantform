@@ -87,7 +87,7 @@ def validate_question_kc_mapping(question, *, root_kc_code, nodes):
 def replace_question_kc_mapping(question, *, root_kc_code, nodes):
     requested_status = (
         Question.Status.ACTIVE
-        if getattr(question, "_activate_after_primary_mapping", False)
+        if question.status != Question.Status.ARCHIVED and getattr(question, "_activate_after_primary_mapping", False)
         else question.status
     )
     question = Question.objects.select_for_update().select_related("bank").get(pk=question.pk)
@@ -112,9 +112,8 @@ def replace_question_kc_mapping(question, *, root_kc_code, nodes):
             parent_link=created.get(parent_code),
             display_order=row["order"],
         )
-    if desired_status == Question.Status.ACTIVE:
-        question.status = Question.Status.ACTIVE
-        question.save(update_fields=["status"])
+    from .question_readiness import refresh_question_readiness
+    refresh_question_readiness(question)
     return project_question_kc_mapping(question)
 
 

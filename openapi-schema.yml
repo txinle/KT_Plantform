@@ -53,6 +53,32 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/v1/auth/password/change/:
+    post:
+      operationId: auth_password_change_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentPasswordChange'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StudentPasswordChange'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StudentPasswordChange'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionContext'
+          description: ''
   /api/v1/auth/session/:
     get:
       operationId: auth_session_retrieve
@@ -516,6 +542,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StudentVisibilityPolicy'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/{student_id}/identity/:
+    patch:
+      operationId: teacher_course_student_identity_update
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: student_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedStudentIdentityUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedStudentIdentityUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedStudentIdentityUpdateRequest'
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentIdentityUpdateResponse'
           description: ''
   /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/{student_id}/move/:
     post:
@@ -1272,6 +1339,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+  /api/v1/teacher/banks/{bank_id}/questions/recheck/:
+    post:
+      operationId: teacher_banks_questions_recheck_create
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionDraftRecheck'
           description: ''
   /api/v1/teacher/banks/{bank_id}/visibility/:
     put:
@@ -2201,6 +2288,31 @@ paths:
               schema:
                 $ref: '#/components/schemas/ManagementErrorResponse'
           description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/questions/recheck/:
+    post:
+      operationId: teacher_courses_banks_questions_recheck_create
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionDraftRecheck'
+          description: ''
   /api/v1/teacher/courses/{course_id}/banks/{bank_id}/restore/:
     post:
       operationId: teacher_question_bank_restore
@@ -2705,6 +2817,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ManagementErrorResponse'
+          description: ''
+    patch:
+      operationId: teacher_courses_concepts_partial_update
+      parameters:
+      - in: path
+        name: concept_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedManagementCourseConceptStatusRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedManagementCourseConceptStatusRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedManagementCourseConceptStatusRequest'
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementCourseConceptDeleteResponse'
           description: ''
     delete:
       operationId: teacher_question_bank_course_concept_delete
@@ -3730,10 +3877,13 @@ components:
           nullable: true
         home_url:
           type: string
+        must_change_password:
+          type: boolean
       required:
       - display_name
       - home_url
       - id
+      - must_change_password
       - role
       - student_number
       - username
@@ -4104,11 +4254,13 @@ components:
     ClassificationEnum:
       enum:
       - ready
+      - draft
       - duplicate
       - invalid
       type: string
       description: |-
         * `ready` - ready
+        * `draft` - draft
         * `duplicate` - duplicate
         * `invalid` - invalid
     CompletenessEnum:
@@ -4139,7 +4291,7 @@ components:
         * `student` - 学生
         * `session` - 会话
         * `attempt` - 作答
-    ConfirmationEnum:
+    ConfirmationF49Enum:
       enum:
       - delete
       type: string
@@ -4194,7 +4346,7 @@ components:
       type: object
       properties:
         confirmation:
-          $ref: '#/components/schemas/ConfirmationEnum'
+          $ref: '#/components/schemas/ConfirmationF49Enum'
       required:
       - confirmation
     CourseClassDeleteResponse:
@@ -4316,6 +4468,10 @@ components:
           type: boolean
         can_delete:
           type: boolean
+        can_archive:
+          type: boolean
+        can_restore:
+          type: boolean
         rename_url:
           type: string
           nullable: true
@@ -4324,8 +4480,10 @@ components:
           nullable: true
       required:
       - bank_count
+      - can_archive
       - can_delete
       - can_rename
+      - can_restore
       - delete_url
       - description
       - distribution
@@ -5185,11 +5343,14 @@ components:
           type: boolean
         can_reset_passwords:
           type: boolean
+        can_edit_students:
+          type: boolean
         can_update_visibility:
           type: boolean
       required:
       - can_add_students
       - can_delete
+      - can_edit_students
       - can_move_students
       - can_remove_students
       - can_reset_passwords
@@ -5230,8 +5391,14 @@ components:
           type: integer
         student:
           $ref: '#/components/schemas/TeacherAccountStudent'
+        identity_state_token:
+          type: string
+        affects_other_courses:
+          type: boolean
       required:
+      - affects_other_courses
       - enrollment_id
+      - identity_state_token
       - student
     ManagementArchivedBank:
       type: object
@@ -5389,6 +5556,14 @@ components:
       - kc_code
       - name
       - status
+    ManagementCourseConceptStatusRequestStatusEnum:
+      enum:
+      - active
+      - archived
+      type: string
+      description: |-
+        * `active` - active
+        * `archived` - archived
     ManagementErrorDetail:
       type: object
       properties:
@@ -5625,6 +5800,10 @@ components:
           $ref: '#/components/schemas/QuestionType128Enum'
         status:
           $ref: '#/components/schemas/StatusB97Enum'
+        draft_reasons:
+          type: array
+          items:
+            type: string
         teacher_difficulty:
           type: string
         absolute_tolerance:
@@ -5646,6 +5825,7 @@ components:
       - accepted_answers_text
       - code
       - correct_answer_text
+      - draft_reasons
       - explanation
       - id
       - options
@@ -5743,6 +5923,12 @@ components:
         created:
           type: integer
           minimum: 0
+        active:
+          type: integer
+          minimum: 0
+        draft:
+          type: integer
+          minimum: 0
         detail_url:
           type: string
         skipped:
@@ -5757,8 +5943,10 @@ components:
             type: object
             additionalProperties: {}
       required:
+      - active
       - created
       - detail_url
+      - draft
     ManagementQuestionImportPreviewPayload:
       type: object
       properties:
@@ -5826,6 +6014,10 @@ components:
           nullable: true
         classification:
           $ref: '#/components/schemas/ClassificationEnum'
+        draft_reasons:
+          type: array
+          items:
+            type: string
         errors:
           type: array
           items:
@@ -6120,6 +6312,10 @@ components:
           $ref: '#/components/schemas/StatusB97Enum'
         status_label:
           type: string
+        draft_reasons:
+          type: array
+          items:
+            type: string
         teacher_difficulty:
           type: string
           nullable: true
@@ -6129,6 +6325,7 @@ components:
           type: string
       required:
       - code
+      - draft_reasons
       - edit_url
       - id
       - kc_mapping
@@ -6200,6 +6397,8 @@ components:
         student_number:
           type: string
         display_name:
+          type: string
+        confirmation_token:
           type: string
       required:
       - display_name
@@ -6354,11 +6553,15 @@ components:
     PasswordResetRequest:
       type: object
       properties:
-        password:
-          type: string
-          writeOnly: true
+        confirmation:
+          $ref: '#/components/schemas/PasswordResetRequestConfirmationEnum'
       required:
-      - password
+      - confirmation
+    PasswordResetRequestConfirmationEnum:
+      enum:
+      - reset
+      type: string
+      description: '* `reset` - reset'
     PatchedCourseClassUpdateRequest:
       type: object
       properties:
@@ -6370,6 +6573,11 @@ components:
           type: boolean
         state_token:
           type: string
+    PatchedManagementCourseConceptStatusRequest:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ManagementCourseConceptStatusRequestStatusEnum'
     PatchedStandaloneExperimentInput:
       type: object
       properties:
@@ -6430,6 +6638,17 @@ components:
           type: integer
           maximum: 120
           minimum: 15
+    PatchedStudentIdentityUpdateRequest:
+      type: object
+      properties:
+        student_number:
+          type: string
+          maxLength: 64
+        display_name:
+          type: string
+          maxLength: 80
+        state_token:
+          type: string
     PatchedStudentVisibilityPolicyRequest:
       type: object
       properties:
@@ -6532,15 +6751,13 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -7370,6 +7587,45 @@ components:
       - class_group
       - course
       - detail
+    QuestionDraftRecheck:
+      type: object
+      properties:
+        checked:
+          type: integer
+          minimum: 0
+        activated:
+          type: integer
+          minimum: 0
+        draft:
+          type: integer
+          minimum: 0
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionDraftRecheckRow'
+      required:
+      - activated
+      - checked
+      - draft
+      - rows
+    QuestionDraftRecheckRow:
+      type: object
+      properties:
+        id:
+          type: integer
+        code:
+          type: string
+        status:
+          type: string
+        draft_reasons:
+          type: array
+          items:
+            type: string
+      required:
+      - code
+      - draft_reasons
+      - id
+      - status
     QuestionKCImportResult:
       type: object
       properties:
@@ -7501,6 +7757,10 @@ components:
           type: string
         status_label:
           type: string
+        draft_reasons:
+          type: array
+          items:
+            type: string
         edit_url:
           type: string
           nullable: true
@@ -7511,6 +7771,7 @@ components:
       - code
       - course_sequence
       - delete_url
+      - draft_reasons
       - edit_url
       - id
       - kc_mapping
@@ -7628,7 +7889,7 @@ components:
       type: object
       properties:
         confirmation:
-          $ref: '#/components/schemas/ConfirmationEnum'
+          $ref: '#/components/schemas/ConfirmationF49Enum'
       required:
       - confirmation
     RemoveEnrollmentResponse:
@@ -8583,6 +8844,19 @@ components:
       description: |-
         * `correctness` - correctness
         * `full` - full
+    StudentIdentityUpdateResponse:
+      type: object
+      properties:
+        student:
+          $ref: '#/components/schemas/TeacherAccountStudent'
+        identity_state_token:
+          type: string
+        affects_other_courses:
+          type: boolean
+      required:
+      - affects_other_courses
+      - identity_state_token
+      - student
     StudentImportPreviewRequest:
       type: object
       properties:
@@ -8867,6 +9141,20 @@ components:
       - generated_at
       - maximum
       - value
+    StudentPasswordChange:
+      type: object
+      properties:
+        new_password1:
+          type: string
+          writeOnly: true
+          minLength: 8
+        new_password2:
+          type: string
+          writeOnly: true
+          minLength: 8
+      required:
+      - new_password1
+      - new_password2
     StudentResult:
       oneOf:
       - $ref: '#/components/schemas/StudentResultNone'
@@ -9635,13 +9923,9 @@ components:
           type: string
         class_group:
           type: integer
-        password:
-          type: string
-          writeOnly: true
       required:
       - class_group
       - display_name
-      - password
       - student_number
     TeacherAccountStudentCreateResponse:
       type: object
@@ -10293,15 +10577,13 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'

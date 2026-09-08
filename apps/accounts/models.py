@@ -285,6 +285,7 @@ class User(AbstractUser):
     role = models.CharField(max_length=16, choices=Role.choices, default=Role.STUDENT)
     display_name = models.CharField("姓名", max_length=80, blank=True)
     student_number = models.CharField("学号", max_length=64, unique=True, null=True, blank=True)
+    must_change_password = models.BooleanField("必须修改密码", default=False)
     class_group = models.ForeignKey(ClassGroup, null=True, blank=True, on_delete=models.SET_NULL, related_name="students")
 
     @property

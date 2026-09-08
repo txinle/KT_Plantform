@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.views import LogoutView
 from django.urls import include, path
-from apps.accounts.views import PlatformLoginView, home
+from apps.accounts.views import PlatformLoginView, home, password_change
 from apps.accounts.health import health
 
 urlpatterns = [
@@ -9,6 +9,7 @@ urlpatterns = [
     path("health/", health, name="health"),
     path("", home, name="home"),
     path("login/", PlatformLoginView.as_view(), name="login"),
+    path("password/change/", password_change, name="password-change"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("admin/", admin.site.urls),
     path("teacher/", include("apps.question_bank.urls")),

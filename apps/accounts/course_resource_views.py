@@ -43,6 +43,8 @@ from .forms import (
 )
 from .models import ClassGroup, ClassStudentAnalyticsPolicy, CourseEnrollment, User
 from .permissions import role_required
+from .password_services import reset_student_initial_password
+from .student_identity import StudentIdentityError
 from .student_analytics_policy import update_class_student_analytics_policy
 from .student_import import (
     ParsedStudent,
@@ -205,6 +207,7 @@ def student_add_manual(request, course_pk, class_pk):
     if not class_group.is_active:
         return _inactive_target_class_response(request, course, class_group, "新增学生")
     form = ManualStudentEnrollmentForm(request.POST or None)
+    conflict = None
     if request.method == "POST":
         if form.is_valid():
             try:
@@ -213,21 +216,17 @@ def student_add_manual(request, course_pk, class_pk):
                     class_group,
                     form.cleaned_data["student_number"],
                     form.cleaned_data["display_name"],
+                    request=request,
+                    confirmation_token=request.POST.get("confirmation_token"),
                 )
+            except StudentIdentityError as exc:
+                if exc.business_code == "STUDENT_NAME_CONFLICT":
+                    conflict = exc.fields
+                else:
+                    form.add_error(None, "; ".join(exc.messages))
             except ValidationError as exc:
                 form.add_error(None, "; ".join(exc.messages))
             else:
-                enrollment = CourseEnrollment.objects.get(course=course, student=student)
-                log_action(
-                    request,
-                    "student.manual_enroll",
-                    enrollment,
-                    {
-                        "course_id": course.pk,
-                        "class_id": class_group.pk,
-                        "created_account": created_account,
-                    },
-                )
                 messages.success(request, "学生已加入当前班级。")
                 return redirect("courses:class_detail", course.pk, class_group.pk)
     return render(
@@ -238,6 +237,7 @@ def student_add_manual(request, course_pk, class_pk):
             "current_course": course,
             "class_group": class_group,
             "form": form,
+            "conflict": conflict,
         },
     )
 
@@ -760,15 +760,10 @@ def reset_student_password(request, course_pk, class_pk, student_pk):
     )
     form = PasswordResetForm(request.POST)
     if form.is_valid():
-        enrollment.student.set_password(form.cleaned_data["password"])
-        enrollment.student.save(update_fields=["password"])
-        log_action(
-            request,
-            "student.password_reset",
-            enrollment.student,
-            {"course_id": course.pk, "global_account": True},
+        reset_student_initial_password(
+            request=request, student_id=student_pk, course_id=course_pk, class_id=class_pk,
         )
-        messages.success(request, "全局登录密码已重置；课程关系和实验分配未改变。")
+        messages.success(request, "初始密码已重置为 S + 当前学号；学生需重新登录并修改密码。")
     else:
-        messages.error(request, "密码至少需要 8 个字符。")
+        messages.error(request, "请确认重置初始密码。")
     return redirect("courses:class_detail", course.pk, class_group.pk)

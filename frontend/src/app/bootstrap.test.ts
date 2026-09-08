@@ -30,6 +30,7 @@ describe('bootstrap initialization', () => {
           username: 'teacher',
           student_number: null,
           home_url: '/teacher/courses/',
+          must_change_password: false,
         },
       }))
     const bootstrap = await loadBootstrap()
@@ -47,6 +48,7 @@ describe('bootstrap initialization', () => {
         username: 'teacher',
         student_number: null,
         home_url: '/teacher/courses/',
+        must_change_password: false,
       },
     })
     expect(fetchImpl).toHaveBeenNthCalledWith(
@@ -92,6 +94,7 @@ describe('bootstrap initialization', () => {
         username: 'S20260001',
         student_number: 'S20260001',
         home_url: '/student/',
+        must_change_password: false,
       },
     })}</script>`
     window.history.replaceState({}, '', '/student/sessions/17/questions/23/')
@@ -105,6 +108,35 @@ describe('bootstrap initialization', () => {
       user: { id: 7, home_url: '/student/' },
     })
 
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('keeps a legacy offline assessment bootstrap usable without changing its cache version', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    document.body.innerHTML = `<script id="kt-offline-bootstrap" type="application/json">${JSON.stringify({
+      version: 1,
+      page_path: '/student/sessions/17/questions/23/',
+      assessment_session_id: 17,
+      assignment_id: 23,
+      csrf_token: 'offline-csrf-token',
+      user: {
+        id: 7,
+        role: 'student',
+        display_name: '离线学生',
+        username: 'S20260001',
+        student_number: 'S20260001',
+        home_url: '/student/',
+      },
+    })}</script>`
+    window.history.replaceState({}, '', '/student/sessions/17/questions/23/')
+    const fetchImpl = vi.fn()
+    const bootstrap = await loadBootstrap()
+
+    await expect(bootstrap.initializeBootstrapContext({
+      fetchImpl: fetchImpl as typeof fetch,
+    })).resolves.toMatchObject({
+      user: { id: 7, must_change_password: false },
+    })
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
@@ -122,6 +154,7 @@ describe('bootstrap initialization', () => {
         username: 'S20260001',
         student_number: 'S20260001',
         home_url: '/student/',
+        must_change_password: false,
       },
     })}</script>`
     window.history.replaceState({}, '', '/student/sessions/17/questions/23/')

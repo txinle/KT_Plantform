@@ -9,6 +9,7 @@ from django.urls import reverse
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework import status
+from apps.question_bank.services.question_readiness import readiness_issues
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -440,6 +441,8 @@ class TeacherCourseConceptCollectionView(APIView):
                 "bank_count": concept.bank_count,
                 "distribution": distribution[concept.pk],
                 "can_rename": writable,
+                "can_archive": writable and concept.status == Concept.Status.ACTIVE,
+                "can_restore": writable and concept.status == Concept.Status.ARCHIVED,
                 "can_delete": (
                     writable
                 ),
@@ -472,6 +475,7 @@ class TeacherCourseConceptCollectionView(APIView):
         request=CourseConceptCreateRequestSerializer,
         responses={201: CourseConceptCreateResponseSerializer},
     )
+    @transaction.atomic
     def post(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
         try:
@@ -623,6 +627,7 @@ class TeacherQuestionCollectionView(APIView):
                     ),
                     "status": question.status,
                     "status_label": question.get_status_display(),
+                    "draft_reasons": readiness_issues(question) if question.status == Question.Status.DRAFT else [],
                     "edit_url": reverse(
                         "courses:question_edit",
                         args=[course.pk, bank.pk, question.pk],

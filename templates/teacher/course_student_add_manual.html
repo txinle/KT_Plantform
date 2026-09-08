@@ -3,5 +3,20 @@
 {% block title %}手动添加学生 | {{ class_group.name }}{% endblock %}
 {% block content %}
 <header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }} / {{ class_group }}</p><h1 class="page-title">手动添加单个学生</h1><p class="page-subtitle">已有同学号、同姓名的全局账号将直接复用；新账号初始密码为 S + 学号。</p></div></header>
-<div class="card"><div class="card-body p-md-4">{% include 'components/error_summary.html' with form=form %}<form method="post" novalidate>{% csrf_token %}{% include 'components/form_field.html' with field=form.student_number %}{% include 'components/form_field.html' with field=form.display_name %}<div class="form-actions"><button class="btn btn-primary" type="submit">添加到当前班级</button><a class="btn btn-secondary" href="{% url 'courses:student_add' course.pk class_group.pk %}">返回导入方式</a></div></form></div></div>
+<div class="card"><div class="card-body p-md-4">
+{% include 'components/error_summary.html' with form=form %}
+{% if conflict %}
+<section role="dialog" aria-modal="true" aria-labelledby="identity-conflict-title">
+<h2 id="identity-conflict-title">确认学生信息更正</h2>
+<p>学号 {{ conflict.student_number }} 已存在，该学生曾加入本课程。当前登记姓名为“{{ conflict.existing_name }}”，本次填写为“{{ conflict.submitted_name }}”。是否确认更正姓名并重新加入当前班级？</p>
+{% if conflict.affects_other_courses %}<p>该修改会同步影响此学生在其他课程中的身份显示</p>{% endif %}
+<form method="post">{% csrf_token %}
+<input type="hidden" name="student_number" value="{{ conflict.student_number }}"><input type="hidden" name="display_name" value="{{ conflict.submitted_name }}"><input type="hidden" name="confirmation_token" value="{{ conflict.confirmation_token }}">
+<button class="btn btn-primary" type="submit">确认更正并加入</button>
+<a class="btn btn-secondary" href="{% url 'courses:student_add_manual' course.pk class_group.pk %}">取消</a>
+</form></section>
+{% else %}
+<form method="post" novalidate>{% csrf_token %}{% include 'components/form_field.html' with field=form.student_number %}{% include 'components/form_field.html' with field=form.display_name %}<div class="form-actions"><button class="btn btn-primary" type="submit">添加到当前班级</button><a class="btn btn-secondary" href="{% url 'courses:student_add' course.pk class_group.pk %}">返回导入方式</a></div></form>
+{% endif %}
+</div></div>
 {% endblock %}

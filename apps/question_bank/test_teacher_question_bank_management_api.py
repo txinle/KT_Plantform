@@ -51,6 +51,42 @@ class TeacherQuestionBankManagementApiTests(TestCase):
     def course_url(self, suffix):
         return f"/api/v1/teacher/courses/{self.course.pk}/{suffix}"
 
+    def test_course_kc_archive_restore_preserves_unreferenced_identity(self):
+        url = self.course_url(f"concepts/{self.child.pk}/")
+        for target in ("archived", "archived", "active", "active"):
+            response = self.client.patch(url, data=json.dumps({"status": target}), content_type="application/json")
+            self.assertEqual(response.status_code, 200, response.content)
+            self.child.refresh_from_db()
+            self.assertEqual((self.child.code, self.child.name, self.child.status), ("KC2", "基础运算", target))
+            listed = self.client.get(self.course_url("concepts/"))
+            row = next(item for item in listed.json()["items"] if item["id"] == self.child.pk)
+            self.assertEqual(row["can_restore"], target == "archived")
+            self.assertEqual(row["can_archive"], target == "active")
+
+    def test_course_kc_restore_preserves_question_mapping(self):
+        from apps.question_bank.models import QuestionConcept
+        link = QuestionConcept.objects.create(question=self.question, concept=self.root, is_primary=True)
+        for target in ("archived", "active"):
+            response = self.client.patch(self.course_url(f"concepts/{self.root.pk}/"), data=json.dumps({"status": target}), content_type="application/json")
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertTrue(QuestionConcept.objects.filter(pk=link.pk, question=self.question, concept=self.root, is_primary=True).exists())
+
+    def test_course_kc_status_requires_manager_and_writable_course(self):
+        url = self.course_url(f"concepts/{self.root.pk}/")
+        outsider = User.objects.create_user(username="kc-outsider", role=User.Role.TEACHER)
+        self.client.force_login(outsider)
+        self.assertEqual(self.client.patch(url, data=json.dumps({"status": "archived"}), content_type="application/json").status_code, 404)
+        self.client.force_login(self.teacher)
+        self.assertEqual(self.client.patch(url, data=json.dumps({"status": "deleted"}), content_type="application/json").status_code, 400)
+        self.course.status = Course.Status.ARCHIVED
+        self.course.save(update_fields=["status"])
+        self.assertEqual(self.client.patch(url, data=json.dumps({"status": "archived"}), content_type="application/json").status_code, 403)
+        row = self.client.get(self.course_url("concepts/")).json()["items"][0]
+        self.assertFalse(row["can_archive"])
+        self.assertFalse(row["can_restore"])
+        self.root.refresh_from_db()
+        self.assertEqual(self.root.status, Concept.Status.ACTIVE)
+
     def test_archived_bank_collection_restore_and_delete_are_json_actions(self):
         archived = QuestionBank.objects.create(
             course=self.course,

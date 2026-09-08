@@ -57,27 +57,34 @@ describe('Teacher bank-management Vue views', () => {
             classification: 'ready', errors: [], existing_question_id: null,
           },
           {
-            row_id: 'row-duplicate', sequence: 2, source_label: '第 3 行', text: '重复题目',
+            row_id: 'row-draft', sequence: 2, source_label: '第 3 行', text: '',
+            question_type: 'short_answer', question_type_label: '简答题', option_count: 0,
+            teacher_difficulty: null, options: [], answer: '', accepted_answers: [], explanation: '',
+            kc_mapping: null, classification: 'draft', errors: ['题干为空。', '正确答案为空。'], existing_question_id: null,
+          },
+          {
+            row_id: 'row-duplicate', sequence: 3, source_label: '第 4 行', text: '重复题目',
             question_type: 'single_choice', question_type_label: '单选题', option_count: 2,
             teacher_difficulty: '0.25', options: [{ key: 'A', text: '甲\n第一行' }, { key: 'B', text: '乙' }],
             answer: 'A', accepted_answers: [], explanation: '',
             kc_mapping: null, classification: 'duplicate', errors: ['预览发现重复。'], existing_question_id: 31,
           },
           {
-            row_id: 'row-invalid', sequence: 3, source_label: '第 4 行', text: '待修正题目',
+            row_id: 'row-invalid', sequence: 4, source_label: '第 5 行', text: '待修正题目',
             question_type: 'short_answer', question_type_label: '简答题', option_count: 0,
             teacher_difficulty: null, options: [], answer: '', accepted_answers: [], explanation: '',
             kc_mapping: null, classification: 'invalid', errors: ['答案不能为空。'], existing_question_id: null,
           },
         ],
-        summary: { ready: 1, duplicate: 1, invalid: 1 },
+        summary: { ready: 1, draft: 1, duplicate: 1, invalid: 1 },
         confirmable: true,
       },
     })
     mocks.api.confirmQuestionImport.mockResolvedValue({
-      created: 1, skipped: 1, failed: 1, detail_url: '/teacher/courses/7/banks/11/',
+      created: 2, active: 1, draft: 1, skipped: 1, failed: 1, detail_url: '/teacher/courses/7/banks/11/',
       rows: [
-        { row_id: 'row-ready', status: 'created', question_id: 41, errors: [] },
+        { row_id: 'row-ready', status: 'created', question_id: 41, question_status: 'active', draft_reasons: [], errors: [] },
+        { row_id: 'row-draft', status: 'created', question_id: 42, question_status: 'draft', draft_reasons: ['题干为空。', '正确答案为空。'], errors: [] },
         { row_id: 'row-duplicate', status: 'duplicate', question_id: 31, errors: [] },
         { row_id: 'row-invalid', status: 'invalid', question_id: null, errors: ['答案不能为空。'] },
       ],
@@ -122,7 +129,8 @@ describe('Teacher bank-management Vue views', () => {
     expect(mocks.api.previewQuestionImport).toHaveBeenCalledWith(7, 11, file)
     expect(wrapper.text()).toContain('导入题目')
     expect(mocks.api.confirmQuestionImport).not.toHaveBeenCalled()
-    expect(wrapper.get('[data-import-filter="ready"]').text()).toContain('可导入 1')
+    expect(wrapper.get('[data-import-filter="ready"]').text()).toContain('导入后可用 1')
+    expect(wrapper.get('[data-import-filter="draft"]').text()).toContain('保存为草稿 1')
     expect(wrapper.get('[data-import-filter="duplicate"]').text()).toContain('重复 1')
     expect(wrapper.get('[data-import-filter="invalid"]').text()).toContain('需修正 1')
     const readyDesktop = wrapper.get('[data-import-row="row-ready"]')
@@ -141,6 +149,9 @@ describe('Teacher bank-management Vue views', () => {
     expect(readyMobile.text()).not.toContain('true')
     expect(wrapper.get('[data-import-row="row-invalid"]').text()).toContain('需修正')
     expect(wrapper.get('[data-import-row="row-invalid"]').text()).toContain('答案不能为空。')
+    expect(wrapper.get('[data-import-row="row-draft"]').text()).toContain('保存为草稿')
+    expect(wrapper.get('[data-import-row="row-draft"]').text()).toContain('题干为空。')
+    expect(wrapper.get('[data-import-row="row-draft"] input[type="checkbox"]').attributes('disabled')).toBeUndefined()
 
     await wrapper.get('#question-import-filter-invalid').trigger('click')
     expect(wrapper.find('[data-import-row="row-ready"]').exists()).toBe(false)
@@ -178,11 +189,15 @@ describe('Teacher bank-management Vue views', () => {
 
     await wrapper.get('[data-confirm-import]').trigger('click')
     await flushPromises()
-    expect(mocks.api.confirmQuestionImport).toHaveBeenCalledWith(7, 11, 'preview-1', ['row-ready'])
+    expect(mocks.api.confirmQuestionImport).toHaveBeenCalledWith(7, 11, 'preview-1', ['row-ready', 'row-draft'])
     expect(mocks.push).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('新增 1')
+    expect(wrapper.text()).toContain('新增 2')
+    expect(wrapper.text()).toContain('可用 1')
+    expect(wrapper.text()).toContain('草稿 1')
     expect(wrapper.text()).toContain('未完成 1')
     expect(wrapper.get('[data-import-row="row-ready"]').text()).toContain('已创建')
+    expect(wrapper.get('[data-import-row="row-draft"]').text()).toContain('已保存为草稿')
+    expect(wrapper.get('[data-import-row="row-draft"]').text()).toContain('正确答案为空。')
     expect(wrapper.get('[data-import-row="row-duplicate"]').text()).not.toContain('预览发现重复。')
     expect(wrapper.get('[data-import-row="row-invalid"]').text()).toContain('需修正')
     expect(wrapper.get('[data-confirm-import]').attributes('disabled')).toBeDefined()
@@ -193,9 +208,10 @@ describe('Teacher bank-management Vue views', () => {
 
   it('uses confirmation outcomes for the summary and invalid-row filter', async () => {
     mocks.api.confirmQuestionImport.mockResolvedValueOnce({
-      created: 0, skipped: 1, failed: 2, detail_url: '/teacher/courses/7/banks/11/',
+      created: 0, active: 0, draft: 0, skipped: 1, failed: 3, detail_url: '/teacher/courses/7/banks/11/',
       rows: [
         { row_id: 'row-ready', status: 'invalid', question_id: null, errors: ['KC001 已归档，无法创建。'] },
+        { row_id: 'row-draft', status: 'invalid', question_id: null, errors: ['题型无法保存。'] },
         { row_id: 'row-duplicate', status: 'duplicate', question_id: 31, errors: [] },
         { row_id: 'row-invalid', status: 'invalid', question_id: null, errors: ['答案不能为空。'] },
       ],
@@ -209,9 +225,10 @@ describe('Teacher bank-management Vue views', () => {
     await wrapper.get('[data-confirm-import]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('[aria-label="预览状态汇总"]').text()).toContain('已导入 0')
+    expect(wrapper.get('[aria-label="预览状态汇总"]').text()).toContain('已创建可用 0')
+    expect(wrapper.get('[aria-label="预览状态汇总"]').text()).toContain('已创建草稿 0')
     expect(wrapper.get('[aria-label="预览状态汇总"]').text()).toContain('重复 1')
-    expect(wrapper.get('[aria-label="预览状态汇总"]').text()).toContain('需修正 2')
+    expect(wrapper.get('[aria-label="预览状态汇总"]').text()).toContain('需修正 3')
     await wrapper.get('#question-import-filter-invalid').trigger('click')
     expect(wrapper.find('[data-import-row="row-ready"]').exists()).toBe(true)
     expect(wrapper.get('[data-import-row="row-ready"]').text()).toContain('KC001 已归档，无法创建。')
@@ -223,7 +240,7 @@ describe('Teacher bank-management Vue views', () => {
       preview_id: 'preview-blocked',
       preview: {
         rows: [],
-        summary: { ready: 0, duplicate: 0, invalid: 1 },
+        summary: { ready: 0, draft: 0, duplicate: 0, invalid: 1 },
         confirmable: false,
       },
     })
@@ -248,17 +265,18 @@ describe('Teacher bank-management Vue views', () => {
     await input.trigger('change')
     await flushPromises()
     expect(wrapper.get('[data-file-summary]').text()).toContain('questions.xlsx')
-    expect(wrapper.get('[data-confirm-import]').text()).toContain('确认导入 2 道题')
+    expect(wrapper.get('[data-confirm-import]').text()).toContain('确认导入 3 道题')
     await wrapper.get('[data-import-row="row-second"] input[type="checkbox"]').setValue(false)
     await wrapper.get('[data-next-question]').trigger('click')
-    expect(wrapper.get('[data-question-detail]').text()).toContain('题目 2 详细信息')
+    await wrapper.get('[data-next-question]').trigger('click')
+    expect(wrapper.get('[data-question-detail]').text()).toContain('题目 3 详细信息')
     expect(wrapper.get('[data-question-detail] [data-option="A"]').text()).toContain('甲\n第一行')
     await wrapper.get('input[type="search"]').setValue('另一道')
     expect(wrapper.findAll('[data-import-row]')).toHaveLength(1)
     expect(wrapper.get('[data-import-row]').attributes('data-import-row')).toBe('row-second')
     await wrapper.get('[data-confirm-import]').trigger('click')
     await flushPromises()
-    expect(mocks.api.confirmQuestionImport).toHaveBeenCalledWith(7, 11, 'preview-1', ['row-ready'])
+    expect(mocks.api.confirmQuestionImport).toHaveBeenCalledWith(7, 11, 'preview-1', ['row-ready', 'row-draft'])
   })
 
   it('redirects the retired course KC import route to unified import', async () => {

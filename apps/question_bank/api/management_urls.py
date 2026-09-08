@@ -1,6 +1,8 @@
 from django.urls import path
 
 from .management_views import (
+    TeacherQuestionDraftRecheckView,
+    TeacherStandaloneQuestionDraftRecheckView,
     TeacherArchivedQuestionBankCollectionView,
     TeacherCourseConceptEditorView,
     TeacherQuestionBankArchiveView,
@@ -31,6 +33,8 @@ from .management_views import (
 
 
 urlpatterns = [
+    path("courses/<int:course_id>/banks/<int:bank_id>/questions/recheck/", TeacherQuestionDraftRecheckView.as_view(), name="teacher-question-draft-recheck"),
+    path("banks/<int:bank_id>/questions/recheck/", TeacherStandaloneQuestionDraftRecheckView.as_view(), name="teacher-standalone-question-draft-recheck"),
     path(
         "banks/",
         TeacherStandaloneQuestionBankCollectionView.as_view(),

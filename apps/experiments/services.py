@@ -15,6 +15,10 @@ from apps.audit.models import AuditLog
 from apps.question_bank.access import lock_question_bank
 from apps.question_bank.models import Question, QuestionBank
 from apps.question_bank.services.numeric import normalize_finite_decimal
+from apps.question_bank.services.question_readiness import (
+    readiness_issues,
+    validate_question_answer_structure as _validate_question_answer_structure,
+)
 from apps.question_bank.services.scoring import normalize_true_false_answer
 from apps.assessment.models import ExperimentSession
 from .research_tool_config import validate_research_tools
@@ -521,56 +525,6 @@ def _save_participant_rules_locked(
     return ParticipantRuleSaveResult(preview_count=len(roster))
 
 
-def _choice_answers(value):
-    if isinstance(value, str):
-        values = value.replace("，", ",").replace("；", ",").replace(";", ",").split(",")
-    elif isinstance(value, (list, tuple, set)):
-        values = value
-    else:
-        values = [value]
-    return {str(item).strip().upper() for item in values if str(item).strip()}
-
-
-def _has_text(value):
-    return bool(" ".join(str(value or "").strip().split()))
-
-
-def _validate_question_answer_structure(question):
-    """Reject active questions that cannot be scored from an immutable snapshot."""
-    options = {option.key.upper() for option in question.options.all()}
-    answer = question.correct_answer
-    question_name = question.code or f"题目#{question.pk}"
-
-    if question.question_type == Question.Type.SINGLE:
-        choices = _choice_answers(answer)
-        if len(choices) != 1 or not choices <= options:
-            raise ValidationError(f"{question_name} 的单选题答案必须对应且仅对应一个选项")
-    elif question.question_type == Question.Type.MULTIPLE:
-        choices = _choice_answers(answer)
-        if len(choices) < 2 or not choices <= options:
-            raise ValidationError(f"{question_name} 的多选题答案必须对应至少两个已有选项")
-    elif question.question_type == Question.Type.NUMERIC:
-        try:
-            normalize_finite_decimal(answer)
-        except ValueError:
-            raise ValidationError(f"{question_name} 的数值题答案必须是有效数字")
-    elif question.question_type in {Question.Type.SHORT, Question.Type.FILL_BLANK}:
-        if not _has_text(answer):
-            raise ValidationError(f"{question_name} 的文本题答案不能为空")
-        if not isinstance(question.accepted_answers, list) or any(
-            not _has_text(item) for item in question.accepted_answers
-        ):
-            raise ValidationError(f"{question_name} 的可接受答案格式无效")
-    elif question.question_type == Question.Type.TRUE_FALSE:
-        if not isinstance(answer, bool) or normalize_true_false_answer(answer) is None:
-            raise ValidationError(f"{question_name} 的判断题答案必须为正确或错误")
-    else:
-        raise ValidationError(f"{question_name} 的题型无效")
-
-    if question.question_type not in {Question.Type.SINGLE, Question.Type.MULTIPLE} and options:
-        raise ValidationError(f"{question_name} 的非选择题不能包含自定义选项")
-
-
 def _publish_candidates(question_bank):
     return list(
         Question.objects.select_for_update(of=("self",))
@@ -640,6 +594,10 @@ def validate_for_publish(experiment, question_bank=None, participant_count=None)
         if not any(link.is_primary for link in links):
             missing.append(question.code)
         _validate_question_answer_structure(question)
+        if question.bank.course_id is not None and any(link.is_primary for link in links):
+            issues = readiness_issues(question)
+            if issues:
+                raise ValidationError([f"{question.code}：{issue}" for issue in issues])
     if missing:
         raise ValidationError(f"以下题目缺少主知识点：{', '.join(missing)}")
     if participant_count is None:

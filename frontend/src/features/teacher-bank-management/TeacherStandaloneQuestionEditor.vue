@@ -31,6 +31,7 @@ const fieldErrors = ref<Record<string, string>>({})
 const error = ref('')
 const saving = ref(false)
 const choiceQuestion = computed(() => ['single_choice', 'multiple_choice'].includes(draft.question_type))
+const originallyArchived = computed(() => editor.value?.question.status === 'archived')
 
 function setError(caught: unknown, fallback: string) {
   error.value = caught instanceof Error ? caught.message : fallback
@@ -46,7 +47,7 @@ onMounted(async () => {
     Object.assign(draft, {
       text: question.text,
       question_type: question.question_type,
-      status: question.status,
+      status: question.status === 'archived' ? 'archived' : 'active',
       teacher_difficulty: question.teacher_difficulty,
       absolute_tolerance: question.absolute_tolerance,
       relative_tolerance: question.relative_tolerance,
@@ -86,25 +87,27 @@ async function save() {
 <template>
   <Alert v-if="error && !editor" tone="danger">{{ error }}</Alert>
   <template v-else-if="editor">
-    <PageHeader :title="`编辑 ${editor.question.code || `题目 ${editor.question.sequence}`}`">
+    <PageHeader :title="`编辑第 ${editor.question.sequence} 题`">
       <template #kicker>{{ editor.bank.name }} · 独立题库</template>
-      <p>编辑题目内容、答案与选项，检查后保存。</p>
+      <p>内容可不完整保存；服务器会在每次保存后自动判断题目是否可用。</p>
       <template #actions><RouterLink class="kt-button kt-button--secondary" :to="editor.detail_url">取消</RouterLink></template>
     </PageHeader>
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
+    <Alert v-if="editor.question.draft_reasons.length" tone="warning"><strong>当前保存为草稿。</strong><ul><li v-for="reason in editor.question.draft_reasons" :key="reason">{{ reason }}</li></ul></Alert>
     <form class="kt-form-stack" novalidate @submit.prevent="save">
       <section class="kt-card">
         <h2>题目内容</h2>
         <FormField for-id="standalone-question-text" label="题干" :error="fieldErrors.text">
-          <textarea id="standalone-question-text" v-model="draft.text" rows="5" required />
+          <textarea id="standalone-question-text" v-model="draft.text" rows="5" />
         </FormField>
         <div class="kt-form-grid">
           <FormField for-id="standalone-question-type" label="题型" :error="fieldErrors.question_type">
-            <select id="standalone-question-type" v-model="draft.question_type"><option v-for="item in editor.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></select>
+            <select id="standalone-question-type" v-model="draft.question_type" required><option v-for="item in editor.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></select>
           </FormField>
-          <FormField for-id="standalone-question-status" label="题目状态" :error="fieldErrors.status">
-            <select id="standalone-question-status" v-model="draft.status"><option v-for="item in editor.statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select>
+          <FormField v-if="originallyArchived" for-id="standalone-question-status" label="题目状态" :error="fieldErrors.status">
+            <select id="standalone-question-status" v-model="draft.status"><option value="archived">保持归档</option><option value="active">恢复并自动判断</option></select>
           </FormField>
+          <FormField v-else for-id="standalone-question-status-mode" label="题目状态" :error="fieldErrors.status"><p id="standalone-question-status-mode">自动模式：保存后自动判断；内容完整则可用，不完整则保存为草稿并说明原因。</p></FormField>
         </div>
         <div class="kt-form-grid">
           <FormField for-id="standalone-question-difficulty" label="教师设定难度" :error="fieldErrors.teacher_difficulty"><input id="standalone-question-difficulty" v-model="draft.teacher_difficulty" inputmode="decimal"></FormField>
@@ -114,7 +117,7 @@ async function save() {
       </section>
       <section class="kt-card">
         <h2>答案与解析</h2>
-        <FormField for-id="standalone-question-answer" label="正确答案" :error="fieldErrors.correct_answer_text"><input id="standalone-question-answer" v-model="draft.correct_answer_text" required></FormField>
+        <FormField for-id="standalone-question-answer" label="正确答案" :error="fieldErrors.correct_answer_text"><input id="standalone-question-answer" v-model="draft.correct_answer_text"></FormField>
         <FormField v-if="!choiceQuestion" for-id="standalone-question-accepted-answers" label="其他可接受答案（分号分隔）" :error="fieldErrors.accepted_answers_text"><input id="standalone-question-accepted-answers" v-model="draft.accepted_answers_text"></FormField>
         <div v-if="choiceQuestion" class="kt-form-grid">
           <FormField for-id="standalone-option-a" label="选项 A" :error="fieldErrors.option_a"><input id="standalone-option-a" v-model="options.a"></FormField>

@@ -122,6 +122,8 @@ class CourseConceptSummarySerializer(serializers.Serializer):
     distribution = QuestionBankDistributionSerializer(many=True)
     can_rename = serializers.BooleanField()
     can_delete = serializers.BooleanField()
+    can_archive = serializers.BooleanField()
+    can_restore = serializers.BooleanField()
     rename_url = serializers.CharField(allow_null=True)
     delete_url = serializers.CharField(allow_null=True)
 
@@ -201,6 +203,7 @@ class QuestionSummarySerializer(serializers.Serializer):
     )
     status = serializers.CharField()
     status_label = serializers.CharField()
+    draft_reasons = serializers.ListField(child=serializers.CharField())
     edit_url = serializers.CharField(allow_null=True)
     delete_url = serializers.CharField(allow_null=True)
 

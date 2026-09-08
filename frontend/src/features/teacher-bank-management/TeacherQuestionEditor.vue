@@ -31,6 +31,7 @@ const draft = reactive({
 const mapping = reactive<{ root_kc_code: string; nodes: MappingNode[] }>({ root_kc_code: '', nodes: [] })
 
 const choiceQuestion = computed(() => editor.value?.question_types.some((item) => item.value === draft.question_type && ['single_choice', 'multiple_choice'].includes(item.value)) ?? false)
+const originallyArchived = computed(() => editor.value?.question.status === 'archived')
 
 function setError(caught: unknown, fallback: string) {
   error.value = caught instanceof Error ? caught.message : fallback
@@ -48,7 +49,7 @@ onMounted(async () => {
     Object.assign(draft, {
       text: question.text,
       question_type: question.question_type,
-      status: question.status,
+      status: question.status === 'archived' ? 'archived' : 'active',
       teacher_difficulty: question.teacher_difficulty,
       absolute_tolerance: question.absolute_tolerance,
       relative_tolerance: question.relative_tolerance,
@@ -90,19 +91,21 @@ async function save() {
 <template>
   <Alert v-if="error && !editor" tone="danger">{{ error }}</Alert>
   <template v-else-if="editor">
-    <PageHeader class="kt-question-editor-page-header" :title="`编辑 ${editor.question.code || `题目 ${editor.question.sequence}`}`"><template #kicker>{{ editor.bank.name }}</template><p>编辑题目、答案与知识点映射，检查后保存。</p><template #actions><RouterLink class="kt-button kt-button--secondary" :to="editor.detail_url">返回题库</RouterLink></template></PageHeader>
+    <PageHeader class="kt-question-editor-page-header" :title="`编辑第 ${editor.question.sequence} 题`"><template #kicker>{{ editor.bank.name }}</template><p>内容可不完整保存；服务器会在每次保存后自动判断题目是否可用。</p><template #actions><RouterLink class="kt-button kt-button--secondary" :to="editor.detail_url">返回题库</RouterLink></template></PageHeader>
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
+    <Alert v-if="editor.question.draft_reasons.length" tone="warning"><strong>当前保存为草稿。</strong><ul><li v-for="reason in editor.question.draft_reasons" :key="reason">{{ reason }}</li></ul></Alert>
     <form class="kt-form-stack kt-question-editor" novalidate @submit.prevent="save">
       <section class="kt-card" aria-labelledby="question-basics-title">
         <div class="kt-question-editor-heading"><Icon name="definition" :size="24" /><div><h2 id="question-basics-title">基础信息</h2><p>设置题目的基本属性。</p></div></div>
         <div class="kt-form-grid">
-          <FormField for-id="question-type" label="题型" :error="fieldErrors.question_type"><select id="question-type" v-model="draft.question_type"><option v-for="item in editor.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></select></FormField>
-          <FormField for-id="question-status" label="题目状态" :error="fieldErrors.status"><select id="question-status" v-model="draft.status"><option v-for="item in editor.statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></FormField>
+          <FormField for-id="question-type" label="题型" :error="fieldErrors.question_type"><select id="question-type" v-model="draft.question_type" required><option v-for="item in editor.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></select></FormField>
+          <FormField v-if="originallyArchived" for-id="question-status" label="题目状态" :error="fieldErrors.status"><select id="question-status" v-model="draft.status"><option value="archived">保持归档</option><option value="active">恢复并自动判断</option></select></FormField>
+          <FormField v-else for-id="question-status-mode" label="题目状态" :error="fieldErrors.status"><p id="question-status-mode">自动模式：保存后自动判断；内容完整则可用，不完整则保存为草稿并说明原因。</p></FormField>
         </div>
       </section>
       <section class="kt-card" aria-labelledby="question-content-title">
         <div class="kt-question-editor-heading"><Icon name="definition" :size="24" /><div><h2 id="question-content-title">题目内容</h2><p>输入题目题干及选项。</p></div></div>
-        <FormField for-id="question-text" label="题干" :error="fieldErrors.text"><textarea id="question-text" v-model="draft.text" rows="3" required /></FormField>
+        <FormField for-id="question-text" label="题干" :error="fieldErrors.text"><textarea id="question-text" v-model="draft.text" rows="3" /></FormField>
         <template v-if="choiceQuestion">
           <div class="kt-form-grid"><FormField v-for="key in ['a', 'b', 'c', 'd']" :key="key" :for-id="`option-${key}`" :label="`选项 ${key.toUpperCase()}`" :error="fieldErrors[`option_${key}`]"><input :id="`option-${key}`" v-model="draft[`option_${key}` as keyof typeof draft]"></FormField></div>
           <details class="kt-question-editor-more" :open="moreOptionsOpen" @toggle="moreOptionsOpen = ($event.target as HTMLDetailsElement).open"><summary>显示更多选项（E、F）</summary><div class="kt-form-grid"><FormField v-for="key in ['e', 'f']" :key="key" :for-id="`option-${key}`" :label="`选项 ${key.toUpperCase()}`" :error="fieldErrors[`option_${key}`]"><input :id="`option-${key}`" v-model="draft[`option_${key}` as keyof typeof draft]"></FormField></div></details>
@@ -112,7 +115,7 @@ async function save() {
         <button type="button" class="kt-editor-section-toggle" data-answer-toggle :aria-expanded="answersOpen" aria-controls="question-answer-fields" @click="answersOpen = !answersOpen"><h2 id="question-answer-title">答案与解析</h2><span class="kt-editor-section-summary">正确答案 {{ draft.correct_answer_text || '未设置' }} · 难度 {{ draft.teacher_difficulty || '未设置' }} · {{ draft.explanation ? '已填写解析' : '暂无解析' }}</span><span>{{ answersOpen ? '收起' : '点击展开' }}</span><Icon name="chevron-down" :size="16" :class="{ 'is-expanded': answersOpen }" /></button>
         <div v-show="answersOpen" id="question-answer-fields" class="kt-editor-section-body">
           <div class="kt-form-grid">
-            <FormField for-id="question-answer" label="正确答案" :error="fieldErrors.correct_answer_text"><input id="question-answer" v-model="draft.correct_answer_text" required></FormField>
+            <FormField for-id="question-answer" label="正确答案" :error="fieldErrors.correct_answer_text"><input id="question-answer" v-model="draft.correct_answer_text"></FormField>
             <FormField for-id="question-difficulty" label="教师设定难度" :error="fieldErrors.teacher_difficulty"><input id="question-difficulty" v-model="draft.teacher_difficulty" inputmode="decimal"></FormField>
           </div>
           <FormField v-if="!choiceQuestion" for-id="question-accepted-answers" label="其他可接受答案（分号分隔）" :error="fieldErrors.accepted_answers_text"><input id="question-accepted-answers" v-model="draft.accepted_answers_text"></FormField>

@@ -14,6 +14,11 @@
   gap: 9px;
 }
 
+.kt-teacher-account-management .kt-account-management-members .kt-table th:nth-child(-n + 2),
+.kt-teacher-account-management .kt-account-management-members .kt-table td:nth-child(-n + 2) {
+  white-space: nowrap;
+}
+
 .kt-account-management-tabs {
   border-bottom: 1px solid #dbe3ee;
   padding-bottom: 10px;
@@ -158,6 +163,17 @@
 
 .kt-account-management-confirm {
   border-color: #e6c4c7;
+}
+
+dialog.kt-account-management-dialog {
+  width: min(calc(100vw - 32px), 34rem);
+  max-height: calc(100vh - 32px);
+  margin: auto;
+  overflow-y: auto;
+}
+
+dialog.kt-account-management-dialog::backdrop {
+  background: rgb(22 34 51 / 48%);
 }
 
 @media (max-width: 767px) {

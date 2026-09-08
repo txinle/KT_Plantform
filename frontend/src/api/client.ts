@@ -57,6 +57,7 @@ interface ClientOptions {
   fetchImpl?: typeof fetch
   getCsrfToken?: () => string
   onAuthenticationRequired?: (loginUrl: string) => void
+  onPasswordChangeRequired?: (passwordChangeUrl: string) => void
 }
 
 interface GetOptions {
@@ -92,15 +93,21 @@ export function createApiClient(options: ClientOptions = {}) {
   const onAuthenticationRequired = options.onAuthenticationRequired || ((loginUrl: string) => {
     window.location.assign(loginUrl)
   })
+  const onPasswordChangeRequired = options.onPasswordChangeRequired || ((passwordChangeUrl: string) => {
+    window.location.assign(passwordChangeUrl)
+  })
 
   async function parse<T>(response: Response): Promise<T> {
     const body = await responseBody(response)
     if (!response.ok) {
-      if (response.status === 401) {
+      const apiError = new ApiError(response.status, (body || {}) as ApiErrorBody)
+      if (apiError.code === 'PASSWORD_CHANGE_REQUIRED') {
+        onPasswordChangeRequired('/password/change/')
+      } else if (response.status === 401) {
         const currentPage = `${window.location.pathname}${window.location.search}${window.location.hash}`
         onAuthenticationRequired(`/login/?next=${encodeURIComponent(currentPage)}`)
       }
-      throw new ApiError(response.status, (body || {}) as ApiErrorBody)
+      throw apiError
     }
     return body as T
   }

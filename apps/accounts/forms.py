@@ -2,6 +2,8 @@ import hashlib
 
 from django import forms
 from django.core import signing
+from django.contrib.auth.hashers import check_password
+from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 from django.utils.crypto import constant_time_compare
 
@@ -227,7 +229,6 @@ class StudentCreateForm(forms.Form):
     student_number = forms.CharField(label="学号", max_length=64)
     display_name = forms.CharField(label="姓名", max_length=80)
     class_group = forms.ModelChoiceField(label="班级", queryset=ClassGroup.objects.none())
-    password = forms.CharField(label="初始密码", widget=forms.PasswordInput, min_length=8)
 
     def __init__(self, *args, owner=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -252,12 +253,38 @@ class StudentCreateForm(forms.Form):
             display_name=self.cleaned_data["display_name"].strip(),
             class_group=self.cleaned_data["class_group"],
             role=User.Role.STUDENT,
-            password=self.cleaned_data["password"],
+            password=f"S{number}",
+            must_change_password=True,
         )
 
 
 class PasswordResetForm(forms.Form):
-    password = forms.CharField(label="新密码", widget=forms.PasswordInput, min_length=8)
+    confirmation = forms.ChoiceField(choices=(("reset", "重置初始密码"),), widget=forms.HiddenInput)
+
+
+class StudentPasswordChangeForm(forms.Form):
+    new_password1 = forms.CharField(label="新密码", min_length=8, strip=False, widget=forms.PasswordInput)
+    new_password2 = forms.CharField(label="再次输入新密码", min_length=8, strip=False, widget=forms.PasswordInput)
+
+    def __init__(self, *args, user, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        data = super().clean()
+        password = data.get("new_password1")
+        confirmation = data.get("new_password2")
+        if password and confirmation:
+            if password != confirmation:
+                self.add_error("new_password2", "两次输入的新密码不一致。")
+            elif password == f"S{self.user.student_number}" or check_password(password, self.user.password):
+                self.add_error("new_password1", "新密码不能与当前密码或初始密码相同。")
+            else:
+                try:
+                    validate_password(password, self.user)
+                except forms.ValidationError as exc:
+                    self.add_error("new_password1", exc)
+        return data
 
 
 class StudentBatchUploadForm(forms.Form):

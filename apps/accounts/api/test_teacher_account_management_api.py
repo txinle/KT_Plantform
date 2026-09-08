@@ -103,7 +103,6 @@ class TeacherAccountManagementApiTests(TestCase):
 
         self.assertEqual(invalid.status_code, 400)
         self.assertIn("student_number", invalid.json()["error"]["fields"])
-        self.assertIn("password", invalid.json()["error"]["fields"])
 
         created = self.post_json(
             f"{self.global_base}students/",
@@ -118,7 +117,8 @@ class TeacherAccountManagementApiTests(TestCase):
         self.assertEqual(created.status_code, 201)
         account = User.objects.get(student_number="LEGACY-001")
         self.assertEqual(account.class_group_id, self.legacy_class.pk)
-        self.assertTrue(account.check_password("account-password"))
+        self.assertTrue(account.check_password("SLEGACY-001"))
+        self.assertTrue(account.must_change_password)
         self.assertTrue(
             AuditLog.objects.filter(
                 action="student.create", object_id=str(account.pk)
@@ -332,11 +332,12 @@ class TeacherAccountManagementApiTests(TestCase):
 
         reset = self.post_json(
             f"{self.global_base}courses/{self.course.pk}/classes/{self.other_class.pk}/students/{student_id}/reset-password/",
-            {"password": "new-global-password"},
+            {"confirmation": "reset"},
         )
         self.assertEqual(reset.status_code, 200)
         student = User.objects.get(pk=student_id)
-        self.assertTrue(student.check_password("new-global-password"))
+        self.assertTrue(student.check_password("SMOVE-001"))
+        self.assertTrue(student.must_change_password)
 
         policy_url = f"{self.manage_base}student-visibility/"
         policy = self.patch_json(

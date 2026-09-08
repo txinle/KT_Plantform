@@ -1,5 +1,6 @@
 import { createApiClient } from '@/api/client'
 import { getBootstrapContext } from '@/app/bootstrap'
+import type { QuestionRecheckResult } from './api'
 
 type ApiClient = ReturnType<typeof createApiClient>
 
@@ -24,6 +25,7 @@ export interface StandaloneQuestion {
   question_type_label: string
   status: string
   status_label: string
+  draft_reasons: string[]
   teacher_difficulty: string | null
   kc_mapping: {
     root_kc_code: string | null
@@ -68,6 +70,7 @@ export interface StandaloneQuestionEditor {
     correct_answer_text: string
     accepted_answers_text: string
     options: Record<string, string>
+    draft_reasons: string[]
   }
   question_types: Array<{ value: string; label: string }>
   statuses: Array<{ value: string; label: string }>
@@ -85,6 +88,8 @@ export interface StandaloneQuestionImportPreview {
       question_type_label: string
       option_count: number
       teacher_difficulty: string | null
+      classification?: 'ready' | 'draft'
+      draft_reasons?: string[]
     }>
   }
 }
@@ -165,6 +170,12 @@ export function createTeacherStandaloneQuestionBankApi(client: ApiClient) {
         { method: 'PUT', body },
       )
     },
+    recheckQuestions(bankId: number) {
+      return client.mutate<QuestionRecheckResult>(
+        `/api/v1/teacher/banks/${bankId}/questions/recheck/`,
+        { method: 'POST' },
+      )
+    },
     previewQuestionImport(bankId: number, file: File) {
       const body = new FormData()
       body.append('file', file)
@@ -174,7 +185,7 @@ export function createTeacherStandaloneQuestionBankApi(client: ApiClient) {
       )
     },
     confirmQuestionImport(bankId: number, previewId: string) {
-      return client.mutate<{ created: number; detail_url: string }>(
+      return client.mutate<{ created: number; active?: number; draft?: number; detail_url: string }>(
         `/api/v1/teacher/banks/${bankId}/imports/questions/confirm/`,
         { method: 'POST', body: { preview_id: previewId } },
       )

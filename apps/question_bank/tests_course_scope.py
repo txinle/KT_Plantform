@@ -639,7 +639,7 @@ class CourseQuestionBankScopeTests(TestCase):
         question.refresh_from_db()
         self.assertEqual(question.text, "保持原题目")
 
-    def test_question_edit_rejects_empty_primary_for_an_active_question(self):
+    def test_question_edit_rejects_orphan_secondary_kcs_without_losing_mapping(self):
         bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="章节题库")
         question = Question.objects.create(
             bank=bank,
@@ -667,7 +667,7 @@ class CourseQuestionBankScopeTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "可用题目必须选择主 KC")
+        self.assertContains(response, "存在次 KC 时必须选择主 KC")
         question.refresh_from_db()
         self.assertEqual(question.text, "保持原题目")
         self.assertEqual(question.primary_concept, existing)

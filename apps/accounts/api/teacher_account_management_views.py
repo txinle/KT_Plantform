@@ -2,7 +2,7 @@ from urllib.parse import quote
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import HttpResponse, QueryDict
 from django.shortcuts import get_object_or_404
@@ -58,6 +58,11 @@ from apps.accounts.student_import import (
     parse_student_workbook,
 )
 from apps.accounts.views import _class_queryset, _student_queryset
+from apps.accounts.password_services import reset_student_initial_password
+from apps.accounts.student_identity import (
+    StudentIdentityError, affects_other_courses, identity_state_token, update_student_identity,
+)
+from apps.api.exceptions import ApiBusinessError
 from apps.api.permissions import RolePermission
 from apps.audit.services import log_action
 
@@ -92,6 +97,8 @@ from .teacher_account_management_serializers import (
     TeacherAccountStudentCreateRequestSerializer,
     TeacherAccountStudentCreateResponseSerializer,
     TeacherAccountStudentSerializer,
+    StudentIdentityUpdateRequestSerializer,
+    StudentIdentityUpdateResponseSerializer,
 )
 
 
@@ -232,6 +239,8 @@ def _class_management_payload(course, class_group, user):
             {
                 "enrollment_id": enrollment.pk,
                 "student": _student_payload(enrollment.student),
+                "identity_state_token": identity_state_token(enrollment.student, course, class_group, user),
+                "affects_other_courses": affects_other_courses(enrollment.student, course),
             }
             for enrollment in enrollments
         ],
@@ -244,6 +253,7 @@ def _class_management_payload(course, class_group, user):
             "can_move_students": writable,
             "can_remove_students": writable,
             "can_reset_passwords": writable,
+            "can_edit_students": writable,
             "can_update_visibility": writable and settings.CLASS_CENTER_ENABLED,
         },
         "actions": {
@@ -274,6 +284,11 @@ def _policy_payload(policy, *, is_read_only):
 class TeacherAccountManagementApiView(APIView):
     permission_classes = (RolePermission,)
     allowed_roles = (User.Role.TEACHER,)
+
+    def handle_exception(self, exc):
+        if isinstance(exc, StudentIdentityError):
+            exc = ApiBusinessError("；".join(exc.messages), code=exc.business_code, fields=exc.fields, status=exc.status_code)
+        return super().handle_exception(exc)
 
 
 class TeacherAccountClassCollectionView(TeacherAccountManagementApiView):
@@ -382,21 +397,25 @@ class TeacherAccountStudentCollectionView(TeacherAccountManagementApiView):
     def post(self, request):
         data = _form_data(
             request.data,
-            ("student_number", "display_name", "class_group", "password"),
+            ("student_number", "display_name", "class_group"),
         )
         form = StudentCreateForm(data, owner=request.user)
         if not form.is_valid():
             raise ValidationError(form.errors)
-        student = form.save()
-        log_action(
-            request,
-            "student.create",
-            student,
-            {
-                "student_number": student.student_number,
-                "class": str(student.class_group or ""),
-            },
-        )
+        try:
+            with transaction.atomic():
+                student = form.save()
+                log_action(request, "student.create", student, {
+                    "student_number": student.student_number,
+                    "class": str(student.class_group or ""),
+                })
+        except IntegrityError as exc:
+            number = form.cleaned_data["student_number"]
+            if User.objects.filter(student_number=number).exists():
+                raise StudentIdentityError("STUDENT_NUMBER_CONFLICT", "该学号已被其他学生账号占用。") from exc
+            if User.objects.filter(username=User.normalize_username(number)).exists():
+                raise StudentIdentityError("USERNAME_CONFLICT", "该登录用户名已被其他账号占用。") from exc
+            raise
         return Response(
             TeacherAccountStudentCreateResponseSerializer(
                 {"student": _student_payload(student)}
@@ -467,13 +486,9 @@ class TeacherAccountStudentResetView(TeacherAccountManagementApiView):
     )
     def post(self, request, student_id):
         student = get_object_or_404(_student_queryset(request.user), pk=student_id)
-        data = _form_data(request.data, ("password",))
-        form = PasswordResetForm(data)
-        if not form.is_valid():
-            raise ValidationError(form.errors)
-        student.set_password(form.cleaned_data["password"])
-        student.save(update_fields=["password"])
-        log_action(request, "student.password_reset", student)
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        student = reset_student_initial_password(request=request, student_id=student.pk)
         return Response(
             TeacherAccountStudentCreateResponseSerializer(
                 {"student": _student_payload(student)}
@@ -551,32 +566,19 @@ class CourseClassManualEnrollmentView(TeacherAccountManagementApiView):
         responses={201: ManualEnrollmentResponseSerializer},
     )
     def post(self, request, course_id, class_id):
-        course, class_group = _course_and_class(request.user, course_id, class_id)
-        require_writable_course(course)
-        _require_active_class(class_group, "新增学生")
-        data = _form_data(request.data, ("student_number", "display_name"))
+        serializer = ManualEnrollmentRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        if not data.get("confirmation_token"):
+            course, class_group = _course_and_class(request.user, course_id, class_id)
+            require_writable_course(course)
+            _require_active_class(class_group, "新增学生")
         form = ManualStudentEnrollmentForm(data)
         if not form.is_valid():
             raise ValidationError(form.errors)
-        try:
-            student, created_account = enroll_single_student(
-                course,
-                class_group,
-                form.cleaned_data["student_number"],
-                form.cleaned_data["display_name"],
-            )
-        except DjangoValidationError as exc:
-            raise ValidationError("; ".join(exc.messages)) from exc
-        enrollment = CourseEnrollment.objects.get(course=course, student=student)
-        log_action(
-            request,
-            "student.manual_enroll",
-            enrollment,
-            {
-                "course_id": course.pk,
-                "class_id": class_group.pk,
-                "created_account": created_account,
-            },
+        student, created_account = enroll_single_student(
+            course_id, class_id, form.cleaned_data["student_number"], form.cleaned_data["display_name"],
+            request=request, confirmation_token=data.get("confirmation_token"),
         )
         return Response(
             ManualEnrollmentResponseSerializer(
@@ -820,15 +822,34 @@ class CourseStudentRemoveView(TeacherAccountManagementApiView):
         if request.data.get("confirmation") != "delete":
             raise ValidationError("请在二次确认后再将学生移出课程。")
         try:
-            details = remove_course_enrollment(
-                course=course,
-                class_group=class_group,
-                enrollment=enrollment,
-            )
+            with transaction.atomic():
+                details = remove_course_enrollment(
+                    course=course, class_group=class_group, enrollment=enrollment,
+                )
+                log_action(request, "student.course_remove", enrollment.student, details)
         except DjangoValidationError as exc:
             raise ValidationError("; ".join(exc.messages)) from exc
-        log_action(request, "student.course_remove", enrollment.student, details)
         return Response(RemoveEnrollmentResponseSerializer({"removed": True}).data)
+
+
+class CourseStudentIdentityView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_student_identity_update",
+        request=StudentIdentityUpdateRequestSerializer,
+        responses=StudentIdentityUpdateResponseSerializer,
+    )
+    def patch(self, request, course_id, class_id, student_id):
+        serializer = StudentIdentityUpdateRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        student, course, class_group = update_student_identity(
+            request=request, course_id=course_id, class_id=class_id, student_id=student_id,
+            **serializer.validated_data,
+        )
+        return Response(StudentIdentityUpdateResponseSerializer({
+            "student": _student_payload(student),
+            "identity_state_token": identity_state_token(student, course, class_group, request.user),
+            "affects_other_courses": affects_other_courses(student, course),
+        }).data)
 
 
 class CourseStudentResetView(TeacherAccountManagementApiView):
@@ -847,17 +868,10 @@ class CourseStudentResetView(TeacherAccountManagementApiView):
             student_id=student_id,
             is_active=True,
         )
-        data = _form_data(request.data, ("password",))
-        form = PasswordResetForm(data)
-        if not form.is_valid():
-            raise ValidationError(form.errors)
-        enrollment.student.set_password(form.cleaned_data["password"])
-        enrollment.student.save(update_fields=["password"])
-        log_action(
-            request,
-            "student.password_reset",
-            enrollment.student,
-            {"course_id": course.pk, "global_account": True},
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        enrollment.student = reset_student_initial_password(
+            request=request, student_id=student_id, course_id=course_id, class_id=class_id,
         )
         return Response(
             TeacherAccountStudentCreateResponseSerializer(

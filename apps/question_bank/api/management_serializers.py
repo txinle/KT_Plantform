@@ -141,9 +141,10 @@ class ManagementQuestionEditorQuestionSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     sequence = serializers.IntegerField(min_value=1)
     code = serializers.CharField()
-    text = serializers.CharField()
+    text = serializers.CharField(allow_blank=True)
     question_type = serializers.ChoiceField(choices=QUESTION_TYPE_CHOICES)
     status = serializers.ChoiceField(choices=QUESTION_STATUS_CHOICES)
+    draft_reasons = serializers.ListField(child=serializers.CharField())
     teacher_difficulty = serializers.CharField(allow_blank=True)
     absolute_tolerance = serializers.CharField(allow_blank=True)
     relative_tolerance = serializers.CharField(allow_blank=True)
@@ -172,7 +173,7 @@ class ManagementQuestionEditorResponseSerializer(serializers.Serializer):
 
 
 class ManagementQuestionEditorRequestSerializer(serializers.Serializer):
-    text = serializers.CharField()
+    text = serializers.CharField(allow_blank=True)
     question_type = serializers.ChoiceField(choices=QUESTION_TYPE_CHOICES)
     status = serializers.ChoiceField(choices=QUESTION_STATUS_CHOICES)
     teacher_difficulty = serializers.CharField(allow_blank=True, required=False)
@@ -204,7 +205,8 @@ class ManagementQuestionImportPreviewRowSerializer(serializers.Serializer):
     accepted_answers = serializers.ListField(child=serializers.CharField(), required=False)
     explanation = serializers.CharField(required=False, allow_blank=True)
     kc_mapping = serializers.JSONField(required=False, allow_null=True)
-    classification = serializers.ChoiceField(choices=('ready', 'duplicate', 'invalid'), required=False)
+    classification = serializers.ChoiceField(choices=('ready', 'draft', 'duplicate', 'invalid'), required=False)
+    draft_reasons = serializers.ListField(child=serializers.CharField(), required=False)
     errors = serializers.ListField(child=serializers.CharField(), required=False)
     existing_question_id = serializers.IntegerField(required=False, allow_null=True)
 
@@ -229,10 +231,26 @@ class ManagementQuestionImportConfirmRequestSerializer(serializers.Serializer):
 
 class ManagementQuestionImportConfirmResponseSerializer(serializers.Serializer):
     created = serializers.IntegerField(min_value=0)
+    active = serializers.IntegerField(min_value=0)
+    draft = serializers.IntegerField(min_value=0)
     detail_url = serializers.CharField()
     skipped = serializers.IntegerField(min_value=0, required=False)
     failed = serializers.IntegerField(min_value=0, required=False)
     rows = serializers.ListField(child=serializers.DictField(), required=False)
+
+
+class QuestionDraftRecheckRowSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    code = serializers.CharField()
+    status = serializers.CharField()
+    draft_reasons = serializers.ListField(child=serializers.CharField())
+
+
+class QuestionDraftRecheckSerializer(serializers.Serializer):
+    checked = serializers.IntegerField(min_value=0)
+    activated = serializers.IntegerField(min_value=0)
+    draft = serializers.IntegerField(min_value=0)
+    rows = QuestionDraftRecheckRowSerializer(many=True)
 
 
 class ManagementKCPreviewTreeNodeSerializer(serializers.Serializer):
@@ -304,6 +322,10 @@ class ManagementCourseConceptEditRequestSerializer(serializers.Serializer):
     description = serializers.CharField(allow_blank=True)
 
 
+class ManagementCourseConceptStatusRequestSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=["active", "archived"])
+
+
 class ManagementCourseConceptEditResponseSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     kc_code = serializers.CharField()
@@ -359,6 +381,7 @@ class ManagementStandaloneQuestionSerializer(serializers.Serializer):
     question_type_label = serializers.CharField()
     status = serializers.ChoiceField(choices=QUESTION_STATUS_CHOICES)
     status_label = serializers.CharField()
+    draft_reasons = serializers.ListField(child=serializers.CharField())
     teacher_difficulty = serializers.CharField(allow_null=True)
     kc_mapping = QuestionKCMappingSerializer()
     edit_url = serializers.CharField()

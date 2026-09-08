@@ -7,7 +7,10 @@ export type CourseConceptCollection = components['schemas']['CourseConceptCollec
   summary: { total: number; active: number; used: number; archived: number }
 }
 export type QuestionBankDetail = components['schemas']['QuestionBankDetail']
-export type QuestionCollection = components['schemas']['QuestionCollection']
+type GeneratedQuestionCollection = components['schemas']['QuestionCollection']
+export type QuestionCollection = Omit<GeneratedQuestionCollection, 'items'> & {
+  items: Array<GeneratedQuestionCollection['items'][number] & { draft_reasons: string[] }>
+}
 export type BankConceptCollection = components['schemas']['BankConceptCollection']
 export interface CourseConceptImportRow {
   sequence: number

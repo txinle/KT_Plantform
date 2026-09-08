@@ -1,7 +1,7 @@
 import os
 from unittest.mock import patch
 
-from django.test import TestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 
 from apps.accounts.models import Course, User
@@ -12,6 +12,31 @@ from apps.question_bank.models import (
     QuestionConcept,
 )
 from apps.question_bank.services.question_kc_mapping import replace_question_kc_mapping
+
+
+class CourseConceptCreateTransactionTests(TransactionTestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(username="kc-create-owner", role=User.Role.TEACHER)
+        self.course = Course.objects.create(owner=self.teacher, name="新增 KC 事务", code="KC-TX", term="2026")
+        self.url = f"/api/v1/teacher/courses/{self.course.pk}/concepts/"
+        self.client.force_login(self.teacher)
+
+    def test_create_under_autocommit_and_reject_duplicate_without_partial_write(self):
+        payload = {"sequence": 1, "name": "基础运算", "description": "说明"}
+        response = self.client.post(self.url, data=payload, content_type="application/json")
+        self.assertEqual(response.status_code, 201, response.content)
+        concept = self.course.concepts.get()
+        self.assertEqual((concept.code, concept.name, concept.description), ("KC1", "基础运算", "说明"))
+        repeated = self.client.post(self.url, data=payload, content_type="application/json")
+        self.assertEqual(repeated.status_code, 400, repeated.content)
+        self.assertEqual(self.course.concepts.count(), 1)
+
+    def test_archived_course_rejects_creation_without_partial_write(self):
+        self.course.status = Course.Status.ARCHIVED
+        self.course.save(update_fields=["status"])
+        response = self.client.post(self.url, data={"sequence": 1, "name": "基础运算"}, content_type="application/json")
+        self.assertEqual(response.status_code, 403, response.content)
+        self.assertFalse(self.course.concepts.exists())
 
 
 class TeacherQuestionBankApiTests(TestCase):

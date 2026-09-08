@@ -52,6 +52,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/password/change/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["auth_password_change_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/session/": {
         parameters: {
             query?: never;
@@ -322,6 +338,22 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["teacher_course_class_student_visibility_update"];
+        trace?: never;
+    };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/{student_id}/identity/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["teacher_course_student_identity_update"];
         trace?: never;
     };
     "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/{student_id}/move/": {
@@ -638,6 +670,22 @@ export interface paths {
         get: operations["teacher_standalone_question_bank_question_editor_retrieve"];
         put: operations["teacher_standalone_question_bank_question_editor_update"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/banks/{bank_id}/questions/recheck/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_banks_questions_recheck_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1060,6 +1108,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/questions/recheck/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_courses_banks_questions_recheck_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/restore/": {
         parameters: {
             query?: never;
@@ -1285,7 +1349,7 @@ export interface paths {
         delete: operations["teacher_question_bank_course_concept_delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        patch: operations["teacher_courses_concepts_partial_update"];
         trace?: never;
     };
     "/api/v1/teacher/courses/{course_id}/concepts/import/confirm/": {
@@ -1825,6 +1889,7 @@ export interface components {
             username: string;
             student_number: string | null;
             home_url: string;
+            must_change_password: boolean;
         };
         AttemptProcess: {
             question_type: string;
@@ -1949,11 +2014,12 @@ export interface components {
         };
         /**
          * @description * `ready` - ready
+         *     * `draft` - draft
          *     * `duplicate` - duplicate
          *     * `invalid` - invalid
          * @enum {string}
          */
-        ClassificationEnum: "ready" | "duplicate" | "invalid";
+        ClassificationEnum: "ready" | "draft" | "duplicate" | "invalid";
         /**
          * @description * `complete` - complete
          *     * `incomplete` - incomplete
@@ -1978,7 +2044,7 @@ export interface components {
          * @description * `delete` - delete
          * @enum {string}
          */
-        ConfirmationEnum: "delete";
+        ConfirmationF49Enum: "delete";
         CourseClassCopyConfirmRequest: {
             action?: components["schemas"]["ActionEnum"];
         };
@@ -1998,7 +2064,7 @@ export interface components {
             skipped: number;
         };
         CourseClassDeleteRequest: {
-            confirmation: components["schemas"]["ConfirmationEnum"];
+            confirmation: components["schemas"]["ConfirmationF49Enum"];
         };
         CourseClassDeleteResponse: {
             deleted: boolean;
@@ -2044,6 +2110,8 @@ export interface components {
             distribution: components["schemas"]["QuestionBankDistribution"][];
             can_rename: boolean;
             can_delete: boolean;
+            can_archive: boolean;
+            can_restore: boolean;
             rename_url: string | null;
             delete_url: string | null;
         };
@@ -2359,6 +2427,7 @@ export interface components {
             can_move_students: boolean;
             can_remove_students: boolean;
             can_reset_passwords: boolean;
+            can_edit_students: boolean;
             can_update_visibility: boolean;
         };
         ManagedClassSourceOption: {
@@ -2374,6 +2443,8 @@ export interface components {
         ManagedEnrollment: {
             enrollment_id: number;
             student: components["schemas"]["TeacherAccountStudent"];
+            identity_state_token: string;
+            affects_other_courses: boolean;
         };
         ManagementArchivedBank: {
             id: number;
@@ -2432,6 +2503,12 @@ export interface components {
             description: string;
             status: string;
         };
+        /**
+         * @description * `active` - active
+         *     * `archived` - archived
+         * @enum {string}
+         */
+        ManagementCourseConceptStatusRequestStatusEnum: "active" | "archived";
         ManagementErrorDetail: {
             code: string;
             message: string;
@@ -2524,6 +2601,7 @@ export interface components {
             text: string;
             question_type: components["schemas"]["QuestionType128Enum"];
             status: components["schemas"]["StatusB97Enum"];
+            draft_reasons: string[];
             teacher_difficulty: string;
             absolute_tolerance: string;
             relative_tolerance: string;
@@ -2567,6 +2645,8 @@ export interface components {
         };
         ManagementQuestionImportConfirmResponse: {
             created: number;
+            active: number;
+            draft: number;
             detail_url: string;
             skipped?: number;
             failed?: number;
@@ -2604,6 +2684,7 @@ export interface components {
             explanation?: string;
             kc_mapping?: unknown;
             classification?: components["schemas"]["ClassificationEnum"];
+            draft_reasons?: string[];
             errors?: string[];
             existing_question_id?: number | null;
         };
@@ -2711,6 +2792,7 @@ export interface components {
             question_type_label: string;
             status: components["schemas"]["StatusB97Enum"];
             status_label: string;
+            draft_reasons: string[];
             teacher_difficulty: string | null;
             kc_mapping: components["schemas"]["QuestionKCMapping"];
             edit_url: string;
@@ -2736,6 +2818,7 @@ export interface components {
         ManualEnrollmentRequest: {
             student_number: string;
             display_name: string;
+            confirmation_token?: string;
         };
         ManualEnrollmentResponse: {
             student: components["schemas"]["TeacherAccountStudent"];
@@ -2805,13 +2888,21 @@ export interface components {
             not_participated: number;
         };
         PasswordResetRequest: {
-            password: string;
+            confirmation: components["schemas"]["PasswordResetRequestConfirmationEnum"];
         };
+        /**
+         * @description * `reset` - reset
+         * @enum {string}
+         */
+        PasswordResetRequestConfirmationEnum: "reset";
         PatchedCourseClassUpdateRequest: {
             name?: string;
             academic_year?: string;
             is_active?: boolean;
             state_token?: string;
+        };
+        PatchedManagementCourseConceptStatusRequest: {
+            status?: components["schemas"]["ManagementCourseConceptStatusRequestStatusEnum"];
         };
         PatchedStandaloneExperimentInput: {
             name?: string;
@@ -2835,6 +2926,11 @@ export interface components {
             confidence_scale_version?: string;
             confidence_prompt_version?: string;
             heartbeat_interval_seconds?: number;
+        };
+        PatchedStudentIdentityUpdateRequest: {
+            student_number?: string;
+            display_name?: string;
+            state_token?: string;
         };
         PatchedStudentVisibilityPolicyRequest: {
             show_scores?: boolean;
@@ -2871,9 +2967,7 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
-            /** Format: int64 */
             total_time_limit_minutes?: number | null;
-            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -3160,6 +3254,18 @@ export interface components {
             detail: components["schemas"]["QuestionDetail"];
             actions: components["schemas"]["QuestionDetailActions"];
         };
+        QuestionDraftRecheck: {
+            checked: number;
+            activated: number;
+            draft: number;
+            rows: components["schemas"]["QuestionDraftRecheckRow"][];
+        };
+        QuestionDraftRecheckRow: {
+            id: number;
+            code: string;
+            status: string;
+            draft_reasons: string[];
+        };
         QuestionKCImportResult: {
             questions_updated: number;
         };
@@ -3207,6 +3313,7 @@ export interface components {
             teacher_difficulty: string | null;
             status: string;
             status_label: string;
+            draft_reasons: string[];
             edit_url: string | null;
             delete_url: string | null;
         };
@@ -3257,7 +3364,7 @@ export interface components {
          */
         RankModeEnum: "none" | "self";
         RemoveEnrollmentRequest: {
-            confirmation: components["schemas"]["ConfirmationEnum"];
+            confirmation: components["schemas"]["ConfirmationF49Enum"];
         };
         RemoveEnrollmentResponse: {
             removed: boolean;
@@ -3643,6 +3750,11 @@ export interface components {
          * @enum {string}
          */
         StudentFeedbackCaptureModeEnum: "correctness" | "full";
+        StudentIdentityUpdateResponse: {
+            student: components["schemas"]["TeacherAccountStudent"];
+            identity_state_token: string;
+            affects_other_courses: boolean;
+        };
         StudentImportPreviewRequest: {
             /** Format: uri */
             file: string;
@@ -3773,6 +3885,10 @@ export interface components {
             value: string;
             /** Format: decimal */
             maximum: string;
+        };
+        StudentPasswordChange: {
+            new_password1: string;
+            new_password2: string;
         };
         StudentResult: components["schemas"]["StudentResultNone"] | components["schemas"]["StudentResultCorrectness"] | components["schemas"]["StudentResultFull"];
         StudentResultCorrectness: {
@@ -4078,7 +4194,6 @@ export interface components {
             student_number: string;
             display_name: string;
             class_group: number;
-            password: string;
         };
         TeacherAccountStudentCreateResponse: {
             student: components["schemas"]["TeacherAccountStudent"];
@@ -4300,9 +4415,7 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
-            /** Format: int64 */
             total_time_limit_minutes?: number | null;
-            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -4654,6 +4767,31 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    auth_password_change_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StudentPasswordChange"];
+                "application/x-www-form-urlencoded": components["schemas"]["StudentPasswordChange"];
+                "multipart/form-data": components["schemas"]["StudentPasswordChange"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionContext"];
+                };
             };
         };
     };
@@ -5104,6 +5242,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StudentVisibilityPolicy"];
+                };
+            };
+        };
+    };
+    teacher_course_student_identity_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+                student_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PatchedStudentIdentityUpdateRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PatchedStudentIdentityUpdateRequest"];
+                "multipart/form-data": components["schemas"]["PatchedStudentIdentityUpdateRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudentIdentityUpdateResponse"];
                 };
             };
         };
@@ -5750,6 +5917,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ManagementErrorResponse"];
+                };
+            };
+        };
+    };
+    teacher_banks_questions_recheck_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuestionDraftRecheck"];
                 };
             };
         };
@@ -6581,6 +6769,28 @@ export interface operations {
             };
         };
     };
+    teacher_courses_banks_questions_recheck_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuestionDraftRecheck"];
+                };
+            };
+        };
+    };
     teacher_question_bank_restore: {
         parameters: {
             query?: never;
@@ -7001,6 +7211,34 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    teacher_courses_concepts_partial_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                concept_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PatchedManagementCourseConceptStatusRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PatchedManagementCourseConceptStatusRequest"];
+                "multipart/form-data": components["schemas"]["PatchedManagementCourseConceptStatusRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagementCourseConceptDeleteResponse"];
+                };
             };
         };
     };

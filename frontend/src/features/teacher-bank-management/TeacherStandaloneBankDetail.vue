@@ -25,7 +25,9 @@ const data = ref<{
   questions: StandaloneQuestion[]
 }>()
 const error = ref('')
+const success = ref('')
 const updatingVisibility = ref(false)
+const rechecking = ref(false)
 const canEditContent = computed(() => Boolean(data.value?.can_edit_content))
 
 function statusTone(status: string) {
@@ -62,6 +64,21 @@ async function updateVisibility(event: Event) {
   }
 }
 
+async function recheckDrafts() {
+  rechecking.value = true
+  error.value = ''
+  success.value = ''
+  try {
+    const result = await api.recheckQuestions(bankId)
+    await load()
+    success.value = `复核完成：检查 ${result.checked} 道，转为可用 ${result.activated} 道，仍为草稿 ${result.draft} 道。`
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '复核草稿失败。'
+  } finally {
+    rechecking.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -74,10 +91,12 @@ onMounted(load)
       <template #actions>
         <RouterLink v-if="canEditContent" class="kt-button" :to="data.bank.question_import_url">导入题目文件</RouterLink>
         <RouterLink v-if="canEditContent" class="kt-button kt-button--secondary" :to="data.bank.kc_import_url">导入 KC 对应表</RouterLink>
+        <button v-if="canEditContent" data-recheck-drafts class="kt-button kt-button--secondary" type="button" :disabled="rechecking" @click="recheckDrafts">{{ rechecking ? '正在复核…' : '复核草稿' }}</button>
         <RouterLink class="kt-button kt-button--secondary" to="/teacher/banks/">返回题库</RouterLink>
       </template>
     </PageHeader>
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
+    <Alert v-if="success" tone="success">{{ success }}</Alert>
     <Alert v-if="data.bank.visibility === 'archived'" tone="warning">题库已归档，题目与导入操作保持只读。</Alert>
     <div class="kt-bank-meta-line">
       <StatusBadge :label="data.bank.visibility_label" :tone="data.bank.visibility === 'shared' ? 'success' : 'neutral'" />
@@ -103,12 +122,12 @@ onMounted(load)
         <div class="kt-table-scroll">
           <table class="kt-table">
             <thead>
-              <tr><th>序号</th><th>题目</th><th>题型</th><th>知识点</th><th>状态</th><th>操作</th></tr>
+              <tr><th>题库内序号</th><th>题目</th><th>题型</th><th>知识点</th><th>状态</th><th>操作</th></tr>
             </thead>
             <tbody>
               <tr v-for="question in data.questions" :key="question.id">
                 <td class="kt-mono">{{ question.sequence }}</td>
-                <td><strong>{{ question.text }}</strong><small class="kt-mono">{{ question.code }}</small></td>
+                <td><strong>{{ question.text }}</strong><ul v-if="question.draft_reasons.length" class="kt-draft-reasons"><li v-for="reason in question.draft_reasons" :key="reason">{{ reason }}</li></ul></td>
                 <td>{{ question.question_type_label }}</td>
                 <td>{{ question.kc_mapping.nodes.map((node) => node.name).join('、') || '未映射' }}</td>
                 <td><StatusBadge :label="question.status_label" :tone="statusTone(question.status)" /></td>

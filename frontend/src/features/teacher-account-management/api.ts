@@ -48,6 +48,8 @@ export interface CourseClassManagement {
   enrollments: Array<{
     enrollment_id: number
     student: AccountStudent
+    identity_state_token: string
+    affects_other_courses: boolean
   }>
   target_classes: AccountClassOption[]
   source_classes: Array<{
@@ -64,6 +66,7 @@ export interface CourseClassManagement {
     can_update: boolean
     can_delete: boolean
     can_add_students: boolean
+    can_edit_students: boolean
     can_move_students: boolean
     can_remove_students: boolean
     can_reset_passwords: boolean
@@ -123,14 +126,15 @@ export function createTeacherAccountManagementApi(client: TeacherAccountManageme
     classes: () => client.get<{ items: AccountClass[] }>('/api/v1/teacher/accounts/classes/'),
     createClass: (input: { name: string; academic_year: string }) => client.mutate<{ class_group: AccountClass }>('/api/v1/teacher/accounts/classes/', { method: 'POST', body: input }),
     students: ({ query, classId }: { query?: string; classId?: number } = {}) => client.get<AccountStudentCollection>(`/api/v1/teacher/accounts/students/${queryString({ q: query, class_id: classId })}`),
-    createStudent: (input: { student_number: string; display_name: string; class_group: number; password: string }) => client.mutate<{ student: AccountStudent }>('/api/v1/teacher/accounts/students/', { method: 'POST', body: input }),
+    createStudent: (input: { student_number: string; display_name: string; class_group: number }) => client.mutate<{ student: AccountStudent }>('/api/v1/teacher/accounts/students/', { method: 'POST', body: input }),
     previewLegacyImport: (body: FormData) => client.mutateForm<StudentImportPreview>('/api/v1/teacher/accounts/students/import/preview/', { method: 'POST', body }),
     confirmLegacyImport: () => client.mutate<{ imported: number }>('/api/v1/teacher/accounts/students/import/confirm/', { method: 'POST', body: {} }),
-    resetLegacyStudentPassword: (studentId: number, password: string) => client.mutate<{ student: AccountStudent }>(`/api/v1/teacher/accounts/students/${studentId}/reset-password/`, { method: 'POST', body: { password } }),
+    resetLegacyStudentPassword: (studentId: number) => client.mutate<{ student: AccountStudent }>(`/api/v1/teacher/accounts/students/${studentId}/reset-password/`, { method: 'POST', body: { confirmation: 'reset' } }),
     management: (courseId: number, classId: number) => client.get<CourseClassManagement>(`${classBase(courseId, classId)}/manage/`),
     updateManagement: (courseId: number, classId: number, input: { name: string; academic_year: string; is_active: boolean; state_token: string }) => client.mutate<CourseClassManagement>(`${classBase(courseId, classId)}/manage/`, { method: 'PATCH', body: input }),
     deleteManagement: (courseId: number, classId: number) => client.mutate<{ deleted: boolean }>(`${classBase(courseId, classId)}/delete/`, { method: 'POST', body: { confirmation: 'delete' } }),
-    manualEnrollment: (courseId: number, classId: number, input: { student_number: string; display_name: string }) => client.mutate<{ student: AccountStudent; created_account: boolean }>(`${classBase(courseId, classId)}/students/manual/`, { method: 'POST', body: input }),
+    manualEnrollment: (courseId: number, classId: number, input: { student_number: string; display_name: string; confirmation_token?: string }) => client.mutate<{ student: AccountStudent; created_account: boolean }>(`${classBase(courseId, classId)}/students/manual/`, { method: 'POST', body: input }),
+    updateStudentIdentity: (courseId: number, classId: number, studentId: number, input: { student_number: string; display_name: string; state_token: string }) => client.mutate<{ student: AccountStudent; identity_state_token: string; affects_other_courses: boolean }>(`${classBase(courseId, classId)}/students/${studentId}/identity/`, { method: 'PATCH', body: input }),
     previewCopy: (courseId: number, classId: number, source_class: number) => client.mutate<{
       source_class: CourseClassManagement['source_classes'][number]
       preview: Array<{ student: AccountStudent; skip: boolean }>
@@ -140,7 +144,7 @@ export function createTeacherAccountManagementApi(client: TeacherAccountManageme
     confirmCourseImport: (courseId: number, classId: number) => client.mutate<{ created_accounts: number; enrollments: number }>(`${classBase(courseId, classId)}/students/import/confirm/`, { method: 'POST', body: {} }),
     moveStudent: (courseId: number, classId: number, studentId: number, class_group: number) => client.mutate<{ class_group: AccountClassOption }>(`${classBase(courseId, classId)}/students/${studentId}/move/`, { method: 'POST', body: { class_group } }),
     removeStudent: (courseId: number, classId: number, studentId: number) => client.mutate<{ removed: boolean }>(`${classBase(courseId, classId)}/students/${studentId}/remove/`, { method: 'POST', body: { confirmation: 'delete' } }),
-    resetCourseStudentPassword: (courseId: number, classId: number, studentId: number, password: string) => client.mutate<{ student: AccountStudent }>(`${classBase(courseId, classId)}/students/${studentId}/reset-password/`, { method: 'POST', body: { password } }),
+    resetCourseStudentPassword: (courseId: number, classId: number, studentId: number) => client.mutate<{ student: AccountStudent }>(`${classBase(courseId, classId)}/students/${studentId}/reset-password/`, { method: 'POST', body: { confirmation: 'reset' } }),
     visibility: (courseId: number, classId: number) => client.get<StudentVisibilityPolicy>(`${classBase(courseId, classId)}/student-visibility/`),
     saveVisibility: (courseId: number, classId: number, input: Omit<StudentVisibilityPolicy, 'is_read_only'>) => client.mutate<StudentVisibilityPolicy>(`${classBase(courseId, classId)}/student-visibility/`, { method: 'PATCH', body: input }),
   }

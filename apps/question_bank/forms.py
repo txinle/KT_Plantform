@@ -90,7 +90,7 @@ class QuestionEditForm(forms.ModelForm):
     option_d = forms.CharField(label="选项 D", required=False)
     option_e = forms.CharField(label="选项 E", required=False)
     option_f = forms.CharField(label="选项 F", required=False)
-    correct_answer_text = forms.CharField(label="正确答案")
+    correct_answer_text = forms.CharField(label="正确答案", required=False)
     class Meta:
         model = Question
         fields = ["text", "question_type", "teacher_difficulty", "absolute_tolerance", "relative_tolerance", "explanation", "status"]
@@ -106,6 +106,8 @@ class QuestionEditForm(forms.ModelForm):
         widgets = {"text": forms.Textarea(attrs={"rows": 4}), "explanation": forms.Textarea(attrs={"rows": 3})}
     def __init__(self, *args, course=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["text"].required = False
+        self.fields["status"].help_text = "非归档题目在保存后自动判定为可用或草稿。"
         if course is None and self.instance.pk:
             course = self.instance.bank.course
         self.manage_concepts = course is not None
@@ -121,10 +123,10 @@ class QuestionEditForm(forms.ModelForm):
             option_map = {item.key.lower(): item.text for item in self.instance.options.all()}
             for key in "abcdef": self.fields[f"option_{key}"].initial = option_map.get(key, "")
             answer = self.instance.correct_answer
-            if self.instance.question_type == Question.Type.TRUE_FALSE:
+            if self.instance.question_type == Question.Type.TRUE_FALSE and isinstance(answer, bool):
                 self.fields["correct_answer_text"].initial = "正确" if answer is True else "错误"
             else:
-                self.fields["correct_answer_text"].initial = ",".join(answer) if isinstance(answer, list) else answer
+                self.fields["correct_answer_text"].initial = ",".join(map(str, answer)) if isinstance(answer, list) else answer
             self.fields["accepted_answers_text"].initial = ";".join(self.instance.accepted_answers or [])
             from .services.question_kc_mapping import project_question_kc_mapping
 
@@ -140,36 +142,6 @@ class QuestionEditForm(forms.ModelForm):
             ).values_list("concept_id", flat=True)
     def clean(self):
         cleaned = super().clean()
-        question_type = cleaned.get("question_type")
-        raw_answer = (cleaned.get("correct_answer_text") or "").strip()
-        option_values = {
-            key.upper(): (cleaned.get(f"option_{key}") or "").strip()
-            for key in "abcdef"
-        }
-        available = {key for key, value in option_values.items() if value}
-        if question_type in {Question.Type.SINGLE, Question.Type.MULTIPLE}:
-            answers = {
-                part.strip().upper()
-                for part in raw_answer.replace("，", ",").replace("；", ",").replace(";", ",").split(",")
-                if part.strip()
-            }
-            if not available:
-                self.add_error("option_a", "选择题至少需要一个选项")
-            invalid = sorted(answers - available)
-            if invalid:
-                self.add_error("correct_answer_text", f"答案引用了不存在的选项：{', '.join(invalid)}")
-            if question_type == Question.Type.SINGLE and len(answers) != 1:
-                self.add_error("correct_answer_text", "单选题必须且只能填写一个正确选项")
-            if question_type == Question.Type.MULTIPLE and len(answers) < 2:
-                self.add_error("correct_answer_text", "多选题至少需要两个正确选项")
-        elif question_type == Question.Type.NUMERIC:
-            try:
-                normalize_finite_decimal(raw_answer)
-            except ValueError:
-                self.add_error("correct_answer_text", "数值题答案必须是有效数字")
-        elif question_type == Question.Type.TRUE_FALSE:
-            if normalize_true_false_answer(raw_answer) is None:
-                self.add_error("correct_answer_text", "判断题答案必须为正确或错误")
         mapping = None
         try:
             mapping = json.loads(cleaned.get("kc_mapping_json") or "{}")
@@ -178,6 +150,8 @@ class QuestionEditForm(forms.ModelForm):
         if mapping is not None:
             primary = cleaned.get("primary_concept")
             secondary = list(cleaned.get("secondary_concepts") or [])
+            if self.manage_concepts and primary is None and secondary and not mapping.get("nodes"):
+                self.add_error("primary_concept", "存在次 KC 时必须选择主 KC；也可以清空整个映射后保存为草稿。")
             if primary is not None and primary in secondary:
                 self.add_error("secondary_concepts", "主 KC 不能同时作为次 KC。")
             raw_secondary = (
@@ -206,15 +180,7 @@ class QuestionEditForm(forms.ModelForm):
                     ],
                 }
             nodes = mapping.get("nodes") or []
-            if (
-                self.manage_concepts
-                and cleaned.get("status") == Question.Status.ACTIVE
-                and not nodes
-            ):
-                self.add_error("kc_mapping_json", "可用题目必须具备完整 KC 树。")
-                if not (cleaned.get("kc_mapping_json") or "").strip():
-                    self.add_error("primary_concept", "可用题目必须选择主 KC。")
-            elif self.manage_concepts and nodes and self.instance.pk:
+            if self.manage_concepts and nodes and self.instance.pk:
                 from .services.question_kc_mapping import validate_question_kc_mapping
 
                 try:
@@ -238,7 +204,8 @@ class QuestionEditForm(forms.ModelForm):
                 {x.strip().upper() for x in normalized.split(",") if x.strip()}
             )
         elif question.question_type == Question.Type.TRUE_FALSE:
-            question.correct_answer = normalize_true_false_answer(raw)
+            normalized = normalize_true_false_answer(raw)
+            question.correct_answer = raw if normalized is None else normalized
         else:
             question.correct_answer = raw.upper() if question.question_type == Question.Type.SINGLE else raw
         if question.question_type in {Question.Type.SHORT, Question.Type.FILL_BLANK}:
@@ -247,7 +214,7 @@ class QuestionEditForm(forms.ModelForm):
             question.accepted_answers = []
         if commit:
             desired_status = question.status
-            if self.manage_concepts and desired_status == Question.Status.ACTIVE:
+            if desired_status != Question.Status.ARCHIVED:
                 question.status = Question.Status.DRAFT
             question.save()
             question.options.all().delete()
@@ -267,7 +234,6 @@ class QuestionEditForm(forms.ModelForm):
                     )
                 else:
                     question.concept_links.all().delete()
-                if desired_status == Question.Status.ACTIVE:
-                    question.status = Question.Status.ACTIVE
-                    question.save(update_fields=["status"])
+            from .services.question_readiness import refresh_question_readiness
+            refresh_question_readiness(question)
         return question

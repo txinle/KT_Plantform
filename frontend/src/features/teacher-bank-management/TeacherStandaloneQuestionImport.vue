@@ -16,6 +16,10 @@ const preview = ref<StandaloneQuestionImportPreview>()
 const error = ref('')
 const busy = ref(false)
 
+function classificationLabel(row: StandaloneQuestionImportPreview['preview']['rows'][number]) {
+  return row.classification === 'draft' ? '保存为草稿' : '导入后可用'
+}
+
 async function selectFile(event: Event) {
   const input = event.currentTarget as HTMLInputElement
   const file = input.files?.[0]
@@ -68,12 +72,12 @@ async function confirm() {
     <p>确认后将导入 {{ preview.preview.rows.length }} 道题；服务器会在事务中再次验证序号是否已被占用。</p>
     <div class="kt-table-scroll">
       <table class="kt-table">
-        <thead><tr><th>序号</th><th>题目</th><th>题型</th><th>选项</th><th>难度</th></tr></thead>
-        <tbody><tr v-for="row in preview.preview.rows" :key="row.sequence"><td>{{ row.sequence }}</td><td>{{ row.text }}</td><td>{{ row.question_type_label }}</td><td>{{ row.option_count }}</td><td>{{ row.teacher_difficulty || '未设置' }}</td></tr></tbody>
+        <thead><tr><th>序号</th><th>题目</th><th>题型</th><th>选项</th><th>难度</th><th>保存结果</th></tr></thead>
+        <tbody><tr v-for="row in preview.preview.rows" :key="row.sequence"><td>{{ row.sequence }}</td><td>{{ row.text || '未填写题干' }}</td><td>{{ row.question_type_label }}</td><td>{{ row.option_count }}</td><td>{{ row.teacher_difficulty || '未设置' }}</td><td><strong>{{ classificationLabel(row) }}</strong><ul v-if="row.draft_reasons?.length" class="kt-draft-reasons"><li v-for="reason in row.draft_reasons" :key="reason">{{ reason }}</li></ul></td></tr></tbody>
       </table>
     </div>
     <div class="kt-inline-actions">
-      <button class="kt-button" type="button" :disabled="busy" @click="confirm">确认导入</button>
+      <button class="kt-button" data-confirm-standalone-import type="button" :disabled="busy" @click="confirm">确认导入</button>
       <button class="kt-button kt-button--secondary" type="button" :disabled="busy" @click="preview = undefined">取消</button>
     </div>
   </section>

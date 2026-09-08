@@ -1,4 +1,5 @@
 from django.contrib.auth import authenticate, login, logout
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.middleware.csrf import get_token
 from drf_spectacular.utils import extend_schema
 from rest_framework.authentication import CSRFCheck
@@ -8,12 +9,16 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.views import resolve_home_url
+from apps.accounts.password_services import change_student_password, password_change_required
+from apps.accounts.student_identity import StudentIdentityError
+from .exceptions import ApiBusinessError
 
 from .serializers import (
     CsrfTokenSerializer,
     HealthSerializer,
     LoginRequestSerializer,
     SessionContextSerializer,
+    StudentPasswordChangeSerializer,
 )
 
 
@@ -26,6 +31,7 @@ def session_context(user):
             "username": user.username,
             "student_number": user.student_number,
             "home_url": resolve_home_url(user),
+            "must_change_password": password_change_required(user),
         }
     }
 
@@ -71,6 +77,20 @@ class LoginApiView(APIView):
             raise ValidationError({"non_field_errors": ["账号或密码不正确。"]})
         login(request._request, user)
         return Response(session_context(user))
+
+
+class StudentPasswordChangeView(APIView):
+    @extend_schema(request=StudentPasswordChangeSerializer, responses=SessionContextSerializer)
+    def post(self, request):
+        serializer = StudentPasswordChangeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            student = change_student_password(request=request._request, data=serializer.validated_data)
+        except StudentIdentityError as exc:
+            raise ApiBusinessError("；".join(exc.messages), code=exc.business_code, fields=exc.fields, status=exc.status_code) from exc
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.message_dict if hasattr(exc, "message_dict") else exc.messages) from exc
+        return Response(session_context(student))
 
 
 class LogoutApiView(APIView):

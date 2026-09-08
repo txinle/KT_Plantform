@@ -8,6 +8,7 @@ class ApiUserSerializer(serializers.Serializer):
     username = serializers.CharField()
     student_number = serializers.CharField(allow_null=True)
     home_url = serializers.CharField()
+    must_change_password = serializers.BooleanField()
 
 
 class SessionContextSerializer(serializers.Serializer):
@@ -21,6 +22,11 @@ class LoginRequestSerializer(serializers.Serializer):
 
 class CsrfTokenSerializer(serializers.Serializer):
     csrf_token = serializers.CharField()
+
+
+class StudentPasswordChangeSerializer(serializers.Serializer):
+    new_password1 = serializers.CharField(min_length=8, trim_whitespace=False, write_only=True)
+    new_password2 = serializers.CharField(min_length=8, trim_whitespace=False, write_only=True)
 
 
 class HealthSerializer(serializers.Serializer):

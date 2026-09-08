@@ -11,51 +11,12 @@ from .student_import import StudentImportError
 TARGET_CLASS_INACTIVE_ERROR = "目标班级已停用，不能新增学生。"
 
 
-@transaction.atomic
-def enroll_single_student(course, class_group, student_number, display_name):
-    student_number = student_number.strip()
-    display_name = display_name.strip()
-    if class_group.course_id != course.pk:
-        raise ValidationError("班级必须属于当前课程")
-    with lock_active_class_groups(
-        [class_group],
-        inactive_error=TARGET_CLASS_INACTIVE_ERROR,
-        lock_courses=True,
-    ) as locked_classes:
-        class_group = locked_classes[class_group.pk]
-        if class_group.course_id != course.pk:
-            raise ValidationError("班级必须属于当前课程")
-        matches = list(
-            User.objects.filter(
-                Q(student_number=student_number) | Q(username=student_number)
-            ).distinct()
-        )
-        if len(matches) > 1:
-            raise ValidationError(f"学号与多个账号冲突：{student_number}")
-        created = not matches
-        if matches:
-            student = matches[0]
-            if student.role != User.Role.STUDENT:
-                raise ValidationError(f"学号与非学生账号冲突：{student_number}")
-            if student.shown_name != display_name:
-                raise ValidationError(f"学号对应姓名不一致：{student_number}")
-        else:
-            student = User.objects.create_user(
-                username=student_number,
-                student_number=student_number,
-                display_name=display_name,
-                role=User.Role.STUDENT,
-                password=f"S{student_number}",
-            )
-        if CourseEnrollment.objects.filter(course=course, student=student).exists():
-            raise ValidationError(f"学生已加入当前课程：{student_number}")
-        CourseEnrollment.objects.create(
-            course=course,
-            class_group=class_group,
-            student=student,
-            is_active=True,
-        )
-        return student, created
+def enroll_single_student(course, class_group, student_number, display_name, *, request=None, confirmation_token=None):
+    from .student_identity import enroll_student
+    return enroll_student(
+        course, class_group, student_number, display_name,
+        request=request, confirmation_token=confirmation_token,
+    )
 
 
 @transaction.atomic
@@ -147,6 +108,7 @@ def enroll_parsed_students(course, class_group, parsed_students):
                     display_name=item.display_name,
                     role=User.Role.STUDENT,
                     password=f"S{item.student_number}",
+                    must_change_password=True,
                 )
                 created_accounts += 1
             CourseEnrollment.objects.create(
@@ -263,4 +225,5 @@ def import_legacy_students(parsed_students, accessible_classes):
                 class_group=class_group,
                 role=User.Role.STUDENT,
                 password=f"S{item.student_number}",
+                must_change_password=True,
             )

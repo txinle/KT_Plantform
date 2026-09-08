@@ -12,7 +12,7 @@ import {
 } from './api'
 import './question-import.css'
 
-type PreviewFilter = 'all' | 'ready' | 'duplicate' | 'invalid'
+type PreviewFilter = 'all' | 'ready' | 'draft' | 'duplicate' | 'invalid'
 type Mapping = NonNullable<QuestionImportPreviewRow['kc_mapping']>
 const route = useRoute()
 const router = useRouter()
@@ -45,16 +45,20 @@ const busy = ref(false)
 
 const acceptedFileTypes = computed(() => format.value === 'docx' ? '.docx' : '.csv,.xlsx')
 const rows = computed(() => preview.value?.preview.rows || [])
-const readyLabel = computed(() => confirmation.value ? '已导入' : '可导入')
+const readyLabel = computed(() => confirmation.value ? '已创建可用' : '导入后可用')
+const draftLabel = computed(() => confirmation.value ? '已创建草稿' : '保存为草稿')
+const confirmedActive = computed(() => confirmation.value?.active ?? confirmation.value?.created ?? 0)
+const confirmedDraft = computed(() => confirmation.value?.draft ?? 0)
 const outcomes = computed(() => new Map(confirmation.value?.rows.map((row) => [row.row_id, row]) || []))
 const summary = computed(() => {
-  const counts = { ready: 0, duplicate: 0, invalid: 0, unselected: 0 }
+  const counts = { ready: 0, draft: 0, duplicate: 0, invalid: 0, unselected: 0 }
   for (const row of rows.value) counts[classification(row)] += 1
   return counts
 })
 const filters = computed(() => [
   { value: 'all' as const, label: '全部', count: rows.value.length },
   { value: 'ready' as const, label: readyLabel.value, count: summary.value.ready },
+  { value: 'draft' as const, label: draftLabel.value, count: summary.value.draft },
   { value: 'duplicate' as const, label: '重复', count: summary.value.duplicate },
   { value: 'invalid' as const, label: '需修正', count: summary.value.invalid },
 ])
@@ -67,7 +71,7 @@ const filteredRows = computed(() => rows.value.filter((row) => {
 }))
 const pageCount = computed(() => Math.max(1, Math.ceil(filteredRows.value.length / pageSize.value)))
 const pageRows = computed(() => filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
-const selectablePageRows = computed(() => pageRows.value.filter((row) => row.classification === 'ready'))
+const selectablePageRows = computed(() => pageRows.value.filter(isSelectable))
 const pageSelected = computed(() => selectablePageRows.value.length > 0 && selectablePageRows.value.every((row) => selectedIds.value.includes(row.row_id)))
 const pagePartlySelected = computed(() => !pageSelected.value && selectablePageRows.value.some((row) => selectedIds.value.includes(row.row_id)))
 const canConfirm = computed(() => Boolean(preview.value?.preview.confirmable && selectedIds.value.length && !confirmation.value && !busy.value))
@@ -87,19 +91,28 @@ const uploadTime = computed(() => {
 const fileKind = computed(() => uploadedFile.value?.name.toLowerCase().endsWith('.docx') ? 'word' : 'excel')
 
 function classification(row: QuestionImportPreviewRow) {
-  const status = outcomes.value.get(row.row_id)?.status
-  return status === 'created' ? 'ready' : status || row.classification
+  const outcome = outcomes.value.get(row.row_id)
+  if (outcome?.status === 'created') return outcome.question_status === 'draft' ? 'draft' : 'ready'
+  return outcome?.status || row.classification
+}
+function isSelectable(row: QuestionImportPreviewRow) {
+  return row.classification === 'ready' || row.classification === 'draft'
 }
 function rowStatus(row: QuestionImportPreviewRow) {
-  const status = outcomes.value.get(row.row_id)?.status || row.classification
-  if (status === 'created') return { label: '已创建', tone: 'success' }
-  if (status === 'ready') return { label: '可导入', tone: 'success' }
+  const outcome = outcomes.value.get(row.row_id)
+  const status = outcome?.status || row.classification
+  if (outcome?.status === 'created' && outcome.question_status === 'draft') return { label: '已保存为草稿', tone: 'warning' }
+  if (status === 'created') return { label: '已创建可用', tone: 'success' }
+  if (status === 'ready') return { label: '导入后可用', tone: 'success' }
+  if (status === 'draft') return { label: '保存为草稿', tone: 'warning' }
   if (status === 'duplicate') return { label: '重复', tone: 'warning' }
   if (status === 'unselected') return { label: '未选择', tone: 'neutral' }
   return { label: '需修正', tone: 'danger' }
 }
 function rowErrors(row: QuestionImportPreviewRow) {
-  return outcomes.value.get(row.row_id)?.errors ?? row.errors
+  const outcome = outcomes.value.get(row.row_id)
+  if (outcome?.status === 'created' && outcome.question_status === 'draft') return outcome.draft_reasons
+  return outcome?.errors ?? row.errors
 }
 function formatValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—'
@@ -180,7 +193,7 @@ async function selectFile(event: Event) {
   try {
     preview.value = await api.previewQuestionImport(courseId, bankId, file)
     uploadedFile.value = { name: file.name, size: file.size, uploadedAt: new Date() }
-    selectedIds.value = rows.value.filter((row) => row.classification === 'ready').map((row) => row.row_id)
+    selectedIds.value = rows.value.filter(isSelectable).map((row) => row.row_id)
     activeRowId.value = rows.value[0]?.row_id
     detailOpen.value = true
     mobileDetailOpen.value = false
@@ -267,6 +280,7 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
         <div v-if="preview" class="qimp-summary" aria-label="预览状态汇总">
           <strong class="qimp-total">共解析 {{ rows.length }} 道题</strong>
           <span class="is-ready">{{ readyLabel }} <strong>{{ summary.ready }}</strong></span>
+          <span class="is-draft">{{ draftLabel }} <strong>{{ summary.draft }}</strong></span>
           <span class="is-duplicate">重复 <strong>{{ summary.duplicate }}</strong></span>
           <span class="is-invalid">需修正 <strong>{{ summary.invalid }}</strong></span>
         </div>
@@ -286,8 +300,8 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
       </section>
 
       <Alert v-if="confirmation" :tone="confirmation.failed ? 'warning' : 'success'">
-        <strong>本次导入已完成。</strong>新增 {{ confirmation.created }} 道，跳过 {{ confirmation.skipped }} 道，未完成 {{ confirmation.failed }} 道。
-        <span v-if="summary.unselected">另有 {{ summary.unselected }} 道未选择。</span>未完成的题目保留在下方，修正后可重新上传完整文件。
+        <strong>本次导入已完成。</strong>新增 {{ confirmation.created }} 道，其中可用 {{ confirmedActive }} 道、草稿 {{ confirmedDraft }} 道；跳过 {{ confirmation.skipped }} 道，未完成 {{ confirmation.failed }} 道。
+        <span v-if="summary.unselected">另有 {{ summary.unselected }} 道未选择。</span><span v-if="confirmation.failed">未完成的导入行保留在下方，修正后可重新上传完整文件。</span><span v-else-if="confirmedDraft">草稿已成功保存，可在题库中继续补全。</span>
       </Alert>
 
       <section v-if="preview" data-import-preview class="qimp-preview" aria-label="导入预览">
@@ -305,13 +319,13 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
             <thead><tr><th><input type="checkbox" aria-label="选择本页可导入题目" :checked="pageSelected" :indeterminate="pagePartlySelected" :disabled="Boolean(confirmation) || busy || !selectablePageRows.length" @change="togglePage(($event.target as HTMLInputElement).checked)"></th><th title="文件内预览题号，正式题号在导入后分配">题号</th><th>题目</th><th>题型</th><th>答案</th><th>KC 映射</th><th>状态</th><th>操作</th></tr></thead>
             <tbody>
               <tr v-for="row in pageRows" :key="row.row_id" :data-import-row="row.row_id" :class="{ 'is-current': activeRowId === row.row_id && detailOpen }">
-                <td><input type="checkbox" :aria-label="'选择题目 ' + row.sequence" :checked="selectedIds.includes(row.row_id)" :disabled="row.classification !== 'ready' || Boolean(confirmation) || busy" @change="toggleRow(row.row_id, ($event.target as HTMLInputElement).checked)"></td>
+                <td><input type="checkbox" :aria-label="'选择题目 ' + row.sequence" :checked="selectedIds.includes(row.row_id)" :disabled="!isSelectable(row) || Boolean(confirmation) || busy" @change="toggleRow(row.row_id, ($event.target as HTMLInputElement).checked)"></td>
                 <td>{{ row.sequence }}</td>
                 <td><p class="qimp-question-text kt-question-import__multiline">{{ row.text || '未读取到题干' }}</p></td>
                 <td>{{ row.question_type_label }}</td>
                 <td data-answer><span class="qimp-answer-text">{{ formatValue(row.answer) }}</span></td>
                 <td><p v-if="rootKc(row)">主：{{ rootKc(row)?.name }}（{{ rootKc(row)?.kc_code }}）</p><p class="qimp-kc-summary"><Icon name="definition" :size="15" />{{ kcSummary(row) }}</p></td>
-                <td><span class="qimp-status" :class="'is-' + rowStatus(row).tone">{{ rowStatus(row).label }}</span><p v-if="rowErrors(row).length" class="kt-question-import__errors">{{ rowErrors(row).join('；') }}</p></td>
+                <td><span class="qimp-status" :class="'is-' + rowStatus(row).tone">{{ rowStatus(row).label }}</span><p v-if="rowErrors(row).length" class="kt-question-import__errors" :class="{ 'is-draft-reasons': classification(row) === 'draft' }">{{ rowErrors(row).join('；') }}</p></td>
                 <td><button class="qimp-link" type="button" :aria-label="'查看题目 ' + row.sequence" @click="inspectRow(row, $event)">查看</button></td>
               </tr>
             </tbody>
@@ -319,11 +333,11 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
         </div>
         <ul v-if="pageRows.length" class="qimp-mobile-list kt-mobile-only">
           <li v-for="row in pageRows" :key="row.row_id" :data-import-mobile-row="row.row_id" class="qimp-mobile-card">
-            <div class="qimp-mobile-heading"><label><input type="checkbox" :aria-label="'选择题目 ' + row.sequence" :checked="selectedIds.includes(row.row_id)" :disabled="row.classification !== 'ready' || Boolean(confirmation) || busy" @change="toggleRow(row.row_id, ($event.target as HTMLInputElement).checked)">题目 {{ row.sequence }}</label><span class="qimp-status" :class="'is-' + rowStatus(row).tone">{{ rowStatus(row).label }}</span></div>
+            <div class="qimp-mobile-heading"><label><input type="checkbox" :aria-label="'选择题目 ' + row.sequence" :checked="selectedIds.includes(row.row_id)" :disabled="!isSelectable(row) || Boolean(confirmation) || busy" @change="toggleRow(row.row_id, ($event.target as HTMLInputElement).checked)">题目 {{ row.sequence }}</label><span class="qimp-status" :class="'is-' + rowStatus(row).tone">{{ rowStatus(row).label }}</span></div>
             <h3 class="kt-question-import__multiline">{{ row.text || '未读取到题干' }}</h3>
             <dl><div><dt>题型</dt><dd>{{ row.question_type_label }}</dd></div><div><dt>答案</dt><dd>{{ formatValue(row.answer) }}</dd></div></dl>
             <p v-if="rootKc(row)" class="qimp-mobile-kc">主：{{ rootKc(row)?.name }}（{{ rootKc(row)?.kc_code }}）</p><p class="qimp-kc-summary"><Icon name="definition" :size="15" />{{ kcSummary(row) }}</p>
-            <p v-if="rowErrors(row).length" class="kt-question-import__errors">{{ rowErrors(row).join('；') }}</p>
+            <p v-if="rowErrors(row).length" class="kt-question-import__errors" :class="{ 'is-draft-reasons': classification(row) === 'draft' }">{{ rowErrors(row).join('；') }}</p>
             <button class="qimp-link" type="button" :aria-label="'查看题目 ' + row.sequence" @click="inspectRow(row, $event)">查看完整内容与 KC 映射 <Icon name="chevron-right" :size="14" /></button>
           </li>
         </ul>
@@ -335,7 +349,7 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
       </section>
 
       <footer v-if="preview" class="qimp-footer">
-        <p><Icon name="warning" :size="23" /><span>{{ confirmation ? '如仍有未完成行，请修正后重新上传完整文件。' : '确认导入前，请再次检查题目内容与 KC 映射是否正确。' }}</span></p>
+        <p><Icon name="warning" :size="23" /><span>{{ confirmation ? confirmation.failed ? '如仍有未完成行，请修正后重新上传完整文件。' : confirmedDraft ? '草稿可在题库中继续补全，保存后会自动转为可用。' : '全部所选题目已导入为可用题目。' : '确认导入前，请再次检查题目内容与 KC 映射是否正确。' }}</span></p>
         <div><button class="qimp-button is-outline" type="button" :disabled="busy" @click="clearPreview">取消</button><button v-if="confirmation" data-return-detail class="qimp-button is-primary" type="button" @click="router.push(detailUrl)">返回题库详情</button><button v-else data-confirm-import class="qimp-button is-primary" type="button" :disabled="!canConfirm" @click="confirm">{{ busy ? '正在确认…' : '确认导入 ' + selectedIds.length + ' 道题' }}</button><button v-if="confirmation" data-confirm-import class="kt-visually-hidden" disabled type="button">本预览已处理</button></div>
       </footer>
     </div>
@@ -366,7 +380,7 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
           <p v-else class="qimp-detail-value">未提供 KC 映射</p>
         </section>
         <section v-if="activeRow.teacher_difficulty"><h3>难度</h3><p class="qimp-detail-value">{{ activeRow.teacher_difficulty }}</p></section>
-        <section v-if="rowErrors(activeRow).length" class="qimp-detail-errors"><h3>需要修正</h3><ul><li v-for="issue in rowErrors(activeRow)" :key="issue">{{ issue }}</li></ul></section>
+        <section v-if="rowErrors(activeRow).length" class="qimp-detail-errors" :class="{ 'is-draft-reasons': classification(activeRow) === 'draft' }"><h3>{{ classification(activeRow) === 'draft' ? '草稿原因' : '需要修正' }}</h3><ul><li v-for="issue in rowErrors(activeRow)" :key="issue">{{ issue }}</li></ul></section>
         <section class="qimp-source"><h3>原文件位置</h3><p>{{ activeRow.source_label }}</p></section>
       </div>
       <footer class="qimp-detail-footer"><button data-previous-question class="qimp-button" type="button" :disabled="activeIndex <= 0" @click="adjacentQuestion(-1)">上一题</button><button data-next-question class="qimp-button is-outline" type="button" :disabled="activeIndex >= rows.length - 1" @click="adjacentQuestion(1)">下一题</button></footer>

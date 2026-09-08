@@ -807,11 +807,12 @@ class CourseWorkspaceViewTests(TestCase):
 
         reset = self.client.post(
             reverse("courses:reset_password", args=[self.course.pk, source.pk, student.pk]),
-            {"password": "new-password"},
+            {"confirmation": "reset"},
         )
         self.assertRedirects(reset, reverse("courses:class_detail", args=[self.course.pk, source.pk]))
         student.refresh_from_db()
-        self.assertTrue(student.check_password("new-password"))
+        self.assertTrue(student.check_password(f"S{student.student_number}"))
+        self.assertTrue(student.must_change_password)
 
         moved = self.client.post(
             reverse("courses:move_student", args=[self.course.pk, source.pk, student.pk]),

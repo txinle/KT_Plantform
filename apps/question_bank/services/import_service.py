@@ -1,13 +1,74 @@
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from apps.accounts.course_access import lock_writable_course
 
 from ..access import lock_question_bank, lock_writable_bank_content
-from .import_parsing import ParsedKCMapping, ParsedKCWorkbook, ParsedQuestion
+from .import_parsing import (
+    ParsedKCMapping,
+    ParsedKCWorkbook,
+    ParsedQuestion,
+    parse_question_kc_tree_rows,
+)
 from .course_kc import normalize_course_kc_name, resolve_course_kc_reference
 from .question_kc_mapping import project_question_kc_mapping, replace_question_kc_mapping
+from .question_readiness import refresh_question_readiness
 from ..models import Concept, Question, QuestionConcept, QuestionOption
+
+
+def _resolve_import_course_kc(bank, token):
+    resolution = resolve_course_kc_reference(course=bank.course, token=token)
+    if resolution.method == "edit_distance":
+        raise ValueError(
+            f"课程 KC 总库中无法精确识别：{token}；请填写准确的 KC 编码或名称。"
+        )
+    return resolution.concept
+
+
+def _course_mapping_for_row(bank, row):
+    if not any((row.raw_primary_kc, row.raw_secondary_kcs, row.raw_tertiary_kcs)):
+        return None
+    tree = parse_question_kc_tree_rows([
+        {
+            "题目序号": row.sequence,
+            "一级知识点": row.raw_primary_kc,
+            "二级知识点": row.raw_secondary_kcs,
+            "三级知识点": row.raw_tertiary_kcs,
+        }
+    ])[0]
+    root = _resolve_import_course_kc(bank, tree.root)
+    secondary = [
+        _resolve_import_course_kc(bank, token)
+        for token in tree.level_two
+    ]
+    nodes = [
+        {"kc_code": root.code, "parent_kc_code": None, "order": 1},
+        *[
+            {
+                "kc_code": concept.code,
+                "parent_kc_code": root.code,
+                "order": order,
+            }
+            for order, concept in enumerate(secondary, start=1)
+        ],
+    ]
+    counts = {}
+    secondary_codes = {concept.code for concept in secondary}
+    for parent_token, child_token in tree.level_three:
+        parent = _resolve_import_course_kc(bank, parent_token)
+        child = _resolve_import_course_kc(bank, child_token)
+        if parent.code not in secondary_codes:
+            raise ValueError(f"三级知识点的父节点“{parent_token}”未填写在二级知识点中。")
+        counts[parent.code] = counts.get(parent.code, 0) + 1
+        nodes.append(
+            {
+                "kc_code": child.code,
+                "parent_kc_code": parent.code,
+                "order": counts[parent.code],
+            }
+        )
+    return {"root_kc_code": root.code, "nodes": nodes}
 
 @transaction.atomic
 def import_questions(bank, parsed_rows: list[ParsedQuestion]):
@@ -42,6 +103,14 @@ def import_questions(bank, parsed_rows: list[ParsedQuestion]):
             QuestionOption(question=question, key=key, text=value, display_order=index)
             for index, (key, value) in enumerate(row.options.items(), start=1)
         ])
+        if bank.course_id is not None:
+            try:
+                mapping = _course_mapping_for_row(bank, row)
+                if mapping is not None:
+                    replace_question_kc_mapping(question, **mapping)
+            except (ValueError, ValidationError):
+                pass
+        refresh_question_readiness(question)
         created.append(question)
     return created
 
@@ -89,7 +158,6 @@ def import_kc_mappings(bank, owner, mappings: list[ParsedKCMapping]):
         ]
         if primary in secondary:
             raise ValueError("主 KC 不能同时作为次 KC")
-        question._activate_after_primary_mapping = True
         replace_question_kc_mapping(
             question,
             root_kc_code=primary.code,
@@ -105,6 +173,7 @@ def import_kc_mappings(bank, owner, mappings: list[ParsedKCMapping]):
                 ],
             ],
         )
+        refresh_question_readiness(question)
         updated += 1
     return updated
 
@@ -148,6 +217,7 @@ def import_kc_workbook(bank, workbook: ParsedKCWorkbook):
             root_kc_code=root.primary_kc_code,
             nodes=nodes,
         )
+        refresh_question_readiness(question)
     return {"nodes_validated": len(workbook.nodes), "questions_updated": len(workbook.roots)}
 
 
@@ -218,4 +288,5 @@ def copy_shared_bank(source_bank, target_course, actor=None):
                 QuestionConcept.objects.create(
                     question=question, concept=concept, is_primary=link.is_primary
                 )
+        refresh_question_readiness(question)
     return target

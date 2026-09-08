@@ -7,10 +7,12 @@ from .views import (
     LoginApiView,
     LogoutApiView,
     SessionContextView,
+    StudentPasswordChangeView,
 )
 
 
 urlpatterns = [
+    path("auth/password/change/", StudentPasswordChangeView.as_view(), name="api-password-change"),
     path("auth/session/", SessionContextView.as_view(), name="api-session"),
     path("auth/csrf/", CsrfTokenView.as_view(), name="api-csrf"),
     path("auth/login/", LoginApiView.as_view(), name="api-login"),

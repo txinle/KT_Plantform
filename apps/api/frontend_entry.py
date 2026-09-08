@@ -11,6 +11,7 @@ from .rollout import is_vue_module_enabled
 
 PAGE_NAMES = {
     'login',
+    'password-change',
     *(f'courses:{name}' for name in (
         'list', 'create', 'detail', 'settings', 'data', 'data_teaching', 'data_export', 'data_exports',
         'data_quality', 'data_export_history', 'data_advanced', 'data_tables',
@@ -64,7 +65,7 @@ class IndependentFrontendMiddleware(MiddlewareMixin):
         user = request.user
         if not user.is_authenticated:
             return None
-        expected_role = 'student' if name.startswith('assessment:') else 'teacher'
+        expected_role = 'student' if name.startswith('assessment:') or name == 'password-change' else 'teacher'
         if user.role != expected_role and user.role != 'admin' and not user.is_superuser:
             return None
         course_id = view_kwargs.get('course_pk') or view_kwargs.get('course_id')

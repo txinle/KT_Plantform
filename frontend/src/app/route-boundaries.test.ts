@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { migratedRoutes } from './route-boundaries'
+import { router } from './router'
 
 describe('Vue route boundaries', () => {
   it('registers only the migrated course, question-bank, class, experiment, student, and assessment boundaries', () => {
@@ -53,5 +54,9 @@ describe('Vue route boundaries', () => {
 
   it('does not register a catch-all route', () => {
     expect(migratedRoutes.some((route) => route.path.includes('pathMatch'))).toBe(false)
+  })
+
+  it('registers password change as an independent application route', () => {
+    expect(router.resolve('/password/change/').name).toBe('password-change')
   })
 })

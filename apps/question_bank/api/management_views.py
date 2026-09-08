@@ -76,6 +76,7 @@ from apps.question_bank.services.question_kc_import import (
     preview_question_kc_trees,
 )
 from apps.question_bank.services.question_kc_mapping import project_question_kc_mapping
+from apps.question_bank.services.question_readiness import content_issues, readiness_issues, recheck_bank_drafts
 from apps.question_bank.services.unified_import import (
     SelectedRowIdsValidationError,
     UnifiedQuestionImportService,
@@ -90,6 +91,7 @@ from .views import (
     _session_key,
 )
 from .management_serializers import (
+    QuestionDraftRecheckSerializer,
     ManagementArchivedBankCollectionSerializer,
     ManagementBankEditorRequestSerializer,
     ManagementBankEditorResponseSerializer,
@@ -97,6 +99,7 @@ from .management_serializers import (
     ManagementCourseConceptDeleteResponseSerializer,
     ManagementCourseConceptEditRequestSerializer,
     ManagementCourseConceptEditResponseSerializer,
+    ManagementCourseConceptStatusRequestSerializer,
     ManagementDeleteConfirmationSerializer,
     ManagementErrorResponseSerializer,
     ManagementKCImportConfirmRequestSerializer,
@@ -187,11 +190,11 @@ def _bank_editor_payload(course, bank):
 
 
 def _question_answer_text(question):
-    if question.question_type == Question.Type.TRUE_FALSE:
+    if question.question_type == Question.Type.TRUE_FALSE and isinstance(question.correct_answer, bool):
         return "正确" if question.correct_answer is True else "错误"
     if isinstance(question.correct_answer, list):
-        return ",".join(question.correct_answer)
-    return str(question.correct_answer or "")
+        return ",".join(map(str, question.correct_answer))
+    return "" if question.correct_answer is None else str(question.correct_answer)
 
 
 def _question_editor_payload(course, bank, question):
@@ -206,6 +209,7 @@ def _question_editor_payload(course, bank, question):
             "text": question.text,
             "question_type": question.question_type,
             "status": question.status,
+            "draft_reasons": readiness_issues(question) if question.status == Question.Status.DRAFT else [],
             "teacher_difficulty": (
                 format(question.teacher_difficulty, "f")
                 if question.teacher_difficulty is not None
@@ -349,6 +353,7 @@ def _standalone_question_editor_payload(bank, question):
             "text": question.text,
             "question_type": question.question_type,
             "status": question.status,
+            "draft_reasons": readiness_issues(question) if question.status == Question.Status.DRAFT else [],
             "teacher_difficulty": (
                 format(question.teacher_difficulty, "f")
                 if question.teacher_difficulty is not None
@@ -391,6 +396,7 @@ def _standalone_question_payload(bank, question):
         "question_type": question.question_type,
         "question_type_label": question.get_question_type_display(),
         "status": question.status,
+        "draft_reasons": readiness_issues(question) if question.status == Question.Status.DRAFT else [],
         "status_label": question.get_status_display(),
         "teacher_difficulty": (
             format(question.teacher_difficulty, "f")
@@ -405,7 +411,11 @@ def _standalone_question_payload(bank, question):
 
 
 def _question_import_preview_row(row):
+    issues = content_issues(asdict(row))
     return {
+        "classification": "draft" if issues else "ready",
+        "draft_reasons": issues,
+        "errors": issues,
         "sequence": row.sequence,
         "text": row.text,
         "question_type": row.question_type,
@@ -693,6 +703,34 @@ class TeacherQuestionDeleteView(TeacherQuestionBankManagementApiView):
                 status.HTTP_409_CONFLICT,
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class TeacherQuestionDraftRecheckView(TeacherQuestionBankManagementApiView):
+    @extend_schema(request=None, responses=QuestionDraftRecheckSerializer)
+    def post(self, request, course_id, bank_id):
+        course = _course_for_teacher(request.user, course_id)
+        bank = _bank_for_course(course, bank_id)
+        with transaction.atomic():
+            course, bank = lock_writable_course_bank(course, bank, content=True)
+            if not course.can_manage(request.user, lock_teacher_link=True):
+                raise PermissionDenied("当前账号不能修改该课程题库。")
+            result = recheck_bank_drafts(bank)
+            log_action(request, "question.readiness_recheck", bank, {"course_id": course.pk, **result})
+        return Response(QuestionDraftRecheckSerializer(result).data)
+
+
+class TeacherStandaloneQuestionDraftRecheckView(TeacherQuestionBankManagementApiView):
+    @extend_schema(request=None, responses=QuestionDraftRecheckSerializer)
+    def post(self, request, bank_id):
+        bank = _standalone_bank_for_user(request.user, bank_id)
+        with transaction.atomic():
+            bank = lock_writable_bank_content(bank)
+            _require_standalone_bank_editor(request.user, bank)
+            if bank.course_id is not None:
+                raise PermissionDenied("该题库已不属于独立题库。")
+            result = recheck_bank_drafts(bank)
+            log_action(request, "question.readiness_recheck", bank, result)
+        return Response(QuestionDraftRecheckSerializer(result).data)
 
 
 class TeacherQuestionEditorView(TeacherQuestionBankManagementApiView):
@@ -1044,6 +1082,30 @@ class TeacherSharedQuestionBankCopyView(TeacherQuestionBankManagementApiView):
 
 class TeacherCourseConceptEditorView(TeacherQuestionBankManagementApiView):
     @extend_schema(
+        request=ManagementCourseConceptStatusRequestSerializer,
+        responses=ManagementCourseConceptDeleteResponseSerializer,
+    )
+    def patch(self, request, course_id, concept_id):
+        course = _course_for_teacher(request.user, course_id)
+        data = ManagementCourseConceptStatusRequestSerializer(data=request.data)
+        data.is_valid(raise_exception=True)
+        with transaction.atomic():
+            course = lock_writable_course(course)
+            if not course.can_manage(request.user, lock_teacher_link=True):
+                raise PermissionDenied("当前账号不能修改该课程 KC。")
+            concept = get_object_or_404(course.concepts.select_for_update(), pk=concept_id)
+            target = data.validated_data["status"]
+            if concept.status != target:
+                previous = concept.status
+                concept.status = target
+                concept.save(update_fields=["status"])
+                log_action(request, "concept.restore" if target == Concept.Status.ACTIVE else "concept.archive", concept, {
+                    "course_id": course.pk, "kc_code": concept.code,
+                    "previous_status": previous, "status": target,
+                })
+        return Response({"id": concept.pk, "status": concept.status})
+
+    @extend_schema(
         operation_id="teacher_question_bank_course_concept_update",
         request=ManagementCourseConceptEditRequestSerializer,
         responses={200: ManagementCourseConceptEditResponseSerializer, 400: ManagementErrorResponseSerializer},
@@ -1307,7 +1369,7 @@ class TeacherStandaloneQuestionImportPreviewView(TeacherQuestionBankManagementAp
         sequence_floor = bank.questions.aggregate(value=Max("sequence"))["value"] or 0
         try:
             parsed = parse_question_rows(
-                read_uploaded_rows(uploaded), sequence_floor=sequence_floor
+                read_uploaded_rows(uploaded), sequence_floor=sequence_floor, allow_incomplete=True
             )
             incoming = [item.sequence for item in parsed]
             existing = list(
@@ -1373,6 +1435,8 @@ class TeacherStandaloneQuestionImportConfirmView(TeacherQuestionBankManagementAp
         return Response(
             {
                 "created": len(imported),
+                "active": sum(question.status == Question.Status.ACTIVE for question in imported),
+                "draft": sum(question.status == Question.Status.DRAFT for question in imported),
                 "detail_url": reverse("question_bank:bank_detail", args=[bank.pk]),
             },
             status=status.HTTP_201_CREATED,
