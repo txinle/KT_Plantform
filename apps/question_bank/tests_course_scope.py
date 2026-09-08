@@ -270,10 +270,21 @@ class CourseQuestionBankScopeTests(TestCase):
         with self.assertRaisesMessage(ValidationError, "可用班级"):
             assign_students(experiment, [self.student])
 
-        response = self.client.get(
-            reverse("courses:experiment_detail", args=[self.course_a.pk, experiment.pk])
-        )
-        self.assertNotContains(response, self.student.student_number)
+        with patch("django.template.context_processors.get_token", return_value="S1" * 32):
+            response = self.client.get(
+                reverse("courses:experiment_detail", args=[self.course_a.pk, experiment.pk])
+            )
+        self.assertEqual(response.status_code, 200)
+        form = response.context["participant_form"]
+        self.assertNotIn(class_group, form.fields["classes"].queryset)
+        self.assertNotIn(self.student, form.fields["includes"].queryset)
+        self.assertNotIn(self.student, form.fields["excludes"].queryset)
+        displayed_students = [
+            row["student"]
+            for class_row in response.context["participant_class_rows"]
+            for row in class_row["students"]
+        ]
+        self.assertNotIn(self.student, displayed_students)
 
     def test_course_bank_imports_questions_with_course_scoped_kc(self):
         from .test_unified_question_import import question_row, upload_rows

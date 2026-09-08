@@ -46,7 +46,7 @@ export default defineConfig({
     },
     {
       command: `${pythonCommand} ../manage.py runserver 127.0.0.1:8000 --noreload`,
-      url: `${defaultDjangoUrl}/health/`,
+      url: `${defaultDjangoUrl}/login/`,
       env: {
         ...commonDjangoEnvironment,
         VUE_STANDALONE_ENABLED: '1',
