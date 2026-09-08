@@ -13,6 +13,11 @@ export type SamplingInventoryInput = {
 }
 export type SamplingInventory = {
   candidate_count: number
+  kc_counts: Array<{
+    kc_code: string
+    primary_available: number
+    any_level_available: number
+  }>
   question_types: Array<{
     question_type: ExperimentQuestionType
     label: string

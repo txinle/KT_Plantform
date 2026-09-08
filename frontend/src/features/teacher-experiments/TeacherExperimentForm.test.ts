@@ -42,6 +42,10 @@ describe('TeacherExperimentForm', () => {
     mocks.api.create.mockResolvedValue({ id: 19 })
     mocks.api.samplingInventory.mockResolvedValue({
       candidate_count: 12,
+      kc_counts: [
+        { kc_code: 'KC000001', primary_available: 0, any_level_available: 0 },
+        { kc_code: 'KC000002', primary_available: 1, any_level_available: 3 },
+      ],
       question_types: [
         { question_type: 'single_choice', label: '单选题', available: 8 },
         { question_type: 'multiple_choice', label: '多选题', available: 4 },
@@ -65,6 +69,40 @@ describe('TeacherExperimentForm', () => {
       page: { number: 1, size: 500, total_items: 2, total_pages: 1, start: 1, end: 2 },
       course: { id: 7, name: '课程', code: 'C', term: '2026', status: 'active' },
     })
+  })
+
+  it('uses bank inventory for KC counts and initializes the quota match scope', async () => {
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+    expect(mocks.api.samplingInventory).toHaveBeenCalledWith(7, {
+      question_bank_id: 3, kc_codes: [], match_scope: 'any_level',
+    })
+    expect(wrapper.get('.kt-kc-config-panel .kt-kc-tree-selector').text()).toContain('3 道可用')
+    expect(wrapper.get('.kt-kc-config-panel .kt-kc-tree-selector').text()).not.toContain('12 道可用')
+    await wrapper.get('input[name="sampling_mode"][value="kc_quota"]').setValue(true)
+    await wrapper.get('input[type="checkbox"][value="11"]').setValue(true)
+    await flushPromises()
+    expect((wrapper.get('select[aria-label="分数匹配层级"]').element as HTMLSelectElement).value).toBe('primary')
+    expect(wrapper.get('.kt-quota-table tbody tr').findAll('td')[2]?.text()).toBe('1')
+    await wrapper.get('select[aria-label="分数匹配层级"]').setValue('any_level')
+    expect(wrapper.get('.kt-quota-table tbody tr').findAll('td')[2]?.text()).toBe('3')
+  })
+
+  it('clears stale bank inventory while loading and on failure', async () => {
+    mocks.api.list.mockResolvedValue({ summary: { question_banks: [{ id: 3, name: '题库一' }, { id: 4, name: '题库二' }] } })
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+    await wrapper.get('#experiment-bank').setValue('3')
+    await flushPromises()
+    let rejectInventory!: (error: Error) => void
+    mocks.api.samplingInventory.mockReturnValueOnce(new Promise((_, reject) => { rejectInventory = reject }))
+    await wrapper.get('#experiment-bank').setValue('4')
+    expect(wrapper.get('.kt-kc-config-panel').text()).not.toContain('3 道可用')
+    expect(wrapper.text()).toContain('正在加载当前题库库存')
+    rejectInventory(new Error('库存查询失败'))
+    await flushPromises()
+    expect(wrapper.text()).toContain('库存查询失败')
+    expect(wrapper.get('.kt-kc-config-panel').text()).not.toContain('3 道可用')
   })
 
   it('creates a complete teacher-owned experiment definition and opens its detail page', async () => {
@@ -145,6 +183,10 @@ describe('TeacherExperimentForm', () => {
 
     expect((wrapper.get('input[name="feedback_mode"][value="none"]').element as HTMLInputElement).checked).toBe(true)
     expect((wrapper.get('input[name="feedback_release_policy"][value="manual_release"]').element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.find('[aria-label="已保存抽题配置库存预检"]').exists()).toBe(true)
+    await wrapper.get('#sampling-total-count').setValue('2')
+    expect(wrapper.find('[aria-label="已保存抽题配置库存预检"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('抽题配置尚未保存')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 

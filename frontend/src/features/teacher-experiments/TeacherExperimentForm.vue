@@ -47,6 +47,7 @@ const conversionWarning = ref('')
 const samplingInventory = ref<SamplingInventory>()
 const inventoryLoading = ref(false)
 const inventoryError = ref('')
+const savedSamplingConfiguration = ref('')
 let inventoryRequest = 0
 
 function convertLegacySampling() {
@@ -89,6 +90,12 @@ const quotaTotal = computed(() => concepts.value.reduce((total, concept) => (
 const selectedConcepts = computed(() => concepts.value.filter(
   (concept) => form.selected_kcs[concept.id],
 ))
+const samplingConfiguration = computed(() => JSON.stringify({
+  question_bank_id: Number(form.question_bank_id),
+  sampling: definitionInput().sampling,
+}))
+const samplingChanged = computed(() => Boolean(savedSamplingConfiguration.value)
+  && samplingConfiguration.value !== savedSamplingConfiguration.value)
 const selectedQuestionTypes = computed(() => QUESTION_TYPES.filter(
   (questionType) => form.selected_question_types[questionType.value],
 ))
@@ -142,11 +149,7 @@ async function refreshSamplingInventory() {
   inventoryError.value = ''
   samplingInventory.value = undefined
   const kcCodes = selectedConcepts.value.map((concept) => concept.kc_code)
-  if (
-    form.sampling_mode !== 'total_count'
-    || !form.question_bank_id
-    || !kcCodes.length
-  ) {
+  if (!form.question_bank_id) {
     inventoryLoading.value = false
     return
   }
@@ -160,7 +163,7 @@ async function refreshSamplingInventory() {
     if (requestId === inventoryRequest) samplingInventory.value = result
   } catch (caught) {
     if (requestId === inventoryRequest) {
-      inventoryError.value = caught instanceof Error ? caught.message : '题型库存加载失败。'
+      inventoryError.value = caught instanceof Error ? caught.message : '题库库存加载失败。'
     }
   } finally {
     if (requestId === inventoryRequest) inventoryLoading.value = false
@@ -168,10 +171,12 @@ async function refreshSamplingInventory() {
 }
 
 function availableCount(concept: components['schemas']['CourseConceptSummary']) {
+  if (!samplingInventory.value) return '—'
   const scope = form.sampling_mode === 'total_count'
     ? form.sampling_match_scope
     : (form.kc_match_scopes[concept.id] || 'primary')
-  return scope === 'primary' ? concept.role_counts.level_1 : concept.question_count
+  const inventory = samplingInventory.value.kc_counts.find((item) => item.kc_code === concept.kc_code)
+  return scope === 'primary' ? (inventory?.primary_available ?? 0) : (inventory?.any_level_available ?? 0)
 }
 
 function firstError(value: unknown): string {
@@ -245,6 +250,7 @@ async function load() {
     ])
     questionBanks.value = collection.summary.question_banks
     concepts.value = conceptCollection.items
+    for (const concept of concepts.value) form.kc_match_scopes[concept.id] = 'primary'
     if (!editing.value && questionBanks.value.length === 1) {
       form.question_bank_id = questionBanks.value[0]?.id || 0
     }
@@ -287,6 +293,7 @@ async function load() {
         form.type_quotas[questionType] = quota.amount
       }
       readiness.value = await api.readiness(courseId, experimentId.value)
+      savedSamplingConfiguration.value = samplingConfiguration.value
     }
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '实验配置加载失败。'
@@ -366,8 +373,12 @@ onMounted(load)
           <div class="kt-kc-config-panel kt-compact-form-row"><strong class="kt-config-label">知识点范围</strong><div class="kt-kc-config-content"><div class="kt-kc-config-top"><div><span class="kt-muted">已选择的 KC</span><div class="kt-selected-kcs"><span v-for="concept in selectedConcepts" :key="concept.id"><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><span v-if="!selectedConcepts.length" class="is-empty">尚未选择</span></div></div><div class="kt-selection-facts">已选择 {{ selectedConcepts.length }} 个 KC</div><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary">选择知识点</summary><div class="kt-kc-tree-selector"><label v-for="concept in concepts" :key="concept.id"><input v-model="form.selected_kcs[concept.id]" type="checkbox" :value="concept.id" :disabled="concept.status !== 'active'"><span><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><small>{{ concept.status === 'active' ? `${availableCount(concept)} 道可用` : '已归档' }}</small></label></div></details></div><div class="kt-match-scope"><span>匹配层级</span><label><input v-model="form.sampling_match_scope" type="radio" value="primary">根 KC</label><small>仅匹配所选节点本身</small><label><input v-model="form.sampling_match_scope" type="radio" value="any_level">任意层级</label><small>包含其在题目树中任意层级的出现</small></div></div></div>
         </template>
         <div v-if="!legacySampling && form.sampling_mode === 'kc_quota'" class="kt-quota-panel kt-compact-form-row"><strong class="kt-config-label">知识点配额</strong><div class="kt-kc-config-content"><div class="kt-quota-toolbar"><p>按所选 KC 及匹配层级设置每位参与者题量。</p><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary">＋ 添加 KC</summary><div class="kt-kc-tree-selector"><label v-for="concept in concepts" :key="concept.id"><input v-model="form.selected_kcs[concept.id]" type="checkbox" :value="concept.id" :disabled="concept.status !== 'active'"><span><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><small>{{ concept.status === 'active' ? `${availableCount(concept)} 道可用` : '已归档' }}</small></label></div></details></div><div class="kt-quota-table-wrap"><table class="kt-quota-table"><thead><tr><th>KC</th><th>匹配层级</th><th>可用题目</th><th>配额</th><th>操作</th></tr></thead><tbody><tr v-for="concept in selectedConcepts" :key="concept.id"><td><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</td><td><select v-model="form.kc_match_scopes[concept.id]" :aria-label="`${concept.name}匹配层级`"><option value="primary">根 KC</option><option value="any_level">任意层级</option></select></td><td>{{ availableCount(concept) }}</td><td><input v-model.number="form.kc_quotas[concept.id]" :aria-label="`${concept.name}配额`" type="number" min="1"></td><td><button class="kt-text-button kt-text-button--danger" type="button" @click="form.selected_kcs[concept.id] = false">删除</button></td></tr><tr v-if="!selectedConcepts.length"><td colspan="5" class="kt-empty-quota">请添加需要设置配额的 KC</td></tr></tbody><tfoot><tr><td colspan="5">每位参与者共抽 <strong>{{ quotaTotal }}</strong> 题</td></tr></tfoot></table></div></div></div>
+        <p v-if="!legacySampling" class="kt-muted">可用题数仅统计当前所选题库中状态为“可用”的题目；同一道题可能匹配多个 KC，发布时会校验能否无重复地满足配额。</p>
+        <p v-if="inventoryLoading" role="status">正在加载当前题库库存…</p>
+        <Alert v-if="inventoryError" tone="danger">{{ inventoryError }}</Alert>
         <p v-if="fieldErrors.sampling_kcs" class="kt-field__error" role="alert">{{ fieldErrors.sampling_kcs }}</p>
-        <div v-if="readiness && !legacySampling" class="kt-compact-form-row" aria-label="已保存抽题配置库存预检">
+        <Alert v-if="samplingChanged && !legacySampling" tone="warning">抽题配置尚未保存。保存后将按当前题库、匹配层级和配额重新进行发布预检。</Alert>
+        <div v-if="readiness && !legacySampling && !samplingChanged" aria-label="已保存抽题配置库存预检">
           <Alert :tone="readiness.ready ? 'success' : 'danger'">已保存配置：计划抽取 {{ readiness.requested_count ?? '—' }} 题，当前候选 {{ readiness.candidate_count }} 题。<span v-if="readiness.issues.length"> {{ readiness.issues.join('；') }}</span></Alert>
           <table v-if="readiness.inventory_buckets.length" class="kt-table"><thead><tr><th>KC</th><th>匹配层级</th><th>计划题数</th><th>可用题数</th></tr></thead><tbody><tr v-for="bucket in readiness.inventory_buckets" :key="bucket.kc_code"><td><span class="kt-mono">{{ bucket.kc_code }}</span> {{ bucket.kc_name }}</td><td>{{ bucket.match_scope === 'primary' ? '仅根 KC' : '任意层级' }}</td><td>{{ bucket.requested ?? '范围' }}</td><td>{{ bucket.available }}</td></tr></tbody></table>
           <small class="kt-muted">库存数据对应当前已保存版本；保存本页更改后会重新计算。</small>

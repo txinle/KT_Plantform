@@ -562,7 +562,7 @@ class TeacherSamplingInventoryRequestSerializer(serializers.Serializer):
     question_bank_id = serializers.IntegerField(min_value=1)
     kc_codes = serializers.ListField(
         child=serializers.CharField(max_length=32),
-        allow_empty=False,
+        allow_empty=True,
     )
     match_scope = serializers.ChoiceField(choices=Experiment.MatchScope.choices)
 
@@ -578,9 +578,16 @@ class TeacherSamplingInventoryQuestionTypeSerializer(serializers.Serializer):
     available = serializers.IntegerField(min_value=0)
 
 
+class TeacherSamplingInventoryKCSerializer(serializers.Serializer):
+    kc_code = serializers.CharField()
+    primary_available = serializers.IntegerField(min_value=0)
+    any_level_available = serializers.IntegerField(min_value=0)
+
+
 class TeacherSamplingInventoryResponseSerializer(serializers.Serializer):
     candidate_count = serializers.IntegerField(min_value=0)
     question_types = TeacherSamplingInventoryQuestionTypeSerializer(many=True)
+    kc_counts = TeacherSamplingInventoryKCSerializer(many=True)
 
 
 class PublishPlanClassSerializer(serializers.Serializer):

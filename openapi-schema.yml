@@ -10675,6 +10675,21 @@ components:
       required:
       - id
       - name
+    TeacherSamplingInventoryKC:
+      type: object
+      properties:
+        kc_code:
+          type: string
+        primary_available:
+          type: integer
+          minimum: 0
+        any_level_available:
+          type: integer
+          minimum: 0
+      required:
+      - any_level_available
+      - kc_code
+      - primary_available
     TeacherSamplingInventoryQuestionType:
       type: object
       properties:
@@ -10716,8 +10731,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TeacherSamplingInventoryQuestionType'
+        kc_counts:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherSamplingInventoryKC'
       required:
       - candidate_count
+      - kc_counts
       - question_types
     TeacherSessionReport:
       type: object

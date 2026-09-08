@@ -4435,6 +4435,11 @@ export interface components {
             id: number;
             name: string;
         };
+        TeacherSamplingInventoryKC: {
+            kc_code: string;
+            primary_available: number;
+            any_level_available: number;
+        };
         TeacherSamplingInventoryQuestionType: {
             question_type: components["schemas"]["QuestionType334Enum"];
             label: string;
@@ -4448,6 +4453,7 @@ export interface components {
         TeacherSamplingInventoryResponse: {
             candidate_count: number;
             question_types: components["schemas"]["TeacherSamplingInventoryQuestionType"][];
+            kc_counts: components["schemas"]["TeacherSamplingInventoryKC"][];
         };
         TeacherSessionReport: {
             student_name: string;

@@ -374,6 +374,63 @@ class TeacherExperimentApiTests(TestCase):
         self.assertEqual(inventory[Question.Type.MULTIPLE], 1)
         self.assertEqual(inventory[Question.Type.SHORT], 0)
 
+    def test_kc_inventory_matches_readiness_for_selected_bank_and_scope(self):
+        concept = Concept.objects.create(course=self.course, code="KC1", name="库存 KC")
+        root = Concept.objects.create(course=self.course, code="KC2", name="另一个根 KC")
+        other_bank = QuestionBank.objects.create(
+            course=self.course, owner=self.teacher, name="其他题库"
+        )
+        for sequence, bank, status, primary in (
+            (1, self.bank, Question.Status.ACTIVE, True),
+            (2, self.bank, Question.Status.ACTIVE, False),
+            (3, self.bank, Question.Status.DRAFT, True),
+            (4, self.bank, Question.Status.ARCHIVED, True),
+            (1, other_bank, Question.Status.ACTIVE, True),
+        ):
+            question = Question.objects.create(
+                bank=bank, sequence=sequence, status=status,
+                question_type=Question.Type.SHORT, text="库存测试题", correct_answer="答案",
+            )
+            parent = None if primary else QuestionConcept.objects.create(
+                question=question, concept=root, is_primary=True,
+            )
+            QuestionConcept.objects.create(
+                question=question, concept=concept, is_primary=primary, parent_link=parent,
+            )
+        self.experiment.sampling_mode = Experiment.SamplingMode.KC_QUOTA
+        self.experiment.save(update_fields=["sampling_mode"])
+        rule = ExperimentSamplingKC.objects.create(
+            experiment=self.experiment, concept=concept, quota=1,
+        )
+        self.client.force_login(self.teacher)
+        for scope, expected in ((Experiment.MatchScope.PRIMARY, 1), (Experiment.MatchScope.ANY_LEVEL, 2)):
+            with self.subTest(scope=scope):
+                rule.match_scope = scope
+                rule.save(update_fields=["match_scope"])
+                response = self.client.post(
+                    self.api_url("sampling-inventory/"),
+                    data=json.dumps({"question_bank_id": self.bank.pk, "kc_codes": [concept.code], "match_scope": scope}),
+                    content_type="application/json",
+                )
+                self.assertEqual(response.status_code, 200, response.content)
+                inventory = {item["kc_code"]: item for item in response.json()["kc_counts"]}
+                self.assertEqual(inventory[concept.code], {
+                    "kc_code": concept.code, "primary_available": 1, "any_level_available": 2,
+                })
+                readiness = self.client.get(self.api_url(f"{self.experiment.pk}/readiness/")).json()
+                self.assertTrue(readiness["ready"], readiness["issues"])
+                self.assertEqual(response.json()["candidate_count"], expected)
+                self.assertEqual(readiness["inventory_buckets"][0]["available"], expected)
+
+        response = self.client.post(
+            self.api_url("sampling-inventory/"),
+            data=json.dumps({"question_bank_id": self.bank.pk, "kc_codes": [], "match_scope": "any_level"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["candidate_count"], 0)
+        self.assertEqual(len(response.json()["kc_counts"]), 2)
+
     def test_create_rejects_legacy_question_type_sampling_fields(self):
         self.client.force_login(self.teacher)
 

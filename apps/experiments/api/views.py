@@ -279,19 +279,26 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
         concepts = list(
             Concept.objects.filter(
                 course=course,
-                code__in=data["kc_codes"],
                 status=Concept.Status.ACTIVE,
             )
         )
-        if {concept.code for concept in concepts} != set(data["kc_codes"]):
+        if not set(data["kc_codes"]).issubset({concept.code for concept in concepts}):
             raise ValidationError(
                 {"kc_codes": "包含不存在、已归档或不属于当前课程的知识点。"}
             )
-        candidates = SamplingService.total_count_candidates(
+        bank_candidates = SamplingService.total_count_candidates(
             question_bank_id=bank.pk,
             concept_ids=[concept.pk for concept in concepts],
-            match_scope=data["match_scope"],
+            match_scope=Experiment.MatchScope.ANY_LEVEL,
         )
+        selected_ids = [concept.pk for concept in concepts if concept.code in data["kc_codes"]]
+        candidates = [
+            question for question in bank_candidates
+            if any(
+                SamplingService._question_matches(question, concept_id, data["match_scope"])
+                for concept_id in selected_ids
+            )
+        ]
         counts = {
             question_type: sum(
                 question.question_type == question_type for question in candidates
@@ -301,6 +308,20 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
         return Response(
             {
                 "candidate_count": len(candidates),
+                "kc_counts": [
+                    {
+                        "kc_code": concept.code,
+                        "primary_available": sum(
+                            SamplingService._question_matches(question, concept.pk, Experiment.MatchScope.PRIMARY)
+                            for question in bank_candidates
+                        ),
+                        "any_level_available": sum(
+                            SamplingService._question_matches(question, concept.pk, Experiment.MatchScope.ANY_LEVEL)
+                            for question in bank_candidates
+                        ),
+                    }
+                    for concept in concepts
+                ],
                 "question_types": [
                     {
                         "question_type": question_type,
