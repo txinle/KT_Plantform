@@ -403,29 +403,6 @@ def question_page(request, session_id, assignment_id):
     from .capture_v2_services import uses_capture_v2
     if uses_capture_v2(session):
         return HttpResponse('当前采集版本暂不可用。请保留本机作答记录，稍后从此任务继续。', status=503)
-    pending_confidence = (
-        ConfidenceAssignment.objects.select_related("attempt__assignment")
-        .filter(
-            attempt__session=session,
-            attempt__status=Attempt.Status.SUBMITTED,
-            condition=ConfidenceAssignment.Condition.PROMPT,
-            response_status__in=(
-                ConfidenceAssignment.ResponseStatus.ASSIGNED,
-                ConfidenceAssignment.ResponseStatus.PROMPT_SHOWN,
-            ),
-        )
-        .order_by("attempt__submitted_at", "attempt_id")
-        .first()
-    )
-    if (
-        pending_confidence is not None
-        and pending_confidence.attempt.assignment_id != assignment_id
-    ):
-        return redirect(
-            "assessment:question",
-            session_id=session.pk,
-            assignment_id=pending_confidence.attempt.assignment_id,
-        )
     assignment = get_object_or_404(StudentQuestionAssignment.objects.select_related("snapshot"), pk=assignment_id, session=session)
     reason = request.GET.get("reason", "navigation_click")
     try:
@@ -438,6 +415,9 @@ def question_page(request, session_id, assignment_id):
     except ValidationError as exc:
         messages.error(request, "; ".join(exc.messages))
         return redirect("assessment:complete", session_id=session.id)
+    pending_confidence = ConfidenceAssignment.objects.filter(
+        attempt=attempt, condition=ConfidenceAssignment.Condition.PROMPT,
+    ).first() if attempt.status != Attempt.Status.SUBMITTED else None
     session.refresh_from_db()
     assignments = list(session.assignments.select_related("snapshot", "attempt"))
     remaining = None
@@ -556,33 +536,15 @@ def submit_api(request, attempt_id):
             target_event_id=data.get('target_event_id'),
             writer_lease_token=data.get('writer_lease_token'),
             writer_client_instance_id=data.get('writer_client_instance_id'),
-        )
-        confidence = ensure_confidence_assignment(attempt)
-        prompt_pending = (
-            confidence.condition == confidence.Condition.PROMPT
-            and confidence.response_status
-            not in {
-                confidence.ResponseStatus.COMMITTED,
-                confidence.ResponseStatus.SKIPPED,
-            }
-        )
-        next_url = _next_url_after_attempt(
-            attempt,
-            finish_if_last=not prompt_pending,
+            confidence_response=data.get('confidence'),
         )
         response = {
             "success": True,
             "status": attempt.status,
-            "next_url": next_url,
-            "confidence_required": prompt_pending,
+            "next_url": _next_url_after_attempt(attempt, finish_if_last=True),
+            "confidence_required": False,
+            **frozen_feedback_payload(attempt),
         }
-        if prompt_pending:
-            response["confidence"] = _confidence_client_contract(
-                attempt,
-                confidence,
-            )
-        else:
-            response.update(frozen_feedback_payload(attempt))
         return JsonResponse(response)
     except WriterLeaseConflict:
         return JsonResponse({'success': False, 'error': {'code': 'writer_lease_conflict', 'message': '另一设备正在保存此题，请稍后重试；本机轨迹仍保留。'}}, status=409)

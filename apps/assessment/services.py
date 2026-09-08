@@ -708,6 +708,7 @@ def _submit_attempt_transaction(
     writer_client_instance_id=None,
     request_received_at=None,
     target_event_id=None,
+    confidence_response=None,
 ):
     session_id, task_id = Attempt.objects.filter(pk=attempt_id).values_list(
         "session_id", "session__class_task_id"
@@ -729,6 +730,17 @@ def _submit_attempt_transaction(
         ) from error
     if attempt.status == Attempt.Status.SUBMITTED:
         if str(attempt.submission_token) == str(token):
+            from .models import ConfidenceAssignment
+            confidence = ConfidenceAssignment.objects.get(attempt=attempt)
+            expected = None
+            if confidence.condition == ConfidenceAssignment.Condition.PROMPT:
+                expected = {'status': confidence.response_status}
+                if confidence.probability is not None:
+                    expected['probability'] = confidence.probability
+                if attempt.final_response_event_id:
+                    expected['answer_event_id'] = str(attempt.final_response_event_id)
+            if confidence_response != expected or (attempt.final_response_event_id and str(target_event_id) != str(attempt.final_response_event_id)):
+                raise SubmissionValidationError('该提交已完成，请核验已提交的答案与信心结果。', reason_code='conflict')
             return attempt, None
         raise SubmissionValidationError(
             "该题已经提交",
@@ -760,6 +772,11 @@ def _submit_attempt_transaction(
             "请先填写答案",
             reason_code="invalid_answer",
         )
+    from .confidence_services import ConfidenceFlowError, validate_submission_confidence
+    try:
+        confidence = validate_submission_confidence(attempt, confidence_response)
+    except ConfidenceFlowError as error:
+        raise SubmissionValidationError(str(error), reason_code='invalid_answer') from error
     from .capture_v2_services import uses_capture_v2
     if uses_capture_v2(session) or target_event_id is not None:
         from .research_tool_services import assert_required_tools
@@ -877,7 +894,12 @@ def _submit_attempt_transaction(
         capture_mode="native",
         app_version="server",
     )
-    ensure_confidence_assignment(attempt)
+    if confidence is not None:
+        from .confidence_services import commit_confidence, skip_confidence
+        if confidence_response['status'] == 'skipped':
+            skip_confidence(attempt_id=attempt.pk, student=session.student)
+        else:
+            commit_confidence(attempt_id=attempt.pk, student=session.student, probability=confidence_response['probability'])
     return attempt, None
 
 
@@ -991,6 +1013,7 @@ def submit_attempt(
     writer_client_instance_id=None,
     request_received_at=None,
     target_event_id=None,
+    confidence_response=None,
 ):
     attempt, time_error = _submit_attempt_transaction(
         attempt_id,
@@ -1000,6 +1023,7 @@ def submit_attempt(
         writer_client_instance_id,
         request_received_at,
         target_event_id,
+        confidence_response,
     )
     if time_error:
         raise SubmissionValidationError(

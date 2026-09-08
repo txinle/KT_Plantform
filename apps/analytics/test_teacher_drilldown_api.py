@@ -233,7 +233,12 @@ class TeacherDrilldownApiTests(TransactionTestCase):
         student_experiment_payload = student_experiment.json()
         self.assertFalse(student_experiment_payload["detail"]["is_current_member"])
         question_row = student_experiment_payload["detail"]["questions"][0]
+        self.assertEqual(question_row['question_summary'], 'KVL 单选诊断')
         self.assertTrue(question_row["process_complete"])
+        self.assertEqual(question_row["submission_status_label"], "已正式提交")
+        self.assertEqual(question_row["score_display"], "0 / 1")
+        self.assertEqual(question_row["confidence_label"], "未采集")
+        self.assertIsNotNone(question_row["submitted_at"])
         self.assertEqual(question_row["question_url"], reverse(
             "courses:class_question_detail",
             args=[
@@ -255,6 +260,10 @@ class TeacherDrilldownApiTests(TransactionTestCase):
         self.assertTrue(historical["process_complete"])
 
         process_payload = process.json()
+        self.assertIn('question_options', process_payload['detail'])
+        self.assertIn('correct_answer', process_payload['detail'])
+        self.assertEqual(process_payload['detail']['confidence_label'], '未采集')
+        self.assertIn('answer_time_display', process_payload['detail'])
         self.assertEqual(process_payload["detail"]["process"]["completeness"], "complete")
         self.assertIn("has_cross_instance_order_uncertainty", process_payload["detail"])
         self.assertIn("coverage_reason_labels", process_payload["detail"])

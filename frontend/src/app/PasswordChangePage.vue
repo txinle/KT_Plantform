@@ -5,14 +5,14 @@ import { ApiError } from '@/api/client'
 
 import { changePassword, logout, redirectPasswordChangeAuthenticationRequired } from './auth'
 
-const passwords = reactive({ new_password1: '', new_password2: '' })
+const passwords = reactive({ current_password: '', new_password1: '', new_password2: '' })
 const errors = ref<string[]>([])
 const submitting = ref(false)
 const loggingOut = ref(false)
 
 function errorMessages(caught: unknown, fallback: string): string[] {
   if (caught instanceof ApiError) {
-    const messages = ['new_password1', 'new_password2', 'non_field_errors'].flatMap((key) => {
+    const messages = ['current_password', 'new_password1', 'new_password2', 'non_field_errors'].flatMap((key) => {
       const value = caught.fields[key]
       if (typeof value === 'string') return [value]
       return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
@@ -26,7 +26,9 @@ async function submit() {
   submitting.value = true
   errors.value = []
   try {
-    const context = await changePassword(passwords.new_password1, passwords.new_password2)
+    const context = await changePassword(
+      passwords.current_password, passwords.new_password1, passwords.new_password2,
+    )
     window.location.assign(context.user.home_url)
   } catch (caught) {
     if (redirectPasswordChangeAuthenticationRequired(caught)) return
@@ -53,14 +55,18 @@ async function signOut() {
   <main class="kt-password-change-page">
     <section class="kt-password-change-card kt-card kt-card--raised" role="dialog" aria-modal="true" aria-labelledby="password-change-title" aria-describedby="password-change-description">
       <p class="kt-kicker">账号安全</p>
-      <h1 id="password-change-title">修改初始密码</h1>
-      <p id="password-change-description" class="kt-password-change-card__intro">首次登录需要设置仅由你本人掌握的新密码，完成后才能进入课程。</p>
+      <h1 id="password-change-title">修改密码</h1>
+      <p id="password-change-description" class="kt-password-change-card__intro">输入当前密码并设置仅由你本人掌握的新密码。</p>
       <div v-if="errors.length" class="kt-alert kt-alert--danger" role="alert">
         <ul>
           <li v-for="item in errors" :key="item">{{ item }}</li>
         </ul>
       </div>
       <form @submit.prevent="submit">
+        <div class="kt-field">
+          <label for="current-password">当前密码</label>
+          <input id="current-password" v-model="passwords.current_password" name="current_password" type="password" autocomplete="current-password" required :disabled="submitting || loggingOut">
+        </div>
         <div class="kt-field">
           <label for="new-password-1">新密码</label>
           <input id="new-password-1" v-model="passwords.new_password1" name="new_password1" type="password" minlength="8" autocomplete="new-password" required :disabled="submitting || loggingOut">
@@ -71,7 +77,7 @@ async function signOut() {
           <input id="new-password-2" v-model="passwords.new_password2" name="new_password2" type="password" minlength="8" autocomplete="new-password" required :disabled="submitting || loggingOut">
         </div>
         <button class="kt-button kt-password-change-card__submit" type="submit" :disabled="submitting || loggingOut">
-          {{ submitting ? '正在保存…' : '保存新密码并继续' }}
+          {{ submitting ? '正在保存…' : '保存新密码' }}
         </button>
       </form>
       <button class="kt-button kt-button--secondary kt-password-change-card__logout" data-password-change-logout type="button" :disabled="submitting || loggingOut" @click="signOut">

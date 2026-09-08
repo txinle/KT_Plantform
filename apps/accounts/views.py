@@ -18,7 +18,7 @@ from openpyxl import Workbook
 from .enrollment_services import import_legacy_students
 from .forms import ClassGroupForm, PasswordResetForm, StudentBatchUploadForm, StudentCreateForm
 from .models import ClassGroup, User
-from .password_services import change_student_password, password_change_required, reset_student_initial_password
+from .password_services import change_student_password, reset_student_initial_password
 from .forms import StudentPasswordChangeForm
 from .permissions import role_required
 from .student_import import ParsedStudent, StudentImportError, parse_student_workbook
@@ -28,11 +28,6 @@ from apps.audit.services import log_action
 class PlatformLoginView(LoginView):
     template_name = "registration/login.html"
 
-    def get_success_url(self):
-        if password_change_required(self.request.user):
-            return reverse("password-change")
-        return super().get_success_url()
-
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["show_demo_credentials"] = settings.DEBUG
@@ -40,8 +35,6 @@ class PlatformLoginView(LoginView):
 
 
 def resolve_home_url(user):
-    if password_change_required(user):
-        return reverse("password-change")
     if user.is_superuser or user.role == User.Role.ADMIN:
         return reverse("admin:index")
     if user.role == User.Role.TEACHER:
@@ -52,7 +45,7 @@ def resolve_home_url(user):
 @login_required
 @require_http_methods(["GET", "POST"])
 def password_change(request):
-    if not password_change_required(request.user):
+    if request.user.role != User.Role.STUDENT or request.user.is_superuser:
         return redirect(resolve_home_url(request.user))
     form = StudentPasswordChangeForm(request.POST or None, user=request.user)
     if request.method == "POST" and form.is_valid():
@@ -228,7 +221,10 @@ def reset_student_password(request, pk):
     form = PasswordResetForm(request.POST)
     if form.is_valid():
         student = reset_student_initial_password(request=request, student_id=student.pk)
-        messages.success(request, f"{student.shown_name} 的初始密码已重置为 S + 当前学号，下次登录必须修改密码。")
+        messages.success(
+            request,
+            f"{student.shown_name} 的密码已重置为 S + 当前学号；学生登录后会看到可跳过的改密提醒。",
+        )
     else:
         messages.error(request, "请确认重置初始密码。")
     return redirect("accounts:student_list")

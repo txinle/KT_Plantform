@@ -5,7 +5,8 @@ export interface AuthenticatedUser {
   username: string
   student_number: string | null
   home_url: string
-  must_change_password: boolean
+  uses_initial_password: boolean
+  initial_password_reminder_pending: boolean
 }
 
 export interface BootstrapContext {
@@ -48,7 +49,8 @@ function isAuthenticatedUser(value: unknown): value is AuthenticatedUser {
     && (typeof user.student_number === 'string' || user.student_number === null)
     && typeof user.home_url === 'string'
     && user.home_url.startsWith('/')
-    && typeof user.must_change_password === 'boolean'
+    && typeof user.uses_initial_password === 'boolean'
+    && typeof user.initial_password_reminder_pending === 'boolean'
   )
 }
 
@@ -58,11 +60,7 @@ function offlineBootstrapContext(): BootstrapContext | undefined {
 
   try {
     const envelope = JSON.parse(element.textContent) as Partial<OfflineBootstrapEnvelope>
-    const rawOfflineUser = (envelope as { user?: unknown }).user
-    const offlineUser = rawOfflineUser && typeof rawOfflineUser === 'object'
-      && !('must_change_password' in rawOfflineUser)
-      ? { ...rawOfflineUser, must_change_password: false }
-      : rawOfflineUser
+    const offlineUser = (envelope as { user?: unknown }).user
     const match = /^\/student\/sessions\/(\d+)\/questions\/(\d+)\/$/.exec(window.location.pathname)
     if (
       !match

@@ -3,6 +3,7 @@ import { ApiError, type ApiErrorBody } from '@/api/client'
 import {
   clearBootstrapContext,
   getCsrfToken,
+  getBootstrapContext,
   initializeBootstrapContext,
   type AuthenticatedUser,
   type BootstrapContext,
@@ -61,7 +62,11 @@ export function createAuthenticationApi(options: AuthenticationApiOptions) {
       options.clearBootstrapContext()
     },
 
-    async changePassword(newPassword1: string, newPassword2: string): Promise<BootstrapContext> {
+    async changePassword(
+      currentPassword: string,
+      newPassword1: string,
+      newPassword2: string,
+    ): Promise<BootstrapContext> {
       const response = await fetchImpl('/api/v1/auth/password/change/', {
         method: 'POST',
         credentials: 'same-origin',
@@ -70,12 +75,28 @@ export function createAuthenticationApi(options: AuthenticationApiOptions) {
           'Content-Type': 'application/json',
           'X-CSRFToken': options.getCsrfToken(),
         },
-        body: JSON.stringify({ new_password1: newPassword1, new_password2: newPassword2 }),
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password1: newPassword1,
+          new_password2: newPassword2,
+        }),
       })
       if (!response.ok) throw await responseError(response)
       const context = await options.refreshBootstrapContext({ force: true })
       if (!context) throw new Error('登录状态未建立。')
       return context
+    },
+
+    async markInitialPasswordReminderShown(): Promise<void> {
+      const response = await fetchImpl('/api/v1/auth/password/reminder-shown/', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          Accept: 'application/json',
+          'X-CSRFToken': options.getCsrfToken(),
+        },
+      })
+      if (!response.ok) throw await responseError(response)
     },
   }
 }
@@ -96,8 +117,19 @@ export function logout() {
   return defaultAuthenticationApi().logout()
 }
 
-export function changePassword(newPassword1: string, newPassword2: string) {
-  return defaultAuthenticationApi().changePassword(newPassword1, newPassword2)
+export function changePassword(
+  currentPassword: string,
+  newPassword1: string,
+  newPassword2: string,
+) {
+  return defaultAuthenticationApi().changePassword(
+    currentPassword, newPassword1, newPassword2,
+  )
+}
+
+export async function markInitialPasswordReminderShown() {
+  await defaultAuthenticationApi().markInitialPasswordReminderShown()
+  getBootstrapContext().user.initial_password_reminder_pending = false
 }
 
 export function safeNextPath(next: unknown, fallback: string, origin = window.location.origin): string {
@@ -116,17 +148,15 @@ export function loginDestination(
   next: unknown,
   origin = window.location.origin,
 ): string {
-  return user.must_change_password ? user.home_url : safeNextPath(next, user.home_url, origin)
+  return safeNextPath(next, user.home_url, origin)
 }
 
 export function authenticatedEntryRedirect(
   user: AuthenticatedUser,
   pathname: string,
 ): string | undefined {
-  if (user.must_change_password) {
-    return pathname === PASSWORD_CHANGE_PATH ? undefined : user.home_url
-  }
-  if (pathname === PASSWORD_CHANGE_PATH || pathname === '/login/') return user.home_url
+  if (pathname === PASSWORD_CHANGE_PATH && user.role !== 'student') return user.home_url
+  if (pathname === '/login/') return user.home_url
   return undefined
 }
 

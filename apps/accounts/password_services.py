@@ -2,16 +2,13 @@ from django.contrib.auth import HASH_SESSION_KEY, update_session_auth_hash
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.utils.crypto import constant_time_compare
 
 from apps.audit.services import log_action
 from .forms import StudentPasswordChangeForm
 from .models import CourseEnrollment, User
 from .student_identity import StudentIdentityError, _lock_context, _require_student
-
-
-def password_change_required(user):
-    return bool(user.is_authenticated and user.role == User.Role.STUDENT and not user.is_superuser and user.must_change_password)
 
 
 @transaction.atomic
@@ -27,26 +24,64 @@ def reset_student_initial_password(*, request, student_id, course_id=None, class
     if not student.student_number:
         raise StudentIdentityError("STUDENT_NUMBER_CONFLICT", "该学生尚无学号，无法生成初始密码。")
     student.set_password(f"S{student.student_number}")
-    student.must_change_password = True
-    student.save(update_fields=["password", "must_change_password"])
-    log_action(request, "student.password_reset", student, {"course_id": course_id, "global_account": True, "requires_password_change": True})
+    student.uses_initial_password = True
+    student.initial_password_reminder_shown_at = None
+    student.initial_password_state_recorded_at = timezone.now()
+    student.must_change_password = False
+    student.save(update_fields=[
+        "password",
+        "uses_initial_password",
+        "initial_password_reminder_shown_at",
+        "initial_password_state_recorded_at",
+        "must_change_password",
+    ])
+    log_action(request, "student.password_reset", student, {
+        "course_id": course_id,
+        "global_account": True,
+        "initial_password_reminder_reopened": True,
+    })
+    return student
+
+
+@transaction.atomic
+def acknowledge_initial_password_reminder(*, request):
+    student = get_object_or_404(User.objects.select_for_update(), pk=request.user.pk)
+    if student.role != User.Role.STUDENT or student.is_superuser:
+        raise StudentIdentityError(
+            "STUDENT_ACCOUNT_REQUIRED", "只有学生账号可以确认初始密码提醒。", status=403
+        )
+    if student.initial_password_reminder_pending:
+        student.initial_password_reminder_shown_at = timezone.now()
+        student.save(update_fields=["initial_password_reminder_shown_at"])
     return student
 
 
 def change_student_password(*, request, data):
     with transaction.atomic():
         student = get_object_or_404(User.objects.select_for_update(), pk=request.user.pk)
-        if not password_change_required(student):
-            raise StudentIdentityError("PASSWORD_CHANGE_NOT_REQUIRED", "当前账号无需强制改密。")
+        if student.role != User.Role.STUDENT or student.is_superuser:
+            raise StudentIdentityError(
+                "STUDENT_ACCOUNT_REQUIRED", "只有学生账号可以修改学生密码。", status=403
+            )
         if not constant_time_compare(request.session.get(HASH_SESSION_KEY, ""), student.get_session_auth_hash()):
             raise StudentIdentityError("AUTHENTICATION_REQUIRED", "登录状态已失效，请重新登录。", status=401)
         form = StudentPasswordChangeForm(data, user=student)
         if not form.is_valid():
             raise ValidationError(form.errors.as_data())
         student.set_password(form.cleaned_data["new_password1"])
+        used_initial_password = student.uses_initial_password
+        student.uses_initial_password = False
+        student.initial_password_state_recorded_at = timezone.now()
         student.must_change_password = False
-        student.save(update_fields=["password", "must_change_password"])
-        log_action(request, "student.password_change", student, {"forced": True})
+        student.save(update_fields=[
+            "password",
+            "uses_initial_password",
+            "initial_password_state_recorded_at",
+            "must_change_password",
+        ])
+        log_action(request, "student.password_change", student, {
+            "used_initial_password": used_initial_password
+        })
     update_session_auth_hash(request, student)
     request.user = student
     return student

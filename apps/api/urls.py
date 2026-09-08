@@ -4,6 +4,7 @@ from drf_spectacular.views import SpectacularAPIView
 from .views import (
     CsrfTokenView,
     HealthView,
+    InitialPasswordReminderShownView,
     LoginApiView,
     LogoutApiView,
     SessionContextView,
@@ -12,6 +13,11 @@ from .views import (
 
 
 urlpatterns = [
+    path(
+        "auth/password/reminder-shown/",
+        InitialPasswordReminderShownView.as_view(),
+        name="api-password-reminder-shown",
+    ),
     path("auth/password/change/", StudentPasswordChangeView.as_view(), name="api-password-change"),
     path("auth/session/", SessionContextView.as_view(), name="api-session"),
     path("auth/csrf/", CsrfTokenView.as_view(), name="api-csrf"),

@@ -5,6 +5,7 @@ from django.core import signing
 from django.contrib.auth.hashers import check_password
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
+from django.utils import timezone
 from django.utils.crypto import constant_time_compare
 
 from .models import (
@@ -254,7 +255,8 @@ class StudentCreateForm(forms.Form):
             class_group=self.cleaned_data["class_group"],
             role=User.Role.STUDENT,
             password=f"S{number}",
-            must_change_password=True,
+            uses_initial_password=True,
+            initial_password_state_recorded_at=timezone.now(),
         )
 
 
@@ -263,6 +265,9 @@ class PasswordResetForm(forms.Form):
 
 
 class StudentPasswordChangeForm(forms.Form):
+    current_password = forms.CharField(
+        label="当前密码", strip=False, widget=forms.PasswordInput
+    )
     new_password1 = forms.CharField(label="新密码", min_length=8, strip=False, widget=forms.PasswordInput)
     new_password2 = forms.CharField(label="再次输入新密码", min_length=8, strip=False, widget=forms.PasswordInput)
 
@@ -272,13 +277,16 @@ class StudentPasswordChangeForm(forms.Form):
 
     def clean(self):
         data = super().clean()
+        current_password = data.get("current_password")
         password = data.get("new_password1")
         confirmation = data.get("new_password2")
+        if current_password and not check_password(current_password, self.user.password):
+            self.add_error("current_password", "当前密码不正确。")
         if password and confirmation:
             if password != confirmation:
                 self.add_error("new_password2", "两次输入的新密码不一致。")
-            elif password == f"S{self.user.student_number}" or check_password(password, self.user.password):
-                self.add_error("new_password1", "新密码不能与当前密码或初始密码相同。")
+            elif check_password(password, self.user.password):
+                self.add_error("new_password1", "新密码不能与当前密码相同。")
             else:
                 try:
                     validate_password(password, self.user)

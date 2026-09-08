@@ -136,15 +136,12 @@ async function setAnswer(page: Page, kind: string) {
 
 async function submitAnswer(page: Page) {
   await page.locator('[data-submit-request]').click()
+  if (await page.locator('[data-confidence-panel]').isVisible()) await page.getByRole('button', { name: '跳过评价', exact: true }).click()
   const submitted = page.waitForResponse((response) => response.url().endsWith('/submit/'))
   await page.locator('[data-submit-confirm]').click()
   const response = await submitted
   const body = await response.json()
   expect(response.ok(), JSON.stringify(body)).toBe(true)
-  if (body.confidence_required) {
-    await expect(page.locator('[data-confidence-panel]')).toBeVisible()
-    await page.getByRole('button', { name: '跳过评价', exact: true }).click()
-  }
   await expect(page).toHaveURL(new RegExp(`${body.next_url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`))
 }
 
@@ -331,7 +328,8 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
             && typeof user.username === 'string'
             && (typeof user.student_number === 'string' || user.student_number === null)
             && typeof user.home_url === 'string'
-            && typeof user.must_change_password === 'boolean'
+            && typeof user.uses_initial_password === 'boolean'
+            && typeof user.initial_password_reminder_pending === 'boolean'
           ),
         }
       }, { sessionId, assignmentId: row.assignment_id })

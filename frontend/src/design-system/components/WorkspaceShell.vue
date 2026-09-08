@@ -1,17 +1,26 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import AppHeader from './AppHeader.vue'
+import InitialPasswordReminder from '@/app/InitialPasswordReminder.vue'
 import WorkspaceNavigation from './WorkspaceNavigation'
 import '../workspace.css'
 
-defineProps<{
+withDefaults(defineProps<{
   userName: string
   userMeta?: string | null
   csrfToken: string
   courseName?: string
   courseMeta?: string
   mainId: string
-}>()
+  passwordChangeUrl?: string | null
+  initialPasswordReminderPending?: boolean
+}>(), {
+  userMeta: null,
+  courseName: undefined,
+  courseMeta: undefined,
+  passwordChangeUrl: null,
+  initialPasswordReminderPending: false,
+})
 const secondary = ref<HTMLElement | null>(null)
 provide('workspace-secondary-nav', secondary)
 const mobile = ref(false)
@@ -67,9 +76,10 @@ onBeforeUnmount(() => {
 <template>
   <div class="kt-workspace">
     <a class="kt-skip-link" :href="`#${mainId}`">跳到主要内容</a>
-    <AppHeader :user-name="userName" :user-meta="userMeta" :csrf-token="csrfToken" show-logout :inert="mobile && open">
+    <AppHeader :user-name="userName" :user-meta="userMeta" :csrf-token="csrfToken" :password-change-url="passwordChangeUrl" show-logout :inert="mobile && open">
       <button ref="trigger" type="button" class="kt-workspace-menu" data-workspace-menu aria-controls="workspace-sidebar" :aria-expanded="open" @click="open = true">菜单</button>
     </AppHeader>
+    <InitialPasswordReminder v-if="initialPasswordReminderPending" />
     <div v-if="mobile && open" class="kt-workspace-shade" @click="close" />
     <aside id="workspace-sidebar" ref="panel" class="kt-workspace-sidebar" :class="{ 'is-open': open }" :inert="mobile && !open" :role="mobile && open ? 'dialog' : undefined" :aria-modal="mobile && open ? true : undefined" aria-label="工作区导航" @keydown="keydown" @click="navigationClick">
       <button ref="closeButton" type="button" class="kt-workspace-close" data-workspace-close @click="close">关闭菜单</button>

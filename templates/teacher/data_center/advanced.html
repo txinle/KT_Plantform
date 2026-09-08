@@ -1,40 +1,18 @@
 {% extends 'base.html' %}
-{% load static %}
-{% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:data' course.pk %}">数据中心</a></li><li class="breadcrumb-item-current" aria-current="page">高级数据工具</li>{% endblock %}
-{% block title %}高级数据工具 | {{ course.name }}{% endblock %}
+{% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:data' course.pk %}">数据中心</a></li><li class="breadcrumb-item-current" aria-current="page">学生作答预览</li>{% endblock %}
+{% block title %}学生作答预览 | {{ course.name }}{% endblock %}
 {% block content %}
-  <header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">高级数据工具</h1><p class="page-subtitle">先按数据类型定位，再审阅具体表、Schema 与来源。这里保留科研可追溯性，但不把导出目录当作导航结构。</p></div></header>
+  <header class="page-header">
+    <div class="page-header-copy">
+      <p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p>
+      <h1 class="page-title">学生作答预览</h1>
+      <p class="page-subtitle">按学生、实验和题目查看已正式提交的答案与作答过程。</p>
+    </div>
+  </header>
   {% include 'teacher/data_center/_workbench_nav.html' %}
-  <div class="advanced-data-layout">
-    <aside class="advanced-data-sidebar" aria-label="研究数据分类" data-advanced-sidebar="true">
-      <label class="form-label" for="advanced-table-search">查找数据表</label>
-      <input class="form-control advanced-table-search" id="advanced-table-search" type="search" placeholder="输入中文名称或表名" data-advanced-table-search>
-      <div class="advanced-data-groups">
-        {% for group in advanced_groups %}
-          <details class="advanced-data-group"{% if group.active %} open data-advanced-group-open="true"{% endif %} data-advanced-group>
-            <summary><span>{{ group.label }}</span><span class="advanced-data-count numeric">{{ group.tables|length }}</span></summary>
-            <div class="advanced-data-group-body">
-              {% for table in group.tables %}
-                <a class="advanced-data-table{% if table.active %} active{% endif %}" href="?{{ scope_query }}&amp;table={{ table.key }}"{% if table.active %} aria-current="page"{% endif %} data-advanced-table-link data-search-text="{{ table.label }} {{ table.key }}">
-                  <span>{{ table.label }}</span><code>{{ table.key }}</code>
-                  {% if table.role == 'source_of_truth' or table.role == 'classified_view' %}<small>{{ table.role_label }}</small>{% endif %}
-                </a>
-              {% empty %}<p class="advanced-data-empty">当前实验未启用此类观测。</p>{% endfor %}
-            </div>
-          </details>
-        {% endfor %}
-      </div>
-    </aside>
-    <section class="advanced-data-content" data-advanced-content="true">
-      <div class="advanced-data-heading"><div><p class="page-kicker">{{ selected_table_info.source_layer }}</p><h2>{{ selected_table_info.label }}</h2><code>{{ selected_table }}</code></div><span class="advanced-data-role advanced-data-role-{{ selected_table_info.role }}">{{ selected_table_info.role_label }}</span></div>
-      {% if selected_table_info.role == 'source_of_truth' %}
-        <div class="research-authority-note"><strong>权威总事件表 / Source of Truth</strong><span>{{ selected_table_info.description }} response、navigation、telemetry 等表均为用途分类视图，不是并列的原始事实源。</span></div>
-      {% elif selected_table_info.role == 'classified_view' %}
-        <div class="research-authority-note research-authority-note-view"><strong>分类视图</strong><span>{{ selected_table_info.description }} 权威来源仍是 assessment_events。</span></div>
-      {% endif %}
-      <section class="advanced-technical-info" aria-labelledby="technical-info-title"><h3 id="technical-info-title">技术信息</h3><dl><div><dt>数据表</dt><dd><code>{{ selected_table }}</code></dd></div><div><dt>导出路径</dt><dd><code>{{ selected_table_info.path }}</code></dd></div><div><dt>Schema</dt><dd><code>{{ selected_table_info.schema_version }}</code></dd></div><div><dt>来源</dt><dd>{{ selected_table_info.source_layer }}</dd></div></dl></section>
-      {% if not selected_experiment %}<div class="empty-state"><h2 class="empty-state-title">请在范围栏选择实验</h2><p>高级表预览仍遵循当前数据范围；不会从其他课程或实验补齐数据。</p></div>{% elif preview %}<div class="table-shell preview-table-wrap"><table class="table table-sm align-middle"><thead><tr>{% for column in preview.columns %}<th><code>{{ column.name }}</code><small class="d-block text-muted">{{ column.description }}</small></th>{% endfor %}</tr></thead><tbody>{% for row in preview.rows %}<tr>{% for value in row %}<td>{{ value|default_if_none:'' }}</td>{% endfor %}</tr>{% empty %}<tr><td colspan="{{ preview.headers|length }}" class="text-muted">当前范围暂无记录。</td></tr>{% endfor %}</tbody></table></div>{% if preview.has_previous or preview.has_next %}<nav class="d-flex justify-content-between align-items-center mt-3" aria-label="表预览分页"><span class="text-muted small">第 {{ preview.page }} 页 · 共 {{ preview.total }} 条</span><div class="d-flex gap-2">{% if preview.has_previous %}<a class="btn btn-sm btn-outline-secondary" href="?{{ scope_query }}&amp;table={{ selected_table }}&amp;page={{ preview.previous_page }}">上一页</a>{% endif %}{% if preview.has_next %}<a class="btn btn-sm btn-outline-secondary" href="?{{ scope_query }}&amp;table={{ selected_table }}&amp;page={{ preview.next_page }}">下一页</a>{% endif %}</div></nav>{% endif %}{% endif %}
-    </section>
-  </div>
+  <section class="card-panel">
+    <h2>学生列表</h2>
+    <p>当前兼容界面从教学数据页进入学生详情；未提交题目只显示数量，不显示草稿内容。</p>
+    <a class="btn btn-primary" href="{% url 'courses:data_teaching' course.pk %}{% if teaching_scope_query %}?{{ teaching_scope_query }}{% endif %}">查看教学数据</a>
+  </section>
 {% endblock %}
-{% block scripts %}{{ block.super }}<script src="{% static 'js/advanced-data-tools.js' %}?v=20260828.1"></script>{% endblock %}

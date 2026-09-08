@@ -20,7 +20,7 @@ async function captureResponsive(page: Page, testInfo: TestInfo, prefix: string)
   await page.evaluate(() => { document.documentElement.style.zoom = '' })
 }
 
-test('corrects a removed student, preserves identity and password, and enforces password changes', async ({ page, browser }, testInfo) => {
+test('corrects a removed student, preserves identity and password, and allows optional password changes', async ({ page, browser }, testInfo) => {
   test.setTimeout(120_000)
   const number = `ID${Date.now()}`
   const correctedNumber = `${number}N`
@@ -73,15 +73,15 @@ test('corrects a removed student, preserves identity and password, and enforces 
     const studentPage = await studentContext.newPage()
     // Editing the number must preserve even a not-yet-changed initial password.
     await login(studentPage, correctedNumber, `S${number}`)
-    await expect(studentPage).toHaveURL(/\/password\/change\/$/)
-    const denied = await studentPage.request.get('/api/v1/student/courses/')
-    expect(denied.status()).toBe(403)
-    expect((await denied.json()).error.code).toBe('PASSWORD_CHANGE_REQUIRED')
+    await expect(studentPage.getByRole('heading', { name: '建议修改初始密码' })).toBeVisible()
+    await studentPage.getByRole('button', { name: '暂不修改', exact: true }).click()
+    expect((await studentPage.request.get('/api/v1/student/courses/')).status()).toBe(200)
     await studentPage.goto('/student/', { waitUntil: 'commit' })
-    await expect(studentPage).toHaveURL(/\/password\/change\/$/)
+    await expect(studentPage).toHaveURL(/\/student\/$/)
+    await studentPage.goto('/password/change/', { waitUntil: 'commit' })
     for (const [name, width, height] of [['desktop', 1440, 900], ['mobile', 390, 844]] as const) {
       await studentPage.setViewportSize({ width, height })
-      await expect(studentPage.getByRole('heading', { name: '修改初始密码' })).toBeVisible()
+      await expect(studentPage.getByRole('heading', { name: '修改密码' })).toBeVisible()
       await studentPage.screenshot({ path: testInfo.outputPath(`password-change-${name}.png`), fullPage: true })
       expect(await studentPage.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1)
     }
@@ -90,11 +90,12 @@ test('corrects a removed student, preserves identity and password, and enforces 
     await studentPage.screenshot({ path: testInfo.outputPath('password-change-200-percent.png'), fullPage: true })
     expect(await studentPage.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1441)
     await studentPage.evaluate(() => { document.documentElement.style.zoom = '' })
+    await studentPage.getByLabel('当前密码', { exact: true }).fill(`S${number}`)
     await studentPage.getByLabel('新密码', { exact: true }).fill('Student-personal-password-1')
     await studentPage.getByLabel('再次输入新密码', { exact: true }).fill('Student-personal-password-1')
-    await studentPage.getByRole('button', { name: '保存新密码并继续', exact: true }).click()
+    await studentPage.getByRole('button', { name: '保存新密码', exact: true }).click()
     await expect(studentPage).toHaveURL(/\/student\/$/)
-    expect((await (await studentPage.request.get('/api/v1/auth/session/')).json()).user.must_change_password).toBe(false)
+    expect((await (await studentPage.request.get('/api/v1/auth/session/')).json()).user.uses_initial_password).toBe(false)
 
     await row.locator('[data-course-reset-password]').click()
     await expect(page.locator('[aria-labelledby="reset-password-title"]')).toContainText(`S${correctedNumber}`)
@@ -102,7 +103,7 @@ test('corrects a removed student, preserves identity and password, and enforces 
     await expect(page.getByText('的全局登录密码已重置。', { exact: false })).toBeVisible()
     expect((await studentPage.request.get('/api/v1/auth/session/')).status()).toBe(401)
     await login(studentPage, correctedNumber, `S${correctedNumber}`)
-    await expect(studentPage).toHaveURL(/\/password\/change\/$/)
+    await expect(studentPage.getByRole('heading', { name: '建议修改初始密码' })).toBeVisible()
   } finally {
     await studentContext.close()
   }

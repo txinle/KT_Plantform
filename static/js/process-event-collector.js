@@ -155,6 +155,7 @@
   class MemoryOutbox {
     constructor(options = {}) {
       this.isFallback = Boolean(options.isFallback);
+      this.submissionIntents = new Map();
       this.records = [];
       this.nextSequences = new Map();
       this.nextOrder = 1;
@@ -192,6 +193,14 @@
 
     async restoreResponse(sessionId, attemptId) {
       return clone(this.responseHeads.get(`${sessionId}:${attemptId}`) || null);
+    }
+    async restoreSubmissionIntent(sessionId, attemptId) {
+      return clone(this.submissionIntents.get(`${sessionId}:${attemptId}`) || null);
+    }
+    async saveSubmissionIntent(sessionId, attemptId, intent) {
+      const key = `${sessionId}:${attemptId}`;
+      if (intent === null) this.submissionIntents.delete(key);
+      else this.submissionIntents.set(key, clone(intent));
     }
     async clearResponseRecovery(sessionId, attemptId) {
       this.responseHeads.delete(`${sessionId}:${attemptId}`);
@@ -352,6 +361,22 @@
       const row = await requestResult(transaction.objectStore('meta').get(`response-head:${sessionId}:${attemptId}`));
       await completed;
       return row?.value || null;
+    }
+    async restoreSubmissionIntent(sessionId, attemptId) {
+      const transaction = this.database.transaction('meta', 'readonly');
+      const completed = transactionResult(transaction);
+      const row = await requestResult(transaction.objectStore('meta').get(`submission-intent:${sessionId}:${attemptId}`));
+      await completed;
+      return row?.value || null;
+    }
+    async saveSubmissionIntent(sessionId, attemptId, intent) {
+      const transaction = this.database.transaction('meta', 'readwrite');
+      const completed = transactionResult(transaction);
+      const store = transaction.objectStore('meta');
+      const key = `submission-intent:${sessionId}:${attemptId}`;
+      if (intent === null) store.delete(key);
+      else store.put({ key, value: clone(intent) });
+      await completed;
     }
     async clearResponseRecovery(sessionId, attemptId) {
       const transaction = this.database.transaction('meta', 'readwrite');

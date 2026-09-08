@@ -25,7 +25,13 @@ onMounted(async () => {
 </script>
 
 <template>
-  <WorkspaceShell :user-name="bootstrap.user.display_name" :csrf-token="bootstrap.csrf_token" main-id="session-summary">
+  <WorkspaceShell
+    :user-name="bootstrap.user.display_name"
+    :csrf-token="bootstrap.csrf_token"
+    password-change-url="/password/change/"
+    :initial-password-reminder-pending="bootstrap.user.initial_password_reminder_pending"
+    main-id="session-summary"
+  >
     <template #navigation><a href="/student/">我的课程</a></template>
     <p v-if="error" role="alert" class="kt-alert kt-alert--danger">{{ error }}</p>
     <section v-else-if="summary" class="kt-card kt-session-summary" aria-labelledby="session-title">

@@ -47,7 +47,8 @@ class StudentIdentityApiTests(TestCase):
         other = Course.objects.create(owner=self.teacher, code="OTHER", name="另一课程", term="2026")
         group = ClassGroup.objects.create(course=other, name="另一班")
         second = CourseEnrollment.objects.create(course=other, class_group=group, student=self.student)
-        self.student.must_change_password = True
+        self.student.uses_initial_password = True
+        self.student.initial_password_reminder_shown_at = timezone.now()
         self.student.save()
         original_password = self.student.password
         row = self.client.get(self.base + "manage/").json()["enrollments"][0]
@@ -58,7 +59,8 @@ class StudentIdentityApiTests(TestCase):
         self.student.refresh_from_db()
         self.assertEqual((self.student.student_number, self.student.username, self.student.display_name), ("ID-002", "ID-002", "更正姓名"))
         self.assertEqual(self.student.password, original_password)
-        self.assertTrue(self.student.must_change_password)
+        self.assertTrue(self.student.uses_initial_password)
+        self.assertIsNotNone(self.student.initial_password_reminder_shown_at)
         self.assertEqual(set(self.student.course_enrollments.values_list("pk", flat=True)), {self.enrollment.pk, second.pk})
         self.assertEqual(self.edit(data).json()["error"]["code"], "STALE_CONFIRMATION")
 
@@ -82,7 +84,7 @@ class StudentIdentityApiTests(TestCase):
         self.assertEqual(self.student.username, "existing-login-name")
 
     def test_removed_student_confirms_correction_without_password_changes(self):
-        self.student.must_change_password = True
+        self.student.uses_initial_password = True
         self.student.save()
         password = self.student.password
         self.remove()
@@ -102,7 +104,7 @@ class StudentIdentityApiTests(TestCase):
         self.student.refresh_from_db()
         self.assertEqual(self.student.display_name, "正确姓名")
         self.assertEqual(self.student.password, password)
-        self.assertTrue(self.student.must_change_password)
+        self.assertTrue(self.student.uses_initial_password)
 
     def test_unrelated_name_conflict_is_forbidden_but_same_name_reuses_account(self):
         self.enrollment.delete()
@@ -178,14 +180,14 @@ class StudentIdentityApiTests(TestCase):
     def test_password_changes_do_not_invalidate_identity_confirmation_or_get_overwritten(self):
         data = self.identity_input()
         self.student.set_password("Changed-in-another-session")
-        self.student.must_change_password = True
+        self.student.uses_initial_password = True
         self.student.save()
         password = self.student.password
         response = self.edit(data)
         self.assertEqual(response.status_code, 200, response.content)
         self.student.refresh_from_db()
         self.assertEqual(self.student.password, password)
-        self.assertTrue(self.student.must_change_password)
+        self.assertTrue(self.student.uses_initial_password)
 
     def test_new_other_course_membership_requires_a_new_cross_course_confirmation(self):
         data = self.identity_input()
@@ -273,37 +275,113 @@ class StudentPasswordTests(TestCase):
         self.group = ClassGroup.objects.create(course=self.course, owner=self.teacher, name="班级")
         self.student, _ = enroll_single_student(self.course, self.group, "PW-001", "学生")
 
-    def test_new_student_has_standard_password_and_requires_change(self):
+    def test_new_student_has_explicit_initial_password_state_and_pending_reminder(self):
         self.assertTrue(self.student.check_password("SPW-001"))
-        self.assertTrue(getattr(self.student, "must_change_password", False))
+        self.assertTrue(self.student.uses_initial_password)
+        self.assertIsNone(self.student.initial_password_reminder_shown_at)
+        self.assertIsNotNone(self.student.initial_password_state_recorded_at)
 
-    def test_authentication_gate_and_password_change(self):
-        self.student.must_change_password = True
-        self.student.save()
+    def test_initial_password_is_a_reminder_and_never_blocks_student_pages(self):
         self.client.login(username="PW-001", password="SPW-001")
         session = self.client.get("/api/v1/auth/session/").json()["user"]
-        self.assertTrue(session.get("must_change_password"))
-        self.assertEqual(session["home_url"], "/password/change/")
-        denied = self.client.get("/api/v1/student/courses/")
+        self.assertEqual(session["home_url"], "/student/")
+        self.assertTrue(session["uses_initial_password"])
+        self.assertTrue(session["initial_password_reminder_pending"])
+        self.assertNotIn("must_change_password", session)
+        self.assertEqual(self.client.get("/api/v1/student/courses/").status_code, 200)
+        response = self.client.get("/student/")
+        self.assertNotEqual(getattr(response, "url", None), "/password/change/")
+
+    def test_reminder_confirmation_is_idempotent_and_only_students_can_use_it(self):
+        self.client.force_login(self.student)
+        url = "/api/v1/auth/password/reminder-shown/"
+        first = self.client.post(url, "{}", content_type="application/json")
+        self.assertEqual(first.status_code, 200, first.content)
+        self.assertFalse(first.json()["user"]["initial_password_reminder_pending"])
+        self.student.refresh_from_db()
+        shown_at = self.student.initial_password_reminder_shown_at
+        self.assertIsNotNone(shown_at)
+        second = self.client.post(url, "{}", content_type="application/json")
+        self.assertEqual(second.status_code, 200, second.content)
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.initial_password_reminder_shown_at, shown_at)
+        self.client.force_login(self.teacher)
+        denied = self.client.post(url, "{}", content_type="application/json")
         self.assertEqual(denied.status_code, 403)
-        self.assertEqual(denied.json()["error"]["code"], "PASSWORD_CHANGE_REQUIRED")
-        denied = self.client.post("/student/attempts/1/draft/", "{}", content_type="application/json")
-        self.assertEqual(denied.status_code, 403)
-        self.assertEqual(denied.json()["error"]["code"], "PASSWORD_CHANGE_REQUIRED")
-        self.assertRedirects(self.client.get("/student/"), "/password/change/", fetch_redirect_response=False)
-        for first, second in (("short", "short"), ("Strong-password-2", "different"), ("SPW-001", "SPW-001")):
-            invalid = self.client.post("/api/v1/auth/password/change/", json.dumps({"new_password1": first, "new_password2": second}), content_type="application/json")
-            self.assertEqual(invalid.status_code, 400)
-        changed = self.client.post("/api/v1/auth/password/change/", json.dumps({"new_password1": "Strong-password-2", "new_password2": "Strong-password-2"}), content_type="application/json")
+
+    def test_failed_reminder_confirmation_does_not_mark_the_reminder_as_shown(self):
+        self.client.force_login(self.student)
+        self.client.raise_request_exception = False
+        with patch("apps.accounts.password_services.User.save", side_effect=RuntimeError("database unavailable")):
+            failed = self.client.post(
+                "/api/v1/auth/password/reminder-shown/", "{}", content_type="application/json"
+            )
+        self.assertEqual(failed.status_code, 500)
+        self.student.refresh_from_db()
+        self.assertIsNone(self.student.initial_password_reminder_shown_at)
+        retry = self.client.post(
+            "/api/v1/auth/password/reminder-shown/", "{}", content_type="application/json"
+        )
+        self.assertEqual(retry.status_code, 200, retry.content)
+
+    def test_password_change_is_permanent_and_validates_the_current_password(self):
+        self.client.login(username="PW-001", password="SPW-001")
+        invalid = self.client.post(
+            "/api/v1/auth/password/change/",
+            json.dumps({
+                "current_password": "wrong-password",
+                "new_password1": "Strong-password-2",
+                "new_password2": "Strong-password-2",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.student.refresh_from_db()
+        self.assertTrue(self.student.uses_initial_password)
+        self.assertIsNone(self.student.initial_password_reminder_shown_at)
+        changed = self.client.post(
+            "/api/v1/auth/password/change/",
+            json.dumps({
+                "current_password": "SPW-001",
+                "new_password1": "Strong-password-2",
+                "new_password2": "Strong-password-2",
+            }),
+            content_type="application/json",
+        )
         self.assertEqual(changed.status_code, 200, changed.content)
-        self.assertFalse(changed.json()["user"]["must_change_password"])
+        self.assertFalse(changed.json()["user"]["uses_initial_password"])
+        self.assertFalse(changed.json()["user"]["initial_password_reminder_pending"])
         self.student.refresh_from_db()
         self.assertTrue(self.student.check_password("Strong-password-2"))
+        self.assertFalse(self.student.uses_initial_password)
         self.assertEqual(self.client.get("/api/v1/auth/session/").status_code, 200)
 
-    def test_teacher_reset_invalidates_old_sessions_and_uses_current_number(self):
+    def test_student_number_change_never_changes_password_or_explicit_initial_state(self):
+        self.student.initial_password_reminder_shown_at = timezone.now()
+        self.student.save(update_fields=["initial_password_reminder_shown_at"])
+        original_password = self.student.password
+        self.client.force_login(self.teacher)
+        base = f"/api/v1/teacher/accounts/courses/{self.course.pk}/classes/{self.group.pk}/"
+        token = self.client.get(base + "manage/").json()["enrollments"][0]["identity_state_token"]
+        edited = self.client.patch(
+            base + f"students/{self.student.pk}/identity/",
+            json.dumps({
+                "student_number": "PW-0002",
+                "display_name": "学生",
+                "state_token": token,
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(edited.status_code, 200, edited.content)
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.password, original_password)
+        self.assertTrue(self.student.uses_initial_password)
+        self.assertIsNotNone(self.student.initial_password_reminder_shown_at)
+
+    def test_teacher_reset_uses_current_number_and_reopens_the_reminder(self):
         self.student.set_password("Personal-password-1")
-        self.student.must_change_password = False
+        self.student.uses_initial_password = False
+        self.student.initial_password_reminder_shown_at = timezone.now()
         self.student.save()
         old = Client()
         old.login(username="PW-001", password="Personal-password-1")
@@ -318,7 +396,9 @@ class StudentPasswordTests(TestCase):
         self.assertEqual(response.status_code, 200, response.content)
         self.student.refresh_from_db()
         self.assertTrue(self.student.check_password("SPW-002"))
-        self.assertTrue(self.student.must_change_password)
+        self.assertTrue(self.student.uses_initial_password)
+        self.assertIsNone(self.student.initial_password_reminder_shown_at)
+        self.assertIsNotNone(self.student.initial_password_state_recorded_at)
         self.assertEqual(old.get("/api/v1/auth/session/").status_code, 401)
 
     def test_inflight_password_change_cannot_overwrite_a_teacher_reset(self):
@@ -338,55 +418,63 @@ class StudentPasswordTests(TestCase):
         self.assertEqual(blocked.exception.business_code, "AUTHENTICATION_REQUIRED")
         self.student.refresh_from_db()
         self.assertEqual(self.student.password, reset_hash)
-        self.assertTrue(self.student.must_change_password)
+        self.assertTrue(self.student.uses_initial_password)
 
-    def test_default_password_command_never_changes_hashes(self):
+    def test_default_password_command_is_one_time_and_never_changes_hashes(self):
         self.assertIn("mark_student_default_passwords", get_commands())
-        self.student.must_change_password = False
-        self.student.save()
+        User.objects.filter(pk=self.student.pk).update(
+            uses_initial_password=False,
+            initial_password_reminder_shown_at=None,
+            initial_password_state_recorded_at=None,
+        )
         original = self.student.password
-        personal = User.objects.create_user(username="CUSTOM", student_number="CUSTOM", password="Personal-password-1", role=User.Role.STUDENT)
+        personal = User.objects.create_user(
+            username="CUSTOM", student_number="CUSTOM", password="Personal-password-1",
+            role=User.Role.STUDENT,
+        )
+        User.objects.filter(pk=personal.pk).update(initial_password_state_recorded_at=None)
+        absent = User.objects.create_user(username="NO-NUMBER", role=User.Role.STUDENT)
+        User.objects.filter(pk=absent.pk).update(initial_password_state_recorded_at=None)
+        before = dict(User.objects.values_list("pk", "password"))
         out = StringIO()
         call_command("mark_student_default_passwords", stdout=out)
+        preview = json.loads(out.getvalue())
+        self.assertEqual(preview["mode"], "dry-run")
+        self.assertEqual(preview["matched_initial_password"], 1)
+        self.assertEqual(preview["personal_or_unrecognized_password"], 2)
+        self.assertEqual(preview["would_record"], 3)
         self.student.refresh_from_db()
-        self.assertFalse(self.student.must_change_password)
+        self.assertFalse(self.student.uses_initial_password)
+        self.assertIsNone(self.student.initial_password_state_recorded_at)
         self.assertNotIn(original, out.getvalue())
         call_command("mark_student_default_passwords", apply=True, stdout=StringIO())
         self.student.refresh_from_db()
         personal.refresh_from_db()
-        self.assertTrue(self.student.must_change_password)
-        self.assertEqual(self.student.password, original)
-        self.assertFalse(personal.must_change_password)
-        call_command("mark_student_default_passwords", apply=True, stdout=StringIO())
+        absent.refresh_from_db()
+        self.assertTrue(self.student.uses_initial_password)
+        self.assertFalse(personal.uses_initial_password)
+        self.assertFalse(absent.uses_initial_password)
+        self.assertTrue(all(user.initial_password_state_recorded_at for user in (self.student, personal, absent)))
+        again = StringIO()
+        call_command("mark_student_default_passwords", apply=True, stdout=again)
         self.student.refresh_from_db()
+        self.assertEqual(json.loads(again.getvalue())["already_authoritative"], 3)
+        self.assertEqual(json.loads(again.getvalue())["recorded"], 0)
         self.assertEqual(self.student.password, original)
 
-    def test_password_change_requires_csrf_and_legacy_login_cannot_bypass_gate(self):
-        self.student.must_change_password = True
-        self.student.save()
+    def test_password_change_requires_csrf_and_legacy_login_honors_safe_next(self):
         client = Client(enforce_csrf_checks=True)
         client.force_login(self.student)
-        response = client.post("/api/v1/auth/password/change/", json.dumps({"new_password1": "New-password-2", "new_password2": "New-password-2"}), content_type="application/json")
+        response = client.post(
+            "/api/v1/auth/password/change/",
+            json.dumps({
+                "current_password": "SPW-001",
+                "new_password1": "New-password-2",
+                "new_password2": "New-password-2",
+            }),
+            content_type="application/json",
+        )
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json()["error"]["code"], "CSRF_FAILED")
         response = self.client.post("/login/?next=/student/", {"username": "PW-001", "password": "SPW-001"})
-        self.assertRedirects(response, "/password/change/", fetch_redirect_response=False)
-        response = self.client.post("/password/change/", {"new_password1": "New-password-2", "new_password2": "New-password-2"})
-        self.assertEqual(response.status_code, 302)
-        self.assertNotEqual(response.url, "/password/change/")
-
-    def test_command_preserves_unrecognized_passwords_and_existing_flags(self):
-        self.student.must_change_password = False
-        self.student.save()
-        personal = User.objects.create_user(username="PERSONAL", student_number="PERSONAL", password="Self-set-password", role=User.Role.STUDENT, must_change_password=True)
-        absent = User.objects.create_user(username="NO-NUMBER", role=User.Role.STUDENT)
-        before = dict(User.objects.values_list("pk", "password"))
-        output = StringIO()
-        call_command("mark_student_default_passwords", dry_run=True, stdout=output)
-        stats = json.loads(output.getvalue())
-        self.assertEqual((stats["scanned"], stats["matched"], stats["skipped"], stats["errors"], stats["would_mark"]), (3, 1, 2, 0, 1))
-        self.assertFalse(User.objects.get(pk=self.student.pk).must_change_password)
-        call_command("mark_student_default_passwords", apply=True, stdout=StringIO())
-        self.assertEqual(dict(User.objects.values_list("pk", "password")), before)
-        self.assertTrue(User.objects.get(pk=personal.pk).must_change_password)
-        self.assertFalse(User.objects.get(pk=absent.pk).must_change_password)
+        self.assertRedirects(response, "/student/", fetch_redirect_response=False)

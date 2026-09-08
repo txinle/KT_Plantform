@@ -79,6 +79,20 @@ paths:
               schema:
                 $ref: '#/components/schemas/SessionContext'
           description: ''
+  /api/v1/auth/password/reminder-shown/:
+    post:
+      operationId: auth_password_reminder_shown_create
+      tags:
+      - auth
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionContext'
+          description: ''
   /api/v1/auth/session/:
     get:
       operationId: auth_session_retrieve
@@ -126,6 +140,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+          description: ''
+  /api/v1/student/attempts/{attempt_id}/recovery/:
+    get:
+      operationId: student_attempts_recovery_retrieve
+      parameters:
+      - in: path
+        name: attempt_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - student
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Recovery'
           description: ''
   /api/v1/student/courses/:
     get:
@@ -261,6 +295,31 @@ paths:
               schema:
                 $ref: '#/components/schemas/StudentRuntimeQuestionEntry'
           description: ''
+  /api/v1/student/sessions/{session_id}/questions/{assignment_id}/recovery/:
+    get:
+      operationId: student_sessions_questions_recovery_retrieve
+      parameters:
+      - in: path
+        name: assignment_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: session_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - student
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Recovery'
+          description: ''
   /api/v1/student/sessions/{session_id}/summary/:
     get:
       operationId: student_sessions_summary_retrieve
@@ -280,6 +339,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StudentSessionSummary'
+          description: ''
+  /api/v1/student/tasks/{task_id}/recovery/:
+    get:
+      operationId: student_tasks_recovery_retrieve
+      parameters:
+      - in: path
+        name: task_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - student
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Recovery'
           description: ''
   /api/v1/student/tasks/{task_id}/results/:
     get:
@@ -3877,16 +3956,19 @@ components:
           nullable: true
         home_url:
           type: string
-        must_change_password:
+        uses_initial_password:
+          type: boolean
+        initial_password_reminder_pending:
           type: boolean
       required:
       - display_name
       - home_url
       - id
-      - must_change_password
+      - initial_password_reminder_pending
       - role
       - student_number
       - username
+      - uses_initial_password
     AttemptProcess:
       type: object
       properties:
@@ -3941,6 +4023,12 @@ components:
           type: string
         question_text:
           type: string
+        question_options:
+          type: array
+          items:
+            type: string
+        correct_answer:
+          type: string
         student_id:
           type: integer
         student_number:
@@ -3952,6 +4040,10 @@ components:
         result_label:
           type: string
         score_display:
+          type: string
+        confidence_label:
+          type: string
+        answer_time_display:
           type: string
         process:
           $ref: '#/components/schemas/AttemptProcess'
@@ -3970,6 +4062,9 @@ components:
         has_cross_instance_order_uncertainty:
           type: boolean
       required:
+      - answer_time_display
+      - confidence_label
+      - correct_answer
       - coverage_reason_labels
       - coverage_status_description
       - coverage_status_title
@@ -3984,6 +4079,7 @@ components:
       - process
       - question_code
       - question_id
+      - question_options
       - question_text
       - result_label
       - score_display
@@ -4583,101 +4679,50 @@ components:
         course:
           $ref: '#/components/schemas/CourseReference'
         scope:
-          $ref: '#/components/schemas/DataCenterResearchScope'
-        groups:
-          type: array
-          items:
-            $ref: '#/components/schemas/DataCenterAdvancedGroup'
-        selected_table:
-          $ref: '#/components/schemas/DataCenterAdvancedTable'
-        selected_experiment:
-          allOf:
-          - $ref: '#/components/schemas/DataCenterExperimentOption'
-          nullable: true
-        preview:
-          allOf:
-          - $ref: '#/components/schemas/DataCenterAdvancedPreview'
-          nullable: true
-      required:
-      - course
-      - groups
-      - preview
-      - scope
-      - selected_experiment
-      - selected_table
-    DataCenterAdvancedGroup:
-      type: object
-      properties:
-        key:
+          $ref: '#/components/schemas/DataCenterTeachingScope'
+        search:
           type: string
-        label:
-          type: string
-        description:
-          type: string
-        tables:
+        students:
           type: array
           items:
-            $ref: '#/components/schemas/DataCenterAdvancedTable'
-        active:
-          type: boolean
-      required:
-      - active
-      - description
-      - key
-      - label
-      - tables
-    DataCenterAdvancedPreview:
-      type: object
-      properties:
-        columns:
-          type: array
-          items:
-            $ref: '#/components/schemas/DataCenterPreviewColumn'
-        rows:
-          type: array
-          items:
-            type: array
-            items: {}
+            $ref: '#/components/schemas/DataCenterAdvancedStudent'
         page:
           $ref: '#/components/schemas/TeacherClassPageMetadata'
-        data_status:
-          type: string
       required:
-      - columns
-      - data_status
+      - course
       - page
-      - rows
-    DataCenterAdvancedTable:
+      - scope
+      - search
+      - students
+    DataCenterAdvancedStudent:
       type: object
       properties:
-        key:
+        student_number:
           type: string
-        label:
+        display_name:
           type: string
-        path:
+        class_name:
           type: string
-        role:
+        experiment_count:
+          type: integer
+          minimum: 0
+        progress_label:
           type: string
-        role_label:
+        status_label:
           type: string
-        description:
+        detail_url:
           type: string
-        schema_version:
+        detail_api_url:
           type: string
-        source_layer:
-          type: string
-        active:
-          type: boolean
       required:
-      - active
-      - description
-      - key
-      - label
-      - path
-      - role
-      - role_label
-      - schema_version
-      - source_layer
+      - class_name
+      - detail_api_url
+      - detail_url
+      - display_name
+      - experiment_count
+      - progress_label
+      - status_label
+      - student_number
     DataCenterClassOption:
       type: object
       properties:
@@ -4908,16 +4953,6 @@ components:
       - quality_url
       - scope_update_url
       - teaching_url
-    DataCenterPreviewColumn:
-      type: object
-      properties:
-        name:
-          type: string
-        description:
-          type: string
-      required:
-      - description
-      - name
     DataCenterQualityCollection:
       type: object
       properties:
@@ -6802,6 +6837,12 @@ components:
         value:
           type: string
           nullable: true
+        value_before:
+          type: string
+          nullable: true
+        value_after:
+          type: string
+          nullable: true
         length_before:
           type: integer
           minimum: 0
@@ -6824,6 +6865,8 @@ components:
       - occurred_at
       - time_source
       - value
+      - value_after
+      - value_before
     PublishCommit:
       type: object
       properties:
@@ -7885,6 +7928,31 @@ components:
       description: |-
         * `none` - 不展示
         * `self` - 仅本人
+    Recovery:
+      type: object
+      properties:
+        task_id:
+          type: integer
+        session_id:
+          type: integer
+        status:
+          type: string
+        code:
+          type: string
+        can_continue:
+          type: boolean
+        question_url:
+          type: string
+          nullable: true
+        submission_matches:
+          type: boolean
+        result:
+          nullable: true
+      required:
+      - can_continue
+      - code
+      - question_url
+      - status
     RemoveEnrollmentRequest:
       type: object
       properties:
@@ -8735,11 +8803,15 @@ components:
           type: integer
         code:
           type: string
+        question_summary:
+          type: string
         kcs:
           type: array
           items:
             type: string
         result_label:
+          type: string
+        score_display:
           type: string
         first_answer:
           type: string
@@ -8759,6 +8831,13 @@ components:
           type: string
         process_complete:
           type: boolean
+        confidence_label:
+          type: string
+        submission_status_label:
+          type: string
+        submitted_at:
+          type: string
+          format: date-time
         question_url:
           type: string
         process_url:
@@ -8767,15 +8846,20 @@ components:
       - answer_time_display
       - answer_time_ms
       - code
+      - confidence_label
       - final_answer
       - first_answer
       - kcs
       - process_complete
       - process_url
       - question_id
+      - question_summary
       - question_url
       - result_label
       - revision_count
+      - score_display
+      - submission_status_label
+      - submitted_at
     StudentFeedbackCapture:
       type: object
       properties:
@@ -9144,6 +9228,9 @@ components:
     StudentPasswordChange:
       type: object
       properties:
+        current_password:
+          type: string
+          writeOnly: true
         new_password1:
           type: string
           writeOnly: true
@@ -9153,6 +9240,7 @@ components:
           writeOnly: true
           minLength: 8
       required:
+      - current_password
       - new_password1
       - new_password2
     StudentResult:

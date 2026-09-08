@@ -98,11 +98,36 @@ def ensure_confidence_assignment(attempt):
         assignment = ConfidenceAssignment.objects.get(attempt=attempt)
         created = False
     if not created and any(
-        getattr(assignment, field) != value for field, value in defaults.items()
+        getattr(assignment, field) != value
+        for field, value in defaults.items() if field != "response_status"
     ):
         raise ConfidenceFlowError(
             "Stored Confidence assignment differs from the frozen experiment configuration."
         )
+    return assignment
+
+
+def validate_submission_confidence(attempt, response):
+    """Validate the final decision without recording a separate submission."""
+    assignment = ensure_confidence_assignment(attempt)
+    if assignment.condition != ConfidenceAssignment.Condition.PROMPT:
+        if response is not None:
+            raise ConfidenceFlowError("本题未分配信心评价。")
+        return None
+    if not isinstance(response, dict) or response.get('status') not in {'committed', 'skipped'}:
+        raise ConfidenceFlowError("请先评价作答信心，或明确选择跳过，再确认提交。")
+    if set(response) - {'status', 'probability', 'answer_event_id'}:
+        raise ConfidenceFlowError("信心评价内容无效。")
+    if assignment.response_status != ConfidenceAssignment.ResponseStatus.PROMPT_SHOWN:
+        raise ConfidenceFlowError("请先打开信心评价，再确认提交。")
+    if attempt.active_response_event_id is not None and str(response.get('answer_event_id')) != str(attempt.active_response_event_id):
+        raise ConfidenceFlowError("答案已发生变化，请重新评价或跳过。")
+    probability = response.get('probability')
+    if response['status'] == 'skipped':
+        if probability is not None:
+            raise ConfidenceFlowError("跳过评价不能同时填写信心值。")
+    elif isinstance(probability, bool) or not isinstance(probability, int) or not 0 <= probability <= 100 or probability % 10:
+        raise ConfidenceFlowError("请选择 0 到 100 之间、以 10 为间隔的信心值。")
     return assignment
 
 
@@ -147,8 +172,19 @@ def _append_confidence_event(assignment, *, event_type, payload):
 
 
 def _locked_assignment(*, attempt_id, student):
+    from apps.experiments.models import ClassExperimentTask
+    from .models import ExperimentSession
+
+    link = Attempt.objects.filter(pk=attempt_id, session__student=student).values_list('session_id', 'session__class_task_id').first()
+    if link is None:
+        raise ConfidenceFlowError('Confidence assignment is unavailable.')
+    session_id, task_id = link
+    if task_id:
+        ClassExperimentTask.objects.select_for_update().get(pk=task_id)
+    ExperimentSession.objects.select_for_update().get(pk=session_id)
+    Attempt.objects.select_for_update().get(pk=attempt_id)
     assignment = (
-        ConfidenceAssignment.objects.select_for_update()
+        ConfidenceAssignment.objects.select_for_update(of=('self',))
         .select_related(
             "attempt__session__version__experiment",
             "attempt__assignment__snapshot",

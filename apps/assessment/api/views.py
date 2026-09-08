@@ -359,38 +359,6 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
             pk=session_id,
             student=request.user,
         )
-        pending_confidence = (
-            ConfidenceAssignment.objects.select_related("attempt__assignment")
-            .filter(
-                attempt__session=session,
-                attempt__status=Attempt.Status.SUBMITTED,
-                condition=ConfidenceAssignment.Condition.PROMPT,
-                response_status__in=(
-                    ConfidenceAssignment.ResponseStatus.ASSIGNED,
-                    ConfidenceAssignment.ResponseStatus.PROMPT_SHOWN,
-                ),
-            )
-            .order_by("attempt__submitted_at", "attempt_id")
-            .first()
-        )
-        if (
-            pending_confidence is not None
-            and pending_confidence.attempt.assignment_id != assignment_id
-        ):
-            raise ApiConflict(
-                "请先完成当前题目的信心评价。",
-                code="CONFIDENCE_REQUIRED",
-                fields={
-                    "assignment_id": pending_confidence.attempt.assignment_id,
-                    "question_url": reverse(
-                        "assessment:question",
-                        args=[
-                            session.pk,
-                            pending_confidence.attempt.assignment_id,
-                        ],
-                    ),
-                },
-            )
         assignment = get_object_or_404(
             StudentQuestionAssignment.objects.select_related(
                 "snapshot",
@@ -463,7 +431,7 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
             "initial_response_state": _runtime_initial_response_state(attempt),
             "pending_confidence": _runtime_pending_confidence(
                 attempt,
-                pending_confidence,
+                ConfidenceAssignment.objects.filter(attempt=attempt, condition=ConfidenceAssignment.Condition.PROMPT).first() if attempt.status != Attempt.Status.SUBMITTED else None,
             ),
             "navigation": [
                 {

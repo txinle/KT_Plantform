@@ -1,4 +1,4 @@
-import { createApiClient } from '@/api/client'
+import { ApiError, createApiClient } from '@/api/client'
 import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
 
@@ -81,6 +81,17 @@ interface StudentApiClient {
 }
 
 export function createStudentCourseApi(client: StudentApiClient) {
+  async function enterTask(taskId: number, action: 'start' | 'resume'): Promise<StudentSessionEntry> {
+    try { return await client.mutate<StudentSessionEntry>(`/api/v1/student/tasks/${taskId}/${action}/`, { method: 'POST' }) }
+    catch (error) {
+      if (error instanceof ApiError && error.status < 500) throw error
+      const recovered = await client.get<StudentSessionEntry & { can_continue: boolean; code: string }>(`/api/v1/student/tasks/${taskId}/recovery/`)
+      if (recovered.can_continue && recovered.question_url) return recovered
+      if (recovered.code === 'SESSION_NOT_STARTED') throw new Error('服务器确认任务尚未开始，请重新点击开始作业。')
+      if (recovered.code === 'DEADLINE_EXPIRED') throw new Error('作答时间已截止，无法继续作答。')
+      throw new Error('任务已结束或关闭，请刷新任务列表查看结果。')
+    }
+  }
   return {
     courses: () => client.get<StudentCourseCollection>('/api/v1/student/courses/'),
     tasks: (courseId: number) => client.get<StudentTaskCollection>(`/api/v1/student/courses/${courseId}/tasks/`),
@@ -88,8 +99,8 @@ export function createStudentCourseApi(client: StudentApiClient) {
     learningExperiment: (courseId: number, experimentId: number) => client.get<StudentLearningExperiment>(`/api/v1/student/courses/${courseId}/learning/experiments/${experimentId}/`),
     learningQuestion: (courseId: number, experimentId: number, questionId: number) => client.get<StudentLearningQuestion>(`/api/v1/student/courses/${courseId}/learning/experiments/${experimentId}/questions/${questionId}/`),
     result: (taskId: number) => client.get<StudentResult>(`/api/v1/student/tasks/${taskId}/results/`),
-    start: (taskId: number) => client.mutate<StudentSessionEntry>(`/api/v1/student/tasks/${taskId}/start/`, { method: 'POST' }),
-    resume: (taskId: number) => client.mutate<StudentSessionEntry>(`/api/v1/student/tasks/${taskId}/resume/`, { method: 'POST' }),
+    start: (taskId: number) => enterTask(taskId, 'start'),
+    resume: (taskId: number) => enterTask(taskId, 'resume'),
   }
 }
 

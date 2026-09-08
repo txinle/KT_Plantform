@@ -349,44 +349,20 @@ class DataCenterExportHistoryCollectionSerializer(serializers.Serializer):
     course = CourseReferenceSerializer()
 
 
-class DataCenterAdvancedTableSerializer(serializers.Serializer):
-    key = serializers.CharField()
-    label = serializers.CharField()
-    path = serializers.CharField()
-    role = serializers.CharField()
-    role_label = serializers.CharField()
-    description = serializers.CharField()
-    schema_version = serializers.CharField()
-    source_layer = serializers.CharField()
-    active = serializers.BooleanField()
-
-
-class DataCenterAdvancedGroupSerializer(serializers.Serializer):
-    key = serializers.CharField()
-    label = serializers.CharField()
-    description = serializers.CharField()
-    tables = DataCenterAdvancedTableSerializer(many=True)
-    active = serializers.BooleanField()
-
-
-class DataCenterPreviewColumnSerializer(serializers.Serializer):
-    name = serializers.CharField()
-    description = serializers.CharField()
-
-
-class DataCenterAdvancedPreviewSerializer(serializers.Serializer):
-    columns = DataCenterPreviewColumnSerializer(many=True)
-    rows = serializers.ListField(
-        child=serializers.ListField(child=serializers.JSONField())
-    )
-    page = TeacherClassPageMetadataSerializer()
-    data_status = serializers.CharField()
+class DataCenterAdvancedStudentSerializer(serializers.Serializer):
+    student_number = serializers.CharField()
+    display_name = serializers.CharField()
+    class_name = serializers.CharField()
+    experiment_count = serializers.IntegerField(min_value=0)
+    progress_label = serializers.CharField()
+    status_label = serializers.CharField()
+    detail_url = serializers.CharField()
+    detail_api_url = serializers.CharField()
 
 
 class DataCenterAdvancedSerializer(serializers.Serializer):
     course = CourseReferenceSerializer()
-    scope = DataCenterResearchScopeSerializer()
-    groups = DataCenterAdvancedGroupSerializer(many=True)
-    selected_table = DataCenterAdvancedTableSerializer()
-    selected_experiment = DataCenterExperimentOptionSerializer(allow_null=True)
-    preview = DataCenterAdvancedPreviewSerializer(allow_null=True)
+    scope = DataCenterTeachingScopeSerializer()
+    search = serializers.CharField()
+    students = DataCenterAdvancedStudentSerializer(many=True)
+    page = TeacherClassPageMetadataSerializer()

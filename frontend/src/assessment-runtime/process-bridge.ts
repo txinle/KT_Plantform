@@ -1,5 +1,6 @@
 import type { StudentRuntimeQuestionEntry } from './api'
 import { ensureProcessCollector } from './collector-loader'
+import type { SubmissionConfidence } from './api'
 
 type ProcessState = StudentRuntimeQuestionEntry['process']
 
@@ -26,13 +27,15 @@ interface SyncUrls {
 }
 
 interface ProcessDataApi {
-  defaultOutbox(): Promise<{ isFallback?: boolean; restoreResponse?(sessionId: number, attemptId: number): Promise<RestoredResponse | null>; clearResponseRecovery?(sessionId: number, attemptId: number): Promise<void> }>
+  defaultOutbox(): Promise<{ isFallback?: boolean; restoreResponse?(sessionId: number, attemptId: number): Promise<RestoredResponse | null>; clearResponseRecovery?(sessionId: number, attemptId: number): Promise<void>; restoreSubmissionIntent?(sessionId: number, attemptId: number): Promise<SubmissionIntent | null>; saveSubmissionIntent?(sessionId: number, attemptId: number, intent: SubmissionIntent | null): Promise<void> }>
   ProcessEventCollector: new (options: Record<string, unknown>) => ProcessCollector
   bindLifecycle(collector: ProcessCollector, options: Record<string, unknown>): ProcessLifecycle
   DEFAULT_SYNC_INTERVAL_MS: number
 }
 
 export interface StudentProcessRuntime {
+  restoredSubmission?: SubmissionIntent | null
+  saveSubmissionIntent?(intent: SubmissionIntent | null): Promise<void>
   clientInstanceId?: string
   clearResponseRecovery?(): Promise<void | undefined>
   restoredResponse?: RestoredResponse | null
@@ -41,6 +44,14 @@ export interface StudentProcessRuntime {
   flushBounded(timeoutMs: number): Promise<unknown>
   closeAttempt(reason: string, toAssignmentId?: number | null): Promise<unknown>
   dispose(): void
+}
+
+export interface SubmissionIntent {
+  token: string
+  clickedAt: string
+  answer: string
+  head?: string | null
+  confidence?: SubmissionConfidence
 }
 
 export interface RestoredResponse {
@@ -85,6 +96,11 @@ export async function createProcessRuntime(
   collector.startSynchronization(syncUrls, processApi.DEFAULT_SYNC_INTERVAL_MS, false)
 
   return {
+    restoredSubmission: await outbox.restoreSubmissionIntent?.(processState.session_id, processState.attempt_id),
+    saveSubmissionIntent: async (intent) => {
+      if (!outbox.saveSubmissionIntent) throw new Error('本地提交记录不可用，请刷新页面后重试。')
+      await outbox.saveSubmissionIntent(processState.session_id, processState.attempt_id, intent)
+    },
     clientInstanceId: collector.clientInstanceId,
     clearResponseRecovery: () => outbox.clearResponseRecovery?.(processState.session_id, processState.attempt_id) || Promise.resolve(),
     restoredResponse: processState.capture_version === 'capture-v2'

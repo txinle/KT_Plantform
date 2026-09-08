@@ -6,6 +6,8 @@ import uuid
 from django.test import SimpleTestCase
 from django.utils import timezone
 
+from apps.assessment.response_snapshot_services import ResponseState
+
 from .teaching.process import ProcessCompleteness, project_attempt_process
 
 
@@ -39,6 +41,144 @@ class AttemptProcessProjectionTests(SimpleTestCase):
             content_length=len(value),
             state_json={"question_type": "numeric", "value": value},
         )
+
+    def _capture_v2_event(
+        self,
+        sequence,
+        before,
+        after,
+        *,
+        event_id=None,
+        parent_event_id=None,
+        attempt_id=7,
+        event_type="response_transition",
+        payload=None,
+    ):
+        event_id = event_id or uuid.uuid4()
+        if payload is None:
+            before_state = ResponseState("short_answer", before)
+            after_state = ResponseState("short_answer", after)
+            payload = {
+                "capture_version": "capture-v2",
+                "parent_event_id": (
+                    str(parent_event_id) if parent_event_id is not None else None
+                ),
+                "before_state": before_state.state_json,
+                "after_state": after_state.state_json,
+                "before_state_hash": before_state.state_hash,
+                "after_state_hash": after_state.state_hash,
+                "input_type": "insertText",
+                "source": "student",
+            }
+        return SimpleNamespace(
+            event_id=event_id,
+            attempt_id=attempt_id,
+            event_type=event_type,
+            payload=payload,
+            server_ingest_sequence_no=sequence,
+            client_instance_id="capture-client",
+            client_sequence_no=sequence,
+            client_monotonic_ms=sequence * 100,
+            client_time_origin=self.generated_at,
+            estimated_occurred_at_utc=None,
+            server_received_at=self.generated_at + timedelta(seconds=sequence),
+        )
+
+    def _capture_v2_projection(self, transitions, *, final_event, final_answer, commit=True):
+        final_state = ResponseState("short_answer", final_answer)
+        final_snapshot = SimpleNamespace(
+            pk="final-snapshot",
+            attempt_id=7,
+            state_hash=final_state.state_hash,
+            content_hash="unused",
+            content_length=len(final_answer),
+            state_json=final_state.state_json,
+        )
+        submission = SimpleNamespace(
+            pk=31,
+            attempt_id=7,
+            submission_token=uuid.uuid4(),
+            final_answer=final_answer,
+            final_response_snapshot_id="final-snapshot",
+            committed_at=self.generated_at + timedelta(seconds=20),
+        )
+        events = list(transitions)
+        if commit:
+            events.append(self._capture_v2_event(
+                21,
+                None,
+                None,
+                event_type="response_committed",
+                payload={
+                    "submission_token": str(submission.submission_token),
+                    "submission_id": submission.pk,
+                    "final_response_snapshot_id": "final-snapshot",
+                    "committed_at": submission.committed_at.isoformat(),
+                },
+            ))
+        return project_attempt_process(
+            generated_at=self.generated_at,
+            attempt_id=7,
+            question_type="short_answer",
+            events=events,
+            snapshots=(final_snapshot,),
+            observations=(),
+            final_answer=final_answer,
+            final_snapshot_id="final-snapshot",
+            submitted_at=submission.committed_at,
+            final_response_event_id=str(final_event.event_id),
+            formal_capture_boundary={
+                "active_response_event_id": str(final_event.event_id),
+                "server_ingest_sequence_no": 20,
+                "student_id": 9,
+            },
+            submission=submission,
+        )
+
+    def test_capture_v2_rebuilds_only_selected_head_and_keeps_a_b_a_and_clear(self):
+        first = self._capture_v2_event(4, "", "A")
+        second = self._capture_v2_event(2, "A", "B", parent_event_id=first.event_id)
+        cleared = self._capture_v2_event(7, "B", "", parent_event_id=second.event_id)
+        final = self._capture_v2_event(5, "", "A", parent_event_id=cleared.event_id)
+        discarded_branch = self._capture_v2_event(8, "A", "草稿分支", parent_event_id=first.event_id)
+
+        projection = self._capture_v2_projection(
+            (discarded_branch, final, second, first, cleared),
+            final_event=final,
+            final_answer="A",
+        )
+
+        self.assertEqual(projection.completeness, ProcessCompleteness.COMPLETE)
+        self.assertEqual(
+            [(step.value_before, step.value_after) for step in projection.steps[:-1]],
+            [("（空）", "A"), ("A", "B"), ("B", "（空）"), ("（空）", "A")],
+        )
+        self.assertEqual(projection.final_value, "A")
+        self.assertEqual([(step.length_before, step.length_after) for step in projection.steps[:-1]], [(0, 1), (1, 1), (1, 0), (0, 1)])
+        self.assertNotIn("草稿分支", str(asdict(projection)))
+
+    def test_capture_v2_requires_provable_parent_submission_and_commit_consistency(self):
+        missing_parent = self._capture_v2_event(
+            2,
+            "A",
+            "B",
+            parent_event_id=uuid.uuid4(),
+        )
+        missing_chain = self._capture_v2_projection(
+            (missing_parent,), final_event=missing_parent, final_answer="B"
+        )
+        root = self._capture_v2_event(1, "", "A")
+        missing_commit = self._capture_v2_projection(
+            (root,),
+            final_event=root,
+            final_answer="A",
+            commit=False,
+        )
+
+        self.assertEqual(missing_chain.completeness, ProcessCompleteness.INCOMPLETE)
+        self.assertEqual(missing_chain.steps, ())
+        self.assertEqual(missing_commit.completeness, ProcessCompleteness.INCOMPLETE)
+        self.assertEqual(missing_commit.steps, ())
 
     def test_single_choice_projects_value_chain_and_choice_revision_count(self):
         events = [

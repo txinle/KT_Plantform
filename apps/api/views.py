@@ -9,7 +9,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.views import resolve_home_url
-from apps.accounts.password_services import change_student_password, password_change_required
+from apps.accounts.password_services import (
+    acknowledge_initial_password_reminder,
+    change_student_password,
+)
 from apps.accounts.student_identity import StudentIdentityError
 from .exceptions import ApiBusinessError
 
@@ -31,7 +34,8 @@ def session_context(user):
             "username": user.username,
             "student_number": user.student_number,
             "home_url": resolve_home_url(user),
-            "must_change_password": password_change_required(user),
+            "uses_initial_password": user.uses_initial_password,
+            "initial_password_reminder_pending": user.initial_password_reminder_pending,
         }
     }
 
@@ -90,6 +94,21 @@ class StudentPasswordChangeView(APIView):
             raise ApiBusinessError("；".join(exc.messages), code=exc.business_code, fields=exc.fields, status=exc.status_code) from exc
         except DjangoValidationError as exc:
             raise ValidationError(exc.message_dict if hasattr(exc, "message_dict") else exc.messages) from exc
+        return Response(session_context(student))
+
+
+class InitialPasswordReminderShownView(APIView):
+    @extend_schema(request=None, responses=SessionContextSerializer)
+    def post(self, request):
+        try:
+            student = acknowledge_initial_password_reminder(request=request._request)
+        except StudentIdentityError as exc:
+            raise ApiBusinessError(
+                "；".join(exc.messages),
+                code=exc.business_code,
+                fields=exc.fields,
+                status=exc.status_code,
+            ) from exc
         return Response(session_context(student))
 
 

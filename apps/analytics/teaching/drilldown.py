@@ -11,6 +11,7 @@ from apps.accounts.models import CourseEnrollment, User
 from apps.assessment.models import (
     AssessmentEvent,
     Attempt,
+    ConfidenceAssignment,
     ExperimentSession,
     GradeRecord,
     ResponseInputObservation,
@@ -108,12 +109,16 @@ class AttemptProcessDetail:
     question_id: int
     question_code: str
     question_text: str
+    question_options: tuple[str, ...]
+    correct_answer: str
     student_id: int
     student_number: str
     display_name: str
     is_current_member: bool
     result_label: str
     score_display: str
+    confidence_label: str
+    answer_time_display: str
     process: AttemptProcessProjection
     coverage_status_title: str
     coverage_status_description: str
@@ -195,13 +200,18 @@ class StudentExperimentQuestionRow:
     generated_at: datetime
     question_id: int
     code: str
+    question_summary: str
     kcs: tuple[str, ...]
     result_label: str
+    score_display: str
     first_answer: str | None
     final_answer: str
     revision_count: int | None
     answer_time_ms: Decimal | None
     process_complete: bool
+    confidence_label: str
+    submission_status_label: str
+    submitted_at: datetime
 
     @property
     def answer_time_display(self):
@@ -253,6 +263,20 @@ def _mean(values):
     if not values:
         return None
     return sum(values, Decimal("0")) / Decimal(len(values))
+
+
+def _confidence_label(attempt):
+    try:
+        confidence = attempt.confidence_assignment
+    except ConfidenceAssignment.DoesNotExist:
+        return "未采集"
+    if confidence.condition in {"not_assigned", "control"}:
+        return "未采集"
+    if confidence.response_status == "committed":
+        return f"{confidence.probability}%"
+    if confidence.response_status == "skipped":
+        return "已跳过"
+    return "未完成"
 
 
 def _task_and_question(class_group, experiment_id, question_id):
@@ -341,6 +365,7 @@ def _process_map(generated_at, attempts, submission_by_attempt):
         attempt_id__in=attempt_ids,
         event_type__in=(
             "item_entered", "item_rendered", "item_left",
+            "response_transition",
             "response_state_changed", "text_edit_observed",
             "response_commit_requested",
             "response_committed", "response_commit_rejected", "attempt_closed",
@@ -379,7 +404,25 @@ def _process_map(generated_at, attempts, submission_by_attempt):
             final_answer=submission.final_answer,
             final_snapshot_id=submission.final_response_snapshot_id,
             submitted_at=submission.committed_at,
+            final_response_event_id=attempt.final_response_event_id,
+            formal_capture_boundary=attempt.formal_capture_boundary,
+            submission=submission,
         )
+        if any(
+            event.event_type == "response_transition"
+            for event in events_by_attempt[attempt.pk]
+        ):
+            projections[attempt.pk] = replace(
+                projection,
+                steps=tuple(
+                    replace(
+                        step,
+                        time_source=event_time_source_message(step.time_source),
+                    )
+                    for step in projection.steps
+                ),
+            )
+            continue
         fact_labels = {
             "item_entered": "进入题目",
             "item_rendered": "题目可交互",
@@ -742,12 +785,16 @@ def build_attempt_process_detail(
             question_id=question.pk,
             question_code=question.code,
             question_text=display_text(question.text),
+            question_options=tuple(option.display for option in options_for_snapshot(question)),
+            correct_answer=format_answer(question.question_type, question.correct_answer, options_for_snapshot(question)),
             student_id=student.pk,
             student_number=student.student_number or student.username,
             display_name=student.shown_name,
             is_current_member=student.pk in current_ids,
             result_label=_result_label(grade),
             score_display=score_display,
+            confidence_label=_confidence_label(attempt),
+            answer_time_display=(f"{attempt.first_to_submit_duration_ms / 1000:.1f}s" if attempt.first_to_submit_duration_ms is not None and attempt.first_to_submit_duration_ms >= 0 else "—"),
             process=process,
             coverage_status_title=status_message.title,
             coverage_status_description=status_message.description,
@@ -1172,7 +1219,7 @@ def build_student_experiment_detail(
         session_by_id = {session.pk: session for session in sessions}
         attempts = tuple(
             Attempt.objects.filter(session_id__in=session_by_id).select_related(
-                "session__student", "assignment__snapshot"
+                "session__student", "assignment__snapshot", "confidence_assignment"
             )
         )
         attempt_by_id = {attempt.pk: attempt for attempt in attempts}
@@ -1221,13 +1268,22 @@ def build_student_experiment_detail(
                 continue
             projection = projections.get(attempt.pk)
             grade = grade_by_attempt.get(attempt.pk)
+            score_display = "—"
+            if grade is not None and grade.score is not None and grade.max_score is not None:
+                score_display = (
+                    f"{format(grade.score.normalize(), 'f')} / "
+                    f"{format(grade.max_score.normalize(), 'f')}"
+                )
+            confidence_label = _confidence_label(attempt)
             question_rows.append(
                 StudentExperimentQuestionRow(
                     generated_at=generated_at,
                     question_id=question.pk,
                     code=question.code,
+                    question_summary=display_text(question.text)[:160],
                     kcs=tuple(dict.fromkeys(question.all_kcs or [question.primary_kc])),
                     result_label=_result_label(grade),
+                    score_display=score_display,
                     first_answer=projection.first_value if projection else None,
                     final_answer=(
                         projection.final_value
@@ -1252,6 +1308,9 @@ def build_student_experiment_detail(
                         projection is not None
                         and projection.completeness == ProcessCompleteness.COMPLETE
                     ),
+                    confidence_label=confidence_label,
+                    submission_status_label="已正式提交",
+                    submitted_at=submission.committed_at,
                 )
             )
         durations = tuple(

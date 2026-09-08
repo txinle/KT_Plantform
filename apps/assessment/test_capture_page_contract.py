@@ -32,7 +32,7 @@ class CapturePageContractTests(StudentApiFixtureMixin, TestCase):
         self.assertNotIn('X-Capture-Contract', response)
         self.assertNotIn('X-Capture-Contract', self.client.get('/login/'))
 
-    def test_unauthenticated_outsider_and_forced_password_change_cannot_receive_contract(self):
+    def test_only_authorized_students_receive_contract_and_initial_password_does_not_block(self):
         self.client.logout()
         anonymous = self.client.get(self.url)
         self.assertEqual(anonymous.status_code, 302)
@@ -41,9 +41,9 @@ class CapturePageContractTests(StudentApiFixtureMixin, TestCase):
         outsider = self.client.get(self.url)
         self.assertEqual(outsider.status_code, 404)
         self.assertNotIn('X-Capture-Contract', outsider)
-        self.student.must_change_password = True
-        self.student.save(update_fields=['must_change_password'])
+        self.student.uses_initial_password = True
+        self.student.save(update_fields=['uses_initial_password'])
         self.client.force_login(self.student)
         change = self.client.get(self.url)
-        self.assertEqual(change.status_code, 302)
-        self.assertNotIn('X-Capture-Contract', change)
+        self.assertEqual(change.status_code, 200)
+        self.assertEqual(change['X-Capture-Contract'], 'capture-v2')

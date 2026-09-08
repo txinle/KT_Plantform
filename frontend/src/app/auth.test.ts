@@ -29,7 +29,8 @@ describe('authentication API', () => {
         username: 'teacher',
         student_number: null,
         home_url: '/teacher/courses/',
-        must_change_password: false,
+      uses_initial_password: false,
+      initial_password_reminder_pending: false,
       },
     }
     const refreshBootstrapContext = vi.fn().mockResolvedValue(refreshedContext)
@@ -67,19 +68,20 @@ describe('authentication API', () => {
       .toBe('/teacher/courses/')
   })
 
-  it('ignores next and enters password change when the session requires it', () => {
+  it('preserves a safe next path when the student still uses the initial password', () => {
     const user = {
       id: 8,
       role: 'student',
       display_name: '待改密学生',
       username: 'S001',
       student_number: 'S001',
-      home_url: '/password/change/',
-      must_change_password: true,
+      home_url: '/student/',
+      uses_initial_password: true,
+      initial_password_reminder_pending: true,
     }
 
-    expect(loginDestination(user, '/student/courses/3/')).toBe('/password/change/')
-    expect(authenticatedEntryRedirect(user, '/student/courses/3/')).toBe('/password/change/')
+    expect(loginDestination(user, '/student/courses/3/')).toBe('/student/courses/3/')
+    expect(authenticatedEntryRedirect(user, '/student/courses/3/')).toBeUndefined()
     expect(authenticatedEntryRedirect(user, '/password/change/')).toBeUndefined()
   })
 
@@ -94,7 +96,8 @@ describe('authentication API', () => {
         username: 'S001',
         student_number: 'S001',
         home_url: '/student/',
-        must_change_password: false,
+        uses_initial_password: false,
+        initial_password_reminder_pending: false,
       },
     }
     const refreshBootstrapContext = vi.fn().mockResolvedValue(refreshedContext)
@@ -105,10 +108,14 @@ describe('authentication API', () => {
       clearBootstrapContext: vi.fn(),
     })
 
-    await expect(api.changePassword('new-password', 'new-password')).resolves.toEqual(refreshedContext)
+    await expect(api.changePassword('current-password', 'new-password', 'new-password')).resolves.toEqual(refreshedContext)
     expect(fetchImpl).toHaveBeenCalledWith('/api/v1/auth/password/change/', expect.objectContaining({
       method: 'POST',
-      body: JSON.stringify({ new_password1: 'new-password', new_password2: 'new-password' }),
+      body: JSON.stringify({
+        current_password: 'current-password',
+        new_password1: 'new-password',
+        new_password2: 'new-password',
+      }),
     }))
     expect(refreshBootstrapContext).toHaveBeenCalledWith({ force: true })
   })
@@ -121,11 +128,32 @@ describe('authentication API', () => {
       username: 'teacher',
       student_number: null,
       home_url: '/teacher/courses/',
-      must_change_password: false,
+        uses_initial_password: false,
+        initial_password_reminder_pending: false,
     }
 
     expect(authenticatedEntryRedirect(user, '/password/change/')).toBe('/teacher/courses/')
     expect(authenticatedEntryRedirect(user, '/teacher/courses/')).toBeUndefined()
+  })
+
+  it('confirms a rendered initial-password reminder without refreshing the session', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    const api = createAuthenticationApi({
+      fetchImpl: fetchImpl as typeof fetch,
+      getCsrfToken: () => 'csrf-token',
+      refreshBootstrapContext: vi.fn(),
+      clearBootstrapContext: vi.fn(),
+    })
+
+    await expect(api.markInitialPasswordReminderShown()).resolves.toBeUndefined()
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/v1/auth/password/reminder-shown/',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json', 'X-CSRFToken': 'csrf-token' },
+      }),
+    )
   })
 
   it('redirects only a structured authentication failure from password change to login', () => {

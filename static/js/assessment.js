@@ -11,6 +11,7 @@
   const feedback = document.getElementById('feedback');
   const submitDialog = document.getElementById('submit-confirm-dialog');
   const submitConfirm = submitDialog?.querySelector('[data-confirm-action]');
+  const submitDismissControls = submitDialog?.querySelectorAll('[data-bs-dismiss="modal"]') || [];
   const confidencePanel = document.getElementById('confidence-panel');
   const confidenceInput = document.getElementById('confidence-probability');
   const confidenceValue = document.getElementById('confidence-value');
@@ -37,13 +38,27 @@
   let textObservationTimer = null;
   let pendingTextObservation = null;
   let processLifecycle = null;
+  let processOutbox = null;
+  let processInitializationError = null;
   let confidencePromptPromise = null;
+  let submissionConfidence = null;
+  let confirmationAnswer = null;
+  let confidenceTouched = false;
+  let confirmationGeneration = 0;
+  let pendingSubmission = null;
+  let submissionIntentLoaded = false;
+  let submissionOutcomeUnknown = false;
+  let recoveryPromise = null;
+  let submissionAccepted = form.dataset.attemptStatus === 'submitted';
   let lastRecordedResponseState = initialResponseState;
+
+  if (submitBtn) submitBtn.disabled = true;
 
   const processApi = window.KTProcessData;
   const processReady = (async () => {
     if (!processApi) return null;
     const outbox = await processApi.defaultOutbox();
+    processOutbox = outbox;
     const collector = new processApi.ProcessEventCollector({
       sessionId: Number(form.dataset.processSessionId),
       attemptId: Number(form.dataset.processAttemptId),
@@ -66,7 +81,10 @@
     collector.synchronizeClock(syncUrls).then(() => collector.flush());
     collector.startSynchronization(syncUrls, processApi.DEFAULT_SYNC_INTERVAL_MS, false);
     return collector;
-  })().catch(() => null);
+  })().catch((error) => {
+    processInitializationError = error;
+    return null;
+  });
 
   async function recordProcessEvent(eventType, payload, options = {}) {
     try {
@@ -169,9 +187,12 @@
   function hideSubmitDialog() {
     const modal = window.bootstrap?.Modal.getOrCreateInstance(submitDialog);
     if (!modal) return;
+    if (submitDialog.classList.contains('show')) {
+      modal.hide();
+      return;
+    }
     const hideAfterShow = () => modal.hide();
     submitDialog.addEventListener('shown.bs.modal', hideAfterShow, { once: true });
-    modal.hide();
   }
 
   const escapeCss = (value) => window.CSS && CSS.escape ? CSS.escape(value) : value.replace(/["']/g, '\\$&');
@@ -253,10 +274,73 @@
     return data;
   }
 
-  function lockAnswerControls() {
-    form.querySelectorAll('[name="answer"]').forEach((element) => {
-      element.disabled = true;
+  async function get(url) {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      credentials: 'same-origin',
+      cache: 'no-store',
     });
+    let data;
+    try {
+      data = await response.json();
+    } catch (_error) {
+      throw new Error('服务器返回了无法识别的核验结果，请稍后重试。');
+    }
+    if (!response.ok) {
+      const message = typeof data.error === 'string'
+        ? data.error
+        : data.error?.message || '暂时无法核验提交结果，请稍后重试。';
+      throw new Error(message);
+    }
+    return data;
+  }
+
+  async function submissionOutbox() {
+    await processReady;
+    if (
+      !processOutbox?.saveSubmissionIntent
+      || !processOutbox?.restoreSubmissionIntent
+    ) {
+      throw processInitializationError || new Error('本地提交记录不可用，请刷新页面后重试。');
+    }
+    return processOutbox;
+  }
+
+  async function persistSubmissionIntent(intent) {
+    try {
+      const outbox = await submissionOutbox();
+      await outbox.saveSubmissionIntent(
+        Number(form.dataset.processSessionId),
+        Number(form.dataset.processAttemptId),
+        intent,
+      );
+    } catch (_error) {
+      throw new Error(intent
+        ? '本地提交记录保存失败，请不要关闭页面，刷新后重试。'
+        : '本地提交记录清理失败，请刷新页面后核验。');
+    }
+  }
+
+  function submissionRecoveryUrl(token) {
+    const separator = form.dataset.recoveryUrl.includes('?') ? '&' : '?';
+    return `${form.dataset.recoveryUrl}${separator}submission_token=${encodeURIComponent(token)}`;
+  }
+
+  function setAnswerControlsDisabled(disabled) {
+    form.querySelectorAll('[name="answer"]').forEach((element) => {
+      element.disabled = disabled;
+    });
+  }
+
+  function setSubmitDismissDisabled(disabled) {
+    submitDismissControls.forEach((element) => {
+      element.disabled = disabled;
+    });
+  }
+
+  function lockAnswerControls() {
+    setAnswerControlsDisabled(true);
     skipBtn?.remove();
     if (submitBtn) {
       submitBtn.closest('.sticky-actions')?.remove();
@@ -288,7 +372,7 @@
     }
   }
 
-  async function showConfidencePrompt(contract) {
+  async function showConfidencePrompt(contract, generation) {
     if (!confidencePanel || !confidenceInput || !confidenceStatus) {
       throw new Error('信心评价界面加载失败，请刷新页面后重试。');
     }
@@ -302,40 +386,102 @@
     confidenceStatus.className = 'save-status is-saving mt-2';
     confidenceInput.focus();
     confidencePanel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    confidencePromptPromise = post(contract.prompt_shown_url, {})
-      .then(() => {
-        confidenceStatus.textContent = '请选择把握程度，或跳过评价';
-        confidenceStatus.className = 'save-status mt-2';
-        return true;
-      })
-      .catch((error) => {
-        confidenceStatus.textContent = '评价表状态同步失败，请重试';
-        confidenceStatus.className = 'save-status is-error mt-2';
-        throw error;
-      });
-    return confidencePromptPromise;
+    confidencePromptPromise = post(contract.prompt_shown_url, {});
+    try {
+      await confidencePromptPromise;
+      if (generation !== confirmationGeneration) return false;
+      confidenceStatus.textContent = '请选择把握程度，或跳过评价';
+      confidenceStatus.className = 'save-status mt-2';
+      return true;
+    } catch (error) {
+      if (generation !== confirmationGeneration) return false;
+      confidenceStatus.textContent = '评价表状态同步失败，请重试';
+      confidenceStatus.className = 'save-status is-error mt-2';
+      throw error;
+    }
   }
 
-  async function resolveConfidence(url, payload) {
-    confidenceSubmit.disabled = true;
-    confidenceSkip.disabled = true;
-    confidenceStatus.textContent = '正在保存评价';
-    confidenceStatus.className = 'save-status is-saving mt-2';
+  async function resolveConfidence(skip) {
+    if (!skip && !confidenceTouched) return;
+    const generation = confirmationGeneration;
+    const confidence = skip
+      ? { status: 'skipped' }
+      : { status: 'committed', probability: Number(confidenceInput.value) };
     clearError();
     try {
       await confidencePromptPromise;
-      const data = await post(url, payload);
+      if (generation !== confirmationGeneration) return;
+      submissionConfidence = confidence;
       confidencePanel.hidden = true;
-      await renderFeedback(data);
-      window.setTimeout(() => { window.location.href = data.next_url; }, 650);
+      window.bootstrap.Modal.getOrCreateInstance(submitDialog).show();
     } catch (error) {
-      showError(error.message, true);
-      confidenceSubmit.disabled = false;
-      confidenceSkip.disabled = false;
-      confidenceStatus.textContent = '保存失败，可重新提交或跳过';
-      confidenceStatus.className = 'save-status is-error mt-2';
+      if (generation === confirmationGeneration) showError(error.message, true);
     }
   }
+
+  async function returnToAnswer() {
+    const clearStoredIntent = Boolean(pendingSubmission)
+      || submissionOutcomeUnknown
+      || !submissionIntentLoaded;
+    confirmationGeneration += 1;
+    pendingSubmission = null;
+    submissionOutcomeUnknown = false;
+    submissionConfidence = null;
+    confirmationAnswer = null;
+    confidenceTouched = false;
+    confidencePanel.hidden = true;
+    submitting = clearStoredIntent;
+    form.removeAttribute('aria-busy');
+    setAnswerControlsDisabled(false);
+    setSubmitDismissDisabled(false);
+    if (submitConfirm) {
+      submitConfirm.disabled = false;
+      submitConfirm.textContent = '提交并锁定';
+    }
+    if (clearStoredIntent) {
+      try {
+        await persistSubmissionIntent(null);
+        submissionIntentLoaded = true;
+      } catch (error) {
+        showError(error.message, true);
+        return false;
+      }
+    }
+    submitting = false;
+    if (submitBtn) submitBtn.disabled = false;
+    return true;
+  }
+  document.getElementById('confidence-return-btn')?.addEventListener('click', returnToAnswer);
+  submitDismissControls.forEach((element) => element.addEventListener('click', () => {
+    if (!submitting && !submissionOutcomeUnknown) returnToAnswer();
+  }));
+  form.addEventListener('input', (event) => {
+    if (event.target === confidenceInput || confidencePanel.contains(event.target)) return;
+    if (submitting || submissionOutcomeUnknown) return;
+    returnToAnswer();
+  });
+  submitBtn?.addEventListener('click', async () => {
+    if (submissionAccepted || submissionOutcomeUnknown || submitting) return;
+    if (pendingSubmission) {
+      window.bootstrap.Modal.getOrCreateInstance(submitDialog).show();
+      return;
+    }
+    confirmationGeneration += 1;
+    const generation = confirmationGeneration;
+    confirmationAnswer = JSON.stringify(collect());
+    if (pendingConfidence) {
+      confidenceTouched = false;
+      confidenceSubmit.disabled = true;
+      confidenceInput.value = '50';
+      confidenceValue.textContent = '请选择';
+      submissionConfidence = null;
+      submitBtn.disabled = true;
+      try { await showConfidencePrompt(pendingConfidence, generation); }
+      catch (error) {
+        if (generation === confirmationGeneration) showError(error.message, true);
+      }
+    } else window.bootstrap.Modal.getOrCreateInstance(submitDialog).show();
+  });
 
   async function recordSavedResponse(data, source) {
     if (!data) return;
@@ -461,9 +607,106 @@
     }
   });
 
+  async function acceptSubmission(data) {
+    let persistenceError = null;
+    try {
+      await persistSubmissionIntent(null);
+      submissionIntentLoaded = true;
+      pendingSubmission = null;
+    } catch (error) {
+      persistenceError = error;
+    }
+    submissionAccepted = true;
+    submissionOutcomeUnknown = false;
+    hideSubmitDialog();
+    lockAnswerControls();
+    await closeProcessAttempt('submit');
+    form.removeAttribute('aria-busy');
+    await renderFeedback(data);
+    if (persistenceError) showError(persistenceError.message, true);
+    window.setTimeout(() => { window.location.href = data.next_url; }, 650);
+  }
+
+  async function recoverSubmission() {
+    if (!pendingSubmission) return;
+    if (recoveryPromise) return recoveryPromise;
+    const intent = pendingSubmission;
+    submissionOutcomeUnknown = true;
+    submitting = true;
+    window.clearTimeout(debounceTimer);
+    debounceTimer = null;
+    setAnswerControlsDisabled(true);
+    setSubmitDismissDisabled(true);
+    if (submitBtn) submitBtn.disabled = true;
+    submitConfirm.disabled = true;
+    submitConfirm.textContent = '正在核验';
+    form.setAttribute('aria-busy', 'true');
+    showError('正在核验服务器上的提交结果…', true);
+    window.bootstrap.Modal.getOrCreateInstance(submitDialog).show();
+    recoveryPromise = (async () => {
+      try {
+        const recovered = await get(submissionRecoveryUrl(intent.token));
+        if (recovered.result) {
+          await acceptSubmission(recovered.result);
+          return;
+        }
+        submissionOutcomeUnknown = false;
+        submitting = false;
+        form.removeAttribute('aria-busy');
+        if (!recovered.can_continue) {
+          let message = recovered.code === 'DEADLINE_EXPIRED'
+            ? '作答时间已截止，本次答案未正式提交。'
+            : '任务已关闭，本次答案未正式提交。';
+          try {
+            await persistSubmissionIntent(null);
+            submissionIntentLoaded = true;
+            pendingSubmission = null;
+          } catch (error) {
+            message = `${message} ${error.message}`;
+          }
+          lockAnswerControls();
+          hideSubmitDialog();
+          showError(message, true);
+          return;
+        }
+        if (intent.answer !== JSON.stringify(collect())) {
+          const cleared = await returnToAnswer();
+          hideSubmitDialog();
+          showError(cleared
+            ? '服务器确认尚未提交。已保留当前草稿，请重新评价并确认。'
+            : '服务器确认尚未提交，但本地提交记录清理失败，请刷新后核验。', true);
+          return;
+        }
+        confirmationAnswer = intent.answer;
+        submissionConfidence = intent.confidence || null;
+        setSubmitDismissDisabled(false);
+        submitConfirm.disabled = false;
+        submitConfirm.textContent = '提交并锁定';
+        if (submitBtn) submitBtn.disabled = false;
+        window.bootstrap.Modal.getOrCreateInstance(submitDialog).show();
+        showError('服务器确认尚未提交。可以重试本次提交，或返回修改答案；计时继续。', true);
+      } catch (_error) {
+        submitting = false;
+        form.removeAttribute('aria-busy');
+        submitConfirm.disabled = false;
+        submitConfirm.textContent = '重新核验提交结果';
+        showError('暂时无法核验提交结果，请恢复网络后重新核验。', true);
+      } finally {
+        recoveryPromise = null;
+      }
+    })();
+    return recoveryPromise;
+  }
+
   submitConfirm?.addEventListener('click', async () => {
+    if (submissionOutcomeUnknown) {
+      await recoverSubmission();
+      return;
+    }
     if (submitting) return;
     submitting = true;
+    setAnswerControlsDisabled(true);
+    setSubmitDismissDisabled(true);
     submitConfirm.disabled = true;
     submitConfirm.textContent = '正在提交';
     submitBtn.disabled = true;
@@ -471,8 +714,21 @@
     clearError();
     hideSubmitDialog();
     try {
+      if (confirmationAnswer !== JSON.stringify(collect()) || (pendingConfidence && !submissionConfidence)) throw new Error('答案已变化，请重新评价并确认。');
+      const submissionToken = pendingSubmission?.token || makeToken();
+      const clickedAt = pendingSubmission?.clickedAt || new Date().toISOString();
+      const intent = pendingSubmission || {
+        token: submissionToken,
+        clickedAt,
+        answer: confirmationAnswer,
+        confidence: submissionConfidence,
+      };
+      if (!pendingSubmission) {
+        await persistSubmissionIntent(intent);
+        submissionIntentLoaded = true;
+        pendingSubmission = intent;
+      }
       await saveDraft(true);
-      const submissionToken = makeToken();
       await recordProcessEvent(
         'response_commit_requested',
         { submission_token: submissionToken },
@@ -483,31 +739,33 @@
       await processCollector?.flushBounded(1500, { ignoreVisibility: true, keepalive: true });
       const data = await post(form.dataset.submitUrl, {
         submission_token: submissionToken,
-        client_clicked_at: new Date().toISOString()
+        client_clicked_at: clickedAt,
+        ...(submissionConfidence ? { confidence: submissionConfidence } : {}),
       });
-      lockAnswerControls();
-      await closeProcessAttempt('submit');
-      form.removeAttribute('aria-busy');
-      if (data.confidence_required) {
-        showConfidencePrompt(data.confidence).catch((error) => {
-          showError(error.message, true);
-        });
-        submitting = false;
-        return;
-      }
-      await renderFeedback(data);
-      window.setTimeout(() => { window.location.href = data.next_url; }, 650);
+      await acceptSubmission(data);
     } catch (error) {
-      showError(error.message, true);
-      submitting = false;
-      submitConfirm.disabled = false;
-      submitConfirm.textContent = '提交并锁定';
-      submitBtn.disabled = false;
-      form.removeAttribute('aria-busy');
+      if (pendingSubmission) {
+        await recoverSubmission();
+      } else {
+        showError(error.message, true);
+        submitting = false;
+        submitConfirm.disabled = false;
+        submitConfirm.textContent = '提交并锁定';
+        setAnswerControlsDisabled(false);
+        setSubmitDismissDisabled(false);
+        submitBtn.disabled = false;
+        form.removeAttribute('aria-busy');
+      }
     }
   });
 
   skipBtn?.addEventListener('click', async () => {
+    if (submissionOutcomeUnknown) {
+      await recoverSubmission();
+      return;
+    }
+    if (submitting) return;
+    if (pendingSubmission && !await returnToAnswer()) return;
     skipBtn.disabled = true;
     skipBtn.textContent = '正在保存';
     clearError();
@@ -526,6 +784,12 @@
   document.querySelectorAll('.js-question-nav').forEach((link) => link.addEventListener('click', async (event) => {
     if (link.classList.contains('current')) return;
     event.preventDefault();
+    if (submissionOutcomeUnknown) {
+      await recoverSubmission();
+      return;
+    }
+    if (submitting) return;
+    if (pendingSubmission && !await returnToAnswer()) return;
     clearError();
     try {
       if (submitBtn) await saveDraft(true);
@@ -541,16 +805,42 @@
   lastSerialized = JSON.stringify(collect());
   lastQueuedSerialized = lastSerialized;
   if (!choiceQuestion) lastStableText = String(collect() ?? '');
-  if (pendingConfidence) {
-    lockAnswerControls();
-    showConfidencePrompt(pendingConfidence).catch((error) => {
-      showError(error.message, true);
-    });
-  }
-
+  const restoreGeneration = confirmationGeneration;
+  processReady.then(async () => {
+    if (!processOutbox?.restoreSubmissionIntent) {
+      submissionIntentLoaded = true;
+      if (submitBtn) submitBtn.disabled = false;
+      return;
+    }
+    try {
+      const intent = await processOutbox.restoreSubmissionIntent(
+        Number(form.dataset.processSessionId),
+        Number(form.dataset.processAttemptId),
+      );
+      submissionIntentLoaded = true;
+      if (!intent) {
+        if (submitBtn) submitBtn.disabled = false;
+        return;
+      }
+      if (restoreGeneration !== confirmationGeneration) return;
+      pendingSubmission = intent;
+      confirmationAnswer = intent.answer;
+      submissionConfidence = intent.confidence || null;
+      await recoverSubmission();
+    } catch (_error) {
+      submissionIntentLoaded = true;
+      showError('本地提交记录读取失败，请刷新页面后重试。', true);
+    }
+  });
   const finishForm = document.querySelector('[data-finish-form]');
   finishForm?.addEventListener('assessment:finish-requested', async (event) => {
     event.preventDefault();
+    if (submissionOutcomeUnknown) {
+      await recoverSubmission();
+      return;
+    }
+    if (submitting) return;
+    if (pendingSubmission && !await returnToAnswer()) return;
     try {
       if (submitBtn) await saveDraft(true);
       await closeProcessAttempt('finish');
@@ -568,18 +858,13 @@
   });
 
   confidenceInput?.addEventListener('input', () => {
+    confidenceTouched = true;
+    confidenceSubmit.disabled = false;
     confidenceValue.textContent = `${confidenceInput.value}%`;
   });
 
-  confidenceSubmit?.addEventListener('click', () => resolveConfidence(
-    confidencePanel.dataset.commitUrl,
-    { probability: Number(confidenceInput.value) },
-  ));
-
-  confidenceSkip?.addEventListener('click', () => resolveConfidence(
-    confidencePanel.dataset.skipUrl,
-    {},
-  ));
+  confidenceSubmit?.addEventListener('click', () => resolveConfidence(false));
+  confidenceSkip?.addEventListener('click', () => resolveConfidence(true));
 
   const timerElement = document.getElementById('countdown');
   if (timerElement) {

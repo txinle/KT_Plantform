@@ -286,11 +286,27 @@ class User(AbstractUser):
     display_name = models.CharField("姓名", max_length=80, blank=True)
     student_number = models.CharField("学号", max_length=64, unique=True, null=True, blank=True)
     must_change_password = models.BooleanField("必须修改密码", default=False)
+    uses_initial_password = models.BooleanField("正在使用初始密码", default=False)
+    initial_password_reminder_shown_at = models.DateTimeField(
+        "初始密码提醒展示时间", null=True, blank=True
+    )
+    initial_password_state_recorded_at = models.DateTimeField(
+        "初始密码状态确认时间", null=True, blank=True
+    )
     class_group = models.ForeignKey(ClassGroup, null=True, blank=True, on_delete=models.SET_NULL, related_name="students")
 
     @property
     def shown_name(self):
         return self.display_name or self.get_full_name() or self.username
+
+    @property
+    def initial_password_reminder_pending(self):
+        return bool(
+            self.role == self.Role.STUDENT
+            and not self.is_superuser
+            and self.uses_initial_password
+            and self.initial_password_reminder_shown_at is None
+        )
 
     def save(self, *args, **kwargs):
         if self.role == self.Role.STUDENT and self.student_number and not self.username:

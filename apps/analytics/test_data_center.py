@@ -372,8 +372,8 @@ class DataCenterContractTests(TransactionTestCase):
         })
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "A001")
-        self.assertEqual([row[0] for row in response.context["preview"]["rows"]], ["A001"])
+        self.assertContains(response, "学生作答预览")
+        self.assertNotContains(response, "A001")
         export = self.client.post(reverse("analytics:table_export_create", args=[self.course.pk]), {
             "table": "assignments", "experiment_id": self.experiment.pk, "version_mode": "single", "version_id": version.pk,
             "class_snapshot_id": first_class.pk, "student_id": first.pk, "confirm_identified": "yes",
@@ -407,8 +407,8 @@ class DataCenterContractTests(TransactionTestCase):
         })
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "N001")
-        self.assertEqual([row[0] for row in response.context["preview"]["rows"]], ["N001"])
+        self.assertContains(response, "学生作答预览")
+        self.assertNotContains(response, "N001")
         export = self.client.post(reverse("analytics:table_export_create", args=[self.course.pk]), {
             "table": "assignments", "experiment_id": self.experiment.pk, "version_mode": "single", "version_id": version.pk,
             "class_snapshot_id": unrecorded_class.pk, "confirm_identified": "yes",

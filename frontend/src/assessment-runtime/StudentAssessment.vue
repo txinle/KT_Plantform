@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 
 import { getBootstrapContext } from '@/app/bootstrap'
+import InitialPasswordReminder from '@/app/InitialPasswordReminder.vue'
 import { ApiError } from '@/api/client'
 import Drawer from '@/design-system/components/Drawer.vue'
 import FocusAssessmentHeader from '@/design-system/components/FocusAssessmentHeader.vue'
@@ -10,9 +11,10 @@ import type {
   DraftMutationResponse,
   StudentRuntimeQuestionEntry,
   SubmissionResponse,
+  SubmissionConfidence,
 } from './api'
 import { getStudentAssessmentApi } from './api'
-import { createProcessRuntime, type StudentProcessRuntime } from './process-bridge'
+import { createProcessRuntime, type StudentProcessRuntime, type SubmissionIntent } from './process-bridge'
 import { ResponseTrajectory } from './response-trajectory'
 import StudentResearchTools from './StudentResearchTools.vue'
 import { prepareOfflineQuestion } from './offline-cache'
@@ -26,6 +28,7 @@ import {
 import './student-assessment.css'
 
 const route = useRoute()
+const initialPasswordReminderPending = getBootstrapContext().user?.initial_password_reminder_pending === true
 const router = useRouter()
 const state = ref<StudentRuntimeQuestionEntry>()
 const answer = ref<unknown>(null)
@@ -38,11 +41,18 @@ const secondsRemaining = ref<number | null>(null)
 const submitDialogOpen = ref(false)
 const finishDialogOpen = ref(false)
 const submitting = ref(false)
+const submissionUncertain = ref(false)
+const taskClosed = ref(false)
+const pendingSubmission = ref<SubmissionIntent>()
 const finishing = ref(false)
 const timedOut = ref(false)
 const online = ref(globalThis.navigator.onLine)
 const pendingConfidence = ref<ConfidenceContract>()
 const confidenceValue = ref(50)
+const confidenceTouched = ref(false)
+const submissionConfidence = ref<SubmissionConfidence>()
+let confirmationAnswer: string | undefined
+let confirmationHead: string | null | undefined
 const confidenceStatus = ref('等待评价')
 const confidenceResolving = ref(false)
 const feedback = ref<SubmissionResponse>()
@@ -63,6 +73,7 @@ let saveQueue = Promise.resolve<unknown>(undefined)
 let inputStarted = false
 let processRuntime: StudentProcessRuntime | undefined
 let confidencePromptPromise: Promise<unknown> | undefined
+let confirmationGeneration = 0
 let lastRecordedResponseState: unknown = null
 let lastStableText = ''
 let pendingTextObservation: TextObservation | undefined
@@ -101,7 +112,7 @@ const answerLocked = computed(() => (
     || ['submitted', 'timed_out', 'unanswered'].includes(state.value.assignment.status)
   )
 ))
-const responseDisabled = computed(() => answerLocked.value || submitting.value || loading.value || !!responseConflict.value
+const responseDisabled = computed(() => answerLocked.value || taskClosed.value || submitting.value || submissionUncertain.value || submitDialogOpen.value || !!pendingConfidence.value || loading.value || !!responseConflict.value
   || !captureReady.value)
 
 function interactionAllowed() {
@@ -469,9 +480,96 @@ function finishComposition(event: unknown) {
   void flushTextObservation()
 }
 
-function openSubmitDialog() {
-  if (!interactionAllowed()) return
-  submitDialogOpen.value = true
+async function openSubmitDialog() {
+  if (!interactionAllowed() || !state.value || answerLocked.value || submissionUncertain.value) return
+  error.value = ''
+  if (!hasLocalResponse.value) { error.value = '请先作答，再提交本题。'; return }
+  if (composing) { error.value = '请先完成当前输入法文字，再确认提交。'; return }
+  confirmationGeneration += 1
+  confirmationAnswer = JSON.stringify(answer.value)
+  confirmationHead = trajectory?.head
+  submissionConfidence.value = undefined
+  confidenceTouched.value = false
+  confidenceValue.value = 50
+  confidenceResolving.value = false
+  pendingConfidence.value = confidenceContract(state.value.pending_confidence)
+  if (pendingConfidence.value) {
+    try { await showConfidencePrompt() }
+    catch { error.value = '评价表状态同步失败，请返回作答后重试。' }
+  } else submitDialogOpen.value = true
+}
+
+function returnToAnswer() {
+  if (submissionUncertain.value) return
+  confirmationGeneration += 1
+  pendingSubmission.value = undefined
+  void processRuntime?.saveSubmissionIntent?.(null).catch(() => { error.value = '本地提交记录清理失败，请刷新后核验。' })
+  submitDialogOpen.value = false
+  pendingConfidence.value = undefined
+  submissionConfidence.value = undefined
+  confirmationAnswer = undefined
+  confirmationHead = undefined
+  confidenceTouched.value = false
+  void nextTick(() => document.querySelector<HTMLButtonElement>('[data-submit-request]')?.focus())
+}
+
+function trapConfirmationFocus(event: KeyboardEvent) {
+  const dialog = event.currentTarget as HTMLElement
+  const controls = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), a[href]')]
+  const first = controls[0], last = controls.at(-1)
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+}
+
+watch(submitDialogOpen, async (open) => {
+  if (open) { await nextTick(); document.querySelector<HTMLElement>('[aria-labelledby="submit-dialog-title"] button')?.focus() }
+})
+
+async function acceptSubmission(response: SubmissionResponse) {
+  if (!state.value) return
+  state.value.assignment.status = 'submitted'
+  submissionUncertain.value = false
+  submitDialogOpen.value = false
+  pendingConfidence.value = undefined
+  await processRuntime?.saveSubmissionIntent?.(null)
+  pendingSubmission.value = undefined
+  await processRuntime?.closeAttempt('submit')
+  await showFeedback(response)
+  await navigate(response.next_url, true)
+}
+
+async function recoverSubmission() {
+  if (!state.value || !pendingSubmission.value) return
+  submissionUncertain.value = true
+  error.value = '正在核验服务器上的提交结果…'
+  try {
+    const recovered = await getStudentAssessmentApi().recover(state.value.assignment.attempt_id, pendingSubmission.value.token)
+    if (recovered.result) {
+      await acceptSubmission(recovered.result)
+      error.value = ''
+      return
+    }
+    submissionUncertain.value = false
+    if (!recovered.can_continue) {
+      taskClosed.value = true
+      timedOut.value = recovered.code === 'DEADLINE_EXPIRED'
+      error.value = timedOut.value ? '作答时间已截止，本次答案未正式提交。' : '任务已关闭，本次答案未正式提交。'
+      return
+    }
+    const intent = pendingSubmission.value
+    if (intent.answer !== JSON.stringify(answer.value) || intent.head !== trajectory?.head) {
+      returnToAnswer()
+      error.value = '服务器确认尚未提交。已恢复草稿，请重新评价并确认。'
+      return
+    }
+    confirmationAnswer = intent.answer
+    confirmationHead = intent.head
+    submissionConfidence.value = intent.confidence
+    submitDialogOpen.value = true
+    error.value = '服务器确认尚未提交。可以重试本次提交，或返回修改答案；计时继续。'
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '暂时无法核验提交结果，请恢复网络后重试。'
+  } finally { submitting.value = false }
 }
 
 function openNavigation() {
@@ -507,10 +605,16 @@ async function confirmSubmit() {
   error.value = ''
   try {
     if (composing) throw new Error('请先完成当前输入法文字，再确认提交。')
+    if (confirmationAnswer !== JSON.stringify(answer.value) || confirmationHead !== trajectory?.head) {
+      returnToAnswer()
+      throw new Error('答案已发生变化，请重新评价并确认。')
+    }
     const submittedState = trajectory?.head
-    const clickedAt = new Date().toISOString()
+    const clickedAt = pendingSubmission.value?.clickedAt || new Date().toISOString()
     const clickedMonotonic = performance.now()
-    const submissionToken = globalThis.crypto.randomUUID()
+    const submissionToken = pendingSubmission.value?.token || globalThis.crypto.randomUUID()
+    pendingSubmission.value = { token: submissionToken, clickedAt, answer: JSON.stringify(answer.value), head: submittedState, confidence: submissionConfidence.value }
+    await processRuntime?.saveSubmissionIntent?.(cloneJson(pendingSubmission.value))
     const commitRecorded = recordProcessEvent(
       'response_commit_requested',
       { submission_token: submissionToken },
@@ -525,28 +629,20 @@ async function confirmSubmit() {
     await processRuntime?.flushBounded(1500)
     const api = getStudentAssessmentApi()
     const response = trajectory
-      ? await api.submit(state.value.actions.submit_url, submissionToken, clickedAt, submittedState, await writerLease?.beforePointerWrite())
-      : await api.submit(state.value.actions.submit_url, submissionToken, clickedAt)
-    await processRuntime?.closeAttempt('submit')
-    if (response.confidence_required) {
-      pendingConfidence.value = confidenceContract(response.confidence)
-      if (!pendingConfidence.value) throw new Error('信心评价契约无效，请刷新页面后重试。')
-      state.value.assignment.status = 'submitted'
-      submitting.value = false
-      await showConfidencePrompt()
-      return
-    }
-    await showFeedback(response)
-    await navigate(response.next_url, true)
+      ? await api.submit(state.value.actions.submit_url, submissionToken, clickedAt, submittedState, await writerLease?.beforePointerWrite(), submissionConfidence.value)
+      : await api.submit(state.value.actions.submit_url, submissionToken, clickedAt, undefined, undefined, submissionConfidence.value)
+    await acceptSubmission(response)
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '提交失败，请重试。'
     submitting.value = false
+    if (pendingSubmission.value) await recoverSubmission()
   }
 }
 
 async function showConfidencePrompt() {
   if (!interactionAllowed() || !pendingConfidence.value) return
   await nextTick()
+  document.querySelector<HTMLInputElement>('[data-confidence-input]')?.focus()
   if (trajectory) await processRuntime?.record('confidence_observed', {
     capture_version: 'capture-v2', operation_id: crypto.randomUUID(),
     confidence_assignment_id: pendingConfidence.value.confidence_assignment_id,
@@ -584,25 +680,33 @@ async function showFeedback(response: SubmissionResponse) {
 
 async function resolveConfidence(skip: boolean) {
   if (!interactionAllowed() || !pendingConfidence.value || confidenceResolving.value) return
+  if (!skip && !confidenceTouched.value) return
+  const generation = confirmationGeneration
+  const assignmentId = pendingConfidence.value.confidence_assignment_id
+  const probability = confidenceValue.value
+  const head = confirmationHead
   confidenceResolving.value = true
-  confidenceStatus.value = '正在保存评价'
+  confidenceStatus.value = '正在准备最终确认'
   error.value = ''
   try {
     await confidencePromptPromise
+    if (generation !== confirmationGeneration) return
     if (trajectory) await processRuntime?.record('confidence_observed', {
       capture_version: 'capture-v2', operation_id: crypto.randomUUID(),
-      confidence_assignment_id: pendingConfidence.value.confidence_assignment_id,
-      stage: skip ? 'skipped' : 'responded', answer_event_id: trajectory.head,
-      probability: skip ? null : confidenceValue.value, feedback_phase: 'before_feedback',
+      confidence_assignment_id: assignmentId,
+      stage: skip ? 'skipped' : 'responded', answer_event_id: head,
+      probability: skip ? null : probability, feedback_phase: 'before_feedback',
     })
-    const response = await getStudentAssessmentApi().post<SubmissionResponse>(
-      skip ? pendingConfidence.value.skip_url : pendingConfidence.value.commit_url,
-      skip ? {} : { probability: confidenceValue.value },
-    )
+    if (generation !== confirmationGeneration) return
+    submissionConfidence.value = {
+      status: skip ? 'skipped' : 'committed',
+      ...(!skip ? { probability } : {}),
+      ...(trajectory ? { answer_event_id: head } : {}),
+    }
     pendingConfidence.value = undefined
-    await showFeedback(response)
-    await navigate(response.next_url, true)
+    submitDialogOpen.value = true
   } catch (caught) {
+    if (generation !== confirmationGeneration) return
     error.value = caught instanceof Error ? caught.message : '信心评价保存失败。'
     confidenceStatus.value = '保存失败，可重新提交或跳过'
     confidenceResolving.value = false
@@ -757,9 +861,8 @@ async function finishInitialization(
     if (!isCurrentInitialization(generation, currentState, runtime)) return
     itemRenderedRecorded = true
   }
-  pendingConfidence.value = confidenceContract(currentState.pending_confidence)
   if (currentState.process.capture_version === 'capture-v2') startRecoveryTimer()
-  if (pendingConfidence.value) await showConfidencePrompt()
+  if (pendingSubmission.value) await recoverSubmission()
 }
 
 async function prepareCaptureInitialization(generation = initializationGeneration) {
@@ -828,6 +931,9 @@ function resetQuestionState() {
   state.value = undefined
   answer.value = null
   pendingConfidence.value = undefined
+  pendingSubmission.value = undefined
+  submissionUncertain.value = false
+  taskClosed.value = false
   feedback.value = undefined
   secondsRemaining.value = null
   submitDialogOpen.value = false
@@ -883,6 +989,8 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
       return
     }
     processRuntime = loadedRuntime
+    pendingSubmission.value = loadedRuntime.restoredSubmission || undefined
+    submissionUncertain.value = !!pendingSubmission.value
     if (state.value.process.capture_version === 'capture-v2') {
       const process = state.value.process
       if (!process.writer_lease_acquire_url || !process.writer_lease_renew_url || !processRuntime.clientInstanceId) throw new Error('缺少写入租约契约，无法保存正式答案。')
@@ -915,19 +1023,22 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
     }
   } catch (caught) {
     if (generation !== initializationGeneration) return
-    const confidenceQuestionUrl = caught instanceof ApiError
-      && caught.code === 'CONFIDENCE_REQUIRED'
-      && typeof caught.fields.question_url === 'string'
-      ? caught.fields.question_url
-      : undefined
-    if (
-      confidenceQuestionUrl
-      && /^\/student\/sessions\/\d+\/questions\/\d+\/$/.test(confidenceQuestionUrl)
-    ) {
-      await router.replace(confidenceQuestionUrl)
-      return
-    }
     error.value = caught instanceof Error ? caught.message : '作答页面加载失败。'
+    if (caught instanceof ApiError && (caught.status === 409 || caught.status >= 500)) {
+      try {
+        const recovered = await getStudentAssessmentApi().recoverQuestion(sessionId, assignmentId)
+        if (generation !== initializationGeneration) return
+        if (recovered.result) {
+          const url = recovered.result.next_url
+          if (/^\/student\/sessions\/\d+\/questions\/\d+\//.test(url)) await router.push(url)
+          else globalThis.location.assign(url)
+          return
+        }
+        if (!recovered.can_continue) error.value = recovered.code === 'DEADLINE_EXPIRED'
+          ? '作答时间已截止，尚未正式提交的内容不会计为提交。'
+          : '任务已关闭，请返回任务列表查看当前状态。'
+      } catch { error.value = '暂时无法核验任务状态。请恢复网络后重试，原任务与本机作答记录会保留。' }
+    }
   } finally {
     if (generation === initializationGeneration) loading.value = false
   }
@@ -990,17 +1101,22 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="kt-assessment-focus" :data-init-state="initializationState">
+    <InitialPasswordReminder v-if="initialPasswordReminderPending" />
     <section v-if="missingCapabilities.length" class="kt-assessment-capability" role="alert">
       <h1>当前浏览器无法安全保存作答过程</h1>
       <p>请升级浏览器或更换受支持的浏览器后再进入实验。</p>
       <p>缺少能力：{{ missingCapabilities.join('、') }}</p>
     </section>
     <p v-else-if="loading" role="status">正在加载作答页面…</p>
-    <p v-else-if="!state && error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
+    <section v-else-if="!state && error" class="kt-alert kt-alert--danger" role="alert">
+      <p>{{ error }}</p><button type="button" class="kt-button" @click="loadQuestion()">重试进入原题目</button>
+      <a href="/student/">返回任务列表</a>
+    </section>
     <div v-else-if="state" class="kt-assessment-layout">
       <header class="kt-assessment-topbar">
         <div><span class="kt-assessment-topbar__label">作业</span><strong>{{ state.experiment_name }}</strong></div>
         <div class="kt-assessment-topbar__status">
+          <a href="/password/change/">修改密码</a>
           <span v-if="secondsRemaining !== null" role="timer" aria-live="off">剩余 {{ timerLabel(secondsRemaining) }}</span>
           <p class="kt-assessment-save-status" role="status" data-save-status>{{ saveStatus }}</p>
         </div>
@@ -1078,26 +1194,6 @@ onBeforeUnmount(() => {
         </section>
         <p v-if="!online" class="kt-alert kt-alert--warning" role="status" data-connectivity-status>当前离线。答案保留在本页，恢复网络后将自动保存。</p>
         <p v-if="answerLocked" class="kt-alert kt-alert--info">本题已提交并锁定，答案不可再修改。</p>
-        <section v-if="pendingConfidence" class="kt-assessment-confidence" data-confidence-panel aria-labelledby="confidence-title">
-          <h2 id="confidence-title">你对这次答案有多大把握？</h2>
-          <p>该评价不影响得分，也可以跳过。</p>
-          <label for="confidence-probability">作答信心：{{ confidenceValue }}%</label>
-          <input
-            id="confidence-probability"
-            v-model.number="confidenceValue"
-            data-confidence-input
-            type="range"
-            :min="pendingConfidence.minimum"
-            :max="pendingConfidence.maximum"
-            :step="pendingConfidence.step"
-            :disabled="confidenceResolving || !captureReady"
-          >
-          <p role="status">{{ confidenceStatus }}</p>
-          <div class="kt-assessment-actions">
-            <button type="button" class="kt-button kt-button--secondary" :disabled="confidenceResolving || !captureReady" @click="resolveConfidence(true)">跳过评价</button>
-            <button type="button" class="kt-button" data-confidence-submit :disabled="confidenceResolving || !captureReady" @click="resolveConfidence(false)">提交信心评价</button>
-          </div>
-        </section>
         <div v-if="feedback" class="kt-alert kt-alert--success" data-feedback>
           <strong>本题已提交并锁定</strong>
           <span v-if="feedback.is_correct === true">，回答正确</span>
@@ -1107,7 +1203,8 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="!answerLocked" class="kt-assessment-actions">
           <button type="button" class="kt-button kt-button--secondary" data-skip-request :disabled="!captureReady" @click="skipCurrent">标记跳过</button>
-          <button type="button" class="kt-button" data-submit-request :disabled="submitting || !captureReady" @click="openSubmitDialog">确认提交本题</button>
+          <button type="button" class="kt-button" data-submit-request :disabled="submitting || submissionUncertain || !captureReady || !!pendingConfidence || submitDialogOpen" @click="openSubmitDialog">确认提交本题</button>
+          <button v-if="submissionUncertain" type="button" class="kt-button" data-recover-submit @click="recoverSubmission">重新核验提交状态</button>
         </div>
       </section>
       <aside class="kt-assessment-nav" aria-labelledby="assessment-navigation-title">
@@ -1170,12 +1267,39 @@ onBeforeUnmount(() => {
         </button>
       </Drawer>
     </div>
+    <div v-if="pendingConfidence" class="kt-dialog-backdrop">
+      <section class="kt-dialog kt-assessment-confidence" role="dialog" aria-modal="true" data-confidence-panel aria-labelledby="confidence-title" @keydown.tab="trapConfirmationFocus" @keydown.esc="returnToAnswer">
+        <h2 id="confidence-title">你对这次答案有多大把握？</h2>
+        <p>该评价不影响得分，也可以跳过。</p>
+        <label for="confidence-probability">作答信心：{{ confidenceValue }}%</label>
+        <input
+          id="confidence-probability"
+          v-model.number="confidenceValue"
+          data-confidence-input
+          type="range"
+          :min="pendingConfidence.minimum"
+          :max="pendingConfidence.maximum"
+          :step="pendingConfidence.step"
+          :disabled="confidenceResolving || !captureReady"
+          @input="confidenceTouched = true"
+          @change="confidenceTouched = true"
+        >
+        <p role="status">{{ confidenceStatus }}</p>
+        <div class="kt-assessment-actions">
+          <button type="button" class="kt-button kt-button--secondary" :disabled="confidenceResolving || !captureReady" @click="resolveConfidence(true)">跳过评价</button>
+          <button type="button" class="kt-button" data-confidence-submit :disabled="confidenceResolving || !captureReady || !confidenceTouched" @click="resolveConfidence(false)">下一步：确认提交</button>
+          <button type="button" class="kt-button kt-button--secondary" data-return-answer @click="returnToAnswer">返回修改答案</button>
+        </div>
+      </section>
+    </div>
     <div v-if="submitDialogOpen" class="kt-dialog-backdrop">
-      <section class="kt-dialog" role="dialog" aria-modal="true" aria-labelledby="submit-dialog-title" aria-describedby="submit-dialog-description">
+      <section class="kt-dialog" role="dialog" aria-modal="true" aria-labelledby="submit-dialog-title" aria-describedby="submit-dialog-description" @keydown.tab="trapConfirmationFocus" @keydown.esc="returnToAnswer">
         <h2 id="submit-dialog-title">确认提交本题</h2>
         <p id="submit-dialog-description">提交后答案将立即锁定，不能修改。草稿会在提交前再次保存。</p>
+        <p>本次答案：{{ formatCorrectAnswer(answer) }}</p>
+        <p v-if="submissionConfidence">作答信心：{{ submissionConfidence.status === 'skipped' ? '已选择跳过评价' : `${submissionConfidence.probability}%` }}</p>
         <div class="kt-dialog__actions">
-          <button type="button" class="kt-button kt-button--secondary" @click="submitDialogOpen = false">取消</button>
+          <button type="button" class="kt-button kt-button--secondary" data-return-answer @click="returnToAnswer">返回修改答案</button>
           <button type="button" class="kt-button" data-submit-confirm :disabled="!captureReady" @click="confirmSubmit">提交并锁定</button>
         </div>
       </section>

@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { createStudentCourseApi } from './api'
 
 describe('student course API', () => {
+  it('queries the existing task after a lost start response', async () => {
+    const client = { mutate: vi.fn().mockRejectedValue(new TypeError('network')), get: vi.fn().mockResolvedValue({ can_continue: true, question_url: '/student/sessions/7/questions/11/' }) }
+    const api = createStudentCourseApi(client)
+    const result = await api.start(19)
+    expect(result.question_url).toBe('/student/sessions/7/questions/11/')
+    expect(client.get).toHaveBeenCalledWith('/api/v1/student/tasks/19/recovery/')
+    expect(client.mutate).toHaveBeenCalledOnce()
+  })
   it('uses task-centered start, resume, and result endpoints', async () => {
     const client = {
       get: vi.fn().mockResolvedValue({}),

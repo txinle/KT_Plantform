@@ -30,8 +30,8 @@ async function load() {
   error.value = ''
   try {
     page.value = await api.studentExperimentDetail(courseId, classId, studentId, experimentId)
-  } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '学生实验事实加载失败。'
+  } catch {
+    error.value = '学生作答详情暂时无法加载，请刷新页面后重试。'
   } finally {
     loading.value = false
   }
@@ -64,7 +64,7 @@ onMounted(load)
     <section class="kt-card kt-analysis-section" aria-labelledby="student-question-facts-title">
       <div class="kt-section-heading"><div><h2 id="student-question-facts-title">逐题事实</h2><p>选择题才显示可比的选择修改次数；数值、填空与简答不生成跨题型修改次数。</p></div></div>
       <EmptyState v-if="!detail.questions.length" title="没有正式提交的题目" />
-      <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>题目</th><th>知识点</th><th>结果</th><th>首答</th><th>终答</th><th>修改次数</th><th>用时</th><th>操作</th></tr></thead><tbody><tr v-for="row in detail.questions" :key="row.question_id"><td><a :href="row.question_url">{{ row.code }}</a></td><td>{{ row.kcs.join('、') }}</td><td>{{ row.result_label }}</td><td>{{ row.first_answer || '—' }}</td><td>{{ row.final_answer }}</td><td>{{ row.revision_count ?? '—' }}</td><td>{{ row.answer_time_display }}</td><td><a :href="row.process_url">查看作答过程</a></td></tr></tbody></table></div>
+      <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>题目</th><th>知识点</th><th>结果 / 得分</th><th>最终答案</th><th>修改次数</th><th>用时</th><th>信心</th><th>提交状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in detail.questions" :key="row.process_url"><td><a :href="row.question_url">{{ row.code }}</a><small>{{ row.question_summary }}</small></td><td>{{ row.kcs.join('、') }}</td><td>{{ row.result_label }} · {{ row.score_display }}</td><td>{{ row.final_answer.length > 100 ? `${row.final_answer.slice(0, 100)}…` : row.final_answer }}</td><td>{{ row.revision_count ?? '—' }}</td><td>{{ row.answer_time_display }}</td><td>{{ row.confidence_label }}</td><td>{{ row.submission_status_label }}<small>{{ displayDate(row.submitted_at) }}</small></td><td><a :href="row.process_url">查看作答过程</a></td></tr></tbody></table></div>
     </section>
   </template>
 </template>

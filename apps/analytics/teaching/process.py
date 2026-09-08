@@ -8,7 +8,7 @@ from apps.assessment.event_invariants import (
     ResponseStateChainError,
     validate_response_state_chain,
 )
-from apps.assessment.response_snapshot_services import canonical_response_state
+from apps.assessment.response_snapshot_services import ResponseState, canonical_response_state
 from apps.experiments.presentation import display_text
 
 
@@ -24,6 +24,8 @@ class ProcessStep:
     label: str
     occurred_at: datetime | None
     value: str | None = None
+    value_before: str | None = None
+    value_after: str | None = None
     length_before: int | None = None
     length_after: int | None = None
     time_source: str = "server_received_at"
@@ -120,6 +122,258 @@ def _incomplete(generated_at, question_type, final_answer):
     )
 
 
+def _state_display(question_type, value):
+    if question_type in _CHOICE_TYPES:
+        rendered = _choice_display(question_type, value)
+    else:
+        rendered = display_text(value)
+    return rendered or "（空）"
+
+
+def _capture_state(payload, side, question_type):
+    state = payload.get(f"{side}_state")
+    if not isinstance(state, dict) or state.get("question_type") != question_type:
+        return False, None
+    value = state.get("value")
+    try:
+        canonical = canonical_response_state(question_type, value)
+    except (TypeError, ValueError):
+        return False, None
+    if canonical != value:
+        return False, None
+    expected_hash = ResponseState(question_type, value).state_hash
+    if payload.get(f"{side}_state_hash") != expected_hash:
+        return False, None
+    return True, value
+
+
+def _capture_snapshot_matches(snapshot_by_id, snapshot_id, *, attempt_id, state, state_hash):
+    if snapshot_id is None:
+        return True
+    snapshot = snapshot_by_id.get(str(snapshot_id))
+    return bool(
+        snapshot is not None
+        and snapshot.attempt_id == attempt_id
+        and snapshot.state_hash == state_hash
+        and snapshot.state_json == state
+    )
+
+
+def _capture_v2_projection(
+    *,
+    generated_at,
+    attempt_id,
+    question_type,
+    events,
+    snapshots,
+    final_answer,
+    final_snapshot_id,
+    submitted_at,
+    final_response_event_id,
+    formal_capture_boundary,
+    submission,
+):
+    incomplete = lambda: AttemptProcessProjection(
+        **{
+            **_incomplete(generated_at, question_type, final_answer).__dict__,
+            "completeness_label": "证据缺口",
+        }
+    )
+    if (
+        submitted_at is None
+        or submission is None
+        or not final_response_event_id
+        or not isinstance(formal_capture_boundary, dict)
+        or str(formal_capture_boundary.get("active_response_event_id"))
+        != str(final_response_event_id)
+    ):
+        return incomplete()
+    try:
+        boundary_sequence = int(formal_capture_boundary["server_ingest_sequence_no"])
+    except (KeyError, TypeError, ValueError):
+        return incomplete()
+
+    transitions = {
+        str(event.event_id): event
+        for event in events
+        if event.event_type == "response_transition"
+        and getattr(event, "attempt_id", None) == attempt_id
+        and event.server_ingest_sequence_no <= boundary_sequence
+    }
+    path = []
+    visited = set()
+    current_id = str(final_response_event_id)
+    snapshot_by_id = _snapshot_index(snapshots)
+    while current_id:
+        if current_id in visited:
+            return incomplete()
+        visited.add(current_id)
+        event = transitions.get(current_id)
+        if event is None:
+            return incomplete()
+        payload = event.payload
+        if not isinstance(payload, dict) or payload.get("capture_version") != "capture-v2":
+            return incomplete()
+        before_valid, before = _capture_state(payload, "before", question_type)
+        after_valid, after = _capture_state(payload, "after", question_type)
+        if not before_valid or not after_valid:
+            return incomplete()
+        if payload.get("before_state_hash") == payload.get("after_state_hash"):
+            return incomplete()
+        if not _capture_snapshot_matches(
+            snapshot_by_id,
+            payload.get("before_snapshot_id"),
+            attempt_id=attempt_id,
+            state=payload.get("before_state"),
+            state_hash=payload.get("before_state_hash"),
+        ) or not _capture_snapshot_matches(
+            snapshot_by_id,
+            payload.get("after_snapshot_id"),
+            attempt_id=attempt_id,
+            state=payload.get("after_state"),
+            state_hash=payload.get("after_state_hash"),
+        ):
+            return incomplete()
+        path.append((event, before, after))
+        parent_id = payload.get("parent_event_id")
+        if parent_id is None:
+            empty = [] if question_type == "multiple_choice" else (
+                "" if question_type in {"short_answer", "fill_blank", "numeric"} else None
+            )
+            if before != empty:
+                return incomplete()
+            current_id = ""
+        else:
+            parent = transitions.get(str(parent_id))
+            if (
+                parent is None
+                or not isinstance(parent.payload, dict)
+                or parent.payload.get("after_state_hash")
+                != payload.get("before_state_hash")
+            ):
+                return incomplete()
+            current_id = str(parent_id)
+    path.reverse()
+
+    final_snapshot = snapshot_by_id.get(str(final_snapshot_id))
+    head_after = path[-1][2]
+    if (
+        final_snapshot is None
+        or final_snapshot.attempt_id != attempt_id
+        or final_snapshot.state_json != {"question_type": question_type, "value": head_after}
+        or final_snapshot.state_hash != ResponseState(question_type, head_after).state_hash
+        or canonical_response_state(question_type, final_answer) != head_after
+        or submission.attempt_id != attempt_id
+        or submission.final_answer != final_answer
+        or str(submission.final_response_snapshot_id) != str(final_snapshot_id)
+        or submission.committed_at != submitted_at
+    ):
+        return incomplete()
+
+    commits = [
+        event for event in events
+        if event.event_type == "response_committed"
+        and getattr(event, "attempt_id", None) == attempt_id
+    ]
+    if len(commits) != 1:
+        return incomplete()
+    commit = commits[0]
+    commit_payload = commit.payload if isinstance(commit.payload, dict) else {}
+    if (
+        str(commit_payload.get("submission_token")) != str(submission.submission_token)
+        or commit_payload.get("submission_id") != submission.pk
+        or str(commit_payload.get("final_response_snapshot_id")) != str(final_snapshot_id)
+        or commit_payload.get("committed_at") != submitted_at.isoformat()
+        or commit.server_ingest_sequence_no <= boundary_sequence
+    ):
+        return incomplete()
+
+    steps = []
+    source_events = []
+    anchors = [
+        event for event in events
+        if event.event_type in {"item_entered", "item_rendered"}
+        and getattr(event, "attempt_id", None) == attempt_id
+        and event.server_ingest_sequence_no <= path[0][0].server_ingest_sequence_no
+        and event.server_ingest_sequence_no <= boundary_sequence
+    ]
+    if anchors:
+        anchor = min(anchors, key=lambda event: event.server_ingest_sequence_no)
+        steps.append(ProcessStep(
+            generated_at=generated_at,
+            kind="item_entered",
+            label="进入题目",
+            occurred_at=_event_time(anchor),
+        ))
+        source_events.append(anchor)
+    for event, before, after in path:
+        before_display = _state_display(question_type, before)
+        after_display = _state_display(question_type, after)
+        label = "清空答案" if after_display == "（空）" else (
+            "填写答案" if before_display == "（空）" else "修改答案"
+        )
+        steps.append(ProcessStep(
+            generated_at=generated_at,
+            kind="response",
+            label=label,
+            occurred_at=_event_time(event),
+            value=after_display,
+            value_before=before_display,
+            value_after=after_display,
+            length_before=len(before) if isinstance(before, str) and question_type in {"short_answer", "fill_blank", "numeric"} else None,
+            length_after=len(after) if isinstance(after, str) and question_type in {"short_answer", "fill_blank", "numeric"} else None,
+        ))
+        source_events.append(event)
+    final_value = _state_display(question_type, head_after)
+    steps.append(ProcessStep(
+        generated_at=generated_at,
+        kind="submit",
+        label="正式提交",
+        occurred_at=submitted_at,
+        value=final_value,
+    ))
+    source_events.append(commit)
+
+    timed_steps = []
+    previous_event = None
+    for step, source_event in zip(steps, source_events):
+        interval_ms = None
+        if (
+            previous_event is not None
+            and source_event.client_instance_id
+            and source_event.client_instance_id == previous_event.client_instance_id
+            and source_event.client_time_origin == previous_event.client_time_origin
+            and source_event.client_monotonic_ms is not None
+            and previous_event.client_monotonic_ms is not None
+        ):
+            delta = source_event.client_monotonic_ms - previous_event.client_monotonic_ms
+            if delta >= 0:
+                interval_ms = int(delta)
+        timed_steps.append(ProcessStep(
+            **{
+                **step.__dict__,
+                "time_source": (
+                    "synchronized_estimate"
+                    if source_event.estimated_occurred_at_utc
+                    else "server_received_at"
+                ),
+                "interval_ms": interval_ms,
+            }
+        ))
+        previous_event = source_event
+    revision_count = None
+    if question_type in {"single_choice", "true_false"}:
+        revision_count = max(0, len(path) - 1)
+    return AttemptProcessProjection(
+        generated_at=generated_at,
+        question_type=question_type,
+        completeness=ProcessCompleteness.COMPLETE,
+        completeness_label="完整链",
+        steps=tuple(timed_steps),
+        first_value=_state_display(question_type, path[0][2]),
+        final_value=final_value,
+        revision_count=revision_count,
+    )
 def _project_choice(
     *, generated_at, attempt_id, question_type, events, final_answer, submitted_at
 ):
@@ -387,11 +641,28 @@ def project_attempt_process(
     final_answer,
     final_snapshot_id,
     submitted_at,
+    final_response_event_id=None,
+    formal_capture_boundary=None,
+    submission=None,
 ):
     """Project one attempt into a privacy-bounded teacher-facing process."""
     events = order_process_records(
         events, fallback_time_field="server_ingest_sequence_no"
     )
+    if any(event.event_type == "response_transition" for event in events):
+        return _capture_v2_projection(
+            generated_at=generated_at,
+            attempt_id=attempt_id,
+            question_type=question_type,
+            events=events,
+            snapshots=snapshots,
+            final_answer=final_answer,
+            final_snapshot_id=final_snapshot_id,
+            submitted_at=submitted_at,
+            final_response_event_id=final_response_event_id,
+            formal_capture_boundary=formal_capture_boundary,
+            submission=submission,
+        )
     if question_type in _CHOICE_TYPES:
         return _project_choice(
             generated_at=generated_at,

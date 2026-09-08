@@ -69,6 +69,8 @@ def render_vue_shell(
             "display_name": request.user.shown_name,
             "username": request.user.username,
             "student_number": request.user.student_number,
+            "uses_initial_password": request.user.uses_initial_password,
+            "initial_password_reminder_pending": request.user.initial_password_reminder_pending,
         },
         "course_id": course.pk if course is not None else None,
     }

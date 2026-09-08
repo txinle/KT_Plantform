@@ -118,7 +118,8 @@ class TeacherAccountManagementApiTests(TestCase):
         account = User.objects.get(student_number="LEGACY-001")
         self.assertEqual(account.class_group_id, self.legacy_class.pk)
         self.assertTrue(account.check_password("SLEGACY-001"))
-        self.assertTrue(account.must_change_password)
+        self.assertTrue(account.uses_initial_password)
+        self.assertIsNone(account.initial_password_reminder_shown_at)
         self.assertTrue(
             AuditLog.objects.filter(
                 action="student.create", object_id=str(account.pk)
@@ -337,7 +338,8 @@ class TeacherAccountManagementApiTests(TestCase):
         self.assertEqual(reset.status_code, 200)
         student = User.objects.get(pk=student_id)
         self.assertTrue(student.check_password("SMOVE-001"))
-        self.assertTrue(student.must_change_password)
+        self.assertTrue(student.uses_initial_password)
+        self.assertIsNone(student.initial_password_reminder_shown_at)
 
         policy_url = f"{self.manage_base}student-visibility/"
         policy = self.patch_json(

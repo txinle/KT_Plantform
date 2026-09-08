@@ -2,6 +2,7 @@ import json
 
 from django.core.management.base import CommandError
 from django.db import connection, transaction
+from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.question_bank.models import Question
@@ -61,6 +62,10 @@ class Command(CaptureV2SeedCommand):
         student.class_group = class_group
         student.is_active = True
         student.set_password("student123")
+        student.uses_initial_password = False
+        student.initial_password_reminder_shown_at = None
+        student.initial_password_state_recorded_at = timezone.now()
+        student.must_change_password = False
         student.save()
         return student
 

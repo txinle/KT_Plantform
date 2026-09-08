@@ -1,7 +1,7 @@
-from math import ceil
 from urllib.parse import urlencode
 
 from django.conf import settings
+from django.core.paginator import Paginator
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
@@ -26,12 +26,9 @@ from apps.accounts.models import ClassGroup, Course, User
 from apps.api.pagination import FixedPageNumberPagination
 from apps.assessment.models import ExperimentSession, SubmissionEvent
 
-from ..advanced_catalog import build_advanced_catalog, enabled_extension_tables
-from ..export_catalog import COMMON_FIELD_DESCRIPTIONS, TABLE_FIELD_DESCRIPTIONS
+from ..advanced_catalog import enabled_extension_tables
 from ..models import ExportJob
 from ..quality_reports import EvaluationState, build_quality_report
-from ..services import preview_export_table
-
 from ..teaching.metrics import build_class_center_snapshot
 from .serializers import (
     DataCenterAdvancedSerializer,
@@ -361,71 +358,88 @@ class TeacherDataCenterAdvancedView(APIView):
     )
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
-        scope = _scope_from_request(request, course)
-        selected_experiment = (
-            course.experiments.prefetch_related("versions")
-            .filter(pk=scope.experiment_id)
-            .first()
-            if scope.experiment_id
-            else None
-        )
-        groups, selected_table, selected_info = build_advanced_catalog(
-            experiment=selected_experiment,
-            selected_table=request.query_params.get("table", "attempts"),
-        )
-        preview_payload = None
-        if selected_experiment is not None:
-            preview = preview_export_table(
-                course=course,
-                experiment=selected_experiment,
-                table=selected_table,
-                page=request.query_params.get("page", 1),
-                page_size=20,
-                scope=scope,
+        scope = _teaching_scope_from_request(request, course)
+        search = request.query_params.get("search", "").strip()[:100]
+        roster = scope.roster().select_related("student", "class_group")
+        if search:
+            roster = roster.filter(
+                Q(student__student_number__icontains=search)
+                | Q(student__display_name__icontains=search)
+                | Q(student__username__icontains=search)
             )
-            total_pages = max(1, ceil(preview["total"] / preview["page_size"]))
-            start = (
-                (preview["page"] - 1) * preview["page_size"] + 1
-                if preview["total"]
-                else 0
+        paginator = Paginator(roster, 20)
+        page = paginator.get_page(request.query_params.get("page", 1))
+        student_ids = [enrollment.student_id for enrollment in page.object_list]
+        sessions = list(
+            scope.sessions()
+            .filter(student_id__in=student_ids)
+            .select_related("version__experiment")
+        )
+        sessions_by_student = {}
+        for session in sessions:
+            sessions_by_student.setdefault(session.student_id, []).append(session)
+        attempts = list(
+            scope.attempts()
+            .filter(session__student_id__in=student_ids)
+            .select_related("submission_event")
+        )
+        attempts_by_student = {}
+        for attempt in attempts:
+            attempts_by_student.setdefault(attempt.session.student_id, []).append(attempt)
+
+        rows = []
+        for enrollment in page.object_list:
+            student_sessions = sessions_by_student.get(enrollment.student_id, [])
+            student_attempts = attempts_by_student.get(enrollment.student_id, [])
+            submitted_count = sum(
+                hasattr(attempt, "submission_event") for attempt in student_attempts
             )
-            preview_payload = {
-                "columns": [
-                    {
-                        "name": header,
-                        "description": TABLE_FIELD_DESCRIPTIONS.get(
-                            selected_table, {}
-                        ).get(header, COMMON_FIELD_DESCRIPTIONS.get(header, "数据字段")),
-                    }
-                    for header in preview["headers"]
-                ],
-                "rows": preview["rows"],
-                "page": {
-                    "number": preview["page"],
-                    "size": preview["page_size"],
-                    "total_items": preview["total"],
-                    "total_pages": total_pages,
-                    "start": start,
-                    "end": min(
-                        preview["page"] * preview["page_size"], preview["total"]
+            total_count = len(student_attempts)
+            if not student_sessions:
+                status_label = "未参与"
+            elif any(
+                session.status == ExperimentSession.Status.IN_PROGRESS
+                for session in student_sessions
+            ):
+                status_label = "进行中"
+            elif total_count and submitted_count < total_count:
+                status_label = "未完成"
+            else:
+                status_label = "已完成"
+            student = enrollment.student
+            rows.append(
+                {
+                    "student_number": student.student_number or student.username,
+                    "display_name": student.shown_name,
+                    "class_name": enrollment.class_group.name,
+                    "experiment_count": len(
+                        {session.version.experiment_id for session in student_sessions}
                     ),
-                },
-                "data_status": preview["data_status"],
-            }
-        return Response(
-            {
-                "course": _course_payload(course),
-                "scope": _research_scope_payload(scope),
-                "groups": groups,
-                "selected_table": selected_info,
-                "selected_experiment": (
-                    _experiment_payload(selected_experiment)
-                    if selected_experiment
-                    else None
-                ),
-                "preview": preview_payload,
-            }
-        )
+                    "progress_label": f"{submitted_count} / {total_count}",
+                    "status_label": status_label,
+                    "detail_url": reverse(
+                        "courses:class_student_experiment_detail",
+                        args=[course.pk, enrollment.class_group_id, student.pk, scope.experiment_id],
+                    ),
+                    "detail_api_url": f"/api/v1/teacher/courses/{course.pk}/classes/{enrollment.class_group_id}/students/{student.pk}/experiments/{scope.experiment_id}/",
+                }
+            )
+        start = page.start_index() if paginator.count else 0
+        payload = {
+            "course": _course_payload(course),
+            "scope": _teaching_scope_payload(scope),
+            "search": search,
+            "students": rows,
+            "page": {
+                "number": page.number,
+                "size": 20,
+                "total_items": paginator.count,
+                "total_pages": max(1, paginator.num_pages),
+                "start": start,
+                "end": page.end_index() if paginator.count else 0,
+            },
+        }
+        return Response(DataCenterAdvancedSerializer(payload).data)
 
 
 def _metric_payload(metric):

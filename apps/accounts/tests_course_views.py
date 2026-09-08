@@ -812,7 +812,8 @@ class CourseWorkspaceViewTests(TestCase):
         self.assertRedirects(reset, reverse("courses:class_detail", args=[self.course.pk, source.pk]))
         student.refresh_from_db()
         self.assertTrue(student.check_password(f"S{student.student_number}"))
-        self.assertTrue(student.must_change_password)
+        self.assertTrue(student.uses_initial_password)
+        self.assertIsNone(student.initial_password_reminder_shown_at)
 
         moved = self.client.post(
             reverse("courses:move_student", args=[self.course.pk, source.pk, student.pk]),

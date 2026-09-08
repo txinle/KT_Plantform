@@ -80,7 +80,7 @@ class ConfidenceFlowTests(TestCase):
         self.session = get_or_create_session(self.experiment, self.student)
         self.client.force_login(self.student)
 
-    def submit_assignment(self, assignment):
+    def submit_assignment(self, assignment, confidence=None):
         draft = self.client.post(
             reverse("assessment:save_draft", args=[assignment.attempt.pk]),
             data=json.dumps({"answer": "A"}),
@@ -89,7 +89,7 @@ class ConfidenceFlowTests(TestCase):
         self.assertEqual(draft.status_code, 200)
         return self.client.post(
             reverse("assessment:submit", args=[assignment.attempt.pk]),
-            data=json.dumps({"submission_token": str(uuid.uuid4())}),
+            data=json.dumps({"submission_token": str(uuid.uuid4()), **({"confidence": confidence} if confidence else {})}),
             content_type="application/json",
         )
 
@@ -137,122 +137,39 @@ class ConfidenceFlowTests(TestCase):
         self.assertContains(response, 'id="confidence-skip-btn"')
         self.assertContains(response, 'id="confidence-status"')
 
-    def test_prompt_submit_withholds_feedback_until_confidence_commit(self):
+    def test_prompt_is_available_before_submission_and_feedback_follows_final_confirmation(self):
         assignment = self.session.assignments.order_by("assigned_sequence_index").first()
-        submitted = self.submit_assignment(assignment)
-
-        self.assertEqual(submitted.status_code, 200)
-        data = submitted.json()
-        self.assertTrue(data["confidence_required"])
-        self.assertEqual(data["confidence"]["scale_version"], "scale-v2")
-        self.assertEqual(data["confidence"]["prompt_version"], "prompt-v3")
-        self.assertNotIn("is_correct", data)
-        self.assertNotIn("correct_answer", data)
-        self.assertNotIn("explanation", data)
-        confidence = ConfidenceAssignment.objects.get(attempt=assignment.attempt)
-        self.assertEqual(
-            confidence.response_status,
-            ConfidenceAssignment.ResponseStatus.ASSIGNED,
-        )
-
-        other_assignment = self.session.assignments.order_by(
-            "assigned_sequence_index"
-        )[1]
-        bypass = self.client.get(
-            reverse(
-                "assessment:question",
-                args=[self.session.pk, other_assignment.pk],
-            )
-        )
-        self.assertRedirects(
-            bypass,
-            reverse(
-                "assessment:question",
-                args=[self.session.pk, assignment.pk],
-            ),
-            fetch_redirect_response=False,
-        )
-        restored = self.client.get(
-            reverse(
-                "assessment:question",
-                args=[self.session.pk, assignment.pk],
-            )
-        )
-        self.assertContains(restored, 'id="pending-confidence-data"')
-        self.assertContains(
-            restored,
-            reverse(
-                "assessment_process:confidence_prompt_shown",
-                args=[assignment.attempt.pk],
-            ),
-        )
-
-        shown = self.post_process("confidence_prompt_shown", assignment.attempt)
+        entry = self.client.get(f'/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/')
+        contract = entry.json()['pending_confidence']
+        self.assertEqual(contract['scale_version'], 'scale-v2')
+        self.assertEqual(contract['prompt_version'], 'prompt-v3')
+        rejected = self.submit_assignment(assignment)
+        self.assertEqual(rejected.status_code, 400)
+        self.assertNotIn('correct_answer', rejected.json())
+        shown = self.post_process('confidence_prompt_shown', assignment.attempt)
         self.assertEqual(shown.status_code, 200)
-        confidence.refresh_from_db()
-        self.assertEqual(
-            confidence.response_status,
-            ConfidenceAssignment.ResponseStatus.PROMPT_SHOWN,
-        )
-        self.assertEqual(
-            AssessmentEvent.objects.filter(
-                attempt=assignment.attempt,
-                event_type="confidence_prompt_shown",
-            ).count(),
-            1,
-        )
-
-        committed = self.post_process(
-            "confidence_commit",
-            assignment.attempt,
-            {"probability": 80},
-        )
-        self.assertEqual(committed.status_code, 200)
-        result = committed.json()
-        self.assertTrue(result["is_correct"])
-        self.assertEqual(result["correct_answer"], "A")
-        self.assertIn("explanation", result)
-        confidence.refresh_from_db()
+        self.post_process('confidence_prompt_shown', assignment.attempt)
+        self.assertEqual(AssessmentEvent.objects.filter(attempt=assignment.attempt, event_type='confidence_prompt_shown').count(), 1)
+        submitted = self.submit_assignment(assignment, {'status': 'committed', 'probability': 80})
+        self.assertEqual(submitted.status_code, 200)
+        self.assertFalse(submitted.json()['confidence_required'])
+        self.assertEqual(submitted.json()['correct_answer'], 'A')
+        confidence = ConfidenceAssignment.objects.get(attempt=assignment.attempt)
+        self.assertEqual(confidence.response_status, 'committed')
         self.assertEqual(confidence.probability, 80)
-        self.assertEqual(
-            confidence.response_status,
-            ConfidenceAssignment.ResponseStatus.COMMITTED,
-        )
 
     def test_prompt_may_be_skipped_but_commit_and_skip_are_mutually_exclusive(self):
         assignment = self.session.assignments.order_by("assigned_sequence_index")[1]
-        self.assertEqual(self.submit_assignment(assignment).status_code, 200)
-        self.assertEqual(
-            self.post_process("confidence_prompt_shown", assignment.attempt).status_code,
-            200,
-        )
-        skipped = self.post_process("confidence_skip", assignment.attempt)
-        replay = self.post_process("confidence_skip", assignment.attempt)
-
-        self.assertEqual(skipped.status_code, 200)
-        self.assertEqual(replay.status_code, 200)
+        self.post_process('confidence_prompt_shown', assignment.attempt)
+        self.assertEqual(self.submit_assignment(assignment, {'status': 'skipped'}).status_code, 200)
         confidence = ConfidenceAssignment.objects.get(attempt=assignment.attempt)
-        self.assertEqual(
-            confidence.response_status,
-            ConfidenceAssignment.ResponseStatus.SKIPPED,
-        )
-        self.assertEqual(
-            AssessmentEvent.objects.filter(
-                attempt=assignment.attempt,
-                event_type="confidence_skipped",
-            ).count(),
-            1,
-        )
-        conflicting_commit = self.post_process(
-            "confidence_commit",
-            assignment.attempt,
-            {"probability": 70},
-        )
-        self.assertEqual(conflicting_commit.status_code, 409)
+        self.assertEqual(confidence.response_status, 'skipped')
+        self.assertEqual(AssessmentEvent.objects.filter(attempt=assignment.attempt, event_type='confidence_skipped').count(), 1)
+        self.assertEqual(self.post_process('confidence_commit', assignment.attempt, {'probability': 70}).status_code, 409)
 
     def test_feedback_event_is_rejected_until_prompt_assignment_is_resolved(self):
         assignment = self.session.assignments.order_by("assigned_sequence_index")[2]
-        self.assertEqual(self.submit_assignment(assignment).status_code, 200)
+        self.assertEqual(self.submit_assignment(assignment).status_code, 400)
         attempt = assignment.attempt
         attempt.refresh_from_db()
         payload = {
@@ -275,7 +192,7 @@ class ConfidenceFlowTests(TestCase):
             )
 
         self.post_process("confidence_prompt_shown", attempt)
-        self.post_process("confidence_commit", attempt, {"probability": 60})
+        self.assertEqual(self.submit_assignment(assignment, {"status": "committed", "probability": 60}).status_code, 200)
         event = append_assessment_event(
             event_type="feedback_shown",
             event_version=1,

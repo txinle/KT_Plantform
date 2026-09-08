@@ -201,26 +201,65 @@ class TeacherDataCenterApiTests(TestCase):
         self.assertTrue(payload["items"][0]["download_url"].endswith("/download/"))
         self.assertTrue(payload["items"][0]["delete_url"].endswith("/delete/"))
 
-    def test_advanced_catalog_keeps_event_authority_and_paginated_preview(self):
+    def test_advanced_preview_is_one_student_per_row_searchable_and_business_only(self):
+        self.student.display_name = "张同学"
+        self.student.save(update_fields=["display_name"])
+        for index in range(21):
+            student = User.objects.create_user(
+                username=f"data-extra-{index:02d}",
+                role=User.Role.STUDENT,
+                student_number=f"DATA-{index + 2:03d}",
+                display_name=f"学生 {index:02d}",
+            )
+            CourseEnrollment.objects.create(
+                course=self.course,
+                class_group=self.class_group,
+                student=student,
+            )
         response = self.client.get(
             self.api("advanced/"),
             {
                 "experiment_id": self.experiment.pk,
-                "table": "assessment_events",
+                "class_id": self.class_group.pk,
                 "page": 1,
             },
         )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(len(payload["groups"]), 6)
-        self.assertEqual(payload["selected_table"]["key"], "assessment_events")
-        self.assertEqual(payload["selected_table"]["role"], "source_of_truth")
-        self.assertEqual(payload["preview"]["page"]["size"], 20)
+        self.assertEqual(len(payload["students"]), 20)
+        self.assertEqual(payload["page"]["size"], 20)
+        self.assertEqual(payload["page"]["total_items"], 22)
+        self.assertEqual(len({row["student_number"] for row in payload["students"]}), 20)
         self.assertEqual(
-            payload["selected_table"]["path"],
-            "03_raw_events/assessment_events.csv",
+            set(payload["students"][0]),
+            {
+                "student_number",
+                "display_name",
+                "class_name",
+                "experiment_count",
+                "progress_label",
+                "status_label",
+                "detail_url",
+                "detail_api_url",
+            },
         )
+        serialized = str(payload).lower()
+        for forbidden in (
+            "schema", "table", "path", "event_id", "attempt_id",
+            "submission_id", "snapshot_id", "hash",
+        ):
+            self.assertNotIn(forbidden, serialized)
+
+        searched = self.client.get(
+            self.api("advanced/"),
+            {
+                "experiment_id": self.experiment.pk,
+                "class_id": self.class_group.pk,
+                "search": "张同学",
+            },
+        ).json()
+        self.assertEqual([row["student_number"] for row in searched["students"]], ["DATA-001"])
 
     def test_inaccessible_course_is_hidden(self):
         other = User.objects.create_user(username="data-api-other", role=User.Role.TEACHER)

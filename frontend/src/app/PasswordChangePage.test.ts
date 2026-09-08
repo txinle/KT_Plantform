@@ -23,20 +23,25 @@ describe('PasswordChangePage', () => {
     mocks.redirectPasswordChangeAuthenticationRequired.mockReturnValue(false)
   })
 
-  it('submits two accessible password fields with an eight-character minimum', async () => {
+  it('submits the current password and two accessible new-password fields', async () => {
     mocks.changePassword.mockRejectedValueOnce(new Error('两次输入的密码不一致。'))
     const wrapper = mount(PasswordChangePage)
 
+    const current = wrapper.get('input[name="current_password"]')
     const first = wrapper.get('input[name="new_password1"]')
     const second = wrapper.get('input[name="new_password2"]')
+    expect(current.attributes('autocomplete')).toBe('current-password')
     expect(first.attributes('minlength')).toBe('8')
     expect(second.attributes('minlength')).toBe('8')
+    await current.setValue('current-password')
     await first.setValue('new-password')
     await second.setValue('different-password')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(mocks.changePassword).toHaveBeenCalledWith('new-password', 'different-password')
+    expect(mocks.changePassword).toHaveBeenCalledWith(
+      'current-password', 'new-password', 'different-password',
+    )
     expect(wrapper.get('[role="alert"]').text()).toContain('两次输入的密码不一致。')
   })
 
@@ -56,6 +61,7 @@ describe('PasswordChangePage', () => {
       code: 'VALIDATION_ERROR',
       message: '请求数据无效。',
       fields: {
+        current_password: ['当前密码不正确。'],
         new_password1: ['新密码不能与初始密码相同。'],
         new_password2: ['两次输入的密码不一致。'],
         non_field_errors: ['请修正密码后重试。'],
@@ -63,12 +69,14 @@ describe('PasswordChangePage', () => {
     } }))
     const wrapper = mount(PasswordChangePage)
 
+    await wrapper.get('input[name="current_password"]').setValue('current-password')
     await wrapper.get('input[name="new_password1"]').setValue('Same-password')
     await wrapper.get('input[name="new_password2"]').setValue('Different-password')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     const alert = wrapper.get('[role="alert"]').text()
+    expect(alert).toContain('当前密码不正确。')
     expect(alert).toContain('新密码不能与初始密码相同。')
     expect(alert).toContain('两次输入的密码不一致。')
     expect(alert).toContain('请修正密码后重试。')
@@ -83,6 +91,7 @@ describe('PasswordChangePage', () => {
     mocks.redirectPasswordChangeAuthenticationRequired.mockReturnValueOnce(true)
     const wrapper = mount(PasswordChangePage)
 
+    await wrapper.get('input[name="current_password"]').setValue('current-password')
     await wrapper.get('input[name="new_password1"]').setValue('new-password')
     await wrapper.get('input[name="new_password2"]').setValue('new-password')
     await wrapper.get('form').trigger('submit')

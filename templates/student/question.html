@@ -58,6 +58,7 @@
             data-save-url="{% url 'assessment:save_draft' attempt.id %}"
             data-submit-url="{% url 'assessment:submit' attempt.id %}"
             data-skip-url="{% url 'assessment:skip' attempt.id %}"
+            data-recovery-url="{% url 'student-attempt-recovery' attempt.id %}"
             data-next-url="{{ fallback_next_url }}"
             data-process-session-id="{{ session.id }}"
             data-process-attempt-id="{{ attempt.id }}"
@@ -66,7 +67,7 @@
             data-capture-checkpoint-url="{% url 'assessment_process:capture_checkpoint' %}"
             data-time-sync-create-url="{% url 'assessment_process:time_sync_create' %}"
             data-time-sync-finalize-url="{% url 'assessment_process:time_sync_finalize' %}"
-            data-process-app-version="2026.08.29.2"
+            data-process-app-version="2026.09.09.1"
             data-heartbeat-interval-seconds="{{ session.version.configuration.heartbeat_interval_seconds|default:30 }}">
         {% csrf_token %}
         {% if snapshot.question_type == 'single_choice' %}
@@ -140,13 +141,14 @@
           <div id="confidence-status" class="save-status mt-2" role="status" aria-live="polite">等待评价</div>
           <div class="confidence-actions">
             <button type="button" id="confidence-skip-btn" class="btn btn-outline-secondary">跳过评价</button>
-            <button type="button" id="confidence-submit-btn" class="btn btn-primary">提交信心评价</button>
+            <button type="button" id="confidence-submit-btn" class="btn btn-primary" disabled>下一步：确认提交</button>
+            <button type="button" id="confidence-return-btn" class="btn btn-outline-secondary">返回修改答案</button>
           </div>
         </section>
         {% if attempt.status != 'submitted' %}
           <div class="sticky-actions">
             <button type="button" id="skip-btn" class="btn btn-outline-secondary">标记跳过</button>
-            <button type="button" id="submit-btn" class="btn btn-primary px-md-4" data-bs-toggle="modal" data-bs-target="#submit-confirm-dialog">确认提交本题</button>
+            <button type="button" id="submit-btn" class="btn btn-primary px-md-4">确认提交本题</button>
           </div>
         {% endif %}
       </form>
@@ -161,6 +163,6 @@
 {% include 'components/confirm_dialog.html' with dialog_id='finish-confirm-dialog' dialog_title='确认结束实验' dialog_body='未正式提交的题目将记录为未作答。此操作会结束当前会话。' dialog_confirm_label='结束实验' dialog_confirm_class='btn-danger' %}
 {% endblock %}
 {% block scripts %}
-<script src="{% static 'js/process-event-collector.js' %}?v=20260829.2"></script>
-<script src="{% static 'js/assessment.js' %}?v=20260829.2"></script>
+<script src="{% static 'js/process-event-collector.js' %}?v=20260909.1"></script>
+<script src="{% static 'js/assessment.js' %}?v=20260909.1"></script>
 {% endblock %}

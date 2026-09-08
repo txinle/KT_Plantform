@@ -233,23 +233,17 @@ class DataCenterUiV2Tests(TransactionTestCase):
         self.assertContains(versioned_response, "本次导出版本：Version 1")
         self.assertContains(versioned_response, "更换版本")
 
-    def test_advanced_tools_use_six_semantic_groups_and_one_open_group(self):
+    def test_advanced_fallback_is_a_business_student_preview_entry(self):
         response = self.client.get(
             reverse("courses:data_advanced", args=[self.course.pk]),
             {"experiment_id": self.experiment.pk, "table": "assessment_events"},
         )
 
         self.assertEqual(response.status_code, 200)
-        for label in (
-            "实验与参与者",
-            "题目与知识结构",
-            "作答与评分",
-            "行为过程",
-            "扩展观测",
-            "派生研究数据",
-        ):
-            self.assertContains(response, label)
-        self.assertContains(response, 'data-advanced-group-open="true"', count=1)
+        self.assertContains(response, "学生作答预览")
+        self.assertContains(response, "查看教学数据")
+        self.assertNotContains(response, "Schema")
+        self.assertNotContains(response, "assessment_events")
 
     def test_advanced_catalog_marks_event_authority_and_derived_q_matrix(self):
         response = self.client.get(
@@ -268,22 +262,17 @@ class DataCenterUiV2Tests(TransactionTestCase):
         self.assertEqual(items["telemetry_events"][1]["role"], "classified_view")
         self.assertEqual(items["q_matrix"][0], "derived")
 
-    def test_advanced_sidebar_uses_logical_names_and_keeps_path_in_technical_info(self):
+    def test_advanced_fallback_does_not_render_technical_catalog_or_paths(self):
         response = self.client.get(
             reverse("courses:data_advanced", args=[self.course.pk]),
             {"experiment_id": self.experiment.pk, "table": "assessment_events"},
         )
 
-        html = response.content.decode()
-        sidebar = html.split('data-advanced-sidebar="true"', 1)[1].split(
-            'data-advanced-content="true"', 1
-        )[0]
-        self.assertIn("assessment_events", sidebar)
-        self.assertNotIn("03_raw_events/assessment_events.csv", sidebar)
-        self.assertContains(response, "技术信息")
-        self.assertContains(response, "03_raw_events/assessment_events.csv")
+        self.assertContains(response, "学生作答预览")
+        for forbidden in ("assessment_events", "03_raw_events", "技术信息", "Schema"):
+            self.assertNotContains(response, forbidden)
 
-    def test_advanced_extensions_are_hidden_until_enabled_for_experiment(self):
+    def test_advanced_fallback_never_exposes_extension_table_names(self):
         url = reverse("courses:data_advanced", args=[self.course.pk])
         hidden = self.client.get(url, {"experiment_id": self.experiment.pk})
         self.assertNotContains(hidden, "Confidence信心")
@@ -294,9 +283,9 @@ class DataCenterUiV2Tests(TransactionTestCase):
         self.version.configuration = {"simulation_enabled": True}
         self.version.save(update_fields=["configuration"])
         enabled = self.client.get(url, {"experiment_id": self.experiment.pk})
-        self.assertContains(enabled, "Confidence信心")
-        self.assertContains(enabled, "仿真事件")
-        self.assertContains(enabled, "仿真快照")
+        self.assertNotContains(enabled, "Confidence信心")
+        self.assertNotContains(enabled, "仿真事件")
+        self.assertNotContains(enabled, "仿真快照")
 
     def test_research_scope_survives_advanced_table_and_export_package_links(self):
         research_scope = {

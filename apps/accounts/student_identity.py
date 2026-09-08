@@ -5,6 +5,7 @@ from django.core import signing
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from apps.audit.services import log_action
 from .membership_history import has_course_membership_history, has_other_course_membership_history
@@ -200,7 +201,8 @@ def enroll_student(course, class_group, student_number, display_name, *, request
                 student = User.objects.create_user(
                     username=submitted["student_number"], student_number=submitted["student_number"],
                     display_name=submitted["display_name"], role=User.Role.STUDENT,
-                    password=f"S{submitted['student_number']}", must_change_password=True,
+                    password=f"S{submitted['student_number']}", uses_initial_password=True,
+                    initial_password_state_recorded_at=timezone.now(),
                 )
         except IntegrityError as exc:
             raise StudentIdentityError("STUDENT_NUMBER_CONFLICT", "该学号或登录用户名已被其他操作占用，请刷新后重试。") from exc

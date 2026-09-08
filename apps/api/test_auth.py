@@ -38,7 +38,8 @@ class AuthenticationApiTests(TestCase):
                     "username": "S20260001",
                     "student_number": "S20260001",
                     "home_url": reverse("assessment:dashboard"),
-                    "must_change_password": False,
+                    "uses_initial_password": False,
+                    "initial_password_reminder_pending": False,
                 }
             },
         )
@@ -76,7 +77,8 @@ class AuthenticationApiTests(TestCase):
                 "username": "auth-teacher",
                 "student_number": None,
                 "home_url": reverse("courses:list"),
-                "must_change_password": False,
+                "uses_initial_password": False,
+                "initial_password_reminder_pending": False,
             },
         )
         self.assertEqual(csrf_client.get(reverse("api-session")).status_code, 200)

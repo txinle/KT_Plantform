@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     submit: vi.fn(),
     skip: vi.fn(),
     post: vi.fn(),
+    recover: vi.fn(),
   },
   push: vi.fn(),
   replace: vi.fn(),
@@ -29,6 +30,7 @@ const mocks = vi.hoisted(() => ({
     flushBounded: vi.fn(),
     closeAttempt: vi.fn(),
     dispose: vi.fn(),
+    saveSubmissionIntent: vi.fn(),
   },
 }))
 
@@ -58,7 +60,6 @@ vi.mock('@/app/bootstrap', () => ({
 }))
 
 import StudentAssessment from './StudentAssessment.vue'
-import { ApiError } from '@/api/client'
 
 const questionState = {
   task_id: 19,
@@ -143,6 +144,7 @@ describe('StudentAssessment', () => {
       },
     })
     mocks.api.question.mockResolvedValue(structuredClone(questionState))
+    mocks.api.recover.mockResolvedValue({ status: 'draft', can_continue: true, code: '', result: null })
     mocks.api.saveDraft.mockResolvedValue({ success: true, saved_at: '2026-08-30T08:00:00Z' })
     mocks.api.submit.mockResolvedValue({
       success: true,
@@ -163,6 +165,7 @@ describe('StudentAssessment', () => {
     mocks.createProcessRuntime.mockResolvedValue(mocks.runtime)
     mocks.prepareOfflineQuestion.mockResolvedValue(undefined)
     mocks.runtime.record.mockResolvedValue({ recorded: true })
+    mocks.runtime.saveSubmissionIntent.mockImplementation(async (intent) => { structuredClone(intent) })
     document.querySelector('[data-runtime-finish-form]')?.remove()
   })
 
@@ -573,13 +576,10 @@ describe('StudentAssessment', () => {
     expect(mocks.push).toHaveBeenCalledWith('/student/sessions/7/questions/12/')
   })
 
-  it('requires the assigned confidence response before navigation and renders only returned feedback', async () => {
-    mocks.api.submit.mockResolvedValue({
-      success: true,
-      status: 'submitted',
-      next_url: '/student/sessions/7/questions/12/',
-      confidence_required: true,
-      confidence: {
+  it('collects confidence before the final atomic submission without accepting an untouched default', async () => {
+    mocks.api.question.mockResolvedValue({
+      ...structuredClone(questionState),
+      pending_confidence: {
         confidence_assignment_id: '31',
         scale_version: 'v1',
         prompt_version: 'v1',
@@ -593,9 +593,9 @@ describe('StudentAssessment', () => {
     })
     const wrapper = mount(StudentAssessment)
     await flushPromises()
+    expect(wrapper.find('[data-confidence-panel]').exists()).toBe(false)
     await wrapper.findAll<HTMLInputElement>('input[name="answer"]')[1]?.setValue(true)
     await wrapper.get('[data-submit-request]').trigger('click')
-    await wrapper.get('[data-submit-confirm]').trigger('click')
     await flushPromises()
 
     expect(mocks.api.post).toHaveBeenCalledWith(
@@ -603,34 +603,94 @@ describe('StudentAssessment', () => {
       {},
     )
     expect(mocks.push).not.toHaveBeenCalled()
+    expect(mocks.api.submit).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-confidence-submit]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-confidence-panel]').text()).toContain('你对这次答案有多大把握？')
 
-    let releaseFlush!: () => void
-    mocks.runtime.flushBounded.mockReturnValueOnce(new Promise<void>(resolve => { releaseFlush = resolve }))
     await wrapper.get<HTMLInputElement>('[data-confidence-input]').setValue(80)
     await wrapper.get('[data-confidence-submit]').trigger('click')
     await flushPromises()
 
     expect(mocks.push).not.toHaveBeenCalled()
-    releaseFlush()
+    expect(mocks.api.submit).not.toHaveBeenCalled()
+    await wrapper.get('[data-submit-confirm]').trigger('click')
     await flushPromises()
-    expect(mocks.api.post).toHaveBeenLastCalledWith(
-      '/assessment/process/confidence/13/commit/',
-      { probability: 80 },
+    expect(mocks.api.submit).toHaveBeenCalledWith(
+      questionState.actions.submit_url,
+      expect.any(String), expect.any(String), undefined, undefined,
+      { status: 'committed', probability: 80 },
     )
-    expect(wrapper.text()).toContain('回答正确')
+    expect(mocks.api.post.mock.calls.every(call => !String(call[0]).endsWith('/commit/'))).toBe(true)
     expect(wrapper.text()).not.toContain('正确答案')
     expect(mocks.runtime.record).toHaveBeenCalledWith(
       'feedback_shown',
       {
-        feedback_mode: 'correctness',
-        included_correctness: true,
+        feedback_mode: 'none',
+        included_correctness: false,
         included_correct_answer: false,
         included_explanation: false,
       },
       {},
     )
     expect(mocks.push).toHaveBeenCalledWith('/student/sessions/7/questions/12/')
+  })
+
+  it('cancels pending confidence resolution when returning to edit', async () => {
+    let shown!: (value: unknown) => void
+    mocks.api.post.mockImplementationOnce(() => new Promise(resolve => { shown = resolve }))
+    mocks.api.question.mockResolvedValue({ ...structuredClone(questionState), pending_confidence: {
+      confidence_assignment_id: '31', scale_version: 'v1', prompt_version: 'v1', minimum: 0, maximum: 100, step: 10,
+      prompt_shown_url: '/assessment/process/confidence/13/prompt-shown/',
+      commit_url: '/assessment/process/confidence/13/commit/', skip_url: '/assessment/process/confidence/13/skip/',
+    } })
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    await wrapper.findAll<HTMLInputElement>('input[name="answer"]')[1]?.setValue(true)
+    await wrapper.get('[data-submit-request]').trigger('click')
+    await flushPromises()
+    await wrapper.get<HTMLInputElement>('[data-confidence-input]').setValue(80)
+    await wrapper.get('[data-confidence-submit]').trigger('click')
+    await wrapper.get('[data-return-answer]').trigger('click')
+    shown({ success: true })
+    await flushPromises()
+    expect(wrapper.find('[data-submit-confirm]').exists()).toBe(false)
+    expect(mocks.api.submit).not.toHaveBeenCalled()
+    await wrapper.get('[data-submit-request]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-confidence-submit]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('recovers a lost final response without sending another submission', async () => {
+    mocks.api.submit.mockRejectedValueOnce(new TypeError('network lost'))
+    mocks.api.recover.mockResolvedValue({ status: 'submitted', submission_matches: true, can_continue: false,
+      result: { success: true, status: 'submitted', confidence_required: false, next_url: '/student/sessions/7/questions/12/' },
+    })
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    await wrapper.findAll<HTMLInputElement>('input[name="answer"]')[1]?.setValue(true)
+    await wrapper.get('[data-submit-request]').trigger('click')
+    await wrapper.get('[data-submit-confirm]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.recover).toHaveBeenCalledWith(13, expect.any(String))
+    expect(mocks.api.submit).toHaveBeenCalledOnce()
+    expect(mocks.runtime.saveSubmissionIntent).toHaveBeenLastCalledWith(null)
+    expect(mocks.push).toHaveBeenCalledWith('/student/sessions/7/questions/12/')
+  })
+
+  it('restores an uncommitted intent after reload and retries with its original token', async () => {
+    mocks.api.question.mockResolvedValue({ ...structuredClone(questionState), draft_answer: 'B' })
+    mocks.createProcessRuntime.mockResolvedValue({ ...mocks.runtime, restoredSubmission: {
+      token: '11111111-1111-4111-8111-111111111111', clickedAt: '2026-09-09T00:00:00Z', answer: JSON.stringify('B'),
+    } })
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    expect(mocks.api.recover).toHaveBeenCalledWith(13, '11111111-1111-4111-8111-111111111111')
+    expect(mocks.api.submit).not.toHaveBeenCalled()
+    await wrapper.get('[data-submit-confirm]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.submit).toHaveBeenCalledWith(questionState.actions.submit_url, '11111111-1111-4111-8111-111111111111', '2026-09-09T00:00:00Z', undefined, undefined, undefined)
+    wrapper.unmount()
   })
 
   it('confirms and posts finish only after the current draft is durable', async () => {
@@ -680,24 +740,6 @@ describe('StudentAssessment', () => {
     expect(mocks.api.question).not.toHaveBeenCalled()
     expect(wrapper.get('[role="alert"]').text()).toContain('当前浏览器无法安全保存作答过程')
     expect(wrapper.text()).toContain('IndexedDB')
-  })
-
-  it('returns to the server-identified question when confidence must be completed first', async () => {
-    mocks.api.question.mockRejectedValue(new ApiError(409, {
-      error: {
-        code: 'CONFIDENCE_REQUIRED',
-        message: '请先完成当前题目的信心评价。',
-        fields: {
-          assignment_id: 10,
-          question_url: '/student/sessions/7/questions/10/',
-        },
-      },
-    }))
-
-    mount(StudentAssessment)
-    await flushPromises()
-
-    expect(mocks.replace).toHaveBeenCalledWith('/student/sessions/7/questions/10/')
   })
 
   it('blocks assessment writes and question navigation when capture preparation fails', async () => {

@@ -595,7 +595,7 @@ class StudentAssessmentApiTests(StudentApiTestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["error"]["code"], "NOT_FOUND")
 
-    def test_question_entry_redirect_contract_identifies_the_pending_confidence_question(self):
+    def test_unresolved_confidence_does_not_redirect_another_question(self):
         second_question = Question.objects.create(
             bank=self.bank,
             sequence=2,
@@ -641,23 +641,9 @@ class StudentAssessmentApiTests(StudentApiTestCase):
             f"/api/v1/student/sessions/{session.pk}/questions/{second.pk}/"
         )
 
-        self.assertEqual(response.status_code, 409, response.content)
-        self.assertEqual(response.json()["error"]["code"], "CONFIDENCE_REQUIRED")
-        self.assertEqual(
-            response.json()["error"]["fields"],
-            {
-                "assignment_id": first.pk,
-                "question_url": reverse(
-                    "assessment:question",
-                    args=[session.pk, first.pk],
-                ),
-            },
-        )
-        second.attempt.refresh_from_db()
-        self.assertEqual(second.attempt.visit_count, 0)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['assignment']['assignment_id'], second.pk)
 
-
-class StudentResultApiTests(StudentApiTestCase):
     def test_full_feedback_never_reveals_answers_during_an_active_session(self):
         started = self.start()
         session = ExperimentSession.objects.get(pk=started.json()["session_id"])

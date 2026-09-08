@@ -55,6 +55,7 @@ describe('StudentCoursesLayout', () => {
     expect(wrapper.get('.kt-global-nav').text()).toBe('菜单')
     expect(wrapper.find('.kt-course-bar').exists()).toBe(false)
     expect(wrapper.get('#student-main').classes()).toContain('kt-workspace-main')
-    expect(wrapper.get('.kt-logout-button').text()).toBe('退出')
+    expect(wrapper.get('button.kt-logout-button').text()).toBe('退出')
+    expect(wrapper.get('a[href="/password/change/"]').text()).toBe('修改密码')
   })
 })

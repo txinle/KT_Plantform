@@ -94,14 +94,19 @@ export interface StudentExperimentDetail {
   questions: Array<{
     question_id: number
     code: string
+    question_summary: string
     kcs: string[]
     result_label: string
+    score_display: string
     first_answer: string | null
     final_answer: string
     revision_count: number | null
     answer_time_ms: string | null
     answer_time_display: string
     process_complete: boolean
+    confidence_label: string
+    submission_status_label: string
+    submitted_at: string
     question_url: string
     process_url: string
   }>
@@ -163,12 +168,16 @@ export interface AttemptProcessDetail {
   question_id: number
   question_code: string
   question_text: string
+  question_options: string[]
+  correct_answer: string
   student_id: number
   student_number: string
   display_name: string
   is_current_member: boolean
   result_label: string
   score_display: string
+  confidence_label: string
+  answer_time_display: string
   process: {
     question_type: string
     completeness: 'complete' | 'incomplete'
@@ -177,6 +186,8 @@ export interface AttemptProcessDetail {
       label: string
       occurred_at: string | null
       value: string | null
+      value_before: string | null
+      value_after: string | null
       length_before: number | null
       length_after: number | null
       time_source: string

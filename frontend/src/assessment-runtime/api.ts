@@ -29,6 +29,21 @@ export interface SubmissionResponse {
   explanation?: string
 }
 
+export interface SubmissionConfidence {
+  status: 'committed' | 'skipped'
+  probability?: number
+  answer_event_id?: string | null
+}
+
+export interface RecoveryState {
+  status: string
+  code: string
+  can_continue: boolean
+  question_url: string | null
+  submission_matches?: boolean
+  result?: SubmissionResponse | null
+}
+
 export interface NavigationResponse {
   success: boolean
   next_url: string
@@ -41,6 +56,8 @@ interface StudentAssessmentClient {
 
 export function createStudentAssessmentApi(client: StudentAssessmentClient) {
   return {
+    recoverQuestion: (sessionId: number, assignmentId: number) => client.get<RecoveryState>(`/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/recovery/`),
+    recover: (attemptId: number, token: string) => client.get<RecoveryState>(`/api/v1/student/attempts/${attemptId}/recovery/?submission_token=${encodeURIComponent(token)}`),
     question: (sessionId: number, assignmentId: number, reason = 'navigation_click') => (
       client.get<StudentRuntimeQuestionEntry>(
         `/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/?reason=${encodeURIComponent(reason)}`,
@@ -52,13 +69,14 @@ export function createStudentAssessmentApi(client: StudentAssessmentClient) {
         body: { answer, client_occurred_at: clientOccurredAt, ...target },
       })
     ),
-    submit: (url: string, submissionToken: string, clientClickedAt: string, targetEventId?: string | null, lease?: WriterLeaseCredentials) => (
+    submit: (url: string, submissionToken: string, clientClickedAt: string, targetEventId?: string | null, lease?: WriterLeaseCredentials, confidence?: SubmissionConfidence) => (
       client.mutate<SubmissionResponse>(url, {
         method: 'POST',
         body: {
           submission_token: submissionToken,
           client_clicked_at: clientClickedAt,
           ...lease,
+          ...(confidence ? { confidence } : {}),
           ...(targetEventId ? { target_event_id: targetEventId } : {}),
         },
       })

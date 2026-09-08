@@ -1,6 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from .class_lifecycle import lock_active_class_groups
 from .course_access import lock_writable_course
@@ -108,7 +109,8 @@ def enroll_parsed_students(course, class_group, parsed_students):
                     display_name=item.display_name,
                     role=User.Role.STUDENT,
                     password=f"S{item.student_number}",
-                    must_change_password=True,
+                    uses_initial_password=True,
+                    initial_password_state_recorded_at=timezone.now(),
                 )
                 created_accounts += 1
             CourseEnrollment.objects.create(
@@ -225,5 +227,6 @@ def import_legacy_students(parsed_students, accessible_classes):
                 class_group=class_group,
                 role=User.Role.STUDENT,
                 password=f"S{item.student_number}",
-                must_change_password=True,
+                uses_initial_password=True,
+                initial_password_state_recorded_at=timezone.now(),
             )

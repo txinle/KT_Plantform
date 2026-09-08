@@ -68,6 +68,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/password/reminder-shown/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["auth_password_reminder_shown_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/session/": {
         parameters: {
             query?: never;
@@ -108,6 +124,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["health_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/student/attempts/{attempt_id}/recovery/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["student_attempts_recovery_retrieve"];
         put?: never;
         post?: never;
         delete?: never;
@@ -212,6 +244,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/student/sessions/{session_id}/questions/{assignment_id}/recovery/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["student_sessions_questions_recovery_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/student/sessions/{session_id}/summary/": {
         parameters: {
             query?: never;
@@ -220,6 +268,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["student_sessions_summary_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/student/tasks/{task_id}/recovery/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["student_tasks_recovery_retrieve"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1889,7 +1953,8 @@ export interface components {
             username: string;
             student_number: string | null;
             home_url: string;
-            must_change_password: boolean;
+            uses_initial_password: boolean;
+            initial_password_reminder_pending: boolean;
         };
         AttemptProcess: {
             question_type: string;
@@ -1911,12 +1976,16 @@ export interface components {
             question_id: number;
             question_code: string;
             question_text: string;
+            question_options: string[];
+            correct_answer: string;
             student_id: number;
             student_number: string;
             display_name: string;
             is_current_member: boolean;
             result_label: string;
             score_display: string;
+            confidence_label: string;
+            answer_time_display: string;
             process: components["schemas"]["AttemptProcess"];
             coverage_status_title: string;
             coverage_status_description: string;
@@ -2148,35 +2217,20 @@ export interface components {
         };
         DataCenterAdvanced: {
             course: components["schemas"]["CourseReference"];
-            scope: components["schemas"]["DataCenterResearchScope"];
-            groups: components["schemas"]["DataCenterAdvancedGroup"][];
-            selected_table: components["schemas"]["DataCenterAdvancedTable"];
-            selected_experiment: components["schemas"]["DataCenterExperimentOption"] | null;
-            preview: components["schemas"]["DataCenterAdvancedPreview"] | null;
-        };
-        DataCenterAdvancedGroup: {
-            key: string;
-            label: string;
-            description: string;
-            tables: components["schemas"]["DataCenterAdvancedTable"][];
-            active: boolean;
-        };
-        DataCenterAdvancedPreview: {
-            columns: components["schemas"]["DataCenterPreviewColumn"][];
-            rows: unknown[][];
+            scope: components["schemas"]["DataCenterTeachingScope"];
+            search: string;
+            students: components["schemas"]["DataCenterAdvancedStudent"][];
             page: components["schemas"]["TeacherClassPageMetadata"];
-            data_status: string;
         };
-        DataCenterAdvancedTable: {
-            key: string;
-            label: string;
-            path: string;
-            role: string;
-            role_label: string;
-            description: string;
-            schema_version: string;
-            source_layer: string;
-            active: boolean;
+        DataCenterAdvancedStudent: {
+            student_number: string;
+            display_name: string;
+            class_name: string;
+            experiment_count: number;
+            progress_label: string;
+            status_label: string;
+            detail_url: string;
+            detail_api_url: string;
         };
         DataCenterClassOption: {
             id: number;
@@ -2254,10 +2308,6 @@ export interface components {
             exports_url: string;
             quality_url: string;
             history_url: string;
-        };
-        DataCenterPreviewColumn: {
-            name: string;
-            description: string;
         };
         DataCenterQualityCollection: {
             items: components["schemas"]["DataCenterQualityRow"][];
@@ -2988,6 +3038,8 @@ export interface components {
             /** Format: date-time */
             occurred_at: string | null;
             value: string | null;
+            value_before: string | null;
+            value_after: string | null;
             length_before: number | null;
             length_after: number | null;
             time_source: string;
@@ -3363,6 +3415,16 @@ export interface components {
          * @enum {string}
          */
         RankModeEnum: "none" | "self";
+        Recovery: {
+            task_id?: number;
+            session_id?: number;
+            status: string;
+            code: string;
+            can_continue: boolean;
+            question_url: string | null;
+            submission_matches?: boolean;
+            result?: unknown;
+        };
         RemoveEnrollmentRequest: {
             confirmation: components["schemas"]["ConfirmationF49Enum"];
         };
@@ -3710,8 +3772,10 @@ export interface components {
         StudentExperimentQuestion: {
             question_id: number;
             code: string;
+            question_summary: string;
             kcs: string[];
             result_label: string;
+            score_display: string;
             first_answer: string | null;
             final_answer: string;
             revision_count: number | null;
@@ -3719,6 +3783,10 @@ export interface components {
             answer_time_ms: string | null;
             answer_time_display: string;
             process_complete: boolean;
+            confidence_label: string;
+            submission_status_label: string;
+            /** Format: date-time */
+            submitted_at: string;
             question_url: string;
             process_url: string;
         };
@@ -3887,6 +3955,7 @@ export interface components {
             maximum: string;
         };
         StudentPasswordChange: {
+            current_password: string;
             new_password1: string;
             new_password2: string;
         };
@@ -4795,6 +4864,25 @@ export interface operations {
             };
         };
     };
+    auth_password_reminder_shown_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionContext"];
+                };
+            };
+        };
+    };
     auth_session_retrieve: {
         parameters: {
             query?: never;
@@ -4850,6 +4938,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Health"];
+                };
+            };
+        };
+    };
+    student_attempts_recovery_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attempt_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recovery"];
                 };
             };
         };
@@ -4982,6 +5091,28 @@ export interface operations {
             };
         };
     };
+    student_sessions_questions_recovery_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                assignment_id: number;
+                session_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recovery"];
+                };
+            };
+        };
+    };
     student_sessions_summary_retrieve: {
         parameters: {
             query?: never;
@@ -4999,6 +5130,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StudentSessionSummary"];
+                };
+            };
+        };
+    };
+    student_tasks_recovery_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recovery"];
                 };
             };
         };

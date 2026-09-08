@@ -3,6 +3,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, models, transaction
 from django.db.models import Q
 from django.db.models.deletion import ProtectedError
+from django.utils import timezone
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.experiments.models import (
     ClassExperimentTask,
@@ -129,7 +130,7 @@ class Command(BaseCommand):
         for index in range(1, 4):
             number = f"S{index:03d}"
             student, _ = User.objects.get_or_create(username=number, defaults={"role": User.Role.STUDENT, "student_number": number, "display_name": f"学生{index}"})
-            student.role = User.Role.STUDENT; student.student_number = number; student.set_password("student123"); student.is_active = True; student.save(); students.append(student)
+            student.role = User.Role.STUDENT; student.student_number = number; student.set_password("student123"); student.is_active = True; student.uses_initial_password = False; student.initial_password_reminder_shown_at = None; student.initial_password_state_recorded_at = timezone.now(); student.must_change_password = False; student.save(); students.append(student)
         existing_bank = QuestionBank.objects.filter(
             course=course,
             name="演示题库",

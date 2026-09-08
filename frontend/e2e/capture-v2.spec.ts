@@ -94,13 +94,13 @@ test('five short-response types retain trajectories through offline reload, IME 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.getByRole('button', { name: '确认提交本题', exact: true }).click()
+    if (await page.locator('[data-confidence-panel]').isVisible()) await page.getByRole('button', { name: /跳过评价/ }).click()
     const submitted = page.waitForResponse((response) => response.url().endsWith('/submit/'), { timeout: 15000 })
     await page.getByRole('dialog').getByRole('button', { name: '提交并锁定', exact: true }).click()
     const submitResponse = await submitted
     const body = await submitResponse.json()
     expect(submitResponse.ok(), JSON.stringify(body)).toBe(true)
     if (row !== rows.at(-1)) expect(body).not.toHaveProperty('correct_answer')
-    if (await page.locator('[data-confidence-panel]').isVisible()) await page.getByRole('button', { name: /跳过评价/ }).click()
     await expect(page).toHaveURL(new RegExp(body.next_url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'))
   }
   const single = fixture.question_refs.find((row: { question_type: string }) => row.question_type === 'single_choice')

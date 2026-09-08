@@ -15,6 +15,16 @@ const {
 const INSTANCE_A = '11111111-1111-4111-8111-111111111111';
 const INSTANCE_B = '22222222-2222-4222-8222-222222222222';
 
+test('submission intent survives collector replacement and is scoped to one attempt', async () => {
+  const outbox = new MemoryOutbox();
+  const intent = { token: INSTANCE_A, answer: 'B', confidence: { status: 'skipped' } };
+  await outbox.saveSubmissionIntent(7, 11, intent);
+  assert.deepEqual(await outbox.restoreSubmissionIntent(7, 11), intent);
+  assert.equal(await outbox.restoreSubmissionIntent(7, 12), null);
+  await outbox.saveSubmissionIntent(7, 11, null);
+  assert.equal(await outbox.restoreSubmissionIntent(7, 11), null);
+});
+
 test('interactive presentation survives payload sanitization for the v2 schema', async () => {
   const collector = new ProcessEventCollector(eventPayload());
   const event = await collector.record('item_rendered', { presentation_state: 'interactive' });

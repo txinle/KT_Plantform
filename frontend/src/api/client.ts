@@ -31,7 +31,7 @@ export class ApiError extends Error {
     const structured = typeof body.error === 'object' ? body.error : undefined
     super(
       (typeof body.error === 'string' ? body.error : structured?.message)
-      || `API request failed with status ${status}`,
+      || (status >= 500 ? '服务器暂时异常，请稍后核验作答状态。' : '请求未完成，请刷新页面后重试。'),
     )
     this.name = 'ApiError'
     this.status = status
@@ -46,7 +46,9 @@ export class MutationOutcomeUnknownError<T = unknown> extends Error {
   cause: unknown
 
   constructor(cause: unknown, authoritativeState?: T) {
-    super('Mutation outcome is unknown; authoritative state was refreshed.')
+    super(authoritativeState === undefined
+      ? '网络中断，尚未确认操作是否成功。请核验状态后重试。'
+      : '请求响应中断，已取得服务器当前状态，请核对后继续。')
     this.name = 'MutationOutcomeUnknownError'
     this.cause = cause
     this.authoritativeState = authoritativeState
@@ -57,7 +59,6 @@ interface ClientOptions {
   fetchImpl?: typeof fetch
   getCsrfToken?: () => string
   onAuthenticationRequired?: (loginUrl: string) => void
-  onPasswordChangeRequired?: (passwordChangeUrl: string) => void
 }
 
 interface GetOptions {
@@ -80,7 +81,14 @@ interface FormMutationOptions<TState> {
 
 async function responseBody(response: Response): Promise<unknown> {
   if (response.status === 204) return undefined
-  return response.json()
+  try { return await response.json() }
+  catch (error) {
+    if (response.ok) throw error
+    return { error: {
+      code: response.status >= 500 ? 'SERVER_ERROR' : response.status === 401 ? 'AUTHENTICATION_REQUIRED' : 'REQUEST_REJECTED',
+      message: response.status >= 500 ? '服务器暂时异常，请稍后核验作答状态。' : response.status === 401 ? '登录已失效，请重新登录后继续原任务。' : '请求未完成，请刷新页面后重试。',
+    } }
+  }
 }
 
 function isAbortError(error: unknown): boolean {
@@ -93,17 +101,13 @@ export function createApiClient(options: ClientOptions = {}) {
   const onAuthenticationRequired = options.onAuthenticationRequired || ((loginUrl: string) => {
     window.location.assign(loginUrl)
   })
-  const onPasswordChangeRequired = options.onPasswordChangeRequired || ((passwordChangeUrl: string) => {
-    window.location.assign(passwordChangeUrl)
-  })
+
 
   async function parse<T>(response: Response): Promise<T> {
     const body = await responseBody(response)
     if (!response.ok) {
       const apiError = new ApiError(response.status, (body || {}) as ApiErrorBody)
-      if (apiError.code === 'PASSWORD_CHANGE_REQUIRED') {
-        onPasswordChangeRequired('/password/change/')
-      } else if (response.status === 401) {
+      if (response.status === 401) {
         const currentPage = `${window.location.pathname}${window.location.search}${window.location.hash}`
         onAuthenticationRequired(`/login/?next=${encodeURIComponent(currentPage)}`)
       }
@@ -126,7 +130,8 @@ export function createApiClient(options: ClientOptions = {}) {
           if ([502, 503, 504].includes(response.status) && attempt === 0) continue
           return await parse<T>(response)
         } catch (error) {
-          if (isAbortError(error) || error instanceof ApiError || attempt === 1) throw error
+          if (isAbortError(error) || error instanceof ApiError) throw error
+          if (attempt === 1) throw new Error('无法连接服务器，请检查网络后重试。', { cause: error })
           lastError = error
         }
       }
@@ -155,7 +160,7 @@ export function createApiClient(options: ClientOptions = {}) {
       } catch (error) {
         if (error instanceof ApiError) throw error
         const authoritativeState = mutation.refreshAuthoritativeState
-          ? await mutation.refreshAuthoritativeState()
+          ? await mutation.refreshAuthoritativeState().catch(() => undefined)
           : undefined
         throw new MutationOutcomeUnknownError(error, authoritativeState)
       }
@@ -180,7 +185,7 @@ export function createApiClient(options: ClientOptions = {}) {
       } catch (error) {
         if (error instanceof ApiError) throw error
         const authoritativeState = mutation.refreshAuthoritativeState
-          ? await mutation.refreshAuthoritativeState()
+          ? await mutation.refreshAuthoritativeState().catch(() => undefined)
           : undefined
         throw new MutationOutcomeUnknownError(error, authoritativeState)
       }

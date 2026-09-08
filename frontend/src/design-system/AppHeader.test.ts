@@ -13,3 +13,13 @@ it('reports a rejected logout without losing the current page', async () => {
   expect(wrapper.get('[role="alert"]').text()).toBe('连接失败，请重试')
   expect(wrapper.get('button').attributes('disabled')).toBeUndefined()
 })
+
+it('shows the permanent password-change entry only when supplied for a student', () => {
+  const student = mount(AppHeader, {
+    props: { userName: '学生', passwordChangeUrl: '/password/change/' },
+  })
+  expect(student.get('[data-password-change-link]').attributes('href')).toBe('/password/change/')
+
+  const teacher = mount(AppHeader, { props: { userName: '教师' } })
+  expect(teacher.find('[data-password-change-link]').exists()).toBe(false)
+})

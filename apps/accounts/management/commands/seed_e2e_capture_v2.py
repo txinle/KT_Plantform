@@ -4,6 +4,7 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
+from django.utils import timezone
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.experiments.models import (
@@ -54,6 +55,7 @@ class Command(BaseCommand):
     course_description = "Isolated browser fixture for replaying five response types."
     bank_description = "First item of each type from eda_chapter1_193.csv."
     experiment_description = "One item each for single, true/false, multiple, fill blank, and short answer."
+    confidence_mode = Experiment.ConfidenceMode.OFF
 
     def handle(self, *args, **options):
         if str(connection.settings_dict["NAME"]) != "kt_e2e":
@@ -132,6 +134,7 @@ class Command(BaseCommand):
                 feedback_mode=Experiment.Feedback.FULL,
                 feedback_release_policy=Experiment.FeedbackReleasePolicy.AFTER_PERSONAL_SUBMISSION,
                 resume_mode=Experiment.ResumeMode.RESUMABLE,
+                confidence_mode=self.confidence_mode,
                 research_tools=self._research_tools(questions),
             )
 
@@ -219,6 +222,10 @@ class Command(BaseCommand):
         student.class_group = class_group
         student.is_active = True
         student.set_password("student123")
+        student.uses_initial_password = False
+        student.initial_password_reminder_shown_at = None
+        student.initial_password_state_recorded_at = timezone.now()
+        student.must_change_password = False
         student.save()
         return student
 

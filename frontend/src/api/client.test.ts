@@ -117,6 +117,23 @@ describe('API client', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
+  it('does not claim authority refreshed when recovery is absent or fails', async () => {
+    const client = createApiClient({ fetchImpl: vi.fn().mockRejectedValue(new TypeError('network')) })
+    await expect(client.mutate('/save', { method: 'POST' })).rejects.toMatchObject({
+      name: 'MutationOutcomeUnknownError', message: '网络中断，尚未确认操作是否成功。请核验状态后重试。', authoritativeState: undefined,
+    })
+    await expect(client.mutate('/save', {
+      method: 'POST', refreshAuthoritativeState: () => Promise.reject(new TypeError('offline')),
+    })).rejects.toMatchObject({ name: 'MutationOutcomeUnknownError', authoritativeState: undefined })
+  })
+
+  it('reports a non-JSON server failure as a server error', async () => {
+    const client = createApiClient({ fetchImpl: vi.fn().mockResolvedValue(new Response('<h1>error</h1>', { status: 500 })) })
+    await expect(client.mutate('/save', { method: 'POST' })).rejects.toMatchObject({
+      name: 'ApiError', status: 500, code: 'SERVER_ERROR', message: '服务器暂时异常，请稍后核验作答状态。',
+    })
+  })
+
   it('preserves a retained Django mutation error message', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse(
@@ -164,20 +181,5 @@ describe('API client', () => {
     )
   })
 
-  it('routes a password-change gate by structured error code', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      jsonResponse({
-        error: {
-          code: 'PASSWORD_CHANGE_REQUIRED',
-          message: 'This text is deliberately not inspected.',
-          fields: {},
-        },
-      }, 403),
-    )
-    const onPasswordChangeRequired = vi.fn()
-    const client = createApiClient({ fetchImpl, onPasswordChangeRequired })
 
-    await expect(client.get('/api/v1/teacher/accounts/classes/')).rejects.toBeInstanceOf(ApiError)
-    expect(onPasswordChangeRequired).toHaveBeenCalledWith('/password/change/')
-  })
 })

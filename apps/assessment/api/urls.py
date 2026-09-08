@@ -1,5 +1,6 @@
 from django.urls import path
 from .session_summary import StudentSessionSummaryView
+from .recovery import StudentAttemptRecoveryView, StudentTaskRecoveryView
 
 from .views import (
     StudentCourseCollectionView,
@@ -15,6 +16,9 @@ from .views import (
 
 
 urlpatterns = [
+    path('sessions/<int:session_id>/questions/<int:assignment_id>/recovery/', StudentAttemptRecoveryView.as_view(), name='student-question-recovery'),
+    path('attempts/<int:attempt_id>/recovery/', StudentAttemptRecoveryView.as_view(), name='student-attempt-recovery'),
+    path('tasks/<int:task_id>/recovery/', StudentTaskRecoveryView.as_view(), name='student-task-recovery'),
     path('sessions/<int:session_id>/summary/', StudentSessionSummaryView.as_view(), name='student-session-summary'),
     path("courses/", StudentCourseCollectionView.as_view(), name="student-courses"),
     path(
