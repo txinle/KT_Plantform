@@ -3,12 +3,13 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
+import { openLoginPage } from './login-navigation'
 
 test('teacher business deep links render the independent entry at desktop and mobile widths', async ({ page }, info) => {
   test.setTimeout(240_000)
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.goto('/login/')
+  await openLoginPage(page)
   await page.getByLabel('账号或学号').fill('teacher')
   await page.getByLabel('密码').fill('teacher123')
   await page.getByRole('button', { name: '登录', exact: true }).click()
@@ -61,7 +62,7 @@ test('teacher business deep links render the independent entry at desktop and mo
 test('student entry, drawer and feedback navigation stay usable at compact viewports', async ({ page }, info) => {
   const scripts: string[] = []
   page.on('request', request => { if (request.resourceType() === 'script') scripts.push(request.url()) })
-  await page.goto('/login/')
+  await openLoginPage(page)
   await page.getByLabel('账号或学号').fill('S002')
   await page.getByLabel('密码').fill('student123')
   await page.getByRole('button', { name: '登录', exact: true }).click()
@@ -101,7 +102,7 @@ print(json.dumps({'bank': b.pk, 'question': q.pk}))
   if (fixture.error) throw fixture.error
   expect(fixture.status, fixture.stderr).toBe(0)
   const data = JSON.parse(fixture.stdout.trim().split('\n').at(-1)!) as { bank: number; question: number }
-  await page.goto('/login/')
+  await openLoginPage(page)
   await page.getByLabel('账号或学号').fill('e2e-standalone-ui')
   await page.getByLabel('密码').fill('standalone123')
   await page.getByRole('button', { name: '登录', exact: true }).click()
@@ -131,7 +132,7 @@ print(json.dumps({'bank': b.pk, 'question': q.pk}))
 
 
 test('class creation preserves validation in Vue and follows the existing detail URL', async ({ page }) => {
-  await page.goto('/login/')
+  await openLoginPage(page)
   await page.getByLabel('账号或学号').fill('teacher')
   await page.getByLabel('密码').fill('teacher123')
   await page.getByRole('button', { name: '登录', exact: true }).click()

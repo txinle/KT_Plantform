@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test'
+import { openLoginPage } from './login-navigation'
 
 async function login(page: import('@playwright/test').Page) {
-  await page.goto('/login/')
+  await openLoginPage(page)
   await page.getByLabel('账号或学号').fill('teacher')
   await page.getByLabel('密码').fill('teacher123')
   await page.getByRole('button', { name: '登录', exact: true }).click()

@@ -1,7 +1,8 @@
 import { expect, test, type Page } from '@playwright/test'
+import { openLoginPage } from './login-navigation'
 
 async function login(page: Page, origin: string) {
-  await page.goto(`${origin}/login/`, { waitUntil: 'commit' })
+  await openLoginPage(page, origin)
   const account = page.getByLabel('账号或学号')
   await expect(account).toBeVisible()
   await account.fill('teacher')
