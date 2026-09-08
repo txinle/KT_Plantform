@@ -135,8 +135,10 @@ class UnifiedQuestionImportTests(TestCase):
             return replace_question_kc_mapping(*args, **kwargs)
 
         with patch('apps.question_bank.services.unified_import.replace_question_kc_mapping', side_effect=fail_after_first):
-            with self.assertRaisesMessage(RuntimeError, 'write failed'):
-                self.confirm(preview)
+            with self.assertLogs('django.request', level='ERROR') as logged:
+                with self.assertRaisesMessage(RuntimeError, 'write failed'):
+                    self.confirm(preview)
+        self.assertTrue(any(record.exc_info and isinstance(record.exc_info[1], RuntimeError) for record in logged.records))
         self.assertFalse(self.bank.questions.exists())
         self.assertEqual(ImportPreviewBatch.objects.get(pk=preview['preview_id']).status, 'pending')
 

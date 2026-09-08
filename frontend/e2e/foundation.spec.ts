@@ -75,7 +75,7 @@ test('teacher creates an experiment and saves a resumable publish draft', async 
 
   await page.getByRole('button', { name: '发布到班级' }).click()
   await expect(page).toHaveURL(/\/publish-plan\/\d+\/step\/1\/$/)
-  await page.locator('[id^="publish-class-"]').first().check()
+  await page.getByRole('checkbox', { name: '选择 认知追踪实验班', exact: true }).check()
   await page.getByRole('button', { name: '保存草稿' }).click()
   await expect(page.getByText('草稿已保存。你可以退出后继续。')).toBeVisible()
   await expect(page.getByText('设置完整，可以执行发布检查。')).toBeVisible()
@@ -206,7 +206,7 @@ test('teacher class center keeps analytics in Vue and management in Django', asy
   await expect(page.locator('#kt-app')).toBeVisible()
   await expect(page.getByRole('heading', { name: '班级', exact: true })).toBeVisible()
 
-  await page.getByRole('link', { name: '进入班级中心' }).first().click()
+  await page.locator('a[href="/teacher/courses/1/classes/1/"]').filter({ hasText: '进入班级中心' }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/classes\/\d+\/$/)
   await expect(page.getByRole('button', { name: '概览', exact: true })).toBeVisible()
   await expect(page.getByText('总体正确率', { exact: true })).toBeVisible()

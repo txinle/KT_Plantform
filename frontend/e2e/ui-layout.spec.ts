@@ -60,10 +60,29 @@ test('student course cards, assignment list and class center reflow with their o
   test.skip(browserName !== 'chromium', 'Chromium provides the responsive visual evidence for this multi-page flow.')
   await login(page, 'S002', 'student123')
   await inspect(page, info, 'student-courses')
-  await page.goto('/student/courses/2/')
+  await page.goto('/student/courses/1/')
+  const feedbackTask = page.locator('.kt-student-task-row').filter({
+    has: page.getByRole('heading', { name: '完整反馈视觉验证', exact: true }),
+  })
+  await expect(feedbackTask).toBeVisible()
+  const startAction = feedbackTask.getByRole('button', { name: /^(开始作业|继续作答)$/ })
+  if (await startAction.isVisible()) {
+    await startAction.click()
+    const answer = page.locator('.kt-assessment-question [name="answer"]').first()
+    await expect(answer).toBeEnabled()
+    const saved = page.waitForResponse(response => response.url().includes('/draft/') && response.ok())
+    await answer.check()
+    await saved
+    await page.getByRole('button', { name: '确认提交本题', exact: true }).click()
+    await Promise.all([
+      page.waitForURL(/\/student\/sessions\/\d+\/complete\/$/),
+      page.getByRole('dialog').getByRole('button', { name: '提交并锁定', exact: true }).click(),
+    ])
+    await page.goto('/student/courses/1/')
+  }
   await inspect(page, info, 'student-tasks')
   await page.locator('.kt-workspace-navigation').getByRole('link', { name: '班级中心', exact: true }).click()
-  await expect(page).toHaveURL(/\/student\/courses\/2\/learning\//)
+  await expect(page).toHaveURL(/\/student\/courses\/1\/learning\//)
   await expect(page.getByRole('region', { name: '个人学习概览' })).toBeVisible()
   await inspect(page, info, 'student-center')
   await page.getByRole('link', { name: '查看作答详情', exact: true }).first().click()

@@ -77,7 +77,9 @@ test('five short-response types retain trajectories through offline reload, IME 
     }
     if (row.kind === 'fill_blank') {
       await expect(page.getByRole('button', { name: '查看第 1 级提示', exact: true })).toBeVisible()
-      if (await page.getByRole('button', { name: '关闭提示', exact: true }).isVisible()) await page.getByRole('button', { name: '关闭提示', exact: true }).click()
+      await page.getByRole('button', { name: '查看第 1 级提示', exact: true }).click()
+      await page.getByRole('button', { name: '关闭提示', exact: true }).click()
+      await expect(page.getByRole('alert')).toHaveCount(0)
     }
     for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport)

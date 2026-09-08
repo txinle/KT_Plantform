@@ -1,5 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, expect, it, vi } from 'vitest'
+import { createRequire } from 'node:module'
 const mocks = vi.hoisted(() => ({ post: vi.fn() }))
 vi.mock('./api', () => ({ getStudentAssessmentApi: () => ({ post: mocks.post }) }))
 import StudentResearchTools from './StudentResearchTools.vue'
@@ -16,6 +17,38 @@ function runtime() {
     dispose: vi.fn(),
   }
 }
+
+it('persists hint closure and subsequent answer events through the real collector', async () => {
+  const { MemoryOutbox, ProcessEventCollector } = createRequire(import.meta.url)('../../../static/js/process-event-collector.js')
+  const outbox = new MemoryOutbox()
+  const collector = new ProcessEventCollector({ sessionId: 7, attemptId: 13, outbox, autoSchedule: false })
+  const toolsRuntime = runtime()
+  toolsRuntime.record.mockImplementation((type: string, payload: Record<string, unknown>, options = {}) => collector.record(type, payload, options))
+  toolsRuntime.flushBounded = vi.fn().mockResolvedValue(undefined)
+  mockHints(toolsResponse({ hints: [{ id: 'h1', level: 1 }] }), { h1: '第一条提示' })
+  const wrapper = mount(StudentResearchTools, { props: {
+    endpoint: '/tools/', answerEventId: null, waitForCapture: async () => undefined, runtime: toolsRuntime,
+  } })
+  try {
+    await flushPromises()
+    await buttonWithText(wrapper, '查看第 1 级提示').trigger('click')
+    await flushPromises()
+    await buttonWithText(wrapper, '关闭提示').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    await expect(collector.record('response_input_started', { question_type: 'fill_blank' })).resolves.toBeDefined()
+    const batch = await outbox.peekBatch(100)
+    expect(batch.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event_type: 'research_tool_observed', payload: expect.objectContaining({
+        tool: 'hint', stage: 'closed', data: { hint_id: 'h1' }, server_event_id: 'request-h1',
+      }) }),
+      expect.objectContaining({ event_type: 'response_input_started' }),
+    ]))
+  } finally {
+    wrapper.unmount()
+    collector.dispose()
+  }
+})
 
 function hintRequests() {
   return mocks.post.mock.calls

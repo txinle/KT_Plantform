@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { getStudentAssessmentApi } from './api'
 import type { StudentProcessRuntime } from './process-bridge'
 import type { ToolRule } from '@/features/teacher-experiments/research-tools'
@@ -19,7 +19,7 @@ const pendingCheck = ref(false)
 const checking = ref(false)
 const doubtNote = ref('')
 const probability = ref(50)
-const hint = ref<{ text: string; source: ToolResponse; data: Record<string, unknown>; initiation: string }>()
+const hint = shallowRef<{ text: string; source: ToolResponse; data: Record<string, unknown>; initiation: string }>()
 const error = ref('')
 const contentVersion = ref('')
 let timer: ReturnType<typeof setInterval> | undefined
