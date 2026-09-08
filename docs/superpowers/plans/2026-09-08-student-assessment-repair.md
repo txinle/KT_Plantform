@@ -65,10 +65,16 @@ P4 唯一视觉参考：[teacher-process-reference.png](../../design/student-ass
 - [x] C：教师预览/过程测试与实现。
 - [x] D：限定测试实验清理工具验证（预演、范围外依赖、共享资源保留、回滚）。
 - [x] E：本地整合、PostgreSQL 全量回归与视觉验收。
-- [ ] 正式发布、状态补齐、备份后限定清理及重建 test；发布已获授权，服务器结果须以实际执行记录为准。
+- [x] 正式发布、状态补齐、备份后限定清理及重建 test；2026-09-09 完成腾讯云实际闭环。
 
 验证环境：本 worktree `.venv\Scripts\python.exe`（Python 3.13.5），Node `C:\Users\31606\Downloads\ATOP-tooling\node-v24.20.0-win-x64\node.exe`，PostgreSQL 17.11（127.0.0.1:55432），Playwright 浏览器目录 `C:\Users\31606\Downloads\ATOP-tooling\pw-fresh-browsers`。后端最终 `manage.py test --parallel 4 --keepdb --noinput` 共 1289 项通过；包含 PostgreSQL 锁顺序和并发检查。首轮发现的账号命令旧断言已修正；CSV 模板仅将本地检出换行恢复为索引中的 LF，未修改导入业务代码或模板 Git 内容。
 
 Chromium 与 Firefox 均走通提醒确认失败与重试、当前密码校验、开始响应丢失、返回改答、最终提交响应丢失、实际网络切断后刷新恢复、教师学生汇总与逐题展开。权威记录为一会话、两次有效提交。Firefox 离线验证使用 TCP 连接中断并确认真实请求失败，避免自动化离线模拟影响 Service Worker 导航。教师页面完成 1777×885、1440×900、390×844、200% 缩放及详情关闭焦点恢复检查。验证日志和截图位于本 worktree 的 `frontend/.e2e-results/submission-repair/`，不进入源码提交。
 
 前端最终全量：85 个测试文件、265 项通过。lint 无错误（保留两个未修改文件中的既有警告）；typecheck、OpenAPI 一致性、构建、Django check、迁移漂移检查与 collectstatic 均通过。main 工作区保持干净。
+
+发布代码 `eeffbe46699455a7b59d1d7ecb8af6d9f70d72d2` 已合入 main，并同步 GitHub、Gitee 及腾讯云 `/home/ubuntu/KT_Plantform`。服务器 Dockerfile 的 APT/PyPI 镜像源定制保留；四个服务镜像构建通过，`accounts.0011` 迁移成功，web/db 健康、scheduler/nginx 运行正常，Django 与 Nginx 检查通过。10 个学生账号完成一次性显式状态补齐，其中 8 个仍使用初始密码、2 个未匹配；密码未修改，复查 10 个均已具备权威状态。
+
+发布前备份位于 `/home/ubuntu/deploy_backups/student-repair-20260909-eeffbe4`，包括 `.env`、Dockerfile、Compose 配置、旧提交与镜像信息、数据库 custom dump（479208 字节，pg_restore 目录校验 803 行）；web/scheduler/nginx 的旧镜像保留为 `kt-repair-backup-<service>:20260909`。限定清理仅移除旧实验 1 的独占树：2 sessions、30 attempts、3 submissions 等；重建事务核验课程、班级、账号、成员关系及全部题库模型内容均未改变。首次重建遇到默认题型配额重复，整个事务回滚；调整执行脚本为更新默认配额后成功。新 test 为实验 3、班级任务 2，保留原配置、班级和 7 名参与学生，重新完成正常预览及正式发布。
+
+生产浏览器实际闭环通过：初始密码登录与非阻断提醒 → 返回改答 → 断网刷新恢复 → 80% 信心最终确认 → 丢弃成功响应后恢复 → 教师按学生及题目展开正式过程。数据库证明该学生仅 1 个新会话、1 次正式提交，教师详情仅 1 行；正式答案链为进入、填写 A、改为 B、提交 B。新 test 保留这条验收提交。桌面 1777×885 与移动端 390×844 无横向溢出，无页面脚本错误。域名健康及登录页直连 HTTPS 返回 200；本机普通浏览器链路仍被重置，因此生产浏览器验收使用 SSH SOCKS 隧道，保留 `https://ktedu.online` 原域名与证书校验。日志与截图保存在本 worktree 的忽略目录 `frontend/.e2e-results/submission-repair/production-*`。
