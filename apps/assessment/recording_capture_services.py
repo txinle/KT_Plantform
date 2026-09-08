@@ -98,7 +98,11 @@ def ensure_capture_contract_v2():
 
 
 def capture_contract_for_start(student, experiment):
-    allowed = str(student.pk) in settings.CAPTURE_V2_USER_IDS or str(experiment.course_id) in settings.CAPTURE_V2_COURSE_IDS
+    allowed = (
+        '*' in settings.CAPTURE_V2_COURSE_IDS
+        or str(student.pk) in settings.CAPTURE_V2_USER_IDS
+        or str(experiment.course_id) in settings.CAPTURE_V2_COURSE_IDS
+    )
     return ensure_capture_contract_v2() if settings.CAPTURE_V2_ENABLED and allowed else ensure_capture_contract_v1()
 
 

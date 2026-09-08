@@ -2,9 +2,10 @@ import hashlib
 import json
 import uuid
 from decimal import Decimal
+from types import SimpleNamespace
 
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from apps.accounts.models import User
@@ -21,9 +22,36 @@ from .models import (
     StudentQuestionAssignment,
 )
 from .recording_capture_services import (
+    capture_contract_for_start,
     ensure_capture_contract_v1,
     record_client_capture_checkpoint,
 )
+
+
+@override_settings(CAPTURE_V2_ENABLED=True, CAPTURE_V2_USER_IDS=frozenset(), CAPTURE_V2_COURSE_IDS=frozenset())
+class CaptureRolloutTests(TestCase):
+    @override_settings(CAPTURE_V2_COURSE_IDS=frozenset({'*'}))
+    def test_explicit_all_courses_scope_includes_future_courses(self):
+        for course_id in (1, 999999, None):
+            with self.subTest(course_id=course_id):
+                contract = capture_contract_for_start(SimpleNamespace(pk=999999), SimpleNamespace(course_id=course_id))
+                self.assertEqual(contract.contract_version, 2)
+
+    @override_settings(CAPTURE_V2_ENABLED=False, CAPTURE_V2_COURSE_IDS=frozenset({'*'}))
+    def test_master_switch_still_disables_new_v2_sessions(self):
+        contract = capture_contract_for_start(SimpleNamespace(pk=1), SimpleNamespace(course_id=1))
+        self.assertEqual(contract.contract_version, 1)
+
+    def test_empty_allowlists_still_require_explicit_opt_in(self):
+        contract = capture_contract_for_start(SimpleNamespace(pk=1), SimpleNamespace(course_id=1))
+        self.assertEqual(contract.contract_version, 1)
+
+    @override_settings(CAPTURE_V2_COURSE_IDS=frozenset({'10'}), CAPTURE_V2_USER_IDS=frozenset({'20'}))
+    def test_selected_courses_and_users_keep_their_existing_scope(self):
+        for user_id, course_id, version in ((1, 10, 2), (20, 1, 2), (1, 1, 1)):
+            with self.subTest(user_id=user_id, course_id=course_id):
+                contract = capture_contract_for_start(SimpleNamespace(pk=user_id), SimpleNamespace(course_id=course_id))
+                self.assertEqual(contract.contract_version, version)
 
 
 class CaptureContractV1Tests(TestCase):

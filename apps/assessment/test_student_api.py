@@ -267,6 +267,27 @@ class StudentApiTestCase(StudentApiFixtureMixin, TestCase):
 
 
 class StudentTaskApiTests(StudentApiTestCase):
+    @override_settings(CAPTURE_V2_ENABLED=True, CAPTURE_V2_COURSE_IDS=frozenset({'*'}), CAPTURE_V2_USER_IDS=frozenset())
+    def test_all_courses_rollout_pins_new_sessions_to_v2(self):
+        started = self.start()
+        self.assertEqual(started.status_code, 201, started.content)
+        session = ExperimentSession.objects.get(pk=started.json()['session_id'])
+        self.assertEqual(session.capture_contract.contract_version, 2)
+
+    def test_enabling_all_courses_does_not_relabel_existing_v1_sessions(self):
+        with override_settings(CAPTURE_V2_ENABLED=False):
+            started = self.start()
+        self.assertEqual(started.status_code, 201, started.content)
+        session = ExperimentSession.objects.get(pk=started.json()['session_id'])
+        original_contract = session.capture_contract_id
+        with override_settings(CAPTURE_V2_ENABLED=True, CAPTURE_V2_COURSE_IDS=frozenset({'*'})):
+            resumed = self.start()
+        self.assertEqual(resumed.status_code, 200, resumed.content)
+        self.assertEqual(resumed.json()['session_id'], session.pk)
+        session.refresh_from_db()
+        self.assertEqual(session.capture_contract_id, original_contract)
+        self.assertEqual(session.capture_contract.contract_version, 1)
+
     def test_task_list_query_count_does_not_scale_with_task_count(self):
         self.client.force_login(self.student)
         url = f"/api/v1/student/courses/{self.course.pk}/tasks/"
