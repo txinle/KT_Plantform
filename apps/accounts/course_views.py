@@ -86,28 +86,35 @@ _DATA_SCOPE_KEYS = (
 _LEGACY_SCOPE_KEYS = ("class_name", "student_number", "status")
 
 
+def _saved_scope(request, course, session_prefix, scope_type):
+    values = request.session.get(f"{session_prefix}:{course.pk}", {})
+    if values:
+        try:
+            return scope_type.from_mapping(course, values)
+        except (ScopeNotFound, ScopeValidationError):
+            # A deleted object must not strand the user behind a saved filter,
+            # or revive an older teaching selection for the same course.
+            for prefix in (_DATA_SCOPE_SESSION_KEY, _TEACHING_SCOPE_SESSION_KEY):
+                request.session.pop(f"{prefix}:{course.pk}", None)
+    return None
+
+
 def _scope_from_request(request, course):
     temporary_values = {
         key: request.GET.get(key)
         for key in (*_DATA_SCOPE_KEYS, *_LEGACY_SCOPE_KEYS)
         if request.GET.get(key) not in (None, "")
     }
-    if temporary_values and set(temporary_values) <= {"search", "session_ref", "student_id", "session_id"}:
-        saved_values = request.session.get(f"{_DATA_SCOPE_SESSION_KEY}:{course.pk}", {})
-        if not saved_values:
-            saved_values = request.session.get(f"{_TEACHING_SCOPE_SESSION_KEY}:{course.pk}", {})
-        temporary_values = {**saved_values, **temporary_values}
-    values = temporary_values or request.session.get(
-        f"{_DATA_SCOPE_SESSION_KEY}:{course.pk}", {}
-    )
-    if not values:
-        teaching_values = request.session.get(
-            f"{_TEACHING_SCOPE_SESSION_KEY}:{course.pk}", {}
-        )
-        teaching_scope = TeachingScope.from_mapping(course, teaching_values)
-        return _research_scope_for_teaching(teaching_scope)
+    if not temporary_values or set(temporary_values) <= {"search", "session_ref", "student_id", "session_id"}:
+        saved = _saved_scope(request, course, _DATA_SCOPE_SESSION_KEY, DataScope)
+        if saved is None:
+            teaching = _saved_scope(request, course, _TEACHING_SCOPE_SESSION_KEY, TeachingScope)
+            saved = _research_scope_for_teaching(teaching) if teaching else DataScope.from_mapping(course, {})
+        if not temporary_values:
+            return saved
+        temporary_values = {**saved.serialize(), **temporary_values}
     try:
-        return DataScope.from_mapping(course, values)
+        return DataScope.from_mapping(course, temporary_values)
     except ScopeNotFound as error:
         raise Http404("数据范围不属于当前课程") from error
     except ScopeValidationError as error:
@@ -137,11 +144,10 @@ def _teaching_scope_from_request(request, course):
                 "experiment_id", snapshot.version.experiment_id
             )
             temporary_values["class_id"] = snapshot.source_class_group_id
-    values = temporary_values or request.session.get(
-        f"{_TEACHING_SCOPE_SESSION_KEY}:{course.pk}", {}
-    )
+    if not temporary_values:
+        return _saved_scope(request, course, _TEACHING_SCOPE_SESSION_KEY, TeachingScope) or TeachingScope.from_mapping(course, {})
     try:
-        return TeachingScope.from_mapping(course, values)
+        return TeachingScope.from_mapping(course, temporary_values)
     except ScopeNotFound as error:
         raise Http404("教学范围不属于当前课程") from error
     except ScopeValidationError as error:

@@ -185,6 +185,87 @@ class TeacherDataCenterApiTests(TestCase):
         self.assertEqual(rejected.status_code, 404)
         self.assertEqual(self.client.get(url).json()["current"]["class_id"], self.class_group.pk)
 
+    def test_deleted_saved_research_scope_resets_and_allows_reselection(self):
+        deleted = Experiment.objects.create(course=self.course, created_by=self.teacher,
+            question_bank=self.experiment.question_bank, name="已删除的筛选实验")
+        deleted_id = deleted.pk
+        deleted.delete()
+        research_key = f"data_center_scope_v1:{self.course.pk}"
+        teaching_key = f"data_center_teaching_scope_v1:{self.course.pk}"
+        session = self.client.session
+        session[research_key] = {"experiment_ids": [self.experiment.pk, deleted_id], "class_id": self.class_group.pk}
+        session[teaching_key] = {"experiment_id": deleted_id, "class_id": self.class_group.pk}
+        session["data_center_scope_v1:99999"] = {"experiment_id": 123}
+        session.save()
+
+        response = self.client.get(self.api("scope/"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["current"]["experiment_ids"], [])
+        self.assertIsNone(response.json()["current"]["class_id"])
+        self.assertFalse(response.json()["current"]["is_complete"])
+        self.assertNotIn(research_key, self.client.session)
+        self.assertNotIn(teaching_key, self.client.session)
+        self.assertEqual(self.client.session["data_center_scope_v1:99999"], {"experiment_id": 123})
+        self.assertEqual(response.json()["experiments"][0]["id"], self.experiment.pk)
+        self.assertEqual(self.client.get(self.api("overview/")).status_code, 200)
+        selected = self.client.post(self.api("scope/"), {
+            "experiment_ids": [self.experiment.pk], "class_id": self.class_group.pk,
+        }, content_type="application/json")
+        self.assertEqual(selected.status_code, 200)
+        self.assertTrue(selected.json()["current"]["is_complete"])
+
+    def test_invalid_saved_scope_formats_and_teaching_fallback_reset(self):
+        for prefix, values in [
+            ("data_center_scope_v1", {"experiment_ids": [self.experiment.pk], "class_id": 999999}),
+            ("data_center_scope_v1", {"experiment_ids": "invalid"}),
+            ("data_center_teaching_scope_v1", {"experiment_id": 999999}),
+        ]:
+            with self.subTest(prefix=prefix, values=values):
+                key = f"{prefix}:{self.course.pk}"
+                session = self.client.session
+                session[key] = values
+                session.save()
+                response = self.client.get(self.api("scope/"))
+                self.assertEqual(response.status_code, 200)
+                self.assertFalse(response.json()["current"]["is_complete"])
+                self.assertNotIn(key, self.client.session)
+
+    def test_explicit_invalid_scope_remains_rejected_and_preserves_saved_selection(self):
+        key = f"data_center_scope_v1:{self.course.pk}"
+        saved = {"experiment_ids": [self.experiment.pk], "class_id": self.class_group.pk}
+        session = self.client.session
+        session[key] = saved
+        session.save()
+        for query, status in [({"experiment_ids": "999999"}, 404), ({"experiment_ids": "invalid"}, 400)]:
+            with self.subTest(query=query):
+                response = self.client.get(self.api("scope/"), query)
+                self.assertEqual(response.status_code, status)
+                self.assertEqual(self.client.session[key], saved)
+
+    def test_explicit_student_scope_is_checked_after_stale_saved_base_resets(self):
+        key = f"data_center_scope_v1:{self.course.pk}"
+        session = self.client.session
+        session[key] = {"experiment_ids": [999999], "class_id": self.class_group.pk}
+        session.save()
+        response = self.client.get(self.api("scope/"), {"student_id": self.student.pk})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["current"]["experiment_ids"], [])
+        self.assertNotIn(key, self.client.session)
+        self.assertEqual(self.client.get(self.api("scope/"), {"student_id": 999999}).status_code, 404)
+
+    @override_settings(CLASS_CENTER_ENABLED=True)
+    def test_stale_teaching_scope_returns_to_class_selection(self):
+        key = f"data_center_teaching_scope_v1:{self.course.pk}"
+        session = self.client.session
+        session[key] = {"experiment_id": 999999, "class_id": self.class_group.pk}
+        session.save()
+        url = reverse("courses:data_teaching", args=[self.course.pk])
+        response = self.client.get(url)
+        self.assertRedirects(response, reverse("courses:classes", args=[self.course.pk]), fetch_redirect_response=False)
+        self.assertNotIn(key, self.client.session)
+        self.assertEqual(self.client.get(url, {"experiment_id": 999999}).status_code, 404)
+
     def test_export_job_create_and_artifact_removal_use_json_contracts(self):
         create_url = self.api("export-jobs/")
         payload = {
