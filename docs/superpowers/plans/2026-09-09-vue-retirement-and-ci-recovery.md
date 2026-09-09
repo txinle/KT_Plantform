@@ -227,8 +227,8 @@
 - [x] 检查最终 diff；已删除的师生业务模板没有活动渲染引用，旧配置不会重新启用它们。
 - [x] 完成以下阶段检查与全部 CI profile；只对最终阶段执行一次完整回归，具体失败修复后重跑相关项。
 - [x] 记录本地通过项、合理 skip、未覆盖的真实浏览器缩放/IME或生产网关测试，禁止统一写成“全部测试通过”。
-- [ ] 用户明确授权提交/推送后，提交并推送精确 SHA；查看该 SHA 的全部 GitHub job，失败则按日志继续修复。
-- [ ] 历史 #15–#19 的失败记录不会消失；恢复标准是修复提交的新 CI 全部 required checks 通过。
+- [x] 用户明确授权提交/推送后，提交并推送精确 SHA；查看该 SHA 的全部 GitHub job，失败则按日志继续修复。
+- [x] 历史 #15–#19 的失败记录不会消失；恢复标准是修复提交的新 CI 全部 required checks 通过。
 - [ ] 生产部署只有在另行授权后执行，并按既有备份、迁移、资源保留、健康检查和师生 UAT 流程验收。
 
 ## 6. 本地测试环境和命令
@@ -304,5 +304,6 @@ npx playwright test --config playwright.submission-repair.config.ts
 | P2–P5 | 同一未提交工作树，按认证、课程/班级、题库、实验顺序退出 | 认证、账号、题库、实验模块定向后端与 Vue 测试通过；发布与并发使用 PostgreSQL 专项验证 | 认证、课程/班级、题库/KC、实验配置与发布的旧 Django 业务模板及仅供旧页面使用的分支 | 下载端点、业务 service、Session/CSRF、服务端 capability 与权限判断保留 |
 | P6–P8 | 同一工作树，教师数据、学生学习/结果与作答运行时闭环后收敛入口 | 后端完整回归 1142 项通过；PostgreSQL 专项 45 项通过；前端 85 文件/259 项单测、类型检查、API 合约和 273 模块构建通过 | 教师数据中心/分析、学生学习/结果、旧作答页、迁移期 Vue 壳、`static/js/assessment.js` 与旧 UI rollout 分支 | Django admin、错误页、共享样式、`process-event-collector.js`、Worker、Capture/反馈等业务 gate 保留 |
 | P9 本地 | `f992e65` 的 GitHub 运行因高级数据工具回归被取消，该提交已由当前修复工作树取代 | 恢复 6 组研究数据目录、服务端学生检索、学生—习题—事件/过程可读主预览及完整原始记录抽屉；后端数据中心/导出范围 46 项、前端数据中心 7 项及完整 259 项通过；完整后端 1142 项、PostgreSQL 专项 45 项通过；`check`、迁移漂移、collectstatic、`check_vue_assets`、lint、类型、API 合约及构建通过；通用 E2E 117 通过/36 合理跳过，三组专项各 2 项通过 | 清理 Playwright 报告、trace、截图与运行日志；修复后的桌面、390px 移动端和完整记录抽屉复核图复制到工作树外 | 真实浏览器菜单缩放与物理中文输入法未自动化；等效视口与自动化输入事件不冒称对应证据 |
+| P9 GitHub | 产品与 CI 修复截至 `91d01eb3ec1a7cfb38ff538d4585129347bebe3f`，运行 `34312630589` | backend、frontend、PostgreSQL contracts、application E2E、Capture V2、Capture initialization、submission repair 共 7 个 job 全部通过 | 无新增删除 | 本行之后仅追加验收记录，不改变产品或 CI 行为 |
 
-当前状态：**P0–P8 与修复后的 P9 本地回归已完成；待提交、推送精确 SHA 并核对该 SHA 的 GitHub required checks。生产发布未授权，也未执行。**
+当前状态：**P0–P9 的实现、本地回归、提交推送和 GitHub required checks 已完成。生产发布未授权，也未执行。**
