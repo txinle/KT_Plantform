@@ -89,7 +89,7 @@ onMounted(async () => {
         <RouterLink :to="dataPath('exports/')">导出</RouterLink>
         <RouterLink :to="dataPath('quality/')">数据质量</RouterLink>
         <RouterLink :to="dataPath('exports/history/')">导出记录</RouterLink>
-        <RouterLink :to="dataPath('advanced/')">学生作答预览</RouterLink>
+        <RouterLink :to="dataPath('advanced/')">高级数据工具</RouterLink>
       </nav>
     </SidebarSection>
     <section v-if="scope" class="kt-card kt-scope-bar" aria-label="当前数据范围">

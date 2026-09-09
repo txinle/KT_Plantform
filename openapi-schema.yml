@@ -3058,11 +3058,31 @@ paths:
     get:
       operationId: teacher_data_center_advanced_retrieve
       parameters:
+      - in: query
+        name: class_id
+        schema:
+          type: integer
       - in: path
         name: course_id
         schema:
           type: integer
         required: true
+      - in: query
+        name: experiment_id
+        schema:
+          type: integer
+      - in: query
+        name: page
+        schema:
+          type: integer
+      - in: query
+        name: search
+        schema:
+          type: string
+      - in: query
+        name: table
+        schema:
+          type: string
       tags:
       - teacher
       security:
@@ -4865,50 +4885,104 @@ components:
         course:
           $ref: '#/components/schemas/CourseReference'
         scope:
-          $ref: '#/components/schemas/DataCenterTeachingScope'
+          $ref: '#/components/schemas/DataCenterResearchScope'
         search:
           type: string
-        students:
+        groups:
           type: array
           items:
-            $ref: '#/components/schemas/DataCenterAdvancedStudent'
-        page:
-          $ref: '#/components/schemas/TeacherClassPageMetadata'
+            $ref: '#/components/schemas/DataCenterAdvancedGroup'
+        selected_table:
+          $ref: '#/components/schemas/DataCenterAdvancedTable'
+        selected_experiment:
+          allOf:
+          - $ref: '#/components/schemas/DataCenterExperimentOption'
+          nullable: true
+        preview:
+          allOf:
+          - $ref: '#/components/schemas/DataCenterAdvancedPreview'
+          nullable: true
       required:
       - course
-      - page
+      - groups
+      - preview
       - scope
       - search
-      - students
-    DataCenterAdvancedStudent:
+      - selected_experiment
+      - selected_table
+    DataCenterAdvancedGroup:
       type: object
       properties:
-        student_number:
+        key:
           type: string
-        display_name:
+        label:
           type: string
-        class_name:
+        description:
           type: string
-        experiment_count:
-          type: integer
-          minimum: 0
-        progress_label:
-          type: string
-        status_label:
-          type: string
-        detail_url:
-          type: string
-        detail_api_url:
+        tables:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataCenterAdvancedTable'
+        active:
+          type: boolean
+      required:
+      - active
+      - description
+      - key
+      - label
+      - tables
+    DataCenterAdvancedPreview:
+      type: object
+      properties:
+        columns:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataCenterPreviewColumn'
+        rows:
+          type: array
+          items:
+            type: array
+            items: {}
+        page:
+          $ref: '#/components/schemas/TeacherClassPageMetadata'
+        data_status:
           type: string
       required:
-      - class_name
-      - detail_api_url
-      - detail_url
-      - display_name
-      - experiment_count
-      - progress_label
-      - status_label
-      - student_number
+      - columns
+      - data_status
+      - page
+      - rows
+    DataCenterAdvancedTable:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        path:
+          type: string
+        role:
+          type: string
+        role_label:
+          type: string
+        description:
+          type: string
+        schema_version:
+          type: string
+        source_layer:
+          type: string
+        active:
+          type: boolean
+      required:
+      - active
+      - description
+      - key
+      - label
+      - path
+      - role
+      - role_label
+      - schema_version
+      - source_layer
     DataCenterClassOption:
       type: object
       properties:
@@ -5183,6 +5257,16 @@ components:
       - quality_url
       - scope_update_url
       - teaching_url
+    DataCenterPreviewColumn:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+      required:
+      - description
+      - name
     DataCenterQualityCollection:
       type: object
       properties:
@@ -7027,13 +7111,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -10955,13 +11041,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'

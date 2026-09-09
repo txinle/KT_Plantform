@@ -302,7 +302,7 @@ npx playwright test --config playwright.submission-repair.config.ts
 | --- | --- | --- | --- | --- |
 | P0–P1 | `fix/vue-retirement-ci-recovery`，从 `a6e1463` 上承接已落盘草稿并逐项核对 | Playwright 归属：通用 153、Capture V2 2、初始化 2、提交修复 2；CI 四组独立 PostgreSQL 17 job 与独立产物名已配置 | 无 | 四组专用 profile 保留，分别锁定 Capture、初始化与提交恢复边界 |
 | P2–P5 | 同一未提交工作树，按认证、课程/班级、题库、实验顺序退出 | 认证、账号、题库、实验模块定向后端与 Vue 测试通过；发布与并发使用 PostgreSQL 专项验证 | 认证、课程/班级、题库/KC、实验配置与发布的旧 Django 业务模板及仅供旧页面使用的分支 | 下载端点、业务 service、Session/CSRF、服务端 capability 与权限判断保留 |
-| P6–P8 | 同一工作树，教师数据、学生学习/结果与作答运行时闭环后收敛入口 | 后端完整回归 1141 项通过；PostgreSQL 专项 45 项通过；前端 85 文件/259 项单测、类型检查、API 合约和 273 模块构建通过 | 教师数据中心/分析、学生学习/结果、旧作答页、迁移期 Vue 壳、`static/js/assessment.js` 与旧 UI rollout 分支 | Django admin、错误页、共享样式、`process-event-collector.js`、Worker、Capture/反馈等业务 gate 保留 |
-| P9 本地 | 仅增加验收记录；产品代码在最终完整回归后未再修改 | `check`、迁移漂移、collectstatic、`check_vue_assets` 通过；通用 E2E 117 通过/36 合理跳过；三组专项各 2 项通过 | 清理 Playwright 报告、trace、截图与运行日志；四张用户复核图复制到工作树外 | 真实浏览器菜单缩放与物理中文输入法未自动化；390px 学生作答预览的班级列出现逐字换行，未溢出但可读性仍需后续设计处理 |
+| P6–P8 | 同一工作树，教师数据、学生学习/结果与作答运行时闭环后收敛入口 | 后端完整回归 1142 项通过；PostgreSQL 专项 45 项通过；前端 85 文件/259 项单测、类型检查、API 合约和 273 模块构建通过 | 教师数据中心/分析、学生学习/结果、旧作答页、迁移期 Vue 壳、`static/js/assessment.js` 与旧 UI rollout 分支 | Django admin、错误页、共享样式、`process-event-collector.js`、Worker、Capture/反馈等业务 gate 保留 |
+| P9 本地 | `f992e65` 的 GitHub 运行因高级数据工具回归被取消，该提交已由当前修复工作树取代 | 恢复 6 组研究数据目录、服务端学生检索、学生—习题—事件/过程可读主预览及完整原始记录抽屉；后端数据中心/导出范围 46 项、前端数据中心 7 项及完整 259 项通过；完整后端 1142 项、PostgreSQL 专项 45 项通过；`check`、迁移漂移、collectstatic、`check_vue_assets`、lint、类型、API 合约及构建通过；通用 E2E 117 通过/36 合理跳过，三组专项各 2 项通过 | 清理 Playwright 报告、trace、截图与运行日志；修复后的桌面、390px 移动端和完整记录抽屉复核图复制到工作树外 | 真实浏览器菜单缩放与物理中文输入法未自动化；等效视口与自动化输入事件不冒称对应证据 |
 
-当前状态：**P0–P8 与 P9 本地回归已完成；待提交、推送精确 SHA 并核对该 SHA 的 GitHub required checks。生产发布未授权，也未执行。**
+当前状态：**P0–P8 与修复后的 P9 本地回归已完成；待提交、推送精确 SHA 并核对该 SHA 的 GitHub required checks。生产发布未授权，也未执行。**

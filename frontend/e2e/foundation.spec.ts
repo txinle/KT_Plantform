@@ -491,7 +491,7 @@ test('data-center mounts every read route on its business URL', async ({ page })
     ['exports/', '导出数据包'],
     ['quality/', '数据质量'],
     ['exports/history/', '导出记录'],
-    ['advanced/', '学生作答预览'],
+    ['advanced/', '高级数据工具'],
   ] as const
 
   for (const [suffix, heading] of routes) {
@@ -502,7 +502,7 @@ test('data-center mounts every read route on its business URL', async ({ page })
   }
 
   await page.reload()
-  await expect(page.getByRole('heading', { name: '学生作答预览', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '高级数据工具', exact: true })).toBeVisible()
 })
 
 test('data-center saves its authoritative scope through the JSON API', async ({ browserName, page }) => {
@@ -528,7 +528,7 @@ test('data-center overview and advanced pages reflow at required viewports', asy
 
   for (const route of [
     { suffix: '', heading: '数据中心', name: 'data-overview' },
-    { suffix: 'advanced/', heading: '学生作答预览', name: 'data-advanced' },
+    { suffix: 'advanced/', heading: '高级数据工具', name: 'data-advanced' },
   ]) {
     for (const viewport of [
       { name: 'desktop-1440x900', width: 1440, height: 900 },

@@ -1158,7 +1158,7 @@ def _validate_question_codes(assignments):
 
 def preview_export_table(*, course, experiment, table, version_id=None,
                          class_name=None, student_number=None, session_id=None, status=None,
-                         page=1, page_size=20, scope=None):
+                         page=1, page_size=20, scope=None, student_search=""):
     """Return a paginated export preview.
 
     ``scope`` is the data-center path and is deliberately preferred over the
@@ -1166,15 +1166,14 @@ def preview_export_table(*, course, experiment, table, version_id=None,
     as teaching, quality, and ZIP export prevents a table view from showing a
     wider population than the visible range bar claims.
     """
+    student_search = str(student_search or "").strip()[:100]
     if scope is not None:
         if scope.course.pk != course.pk:
             raise ExportContractError("预览范围不属于当前课程")
         if experiment is not None and scope.experiment_id not in {None, experiment.pk}:
             raise ExportContractError("预览范围与实验不一致")
         filter_definition = scope.serialize()
-        sessions = list(
-            scope.sessions().select_related("student", "version").order_by("pk")
-        )
+        session_queryset = scope.sessions()
     else:
         filter_definition = {
             key: value
@@ -1198,15 +1197,21 @@ def preview_export_table(*, course, experiment, table, version_id=None,
             session_filter["pk"] = int(session_id)
         if status in {choice for choice, _label in ExperimentSession.Status.choices}:
             session_filter["status"] = status
-        sessions = list(
-            ExperimentSession.objects.filter(**session_filter)
-            .select_related("student", "version")
-            .order_by("pk")
+        session_queryset = ExperimentSession.objects.filter(**session_filter)
+    if student_search:
+        filter_definition["student_search"] = student_search
+        session_queryset = session_queryset.filter(
+            models.Q(student__display_name__icontains=student_search)
+            | models.Q(student__student_number__icontains=student_search)
+            | models.Q(student__username__icontains=student_search)
         )
+    sessions = list(
+        session_queryset.select_related("student", "version").order_by("pk")
+    )
     session_ids = [session.pk for session in sessions]
-    attempt_queryset = (scope.attempts() if scope is not None else Attempt.objects.filter(
-        session_id__in=session_ids
-    )).select_related(
+    attempt_queryset = (
+        scope.attempts() if scope is not None else Attempt.objects.all()
+    ).filter(session_id__in=session_ids).select_related(
         "session", "assignment__snapshot", "assignment__item_instance"
     )
     has_attempt_status = (

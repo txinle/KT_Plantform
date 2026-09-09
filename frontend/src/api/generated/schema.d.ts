@@ -2297,20 +2297,36 @@ export interface components {
         };
         DataCenterAdvanced: {
             course: components["schemas"]["CourseReference"];
-            scope: components["schemas"]["DataCenterTeachingScope"];
+            scope: components["schemas"]["DataCenterResearchScope"];
             search: string;
-            students: components["schemas"]["DataCenterAdvancedStudent"][];
-            page: components["schemas"]["TeacherClassPageMetadata"];
+            groups: components["schemas"]["DataCenterAdvancedGroup"][];
+            selected_table: components["schemas"]["DataCenterAdvancedTable"];
+            selected_experiment: components["schemas"]["DataCenterExperimentOption"] | null;
+            preview: components["schemas"]["DataCenterAdvancedPreview"] | null;
         };
-        DataCenterAdvancedStudent: {
-            student_number: string;
-            display_name: string;
-            class_name: string;
-            experiment_count: number;
-            progress_label: string;
-            status_label: string;
-            detail_url: string;
-            detail_api_url: string;
+        DataCenterAdvancedGroup: {
+            key: string;
+            label: string;
+            description: string;
+            tables: components["schemas"]["DataCenterAdvancedTable"][];
+            active: boolean;
+        };
+        DataCenterAdvancedPreview: {
+            columns: components["schemas"]["DataCenterPreviewColumn"][];
+            rows: unknown[][];
+            page: components["schemas"]["TeacherClassPageMetadata"];
+            data_status: string;
+        };
+        DataCenterAdvancedTable: {
+            key: string;
+            label: string;
+            path: string;
+            role: string;
+            role_label: string;
+            description: string;
+            schema_version: string;
+            source_layer: string;
+            active: boolean;
         };
         DataCenterClassOption: {
             id: number;
@@ -2404,6 +2420,10 @@ export interface components {
             exports_url: string;
             quality_url: string;
             history_url: string;
+        };
+        DataCenterPreviewColumn: {
+            name: string;
+            description: string;
         };
         DataCenterQualityCollection: {
             items: components["schemas"]["DataCenterQualityRow"][];
@@ -3117,7 +3137,9 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -4616,7 +4638,9 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -7609,7 +7633,13 @@ export interface operations {
     };
     teacher_data_center_advanced_retrieve: {
         parameters: {
-            query?: never;
+            query?: {
+                class_id?: number;
+                experiment_id?: number;
+                page?: number;
+                search?: string;
+                table?: string;
+            };
             header?: never;
             path: {
                 course_id: number;
