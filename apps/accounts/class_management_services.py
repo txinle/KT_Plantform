@@ -116,14 +116,10 @@ def delete_course_class_group(*, request, course, class_group):
             pk=class_group.pk,
             course_id=course.pk,
         )
-        if (
-            class_group.enrollments.exists()
-            or class_group.students.exists()
-            or class_group.experiment_participant_class_links.exists()
-        ):
-            raise CourseClassDeletionError(
-                "班级仍有关联学生或实验参与规则，请先迁移学生并移除参与规则。"
-            )
+        from apps.experiments.research_deletion import CLASS_BLOCKED, class_experiments
+
+        if class_experiments(class_group).exists():
+            raise CourseClassDeletionError(CLASS_BLOCKED)
         details = {
             "class_id": class_group.pk,
             "course_id": course.pk,
@@ -132,6 +128,8 @@ def delete_course_class_group(*, request, course, class_group):
         }
         try:
             with transaction.atomic():
+                class_group.enrollments.all().delete()
+                class_group.students.all().update(class_group=None)
                 ClassStudentAnalyticsPolicy.objects.filter(
                     class_group_id=class_group.pk
                 ).delete()

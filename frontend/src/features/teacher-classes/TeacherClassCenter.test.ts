@@ -1,9 +1,15 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const route = { params: { courseId: '7', classId: '11' }, query: {} as Record<string, string> }
 const mocks = vi.hoisted(() => ({
   api: { center: vi.fn() },
+  deletion: {
+    previewExperiment: vi.fn(), deleteExperiment: vi.fn(),
+    previewClassExperiment: vi.fn(), removeClassExperiment: vi.fn(),
+    previewClass: vi.fn(), deleteClass: vi.fn(), cleanup: vi.fn(),
+  },
   push: vi.fn(),
 }))
 
@@ -12,6 +18,7 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push: mocks.push }),
 }))
 vi.mock('./api', () => ({ getTeacherClassApi: () => mocks.api }))
+vi.mock('@/features/teacher-deletion/api', () => ({ getTeacherDeletionApi: () => mocks.deletion }))
 
 import TeacherClassCenter from './TeacherClassCenter.vue'
 
@@ -86,6 +93,21 @@ describe('TeacherClassCenter', () => {
     vi.clearAllMocks()
     route.query = {}
     mocks.api.center.mockResolvedValue(centerPayload())
+    mocks.deletion.previewClass.mockResolvedValue({
+      action: 'delete_class', object_id: 11, object_name: '实验一班', allowed: true, blocked_reason: '',
+      experiments: [], counts: { class_count: 1, session_count: 0, export_count: 0, member_count: 0 }, confirmation_token: 'class-token',
+    })
+    mocks.deletion.previewClassExperiment.mockResolvedValue({
+      action: 'remove_class_experiment', object_id: 13, object_name: '认知负荷实验', allowed: true, blocked_reason: '',
+      experiments: [], counts: { class_count: 1, session_count: 2, export_count: 0, member_count: 0 }, confirmation_token: 'remove-token',
+    })
+    mocks.deletion.previewExperiment.mockResolvedValue({
+      action: 'delete_experiment', object_id: 13, object_name: '认知负荷实验', allowed: true, blocked_reason: '',
+      experiments: [], counts: { class_count: 2, session_count: 4, export_count: 1, member_count: 0 }, confirmation_token: 'global-token',
+    })
+    mocks.deletion.deleteClass.mockResolvedValue({ deleted: true, cleanup_pending: false, cleanup_id: null })
+    mocks.deletion.removeClassExperiment.mockResolvedValue({ deleted: true, cleanup_pending: false, cleanup_id: null })
+    mocks.deletion.deleteExperiment.mockResolvedValue({ deleted: true, cleanup_pending: false, cleanup_id: null })
   })
 
   it('renders authoritative empty metrics and keeps management as document navigation', async () => {
@@ -141,5 +163,54 @@ describe('TeacherClassCenter', () => {
     await flushPromises()
     expect(wrapper.findAll('[data-distribution-ring] [data-sector]')).toHaveLength(0)
     expect(wrapper.get('[data-bin="no_data"]').text()).toContain('—')
+  })
+
+  it('removes only the selected class experiment and refreshes authoritative class facts', async () => {
+    route.query = { section: 'experiments' }
+    const payload = centerPayload()
+    ;(payload.experiment_rows as unknown[]).push({ experiment_id: 13, name: '认知负荷实验', participated_count: 2, eligible_count: 3, completed_count: 1, correct_rate: metric('50.0%', 'available'), analysis_url: '/analysis/13/' })
+    mocks.api.center.mockResolvedValue(payload)
+    const wrapper = mount(TeacherClassCenter, { global: { provide: { 'teacher-classes-course': ref({ can_manage: true }) } } })
+    await flushPromises()
+
+    await wrapper.get('[data-remove-class-experiment="13"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-deletion-confirm]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.deletion.removeClassExperiment).toHaveBeenCalledWith(7, 11, 13, 'remove-token')
+    expect(mocks.api.center).toHaveBeenCalledTimes(2)
+  })
+
+  it('offers view, current-class removal, and global deletion for each class experiment', async () => {
+    route.query = { section: 'experiments' }
+    const payload = centerPayload()
+    ;(payload.experiment_rows as unknown[]).push({ experiment_id: 13, name: '认知负荷实验', participated_count: 2, eligible_count: 3, completed_count: 1, correct_rate: metric('50.0%', 'available'), analysis_url: '/analysis/13/' })
+    mocks.api.center.mockResolvedValue(payload)
+    const wrapper = mount(TeacherClassCenter, { global: { provide: { 'teacher-classes-course': ref({ can_manage: true }) } } })
+    await flushPromises()
+
+    const actions = wrapper.get('[data-class-experiment-actions="13"]')
+    expect(actions.get('a').text()).toBe('查看实验')
+    expect(actions.get('a').attributes('href')).toBe('/teacher/courses/7/experiments/13/')
+    expect(actions.get('[data-remove-class-experiment="13"]').text()).toBe('从本班移除')
+    await actions.get('[data-delete-global-experiment="13"]').trigger('click')
+    await flushPromises()
+    expect(mocks.deletion.previewExperiment).toHaveBeenCalledWith(7, 13)
+    await wrapper.get('[data-deletion-confirm]').trigger('click')
+    await flushPromises()
+    expect(mocks.deletion.deleteExperiment).toHaveBeenCalledWith(7, 13, 'global-token')
+  })
+
+  it('deletes the class and returns to its server-provided list URL', async () => {
+    const wrapper = mount(TeacherClassCenter, { global: { provide: { 'teacher-classes-course': ref({ can_manage: true }) } } })
+    await flushPromises()
+    await wrapper.get('[data-delete-class]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-deletion-confirm]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.deletion.deleteClass).toHaveBeenCalledWith(7, 11, 'class-token')
+    expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/classes/')
   })
 })

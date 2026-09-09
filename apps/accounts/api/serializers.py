@@ -4,9 +4,15 @@ from apps.accounts.models import Course
 
 
 class CourseContextSerializer(serializers.ModelSerializer):
+    can_manage = serializers.SerializerMethodField()
+
+    def get_can_manage(self, course) -> bool:
+        request = self.context.get("request")
+        return bool(request and course.can_manage(request.user) and course.status == course.Status.ACTIVE)
+
     class Meta:
         model = Course
-        fields = ("id", "name", "code", "term", "status")
+        fields = ("id", "name", "code", "term", "status", "can_manage")
         read_only_fields = fields
 
 

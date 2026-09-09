@@ -24,6 +24,7 @@ from apps.assessment.models import (
 from apps.experiments.models import (
     ClassExperimentTask,
     ConditionAssignment,
+    Experiment,
     ExperimentClassSnapshot,
     ExperimentVersion,
     ExperimentVersionParticipantSnapshot,
@@ -130,6 +131,19 @@ def create_export_snapshot(*, course=None, experiment=None, research_study=None,
         # owns an already-started transaction and cannot change its isolation.
         if not entered_with_outer_transaction:
             _set_export_freeze_isolation()
+
+        from apps.accounts.course_access import lock_course
+        if research_study is not None:
+            for locked_course_id in sorted(research_study.course_links.values_list("course_id", flat=True)):
+                lock_course(locked_course_id)
+        elif course is not None:
+            lock_course(course.pk)
+        requested_experiments = set((scope.experiment_ids if scope is not None else ()) or ())
+        if experiment is not None:
+            requested_experiments.add(experiment.pk)
+        if requested_experiments and set(Experiment.objects.filter(
+            pk__in=requested_experiments, course=course).values_list("pk", flat=True)) != requested_experiments:
+            raise ExportContractError("导出范围内的实验已删除或变更，请重新选择范围。")
 
         version_queryset = ExperimentVersion.objects.none()
         if experiment is not None:
@@ -246,11 +260,17 @@ def create_export_snapshot(*, course=None, experiment=None, research_study=None,
         return snapshot
 
 
+@transaction.atomic
 def create_export_job(*, course, snapshot, created_by, experiment=None,
                       research_study=None, kind=ExportJob.Kind.RESEARCH,
                       package="complete", selected_tables=None,
                       selected_fields=None):
     """Create, never reuse, an auditable export request."""
+    from apps.accounts.course_access import lock_course
+    lock_course(course.pk)
+    snapshot = ExportSnapshot.objects.filter(pk=snapshot.pk, invalidated_at=None).first()
+    if snapshot is None:
+        raise ExportContractError("导出源已删除或失效，请重新选择范围。")
     return ExportJob.objects.create(
         course=course,
         experiment=experiment,
@@ -985,7 +1005,20 @@ def _csv_table_from_bytes(body):
     return tuple(rows[0]), rows[1:]
 
 
+@transaction.atomic
 def run_export_job(job):
+    from apps.accounts.course_access import lock_course
+    lock_course(job.course_id)
+    current = ExportJob.objects.select_for_update().filter(pk=job.pk).exclude(
+        status__in=[ExportJob.Status.INVALIDATED, ExportJob.Status.EXPIRED]).first()
+    if current is None:
+        raise ExportContractError("导出任务已删除或失效，不能重新生成。")
+    _materialize_export_job(current)
+    job.refresh_from_db()
+    return job
+
+
+def _materialize_export_job(job):
     """Materialize an export from an immutable source bundle only."""
     snapshot = job.snapshot
     if snapshot.invalidated_at is not None:
@@ -1003,8 +1036,8 @@ def run_export_job(job):
         os.makedirs(root, exist_ok=True)
         artifact_path = os.path.join(root, f"experiment-{job.job_id}.zip")
         with zipfile.ZipFile(artifact_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path, body in files.items():
-                archive.writestr(path, base64.b64decode(body.encode("ascii")))
+            for path in sorted(files):
+                archive.writestr(path, base64.b64decode(files[path].encode("ascii")))
         return _finalize_export_job(job, artifact_path, {})
     resource_freeze_status = _frozen_resource_status(source_bundle)
     selected_tables = _selected_export_tables(job)

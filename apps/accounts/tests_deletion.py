@@ -41,7 +41,7 @@ class ClassDeletionTests(TestCase):
         self.assertFalse(ClassGroup.objects.filter(pk=self.class_group.pk).exists())
         self.assertTrue(AuditLog.objects.filter(action="class.delete").exists())
 
-    def test_class_with_enrollment_is_protected(self):
+    def test_class_without_experiment_deletes_enrollment_but_preserves_account(self):
         student = User.objects.create_user(
             username="class-delete-student",
             student_number="class-delete-student",
@@ -57,8 +57,10 @@ class ClassDeletionTests(TestCase):
 
         response = self.client.post(url, {"confirmation": "delete"})
 
-        self.assertEqual(response.status_code, 400)
-        self.assertTrue(ClassGroup.objects.filter(pk=self.class_group.pk).exists())
+        self.assertRedirects(response, reverse("courses:classes", args=[self.course.pk]))
+        self.assertFalse(ClassGroup.objects.filter(pk=self.class_group.pk).exists())
+        self.assertFalse(CourseEnrollment.objects.filter(class_group_id=self.class_group.pk).exists())
+        self.assertTrue(User.objects.filter(pk=student.pk).exists())
 
     def test_class_delete_is_csrf_protected(self):
         self.client.force_login(self.owner)

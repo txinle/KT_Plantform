@@ -252,7 +252,7 @@ class QuestionBankDeletionTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertTrue(QuestionBank.objects.filter(pk=self.bank.pk).exists())
 
-    def test_collaborator_can_delete_unreferenced_bank_and_identity_is_retained(self):
+    def test_collaborator_can_delete_unreferenced_bank_and_identity_is_removed(self):
         identity_pk = self.question.course_identity.pk
         self.client.force_login(self.collaborator)
 
@@ -263,14 +263,13 @@ class QuestionBankDeletionTests(TestCase):
 
         self.assertRedirects(response, reverse("courses:banks", args=[self.course.pk]))
         self.assertFalse(QuestionBank.objects.filter(pk=self.bank.pk).exists())
-        identity = CourseQuestionIdentity.objects.get(pk=identity_pk)
-        self.assertIsNone(identity.question_id)
+        self.assertFalse(CourseQuestionIdentity.objects.filter(pk=identity_pk).exists())
         self.assertTrue(
             AuditLog.objects.filter(action="question_bank.delete").exists()
         )
 
-    def test_bank_referenced_by_experiment_is_not_deleted(self):
-        Experiment.objects.create(
+    def test_bank_referenced_only_by_draft_experiment_is_deleted_and_draft_is_preserved(self):
+        experiment = Experiment.objects.create(
             course=self.course,
             created_by=self.owner,
             question_bank=self.bank,
@@ -284,11 +283,10 @@ class QuestionBankDeletionTests(TestCase):
             follow=True,
         )
 
-        self.assertRedirects(
-            response,
-            reverse("courses:bank_detail", args=[self.course.pk, self.bank.pk]),
-        )
-        self.assertTrue(QuestionBank.objects.filter(pk=self.bank.pk).exists())
+        self.assertRedirects(response, reverse("courses:banks", args=[self.course.pk]))
+        self.assertFalse(QuestionBank.objects.filter(pk=self.bank.pk).exists())
+        experiment.refresh_from_db()
+        self.assertIsNone(experiment.question_bank_id)
 
     def test_outsider_cannot_delete_bank(self):
         self.client.force_login(self.outsider)
@@ -328,7 +326,7 @@ class QuestionBankDeletionTests(TestCase):
         self.assertTrue(QuestionBank.objects.filter(pk=self.bank.pk).exists())
         self.assertTrue(Question.objects.filter(pk=self.question.pk).exists())
 
-    def test_unreferenced_question_deletes_without_reordering_and_keeps_identity(self):
+    def test_unreferenced_question_deletes_and_compacts_course_identity(self):
         second = Question.objects.create(
             bank=self.bank,
             sequence=2,
@@ -337,7 +335,7 @@ class QuestionBankDeletionTests(TestCase):
             correct_answer="保留答案",
         )
         identity_pk = self.question.course_identity.pk
-        second_identity = second.course_identity.stable_code
+        second_identity_pk = second.course_identity.pk
         self.client.force_login(self.collaborator)
 
         response = self.client.post(
@@ -350,15 +348,18 @@ class QuestionBankDeletionTests(TestCase):
             reverse("courses:bank_detail", args=[self.course.pk, self.bank.pk]),
         )
         self.assertFalse(Question.objects.filter(pk=self.question.pk).exists())
-        self.assertIsNone(
-            CourseQuestionIdentity.objects.get(pk=identity_pk).question_id
-        )
+        self.assertFalse(CourseQuestionIdentity.objects.filter(pk=identity_pk).exists())
         second.refresh_from_db()
         self.assertEqual(second.sequence, 2)
-        self.assertEqual(second.course_identity.stable_code, second_identity)
+        self.assertEqual(second.course_identity.pk, second_identity_pk)
+        self.assertEqual(second.course_identity.course_sequence, 1)
+        self.assertEqual(
+            second.course_identity.stable_code,
+            f"C{self.course.pk:06d}-Q000001",
+        )
         self.assertTrue(AuditLog.objects.filter(action="question.delete").exists())
 
-    def test_question_used_by_draft_experiment_is_not_deleted(self):
+    def test_question_used_only_by_draft_experiment_is_deleted_and_detached(self):
         experiment = Experiment.objects.create(
             course=self.course,
             created_by=self.owner,
@@ -379,7 +380,8 @@ class QuestionBankDeletionTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(Question.objects.filter(pk=self.question.pk).exists())
+        self.assertFalse(Question.objects.filter(pk=self.question.pk).exists())
+        self.assertFalse(ExperimentQuestion.objects.filter(experiment=experiment).exists())
 
     def test_question_used_by_published_snapshot_is_not_deleted(self):
         experiment = Experiment.objects.create(

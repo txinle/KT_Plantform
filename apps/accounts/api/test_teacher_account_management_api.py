@@ -290,10 +290,13 @@ class TeacherAccountManagementApiTests(TestCase):
         self.assertTrue(ClassGroup.objects.filter(pk=self.other_class.pk).exists())
         self.assertTrue(ClassStudentAnalyticsPolicy.objects.filter(pk=policy_pk).exists())
 
-        deleted = self.post_json(delete_url, {"confirmation": "delete"})
+        preview = self.client.get(delete_url).json()
+        deleted = self.post_json(delete_url, {
+            "confirmation": "delete", "confirmation_token": preview["confirmation_token"],
+        })
 
         self.assertEqual(deleted.status_code, 200)
-        self.assertEqual(deleted.json(), {"deleted": True})
+        self.assertEqual(deleted.json(), {"deleted": True, "cleanup_pending": False, "cleanup_id": None})
         self.assertFalse(ClassGroup.objects.filter(pk=self.other_class.pk).exists())
         self.assertFalse(ClassStudentAnalyticsPolicy.objects.filter(pk=policy_pk).exists())
         self.assertTrue(AuditLog.objects.filter(action="class.delete").exists())

@@ -2,9 +2,7 @@ import { createApiClient } from '@/api/client'
 import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
 
-export type TeacherClassCollection = components['schemas']['TeacherClassCollection'] & {
-  capabilities: { can_create: boolean }
-}
+export type TeacherClassCollection = components['schemas']['TeacherClassCollection']
 export type TeacherClassCenter = components['schemas']['TeacherClassCenter']
 export interface TeacherClassCreateInput {
   name: string

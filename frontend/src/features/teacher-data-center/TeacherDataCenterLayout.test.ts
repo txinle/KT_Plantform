@@ -73,7 +73,11 @@ describe('TeacherDataCenterLayout', () => {
     expect(wrapper.get('[aria-label="当前数据范围"]').text()).toContain('已选择实验：数据实验、追踪实验（2 个实验）')
     expect(wrapper.get('.kt-scope-bar summary').text()).toBe('更改范围')
     const form = wrapper.get('.kt-scope-bar form')
-    expect(Array.from((form.get('select[name="experiment_ids"]').element as HTMLSelectElement).selectedOptions).map(option => option.value)).toEqual(['3', '5'])
+    const experimentChoices = form.findAll('input[name="experiment_ids"]')
+    expect(experimentChoices).toHaveLength(2)
+    expect(experimentChoices.every(choice => (choice.element as HTMLInputElement).checked)).toBe(true)
+    expect(form.get('[data-selected-experiment-count]').text()).toContain('已选择 2 个')
+    expect(form.findAll('.kt-scope-experiment-choice.is-selected')).toHaveLength(2)
     expect((form.get('select[name="class_id"]').element as HTMLSelectElement).value).toBe('4')
     await form.trigger('submit')
     await flushPromises()
@@ -84,6 +88,38 @@ describe('TeacherDataCenterLayout', () => {
     const navigationQuery = JSON.parse(wrapper.get('a[href="/teacher/courses/7/data/advanced/"]').attributes('data-query') || '{}')
     expect(navigationQuery).toEqual({ experiment_ids: '3,5', class_id: 4 })
     expect(wrapper.get('a[href="/teacher/courses/7/data/teaching/"]')).toBeTruthy()
+  })
+
+  it('supports multiple native checkbox choices without losing class selection', async () => {
+    mocks.get.mockResolvedValue({ id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' })
+    mocks.scope.mockResolvedValue({
+      course: { id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' },
+      current: { experiment_id: 3, experiment_ids: [3], class_id: 4, is_complete: true, display: '数据实验 · 实验班' },
+      experiments: [{ id: 3, name: '数据实验', versions: [] }, { id: 5, name: '追踪实验', versions: [] }],
+      classes: [{ id: 4, name: '实验班', academic_year: '2026' }],
+      scope_update_url: '/api/v1/teacher/courses/7/data/scope/',
+    })
+    mocks.updateScope.mockResolvedValue({
+      course: { id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' },
+      current: { experiment_id: 3, experiment_ids: [3, 5], class_id: 4, is_complete: true, display: '两个实验 · 实验班' },
+      experiments: [{ id: 3, name: '数据实验', versions: [] }, { id: 5, name: '追踪实验', versions: [] }],
+      classes: [{ id: 4, name: '实验班', academic_year: '2026' }],
+      scope_update_url: '/api/v1/teacher/courses/7/data/scope/',
+    })
+    const wrapper = mount(TeacherDataCenterLayout)
+    await flushPromises()
+
+    const choices = wrapper.findAll('input[name="experiment_ids"]')
+    expect(choices[0]?.attributes('type')).toBe('checkbox')
+    expect(choices[0]?.element.closest('label')).not.toBeNull()
+    expect(choices[0]?.attributes('value')).toBe('3')
+    await choices[1]?.setValue(true)
+    expect(wrapper.get('[data-selected-experiment-count]').text()).toContain('已选择 2 个')
+    expect(wrapper.findAll('.kt-scope-experiment-choice.is-selected')).toHaveLength(2)
+    await wrapper.get('.kt-scope-bar form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.updateScope).toHaveBeenCalledWith(7, { experiment_ids: [3, 5], class_id: 4 })
   })
 
   it('keeps research scope query fields and fills persisted experiment and class values', async () => {

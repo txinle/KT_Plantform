@@ -12,6 +12,8 @@ class Command(BaseCommand):
         parser.add_argument("--once", action="store_true")
 
     def handle(self, *args, **options):
+        from apps.analytics.research_deletion import retry_artifact_cleanups
+        retry_artifact_cleanups()
         worker_id = f"{socket.gethostname()}:{id(self)}"
         count = 0
         while True:
@@ -33,4 +35,7 @@ class Command(BaseCommand):
         job.lease_expires_at = None
         job.heartbeat_at = None
         job.status = job.Status.QUEUED if job.retry_count < 3 else job.Status.FAILED
-        job.save(update_fields=["retry_count", "locked_by", "lease_expires_at", "heartbeat_at", "status"])
+        type(job).objects.filter(pk=job.pk, status__in=[job.Status.QUEUED, job.Status.RUNNING]).update(
+            retry_count=job.retry_count, locked_by="", lease_expires_at=None,
+            heartbeat_at=None, status=job.status,
+        )

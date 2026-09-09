@@ -79,6 +79,7 @@ class ApiFoundationContractTests(TestCase):
                 "code": "API-001",
                 "term": "2026-Autumn",
                 "status": Course.Status.ACTIVE,
+                "can_manage": True,
             },
         )
 

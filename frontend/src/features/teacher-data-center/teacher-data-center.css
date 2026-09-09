@@ -44,7 +44,17 @@
 .kt-data-center .kt-export-version form { display: grid; grid-template-columns: minmax(12rem, 1.4fr) minmax(10rem, 1fr) auto; align-items: end; gap: 12px; margin-top: 12px; }
 .kt-data-center .kt-scope-bar label,
 .kt-data-center .kt-export-version label { display: grid; gap: 6px; color: var(--kt-research-muted); font-size: 14px; }
-.kt-data-center .kt-scope-bar select[multiple] { min-height: 7rem; }
+.kt-data-center .kt-scope-experiments { min-width: 0; margin: 0; border: 0; padding: 0; }
+.kt-data-center .kt-scope-experiments legend { display: flex; width: 100%; justify-content: space-between; gap: 1rem; margin-bottom: 6px; color: var(--kt-research-muted); font-size: 14px; }
+.kt-data-center .kt-scope-experiments legend span { font-variant-numeric: tabular-nums; }
+.kt-data-center .kt-scope-experiment-options { display: grid; max-height: 10rem; overflow-y: auto; border: 1px solid #cbd5e7; border-radius: 7px; padding: 5px; background: #fff; }
+.kt-data-center .kt-scope-experiment-choice { display: grid !important; grid-template-columns: 1.25rem minmax(0, 1fr); align-items: center; gap: 8px !important; min-height: 2.5rem; border: 1px solid transparent; border-radius: 5px; padding: 6px 8px; color: var(--kt-research-navy) !important; cursor: pointer; }
+.kt-data-center .kt-scope-experiment-choice:hover { background: #f7f6ff; }
+.kt-data-center .kt-scope-experiment-choice.is-selected { border-color: var(--kt-research-purple); background: var(--kt-research-purple-soft); }
+.kt-data-center .kt-scope-experiment-choice input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.kt-data-center .kt-scope-checkbox { display: grid; width: 1.15rem; height: 1.15rem; place-items: center; border: 1px solid #aebad2; border-radius: 4px; background: #fff; color: transparent !important; font-size: .75rem; font-weight: 800; }
+.kt-data-center .kt-scope-experiment-choice input:focus-visible + .kt-scope-checkbox { outline: 3px solid rgb(82 65 251 / 25%); outline-offset: 2px; }
+.kt-data-center .kt-scope-experiment-choice.is-selected .kt-scope-checkbox { border-color: var(--kt-research-purple); background: var(--kt-research-purple); color: #fff !important; }
 
 .kt-data-center .kt-research-loading { padding: 2rem; color: var(--kt-research-muted); }
 .kt-data-center .kt-research-workspace { display: grid; gap: 16px; min-width: 0; color: var(--kt-research-text); }

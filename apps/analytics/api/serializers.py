@@ -33,6 +33,7 @@ class TeacherClassSummarySerializer(serializers.Serializer):
 
 class TeacherClassCapabilitiesSerializer(serializers.Serializer):
     can_create = serializers.BooleanField()
+    can_manage = serializers.BooleanField()
 
 
 class TeacherClassCollectionSerializer(serializers.Serializer):

@@ -200,6 +200,36 @@ describe('TeacherExperimentForm', () => {
     )
   })
 
+  it('allows an editable draft whose deleted bank must be replaced', async () => {
+    mocks.route.name = 'teacher-experiment-edit'
+    mocks.route.params = { courseId: '7', experimentId: '19' }
+    mocks.api.detail.mockResolvedValue({
+      id: 19,
+      name: '待修复实验',
+      description: '',
+      question_bank: null,
+      sampling_mode: 'total_count',
+      sampling_total_count: 1,
+      sampling_match_scope: 'any_level',
+      sampling_kcs: [],
+      sampling: { mode: 'total_count', total_count: 1, match_scope: 'any_level', nodes: [], type_quotas: [] },
+      question_quotas: [], ordering_mode: 'fixed', feedback_mode: 'none',
+      feedback_release_policy: 'after_personal_submission', time_mode: 'none', resume_mode: 'resumable',
+      confidence_mode: 'off', confidence_sampling_unit: 'attempt',
+    })
+    mocks.api.update.mockResolvedValue({ id: 19 })
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+
+    expect((wrapper.get('#experiment-name').element as HTMLInputElement).value).toBe('待修复实验')
+    expect((wrapper.get('#experiment-bank').element as HTMLSelectElement).value).toBe('0')
+    expect(wrapper.text()).toContain('请选择题库')
+    await wrapper.get('#experiment-bank').setValue('3')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.api.update).toHaveBeenCalledWith(7, 19, expect.objectContaining({ question_bank_id: 3 }))
+  })
+
   it('selects an exact question-type composition from server inventory', async () => {
     const wrapper = mount(TeacherExperimentForm)
     await flushPromises()

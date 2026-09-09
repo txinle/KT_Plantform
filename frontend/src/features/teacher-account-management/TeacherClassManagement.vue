@@ -7,6 +7,8 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import PageHeader from '@/design-system/components/PageHeader.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 import { ApiError } from '@/api/client'
+import DeletionDialog from '@/features/teacher-deletion/DeletionDialog.vue'
+import type { DeletionTarget } from '@/features/teacher-deletion/api'
 
 import { getTeacherAccountManagementApi, type AccountStudent, type CourseClassManagement, type StudentImportPreview } from './api'
 import './teacher-account-management.css'
@@ -59,7 +61,7 @@ const resetCandidate = ref<AccountStudent>()
 const editCandidate = ref<IdentityEditCandidate>()
 const nameConfirmation = ref<StudentNameConfirmation>()
 const nameConfirmationDialog = ref<HTMLDialogElement>()
-const deleteCandidate = ref(false)
+const deletionTarget = ref<DeletionTarget>()
 const submitting = ref(false)
 
 const currentClass = computed(() => management.value?.class_group)
@@ -117,18 +119,18 @@ async function saveClass() {
   }
 }
 
-async function deleteClass() {
-  if (!management.value) return
-  submitting.value = true
-  error.value = ''
-  try {
-    await api.deleteManagement(courseId, classId)
-    await router.push(management.value.actions.classes_url)
-  } catch (caught) {
-    error.value = message(caught, '班级未删除。')
-  } finally {
-    submitting.value = false
+async function afterClassDeletion(payload: { target: DeletionTarget }) {
+  deletionTarget.value = undefined
+  if (payload.target.kind === 'class') {
+    await router.push(management.value?.actions.classes_url || `/teacher/courses/${courseId}/classes/`)
+    return
   }
+  await load()
+}
+
+async function afterBatchDeletion() {
+  deletionTarget.value = undefined
+  await load()
 }
 
 function captureNameConflict(
@@ -421,7 +423,7 @@ onMounted(load)
           <h2>成员操作</h2>
           <p>单个补充、批量导入和跨课程复制均在服务器端重新验证班级状态、成员身份和选课关系。</p>
           <a class="kt-button kt-button--secondary" :href="management.actions.import_template_url">下载 Excel 参考模板</a>
-          <button v-if="management.capabilities.can_delete" class="kt-button kt-button--danger" data-course-class-delete type="button" :disabled="submitting" @click="deleteCandidate = true">删除空班级</button>
+          <button v-if="management.capabilities.can_delete" class="kt-button kt-button--danger" data-course-class-delete type="button" :disabled="submitting" @click="deletionTarget = { kind: 'class', classId }">删除班级</button>
         </aside>
       </section>
 
@@ -505,11 +507,7 @@ onMounted(load)
         <div class="kt-account-management-actions"><button class="kt-button kt-button--danger" type="button" :disabled="submitting" @click="removeStudent">确认移出课程</button><button class="kt-button kt-button--secondary" type="button" :disabled="submitting" @click="removeCandidate = undefined">取消</button></div>
       </section>
 
-      <section v-if="deleteCandidate" class="kt-card kt-account-management-confirm" aria-labelledby="delete-class-title">
-        <h2 id="delete-class-title">删除 {{ currentClass?.name }}</h2>
-        <p>仅当班级没有关联学生、选课关系或实验参与规则时才能删除。删除后将无法恢复班级和学生端显示设置。</p>
-        <div class="kt-account-management-actions"><button class="kt-button kt-button--danger" data-course-class-delete-confirm type="button" :disabled="submitting" @click="deleteClass">确认删除班级</button><button class="kt-button kt-button--secondary" type="button" :disabled="submitting" @click="deleteCandidate = false">取消</button></div>
-      </section>
+      <DeletionDialog v-if="deletionTarget" :course-id="courseId" :target="deletionTarget" @cancelled="deletionTarget = undefined" @completed="afterClassDeletion" @batch-completed="afterBatchDeletion" />
     </template>
   </section>
 </template>

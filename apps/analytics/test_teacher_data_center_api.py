@@ -126,6 +126,20 @@ class TeacherDataCenterApiTests(TestCase):
         ))
         self.assertNotIn("password", str(payload))
 
+    def test_overview_accepts_click_selected_experiment_ids_and_preserves_multi_scope(self):
+        other = Experiment.objects.create(course=self.course, created_by=self.teacher,
+            question_bank=self.experiment.question_bank, name="另一实验")
+        for ids in [str(self.experiment.pk), f"{self.experiment.pk},{other.pk}"]:
+            with self.subTest(ids=ids):
+                response = self.client.get(self.api("overview/"),
+                    {"experiment_ids": ids, "class_id": self.class_group.pk})
+                self.assertEqual(response.status_code, 200, response.content[:200])
+                self.assertTrue(response.json()["scope"]["is_complete"])
+                self.assertEqual(response.json()["facts"]["total_sessions"], 1)
+                self.assertEqual(response.json()["facts"]["participants"], 1)
+                if "," in ids:
+                    self.assertIn("另一实验", response.json()["scope"]["display"])
+
     def test_scope_update_is_json_and_persists_the_authoritative_selection(self):
         url = self.api("scope/")
 

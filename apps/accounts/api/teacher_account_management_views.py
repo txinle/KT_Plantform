@@ -13,6 +13,8 @@ from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.experiments.api.deletion_views import TeacherClassDeletionView
+
 from apps.accounts.class_management_services import (
     CourseClassDeletionError,
     delete_course_class_group,
@@ -537,26 +539,8 @@ class CourseClassManagementView(TeacherAccountManagementApiView):
         )
 
 
-class CourseClassDeleteView(TeacherAccountManagementApiView):
-    @extend_schema(
-        operation_id="teacher_course_class_delete",
-        request=CourseClassDeleteRequestSerializer,
-        responses=CourseClassDeleteResponseSerializer,
-    )
-    def post(self, request, course_id, class_id):
-        course, class_group = _course_and_class(request.user, course_id, class_id)
-        require_writable_course(course)
-        if request.data.get("confirmation") != "delete":
-            raise ValidationError("请在二次确认后再删除班级。")
-        try:
-            delete_course_class_group(
-                request=request,
-                course=course,
-                class_group=class_group,
-            )
-        except CourseClassDeletionError as exc:
-            raise ValidationError("; ".join(exc.messages)) from exc
-        return Response(CourseClassDeleteResponseSerializer({"deleted": True}).data)
+class CourseClassDeleteView(TeacherClassDeletionView):
+    pass
 
 
 class CourseClassManualEnrollmentView(TeacherAccountManagementApiView):

@@ -555,6 +555,8 @@ def _raise_for_invalid_identities(questions):
 
 
 def lock_experiment_question_bank(bank_or_pk, course=None):
+    if bank_or_pk is None:
+        raise ValidationError("原题库已删除，请重新选择题库。")
     bank = lock_question_bank(bank_or_pk)
     if bank.visibility == QuestionBank.Visibility.ARCHIVED:
         raise ValidationError(ARCHIVED_EXPERIMENT_BANK_MESSAGE)
@@ -569,6 +571,8 @@ def _lock_experiment_question_bank(experiment):
 
 def validate_for_publish(experiment, question_bank=None, participant_count=None):
     question_bank = question_bank or experiment.question_bank
+    if question_bank is None:
+        raise ValidationError("原题库已删除，请重新选择题库。")
     if question_bank.course_id != experiment.course_id:
         raise ValidationError("实验与题库必须属于同一课程")
 
@@ -661,7 +665,7 @@ def selection_display_context(experiment):
         for question_type in Question.Type.values
     ]
     active_counts = {question_type: 0 for question_type in Question.Type.values}
-    for question_type in experiment.question_bank.questions.filter(
+    for question_type in Question.objects.filter(bank_id=experiment.question_bank_id).filter(
         status=Question.Status.ACTIVE
     ).values_list("question_type", flat=True):
         if question_type in active_counts:

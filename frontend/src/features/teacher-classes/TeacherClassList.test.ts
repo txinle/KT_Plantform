@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   api: { list: vi.fn(), create: vi.fn() },
+  deletion: {
+    previewExperiment: vi.fn(), deleteExperiment: vi.fn(),
+    previewClassExperiment: vi.fn(), removeClassExperiment: vi.fn(),
+    previewClass: vi.fn(), deleteClass: vi.fn(), cleanup: vi.fn(),
+  },
   push: vi.fn(),
 }))
 
@@ -12,6 +17,7 @@ vi.mock('vue-router', () => ({
   RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
 }))
 vi.mock('./api', () => ({ getTeacherClassApi: () => mocks.api }))
+vi.mock('@/features/teacher-deletion/api', () => ({ getTeacherDeletionApi: () => mocks.deletion }))
 vi.mock('@/app/bootstrap', () => ({
   getBootstrapContext: () => ({ csrf_token: 'csrf-token' }),
 }))
@@ -23,7 +29,7 @@ describe('TeacherClassList', () => {
     vi.clearAllMocks()
     mocks.api.list.mockResolvedValue({
       course: { id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' },
-      capabilities: { can_create: true },
+      capabilities: { can_create: true, can_manage: true },
       items: [{
         id: 11,
         name: '实验一班',
@@ -34,6 +40,11 @@ describe('TeacherClassList', () => {
       }],
       page: { number: 1, size: 20, total_items: 1, total_pages: 1, start: 1, end: 1 },
     })
+    mocks.deletion.previewClass.mockResolvedValue({
+      action: 'delete_class', object_id: 11, object_name: '实验一班', allowed: true, blocked_reason: '',
+      experiments: [], counts: { class_count: 1, session_count: 0, export_count: 0, member_count: 0 }, confirmation_token: 'class-token',
+    })
+    mocks.deletion.deleteClass.mockResolvedValue({ deleted: true, cleanup_pending: false, cleanup_id: null })
   })
 
   it('renders the paged class facts and creates a class through the JSON API', async () => {
@@ -78,6 +89,20 @@ describe('TeacherClassList', () => {
     await flushPromises()
 
     expect(wrapper.find('.kt-class-create').exists()).toBe(false)
+  })
+
+  it('deletes a class only after the server preview and refreshes the list', async () => {
+    const wrapper = mount(TeacherClassList)
+    await flushPromises()
+
+    await wrapper.findAll('[data-delete-class="11"]')[0]!.trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-deletion-confirm]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.deletion.previewClass).toHaveBeenCalledWith(7, 11)
+    expect(mocks.deletion.deleteClass).toHaveBeenCalledWith(7, 11, 'class-token')
+    expect(mocks.api.list).toHaveBeenCalledTimes(2)
   })
 
   it('shows an API validation failure without navigating away', async () => {

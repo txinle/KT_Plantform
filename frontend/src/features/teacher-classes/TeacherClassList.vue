@@ -8,6 +8,8 @@ import MobileCardList from '@/design-system/components/MobileCardList.vue'
 import PageHeader from '@/design-system/components/PageHeader.vue'
 import Paginator from '@/design-system/components/Paginator.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
+import DeletionDialog from '@/features/teacher-deletion/DeletionDialog.vue'
+import type { DeletionTarget } from '@/features/teacher-deletion/api'
 
 import { getTeacherClassApi, type TeacherClassCollection } from './api'
 
@@ -23,6 +25,8 @@ const currentPage = computed(() => Number(route.query.page || 1))
 const canCreate = computed(() => collection.value?.capabilities.can_create === true)
 const createForm = ref({ name: '', academic_year: '' })
 const creating = ref(false)
+const deletionTarget = ref<DeletionTarget>()
+const canManage = computed(() => collection.value?.capabilities.can_manage === true)
 
 async function load(page = currentPage.value, query = search.value) {
   loading.value = true
@@ -59,6 +63,15 @@ async function createClass() {
     error.value = caught instanceof Error ? caught.message : '班级创建失败。'
   } finally {
     creating.value = false
+  }
+}
+
+async function afterDeletion() {
+  deletionTarget.value = undefined
+  const page = currentPage.value
+  await load(page)
+  if (!collection.value?.items.length && page > 1) {
+    await navigate(Math.max(1, collection.value?.page.total_pages || page - 1))
   }
 }
 
@@ -100,7 +113,7 @@ onMounted(() => load())
                 <td><RouterLink :to="classGroup.detail_url"><strong>{{ classGroup.name }}</strong></RouterLink></td>
                 <td>{{ classGroup.active_student_count }} 人</td>
                 <td><StatusBadge :tone="classGroup.is_active ? 'success' : 'neutral'" :label="classGroup.is_active ? '可用' : '已停用'" /></td>
-                <td><RouterLink :to="classGroup.detail_url">进入班级中心</RouterLink></td>
+                <td><div class="kt-class-row-actions"><RouterLink :to="classGroup.detail_url">进入班级中心</RouterLink><button v-if="canManage" class="kt-text-button kt-text-button--danger" type="button" :data-delete-class="classGroup.id" @click="deletionTarget = { kind: 'class', classId: classGroup.id }">删除</button></div></td>
               </tr>
             </tbody>
           </table>
@@ -112,6 +125,7 @@ onMounted(() => load())
               <StatusBadge :tone="classGroup.is_active ? 'success' : 'neutral'" :label="classGroup.is_active ? '可用' : '已停用'" />
             </div>
             <p>{{ classGroup.academic_year || '未填写年级' }} · {{ classGroup.active_student_count }} 人</p>
+            <button v-if="canManage" class="kt-text-button kt-text-button--danger" type="button" :data-delete-class="classGroup.id" @click="deletionTarget = { kind: 'class', classId: classGroup.id }">删除班级</button>
           </li>
         </MobileCardList>
         <Paginator :page="collection.page.number" :total-pages="collection.page.total_pages" @navigate="navigate" />
@@ -129,4 +143,5 @@ onMounted(() => load())
       </form>
     </aside>
   </div>
+  <DeletionDialog v-if="deletionTarget" :course-id="courseId" :target="deletionTarget" @cancelled="deletionTarget = undefined" @completed="afterDeletion" @batch-completed="afterDeletion" />
 </template>

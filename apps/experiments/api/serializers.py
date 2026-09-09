@@ -79,7 +79,7 @@ class SamplingDefinitionSerializer(serializers.Serializer):
 
 
 class TeacherExperimentSerializer(serializers.ModelSerializer):
-    question_bank = QuestionBankReferenceSerializer(read_only=True)
+    question_bank = QuestionBankReferenceSerializer(read_only=True, allow_null=True)
     question_bank_id = serializers.PrimaryKeyRelatedField(
         source="question_bank",
         queryset=QuestionBank.objects.all(),
@@ -119,6 +119,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         source="get_confidence_sampling_unit_display", read_only=True
     )
     can_edit = serializers.SerializerMethodField()
+    can_manage = serializers.SerializerMethodField()
 
     class Meta:
         model = Experiment
@@ -158,6 +159,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "confidence_sampling_unit_label",
             "confidence_probability",
             "can_edit",
+            "can_manage",
             "created_at",
             "updated_at",
         )
@@ -175,6 +177,11 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
 
     def get_can_edit(self, experiment) -> bool:
         return experiment.status == Experiment.Status.DRAFT
+
+    def get_can_manage(self, experiment) -> bool:
+        request = self.context.get("request")
+        return bool(request and experiment.course and experiment.course.can_manage(request.user)
+                    and experiment.course.status == experiment.course.Status.ACTIVE)
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
@@ -521,10 +528,15 @@ class TeacherExperimentSummarySerializer(serializers.Serializer):
     classes = TeacherExperimentClassOptionSerializer(many=True)
 
 
+class ExperimentManagementCapabilitiesSerializer(serializers.Serializer):
+    can_manage = serializers.BooleanField()
+
+
 class TeacherExperimentCollectionSerializer(serializers.Serializer):
     items = TeacherExperimentSerializer(many=True)
     page = PageMetadataSerializer()
     summary = TeacherExperimentSummarySerializer()
+    capabilities = ExperimentManagementCapabilitiesSerializer()
 
 
 class TeacherExperimentReadinessIssueSerializer(serializers.Serializer):

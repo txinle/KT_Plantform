@@ -1,5 +1,11 @@
 from django.urls import path
 
+from .deletion_views import (
+    TeacherClassExperimentRemoveView,
+    TeacherDeletionCleanupView,
+    TeacherExperimentDeletionView,
+)
+
 from .views import (
     TeacherClassTaskCancelView,
     TeacherClassTaskDetailView,
@@ -33,6 +39,12 @@ from .standalone_views import (
 
 
 urlpatterns = [
+    path("courses/<int:course_id>/experiments/<int:experiment_id>/deletion/",
+         TeacherExperimentDeletionView.as_view(), name="teacher-experiment-deletion"),
+    path("courses/<int:course_id>/classes/<int:class_id>/experiments/<int:experiment_id>/remove/",
+         TeacherClassExperimentRemoveView.as_view(), name="teacher-class-experiment-remove"),
+    path("courses/<int:course_id>/deletion-cleanups/<uuid:cleanup_id>/",
+         TeacherDeletionCleanupView.as_view(), name="teacher-deletion-cleanup"),
     path(
         "standalone-experiments/",
         TeacherStandaloneExperimentCollectionView.as_view(),

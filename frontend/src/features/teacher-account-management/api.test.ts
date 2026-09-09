@@ -21,7 +21,6 @@ describe('teacher account-management API', () => {
     await api.resetLegacyStudentPassword(9)
     await api.management(7, 11)
     await api.updateManagement(7, 11, { name: '一班', academic_year: '2026', is_active: true, state_token: 'state-1' })
-    await api.deleteManagement(7, 11)
     await api.manualEnrollment(7, 11, { student_number: 'S-2', display_name: '李同学', confirmation_token: 'confirm-1' })
     await api.updateStudentIdentity(7, 11, 9, { student_number: 'S-2', display_name: '李同学', state_token: 'identity-1' })
     await api.previewCopy(7, 11, 12)
@@ -63,38 +62,35 @@ describe('teacher account-management API', () => {
     expect(client.mutate).toHaveBeenNthCalledWith(5, '/api/v1/teacher/accounts/courses/7/classes/11/manage/', {
       method: 'PATCH', body: { name: '一班', academic_year: '2026', is_active: true, state_token: 'state-1' },
     })
-    expect(client.mutate).toHaveBeenNthCalledWith(6, '/api/v1/teacher/accounts/courses/7/classes/11/delete/', {
-      method: 'POST', body: { confirmation: 'delete' },
-    })
-    expect(client.mutate).toHaveBeenNthCalledWith(7, '/api/v1/teacher/accounts/courses/7/classes/11/students/manual/', {
+    expect(client.mutate).toHaveBeenNthCalledWith(6, '/api/v1/teacher/accounts/courses/7/classes/11/students/manual/', {
       method: 'POST', body: { student_number: 'S-2', display_name: '李同学', confirmation_token: 'confirm-1' },
     })
-    expect(client.mutate).toHaveBeenNthCalledWith(8, '/api/v1/teacher/accounts/courses/7/classes/11/students/9/identity/', {
+    expect(client.mutate).toHaveBeenNthCalledWith(7, '/api/v1/teacher/accounts/courses/7/classes/11/students/9/identity/', {
       method: 'PATCH', body: { student_number: 'S-2', display_name: '李同学', state_token: 'identity-1' },
     })
-    expect(client.mutate).toHaveBeenNthCalledWith(9, '/api/v1/teacher/accounts/courses/7/classes/11/students/copy/preview/', {
+    expect(client.mutate).toHaveBeenNthCalledWith(8, '/api/v1/teacher/accounts/courses/7/classes/11/students/copy/preview/', {
       method: 'POST', body: { source_class: 12 },
     })
-    expect(client.mutate).toHaveBeenNthCalledWith(10, '/api/v1/teacher/accounts/courses/7/classes/11/students/copy/confirm/', {
+    expect(client.mutate).toHaveBeenNthCalledWith(9, '/api/v1/teacher/accounts/courses/7/classes/11/students/copy/confirm/', {
       method: 'POST', body: {},
     })
     expect(client.mutateForm).toHaveBeenNthCalledWith(2, '/api/v1/teacher/accounts/courses/7/classes/11/students/import/preview/', {
       method: 'POST', body: upload,
     })
-    expect(client.mutate).toHaveBeenNthCalledWith(11, '/api/v1/teacher/accounts/courses/7/classes/11/students/import/confirm/', {
+    expect(client.mutate).toHaveBeenNthCalledWith(10, '/api/v1/teacher/accounts/courses/7/classes/11/students/import/confirm/', {
       method: 'POST', body: {},
     })
-    expect(client.mutate).toHaveBeenNthCalledWith(12, '/api/v1/teacher/accounts/courses/7/classes/11/students/9/move/', {
+    expect(client.mutate).toHaveBeenNthCalledWith(11, '/api/v1/teacher/accounts/courses/7/classes/11/students/9/move/', {
       method: 'POST', body: { class_group: 12 },
     })
-    expect(client.mutate).toHaveBeenNthCalledWith(13, '/api/v1/teacher/accounts/courses/7/classes/11/students/9/remove/', {
+    expect(client.mutate).toHaveBeenNthCalledWith(12, '/api/v1/teacher/accounts/courses/7/classes/11/students/9/remove/', {
       method: 'POST', body: { confirmation: 'delete' },
     })
-    expect(client.mutate).toHaveBeenNthCalledWith(14, '/api/v1/teacher/accounts/courses/7/classes/11/students/9/reset-password/', {
+    expect(client.mutate).toHaveBeenNthCalledWith(13, '/api/v1/teacher/accounts/courses/7/classes/11/students/9/reset-password/', {
       method: 'POST', body: { confirmation: 'reset' },
     })
     expect(client.get).toHaveBeenNthCalledWith(4, '/api/v1/teacher/accounts/courses/7/classes/11/student-visibility/')
-    expect(client.mutate).toHaveBeenNthCalledWith(15, '/api/v1/teacher/accounts/courses/7/classes/11/student-visibility/', {
+    expect(client.mutate).toHaveBeenNthCalledWith(14, '/api/v1/teacher/accounts/courses/7/classes/11/student-visibility/', {
       method: 'PATCH', body: {
         show_scores: true,
         show_correct_rate: true,

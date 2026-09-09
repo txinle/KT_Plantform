@@ -8,6 +8,8 @@ import MobileCardList from '@/design-system/components/MobileCardList.vue'
 import PageHeader from '@/design-system/components/PageHeader.vue'
 import Paginator from '@/design-system/components/Paginator.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
+import DeletionDialog from '@/features/teacher-deletion/DeletionDialog.vue'
+import type { DeletionTarget } from '@/features/teacher-deletion/api'
 
 import { getTeacherExperimentApi, type TeacherExperimentCollection } from './api'
 
@@ -19,6 +21,8 @@ const collection = ref<TeacherExperimentCollection>()
 const loading = ref(true)
 const error = ref('')
 const currentPage = computed(() => Number(route.query.page || 1))
+const deletionTarget = ref<DeletionTarget>()
+const canManage = computed(() => collection.value?.capabilities.can_manage === true)
 
 function statusTone(status: string) {
   if (status === 'draft') return 'warning' as const
@@ -41,6 +45,15 @@ async function load(page = currentPage.value) {
 async function navigate(page: number) {
   await router.push({ query: page === 1 ? {} : { page: String(page) } })
   await load(page)
+}
+
+async function afterDeletion() {
+  deletionTarget.value = undefined
+  const page = currentPage.value
+  await load(page)
+  if (!collection.value?.items.length && page > 1) {
+    await navigate(Math.max(1, collection.value?.page.total_pages || page - 1))
+  }
 }
 
 onMounted(() => load())
@@ -69,7 +82,7 @@ onMounted(() => load())
     </div>
     <div class="kt-table-scroll kt-desktop-only">
       <table class="kt-table">
-        <thead><tr><th>实验</th><th>题库</th><th>选题</th><th>状态</th><th>更新时间</th></tr></thead>
+        <thead><tr><th>实验</th><th>题库</th><th>选题</th><th>状态</th><th>更新时间</th><th v-if="canManage"><span class="kt-visually-hidden">操作</span></th></tr></thead>
         <tbody>
           <tr v-for="experiment in collection.items" :key="experiment.id">
             <td>
@@ -78,10 +91,11 @@ onMounted(() => load())
               </RouterLink>
               <span class="kt-cell-note">{{ experiment.description || '无说明' }}</span>
             </td>
-            <td>{{ experiment.question_bank.name }}</td>
+            <td>{{ experiment.question_bank?.name || '未选择题库' }}</td>
             <td>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}</td>
             <td><StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" /></td>
             <td>{{ new Date(experiment.updated_at).toLocaleString('zh-CN') }}</td>
+            <td v-if="canManage"><button class="kt-text-button kt-text-button--danger" type="button" :data-delete-experiment="experiment.id" @click="deletionTarget = { kind: 'experiment', experimentId: experiment.id }">删除</button></td>
           </tr>
         </tbody>
       </table>
@@ -96,9 +110,10 @@ onMounted(() => load())
         </div>
         <p>{{ experiment.description || '无说明' }}</p>
         <dl>
-          <div><dt>题库</dt><dd>{{ experiment.question_bank.name }}</dd></div>
+          <div><dt>题库</dt><dd>{{ experiment.question_bank?.name || '未选择题库' }}</dd></div>
           <div><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}</dd></div>
         </dl>
+        <button v-if="canManage" class="kt-text-button kt-text-button--danger" type="button" :data-delete-experiment="experiment.id" @click="deletionTarget = { kind: 'experiment', experimentId: experiment.id }">删除实验</button>
       </li>
     </MobileCardList>
     <Paginator
@@ -107,4 +122,5 @@ onMounted(() => load())
       @navigate="navigate"
     />
   </section>
+  <DeletionDialog v-if="deletionTarget" :course-id="courseId" :target="deletionTarget" @cancelled="deletionTarget = undefined" @completed="afterDeletion" />
 </template>

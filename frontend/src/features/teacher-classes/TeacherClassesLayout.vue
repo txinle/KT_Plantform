@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, provide, ref } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 
 import { createApiClient } from '@/api/client'
@@ -13,6 +13,8 @@ const route = useRoute()
 const courseId = Number(route.params.courseId)
 const bootstrap = getBootstrapContext()
 const course = ref<components['schemas']['CourseContext']>()
+
+provide('teacher-classes-course', course)
 
 const contextError = ref('')
 

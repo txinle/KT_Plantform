@@ -409,10 +409,10 @@ def bank_delete(request, course_pk, pk):
             _require_bank_metadata_editor(request, course, bank)
             details = delete_question_bank(bank)
             log_action(request, "question_bank.delete", details=details)
-    except ReferencedQuestionBankError:
+    except ReferencedQuestionBankError as error:
         messages.error(
             request,
-            "题库已被实验或发布快照引用，不能永久删除。请保留并归档，或先处理无研究数据的草稿实验。",
+            str(error),
         )
         return redirect("courses:bank_detail", course.pk, bank.pk)
     messages.success(request, "题库及其未被研究数据引用的题目已永久删除。")
@@ -435,13 +435,13 @@ def question_delete(request, course_pk, bank_pk, question_pk):
             )
             details = delete_question(question)
             log_action(request, "question.delete", details=details)
-    except ReferencedQuestionError:
+    except ReferencedQuestionError as error:
         messages.error(
             request,
-            "题目已被实验或发布快照引用，不能永久删除。请保留题目，或先处理无研究数据的草稿实验。",
+            str(error),
         )
         return redirect("courses:bank_detail", course.pk, bank.pk)
-    messages.success(request, "题目已永久删除，其他题目的序号和稳定课程代码保持不变。")
+    messages.success(request, "题目已永久删除，课程题号已按原顺序重新连续编号。")
     return redirect("courses:bank_detail", course.pk, bank.pk)
 
 

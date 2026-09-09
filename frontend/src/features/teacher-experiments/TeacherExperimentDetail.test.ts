@@ -13,6 +13,11 @@ const mocks = vi.hoisted(() => ({
     manualClose: vi.fn(),
     releaseFeedback: vi.fn(),
   },
+  deletion: {
+    previewExperiment: vi.fn(), deleteExperiment: vi.fn(),
+    previewClassExperiment: vi.fn(), removeClassExperiment: vi.fn(),
+    previewClass: vi.fn(), deleteClass: vi.fn(), cleanup: vi.fn(),
+  },
   push: vi.fn(),
 }))
 
@@ -22,6 +27,7 @@ vi.mock('vue-router', () => ({
 }))
 
 vi.mock('./api', () => ({ getTeacherExperimentApi: () => mocks.api }))
+vi.mock('@/features/teacher-deletion/api', () => ({ getTeacherDeletionApi: () => mocks.deletion }))
 
 import TeacherExperimentDetail from './TeacherExperimentDetail.vue'
 
@@ -45,6 +51,7 @@ describe('TeacherExperimentDetail', () => {
       resume_mode_label: '允许断点续答',
       confidence_mode_label: '不采集',
       can_edit: true,
+      can_manage: true,
       updated_at: '2026-08-30T00:00:00Z',
     })
     mocks.api.readiness.mockResolvedValue({ ready: true, issues: [], candidate_count: 12, participant_count: 0 })
@@ -52,6 +59,11 @@ describe('TeacherExperimentDetail', () => {
     mocks.api.progress.mockResolvedValue({ total_participants: 0, not_started: 0, in_progress: 0, completed: 0 })
     mocks.api.startPlan.mockResolvedValue({ id: 23 })
     mocks.api.releaseFeedback.mockResolvedValue({ id: 31 })
+    mocks.deletion.previewExperiment.mockResolvedValue({
+      action: 'delete_experiment', object_id: 11, object_name: '认知诊断实验', allowed: true, blocked_reason: '',
+      experiments: [], counts: { class_count: 0, session_count: 0, export_count: 0, member_count: 0 }, confirmation_token: 'token-11',
+    })
+    mocks.deletion.deleteExperiment.mockResolvedValue({ deleted: true, cleanup_pending: false, cleanup_id: null })
   })
 
   it('renders authoritative readiness and resumes the server publish plan', async () => {
@@ -86,6 +98,33 @@ describe('TeacherExperimentDetail', () => {
     expect(wrapper.find('.kt-definition-summary__action').exists()).toBe(true)
     expect(wrapper.find('.kt-publish-empty-illustration').exists()).toBe(true)
     expect(wrapper.findAll('.kt-readiness-checklist li').length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('deletes an experiment after preview and returns to the experiment list', async () => {
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+
+    await wrapper.get('[data-delete-experiment]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-deletion-confirm]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.deletion.deleteExperiment).toHaveBeenCalledWith(7, 11, 'token-11')
+    expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/')
+  })
+
+  it('shows a deleted draft bank as unselected', async () => {
+    mocks.api.detail.mockResolvedValueOnce({
+      id: 11, name: '待修复实验', description: '', question_bank: null,
+      status: 'draft', status_label: '草稿', selection_mode_label: '全量题池', ordering_mode_label: '固定顺序',
+      feedback_mode_label: '不反馈', feedback_release_policy_label: '个人完成后', total_time_limit_minutes: null,
+      per_question_time_limit_seconds: null, resume_mode_label: '允许断点续答', confidence_mode_label: '不采集',
+      can_edit: true, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+    })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+
+    expect(wrapper.get('.kt-definition-summary').text()).toContain('未选择题库')
   })
 
   it('renders server-authorized task actions in the published task table', async () => {

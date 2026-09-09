@@ -77,7 +77,7 @@ class TeacherClassApiTests(TransactionTestCase):
             },
         )
         self.assertEqual(payload["course"]["id"], self.course.pk)
-        self.assertEqual(payload["capabilities"], {"can_create": True})
+        self.assertEqual(payload["capabilities"], {"can_create": True, "can_manage": True})
         detail_response = self.client.get(
             f"/api/v1/teacher/courses/{self.course.pk}/classes/",
             {"q": "一班"},
@@ -141,7 +141,7 @@ class TeacherClassApiTests(TransactionTestCase):
 
         collection = self.client.get(endpoint)
         self.assertEqual(collection.status_code, 200)
-        self.assertEqual(collection.json()["capabilities"], {"can_create": False})
+        self.assertEqual(collection.json()["capabilities"], {"can_create": False, "can_manage": False})
 
         rejected = self.post_json(
             endpoint,

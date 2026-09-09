@@ -14,17 +14,19 @@ class APlusMigrationContractTests(SimpleTestCase):
             [("experiments", "0015_a_plus_publish_plan")]
         ).apps
 
-    def test_schema_chain_retains_a_plus_and_ends_at_feedback_policy(self):
+    def test_schema_chain_retains_a_plus_and_allows_unassigned_draft_bank(self):
         loader = MigrationLoader(None)
 
         self.assertEqual(
             loader.graph.leaf_nodes("experiments"),
-            [("experiments", "0024_feedback_release_policy")],
+            [("experiments", "0025_allow_unassigned_draft_bank")],
         )
         self.assertIn(
             ("experiments", "0022_participant_snapshot_assignment_provenance"),
-            loader.graph.forwards_plan(("experiments", "0024_feedback_release_policy")),
+            loader.graph.forwards_plan(("experiments", "0025_allow_unassigned_draft_bank")),
         )
+        experiment = loader.project_state().apps.get_model("experiments", "Experiment")
+        self.assertTrue(experiment._meta.get_field("question_bank").null)
 
     def test_a_plus_initial_schema_migration_has_no_data_backfill(self):
         migration_module = import_module(

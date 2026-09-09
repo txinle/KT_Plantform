@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
   api: {
     management: vi.fn(),
     updateManagement: vi.fn(),
-    deleteManagement: vi.fn(),
     manualEnrollment: vi.fn(),
     previewCopy: vi.fn(),
     confirmCopy: vi.fn(),
@@ -20,10 +19,16 @@ const mocks = vi.hoisted(() => ({
     resetCourseStudentPassword: vi.fn(),
     updateStudentIdentity: vi.fn(),
   },
+  deletion: {
+    previewExperiment: vi.fn(), deleteExperiment: vi.fn(),
+    previewClassExperiment: vi.fn(), removeClassExperiment: vi.fn(),
+    previewClass: vi.fn(), deleteClass: vi.fn(), cleanup: vi.fn(),
+  },
 }))
 
 vi.mock('vue-router', () => ({ useRoute: () => route, useRouter: () => router }))
 vi.mock('./api', () => ({ getTeacherAccountManagementApi: () => mocks.api }))
+vi.mock('@/features/teacher-deletion/api', () => ({ getTeacherDeletionApi: () => mocks.deletion }))
 
 import TeacherClassManagement from './TeacherClassManagement.vue'
 
@@ -67,6 +72,11 @@ describe('TeacherClassManagement', () => {
       student: { id: 23, student_number: 'S001', display_name: '新学生', username: 'S001', class_group: null },
       created_account: true,
     })
+    mocks.deletion.previewClass.mockResolvedValue({
+      action: 'delete_class', object_id: 11, object_name: '目标班', allowed: true, blocked_reason: '',
+      experiments: [], counts: { class_count: 1, session_count: 0, export_count: 0, member_count: 0 }, confirmation_token: 'class-token',
+    })
+    mocks.deletion.deleteClass.mockResolvedValue({ deleted: true, cleanup_pending: false, cleanup_id: null })
   })
 
   it('uses the server-provided class state and submits manual enrollment through the API', async () => {
@@ -92,10 +102,12 @@ describe('TeacherClassManagement', () => {
     await flushPromises()
 
     await wrapper.get('[data-course-class-delete]').trigger('click')
-    await wrapper.get('[data-course-class-delete-confirm]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-deletion-confirm]').trigger('click')
     await flushPromises()
 
-    expect(mocks.api.deleteManagement).toHaveBeenCalledWith(7, 11)
+    expect(mocks.deletion.previewClass).toHaveBeenCalledWith(7, 11)
+    expect(mocks.deletion.deleteClass).toHaveBeenCalledWith(7, 11, 'class-token')
     expect(router.push).toHaveBeenCalledWith('/teacher/courses/7/classes/')
   })
 

@@ -48,7 +48,7 @@ class CourseContextView(APIView):
         course = get_object_or_404(Course, pk=course_id)
         if not course.can_manage(request.user):
             raise NotFound()
-        return Response(CourseContextSerializer(course).data)
+        return Response(CourseContextSerializer(course, context={"request": request}).data)
 
 
 def _form_data(payload, *, include_teachers=False):

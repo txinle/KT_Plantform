@@ -363,9 +363,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["teacher_accounts_courses_classes_delete_retrieve"];
         put?: never;
-        post: operations["teacher_course_class_delete"];
+        post: operations["teacher_accounts_courses_classes_delete_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1366,6 +1366,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/classes/{class_id}/experiments/{experiment_id}/remove/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_courses_classes_experiments_remove_retrieve"];
+        put?: never;
+        post: operations["teacher_courses_classes_experiments_remove_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/classes/{class_id}/students/{student_id}/analysis/": {
         parameters: {
             query?: never;
@@ -1609,6 +1625,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/deletion-cleanups/{cleanup_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_courses_deletion_cleanups_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/experiments/": {
         parameters: {
             query?: never;
@@ -1639,6 +1671,22 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["teacher_experiment_update"];
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/deletion/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_courses_experiments_deletion_retrieve"];
+        put?: never;
+        post: operations["teacher_courses_experiments_deletion_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/publish-plans/": {
@@ -2025,7 +2073,7 @@ export interface components {
          * @description * `confirm` - confirm
          * @enum {string}
          */
-        ActionEnum: "confirm";
+        ActionF00Enum: "confirm";
         ApiUser: {
             id: number;
             role: string;
@@ -2195,7 +2243,7 @@ export interface components {
          */
         ConfirmationF49Enum: "delete";
         CourseClassCopyConfirmRequest: {
-            action?: components["schemas"]["ActionEnum"];
+            action?: components["schemas"]["ActionF00Enum"];
         };
         CourseClassCopyPreview: {
             source_class: components["schemas"]["ManagedClassSourceOption"];
@@ -2211,12 +2259,6 @@ export interface components {
         CourseClassCopyResult: {
             copied: number;
             skipped: number;
-        };
-        CourseClassDeleteRequest: {
-            confirmation: components["schemas"]["ConfirmationF49Enum"];
-        };
-        CourseClassDeleteResponse: {
-            deleted: boolean;
         };
         CourseClassManagement: {
             course: components["schemas"]["TeacherAccountCourse"];
@@ -2273,6 +2315,7 @@ export interface components {
             /** 学期 */
             readonly term: string;
             readonly status: components["schemas"]["Status558Enum"];
+            readonly can_manage: boolean;
         };
         CourseKCImportResult: {
             created: number;
@@ -2286,7 +2329,7 @@ export interface components {
             status: string;
         };
         CourseStudentImportConfirmRequest: {
-            action?: components["schemas"]["ActionEnum"];
+            action?: components["schemas"]["ActionF00Enum"];
         };
         CourseStudentImportResult: {
             created_accounts: number;
@@ -2491,6 +2534,27 @@ export interface components {
             is_complete: boolean;
             display: string;
         };
+        DeletionClass: {
+            id: number;
+            name: string;
+            session_count: number;
+        };
+        DeletionCounts: {
+            class_count: number;
+            session_count: number;
+            export_count: number;
+            member_count: number;
+        };
+        DeletionExperiment: {
+            id: number;
+            name: string;
+            class_count: number;
+            session_count: number;
+            class_session_count: number;
+            export_count: number;
+            classes: components["schemas"]["DeletionClass"][];
+            detail_url: string;
+        };
         DistributionBin: {
             key: string;
             label: string;
@@ -2498,6 +2562,9 @@ export interface components {
         };
         ExpectedRevision: {
             expected_revision: number;
+        };
+        ExperimentManagementCapabilities: {
+            can_manage: boolean;
         };
         ExperimentOption: {
             experiment_id: number;
@@ -3130,7 +3197,7 @@ export interface components {
             readonly id?: number;
             name?: string;
             description?: string;
-            readonly question_bank?: components["schemas"]["QuestionBankReference"];
+            readonly question_bank?: components["schemas"]["QuestionBankReference"] | null;
             question_bank_id?: number;
             readonly status?: components["schemas"]["TeacherExperimentStatusEnum"];
             readonly status_label?: string;
@@ -3152,9 +3219,7 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
-            /** Format: int64 */
             total_time_limit_minutes?: number | null;
-            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -3165,6 +3230,7 @@ export interface components {
             /** Format: decimal */
             confidence_probability?: string | null;
             readonly can_edit?: boolean;
+            readonly can_manage?: boolean;
             /** Format: date-time */
             readonly created_at?: string;
             /** Format: date-time */
@@ -3574,6 +3640,44 @@ export interface components {
         };
         RemoveEnrollmentResponse: {
             removed: boolean;
+        };
+        ResearchDeletionCleanup: {
+            cleanup_pending: boolean;
+            status: components["schemas"]["ResearchDeletionCleanupStatusEnum"];
+            error: string;
+        };
+        /**
+         * @description * `pending` - pending
+         *     * `completed` - completed
+         * @enum {string}
+         */
+        ResearchDeletionCleanupStatusEnum: "pending" | "completed";
+        ResearchDeletionInput: {
+            confirmation: components["schemas"]["ConfirmationF49Enum"];
+            confirmation_token: string;
+        };
+        ResearchDeletionPreview: {
+            action: components["schemas"]["ResearchDeletionPreviewActionEnum"];
+            object_id: number;
+            object_name: string;
+            allowed: boolean;
+            blocked_reason: string;
+            experiments: components["schemas"]["DeletionExperiment"][];
+            counts: components["schemas"]["DeletionCounts"];
+            confirmation_token: string;
+        };
+        /**
+         * @description * `delete_experiment` - delete_experiment
+         *     * `remove_class_experiment` - remove_class_experiment
+         *     * `delete_class` - delete_class
+         * @enum {string}
+         */
+        ResearchDeletionPreviewActionEnum: "delete_experiment" | "remove_class_experiment" | "delete_class";
+        ResearchDeletionResult: {
+            deleted: boolean;
+            cleanup_pending: boolean;
+            /** Format: uuid */
+            cleanup_id: string | null;
         };
         /**
          * @description * `correct` - correct
@@ -4418,7 +4522,7 @@ export interface components {
             student: components["schemas"]["TeacherAccountStudent"];
         };
         TeacherAccountStudentImportConfirmRequest: {
-            action?: components["schemas"]["ActionEnum"];
+            action?: components["schemas"]["ActionF00Enum"];
         };
         TeacherAnalysisClassGroup: {
             id: number;
@@ -4427,6 +4531,7 @@ export interface components {
         };
         TeacherClassCapabilities: {
             can_create: boolean;
+            can_manage: boolean;
         };
         TeacherClassCenter: {
             course: components["schemas"]["CourseReference"];
@@ -4637,7 +4742,7 @@ export interface components {
             readonly id: number;
             name: string;
             description?: string;
-            readonly question_bank: components["schemas"]["QuestionBankReference"];
+            readonly question_bank: components["schemas"]["QuestionBankReference"] | null;
             question_bank_id: number;
             readonly status: components["schemas"]["TeacherExperimentStatusEnum"];
             readonly status_label: string;
@@ -4659,9 +4764,7 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
-            /** Format: int64 */
             total_time_limit_minutes?: number | null;
-            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -4672,6 +4775,7 @@ export interface components {
             /** Format: decimal */
             confidence_probability?: string | null;
             readonly can_edit: boolean;
+            readonly can_manage: boolean;
             /** Format: date-time */
             readonly created_at: string;
             /** Format: date-time */
@@ -4687,6 +4791,7 @@ export interface components {
             items: components["schemas"]["TeacherExperiment"][];
             page: components["schemas"]["PageMetadata"];
             summary: components["schemas"]["TeacherExperimentSummary"];
+            capabilities: components["schemas"]["ExperimentManagementCapabilities"];
         };
         TeacherExperimentInventoryBucket: {
             kc_code: string;
@@ -5453,7 +5558,29 @@ export interface operations {
             };
         };
     };
-    teacher_course_class_delete: {
+    teacher_accounts_courses_classes_delete_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchDeletionPreview"];
+                };
+            };
+        };
+    };
+    teacher_accounts_courses_classes_delete_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -5465,9 +5592,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CourseClassDeleteRequest"];
-                "application/x-www-form-urlencoded": components["schemas"]["CourseClassDeleteRequest"];
-                "multipart/form-data": components["schemas"]["CourseClassDeleteRequest"];
+                "application/json": components["schemas"]["ResearchDeletionInput"];
+                "application/x-www-form-urlencoded": components["schemas"]["ResearchDeletionInput"];
+                "multipart/form-data": components["schemas"]["ResearchDeletionInput"];
             };
         };
         responses: {
@@ -5476,7 +5603,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CourseClassDeleteResponse"];
+                    "application/json": components["schemas"]["ResearchDeletionResult"];
                 };
             };
         };
@@ -7413,6 +7540,58 @@ export interface operations {
             };
         };
     };
+    teacher_courses_classes_experiments_remove_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchDeletionPreview"];
+                };
+            };
+        };
+    };
+    teacher_courses_classes_experiments_remove_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchDeletionInput"];
+                "application/x-www-form-urlencoded": components["schemas"]["ResearchDeletionInput"];
+                "multipart/form-data": components["schemas"]["ResearchDeletionInput"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchDeletionResult"];
+                };
+            };
+        };
+    };
     teacher_courses_classes_students_analysis_retrieve: {
         parameters: {
             query?: never;
@@ -7781,6 +7960,7 @@ export interface operations {
             query?: {
                 class_id?: number;
                 experiment_id?: number;
+                experiment_ids?: string;
             };
             header?: never;
             path: {
@@ -7897,6 +8077,28 @@ export interface operations {
             };
         };
     };
+    teacher_courses_deletion_cleanups_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                cleanup_id: string;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchDeletionCleanup"];
+                };
+            };
+        };
+    };
     teacher_experiment_list: {
         parameters: {
             query?: never;
@@ -7991,6 +8193,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeacherExperiment"];
+                };
+            };
+        };
+    };
+    teacher_courses_experiments_deletion_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchDeletionPreview"];
+                };
+            };
+        };
+    };
+    teacher_courses_experiments_deletion_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchDeletionInput"];
+                "application/x-www-form-urlencoded": components["schemas"]["ResearchDeletionInput"];
+                "multipart/form-data": components["schemas"]["ResearchDeletionInput"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchDeletionResult"];
                 };
             };
         };

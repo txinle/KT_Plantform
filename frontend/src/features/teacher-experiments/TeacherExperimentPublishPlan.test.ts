@@ -115,6 +115,34 @@ describe('TeacherExperimentPublishPlan', () => {
     expect(wrapper.get('.kt-publish-class-table').text()).toContain('截止')
   })
 
+  it('renders a draft with a deleted bank without crashing', async () => {
+    mocks.route.params.step = '2'
+    const completedPlan = {
+      id: 23, experiment_id: 11, status: 'previewed', current_step: 2, setup_status: 'complete',
+      missing_requirements: [], blocking_issues: [], field_errors: {}, plan_revision: 4,
+      expires_at: '2026-08-31T00:00:00Z', default_opens_at: null, default_closes_at: null,
+      classes: [{ class_id: 5, class_name: '一班', academic_year: '2026', excluded_count: 0, participant_count: 36, schedule_mode: 'default', opens_at: null, closes_at: null }],
+    }
+    mocks.api.plan.mockResolvedValue(completedPlan)
+    mocks.api.review.mockResolvedValue({
+      plan: completedPlan,
+      preview: { id: 41, plan_revision: 4, class_count: 1, participant_count: 36, item_count: 36, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z' },
+      effects: [],
+    })
+    mocks.api.detail.mockResolvedValue({
+      id: 11, name: '待修复实验', description: '', question_bank: null,
+      status: 'draft', status_label: '草稿', selection_mode_label: '全量题池', ordering_mode_label: '固定顺序',
+      feedback_mode_label: '不反馈', time_mode_label: '无时限', total_time_limit_minutes: null,
+      per_question_time_limit_seconds: null, resume_mode_label: '允许断点续答', confidence_mode_label: '不采集',
+      can_edit: true, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+    })
+    const wrapper = mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+
+    await wrapper.get('[data-action="enter-confirmation"]').trigger('click')
+    expect(wrapper.get('.kt-definition-summary__list').text()).toContain('未选择题库')
+  })
+
   it('applies the batch schedule only to selected classes without previewing', async () => {
     const wrapper = mount(TeacherExperimentPublishPlan)
     await flushPromises()

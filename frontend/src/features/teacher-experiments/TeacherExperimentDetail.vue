@@ -9,6 +9,8 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import SidebarSection from '@/design-system/components/SidebarSection.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 import Icon from '@/design-system/Icon.vue'
+import DeletionDialog from '@/features/teacher-deletion/DeletionDialog.vue'
+import type { DeletionTarget } from '@/features/teacher-deletion/api'
 
 import {
   getTeacherExperimentApi,
@@ -38,6 +40,7 @@ const scheduleTaskId = ref<number>()
 const scheduleForm = reactive({ opens_at: '', closes_at: '', reason: '' })
 const confirmation = reactive({ taskId: 0, action: '' as '' | 'cancel' | 'manual_close', reason: '' })
 const activeTab = ref<'definition' | 'tasks' | 'collection'>('definition')
+const deletionTarget = ref<DeletionTarget>()
 
 const readinessTone = computed(() => readiness.value?.ready ? 'success' : 'warning')
 const courseName = computed(() => course?.value?.name || '课程')
@@ -154,6 +157,11 @@ async function releaseFeedback(taskId: number) {
   }
 }
 
+async function afterDeletion() {
+  deletionTarget.value = undefined
+  await router.push(`/teacher/courses/${courseId}/experiments/`)
+}
+
 onMounted(load)
 </script>
 
@@ -174,6 +182,9 @@ onMounted(load)
         </div>
         <p>{{ experiment.description || '未填写实验说明。' }}</p>
       </div>
+      <div v-if="experiment.can_manage" class="kt-experiment-page-header__actions">
+        <button class="kt-button kt-button--danger" data-delete-experiment type="button" @click="deletionTarget = { kind: 'experiment', experimentId }">删除实验</button>
+      </div>
     </header>
 
     <SidebarSection>
@@ -191,7 +202,7 @@ onMounted(load)
         <section class="kt-card kt-definition-summary" aria-labelledby="definition-summary">
           <div class="kt-section-heading"><h2 id="definition-summary">实验设置摘要</h2></div>
           <dl class="kt-description-list kt-definition-summary__list">
-            <div><span class="kt-summary-icon" data-summary-icon><Icon name="bank" :size="17" /></span><dt>题库</dt><dd>{{ experiment.question_bank.name }}</dd></div>
+            <div><span class="kt-summary-icon" data-summary-icon><Icon name="bank" :size="17" /></span><dt>题库</dt><dd>{{ experiment.question_bank?.name || '未选择题库' }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="definition" :size="17" /></span><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}<span v-if="experiment.sampling_mode === 'total_count'"> · {{ experiment.sampling_total_count }} 题</span></dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="summary" :size="17" /></span><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>反馈</dt><dd>{{ experiment.feedback_mode_label }}</dd></div>
@@ -276,6 +287,7 @@ onMounted(load)
         <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>状态</th><th>参与者</th><th>未开始</th><th>进行中</th><th>已完成</th></tr></thead><tbody><tr v-for="task in tasks" :key="task.id"><td>{{ task.class_name }}</td><td>{{ task.business_status }}</td><td>{{ progress[task.id]?.total_participants ?? task.participant_count }}</td><td>{{ progress[task.id]?.not_started ?? '—' }}</td><td>{{ progress[task.id]?.in_progress ?? '—' }}</td><td>{{ progress[task.id]?.completed ?? '—' }}</td></tr></tbody></table></div>
       </section>
     </section>
+    <DeletionDialog v-if="deletionTarget" :course-id="courseId" :target="deletionTarget" @cancelled="deletionTarget = undefined" @completed="afterDeletion" />
   </template>
   <Alert v-else tone="danger">{{ error || '实验不存在或无法访问。' }}</Alert>
 </template>

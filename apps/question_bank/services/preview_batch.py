@@ -5,9 +5,13 @@ import hashlib
 from django.core.signing import salted_hmac
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 
+from apps.accounts.course_access import lock_course
+
 from ..models import ImportPreviewBatch
+from .course_question_identity import course_question_identity_fingerprint
 
 
 class ImportPreviewBatchConflict(Exception):
@@ -26,6 +30,7 @@ def _session_binding(session_key: str) -> str:
 
 class ImportPreviewBatchService:
     @staticmethod
+    @transaction.atomic
     def create(
         *,
         kind,
@@ -43,6 +48,18 @@ class ImportPreviewBatchService:
             raise ValueError("题目 KC 预览必须绑定题库，课程 KC 预览不得绑定题库")
         if bank is not None and bank.course_id != course.pk:
             raise ValueError("预览题库不属于当前课程")
+        course = lock_course(course)
+        bound_payload = dict(payload)
+        identity_map_max_pk = (
+            course.question_identities.aggregate(value=Max("pk"))["value"] or 0
+        )
+        bound_payload["_course_question_identity_max_pk"] = identity_map_max_pk
+        bound_payload["_course_question_identity_fingerprint"] = (
+            course_question_identity_fingerprint(
+                course,
+                through_identity_pk=identity_map_max_pk,
+            )
+        )
         return ImportPreviewBatch.objects.create(
             kind=kind,
             course=course,
@@ -50,12 +67,13 @@ class ImportPreviewBatchService:
             created_by=actor,
             session_binding=_session_binding(session_key),
             file_sha256=hashlib.sha256(file_bytes).hexdigest(),
-            payload=payload,
+            payload=bound_payload,
             summary=summary,
         )
 
     @staticmethod
     def _locked_valid_batch(*, batch_id, kind, course, bank, actor, session_key, allow_consumed=False):
+        course = lock_course(course)
         try:
             batch = ImportPreviewBatch.objects.select_for_update().get(pk=batch_id)
         except (ImportPreviewBatch.DoesNotExist, ValueError, TypeError, ValidationError):
@@ -79,6 +97,19 @@ class ImportPreviewBatchService:
             if allow_consumed:
                 return batch
             raise ImportPreviewBatchConflict("preview_consumed", "预览批次已经确认，不能重复消费")
+        identity_map_max_pk = batch.payload.get("_course_question_identity_max_pk")
+        if (
+            not isinstance(identity_map_max_pk, int)
+            or batch.payload.get("_course_question_identity_fingerprint")
+            != course_question_identity_fingerprint(
+                course,
+                through_identity_pk=identity_map_max_pk,
+            )
+        ):
+            raise ImportPreviewBatchConflict(
+                "preview_stale",
+                "课程题号已变化，预览批次已失效，请重新上传",
+            )
         if batch.expires_at <= timezone.now():
             raise ImportPreviewBatchConflict("preview_expired", "预览批次已过期，请重新上传")
         return batch

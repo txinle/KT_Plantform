@@ -258,7 +258,7 @@ async function load() {
       const experiment = await api.detail(courseId, experimentId.value)
       form.name = experiment.name
       form.description = experiment.description || ''
-      form.question_bank_id = experiment.question_bank.id
+      form.question_bank_id = experiment.question_bank?.id || 0
       legacySampling.value = !experiment.sampling_mode
       legacyQuotaTotal.value = (experiment.question_quotas || []).reduce(
         (total, quota) => total + Number(quota.amount || 0),

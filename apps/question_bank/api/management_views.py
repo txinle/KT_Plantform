@@ -667,10 +667,10 @@ class TeacherQuestionBankDeleteView(TeacherQuestionBankManagementApiView):
                 _require_metadata_editor(request.user, course, bank)
                 details = delete_question_bank(bank)
                 log_action(request, "question_bank.delete", details=details)
-        except ReferencedQuestionBankError:
+        except ReferencedQuestionBankError as error:
             return _api_error_response(
                 "question_bank_referenced",
-                "题库已被实验或发布快照引用，不能永久删除。请保留并归档，或先处理无研究数据的草稿实验。",
+                str(error),
                 status.HTTP_409_CONFLICT,
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -696,10 +696,10 @@ class TeacherQuestionDeleteView(TeacherQuestionBankManagementApiView):
                 )
                 details = delete_question(question)
                 log_action(request, "question.delete", details=details)
-        except ReferencedQuestionError:
+        except ReferencedQuestionError as error:
             return _api_error_response(
                 "question_referenced",
-                "题目已被实验或发布快照引用，不能永久删除。请保留题目，或先处理无研究数据的草稿实验。",
+                str(error),
                 status.HTTP_409_CONFLICT,
             )
         return Response(status=status.HTTP_204_NO_CONTENT)

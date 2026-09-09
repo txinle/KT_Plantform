@@ -494,8 +494,32 @@ paths:
                 $ref: '#/components/schemas/TeacherAccountClassCreateResponse'
           description: ''
   /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/delete/:
+    get:
+      operationId: teacher_accounts_courses_classes_delete_retrieve
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchDeletionPreview'
+          description: ''
     post:
-      operationId: teacher_course_class_delete
+      operationId: teacher_accounts_courses_classes_delete_create
       parameters:
       - in: path
         name: class_id
@@ -513,13 +537,13 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CourseClassDeleteRequest'
+              $ref: '#/components/schemas/ResearchDeletionInput'
           application/x-www-form-urlencoded:
             schema:
-              $ref: '#/components/schemas/CourseClassDeleteRequest'
+              $ref: '#/components/schemas/ResearchDeletionInput'
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/CourseClassDeleteRequest'
+              $ref: '#/components/schemas/ResearchDeletionInput'
         required: true
       security:
       - SessionAuth: []
@@ -528,7 +552,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CourseClassDeleteResponse'
+                $ref: '#/components/schemas/ResearchDeletionResult'
           description: ''
   /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/manage/:
     get:
@@ -2786,6 +2810,77 @@ paths:
               schema:
                 $ref: '#/components/schemas/AttemptProcessResponse'
           description: ''
+  /api/v1/teacher/courses/{course_id}/classes/{class_id}/experiments/{experiment_id}/remove/:
+    get:
+      operationId: teacher_courses_classes_experiments_remove_retrieve
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchDeletionPreview'
+          description: ''
+    post:
+      operationId: teacher_courses_classes_experiments_remove_create
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResearchDeletionInput'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResearchDeletionInput'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResearchDeletionInput'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchDeletionResult'
+          description: ''
   /api/v1/teacher/courses/{course_id}/classes/{class_id}/students/{student_id}/analysis/:
     get:
       operationId: teacher_courses_classes_students_analysis_retrieve
@@ -3237,6 +3332,10 @@ paths:
         name: experiment_id
         schema:
           type: integer
+      - in: query
+        name: experiment_ids
+        schema:
+          type: string
       tags:
       - teacher
       security:
@@ -3363,6 +3462,32 @@ paths:
               schema:
                 $ref: '#/components/schemas/TeachingLegacyResponse'
           description: ''
+  /api/v1/teacher/courses/{course_id}/deletion-cleanups/{cleanup_id}/:
+    get:
+      operationId: teacher_courses_deletion_cleanups_retrieve
+      parameters:
+      - in: path
+        name: cleanup_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchDeletionCleanup'
+          description: ''
   /api/v1/teacher/courses/{course_id}/experiments/:
     get:
       operationId: teacher_experiment_list
@@ -3473,6 +3598,67 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TeacherExperiment'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/deletion/:
+    get:
+      operationId: teacher_courses_experiments_deletion_retrieve
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchDeletionPreview'
+          description: ''
+    post:
+      operationId: teacher_courses_experiments_deletion_create
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResearchDeletionInput'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResearchDeletionInput'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResearchDeletionInput'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchDeletionResult'
           description: ''
   /api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/publish-plans/:
     post:
@@ -4173,7 +4359,7 @@ components:
       description: |-
         * `create` - create
         * `reuse` - reuse
-    ActionEnum:
+    ActionF00Enum:
       enum:
       - confirm
       type: string
@@ -4634,7 +4820,7 @@ components:
       type: object
       properties:
         action:
-          $ref: '#/components/schemas/ActionEnum'
+          $ref: '#/components/schemas/ActionF00Enum'
     CourseClassCopyPreview:
       type: object
       properties:
@@ -4676,20 +4862,6 @@ components:
       required:
       - copied
       - skipped
-    CourseClassDeleteRequest:
-      type: object
-      properties:
-        confirmation:
-          $ref: '#/components/schemas/ConfirmationF49Enum'
-      required:
-      - confirmation
-    CourseClassDeleteResponse:
-      type: object
-      properties:
-        deleted:
-          type: boolean
-      required:
-      - deleted
     CourseClassManagement:
       type: object
       properties:
@@ -4850,7 +5022,11 @@ components:
           allOf:
           - $ref: '#/components/schemas/Status558Enum'
           readOnly: true
+        can_manage:
+          type: boolean
+          readOnly: true
       required:
+      - can_manage
       - code
       - id
       - name
@@ -4891,7 +5067,7 @@ components:
       type: object
       properties:
         action:
-          $ref: '#/components/schemas/ActionEnum'
+          $ref: '#/components/schemas/ActionF00Enum'
     CourseStudentImportResult:
       type: object
       properties:
@@ -5485,6 +5661,65 @@ components:
       - display
       - experiment_id
       - is_complete
+    DeletionClass:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        session_count:
+          type: integer
+      required:
+      - id
+      - name
+      - session_count
+    DeletionCounts:
+      type: object
+      properties:
+        class_count:
+          type: integer
+        session_count:
+          type: integer
+        export_count:
+          type: integer
+        member_count:
+          type: integer
+      required:
+      - class_count
+      - export_count
+      - member_count
+      - session_count
+    DeletionExperiment:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        class_count:
+          type: integer
+        session_count:
+          type: integer
+        class_session_count:
+          type: integer
+        export_count:
+          type: integer
+        classes:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeletionClass'
+        detail_url:
+          type: string
+      required:
+      - class_count
+      - class_session_count
+      - classes
+      - detail_url
+      - export_count
+      - id
+      - name
+      - session_count
     DistributionBin:
       type: object
       properties:
@@ -5507,6 +5742,13 @@ components:
           minimum: 1
       required:
       - expected_revision
+    ExperimentManagementCapabilities:
+      type: object
+      properties:
+        can_manage:
+          type: boolean
+      required:
+      - can_manage
     ExperimentOption:
       type: object
       properties:
@@ -7117,6 +7359,7 @@ components:
           allOf:
           - $ref: '#/components/schemas/QuestionBankReference'
           readOnly: true
+          nullable: true
         question_bank_id:
           type: integer
           writeOnly: true
@@ -7187,15 +7430,13 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -7218,6 +7459,9 @@ components:
           pattern: ^-?\d{0,1}(?:\.\d{0,3})?$
           nullable: true
         can_edit:
+          type: boolean
+          readOnly: true
+        can_manage:
           type: boolean
           readOnly: true
         created_at:
@@ -8380,6 +8624,92 @@ components:
           type: boolean
       required:
       - removed
+    ResearchDeletionCleanup:
+      type: object
+      properties:
+        cleanup_pending:
+          type: boolean
+        status:
+          $ref: '#/components/schemas/ResearchDeletionCleanupStatusEnum'
+        error:
+          type: string
+      required:
+      - cleanup_pending
+      - error
+      - status
+    ResearchDeletionCleanupStatusEnum:
+      enum:
+      - pending
+      - completed
+      type: string
+      description: |-
+        * `pending` - pending
+        * `completed` - completed
+    ResearchDeletionInput:
+      type: object
+      properties:
+        confirmation:
+          $ref: '#/components/schemas/ConfirmationF49Enum'
+        confirmation_token:
+          type: string
+      required:
+      - confirmation
+      - confirmation_token
+    ResearchDeletionPreview:
+      type: object
+      properties:
+        action:
+          $ref: '#/components/schemas/ResearchDeletionPreviewActionEnum'
+        object_id:
+          type: integer
+        object_name:
+          type: string
+        allowed:
+          type: boolean
+        blocked_reason:
+          type: string
+        experiments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeletionExperiment'
+        counts:
+          $ref: '#/components/schemas/DeletionCounts'
+        confirmation_token:
+          type: string
+      required:
+      - action
+      - allowed
+      - blocked_reason
+      - confirmation_token
+      - counts
+      - experiments
+      - object_id
+      - object_name
+    ResearchDeletionPreviewActionEnum:
+      enum:
+      - delete_experiment
+      - remove_class_experiment
+      - delete_class
+      type: string
+      description: |-
+        * `delete_experiment` - delete_experiment
+        * `remove_class_experiment` - remove_class_experiment
+        * `delete_class` - delete_class
+    ResearchDeletionResult:
+      type: object
+      properties:
+        deleted:
+          type: boolean
+        cleanup_pending:
+          type: boolean
+        cleanup_id:
+          type: string
+          format: uuid
+          nullable: true
+      required:
+      - cleanup_id
+      - cleanup_pending
+      - deleted
     ResultStateEnum:
       enum:
       - correct
@@ -10453,7 +10783,7 @@ components:
       type: object
       properties:
         action:
-          $ref: '#/components/schemas/ActionEnum'
+          $ref: '#/components/schemas/ActionF00Enum'
     TeacherAnalysisClassGroup:
       type: object
       properties:
@@ -10472,8 +10802,11 @@ components:
       properties:
         can_create:
           type: boolean
+        can_manage:
+          type: boolean
       required:
       - can_create
+      - can_manage
     TeacherClassCenter:
       type: object
       properties:
@@ -11061,6 +11394,7 @@ components:
           allOf:
           - $ref: '#/components/schemas/QuestionBankReference'
           readOnly: true
+          nullable: true
         question_bank_id:
           type: integer
           writeOnly: true
@@ -11131,15 +11465,13 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -11164,6 +11496,9 @@ components:
         can_edit:
           type: boolean
           readOnly: true
+        can_manage:
+          type: boolean
+          readOnly: true
         created_at:
           type: string
           format: date-time
@@ -11174,6 +11509,7 @@ components:
           readOnly: true
       required:
       - can_edit
+      - can_manage
       - confidence_mode_label
       - confidence_sampling_unit_label
       - created_at
@@ -11225,7 +11561,10 @@ components:
           $ref: '#/components/schemas/PageMetadata'
         summary:
           $ref: '#/components/schemas/TeacherExperimentSummary'
+        capabilities:
+          $ref: '#/components/schemas/ExperimentManagementCapabilities'
       required:
+      - capabilities
       - items
       - page
       - summary

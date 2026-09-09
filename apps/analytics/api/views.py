@@ -272,10 +272,8 @@ class TeacherDataCenterExportJobCreateView(APIView):
             run_export_job(job)
         except ExportContractError as error:
             if "job" in locals():
-                job.status = ExportJob.Status.FAILED
-                job.progress_stage = "contract_error"
-                job.finished_at = timezone.now()
-                job.save(update_fields=["status", "progress_stage", "finished_at"])
+                ExportJob.objects.filter(pk=job.pk, status__in=[ExportJob.Status.RUNNING, ExportJob.Status.QUEUED]).update(
+                    status=ExportJob.Status.FAILED, progress_stage="contract_error", finished_at=timezone.now())
             raise ValidationError({"scope": [str(error)]}) from error
         log_action(
             request,
@@ -314,14 +312,20 @@ class TeacherDataCenterOverviewView(APIView):
         operation_id="teacher_data_center_overview_retrieve",
         parameters=[
             OpenApiParameter("experiment_id", int, required=False),
+            OpenApiParameter("experiment_ids", str, required=False),
             OpenApiParameter("class_id", int, required=False),
         ],
         responses=DataCenterOverviewSerializer,
     )
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
-        scope = _teaching_scope_from_request(request, course)
         research_scope = _scope_from_request(request, course)
+        class_id = research_scope.class_id
+        if class_id is None and research_scope.class_snapshot_id:
+            class_id = research_scope._course_class_snapshot(research_scope.class_snapshot_id).source_class_group_id
+        # The research scope validates multi-experiment selections; this adapter
+        # only supplies the existing class-membership roster projection.
+        scope = TeachingScope(course=course, experiment_id=research_scope.experiment_id, class_id=class_id)
         sessions = research_scope.sessions() if research_scope.is_complete else scope.sessions().none()
         attempts = research_scope.attempts() if research_scope.is_complete else scope.attempts().none()
         report = build_quality_report(research_scope) if research_scope.is_complete else QualityReport(())
@@ -335,7 +339,8 @@ class TeacherDataCenterOverviewView(APIView):
         return Response(
             {
                 "course": _course_payload(course),
-                "scope": _teaching_scope_payload(scope),
+                "scope": {"experiment_id": research_scope.experiment_id, "class_id": class_id,
+                          "is_complete": research_scope.is_complete, "display": scope_label(research_scope)},
                 "facts": {
                     "participants": sessions.values("student_id").distinct().count() if research_scope.search or research_scope.session_ref else scope.roster().count(),
                     "observed_participants": sessions.values("student_id")
@@ -640,7 +645,8 @@ class TeacherClassCollectionView(APIView):
         response = paginator.get_paginated_response(items)
         response.data["course"] = _course_payload(course)
         response.data["capabilities"] = {
-            "can_create": can_create_course_class_group(course, request.user)
+            "can_create": can_create_course_class_group(course, request.user),
+            "can_manage": can_create_course_class_group(course, request.user),
         }
         return response
 

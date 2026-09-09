@@ -35,6 +35,13 @@
   gap: .75rem;
 }
 
+.kt-class-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem;
+}
+
 .kt-inline-controls input {
   flex: 1;
 }

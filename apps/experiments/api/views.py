@@ -352,6 +352,7 @@ class TeacherExperimentCollectionView(TeacherExperimentApiMixin, APIView):
             context={"request": request, "course": course},
         )
         response = paginator.get_paginated_response(serializer.data)
+        response.data["capabilities"] = {"can_manage": course.can_manage(request.user) and course.status == course.Status.ACTIVE}
         response.data["summary"] = {
             "question_banks": list(
                 course.question_banks.exclude(visibility="archived")

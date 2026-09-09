@@ -218,7 +218,7 @@ class Experiment(models.Model):
         on_delete=models.PROTECT,
         related_name="experiments",
     )
-    question_bank = models.ForeignKey("question_bank.QuestionBank", on_delete=models.PROTECT, related_name="experiments")
+    question_bank = models.ForeignKey("question_bank.QuestionBank", null=True, blank=True, on_delete=models.PROTECT, related_name="experiments")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
     frozen_release_snapshot = models.ForeignKey(
         "ExperimentVersion",
@@ -339,6 +339,8 @@ class Experiment(models.Model):
     def clean(self):
         super().clean()
         errors = {}
+        if not self.question_bank_id and self.status != self.Status.DRAFT:
+            errors["question_bank"] = "正式实验必须关联题库。"
         if self.course_id and self.question_bank_id and self.question_bank.course_id != self.course_id:
             errors["question_bank"] = "实验只能使用同一课程的题库。"
         if self.confidence_mode == self.ConfidenceMode.SAMPLED:
