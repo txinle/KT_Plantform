@@ -69,6 +69,8 @@ def _class_snapshot_filter_value(class_name):
 
 
 def _validate_export_scope(scope, package):
+    if package == "experiment" and not scope.is_complete:
+        raise ExportContractError("请先选择实验和班级")
     if package in {"teaching", "kt", "cd"} and not scope.is_single_version:
         raise ExportContractError(f"{package.upper()} 导出必须选择单一实验版本")
 
@@ -140,6 +142,8 @@ def create_export_snapshot(*, course=None, experiment=None, research_study=None,
             version_queryset = version_queryset.filter(pk=scope.version_id)
         if scope is not None and scope.experiment_id is not None:
             version_queryset = version_queryset.filter(experiment_id=scope.experiment_id)
+        if scope is not None and scope.experiment_ids:
+            version_queryset = version_queryset.filter(experiment_id__in=scope.experiment_ids)
         versions = list(version_queryset.values_list("pk", "version_number"))
         if package in {"teaching", "kt", "cd"} and len(versions) != 1:
             raise ExportContractError(f"{package.upper()} 导出必须选择单一实验版本")
@@ -170,7 +174,7 @@ def create_export_snapshot(*, course=None, experiment=None, research_study=None,
             json.dumps(schema_hashes, sort_keys=True).encode()
         ).hexdigest()
         coverage_run = None
-        if course is not None and research_study is None:
+        if course is not None and research_study is None and package != "experiment":
             coverage_mapping = dict(filter_definition or {})
             if experiment is not None and not coverage_mapping.get("experiment_id"):
                 coverage_mapping["experiment_id"] = experiment.pk
@@ -223,6 +227,20 @@ def create_export_snapshot(*, course=None, experiment=None, research_study=None,
             )
         )
         snapshot.source_bundle = _build_source_bundle(snapshot, captured)
+        if package == "experiment":
+            from .research_dataset import build_research_bundle
+            from .research_contract import FILES
+
+            research_scope = data_scope or DataScope.from_mapping(course, canonical_filter_definition)
+            _validate_export_scope(research_scope, package)
+            dataset = build_research_bundle(captured, scope=research_scope)["files"]
+            snapshot.source_bundle["research_files"] = {
+                table["path"]: base64.b64encode(
+                    json.dumps(dataset[table["key"]], ensure_ascii=False, indent=2).encode("utf-8")
+                    if table["key"] == "question_library" else _csv_bytes(table["headers"], dataset[table["key"]])
+                ).decode("ascii")
+                for table in FILES
+            }
         snapshot.source_bundle_hash = _source_bundle_hash(snapshot.source_bundle)
         snapshot.save(force_insert=True)
         return snapshot
@@ -977,6 +995,17 @@ def run_export_job(job):
     if job.selected_fields:
         raise ExportContractError("固定研究数据包不支持字段级选择，以免破坏冻结表的引用和回放契约。")
     source_bundle = _load_source_bundle(snapshot)
+    if job.package == "experiment":
+        files = source_bundle.get("research_files")
+        if not files:
+            raise ExportContractError("冻结源中没有实验研究数据包内容")
+        root = os.path.join(settings.MEDIA_ROOT, "exports", str(job.job_id))
+        os.makedirs(root, exist_ok=True)
+        artifact_path = os.path.join(root, f"experiment-{job.job_id}.zip")
+        with zipfile.ZipFile(artifact_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path, body in files.items():
+                archive.writestr(path, base64.b64decode(body.encode("ascii")))
+        return _finalize_export_job(job, artifact_path, {})
     resource_freeze_status = _frozen_resource_status(source_bundle)
     selected_tables = _selected_export_tables(job)
     if job.package == "teaching" and job.selected_tables and selected_tables != ["attempts"]:

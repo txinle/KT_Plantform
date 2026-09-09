@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createProcessRuntime } from './process-bridge'
 
 const processState = {
+  visit_id: 41,
+  visit_index: 2,
+  entry_event_id: '00000000-0000-4000-8000-000000000040',
+  navigation_id: '00000000-0000-4000-8000-000000000041',
   session_id: 7,
   attempt_id: 13,
   event_batch_url: '/assessment/process/events/batch/',
@@ -56,6 +60,7 @@ describe('assessment process bridge', () => {
       checkpointEndpoint: '/assessment/process/capture-checkpoints/',
       csrfToken: 'csrf-token',
       appVersion: '2026.08.29.2',
+      correlationId: '00000000-0000-4000-8000-000000000041',
       outbox,
     })
     expect(bindLifecycle).toHaveBeenCalledWith(collector, {

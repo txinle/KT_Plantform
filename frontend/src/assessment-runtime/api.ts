@@ -3,7 +3,22 @@ import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
 import type { WriterLeaseCredentials } from './writer-lease'
 
-export type StudentRuntimeQuestionEntry = components['schemas']['StudentRuntimeQuestionEntry'] & { offline_recovery?: boolean }
+export type StudentRuntimeQuestionEntry = components['schemas']['StudentRuntimeQuestionEntry'] & {
+  offline_recovery?: boolean
+  process: components['schemas']['StudentRuntimeProcess'] & {
+    visit_id: number
+    visit_index: number
+    entry_event_id: string
+    navigation_id: string
+  }
+}
+
+export interface NavigationClickContext {
+  navigationId: string
+  clientOccurredAt: string
+  clientMonotonicMs: number
+  clientTimeOrigin: string
+}
 
 export interface DraftMutationResponse {
   response_version?: number
@@ -58,11 +73,18 @@ export function createStudentAssessmentApi(client: StudentAssessmentClient) {
   return {
     recoverQuestion: (sessionId: number, assignmentId: number) => client.get<RecoveryState>(`/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/recovery/`),
     recover: (attemptId: number, token: string) => client.get<RecoveryState>(`/api/v1/student/attempts/${attemptId}/recovery/?submission_token=${encodeURIComponent(token)}`),
-    question: (sessionId: number, assignmentId: number, reason = 'navigation_click') => (
-      client.get<StudentRuntimeQuestionEntry>(
-        `/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/?reason=${encodeURIComponent(reason)}`,
+    question: (sessionId: number, assignmentId: number, reason = 'direct_open', navigation?: NavigationClickContext) => {
+      const query = new URLSearchParams({ reason })
+      if (navigation) {
+        query.set('navigation_id', navigation.navigationId)
+        query.set('client_occurred_at', navigation.clientOccurredAt)
+        query.set('client_monotonic_ms', navigation.clientMonotonicMs.toFixed(3))
+        query.set('client_time_origin', navigation.clientTimeOrigin)
+      }
+      return client.get<StudentRuntimeQuestionEntry>(
+        `/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/?${query.toString()}`,
       )
-    ),
+    },
     saveDraft: (url: string, answer: unknown, clientOccurredAt: string, target?: { target_event_id: string | null; expected_version: number } & Partial<WriterLeaseCredentials>) => (
       client.mutate<DraftMutationResponse>(url, {
         method: 'POST',

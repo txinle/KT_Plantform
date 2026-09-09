@@ -5,7 +5,7 @@ import { useRoute } from 'vue-router'
 import Alert from '@/design-system/components/Alert.vue'
 import PageHeader from '@/design-system/components/PageHeader.vue'
 
-import { getTeacherDataCenterApi, queryString, routeQuery, type DataCenterExportCatalog, type DataCenterExportJobMutation } from './api'
+import { getTeacherDataCenterApi, routeQuery, type DataCenterExportCatalog, type DataCenterExportJobMutation } from './api'
 
 const route = useRoute()
 const courseId = Number(route.params.courseId)
@@ -14,28 +14,32 @@ const data = ref<DataCenterExportCatalog>()
 const error = ref('')
 const creating = ref(false)
 const createdJob = ref<DataCenterExportJobMutation>()
+const activePackage = computed(() => data.value?.selected_package || data.value?.packages[0])
+const groups = computed(() => [
+  { key: 'course', title: '课程基础资料', note: '始终导出完整课程数据', tables: data.value?.tables.filter(table => table.level === 'course') || [] },
+  { key: 'experiment', title: '实验原始记录', note: '学生和会话筛选仅作用于逐题作答与行为过程', tables: data.value?.tables.filter(table => table.level === 'experiment') || [] },
+  { key: 'dictionary', title: '事件说明', note: '固定事件字段说明', tables: data.value?.tables.filter(table => table.level === 'dictionary') || [] },
+])
 
 function scopeValues(value: unknown): Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
+  const result: Record<string, unknown> = {}
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return result
+  for (const [key, item] of Object.entries(value)) result[key] = item
+  return result
 }
 
-const scopeEntries = computed(() => Object.entries(scopeValues(data.value?.scope.values)))
-
-function packageUrl(key: string) {
-  const query = { ...routeQuery(route.query), package: key }
-  return `${route.path}${queryString(query)}`
+function formattedTime(value: string) {
+  return new Date(value).toLocaleString('zh-CN')
 }
 
 async function createExport() {
-  if (!data.value?.selected_package) return
+  if (!data.value || !activePackage.value || activePackage.value.blocked) return
   creating.value = true
   createdJob.value = undefined
   error.value = ''
   try {
     createdJob.value = await api.createExport(courseId, {
-      package: data.value.selected_package.key,
+      package: activePackage.value.key,
       confirm_identified: true,
       scope: scopeValues(data.value.scope.values),
     })
@@ -48,18 +52,49 @@ async function createExport() {
 
 onMounted(async () => {
   try { data.value = await api.exports(courseId, routeQuery(route.query)) }
-  catch (caught) { error.value = caught instanceof Error ? caught.message : '导出目录加载失败。' }
+  catch (caught) { error.value = caught instanceof Error ? caught.message : '导出数据加载失败。' }
 })
 </script>
 
 <template>
-  <PageHeader title="导出数据包"><template #kicker>冻结与审计</template><p>每次请求都会冻结新的 ExportSnapshot；范围、Schema 与高水位写入 Manifest。</p></PageHeader>
-  <Alert v-if="error" tone="danger">{{ error }}</Alert><p v-if="!data && !error" role="status">正在加载导出目录…</p>
+  <PageHeader title="导出研究数据">
+    <template #kicker>可复核数据包</template>
+    <p>将当前实验、班级、学生和作答会话范围冻结为一个 ZIP 数据包。</p>
+  </PageHeader>
+  <Alert v-if="error" tone="danger">{{ error }}</Alert>
+  <p v-if="!data && !error" role="status">正在加载研究数据导出…</p>
   <template v-else-if="data">
-    <Alert tone="warning"><strong>实名数据边界：</strong>{{ data.identified_data_notice }}</Alert>
-    <section v-if="data.selected_export_version" class="kt-card kt-export-version"><h2>本次导出版本：Version {{ data.selected_export_version.version_number }}</h2><p>该版本只用于本次导出，不改变普通教学范围。</p><a :href="data.actions.reset_url">更换版本</a></section>
-    <section v-else-if="data.export_versions.length" class="kt-card kt-export-version"><h2>选择导出版本</h2><p>教学成绩、KT 和 CD 只能使用单一实验版本。</p><form method="get"><input v-for="[key, value] in scopeEntries.filter(([key]) => !['version_mode', 'version_id'].includes(key))" :key="key" type="hidden" :name="key" :value="String(value)"><input type="hidden" name="version_mode" value="single"><label>实验版本<select name="version_id" required><option value="">选择版本</option><option v-for="version in data.export_versions" :key="version.id" :value="version.id">Version {{ version.version_number }}</option></select></label><button class="kt-button" type="submit">使用此版本</button></form></section>
-    <section class="kt-export-grid" aria-label="可用导出包"><article v-for="item in data.packages" :key="item.key" class="kt-card"><div><h2>{{ item.label }}</h2><p>{{ item.description }}</p></div><p v-if="item.blocked" class="kt-warning-text">该包需要选择单一实验版本。</p><a v-if="item.blocked" class="kt-button kt-button--secondary" href="#export-version">选择导出版本</a><a v-else class="kt-button" :href="packageUrl(item.key)">选择用途</a></article></section>
-    <section v-if="data.selected_package" class="kt-card kt-export-confirm"><h2>确认导出：{{ data.selected_package.label }}</h2><p>将按范围“{{ data.scope.display }}”冻结新的 ExportSnapshot 和 ExportJob。该包含直接身份标识。</p><p v-if="data.selected_package.blocked" class="kt-warning-text">当前范围不是单一实验版本，不能生成。</p><form v-else @submit.prevent="createExport"><button class="kt-button kt-button--danger" type="submit" :disabled="creating">{{ creating ? '正在生成…' : '确认生成实名数据包' }}</button><a class="kt-button kt-button--secondary" :href="data.actions.reset_url">返回选择</a></form><Alert v-if="createdJob" tone="success">导出任务状态：{{ createdJob.status_label }}。 <a v-if="createdJob.download_url" :href="createdJob.download_url">下载文件</a> <a :href="createdJob.history_url">查看导出记录</a></Alert></section>
+    <Alert tone="warning"><strong>实名数据确认：</strong>{{ data.identified_data_notice }}</Alert>
+
+    <section class="kt-card kt-export-package">
+      <div class="kt-section-heading">
+        <div>
+          <p class="kt-kicker">唯一标准格式</p>
+          <h2>标准实验数据包（ZIP）</h2>
+          <p>{{ activePackage?.description }}</p>
+        </div>
+        <small>目录生成于 {{ formattedTime(data.generated_at) }}</small>
+      </div>
+      <section v-for="group in groups" :key="group.key" class="kt-export-file-group" :aria-label="group.title">
+        <div><h3>{{ group.title }}</h3><p>{{ group.note }}</p></div>
+        <ul class="kt-export-file-list">
+          <li v-for="table in group.tables" :key="table.key" data-testid="export-table">
+            <div><strong>{{ table.path }}</strong><span>{{ table.description }}</span></div>
+            <small>{{ table.format.toUpperCase() }} · {{ table.total_items }} 条记录</small>
+          </li>
+        </ul>
+      </section>
+    </section>
+
+    <section v-if="activePackage" class="kt-card kt-export-confirm">
+      <h2>确认导出</h2>
+      <p>将按范围“{{ data.scope.display }}”生成标准实验数据包。课程基础资料和课程题目固定库始终覆盖完整课程，学生和会话筛选仅作用于逐题作答与行为过程。</p>
+      <p>数据包包含学生姓名和学号，请按研究数据管理要求使用。</p>
+      <p v-if="activePackage.blocked || !data.scope.is_complete" class="kt-warning-text">请先选择完整的实验和班级范围。</p>
+      <form v-else @submit.prevent="createExport">
+        <button class="kt-button kt-button--danger" type="submit" :disabled="creating">{{ creating ? '正在生成…' : '导出实验数据包' }}</button>
+      </form>
+      <Alert v-if="createdJob" tone="success">导出任务状态：{{ createdJob.status_label }}。 <a v-if="createdJob.download_url" :href="createdJob.download_url">下载文件</a> <a :href="createdJob.history_url">查看导出记录</a></Alert>
+    </section>
   </template>
 </template>

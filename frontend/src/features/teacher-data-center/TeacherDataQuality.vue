@@ -18,23 +18,29 @@ const api = getTeacherDataCenterApi()
 const data = ref<DataCenterQualityCollection>()
 const error = ref('')
 const currentPage = computed(() => Number(route.query.page || 1))
+let latestRequest = 0
 
 function tone(state: string) {
-  if (state === 'PASS') return 'success' as const
-  if (state === 'FAIL') return 'danger' as const
-  if (state === 'WARN') return 'warning' as const
+  if (state === 'PASS' || state.includes('正常')) return 'success' as const
+  if (state === 'FAIL' || state.includes('不一致')) return 'danger' as const
+  if (state === 'WARN' || state.includes('注意') || state.includes('核查')) return 'warning' as const
   return 'neutral' as const
 }
 
 async function load(page = currentPage.value) {
-  try { data.value = await api.quality(courseId, { ...routeQuery(route.query), page }) }
-  catch (caught) { error.value = caught instanceof Error ? caught.message : '质量报告加载失败。' }
+  const request = ++latestRequest
+  error.value = ''
+  data.value = undefined
+  try {
+    const result = await api.quality(courseId, { ...routeQuery(route.query), page })
+    if (request === latestRequest) data.value = result
+  } catch (caught) {
+    if (request === latestRequest) error.value = caught instanceof Error ? caught.message : '质量报告加载失败。'
+  }
 }
 
 async function navigate(page: number) {
-  const query = { ...route.query }
-  if (page === 1) delete query.page
-  else query.page = String(page)
+  const query = { ...route.query, page: page === 1 ? undefined : String(page) }
   await router.push({ query })
   await load(page)
 }
@@ -43,11 +49,33 @@ onMounted(() => load())
 </script>
 
 <template>
-  <PageHeader title="数据质量"><template #kicker>五态不变量</template><p>质量规则描述身份、状态链、提交、排序时间与血缘，不把技术记录推断为心理状态。</p></PageHeader>
-  <Alert v-if="error" tone="danger">{{ error }}</Alert><p v-if="!data && !error" role="status">正在加载质量报告…</p>
+  <PageHeader title="数据质量">
+    <template #kicker>研究可用性</template>
+    <p>按学生、作答会话和题目说明具体问题，并明确该问题对研究分析的影响。</p>
+  </PageHeader>
+  <Alert v-if="error" tone="danger">{{ error }}</Alert>
+  <p v-if="!data && !error" role="status">正在加载数据质量报告…</p>
   <template v-else-if="data">
-    <section class="kt-quality-counts" aria-label="质量状态汇总"><article v-for="(count, state) in data.counts" :key="state" class="kt-card"><StatusBadge :label="state" :tone="tone(state)" /><strong>{{ count }}</strong></article></section>
-    <EmptyState v-if="!data.items.length" title="当前范围没有质量规则结果" />
-    <div v-else class="kt-card kt-table-card"><div class="kt-table-scroll kt-desktop-only"><table class="kt-table"><thead><tr><th>规则</th><th>结果</th><th>作答</th><th>来源</th><th>原因</th><th>证据</th></tr></thead><tbody><tr v-for="row in data.items" :key="`${row.rule}-${row.entity_id}`"><td><code>{{ row.rule }}</code><span class="kt-cell-note">{{ row.rule_version }}</span></td><td><StatusBadge :label="row.state" :tone="tone(row.state)" /></td><td>{{ row.entity_id ?? '—' }}</td><td>{{ row.source_mode }}</td><td><code>{{ row.reason_code || '—' }}</code></td><td>{{ row.evidence_summary || '—' }}</td></tr></tbody></table></div><MobileCardList class="kt-mobile-only"><li v-for="row in data.items" :key="`${row.rule}-${row.entity_id}`" class="kt-mobile-data-card"><div class="kt-section-heading"><code>{{ row.rule }}</code><StatusBadge :label="row.state" :tone="tone(row.state)" /></div><dl><div><dt>作答</dt><dd>{{ row.entity_id ?? '—' }}</dd></div><div><dt>来源</dt><dd>{{ row.source_mode }}</dd></div><div><dt>原因</dt><dd>{{ row.reason_code || '—' }}</dd></div></dl><p>{{ row.evidence_summary || '无补充证据' }}</p></li></MobileCardList><Paginator :page="data.page.number" :total-pages="data.page.total_pages" @navigate="navigate" /></div>
+    <section class="kt-quality-counts" aria-label="质量状态汇总">
+      <article v-for="(count, label) in data.counts" :key="label" class="kt-card"><StatusBadge :label="label" :tone="tone(label)" /><strong>{{ count }}</strong></article>
+    </section>
+    <EmptyState v-if="!data.scope.is_complete" title="请先选择实验和班级" />
+    <EmptyState v-else-if="!data.items.length" title="当前范围没有需要展示的质量结果" />
+    <div v-else class="kt-card kt-table-card">
+      <div class="kt-table-scroll kt-desktop-only">
+        <table class="kt-table">
+          <thead><tr><th>学生</th><th>作答会话</th><th>题目</th><th>结果</th><th>发现的问题</th><th>对研究的影响</th></tr></thead>
+          <tbody><tr v-for="row in data.items" :key="`${row.student_number}-${row.session_ref}-${row.question_code}-${row.problem}`"><td><strong>{{ row.student_name || '姓名未记录' }}</strong><span class="kt-cell-note">{{ row.student_number || '学号未记录' }}</span></td><td>{{ row.session_ref || '—' }}</td><td>{{ row.question_code || '—' }}</td><td><StatusBadge :label="row.state_label" :tone="tone(row.state)" /></td><td>{{ row.problem }}</td><td>{{ row.impact }}</td></tr></tbody>
+        </table>
+      </div>
+      <MobileCardList class="kt-mobile-only">
+        <li v-for="row in data.items" :key="`${row.student_number}-${row.session_ref}-${row.question_code}-${row.problem}`" class="kt-mobile-data-card">
+          <div class="kt-section-heading"><strong>{{ row.student_name || '姓名未记录' }}</strong><StatusBadge :label="row.state_label" :tone="tone(row.state)" /></div>
+          <dl><div><dt>学号</dt><dd>{{ row.student_number || '—' }}</dd></div><div><dt>作答会话</dt><dd>{{ row.session_ref || '—' }}</dd></div><div><dt>题目</dt><dd>{{ row.question_code || '—' }}</dd></div></dl>
+          <p><strong>发现的问题：</strong>{{ row.problem }}</p><p><strong>对研究的影响：</strong>{{ row.impact }}</p>
+        </li>
+      </MobileCardList>
+      <Paginator :page="data.page.number" :total-pages="data.page.total_pages" @navigate="navigate" />
+    </div>
   </template>
 </template>

@@ -19,12 +19,20 @@ from apps.question_bank.models import (
     QuestionOption,
 )
 
-from .models import AssessmentEvent, Attempt, ExperimentSession, SubmissionEvent
+from .models import (
+    AssessmentEvent,
+    Attempt,
+    ExperimentSession,
+    QuestionVisitEvent,
+    SubmissionEvent,
+)
 from .services import (
     finish_session,
     get_or_create_session,
     record_visit,
+    record_visit_entry,
     save_draft,
+    submit_attempt,
 )
 
 
@@ -99,6 +107,69 @@ class TransactionalProcessEventTests(TestCase):
         self.assertEqual(entered.actor_source, "server")
         self.assertEqual(entered.payload["entry_reason"], "navigation_click")
         self.assertIsNone(entered.payload["from_assignment_id"])
+
+    def test_navigation_entry_replay_refresh_and_true_return_preserve_visit_semantics(self):
+        session = get_or_create_session(self.experiment, self.student)
+        first, second = session.assignments.order_by("assigned_sequence_index")
+        clicked_at = timezone.now() - timedelta(seconds=2)
+        time_origin = clicked_at - timedelta(seconds=10)
+        navigation_id = uuid.uuid4()
+
+        entered = record_visit_entry(
+            session.pk,
+            first.pk,
+            navigation_id=navigation_id,
+            client_time=clicked_at,
+            client_monotonic_ms="10000.125",
+            client_time_origin=time_origin,
+        )
+        replayed = record_visit_entry(
+            session.pk,
+            first.pk,
+            navigation_id=navigation_id,
+            client_time=clicked_at,
+            client_monotonic_ms="10000.125",
+            client_time_origin=time_origin,
+        )
+        refreshed = record_visit_entry(session.pk, first.pk, entry_reason="resume")
+
+        self.assertEqual(replayed.visit.pk, entered.visit.pk)
+        self.assertEqual(refreshed.visit.pk, entered.visit.pk)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+        self.assertEqual(entered.visit.client_occurred_at, clicked_at)
+        self.assertEqual(entered.entry_event.correlation_id, navigation_id)
+        self.assertEqual(entered.entry_event.client_wall_time_utc, clicked_at)
+        self.assertEqual(str(entered.entry_event.client_monotonic_ms), "10000.125")
+        self.assertEqual(entered.entry_event.client_time_origin, time_origin)
+        self.assertEqual(entered.entry_event.payload["visit_id"], entered.visit.pk)
+
+        record_visit_entry(session.pk, second.pk, navigation_id=uuid.uuid4())
+        returned = record_visit_entry(session.pk, first.pk, navigation_id=uuid.uuid4())
+        first.attempt.refresh_from_db()
+
+        self.assertEqual(first.attempt.visit_count, 2)
+        self.assertEqual(returned.visit.visit_index, 2)
+        self.assertNotEqual(returned.visit.pk, entered.visit.pk)
+
+    def test_return_to_submitted_question_increments_visit_without_rewriting_open_times(self):
+        session = get_or_create_session(self.experiment, self.student)
+        first, second = session.assignments.order_by("assigned_sequence_index")
+        initial = record_visit_entry(session.pk, first.pk, navigation_id=uuid.uuid4())
+        save_draft(first.attempt.pk, "A")
+        submit_attempt(first.attempt.pk, uuid.uuid4())
+        first.attempt.refresh_from_db()
+        first_opened_at = first.attempt.first_opened_at
+        last_opened_at = first.attempt.last_opened_at
+
+        record_visit_entry(session.pk, second.pk, navigation_id=uuid.uuid4())
+        returned = record_visit_entry(session.pk, first.pk, navigation_id=uuid.uuid4())
+        first.attempt.refresh_from_db()
+
+        self.assertEqual(initial.visit.visit_index, 1)
+        self.assertEqual(returned.visit.visit_index, 2)
+        self.assertEqual(first.attempt.visit_count, 2)
+        self.assertEqual(first.attempt.first_opened_at, first_opened_at)
+        self.assertEqual(first.attempt.last_opened_at, last_opened_at)
 
     def test_finish_closes_open_attempts_and_session_in_one_transaction(self):
         session = get_or_create_session(self.experiment, self.student)

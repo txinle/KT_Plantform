@@ -2,7 +2,10 @@ import type { StudentRuntimeQuestionEntry } from './api'
 import { ensureProcessCollector } from './collector-loader'
 import type { SubmissionConfidence } from './api'
 
-type ProcessState = StudentRuntimeQuestionEntry['process']
+type RuntimeProcessState = StudentRuntimeQuestionEntry['process']
+type VisitProcessKeys = 'visit_id' | 'visit_index' | 'entry_event_id' | 'navigation_id'
+type ProcessState = Omit<RuntimeProcessState, VisitProcessKeys>
+  & Partial<Pick<RuntimeProcessState, VisitProcessKeys>>
 
 interface ProcessCollector {
   clientInstanceId: string
@@ -79,6 +82,7 @@ export async function createProcessRuntime(
     checkpointEndpoint: processState.checkpoint_url,
     csrfToken,
     appVersion: processState.app_version,
+    correlationId: processState.navigation_id,
     outbox,
   })
   const syncUrls = {

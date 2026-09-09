@@ -1,4 +1,5 @@
 .kt-workspace { --kt-workspace-header: 64px; --kt-workspace-sidebar: 224px; min-height: 100dvh; background: var(--kt-page); color: var(--kt-ink); }
+.kt-workspace:has(.kt-workspace-navigation--teacher-course) { --kt-workspace-sidebar: 236px; }
 .kt-workspace > .kt-app-header { position: sticky; top: 0; z-index: 35; height: var(--kt-workspace-header); background: var(--kt-surface); }
 .kt-workspace > .kt-app-header .kt-app-header__inner { width: 100%; max-width: none; min-height: 64px; height: 64px; padding: 0 24px; flex-wrap: nowrap; }
 .kt-workspace .kt-wordmark { font-size: 18px; }
@@ -13,7 +14,8 @@
 .kt-workspace-context > span:last-child { font-size: 12px; color: var(--kt-muted); }
 .kt-workspace-emblem { display: grid; place-items: center; width: 52px; height: 52px; border: 1px solid var(--kt-surface-subtle); border-radius: 10px; background: var(--kt-action-050); color: var(--kt-action-600); font-weight: 700; font-size: 22px; }
 .kt-workspace-navigation { display: flex; flex-direction: column; gap: 4px; }
-.kt-workspace-navigation > a { display: flex; align-items: center; min-height: 44px; padding: 10px 16px; border-radius: var(--kt-radius-control); color: var(--kt-muted); font-size: 15px; text-decoration: none; }
+.kt-workspace-navigation > a { display: flex; align-items: center; gap: 14px; min-height: 44px; padding: 10px 16px; border-radius: var(--kt-radius-control); color: var(--kt-muted); font-size: 15px; text-decoration: none; }
+.kt-workspace-navigation-icon { width: 22px; height: 22px; flex: 0 0 22px; color: currentcolor; }
 .kt-workspace-navigation > a:hover { background: var(--kt-surface-subtle); }
 .kt-workspace-navigation > a:is([aria-current='page'], .is-active, .router-link-exact-active) { background: var(--kt-action-050); color: var(--kt-action-600); font-weight: 700; }
 .kt-workspace-secondary:empty { display: none; }

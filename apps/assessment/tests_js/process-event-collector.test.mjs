@@ -649,6 +649,22 @@ test('IndexedDB unavailability is explicit in the in-memory fallback quality', a
   assert.ok(event.quality_flags.includes('persistent_outbox_unavailable'));
 });
 
+test('visit correlation is the default while explicit operation correlation is preserved', async () => {
+  const visitId = '00000000-0000-4000-8000-000000000041';
+  const submissionId = '00000000-0000-4000-8000-000000000042';
+  const collector = new ProcessEventCollector(eventPayload({ correlationId: visitId }));
+
+  const rendered = await collector.record('item_rendered', { presentation_state: 'interactive' });
+  const commit = await collector.record(
+    'response_commit_requested',
+    { submission_token: submissionId },
+    { correlationId: submissionId },
+  );
+
+  assert.equal(rendered.correlation_id, visitId);
+  assert.equal(commit.correlation_id, submissionId);
+});
+
 test('two-step time synchronization uses one instance and links later events', async () => {
   const requests = [];
   const walls = [

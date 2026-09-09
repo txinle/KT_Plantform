@@ -17,7 +17,6 @@ from apps.accounts.class_management_services import (
     create_course_class_group,
 )
 from apps.accounts.course_views import (
-    _scope_display,
     _scope_from_request,
     _teaching_scope_display,
     _teaching_scope_from_request,
@@ -25,23 +24,20 @@ from apps.accounts.course_views import (
 from apps.accounts.forms import ClassGroupForm
 from apps.accounts.models import ClassGroup, Course, User
 from apps.api.pagination import FixedPageNumberPagination
-from apps.assessment.models import ExperimentSession, SubmissionEvent
+from apps.assessment.models import AssessmentEvent, ExperimentSession, SubmissionEvent
 from apps.audit.services import log_action
 
-from ..advanced_catalog import build_advanced_catalog, enabled_extension_tables
+from ..advanced_catalog import enabled_extension_tables
 from ..data_scope import DataScope, ScopeNotFound, ScopeValidationError
-from ..export_catalog import (
-    COMMON_FIELD_DESCRIPTIONS,
-    PACKAGE_TABLES,
-    TABLE_FIELD_DESCRIPTIONS,
-)
+from ..export_catalog import PACKAGE_TABLES
 from ..models import ExportJob
-from ..quality_reports import EvaluationState, build_quality_report
+from ..research_dataset import read_research_dataset, read_research_bundle, workspace_payload, context_tables, scope_label, session_options, table_catalog
+from ..research_contract import file_catalog
+from ..quality_reports import EvaluationState, QualityReport, build_quality_report
 from ..services import (
     ExportContractError,
     create_export_job,
     create_export_snapshot,
-    preview_export_table,
     run_export_job,
 )
 from ..teaching_scope import TeachingScope
@@ -93,9 +89,10 @@ def _research_scope_payload(scope):
     values = scope.serialize()
     return {
         "values": values,
-        "query": urlencode(values),
-        "display": _scope_display(scope),
+        "query": urlencode({key: ",".join(map(str, value)) if isinstance(value, list) else value for key, value in values.items()}),
+        "display": scope_label(scope),
         "is_single_version": scope.is_single_version,
+        "is_complete": scope.is_complete,
     }
 
 
@@ -112,14 +109,32 @@ def _experiment_payload(experiment):
 
 
 def _recent_export_payload(job):
+    filters = job.snapshot.filter_definition or {}
+    class_name = ClassGroup.objects.filter(pk=filters.get("class_id")).values_list("name", flat=True).first() if filters.get("class_id") else None
+    experiment_name = job.experiment.name if job.experiment else None
+    if not experiment_name and filters.get("experiment_ids"):
+        experiment_name = "、".join(job.course.experiments.filter(pk__in=filters["experiment_ids"]).order_by("pk").values_list("name", flat=True))
     return {
         "job_id": job.job_id,
         "package": job.package,
-        "experiment_name": job.experiment.name if job.experiment else None,
+        "package_label": {"experiment": "实验数据包", "teaching": "教学成绩", "complete": "历史完整研究包", "process": "历史作答过程包", "kt": "历史知识追踪包", "cd": "历史认知诊断包", "confidence": "历史信心数据包", "simulation": "历史仿真数据包"}.get(job.package, "历史数据包"),
+        "class_name": class_name or "班级未记录",
+        "experiment_name": experiment_name,
         "status": job.status,
         "status_label": job.get_status_display(),
         "created_at": job.created_at,
     }
+
+
+def _scoped_export_jobs(course, scope):
+    jobs = course.export_jobs.select_related("experiment", "created_by", "snapshot")
+    if scope.experiment_id:
+        jobs = jobs.filter(experiment_id=scope.experiment_id)
+    for key in ("class_id", "class_snapshot_id", "student_id", "session_id", "search", "session_ref"):
+        value = getattr(scope, key, None)
+        if value is not None:
+            jobs = jobs.filter(**{f"snapshot__filter_definition__{key}": str(value) if key == "class_snapshot_id" else value})
+    return jobs.order_by("-created_at", "-job_id")
 
 
 class TeacherDataCenterScopeView(APIView):
@@ -141,19 +156,22 @@ class TeacherDataCenterScopeView(APIView):
         serializer = DataCenterScopeUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            scope = TeachingScope.from_mapping(course, serializer.validated_data)
+            scope = (DataScope if "experiment_ids" in serializer.validated_data else TeachingScope).from_mapping(course, serializer.validated_data)
         except ScopeNotFound as error:
             raise NotFound(str(error)) from error
         except ScopeValidationError as error:
             raise ValidationError({"scope": [str(error)]}) from error
-        request.session[f"data_center_teaching_scope_v1:{course.pk}"] = scope.serialize()
-        request.session.pop(f"data_center_scope_v1:{course.pk}", None)
+        if isinstance(scope, DataScope):
+            request.session[f"data_center_scope_v1:{course.pk}"] = scope.serialize()
+        else:
+            request.session[f"data_center_teaching_scope_v1:{course.pk}"] = scope.serialize()
+            request.session.pop(f"data_center_scope_v1:{course.pk}", None)
         request.session.modified = True
         return Response(self._payload(request, course, scope=scope))
 
     @staticmethod
     def _payload(request, course, *, scope=None):
-        scope = scope or _teaching_scope_from_request(request, course)
+        scope = scope or _scope_from_request(request, course)
         experiments = list(
             course.experiments.prefetch_related("versions").order_by("name", "pk")
         )
@@ -162,7 +180,9 @@ class TeacherDataCenterScopeView(APIView):
         )
         return {
                 "course": _course_payload(course),
-                "current": _teaching_scope_payload(scope),
+                "current": {"experiment_id": scope.experiment_id, "experiment_ids": list(getattr(scope, "experiment_ids", ())) or ([scope.experiment_id] if scope.experiment_id else []),
+                    "class_id": scope.class_id, "is_complete": scope.is_complete,
+                    "display": scope_label(scope) if isinstance(scope, DataScope) else _teaching_scope_display(scope)},
                 "experiments": [_experiment_payload(item) for item in experiments],
                 "classes": [
                     {
@@ -179,6 +199,8 @@ class TeacherDataCenterScopeView(APIView):
 
 
 def _export_job_payload(job):
+    history_query = urlencode({key: ",".join(map(str, value)) if isinstance(value, list) else value
+        for key, value in (job.snapshot.filter_definition or {}).items()})
     return {
         "job_id": job.job_id,
         "package": job.package,
@@ -192,7 +214,7 @@ def _export_job_payload(job):
             if job.status == ExportJob.Status.SUCCEEDED and job.artifact_path
             else None
         ),
-        "history_url": reverse("courses:data_export_history", args=[job.course_id]),
+        "history_url": f"{reverse('courses:data_export_history', args=[job.course_id])}?{history_query}",
     }
 
 
@@ -211,8 +233,8 @@ class TeacherDataCenterExportJobCreateView(APIView):
             raise ValidationError(
                 {"confirm_identified": ["请确认该导出包含实名数据后再生成。"]}
             )
-        package = values["package"]
-        if package not in PACKAGE_TABLES or package == "identity":
+        package = "experiment" if values["package"] == "complete" else values["package"]
+        if package not in {*PACKAGE_TABLES, "experiment"} or package == "identity":
             raise ValidationError({"package": ["不支持的数据包类型。"]})
         try:
             scope = DataScope.from_mapping(course, values["scope"])
@@ -299,24 +321,23 @@ class TeacherDataCenterOverviewView(APIView):
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
         scope = _teaching_scope_from_request(request, course)
-        sessions = scope.sessions()
-        attempts = scope.attempts()
-        report = build_quality_report(scope)
+        research_scope = _scope_from_request(request, course)
+        sessions = research_scope.sessions() if research_scope.is_complete else scope.sessions().none()
+        attempts = research_scope.attempts() if research_scope.is_complete else scope.attempts().none()
+        report = build_quality_report(research_scope) if research_scope.is_complete else QualityReport(())
         warning_attempt_ids = {
             row.attempt_id
             for row in report.rows
             if row.attempt_id is not None
             and row.state in {EvaluationState.WARN, EvaluationState.FAIL}
         }
-        recent_jobs = course.export_jobs.select_related("experiment").order_by(
-            "-created_at", "-job_id"
-        )[:5]
+        recent_jobs = _scoped_export_jobs(course, research_scope)[:5] if research_scope.is_complete else ()
         return Response(
             {
                 "course": _course_payload(course),
                 "scope": _teaching_scope_payload(scope),
                 "facts": {
-                    "participants": scope.roster().count(),
+                    "participants": sessions.values("student_id").distinct().count() if research_scope.search or research_scope.session_ref else scope.roster().count(),
                     "observed_participants": sessions.values("student_id")
                     .distinct()
                     .count(),
@@ -328,6 +349,7 @@ class TeacherDataCenterOverviewView(APIView):
                         attempt__in=attempts
                     ).count(),
                     "quality_warnings": len(warning_attempt_ids),
+                    "process_records": AssessmentEvent.objects.filter(session__in=sessions).count(),
                     "not_evaluable": report.counts.get(
                         EvaluationState.NOT_EVALUABLE, 0
                     ),
@@ -336,6 +358,7 @@ class TeacherDataCenterOverviewView(APIView):
                     _recent_export_payload(job) for job in recent_jobs
                 ],
                 "actions": {
+                    "preview_url": f"{reverse('courses:data_advanced', args=[course.pk])}?{_research_scope_payload(research_scope)["query"]}",
                     "scope_update_url": reverse(
                         "teacher-data-center-scope", args=[course.pk]
                     ),
@@ -343,15 +366,9 @@ class TeacherDataCenterOverviewView(APIView):
                     "teaching_url": reverse(
                         "courses:data_teaching", args=[course.pk]
                     ),
-                    "exports_url": reverse(
-                        "courses:data_exports", args=[course.pk]
-                    ),
-                    "quality_url": reverse(
-                        "courses:data_quality", args=[course.pk]
-                    ),
-                    "history_url": reverse(
-                        "courses:data_export_history", args=[course.pk]
-                    ),
+                    "exports_url": f"{reverse('courses:data_exports', args=[course.pk])}?{_research_scope_payload(research_scope)["query"]}",
+                    "quality_url": f"{reverse('courses:data_quality', args=[course.pk])}?{_research_scope_payload(research_scope)["query"]}",
+                    "history_url": f"{reverse('courses:data_export_history', args=[course.pk])}?{_research_scope_payload(research_scope)["query"]}",
                 },
             }
         )
@@ -372,46 +389,19 @@ class TeacherDataCenterExportCatalogView(APIView):
             if scope.experiment_id
             else None
         )
-        packages = [
-            ("teaching", "教学成绩（XLSX）", "当前有效成绩与导出血缘"),
-            ("complete", "完整研究包", "全过程数据与可复现派生"),
-            ("process", "作答过程", "原始事件、响应快照与稳定输入观测"),
-            ("kt", "KT", "知识追踪所需数据"),
-            ("cd", "CD", "认知诊断所需数据"),
-        ]
-        extensions = enabled_extension_tables(selected_experiment)
-        if "confidence_assignments" in extensions:
-            packages.append(("confidence", "Confidence", "信心采集及校准数据"))
-        if "simulation_events" in extensions:
-            packages.append(("simulation", "Simulation", "仿真事件和快照"))
-        package_rows = [
-            {
-                "key": key,
-                "label": label,
-                "description": description,
-                "blocked": key in {"teaching", "kt", "cd"}
-                and not scope.is_single_version,
-            }
-            for key, label, description in packages
-        ]
-        selected_key = request.query_params.get("package", "")
-        selected_package = next(
-            (row for row in package_rows if row["key"] == selected_key), None
-        )
-        versions = list(selected_experiment.versions.all()) if selected_experiment else []
-        selected_version = next(
-            (version for version in versions if version.pk == scope.version_id), None
-        )
+        package_rows = [{"key": "experiment", "label": "实验数据包", "description": "七张 CSV 与课程题目固定库 JSON", "blocked": not scope.is_complete}]
+        selected_package = package_rows[0]
+        bundle, generated_at = read_research_bundle(scope) if scope.is_complete else (None, timezone.now())
         return Response(
             {
                 "course": _course_payload(course),
                 "scope": _research_scope_payload(scope),
                 "packages": package_rows,
                 "selected_package": selected_package,
-                "export_versions": [_version_payload(item) for item in versions],
-                "selected_export_version": (
-                    _version_payload(selected_version) if selected_version else None
-                ),
+                "export_versions": [],
+                "selected_export_version": None,
+                "tables": file_catalog(bundle["files"] if bundle else None),
+                "generated_at": generated_at,
                 "identified_data_notice": (
                     "所有数据包均含实名身份数据；对外共享前必须在平台外完成合规去标识化。"
                 ),
@@ -433,33 +423,45 @@ class TeacherDataCenterQualityView(APIView):
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
         scope = _scope_from_request(request, course)
-        report = build_quality_report(scope)
+        report = build_quality_report(scope) if scope.is_complete else None
+        state_labels = {"PASS": "记录正常", "WARN": "需要注意", "FAIL": "记录不一致", "NOT_EVALUABLE": "无法评估", "NOT_APPLICABLE": "不适用"}
+        explanations = {
+            "missing_native_event_anchor": ("缺少原生行为记录", "无法核验行为与题目的对应关系"),
+            "identity_anchor_mismatch": ("行为记录与题目对应关系不一致", "不能可靠关联该行为"),
+            "missing_native_state_observation": ("缺少原生答案状态记录", "不能完整还原答案变化"),
+            "no_response_state_event": ("没有答案变化记录", "不适用答案状态链检查"),
+            "response_state_chain_mismatch": ("答案变化记录不连续或不一致", "不能完整还原答案变化"),
+            "attempt_not_submitted": ("尚未正式提交", "没有可供核验的正式最终答案"),
+            "missing_submission": ("作答显示已提交但缺少正式提交记录", "无法确认最终答案"),
+            "submission_snapshot_mismatch": ("正式提交与答案记录不一致", "最终答案需要核查"),
+            "missing_client_sequence": ("缺少客户端顺序记录", "不能精确判断学生操作顺序和间隔"),
+            "client_sequence_not_strict": ("客户端顺序记录存在冲突", "操作先后顺序需要核查"),
+            "interval_degraded": ("时间记录精度不足", "不能按精确时长解释操作间隔"),
+            "export_scoped_rule": ("本项在生成数据包时检查", "实时预览中不作判断"),
+        }
+        refs = scope.session_references() if scope.is_complete else {}
+        attempts = {item.pk: item for item in scope.attempts().select_related("session__student", "assignment")} if scope.is_complete else {}
+        dataset, _ = read_research_dataset(scope) if scope.is_complete else (None, None)
+        question_refs = {(row[0], row[4]): row[3] for row in dataset["responses"][1]} if dataset else {}
+        items = []
+        for row in report.rows if report else ():
+            attempt = attempts.get(row.attempt_id)
+            reference = refs.get(str(attempt.session_id), "") if attempt else ""
+            problem, impact = explanations.get(row.reason_code, ("本项记录核验正常", "未发现影响"))
+            items.append({
+                "student_number": attempt.session.student.student_number or "" if attempt else "",
+                "student_name": attempt.session.student.shown_name if attempt else "",
+                "session_ref": reference,
+                "question_code": question_refs.get((reference, str(attempt.assignment.assigned_sequence_index)), "") if attempt else "",
+                "state": str(row.state), "state_label": state_labels[str(row.state)], "problem": problem, "impact": impact,
+            })
         paginator = FixedPageNumberPagination()
-        page = paginator.paginate_queryset(list(report.rows), request, view=self)
-        items = [
-            {
-                "rule": row.rule,
-                "rule_version": row.rule_version,
-                "state": str(row.state),
-                "entity_id": row.entity_id,
-                "source_mode": row.source_mode,
-                "reason_code": row.reason_code,
-                "evidence_summary": row.evidence_summary,
-            }
-            for row in page
-        ]
-        response = paginator.get_paginated_response(items)
-        response.data.update(
-            {
-                "course": _course_payload(course),
-                "scope": _research_scope_payload(scope),
-                "counts": {
-                    str(state): report.counts.get(state, 0)
-                    for state in EvaluationState
-                },
-            }
-        )
+        page = paginator.paginate_queryset(items, request, view=self)
+        response = paginator.get_paginated_response(page)
+        response.data.update({"course": _course_payload(course), "scope": _research_scope_payload(scope),
+            "counts": {label: report.counts.get(state, 0) if report else 0 for state, label in state_labels.items()}})
         return response
+
 
 
 class TeacherDataCenterExportHistoryView(APIView):
@@ -469,9 +471,8 @@ class TeacherDataCenterExportHistoryView(APIView):
     )
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
-        jobs = course.export_jobs.select_related(
-            "experiment", "created_by"
-        ).order_by("-created_at", "-job_id")
+        scope = _scope_from_request(request, course)
+        jobs = _scoped_export_jobs(course, scope)
         paginator = FixedPageNumberPagination()
         page = paginator.paginate_queryset(jobs, request, view=self)
         items = []
@@ -481,6 +482,7 @@ class TeacherDataCenterExportHistoryView(APIView):
                 {
                     **_recent_export_payload(job),
                     "artifact_removal_reason": job.artifact_removal_reason,
+                    "artifact_removal_label": {"user_requested_removal": "已由用户移除文件", "retention_expired": "已超过保留期限"}.get(job.artifact_removal_reason, "文件已移除" if job.artifact_removal_reason else ""),
                     "created_by_name": job.created_by.shown_name,
                     "download_url": reverse(
                         "analytics:export_job_download",
@@ -498,6 +500,7 @@ class TeacherDataCenterExportHistoryView(APIView):
             )
         response = paginator.get_paginated_response(items)
         response.data["course"] = _course_payload(course)
+        response.data["scope"] = _research_scope_payload(scope)
         return response
 
 
@@ -509,6 +512,7 @@ class TeacherDataCenterAdvancedView(APIView):
             OpenApiParameter("class_id", int, required=False),
             OpenApiParameter("table", str, required=False),
             OpenApiParameter("search", str, required=False),
+            OpenApiParameter("session_ref", str, required=False),
             OpenApiParameter("page", int, required=False),
         ],
         responses=DataCenterAdvancedSerializer,
@@ -516,72 +520,46 @@ class TeacherDataCenterAdvancedView(APIView):
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
         scope = _scope_from_request(request, course)
-        search = request.query_params.get("search", "").strip()[:100]
-        selected_experiment = (
-            course.experiments.prefetch_related("versions")
-            .filter(pk=scope.experiment_id)
-            .first()
-            if scope.experiment_id
-            else None
-        )
-        groups, selected_table, selected_info = build_advanced_catalog(
-            experiment=selected_experiment,
-            selected_table=request.query_params.get("table", "attempts"),
-        )
-        preview_payload = None
-        if selected_experiment is not None:
-            preview = preview_export_table(
-                course=course,
-                experiment=selected_experiment,
-                table=selected_table,
-                page=request.query_params.get("page", 1),
-                page_size=20,
-                scope=scope,
-                student_search=search,
-            )
-            total_pages = max(1, ceil(preview["total"] / preview["page_size"]))
-            start = (
-                (preview["page"] - 1) * preview["page_size"] + 1
-                if preview["total"]
-                else 0
-            )
-            preview_payload = {
-                "columns": [
-                    {
-                        "name": header,
-                        "description": TABLE_FIELD_DESCRIPTIONS.get(
-                            selected_table, {}
-                        ).get(header, COMMON_FIELD_DESCRIPTIONS.get(header, "数据字段")),
-                    }
-                    for header in preview["headers"]
-                ],
-                "rows": preview["rows"],
-                "page": {
-                    "number": preview["page"],
-                    "size": preview["page_size"],
-                    "total_items": preview["total"],
-                    "total_pages": total_pages,
-                    "start": start,
-                    "end": min(
-                        preview["page"] * preview["page_size"], preview["total"]
-                    ),
-                },
-                "data_status": preview["data_status"],
+        selected_key = request.query_params.get("table", "sessions" if request.query_params.get("view", "overview") == "overview" else "responses")
+        if selected_key == "attempts":
+            selected_key = "responses"
+        view = request.query_params.get("view") if request.query_params.get("view") in {"overview", "student", "session", "question", "timeline"} else "overview"
+        from dataclasses import replace
+        read_scope = replace(scope, session_id=None, session_ref=None) if view == "student" else scope
+        bundle, generated_at = read_research_bundle(read_scope) if scope.is_complete else (None, timezone.now())
+        workspace = workspace_payload(bundle, scope, request.query_params)
+        dataset = context_tables(bundle, workspace, view) if bundle else None
+        tables = table_catalog(dataset)
+        selected = next((item for item in tables if item["key"] == selected_key), tables[4])
+        preview = None
+        if dataset is not None:
+            headers, rows = dataset[selected["key"]]
+            total = len(rows)
+            total_pages = max(1, ceil(total / 20))
+            try:
+                page = max(1, min(int(request.query_params.get("page", 1)), total_pages))
+            except (ValueError, TypeError):
+                page = 1
+            offset = (page - 1) * 20
+            preview = {
+                "columns": [{"name": header, "description": header} for header in headers],
+                "rows": rows[offset:offset + 20],
+                "page": {"number": page, "size": 20, "total_items": total, "total_pages": total_pages,
+                         "start": offset + 1 if total else 0, "end": min(offset + 20, total)},
+                "data_status": "observed" if total else "no_observation",
             }
+        experiment = course.experiments.filter(pk=scope.experiment_id).first() if scope.experiment_id else None
         payload = {
-            "course": _course_payload(course),
-            "scope": _research_scope_payload(scope),
-            "search": search,
-            "groups": groups,
-            "selected_table": selected_info,
-            "selected_experiment": (
-                _experiment_payload(selected_experiment)
-                if selected_experiment
-                else None
-            ),
-            "preview": preview_payload,
+            "course": _course_payload(course), "scope": _research_scope_payload(scope),
+            "search": scope.search or "", "tables": tables, "selected_table": selected,
+            "selected_experiment": {"id": experiment.pk, "name": experiment.name, "versions": []} if experiment else None,
+            "session_options": session_options(scope) if scope.is_complete else [],
+            "generated_at": generated_at, "preview": preview,
+            "view": view,
+            "workspace": workspace,
         }
         return Response(DataCenterAdvancedSerializer(payload).data)
+
 
 
 def _metric_payload(metric):

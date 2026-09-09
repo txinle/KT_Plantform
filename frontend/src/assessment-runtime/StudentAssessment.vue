@@ -12,6 +12,7 @@ import type {
   StudentRuntimeQuestionEntry,
   SubmissionResponse,
   SubmissionConfidence,
+  NavigationClickContext,
 } from './api'
 import { getStudentAssessmentApi } from './api'
 import { createProcessRuntime, type StudentProcessRuntime, type SubmissionIntent } from './process-bridge'
@@ -73,6 +74,7 @@ let saveQueue = Promise.resolve<unknown>(undefined)
 let inputStarted = false
 let processRuntime: StudentProcessRuntime | undefined
 let confidencePromptPromise: Promise<unknown> | undefined
+let confidenceObservationQueue = Promise.resolve<unknown>(undefined)
 let confirmationGeneration = 0
 let lastRecordedResponseState: unknown = null
 let lastStableText = ''
@@ -88,6 +90,7 @@ let initializationGeneration = 0
 let preparationPromise: Promise<void> | undefined
 let itemRenderedRecorded = false
 let pendingRouteInitialization: { generation: number; sessionId: number; assignmentId: number } | undefined
+let pendingNavigationClick: (NavigationClickContext & { assignmentId: number }) | undefined
 
 interface ConfidenceContract {
   confidence_assignment_id: string
@@ -492,6 +495,7 @@ async function openSubmitDialog() {
   confidenceTouched.value = false
   confidenceValue.value = 50
   confidenceResolving.value = false
+  confidenceObservationQueue = Promise.resolve(undefined)
   pendingConfidence.value = confidenceContract(state.value.pending_confidence)
   if (pendingConfidence.value) {
     try { await showConfidencePrompt() }
@@ -535,7 +539,7 @@ async function acceptSubmission(response: SubmissionResponse) {
   pendingSubmission.value = undefined
   await processRuntime?.closeAttempt('submit')
   await showFeedback(response)
-  await navigate(response.next_url, true)
+  await navigate(response.next_url, true, 'submit_next')
 }
 
 async function recoverSubmission() {
@@ -582,13 +586,29 @@ function openFinishDialog() {
   finishDialogOpen.value = true
 }
 
-async function navigate(url: string, runtimePrepared = false) {
+async function navigate(
+  url: string,
+  runtimePrepared = false,
+  entryReason: string,
+  navigation?: NavigationClickContext,
+) {
   if (!interactionAllowed()) return
   await processRuntime?.flushBounded(1500)
   if (/^\/student\/sessions\/\d+\/questions\/\d+\//.test(url)) {
     routeTransitionPrepared = runtimePrepared
     try {
-      await router.push(url)
+      await router.push({
+        path: url,
+        query: {
+          reason: entryReason,
+          ...(navigation ? {
+            navigation_id: navigation.navigationId,
+            client_occurred_at: navigation.clientOccurredAt,
+            client_monotonic_ms: String(navigation.clientMonotonicMs),
+            client_time_origin: navigation.clientTimeOrigin,
+          } : {}),
+        },
+      })
     } catch (caught) {
       routeTransitionPrepared = false
       throw caught
@@ -690,12 +710,13 @@ async function resolveConfidence(skip: boolean) {
   error.value = ''
   try {
     await confidencePromptPromise
+    await confidenceObservationQueue
     if (generation !== confirmationGeneration) return
-    if (trajectory) await processRuntime?.record('confidence_observed', {
+    if (skip && trajectory) await processRuntime?.record('confidence_observed', {
       capture_version: 'capture-v2', operation_id: crypto.randomUUID(),
       confidence_assignment_id: assignmentId,
-      stage: skip ? 'skipped' : 'responded', answer_event_id: head,
-      probability: skip ? null : probability, feedback_phase: 'before_feedback',
+      stage: 'skipped', answer_event_id: head,
+      probability: null, feedback_phase: 'before_feedback',
     })
     if (generation !== confirmationGeneration) return
     submissionConfidence.value = {
@@ -713,14 +734,45 @@ async function resolveConfidence(skip: boolean) {
   }
 }
 
+function recordConfidenceSelection() {
+  confidenceTouched.value = true
+  if (!trajectory || !pendingConfidence.value) return
+  const assignmentId = pendingConfidence.value.confidence_assignment_id
+  const probability = confidenceValue.value
+  const observation = processRuntime?.record(
+    'confidence_observed',
+    {
+      capture_version: 'capture-v2', operation_id: crypto.randomUUID(),
+      confidence_assignment_id: assignmentId,
+      stage: 'responded', answer_event_id: confirmationHead,
+      probability, feedback_phase: 'before_feedback',
+    },
+  )
+  if (!observation) return
+  confidenceObservationQueue = Promise.all([confidenceObservationQueue, observation])
+  void observation.catch((caught) => {
+    error.value = caught instanceof Error ? caught.message : '信心选择记录失败，请重新选择。'
+  })
+}
+
 async function navigateToAssignment(item: StudentRuntimeQuestionEntry['navigation'][number]) {
   if (!interactionAllowed() || item.current || !state.value) return
+  if (!pendingNavigationClick || pendingNavigationClick.assignmentId !== item.assignment_id) {
+    pendingNavigationClick = {
+      assignmentId: item.assignment_id,
+      navigationId: globalThis.crypto.randomUUID(),
+      clientOccurredAt: new Date().toISOString(),
+      clientMonotonicMs: Math.round(performance.now() * 1000) / 1000,
+      clientTimeOrigin: new Date(performance.timeOrigin).toISOString(),
+    }
+  }
+  const navigation = pendingNavigationClick
   error.value = ''
   try {
     await flushTextObservation()
     if (!answerLocked.value) await saveDraft(true)
     await processRuntime?.closeAttempt('navigation', item.assignment_id)
-    await navigate(item.url, true)
+    await navigate(item.url, true, 'navigation_click', navigation)
   } catch (caught) {
     error.value = caught instanceof Error
       ? caught.message
@@ -748,7 +800,7 @@ async function skipCurrent() {
     await saveDraft(true)
     const response = await getStudentAssessmentApi().skip(state.value.actions.skip_url)
     await processRuntime?.closeAttempt('skip')
-    await navigate(response.next_url, true)
+    await navigate(response.next_url, true, 'skip_next')
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '跳过操作失败。'
   }
@@ -958,15 +1010,26 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
   initializationError.value = undefined
   error.value = ''
   try {
-    const loadedState = await getStudentAssessmentApi().question(
-      sessionId,
-      assignmentId,
-      typeof targetRoute.query.reason === 'string'
-        ? targetRoute.query.reason
-        : 'navigation_click',
-    )
+    const navigation = (
+      typeof targetRoute.query.navigation_id === 'string'
+      && typeof targetRoute.query.client_occurred_at === 'string'
+      && typeof targetRoute.query.client_monotonic_ms === 'string'
+      && typeof targetRoute.query.client_time_origin === 'string'
+    ) ? {
+        navigationId: targetRoute.query.navigation_id,
+        clientOccurredAt: targetRoute.query.client_occurred_at,
+        clientMonotonicMs: Number(targetRoute.query.client_monotonic_ms),
+        clientTimeOrigin: targetRoute.query.client_time_origin,
+      } : undefined
+    const reason = typeof targetRoute.query.reason === 'string'
+      ? targetRoute.query.reason
+      : 'direct_open'
+    const loadedState = navigation
+      ? await getStudentAssessmentApi().question(sessionId, assignmentId, reason, navigation)
+      : await getStudentAssessmentApi().question(sessionId, assignmentId, reason)
     if (generation !== initializationGeneration) return
     state.value = loadedState
+    pendingNavigationClick = undefined
     answer.value = cloneJson(state.value.draft_answer)
     if (state.value.offline_recovery) online.value = false
     lastSavedAnswer = JSON.stringify(answer.value)
@@ -1046,6 +1109,11 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
 
 const removeAfterEach = router.afterEach((to, _from, failure) => {
   if (failure) return
+  if (typeof to.query.navigation_id === 'string') {
+    void router.replace(
+      `/student/sessions/${String(to.params.sessionId)}/questions/${String(to.params.assignmentId)}/`,
+    )
+  }
   const pending = pendingRouteInitialization
   if (
     !pending
@@ -1281,8 +1349,7 @@ onBeforeUnmount(() => {
           :max="pendingConfidence.maximum"
           :step="pendingConfidence.step"
           :disabled="confidenceResolving || !captureReady"
-          @input="confidenceTouched = true"
-          @change="confidenceTouched = true"
+          @input="recordConfidenceSelection"
         >
         <p role="status">{{ confidenceStatus }}</p>
         <div class="kt-assessment-actions">

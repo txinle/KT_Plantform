@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone as datetime_timezone
 from typing import Mapping
 from uuid import UUID
@@ -158,6 +158,9 @@ class DataScope:
     attempt_status: str | None = None
     started_from_utc: datetime | None = None
     started_before_utc: datetime | None = None
+    search: str | None = None
+    session_ref: str | None = None
+    experiment_ids: tuple[int, ...] = ()
 
     SCOPE_VERSION = 1
     VERSION_MODES = frozenset({"single", "all"})
@@ -178,6 +181,18 @@ class DataScope:
         if version_mode == "all" and version_id is not None:
             raise ScopeValidationError("全版本范围不能指定 version_id")
 
+        raw_experiments = values.get("experiment_ids") or ()
+        if isinstance(raw_experiments, str):
+            raw_experiments = raw_experiments.split(",")
+        try:
+            experiment_ids = tuple(sorted({int(value) for value in raw_experiments}))
+        except (TypeError, ValueError) as error:
+            raise ScopeValidationError("实验范围必须为实验编号列表") from error
+        if any(value <= 0 for value in experiment_ids):
+            raise ScopeValidationError("实验编号必须为正整数")
+        single_experiment = _optional_positive_int(values, "experiment_id")
+        if experiment_ids and single_experiment and experiment_ids != (single_experiment,):
+            raise ScopeValidationError("单实验参数与所选实验范围不一致")
         scope = cls(
             course=course,
             experiment_id=_optional_positive_int(values, "experiment_id"),
@@ -192,6 +207,9 @@ class DataScope:
             attempt_status=_optional_value(values, "attempt_status"),
             started_from_utc=_optional_utc_datetime(values, "started_from_utc"),
             started_before_utc=_optional_utc_datetime(values, "started_before_utc"),
+            search=(_optional_value(values, "search") or "").strip()[:100] or None,
+            session_ref=_optional_value(values, "session_ref"),
+            experiment_ids=experiment_ids,
         )
         scope._validate()
         return scope
@@ -213,12 +231,28 @@ class DataScope:
             raise ScopeValidationError("开始时间范围不能为空或倒置")
 
         experiment = self._course_experiment(self.experiment_id)
+        for experiment_id in self.experiment_ids:
+            self._course_experiment(experiment_id)
         version = self._course_version(self.version_id)
         class_group = self._course_class_group(self.class_id)
         class_snapshot = self._course_class_snapshot(self.class_snapshot_id)
         condition = self._course_condition(self.condition_id)
         session = self._course_session(self.session_id)
+        if self.session_ref:
+            referenced_id = next((pk for pk, reference in self.session_references().items() if reference == self.session_ref), None)
+            if referenced_id is None:
+                raise ScopeNotFound("会话不属于当前课程")
+            if session and str(session.pk) != referenced_id:
+                raise ScopeValidationError("会话编号与会话标识不一致")
+            session = self._course_session(int(referenced_id))
         self._validate_course_student(self.student_id)
+
+        if self.experiment_ids:
+            for selected_experiment in (version.experiment_id if version else None,
+                    class_snapshot.version.experiment_id if class_snapshot else None,
+                    condition.experiment_id if condition else None):
+                if selected_experiment and selected_experiment not in self.experiment_ids:
+                    raise ScopeValidationError("历史范围不属于所选实验")
 
         if experiment and version and version.experiment_id != experiment.pk:
             raise ScopeValidationError("实验与版本不属于同一范围")
@@ -234,6 +268,8 @@ class DataScope:
             raise ScopeValidationError("版本与条件不属于同一范围")
 
         if session:
+            if self.experiment_ids and session.version.experiment_id not in self.experiment_ids:
+                raise ScopeValidationError("会话不属于所选实验范围")
             if experiment and session.version.experiment_id != experiment.pk:
                 raise ScopeValidationError("实验与会话不属于同一范围")
             if version and session.version_id != version.pk:
@@ -340,6 +376,8 @@ class DataScope:
         filters = {"version__experiment__course_id": self.course.pk}
         if self.experiment_id is not None:
             filters["version__experiment_id"] = self.experiment_id
+        if self.experiment_ids:
+            filters["version__experiment_id__in"] = self.experiment_ids
         if self.version_id is not None:
             filters["version_id"] = self.version_id
         if self.class_id is not None:
@@ -358,7 +396,34 @@ class DataScope:
             filters["started_at__gte"] = self.started_from_utc
         if self.started_before_utc is not None:
             filters["started_at__lt"] = self.started_before_utc
-        return ExperimentSession.objects.filter(**filters)
+        queryset = ExperimentSession.objects.filter(**filters)
+        if self.search or self.session_ref:
+            references = self.session_references()
+            selected = []
+            for session in queryset.select_related("student"):
+                reference = references.get(str(session.pk), "")
+                if self.session_ref and reference != self.session_ref:
+                    continue
+                if self.search and self.search.casefold() not in " ".join(
+                    (session.student.student_number or "", session.student.shown_name, reference)
+                ).casefold():
+                    continue
+                selected.append(session.pk)
+            queryset = queryset.filter(pk__in=selected)
+        return queryset
+
+    def session_references(self):
+        from zoneinfo import ZoneInfo
+
+        return {
+            str(pk): f"S{started.astimezone(ZoneInfo('Asia/Shanghai')):%Y%m%d}_{pk:04d}"
+            for pk, started in ExperimentSession.objects.filter(version__experiment__course=self.course)
+            .values_list("pk", "started_at")
+        }
+
+    @property
+    def is_complete(self):
+        return bool((self.experiment_id or self.experiment_ids) and (self.class_id or self.class_snapshot_id))
 
     def attempts(self):
         attempts = Attempt.objects.filter(session__in=self.sessions())
@@ -378,6 +443,8 @@ class DataScope:
 
     def serialize(self):
         values = {"scope_version": self.SCOPE_VERSION}
+        if self.experiment_ids:
+            values["experiment_ids"] = list(self.experiment_ids)
         for key, value in (
             ("experiment_id", self.experiment_id),
             ("version_mode", self.version_mode),
@@ -391,6 +458,8 @@ class DataScope:
             ("attempt_status", self.attempt_status),
             ("started_from_utc", self.started_from_utc),
             ("started_before_utc", self.started_before_utc),
+            ("search", self.search),
+            ("session_ref", self.session_ref),
         ):
             if value is None:
                 continue

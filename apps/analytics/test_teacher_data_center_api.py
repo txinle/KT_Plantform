@@ -143,6 +143,7 @@ class TeacherDataCenterApiTests(TestCase):
             updated.json()["current"],
             {
                 "experiment_id": self.experiment.pk,
+                "experiment_ids": [self.experiment.pk],
                 "class_id": self.class_group.pk,
                 "is_complete": True,
                 "display": "数据实验 · 实验班",
@@ -203,7 +204,7 @@ class TeacherDataCenterApiTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(job.artifact_removal_reason, "user_requested_removal")
 
-    def test_export_catalog_preserves_single_version_scope_and_confirmation_boundary(self):
+    def test_export_catalog_preserves_legacy_scope_but_offers_standard_research_package(self):
         response = self.client.get(
             self.api("exports/"),
             {
@@ -217,9 +218,9 @@ class TeacherDataCenterApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["selected_package"]["key"], "teaching")
+        self.assertEqual(payload["selected_package"]["key"], "experiment")
         self.assertFalse(payload["selected_package"]["blocked"])
-        self.assertEqual(payload["selected_export_version"]["version_number"], 1)
+        self.assertIsNone(payload["selected_export_version"])
         self.assertEqual(payload["scope"]["values"]["version_id"], self.version.pk)
         self.assertEqual(
             payload["actions"]["create_url"],
@@ -230,24 +231,19 @@ class TeacherDataCenterApiTests(TestCase):
     def test_quality_rows_are_paginated_and_keep_five_state_evidence(self):
         response = self.client.get(
             self.api("quality/"),
-            {"experiment_id": self.experiment.pk, "page": 1},
+            {"experiment_id": self.experiment.pk, "class_id": self.class_group.pk, "page": 1},
         )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["page"]["size"], 20)
-        self.assertIn("NOT_EVALUABLE", payload["counts"])
+        self.assertIn("无法评估", payload["counts"])
         self.assertTrue(payload["items"])
         self.assertEqual(
             set(payload["items"][0]),
             {
-                "rule",
-                "rule_version",
-                "state",
-                "entity_id",
-                "source_mode",
-                "reason_code",
-                "evidence_summary",
+                "student_number", "student_name", "session_ref", "question_code",
+                "state", "state_label", "problem", "impact",
             },
         )
 
@@ -282,7 +278,7 @@ class TeacherDataCenterApiTests(TestCase):
             )
         )
 
-    def test_advanced_catalog_keeps_all_groups_and_filters_preview_by_student_name(self):
+    def test_research_catalog_has_six_tables_and_filters_preview_by_student_name(self):
         self.student.display_name = "张同学"
         self.student.save(update_fields=["display_name"])
         response = self.client.get(
@@ -298,30 +294,20 @@ class TeacherDataCenterApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(
-            [group["key"] for group in payload["groups"]],
-            [
-                "experiment_participants",
-                "questions_knowledge",
-                "responses_grading",
-                "behavior_process",
-                "extensions",
-                "derived",
-            ],
-        )
+        self.assertEqual([table["key"] for table in payload["tables"]], [
+            "sessions", "questions", "knowledge_points", "question_kc_mapping", "responses", "behavior_events",
+        ])
         self.assertEqual(payload["search"], "张同学")
-        self.assertEqual(payload["selected_table"]["key"], "attempts")
+        self.assertEqual(payload["selected_table"]["key"], "responses")
         self.assertEqual(payload["preview"]["page"]["total_items"], 1)
-        self.assertIn("student_name", [column["name"] for column in payload["preview"]["columns"]])
-        self.assertIn("attempt_id", [column["name"] for column in payload["preview"]["columns"]])
         row = dict(zip(
             [column["name"] for column in payload["preview"]["columns"]],
             payload["preview"]["rows"][0],
         ))
-        self.assertEqual(row["student_name"], "张同学")
-        self.assertEqual(row["student_number"], "DATA-001")
-        self.assertEqual(row["question_code"], "DATA-Q1")
-        self.assertEqual(row["attempt_id"], self.attempt.pk)
+        self.assertEqual(row["姓名"], "张同学")
+        self.assertEqual(row["学号"], "DATA-001")
+        self.assertEqual(row["课程内题目ID"], "Q001")
+        self.assertNotIn("attempt_id", row)
 
         missing = self.client.get(
             self.api("advanced/"),
@@ -334,37 +320,23 @@ class TeacherDataCenterApiTests(TestCase):
         ).json()
         self.assertEqual(missing["preview"]["page"]["total_items"], 0)
 
-    def test_advanced_catalog_preserves_event_authority_and_paginated_table_preview(self):
+    def test_research_catalog_projects_readable_behavior_with_paginated_preview(self):
         response = self.client.get(
             self.api("advanced/"),
             {
                 "experiment_id": self.experiment.pk,
                 "class_id": self.class_group.pk,
-                "table": "assessment_events",
+                "table": "behavior_events",
                 "page": 1,
             },
         )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(len(payload["groups"]), 6)
-        self.assertEqual(
-            [group["key"] for group in payload["groups"]],
-            [
-                "experiment_participants",
-                "questions_knowledge",
-                "responses_grading",
-                "behavior_process",
-                "extensions",
-                "derived",
-            ],
-        )
-        self.assertEqual(payload["selected_table"]["key"], "assessment_events")
-        self.assertEqual(payload["selected_table"]["role"], "source_of_truth")
-        self.assertEqual(
-            payload["selected_table"]["path"],
-            "03_raw_events/assessment_events.csv",
-        )
+        self.assertEqual(len(payload["tables"]), 6)
+        self.assertEqual(payload["selected_table"]["key"], "behavior_events")
+        self.assertEqual(payload["selected_table"]["path"], "行为过程.csv")
+        self.assertNotIn("role", payload["selected_table"])
         self.assertEqual(payload["preview"]["page"]["size"], 20)
         self.assertIn("columns", payload["preview"])
         self.assertIn("rows", payload["preview"])

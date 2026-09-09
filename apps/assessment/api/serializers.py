@@ -89,12 +89,43 @@ class StudentRuntimeActionsSerializer(serializers.Serializer):
     finish_url = serializers.CharField()
 
 
+class StudentRuntimeQuestionEntryQuerySerializer(serializers.Serializer):
+    reason = serializers.CharField(default="navigation_click", max_length=32)
+    navigation_id = serializers.UUIDField(required=False)
+    client_occurred_at = serializers.DateTimeField(required=False)
+    client_monotonic_ms = serializers.DecimalField(
+        required=False,
+        max_digits=20,
+        decimal_places=3,
+        min_value=0,
+    )
+    client_time_origin = serializers.DateTimeField(required=False)
+
+    def validate(self, attrs):
+        navigation_fields = {
+            "navigation_id",
+            "client_occurred_at",
+            "client_monotonic_ms",
+            "client_time_origin",
+        }
+        supplied = navigation_fields.intersection(attrs)
+        if supplied and supplied != navigation_fields:
+            raise serializers.ValidationError(
+                "导航标识、客户端墙钟、单调时钟和时钟原点必须一起提供。"
+            )
+        return attrs
+
+
 class StudentRuntimeProcessSerializer(serializers.Serializer):
     writer_lease_acquire_url = serializers.CharField(required=False)
     writer_lease_renew_url = serializers.CharField(required=False)
     capture_version = serializers.CharField(required=False)
     active_response_event_id = serializers.CharField(allow_null=True, required=False)
     response_version = serializers.IntegerField(required=False)
+    visit_id = serializers.IntegerField()
+    visit_index = serializers.IntegerField()
+    entry_event_id = serializers.UUIDField()
+    navigation_id = serializers.UUIDField()
     session_id = serializers.IntegerField()
     attempt_id = serializers.IntegerField()
     event_batch_url = serializers.CharField()

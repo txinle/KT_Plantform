@@ -644,6 +644,7 @@
       this.checkpointEndpoint = options.checkpointEndpoint || '';
       this.csrfToken = options.csrfToken || '';
       this.appVersion = options.appVersion || '';
+      this.correlationId = options.correlationId || null;
       this.outbox = options.outbox;
       this.fetch = options.fetch || globalThis.fetch?.bind(globalThis);
       this.wallNow = options.wallNow || (() => new Date());
@@ -704,7 +705,8 @@
             quality_flags: qualityFlags,
             app_version: this.appVersion,
           };
-          if (options.correlationId) document.correlation_id = options.correlationId;
+          const correlationId = options.correlationId || this.correlationId;
+          if (correlationId) document.correlation_id = correlationId;
           if (options.eventId) document.event_id = options.eventId;
           if (this.timeSyncId) document.time_sync_id = this.timeSyncId;
           return document;

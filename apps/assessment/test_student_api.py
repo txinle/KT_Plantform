@@ -29,10 +29,12 @@ from apps.question_bank.models import (
 )
 
 from .models import (
+    AssessmentEvent,
     Attempt,
     ConfidenceAssignment,
     ExperimentSession,
     GradeRecord,
+    QuestionVisitEvent,
     SubmissionEvent,
 )
 
@@ -429,6 +431,43 @@ class StudentTaskApiTests(StudentApiTestCase):
 
 
 class StudentAssessmentApiTests(StudentApiTestCase):
+    def test_navigation_entry_returns_visit_contract_and_replays_navigation_id(self):
+        self.start()
+        session = ExperimentSession.objects.get(
+            class_task=self.task,
+            student=self.student,
+        )
+        assignment = session.assignments.get()
+        navigation_id = uuid.uuid4()
+        clicked_at = timezone.now() - timedelta(seconds=1)
+        time_origin = clicked_at - timedelta(seconds=20)
+        url = f"/api/v1/student/sessions/{session.pk}/questions/{assignment.pk}/"
+        query = {
+            "reason": "navigation_click",
+            "navigation_id": str(navigation_id),
+            "client_occurred_at": clicked_at.isoformat(),
+            "client_monotonic_ms": "20000.5",
+            "client_time_origin": time_origin.isoformat(),
+        }
+
+        first = self.client.get(url, query)
+        replay = self.client.get(url, query)
+
+        self.assertEqual(first.status_code, 200, first.content)
+        self.assertEqual(replay.status_code, 200, replay.content)
+        process = first.json()["process"]
+        self.assertEqual(process["navigation_id"], str(navigation_id))
+        self.assertEqual(process["visit_index"], 1)
+        self.assertEqual(replay.json()["process"]["visit_id"], process["visit_id"])
+        self.assertEqual(
+            replay.json()["process"]["entry_event_id"],
+            process["entry_event_id"],
+        )
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+        entered = AssessmentEvent.objects.get(pk=process["entry_event_id"])
+        self.assertEqual(entered.correlation_id, navigation_id)
+        self.assertEqual(entered.payload["visit_id"], process["visit_id"])
+
     @override_settings(
         CAPTURE_V2_ENABLED=False,
         CAPTURE_V2_USER_IDS=frozenset(),

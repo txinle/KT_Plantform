@@ -2296,20 +2296,18 @@ export interface components {
             csrf_token: string;
         };
         DataCenterAdvanced: {
+            view: string;
+            workspace: unknown;
             course: components["schemas"]["CourseReference"];
             scope: components["schemas"]["DataCenterResearchScope"];
             search: string;
-            groups: components["schemas"]["DataCenterAdvancedGroup"][];
+            tables: components["schemas"]["DataCenterAdvancedTable"][];
+            session_options: components["schemas"]["DataCenterSessionOption"][];
+            /** Format: date-time */
+            generated_at: string;
             selected_table: components["schemas"]["DataCenterAdvancedTable"];
             selected_experiment: components["schemas"]["DataCenterExperimentOption"] | null;
             preview: components["schemas"]["DataCenterAdvancedPreview"] | null;
-        };
-        DataCenterAdvancedGroup: {
-            key: string;
-            label: string;
-            description: string;
-            tables: components["schemas"]["DataCenterAdvancedTable"][];
-            active: boolean;
         };
         DataCenterAdvancedPreview: {
             columns: components["schemas"]["DataCenterPreviewColumn"][];
@@ -2321,12 +2319,10 @@ export interface components {
             key: string;
             label: string;
             path: string;
-            role: string;
-            role_label: string;
             description: string;
-            schema_version: string;
-            source_layer: string;
-            active: boolean;
+            total_items: number;
+            level?: string;
+            format?: string;
         };
         DataCenterClassOption: {
             id: number;
@@ -2355,13 +2351,20 @@ export interface components {
             selected_export_version: components["schemas"]["DataCenterExperimentVersion"] | null;
             identified_data_notice: string;
             actions: components["schemas"]["DataCenterExportActions"];
+            tables: components["schemas"]["DataCenterAdvancedTable"][];
+            /** Format: date-time */
+            generated_at: string;
         };
         DataCenterExportHistoryCollection: {
+            scope: components["schemas"]["DataCenterResearchScope"];
             items: components["schemas"]["DataCenterExportHistoryRow"][];
             page: components["schemas"]["TeacherClassPageMetadata"];
             course: components["schemas"]["CourseReference"];
         };
         DataCenterExportHistoryRow: {
+            package_label: string;
+            class_name: string;
+            artifact_removal_label: string;
             /** Format: uuid */
             job_id: string;
             package: string;
@@ -2404,6 +2407,7 @@ export interface components {
             total_sessions: number;
             submitted_attempts: number;
             quality_warnings: number;
+            process_records: number;
             not_evaluable: number;
         };
         DataCenterOverview: {
@@ -2414,6 +2418,7 @@ export interface components {
             actions: components["schemas"]["DataCenterOverviewActions"];
         };
         DataCenterOverviewActions: {
+            preview_url: string;
             scope_update_url: string;
             governance_url: string;
             teaching_url: string;
@@ -2435,15 +2440,18 @@ export interface components {
             };
         };
         DataCenterQualityRow: {
-            rule: string;
-            rule_version: string;
+            student_number: string;
+            student_name: string;
+            session_ref: string;
+            question_code: string;
             state: string;
-            entity_id: number | null;
-            source_mode: string;
-            reason_code: string;
-            evidence_summary: string;
+            state_label: string;
+            problem: string;
+            impact: string;
         };
         DataCenterRecentExport: {
+            package_label: string;
+            class_name: string;
             /** Format: uuid */
             job_id: string;
             package: string;
@@ -2458,6 +2466,7 @@ export interface components {
             query: string;
             display: string;
             is_single_version: boolean;
+            is_complete: boolean;
         };
         DataCenterScope: {
             course: components["schemas"]["CourseReference"];
@@ -2468,10 +2477,16 @@ export interface components {
         };
         DataCenterScopeUpdate: {
             experiment_id?: number | null;
+            experiment_ids?: number[];
             class_id?: number | null;
+        };
+        DataCenterSessionOption: {
+            value: string;
+            label: string;
         };
         DataCenterTeachingScope: {
             experiment_id: number | null;
+            experiment_ids?: number[];
             class_id: number | null;
             is_complete: boolean;
             display: string;
@@ -3137,7 +3152,9 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -4216,6 +4233,12 @@ export interface components {
             capture_version?: string;
             active_response_event_id?: string | null;
             response_version?: number;
+            visit_id: number;
+            visit_index: number;
+            /** Format: uuid */
+            entry_event_id: string;
+            /** Format: uuid */
+            navigation_id: string;
             session_id: number;
             attempt_id: number;
             event_batch_url: string;
@@ -4636,7 +4659,9 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -5223,7 +5248,13 @@ export interface operations {
     };
     student_sessions_questions_retrieve: {
         parameters: {
-            query?: never;
+            query?: {
+                client_monotonic_ms?: string;
+                client_occurred_at?: string;
+                client_time_origin?: string;
+                navigation_id?: string;
+                reason?: string;
+            };
             header?: never;
             path: {
                 assignment_id: number;
@@ -7634,6 +7665,7 @@ export interface operations {
                 experiment_id?: number;
                 page?: number;
                 search?: string;
+                session_ref?: string;
                 table?: string;
             };
             header?: never;

@@ -95,6 +95,10 @@ const questionState = {
     finish_url: '/student/sessions/7/finish/',
   },
   process: {
+    visit_id: 41,
+    visit_index: 1,
+    entry_event_id: '00000000-0000-4000-8000-000000000040',
+    navigation_id: '00000000-0000-4000-8000-000000000041',
     session_id: 7,
     attempt_id: 13,
     event_batch_url: '/assessment/process/events/batch/',
@@ -177,7 +181,7 @@ describe('StudentAssessment', () => {
     const wrapper = mount(StudentAssessment)
     await flushPromises()
 
-    expect(mocks.api.question).toHaveBeenCalledWith(7, 11, 'navigation_click')
+    expect(mocks.api.question).toHaveBeenCalledWith(7, 11, 'direct_open')
     expect(wrapper.get('h1').text()).toBe('第 1/2 题')
     expect(wrapper.text()).toContain('反馈策略实验')
     expect(wrapper.text()).toContain('2 + 2 等于多少？')
@@ -378,7 +382,10 @@ describe('StudentAssessment', () => {
       '00000000-0000-4000-8000-000000000001',
     ])
     expect(mocks.runtime.closeAttempt).toHaveBeenCalledWith('submit')
-    expect(mocks.push).toHaveBeenCalledWith('/student/sessions/7/questions/12/')
+    expect(mocks.push).toHaveBeenCalledWith({
+      path: '/student/sessions/7/questions/12/',
+      query: { reason: 'submit_next' },
+    })
   })
 
   it('forces a durable save before question navigation', async () => {
@@ -393,7 +400,10 @@ describe('StudentAssessment', () => {
       null,
     ])
     expect(mocks.runtime.closeAttempt).toHaveBeenCalledWith('navigation', 12)
-    expect(mocks.push).toHaveBeenCalledWith('/student/sessions/7/questions/12/')
+    expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/student/sessions/7/questions/12/',
+      query: expect.objectContaining({ navigation_id: expect.any(String) }),
+    }))
   })
 
   it('forces a durable save before marking the current question skipped', async () => {
@@ -409,7 +419,10 @@ describe('StudentAssessment', () => {
     ])
     expect(mocks.api.skip).toHaveBeenCalledWith('/student/attempts/13/skip/')
     expect(mocks.runtime.closeAttempt).toHaveBeenCalledWith('skip')
-    expect(mocks.push).toHaveBeenCalledWith('/student/sessions/7/questions/12/')
+    expect(mocks.push).toHaveBeenCalledWith({
+      path: '/student/sessions/7/questions/12/',
+      query: { reason: 'skip_next' },
+    })
   })
 
   it('replaces the assessment runtime when Vue Router reuses the component for another question', async () => {
@@ -573,12 +586,88 @@ describe('StudentAssessment', () => {
 
     expect(mocks.api.saveDraft).not.toHaveBeenCalled()
     expect(mocks.runtime.closeAttempt).toHaveBeenCalledWith('navigation', 12)
-    expect(mocks.push).toHaveBeenCalledWith('/student/sessions/7/questions/12/')
+    expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/student/sessions/7/questions/12/',
+      query: expect.objectContaining({
+        reason: 'navigation_click',
+        navigation_id: expect.any(String),
+        client_occurred_at: expect.any(String),
+        client_monotonic_ms: expect.any(String),
+        client_time_origin: expect.any(String),
+      }),
+    }))
+  })
+
+  it('freezes navigation identity and click clocks before draft work and reuses them on retry', async () => {
+    const calls: string[] = []
+    mocks.api.saveDraft.mockImplementation(async () => { calls.push('save'); return { success: true, saved_at: '2026-08-30T08:00:00Z' } })
+    mocks.runtime.closeAttempt.mockImplementation(async () => { calls.push('close') })
+    mocks.push.mockImplementation(async () => { calls.push('push'); throw new Error('route failed') })
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+
+    await wrapper.get('[data-nav-assignment="12"]').trigger('click')
+    await flushPromises()
+    const firstRoute = structuredClone(mocks.push.mock.calls[0]?.[0])
+    await wrapper.get('[data-nav-assignment="12"]').trigger('click')
+    await flushPromises()
+    const secondRoute = mocks.push.mock.calls[1]?.[0]
+
+    expect(calls.slice(0, 3)).toEqual(['save', 'close', 'push'])
+    expect(secondRoute.query).toEqual(firstRoute.query)
+  })
+
+  it('removes a consumed navigation id from history after authoritative entry succeeds', async () => {
+    const secondQuestion = captureV2Question({
+      assignment: { assignment_id: 12, attempt_id: 14, status: 'visited', sequence_index: 2 },
+      navigation: questionState.navigation.map(item => ({
+        ...item,
+        current: item.assignment_id === 12,
+      })),
+      process: {
+        ...captureV2Question().process,
+        attempt_id: 14,
+        visit_id: 42,
+        navigation_id: '00000000-0000-4000-8000-000000000042',
+      },
+    })
+    mocks.api.question
+      .mockResolvedValueOnce(structuredClone(questionState))
+      .mockResolvedValueOnce(secondQuestion)
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    const to = {
+      params: { sessionId: '7', assignmentId: '12' },
+      query: {
+        reason: 'navigation_click',
+        navigation_id: '00000000-0000-4000-8000-000000000042',
+        client_occurred_at: '2026-09-09T10:00:00.000Z',
+        client_monotonic_ms: '1000.5',
+        client_time_origin: '2026-09-09T09:59:59.000Z',
+      },
+    }
+
+    await mocks.beforeRouteUpdate?.(to)
+    mocks.afterRouteEach?.(to)
+    await flushPromises()
+
+    expect(mocks.replace).toHaveBeenCalledWith('/student/sessions/7/questions/12/')
+    wrapper.unmount()
   })
 
   it('collects confidence before the final atomic submission without accepting an untouched default', async () => {
-    mocks.api.question.mockResolvedValue({
-      ...structuredClone(questionState),
+    mocks.api.post.mockImplementation(async (url: string) => {
+      if (url.includes('/lease/')) {
+        return {
+          success: true,
+          lease_token: '00000000-0000-4000-8000-000000000099',
+          client_instance_id: mocks.runtime.clientInstanceId,
+          expires_at: '2099-01-01T00:00:00Z',
+        }
+      }
+      return { success: true }
+    })
+    mocks.api.question.mockResolvedValue(captureV2Question({
       pending_confidence: {
         confidence_assignment_id: '31',
         scale_version: 'v1',
@@ -590,7 +679,7 @@ describe('StudentAssessment', () => {
         commit_url: '/assessment/process/confidence/13/commit/',
         skip_url: '/assessment/process/confidence/13/skip/',
       },
-    })
+    }))
     const wrapper = mount(StudentAssessment)
     await flushPromises()
     expect(wrapper.find('[data-confidence-panel]').exists()).toBe(false)
@@ -608,6 +697,8 @@ describe('StudentAssessment', () => {
     expect(wrapper.get('[data-confidence-panel]').text()).toContain('你对这次答案有多大把握？')
 
     await wrapper.get<HTMLInputElement>('[data-confidence-input]').setValue(80)
+    await wrapper.get<HTMLInputElement>('[data-confidence-input]').setValue(0)
+    await wrapper.get<HTMLInputElement>('[data-confidence-input]').setValue(80)
     await wrapper.get('[data-confidence-submit]').trigger('click')
     await flushPromises()
 
@@ -617,10 +708,18 @@ describe('StudentAssessment', () => {
     await flushPromises()
     expect(mocks.api.submit).toHaveBeenCalledWith(
       questionState.actions.submit_url,
-      expect.any(String), expect.any(String), undefined, undefined,
-      { status: 'committed', probability: 80 },
+      expect.any(String), expect.any(String), null,
+      {
+        writer_lease_token: '00000000-0000-4000-8000-000000000099',
+        writer_client_instance_id: mocks.runtime.clientInstanceId,
+      },
+      { status: 'committed', probability: 80, answer_event_id: null },
     )
     expect(mocks.api.post.mock.calls.every(call => !String(call[0]).endsWith('/commit/'))).toBe(true)
+    const confidenceEvents = mocks.runtime.record.mock.calls.filter(call => (
+      call[0] === 'confidence_observed' && call[1].stage === 'responded'
+    ))
+    expect(confidenceEvents.map(call => call[1].probability)).toEqual([80, 0, 80])
     expect(wrapper.text()).not.toContain('正确答案')
     expect(mocks.runtime.record).toHaveBeenCalledWith(
       'feedback_shown',
@@ -632,7 +731,10 @@ describe('StudentAssessment', () => {
       },
       {},
     )
-    expect(mocks.push).toHaveBeenCalledWith('/student/sessions/7/questions/12/')
+    expect(mocks.push).toHaveBeenCalledWith({
+      path: '/student/sessions/7/questions/12/',
+      query: { reason: 'submit_next' },
+    })
   })
 
   it('cancels pending confidence resolution when returning to edit', async () => {
@@ -675,7 +777,10 @@ describe('StudentAssessment', () => {
     expect(mocks.api.recover).toHaveBeenCalledWith(13, expect.any(String))
     expect(mocks.api.submit).toHaveBeenCalledOnce()
     expect(mocks.runtime.saveSubmissionIntent).toHaveBeenLastCalledWith(null)
-    expect(mocks.push).toHaveBeenCalledWith('/student/sessions/7/questions/12/')
+    expect(mocks.push).toHaveBeenCalledWith({
+      path: '/student/sessions/7/questions/12/',
+      query: { reason: 'submit_next' },
+    })
   })
 
   it('restores an uncommitted intent after reload and retries with its original token', async () => {

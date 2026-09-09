@@ -67,6 +67,7 @@ _TEACHING_SCOPE_SESSION_KEY = "data_center_teaching_scope_v1"
 _TEACHING_SCOPE_KEYS = ("experiment_id", "class_id")
 _DATA_SCOPE_KEYS = (
     "scope_version",
+    "experiment_ids",
     "experiment_id",
     "version_mode",
     "version_id",
@@ -79,6 +80,8 @@ _DATA_SCOPE_KEYS = (
     "attempt_status",
     "started_from_utc",
     "started_before_utc",
+    "search",
+    "session_ref",
 )
 _LEGACY_SCOPE_KEYS = ("class_name", "student_number", "status")
 
@@ -89,6 +92,11 @@ def _scope_from_request(request, course):
         for key in (*_DATA_SCOPE_KEYS, *_LEGACY_SCOPE_KEYS)
         if request.GET.get(key) not in (None, "")
     }
+    if temporary_values and set(temporary_values) <= {"search", "session_ref", "student_id", "session_id"}:
+        saved_values = request.session.get(f"{_DATA_SCOPE_SESSION_KEY}:{course.pk}", {})
+        if not saved_values:
+            saved_values = request.session.get(f"{_TEACHING_SCOPE_SESSION_KEY}:{course.pk}", {})
+        temporary_values = {**saved_values, **temporary_values}
     values = temporary_values or request.session.get(
         f"{_DATA_SCOPE_SESSION_KEY}:{course.pk}", {}
     )

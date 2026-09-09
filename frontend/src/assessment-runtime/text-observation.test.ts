@@ -38,9 +38,12 @@ describe('stable text observations', () => {
     expect(JSON.stringify(payload)).not.toContain('知识追踪')
   })
 
-  it('classifies paste, delete, replacement, and IME input', () => {
+  it('preserves paste, cut, undo, redo, replacement, and IME input semantics', () => {
     expect(createTextObservation('', 'a', { inputType: 'insertFromPaste', isComposing: false, monotonicMs: 1 }).operation).toBe('paste')
     expect(createTextObservation('a', '', { inputType: 'deleteContentBackward', isComposing: false, monotonicMs: 1 }).operation).toBe('delete')
+    expect(createTextObservation('a', '', { inputType: 'deleteByCut', isComposing: false, monotonicMs: 1 }).operation).toBe('delete')
+    expect(createTextObservation('a', '', { inputType: 'historyUndo', isComposing: false, monotonicMs: 1 }).operation).toBe('unknown')
+    expect(createTextObservation('', 'a', { inputType: 'historyRedo', isComposing: false, monotonicMs: 1 }).operation).toBe('unknown')
     expect(createTextObservation('a', 'b', { inputType: 'insertReplacementText', isComposing: false, monotonicMs: 1 }).operation).toBe('replace')
     expect(createTextObservation('', '中', { inputType: 'insertCompositionText', isComposing: true, monotonicMs: 1 }).method).toBe('ime')
   })

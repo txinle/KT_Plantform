@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib
 import uuid
+from dataclasses import dataclass
 from datetime import timedelta
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -507,8 +508,70 @@ def _validate_session_time(session, attempt=None, *, request_received_at=None):
             return "本题作答时间已结束"
     return None
 
+@dataclass(frozen=True)
+class RecordedVisitEntry:
+    attempt: Attempt
+    visit: QuestionVisitEvent
+    entry_event: AssessmentEvent
+    navigation_id: uuid.UUID
+
+
+def _existing_visit_entry(session, assignment, navigation_id=None):
+    entry_event = None
+    if navigation_id is not None:
+        entry_event = AssessmentEvent.objects.filter(
+            session=session,
+            event_type="item_entered",
+            correlation_id=navigation_id,
+        ).first()
+        if entry_event is None:
+            return None
+        if entry_event.assignment_id != assignment.pk:
+            raise ValidationError("导航标识已用于其他题目")
+    elif session.current_assignment_id != assignment.pk:
+        return None
+
+    visit = None
+    if entry_event is not None and entry_event.payload.get("visit_id") is not None:
+        visit = QuestionVisitEvent.objects.filter(
+            pk=entry_event.payload["visit_id"],
+            session=session,
+            attempt__assignment=assignment,
+        ).first()
+    if visit is None:
+        visit = QuestionVisitEvent.objects.filter(
+            session=session,
+            attempt__assignment=assignment,
+        ).order_by("-event_sequence").first()
+    if visit is None:
+        return None
+    if entry_event is None:
+        entry_event = AssessmentEvent.objects.filter(
+            session=session,
+            attempt=visit.attempt,
+            event_type="item_entered",
+        ).order_by("-server_ingest_sequence_no").first()
+    if entry_event is None:
+        return None
+    return RecordedVisitEntry(
+        attempt=visit.attempt,
+        visit=visit,
+        entry_event=entry_event,
+        navigation_id=entry_event.correlation_id or entry_event.event_id,
+    )
+
+
 @transaction.atomic
-def _record_visit_transaction(session_id, assignment_id, entry_reason="navigation_click", client_time=None, request_received_at=None):
+def _record_visit_transaction(
+    session_id,
+    assignment_id,
+    entry_reason="navigation_click",
+    client_time=None,
+    request_received_at=None,
+    navigation_id=None,
+    client_monotonic_ms=None,
+    client_time_origin=None,
+):
     task_id = ExperimentSession.objects.only("class_task_id").get(pk=session_id).class_task_id
     if task_id:
         ClassExperimentTask.objects.select_for_update().get(pk=task_id)
@@ -522,9 +585,14 @@ def _record_visit_transaction(session_id, assignment_id, entry_reason="navigatio
     if session.status != ExperimentSession.Status.IN_PROGRESS:
         raise ValidationError("当前会话不可继续作答")
     assignment = StudentQuestionAssignment.objects.select_related("snapshot").get(pk=assignment_id, session=session)
+    existing = _existing_visit_entry(session, assignment, navigation_id)
+    if existing is not None:
+        return existing, None
+    navigation_id = navigation_id or uuid.uuid4()
     now = timezone.now(); from_assignment = session.current_assignment
     _close_previous(session, now)
     attempt = Attempt.objects.select_for_update().get(assignment=assignment)
+    attempt.visit_count += 1
     if attempt.status not in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
         if attempt.first_opened_at is None:
             session.first_open_count += 1
@@ -546,20 +614,19 @@ def _record_visit_transaction(session_id, assignment_id, entry_reason="navigatio
                     )
                 )
         attempt.last_opened_at = now
-        attempt.visit_count += 1
         if attempt.status in {Attempt.Status.UNVISITED, Attempt.Status.SKIPPED}: attempt.status = Attempt.Status.VISITED
-        attempt.save()
+    attempt.save()
     session.visit_event_count += 1
-    QuestionVisitEvent.objects.create(
+    visit = QuestionVisitEvent.objects.create(
         session=session, attempt=attempt, from_assignment=from_assignment,
         visit_index=attempt.visit_count, event_sequence=session.visit_event_count,
         entry_reason=entry_reason, client_occurred_at=client_time,
     )
     session.current_assignment = assignment
     session.save(update_fields=["current_assignment", "first_open_count", "visit_event_count", "last_activity_at"])
-    append_assessment_event(
+    entry_event = append_assessment_event(
         event_type="item_entered",
-        event_version=2 if session.capture_contract_id else 1,
+        event_version=3,
         event_domain="assessment",
         actor_source="server",
         session=session,
@@ -572,24 +639,57 @@ def _record_visit_transaction(session_id, assignment_id, entry_reason="navigatio
             "from_assignment_id": (
                 from_assignment.pk if from_assignment is not None else None
             ),
+            "visit_id": visit.pk,
         },
+        correlation_id=navigation_id,
+        client_wall_time_utc=client_time,
+        client_monotonic_ms=client_monotonic_ms,
+        client_time_origin=client_time_origin,
         capture_mode="native",
         app_version="server",
     )
-    return attempt, None
+    return RecordedVisitEntry(
+        attempt=attempt,
+        visit=visit,
+        entry_event=entry_event,
+        navigation_id=navigation_id,
+    ), None
 
 
-def record_visit(session_id, assignment_id, entry_reason="navigation_click", client_time=None, *, request_received_at=None):
-    attempt, time_error = _record_visit_transaction(
+def record_visit_entry(
+    session_id,
+    assignment_id,
+    entry_reason="navigation_click",
+    client_time=None,
+    *,
+    request_received_at=None,
+    navigation_id=None,
+    client_monotonic_ms=None,
+    client_time_origin=None,
+):
+    entry, time_error = _record_visit_transaction(
         session_id,
         assignment_id,
         entry_reason,
         client_time,
         request_received_at,
+        navigation_id,
+        client_monotonic_ms,
+        client_time_origin,
     )
     if time_error:
         raise ValidationError(time_error)
-    return attempt
+    return entry
+
+
+def record_visit(session_id, assignment_id, entry_reason="navigation_click", client_time=None, *, request_received_at=None):
+    return record_visit_entry(
+        session_id,
+        assignment_id,
+        entry_reason,
+        client_time,
+        request_received_at=request_received_at,
+    ).attempt
 
 @transaction.atomic
 def _save_draft_transaction(

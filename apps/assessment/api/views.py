@@ -30,7 +30,7 @@ from ..models import (
 )
 from ..response_snapshot_services import canonical_response_state
 from ..services import get_or_create_session, resume_task_session
-from ..services import record_visit
+from ..services import record_visit_entry
 from ..student_results import build_student_task_result
 from .serializers import (
     StudentCourseCollectionSerializer,
@@ -38,6 +38,7 @@ from .serializers import (
     StudentLearningProjectionSerializer,
     StudentLearningQuestionSerializer,
     StudentSessionEntrySerializer,
+    StudentRuntimeQuestionEntryQuerySerializer,
     StudentRuntimeQuestionEntrySerializer,
     StudentResultResponseSerializer,
     StudentTaskCollectionSerializer,
@@ -348,9 +349,14 @@ def _runtime_options(assignment):
 
 
 class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
-    @extend_schema(responses=StudentRuntimeQuestionEntrySerializer)
+    @extend_schema(
+        parameters=[StudentRuntimeQuestionEntryQuerySerializer],
+        responses=StudentRuntimeQuestionEntrySerializer,
+    )
     def get(self, request, session_id, assignment_id):
         request_received_at = timezone.now()
+        query = StudentRuntimeQuestionEntryQuerySerializer(data=request.query_params)
+        query.is_valid(raise_exception=True)
         session = get_object_or_404(
             ExperimentSession.objects.select_related(
                 "version__experiment",
@@ -369,11 +375,15 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
             session=session,
         )
         try:
-            attempt = record_visit(
+            visit_entry = record_visit_entry(
                 session.pk,
                 assignment.pk,
-                request.query_params.get("reason", "navigation_click"),
+                query.validated_data["reason"],
+                query.validated_data.get("client_occurred_at"),
                 request_received_at=request_received_at,
+                navigation_id=query.validated_data.get("navigation_id"),
+                client_monotonic_ms=query.validated_data.get("client_monotonic_ms"),
+                client_time_origin=query.validated_data.get("client_time_origin"),
             )
         except ValidationError as error:
             raise ApiConflict(
@@ -386,7 +396,7 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                 "assignment__item_instance",
                 "current_response_snapshot",
             )
-            .get(pk=attempt.pk)
+            .get(pk=visit_entry.attempt.pk)
         )
         assignment = attempt.assignment
         session.refresh_from_db()
@@ -455,6 +465,10 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                 "finish_url": reverse("assessment:finish", args=[session.pk]),
             },
             "process": {
+                "visit_id": visit_entry.visit.pk,
+                "visit_index": visit_entry.visit.visit_index,
+                "entry_event_id": str(visit_entry.entry_event.pk),
+                "navigation_id": str(visit_entry.navigation_id),
                 "writer_lease_acquire_url": reverse('assessment_process:writer_lease_acquire', args=[attempt.pk]),
                 "writer_lease_renew_url": reverse('assessment_process:writer_lease_renew', args=[attempt.pk]),
                 "capture_version": session.capture_contract.contract_name if session.capture_contract_id else 'legacy',

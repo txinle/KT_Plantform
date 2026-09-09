@@ -1,257 +1,398 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import Alert from '@/design-system/components/Alert.vue'
-import Drawer from '@/design-system/components/Drawer.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
-import MobileCardList from '@/design-system/components/MobileCardList.vue'
-import PageHeader from '@/design-system/components/PageHeader.vue'
 import Paginator from '@/design-system/components/Paginator.vue'
 
-import { getTeacherDataCenterApi, routeQuery, type DataCenterAdvanced } from './api'
-
-type Preview = NonNullable<DataCenterAdvanced['preview']>
-type PreviewColumn = Preview['columns'][number]
-
-interface PreviewField extends PreviewColumn {
-  value: string
-  internal: boolean
-}
-
-interface ReadableRecord {
-  key: number
-  studentName: string
-  studentNumber: string
-  questionCode: string
-  summary: PreviewField[]
-  occurredAt: string
-  readableFields: PreviewField[]
-  technicalFields: PreviewField[]
-}
+import ResearchDataIcon from './ResearchDataIcon.vue'
+import ResearchBehaviorCompactTable from './ResearchBehaviorCompactTable.vue'
+import ResearchBehaviorTable from './ResearchBehaviorTable.vue'
+import ResearchCards from './ResearchCards.vue'
+import ResearchPageHeading from './ResearchPageHeading.vue'
+import ResearchQuestionSummary from './ResearchQuestionSummary.vue'
+import ResearchResponsesResultTable from './ResearchResponsesResultTable.vue'
+import ResearchResponsesTable from './ResearchResponsesTable.vue'
+import ResearchSessionSummary from './ResearchSessionSummary.vue'
+import {
+  getTeacherDataCenterApi,
+  routeQuery,
+  type DataCenterAdvanced,
+  type ResearchSession,
+  type ResearchStudent,
+} from './api'
 
 const route = useRoute()
 const router = useRouter()
 const courseId = Number(route.params.courseId)
 const api = getTeacherDataCenterApi()
+
 const data = ref<DataCenterAdvanced>()
 const error = ref('')
-const tableSearch = ref('')
-const studentSearch = ref(typeof route.query.search === 'string' ? route.query.search : '')
-const selectedRecord = ref<ReadableRecord>()
+const loading = ref(false)
+const studentSearch = ref('')
+const showSuggestions = ref(false)
+const pendingStudent = ref<ResearchStudent | null | undefined>(undefined)
+let latestRequest = 0
 
-const summaryPriority = [
-  'event_type', 'status', 'data_status', 'result', 'is_correct', 'score',
-  'response_status', 'condition', 'condition_name', 'capture_mode',
-  'quality_flags', 'probability', 'visit_count', 'assigned_sequence_index',
-]
-const timePriority = [
-  'server_received_at', 'submitted_at', 'created_at', 'started_at',
-  'completed_at', 'assigned_at', 'committed_at', 'generated_at',
-]
-const verboseFieldPattern = /(payload|state|metadata|chain|document|configuration|parameter_values|option_order)/i
+const cardCopy: Record<string, { label: string; description: string; icon: string }> = {
+  sessions: { label: '会话', description: '一名学生参加实验的一次会话', icon: 'session' },
+  questions: { label: '题目', description: '课程题目固定库，详情页展示当前范围相关题目', icon: 'question' },
+  knowledge_points: { label: '知识点', description: '课程知识点库，详情页展示当前范围相关知识点', icon: 'knowledge' },
+  question_kc_mapping: { label: '题目和知识点映射', description: '题目与知识点的明确对应关系', icon: 'mapping' },
+  responses: { label: '逐题作答', description: '某会话中学生对一道题的最终作答事实', icon: 'response' },
+  behavior_events: { label: '行为过程', description: '一次已记录的研究行为或状态变化', icon: 'behavior' },
+}
 
-const groups = computed(() => (data.value?.groups || []).map(group => ({
-  ...group,
-  tables: group.tables.filter(table => `${table.label} ${table.key}`.toLocaleLowerCase().includes(tableSearch.value.toLocaleLowerCase())),
-})).filter(group => !tableSearch.value || group.tables.length))
-
-const records = computed<ReadableRecord[]>(() => {
-  const preview = data.value?.preview
-  if (!preview) return []
-  return preview.rows.map((row, rowIndex) => {
-    const fields = preview.columns.map((column, columnIndex): PreviewField => ({
-      ...column,
-      value: displayValue(row[columnIndex]),
-      internal: isInternalIdentifier(column.name),
-    }))
-    const byName = new Map(fields.map(field => [field.name, field]))
-    const summary = summaryPriority
-      .map(name => byName.get(name))
-      .filter((field): field is PreviewField => Boolean(field && field.value !== '—' && !field.internal))
-      .slice(0, 3)
-    if (!summary.length) {
-      summary.push(...fields.filter(field => (
-        !field.internal
-        && !identityField(field.name)
-        && !timePriority.includes(field.name)
-        && !verboseFieldPattern.test(field.name)
-        && field.value !== '—'
-      )).slice(0, 3))
-    }
-    return {
-      key: rowIndex,
-      studentName: fieldValue(byName, 'student_name'),
-      studentNumber: fieldValue(byName, 'student_number'),
-      questionCode: fieldValue(byName, 'question_code', 'code'),
-      summary,
-      occurredAt: fieldValue(byName, ...timePriority),
-      readableFields: fields.filter(field => !field.internal),
-      technicalFields: fields.filter(field => field.internal),
-    }
-  })
+const view = computed(() => data.value?.view || route.query.view || 'overview')
+const workspace = computed(() => data.value?.workspace)
+const routeStudentId = computed(() => Number(route.query.student_id || 0))
+const selectedStudent = computed(() =>
+  pendingStudent.value !== undefined
+    ? pendingStudent.value
+    : workspace.value?.student || workspace.value?.students.find(student => student.id === routeStudentId.value) || null,
+)
+const selectedSession = computed(() => {
+  const ref = typeof route.query.session_ref === 'string' ? route.query.session_ref : ''
+  return workspace.value?.sessions.find(session => session.session_ref === ref) || workspace.value?.session || workspace.value?.sessions[0] || null
 })
+const selectedQuestion = computed(() => {
+  const ref = typeof route.query.question_ref === 'string' ? route.query.question_ref : ''
+  return workspace.value?.question || workspace.value?.responses.find(item => item.question_ref === ref) || workspace.value?.responses[0] || null
+})
+const selectedVisit = computed(() => {
+  const key = typeof route.query.visit === 'string' ? route.query.visit : workspace.value?.selected_visit
+  return workspace.value?.visits.find(item => item.key === key) || workspace.value?.visits[0] || null
+})
+const suggestions = computed(() => {
+  const search = studentSearch.value.trim().toLowerCase()
+  if (!search || !workspace.value) return []
+  return workspace.value.students.filter(student => {
+    const label = studentLabel(student).toLowerCase()
+    return label.includes(search) && label !== search
+  }).slice(0, 8)
+})
+const activeCardKey = computed(() => {
+  if (view.value === 'question' || view.value === 'timeline') return 'behavior_events'
+  if (view.value === 'session' || view.value === 'student') return 'responses'
+  return data.value?.selected_table.key || 'sessions'
+})
+
+function studentLabel(student: ResearchStudent) {
+  return student.name + ' / ' + student.student_number
+}
 
 function displayValue(value: unknown) {
   if (value === null || value === undefined || value === '') return '—'
-  if (typeof value === 'object') return JSON.stringify(value)
+  if (typeof value === 'boolean') return value ? '是' : '否'
   return String(value)
 }
 
-function isInternalIdentifier(name: string) {
-  if (name === 'student_number' || name === 'question_code') return false
-  return name === 'id'
-    || name.endsWith('_id')
-    || name.endsWith('_ids')
-    || name.includes('hash')
-    || name.includes('fingerprint')
-    || name.includes('high_watermark')
+function isLongText(value: unknown) {
+  const text = displayValue(value)
+  return text.length > 48 || text.includes('\n')
 }
 
-function identityField(name: string) {
-  return ['student_name', 'student_number', 'question_code', 'code'].includes(name)
+function compactText(value: unknown) {
+  const text = displayValue(value).replace(/\s+/g, ' ')
+  return text.length > 36 ? text.slice(0, 36) + '…' : text
 }
 
-function fieldValue(fields: Map<string, PreviewField>, ...names: string[]) {
-  for (const name of names) {
-    const value = fields.get(name)?.value
-    if (value && value !== '—') return value
-  }
-  return '—'
+function formatTime(value: string) {
+  if (!value) return '未记录'
+  const compact = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\.\d+)?$/)
+  if (compact) return compact[1] + '-' + compact[2] + '-' + compact[3] + ' ' + compact[4] + ':' + compact[5] + ':' + compact[6] + (compact[7] || '')
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).format(date).replaceAll('/', '-')
+}
+
+function formatDuration(value: number | null) {
+  if (value === null) return '未记录'
+  const minutes = Math.floor(value / 60)
+  const seconds = Math.round(value % 60)
+  return minutes ? minutes + '分' + seconds + '秒' : seconds + '秒'
+}
+
+function cleanQuery(overrides: Record<string, string | number | undefined>) {
+  return { ...route.query, ...overrides }
+}
+
+async function go(overrides: Record<string, string | number | undefined>) {
+  await router.push({ query: cleanQuery(overrides) })
 }
 
 async function load(query = routeQuery(route.query)) {
+  const request = ++latestRequest
   error.value = ''
-  selectedRecord.value = undefined
-  try { data.value = await api.advanced(courseId, query) }
-  catch (caught) { error.value = caught instanceof Error ? caught.message : '高级数据目录加载失败。' }
+  loading.value = true
+  try {
+    const result = await api.advanced(courseId, query)
+    if (request !== latestRequest) return
+    data.value = result
+    if (pendingStudent.value !== undefined) studentSearch.value = pendingStudent.value ? studentLabel(pendingStudent.value) : studentSearch.value
+    else {
+      const id = Number(route.query.student_id || 0)
+      const student = result.workspace.student || result.workspace.students.find(item => item.id === id)
+      studentSearch.value = student ? studentLabel(student) : ''
+    }
+  } catch (caught) {
+    if (request === latestRequest) error.value = caught instanceof Error ? caught.message : '研究数据预览加载失败。'
+  } finally {
+    if (request === latestRequest) loading.value = false
+  }
 }
 
-async function selectTable(table: string) {
-  const query = { ...route.query, table, page: undefined }
-  await router.push({ query })
-  await load(routeQuery(query))
+async function selectStudent(student: ResearchStudent) {
+  pendingStudent.value = student
+  studentSearch.value = studentLabel(student)
+  showSuggestions.value = false
 }
 
-async function submitStudentSearch() {
-  const query = { ...route.query, search: studentSearch.value.trim() || undefined, page: undefined }
-  await router.push({ query })
-  await load(routeQuery(query))
+function clearStudent() {
+  pendingStudent.value = null
+  studentSearch.value = ''
+  showSuggestions.value = true
+}
+
+function studentInput() {
+  pendingStudent.value = null
+  showSuggestions.value = true
+}
+
+async function submitFilters() {
+  if (!selectedStudent.value) return
+  const sessionRef = typeof route.query.session_ref === 'string' ? route.query.session_ref : undefined
+  await go({ view: 'student', student_id: String(selectedStudent.value.id), session_ref: sessionRef, question_ref: undefined, visit: undefined, page: undefined })
+}
+
+async function selectTable(key: string) {
+  if (view.value !== 'overview' && key === 'behavior_events') {
+    await go({ view: 'timeline', question_ref: selectedQuestion.value?.question_ref, visit: selectedVisit.value?.key, page: undefined })
+    return
+  }
+  if (view.value === 'overview') await go({ table: key, page: undefined })
+}
+
+async function selectStudentSession(session: ResearchSession) {
+  await go({ session_ref: session.session_ref, question_ref: undefined, visit: undefined, page: undefined })
+}
+
+async function openSession() {
+  if (selectedSession.value) await go({ view: 'session', session_ref: selectedSession.value.session_ref, question_ref: undefined, visit: undefined, page: undefined })
+}
+
+async function openQuestion(questionRef: string) {
+  await go({ view: 'question', question_ref: questionRef, visit: undefined, page: undefined })
+}
+
+async function selectQuestion(questionRef: string) {
+  await go({ question_ref: questionRef || undefined, visit: undefined, page: undefined })
+}
+
+async function selectVisit(key: string) {
+  const visit = workspace.value?.visits.find(item => item.key === key)
+  await go({ visit: key || undefined, question_ref: visit?.question_ref || selectedQuestion.value?.question_ref, page: undefined })
 }
 
 async function navigate(page: number) {
-  const query = { ...route.query }
-  if (page === 1) delete query.page
-  else query.page = String(page)
-  await router.push({ query })
-  await load(routeQuery(query))
+  await go({ page: page === 1 ? undefined : String(page) })
 }
 
-onMounted(() => load())
+watch(
+  () => [route.query.student_id, route.query.view],
+  () => { pendingStudent.value = undefined },
+)
+
+watch(
+  () => route.query,
+  query => { void load(routeQuery(query)) },
+  { deep: true, immediate: true },
+)
 </script>
 
 <template>
-  <PageHeader title="高级数据工具">
-    <template #kicker>Schema 与来源</template>
-    <p>按语义定位研究数据，用学生、习题和过程摘要快速审阅；完整字段可在记录详情中核对。</p>
-  </PageHeader>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
-  <p v-if="!data && !error" role="status">正在加载高级数据工具…</p>
+  <p v-if="loading && !data" class="kt-research-loading" role="status">正在加载研究数据…</p>
   <template v-else-if="data">
-    <form class="kt-card kt-advanced-student-search" role="search" @submit.prevent="submitStudentSearch">
-      <label for="advanced-student-search">搜索学生</label>
-      <div>
-        <input id="advanced-student-search" v-model="studentSearch" type="search" aria-label="按学生姓名或学号搜索" placeholder="输入学生姓名或学号">
-        <button class="kt-button" type="submit">搜索当前数据表</button>
-      </div>
-      <small>搜索由服务端应用到当前实验、班级和版本范围，不只筛选本页。</small>
-    </form>
-    <div class="kt-advanced-layout">
-      <aside class="kt-card kt-advanced-sidebar" aria-label="研究数据分类">
-        <label>查找数据表<input v-model="tableSearch" type="search" placeholder="中文名称或表名"></label>
-        <details v-for="group in groups" :key="group.key" :open="group.active">
-          <summary><span>{{ group.label }}</span><span>{{ group.tables.length }}</span></summary>
-          <p>{{ group.description }}</p>
+    <EmptyState v-if="!data.scope.is_complete" title="请先选择实验和班级">
+      <p>研究数据预览需要明确的实验和班级范围。</p>
+    </EmptyState>
+
+    <div v-else class="kt-research-workspace" :class="{ 'kt-research-workspace--timeline': view === 'timeline' }">
+      <template v-if="view === 'overview'">
+        <header class="kt-research-heading">
           <div>
-            <button v-for="table in group.tables" :key="table.key" type="button" :aria-current="table.active ? 'page' : undefined" @click="selectTable(table.key)">
-              <span>{{ table.label }}</span><code>{{ table.key }}</code><small>{{ table.role_label }}</small>
-            </button>
+            <p class="kt-research-kicker">实验数据</p>
+            <h1>研究数据预览</h1>
+            <p>按实验、班级、学生和作答会话查看可直接用于研究的六张数据表。</p>
           </div>
-        </details>
-      </aside>
-      <section class="kt-advanced-content">
-        <div class="kt-section-heading">
-          <div><p class="kt-kicker">{{ data.selected_table.source_layer }}</p><h2>{{ data.selected_table.label }}</h2><code>{{ data.selected_table.key }}</code></div>
-          <strong>{{ data.selected_table.role_label }}</strong>
-        </div>
-        <Alert v-if="data.selected_table.role === 'source_of_truth'" tone="info"><strong>权威总事件表 / Source of Truth。</strong>用途分类视图不是并列的原始事实源。</Alert>
-        <Alert v-else-if="data.selected_table.role === 'classified_view'" tone="info"><strong>分类视图。</strong>权威来源仍是 assessment_events。</Alert>
-        <section class="kt-card kt-technical-info">
-          <h3>技术信息</h3>
-          <dl><div><dt>数据表</dt><dd><code>{{ data.selected_table.key }}</code></dd></div><div><dt>导出路径</dt><dd><code>{{ data.selected_table.path }}</code></dd></div><div><dt>Schema</dt><dd><code>{{ data.selected_table.schema_version }}</code></dd></div><div><dt>来源</dt><dd>{{ data.selected_table.source_layer }}</dd></div></dl>
-        </section>
-        <EmptyState v-if="!data.selected_experiment" title="请先在范围栏选择实验"><p>预览只读取当前明确的数据范围。</p></EmptyState>
-        <template v-else-if="data.preview">
-          <section class="kt-card kt-table-card" data-testid="readable-preview">
-            <div class="kt-section-heading">
-              <div><h3>可读预览</h3><p>主表隐藏内部唯一标识；点击记录可查看全部原始字段。</p></div>
-              <strong>共 {{ data.preview.page.total_items }} 条</strong>
-            </div>
-            <div v-if="records.length" class="kt-table-scroll kt-desktop-only">
-              <table class="kt-table">
-                <thead><tr><th>学生</th><th>习题</th><th>事件 / 过程摘要</th><th>时间</th><th>操作</th></tr></thead>
+          <aside v-if="selectedStudent" class="kt-step-note">
+            <ResearchDataIcon name="info" />
+            <div><strong>步骤 1/5：筛选单一学生</strong><span>通过选择学生，查看该学生的研究数据预览。</span></div>
+          </aside>
+        </header>
+
+        <form class="kt-research-filter-panel" role="search" @submit.prevent="submitFilters">
+          <label class="kt-student-search">学生
+            <span class="kt-input-wrap">
+              <ResearchDataIcon name="search" />
+              <input
+                v-model="studentSearch"
+                type="search"
+                aria-label="按学生姓名或学号搜索"
+                placeholder="输入姓名或学号搜索"
+                autocomplete="off"
+                @focus="showSuggestions = true"
+                @input="studentInput"
+              >
+              <button v-if="selectedStudent" type="button" aria-label="清除学生" @click="clearStudent">×</button>
+            </span>
+            <span v-if="showSuggestions && suggestions.length" class="kt-student-suggestions" role="listbox">
+              <button v-for="student in suggestions" :key="student.id" type="button" role="option" data-testid="student-suggestion" @click="selectStudent(student)">
+                <strong>{{ student.name }}</strong><span>{{ student.student_number }}</span>
+              </button>
+            </span>
+          </label>
+          <label>作答会话
+            <select
+              :value="typeof route.query.session_ref === 'string' ? route.query.session_ref : ''"
+              aria-label="选择作答会话"
+              @change="go({ session_ref: ($event.target as HTMLSelectElement).value || undefined, page: undefined })"
+            >
+              <option value="">全部作答会话</option>
+              <option v-for="option in data.session_options" :key="option.value" :value="option.value">{{ option.label }}</option>
+            </select>
+          </label>
+          <button class="kt-research-primary" type="submit" :disabled="!selectedStudent">应用筛选</button>
+        </form>
+
+        <ResearchCards :tables="data.tables" :active-key="activeCardKey" @select="selectTable" />
+
+        <section class="kt-research-panel kt-research-preview">
+          <div class="kt-research-section-heading">
+            <div><p class="kt-research-kicker">当前预览表</p><h2>{{ cardCopy[data.selected_table.key]?.label || data.selected_table.label }}</h2><p>{{ cardCopy[data.selected_table.key]?.description || data.selected_table.description }}</p></div>
+            <div class="kt-research-panel-meta"><strong>共 {{ data.preview?.page.total_items || 0 }} 条</strong><span>数据生成于 {{ formatTime(data.generated_at) }}</span></div>
+          </div>
+          <template v-if="data.preview">
+            <div v-if="data.preview.rows.length" class="kt-research-table-scroll" tabindex="0" aria-label="研究数据表，可水平滚动">
+              <table class="kt-research-table">
+                <thead><tr><th v-for="column in data.preview.columns" :key="column.name">{{ column.description }}</th></tr></thead>
                 <tbody>
-                  <tr v-for="record in records" :key="record.key">
-                    <td><strong>{{ record.studentName }}</strong><small>{{ record.studentNumber }}</small></td>
-                    <td>{{ record.questionCode }}</td>
-                    <td><dl class="kt-preview-summary"><div v-for="field in record.summary" :key="field.name"><dt>{{ field.description }}</dt><dd>{{ field.value }}</dd></div><div v-if="!record.summary.length"><dt>记录类型</dt><dd>{{ data.selected_table.label }}</dd></div></dl></td>
-                    <td>{{ record.occurredAt }}</td>
-                    <td><button class="kt-button kt-button--secondary" type="button" @click="selectedRecord = record">查看完整记录</button></td>
+                  <tr v-for="(row, rowIndex) in data.preview.rows" :key="rowIndex">
+                    <td v-for="(column, columnIndex) in data.preview.columns" :key="column.name">
+                      <details v-if="isLongText(row[columnIndex])" data-testid="long-cell"><summary>{{ compactText(row[columnIndex]) }}</summary><p>{{ displayValue(row[columnIndex]) }}</p></details>
+                      <span v-else>{{ displayValue(row[columnIndex]) }}</span>
+                    </td>
                   </tr>
                 </tbody>
               </table>
             </div>
-            <MobileCardList v-if="records.length" class="kt-mobile-only">
-              <li v-for="record in records" :key="record.key" class="kt-mobile-data-card">
-                <dl><div><dt>学生</dt><dd>{{ record.studentName }}<small>{{ record.studentNumber }}</small></dd></div><div><dt>习题</dt><dd>{{ record.questionCode }}</dd></div><div><dt>时间</dt><dd>{{ record.occurredAt }}</dd></div></dl>
-                <div class="kt-mobile-summary"><p v-for="field in record.summary" :key="field.name"><strong>{{ field.description }}</strong>{{ field.value }}</p></div>
-                <button class="kt-button kt-button--secondary" type="button" @click="selectedRecord = record">查看完整记录</button>
-              </li>
-            </MobileCardList>
-            <EmptyState v-if="!records.length" :title="studentSearch.trim() ? '没有匹配该学生的记录' : '当前范围暂无记录'" />
+            <EmptyState v-else title="当前范围暂无记录" />
             <Paginator :page="data.preview.page.number" :total-pages="data.preview.page.total_pages" @navigate="navigate" />
-          </section>
-        </template>
-      </section>
+          </template>
+        </section>
+      </template>
+
+      <template v-else-if="view === 'student' && workspace?.student">
+        <header class="kt-research-heading">
+          <div><p class="kt-research-kicker">学生数据</p><h1>学生数据总览</h1><p>查看学生的实验参与情况，选择具体会话可查看该次实验的详细研究数据。</p></div>
+          <strong class="kt-step-inline">步骤 2/5：选择学生会话</strong>
+        </header>
+        <section class="kt-research-panel kt-student-summary">
+          <span class="kt-avatar"><ResearchDataIcon name="student" /></span>
+          <strong>{{ workspace.student.name }}</strong>
+          <dl>
+            <div><dt>学号</dt><dd>{{ workspace.student.student_number }}</dd></div>
+            <div><dt>班级</dt><dd>{{ workspace.student.class_name }}</dd></div>
+            <div><dt>课程</dt><dd>{{ workspace.student.course_name }}</dd></div>
+            <div><dt>已参与实验</dt><dd>{{ workspace.student.experiment_count }} 次</dd></div>
+          </dl>
+        </section>
+        <section class="kt-research-panel">
+          <div class="kt-research-section-heading"><div><h2>该学生的实验会话</h2><p>共 {{ workspace.sessions.length }} 条会话记录，按时间倒序排列</p></div></div>
+          <div class="kt-research-table-scroll">
+            <table class="kt-research-table kt-clickable-table">
+              <thead><tr><th>sessionID</th><th>实验名称</th><th>完成状态</th><th>题目数</th><th>行为记录数</th><th>提交时间</th></tr></thead>
+              <tbody>
+                <tr v-for="session in workspace.sessions" :key="session.session_ref" :data-session-ref="session.session_ref" :aria-selected="selectedSession?.session_ref === session.session_ref" tabindex="0" @click="selectStudentSession(session)" @keydown.enter="selectStudentSession(session)">
+                  <td>{{ session.session_ref }}</td><td>{{ session.experiment_name }}</td><td><span class="kt-status-dot" />{{ session.status_label }}</td><td>{{ session.question_count }}</td><td>{{ session.behavior_count }}</td><td>{{ formatTime(session.submitted_at) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section v-if="selectedSession" class="kt-research-panel">
+          <div class="kt-research-section-heading">
+            <div><p class="kt-research-kicker">当前选中会话预览</p><h2>{{ selectedSession.experiment_name }}（{{ selectedSession.session_ref }}）</h2><p>按实验、班级、学生和作答会话查看可直接用于研究的六张数据表。</p></div>
+            <button class="kt-research-link" type="button" data-testid="open-session" @click="openSession">▶ 查看完整数据</button>
+          </div>
+          <ResearchCards :tables="data.tables" active-key="responses" compact />
+        </section>
+      </template>
+
+      <template v-else-if="view === 'session' && selectedSession">
+        <ResearchPageHeading title="会话详情" description="查看单次实验会话的详细数据，包括逐题作答、行为过程等信息。" step="步骤 3/5：查看逐题作答" @back="go({ view: 'student', question_ref: undefined, visit: undefined })" />
+        <ResearchSessionSummary :session="selectedSession" />
+        <ResearchCards :tables="data.tables" :active-key="activeCardKey" @select="selectTable" />
+        <section class="kt-research-panel">
+          <div class="kt-research-section-heading"><div><h2>逐题作答</h2><p>查看该会话中学生对每道题的作答情况。</p></div><span class="kt-step-pill">步骤 3/5：查看逐题作答</span></div>
+          <ResearchResponsesTable :responses="workspace?.responses || []" @select="openQuestion" />
+        </section>
+      </template>
+
+      <template v-else-if="view === 'question' && selectedSession && selectedQuestion">
+        <ResearchPageHeading title="题目行为过程" description="查看单个题目在一次或多次访问中的详细行为日志，仅展示该题目内的行为数据。" step="步骤 4/5：进入单题行为过程" @back="go({ view: 'session', visit: undefined })" />
+        <ResearchQuestionSummary :session="selectedSession" :question="selectedQuestion" />
+        <ResearchCards :tables="data.tables" active-key="behavior_events" />
+        <section class="kt-research-filter-panel kt-behavior-filters">
+          <label>选择题目
+            <select :value="selectedQuestion.question_ref" aria-label="选择题目" @change="selectQuestion(($event.target as HTMLSelectElement).value)">
+              <option v-for="response in workspace?.responses || []" :key="response.question_ref" :value="response.question_ref">{{ response.question_ref }}（{{ response.question_type }}）</option>
+            </select>
+          </label>
+          <label>选择访问
+            <select :value="typeof route.query.visit === 'string' ? route.query.visit : ''" aria-label="选择访问" @change="selectVisit(($event.target as HTMLSelectElement).value)">
+              <option value="">全部访问</option>
+              <option v-for="visitItem in workspace?.visits || []" :key="visitItem.key" :value="visitItem.key">第 {{ visitItem.visit_index }} 次访问</option>
+            </select>
+          </label>
+          <p><ResearchDataIcon name="info" />仅展示该题目内的行为数据，不包含其他题目的行为。</p>
+        </section>
+        <ResearchBehaviorTable :behavior="workspace?.behavior || []" :generated-at="data.generated_at" />
+      </template>
+
+      <template v-else-if="view === 'timeline' && selectedSession">
+        <ResearchPageHeading title="单一学生全过程" description="查看某一学生在实验中的完整答题过程、行为轨迹与最终结果。" step="步骤 5/5：查看单一学生全过程" @back="go({ view: 'session', visit: undefined })" />
+        <ResearchSessionSummary :session="selectedSession" />
+        <section class="kt-timeline-grid">
+          <article class="kt-research-panel kt-visit-timeline">
+            <div class="kt-icon-heading"><ResearchDataIcon name="behavior" /><div><h2>题目访问轨迹</h2><p>该学生在实验中的题目访问顺序与时间轨迹。</p></div></div>
+            <button v-for="(visitItem, index) in workspace?.visits || []" :key="visitItem.key" type="button" :data-visit-key="visitItem.key" :aria-current="selectedVisit?.key === visitItem.key ? 'step' : undefined" @click="selectVisit(visitItem.key)">
+              <span>{{ index + 1 }}</span><div><strong>{{ visitItem.question_ref }}<small v-if="visitItem.visit_index > 1">（第 {{ visitItem.visit_index }} 次）</small></strong><p>点击题目时间：{{ formatTime(visitItem.clicked_at) }}<br>进入题目时间：{{ formatTime(visitItem.entered_at) }}<br>离开题目时间：{{ formatTime(visitItem.left_at) }}</p></div><b>停留时长：{{ formatDuration(visitItem.duration_seconds) }}</b>
+            </button>
+          </article>
+          <article class="kt-research-panel kt-visit-detail">
+            <div class="kt-research-section-heading">
+              <div class="kt-icon-heading"><ResearchDataIcon name="question" /><div><h2>当前题目内部过程</h2><p>展示选中题目的详细行为序列。</p></div></div>
+              <select :value="selectedVisit?.key" aria-label="选择当前访问" @change="selectVisit(($event.target as HTMLSelectElement).value)">
+                <option v-for="visitItem in workspace?.visits || []" :key="visitItem.key" :value="visitItem.key">{{ visitItem.question_ref }}（第 {{ visitItem.visit_index }} 次访问）</option>
+              </select>
+            </div>
+            <div v-if="selectedVisit" class="kt-visit-highlight"><strong>题目：{{ selectedVisit.question_ref }}（第 {{ selectedVisit.visit_index }} 次访问）</strong><span>进入时间：{{ formatTime(selectedVisit.entered_at) }}<br>离开时间：{{ formatTime(selectedVisit.left_at) }}<br>停留时长：{{ formatDuration(selectedVisit.duration_seconds) }}</span></div>
+            <ResearchBehaviorCompactTable :behavior="workspace?.behavior || []" />
+          </article>
+        </section>
+        <section class="kt-research-panel kt-timeline-results">
+          <div class="kt-icon-heading"><ResearchDataIcon name="response" /><div><h2>最终作答结果</h2><p>该会话所有题目的最终提交结果。</p></div></div>
+          <ResearchResponsesResultTable :responses="workspace?.responses || []" />
+        </section>
+      </template>
+
+      <EmptyState v-else title="当前研究数据状态不可用"><p>请返回研究数据预览重新选择学生和会话。</p></EmptyState>
     </div>
   </template>
-  <Drawer :open="Boolean(selectedRecord)" title="完整记录" @close="selectedRecord = undefined">
-    <template v-if="selectedRecord">
-      <h2>{{ selectedRecord.studentName }} · {{ selectedRecord.questionCode }}</h2>
-      <p>当前数据表：{{ data?.selected_table.label }}。可读字段与技术标识均来自同一条服务端预览记录。</p>
-      <section class="kt-record-fields"><h3>记录字段</h3><dl><div v-for="field in selectedRecord.readableFields" :key="field.name"><dt>{{ field.description }}<code>{{ field.name }}</code></dt><dd>{{ field.value }}</dd></div></dl></section>
-      <details v-if="selectedRecord.technicalFields.length" class="kt-record-identifiers"><summary>技术标识（{{ selectedRecord.technicalFields.length }} 项）</summary><dl><div v-for="field in selectedRecord.technicalFields" :key="field.name"><dt>{{ field.description }}<code>{{ field.name }}</code></dt><dd>{{ field.value }}</dd></div></dl></details>
-    </template>
-  </Drawer>
 </template>
-
-<style scoped>
-.kt-advanced-student-search { display: grid; gap: .45rem; margin-bottom: 1rem; }
-.kt-advanced-student-search > div { display: flex; gap: .75rem; }
-.kt-advanced-student-search input { flex: 1; min-width: 0; }
-.kt-advanced-student-search small, .kt-advanced-sidebar > details > p { color: var(--kt-color-muted); }
-.kt-advanced-sidebar > details > p { font-size: .8rem; margin: .45rem 0 0; }
-.kt-table td > small, .kt-mobile-data-card small { display: block; color: var(--kt-color-muted); margin-top: .2rem; }
-.kt-preview-summary, .kt-record-fields dl, .kt-record-identifiers dl { display: grid; gap: .55rem; margin: 0; }
-.kt-preview-summary div, .kt-record-fields dl > div, .kt-record-identifiers dl > div { min-width: 0; }
-.kt-preview-summary dt, .kt-record-fields dt, .kt-record-identifiers dt { color: var(--kt-color-muted); font-size: .75rem; }
-.kt-preview-summary dd, .kt-record-fields dd, .kt-record-identifiers dd { margin: .15rem 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.kt-record-fields code, .kt-record-identifiers code { display: block; margin-top: .15rem; }
-.kt-record-identifiers { border-top: 1px solid var(--kt-color-border); margin-top: 1rem; padding-top: 1rem; }
-.kt-record-identifiers summary { color: var(--kt-color-primary); cursor: pointer; font-weight: 700; margin-bottom: 1rem; }
-.kt-mobile-summary { display: grid; gap: .5rem; margin-bottom: .75rem; }
-.kt-mobile-summary p { display: grid; gap: .2rem; margin: 0; overflow-wrap: anywhere; }
-@media (max-width: 48rem) {
-  .kt-advanced-student-search > div { display: grid; }
-}
-</style>

@@ -2,12 +2,110 @@ import { createApiClient } from '@/api/client'
 import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
 
-export type DataCenterScope = components['schemas']['DataCenterScope']
+type GeneratedDataCenterScope = components['schemas']['DataCenterScope']
+type GeneratedDataCenterAdvanced = components['schemas']['DataCenterAdvanced']
+type GeneratedDataCenterExportCatalog = components['schemas']['DataCenterExportCatalog']
+
+export type DataCenterScope = Omit<GeneratedDataCenterScope, 'current'> & {
+  current: GeneratedDataCenterScope['current'] & { experiment_ids: number[] }
+}
 export type DataCenterOverview = components['schemas']['DataCenterOverview']
-export type DataCenterExportCatalog = components['schemas']['DataCenterExportCatalog']
 export type DataCenterQualityCollection = components['schemas']['DataCenterQualityCollection']
 export type DataCenterExportHistoryCollection = components['schemas']['DataCenterExportHistoryCollection']
-export type DataCenterAdvanced = components['schemas']['DataCenterAdvanced']
+
+export interface ResearchStudent {
+  id: number
+  student_number: string
+  name: string
+}
+
+export interface ResearchStudentSummary extends ResearchStudent {
+  class_name: string
+  course_name: string
+  experiment_count: number
+}
+
+export interface ResearchSession {
+  session_ref: string
+  student_id: number
+  student_number: string
+  name: string
+  course_name: string
+  experiment_name: string
+  class_name: string
+  status_label: string
+  started_at: string
+  ended_at: string
+  submitted_at: string
+  duration_minutes: number | null
+  question_count: number
+  behavior_count: number
+}
+
+export interface ResearchResponse {
+  question_ref: string
+  question_type: string
+  assigned_order: number
+  first_visit_order: number | null
+  visit_count: number | null
+  clicked_times: string[]
+  entered_times: string[]
+  left_times: string[]
+  submitted_at: string
+  final_answer: string
+  status_label: string
+  is_correct: boolean | null
+}
+
+export interface ResearchVisit {
+  key: string
+  question_ref: string
+  visit_index: number
+  sequence: number
+  clicked_at: string
+  entered_at: string
+  left_at: string
+  duration_seconds: number | null
+  problem: string
+}
+
+export interface ResearchBehavior {
+  question_ref: string
+  visit_index: number | null
+  sequence: number
+  category: string
+  action: string
+  occurred_at: string
+  before: string
+  after: string
+  details: string
+}
+
+export interface ResearchWorkspace {
+  students: ResearchStudent[]
+  student: ResearchStudentSummary | null
+  sessions: ResearchSession[]
+  session: ResearchSession | null
+  responses: ResearchResponse[]
+  visits: ResearchVisit[]
+  behavior: ResearchBehavior[]
+  question: ResearchResponse | null
+  selected_visit: string | null
+}
+
+export type DataCenterAdvanced = GeneratedDataCenterAdvanced & {
+  view: 'overview' | 'student' | 'session' | 'question' | 'timeline'
+  workspace: ResearchWorkspace
+}
+
+export type DataCenterExportTable = GeneratedDataCenterAdvanced['tables'][number] & {
+  level: 'course' | 'experiment' | 'dictionary'
+  format: 'csv' | 'json'
+}
+
+export type DataCenterExportCatalog = Omit<GeneratedDataCenterExportCatalog, 'tables'> & {
+  tables: DataCenterExportTable[]
+}
 
 export interface DataCenterExportJobMutation {
   job_id: string
@@ -46,7 +144,7 @@ export function createTeacherDataCenterApi(client: ApiClient) {
     scope(courseId: number, query: DataQuery = {}) {
       return client.get<DataCenterScope>(`/api/v1/teacher/courses/${courseId}/data/scope/${queryString(query)}`)
     },
-    updateScope(courseId: number, input: { experiment_id: number | null; class_id: number | null }) {
+    updateScope(courseId: number, input: { experiment_ids: number[]; class_id: number | null }) {
       return client.mutate<DataCenterScope>(`/api/v1/teacher/courses/${courseId}/data/scope/`, {
         method: 'POST',
         body: input,
@@ -61,8 +159,8 @@ export function createTeacherDataCenterApi(client: ApiClient) {
     quality(courseId: number, query: DataQuery = {}) {
       return client.get<DataCenterQualityCollection>(`/api/v1/teacher/courses/${courseId}/data/quality/${queryString(query)}`)
     },
-    history(courseId: number, page = 1) {
-      return client.get<DataCenterExportHistoryCollection>(`/api/v1/teacher/courses/${courseId}/data/exports/history/?page=${page}`)
+    history(courseId: number, query: DataQuery = {}) {
+      return client.get<DataCenterExportHistoryCollection>(`/api/v1/teacher/courses/${courseId}/data/exports/history/${queryString(query)}`)
     },
     advanced(courseId: number, query: DataQuery = {}) {
       return client.get<DataCenterAdvanced>(`/api/v1/teacher/courses/${courseId}/data/advanced/${queryString(query)}`)

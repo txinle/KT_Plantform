@@ -233,6 +233,7 @@ class DataCenterClassOptionSerializer(serializers.Serializer):
 
 class DataCenterTeachingScopeSerializer(serializers.Serializer):
     experiment_id = serializers.IntegerField(allow_null=True)
+    experiment_ids = serializers.ListField(child=serializers.IntegerField(), required=False)
     class_id = serializers.IntegerField(allow_null=True)
     is_complete = serializers.BooleanField()
     display = serializers.CharField()
@@ -248,6 +249,7 @@ class DataCenterScopeSerializer(serializers.Serializer):
 
 class DataCenterScopeUpdateSerializer(serializers.Serializer):
     experiment_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    experiment_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
     class_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
 
 
@@ -279,10 +281,13 @@ class DataCenterFactsSerializer(serializers.Serializer):
     total_sessions = serializers.IntegerField(min_value=0)
     submitted_attempts = serializers.IntegerField(min_value=0)
     quality_warnings = serializers.IntegerField(min_value=0)
+    process_records = serializers.IntegerField(min_value=0)
     not_evaluable = serializers.IntegerField(min_value=0)
 
 
 class DataCenterRecentExportSerializer(serializers.Serializer):
+    package_label = serializers.CharField()
+    class_name = serializers.CharField()
     job_id = serializers.UUIDField()
     package = serializers.CharField()
     experiment_name = serializers.CharField(allow_null=True)
@@ -292,6 +297,7 @@ class DataCenterRecentExportSerializer(serializers.Serializer):
 
 
 class DataCenterOverviewActionsSerializer(serializers.Serializer):
+    preview_url = serializers.CharField()
     scope_update_url = serializers.CharField()
     governance_url = serializers.CharField()
     teaching_url = serializers.CharField()
@@ -320,11 +326,27 @@ class DataCenterResearchScopeSerializer(serializers.Serializer):
     query = serializers.CharField()
     display = serializers.CharField()
     is_single_version = serializers.BooleanField()
+    is_complete = serializers.BooleanField()
 
 
 class DataCenterExportActionsSerializer(serializers.Serializer):
     create_url = serializers.CharField()
     reset_url = serializers.CharField()
+
+
+class DataCenterAdvancedTableSerializer(serializers.Serializer):
+    key = serializers.CharField()
+    label = serializers.CharField()
+    path = serializers.CharField()
+    description = serializers.CharField()
+    total_items = serializers.IntegerField(min_value=0)
+    level = serializers.CharField(required=False)
+    format = serializers.CharField(required=False)
+
+
+class DataCenterSessionOptionSerializer(serializers.Serializer):
+    value = serializers.CharField()
+    label = serializers.CharField()
 
 
 class DataCenterExportCatalogSerializer(serializers.Serializer):
@@ -336,16 +358,19 @@ class DataCenterExportCatalogSerializer(serializers.Serializer):
     selected_export_version = DataCenterExperimentVersionSerializer(allow_null=True)
     identified_data_notice = serializers.CharField()
     actions = DataCenterExportActionsSerializer()
+    tables = DataCenterAdvancedTableSerializer(many=True)
+    generated_at = serializers.DateTimeField()
 
 
 class DataCenterQualityRowSerializer(serializers.Serializer):
-    rule = serializers.CharField()
-    rule_version = serializers.CharField()
+    student_number = serializers.CharField()
+    student_name = serializers.CharField()
+    session_ref = serializers.CharField()
+    question_code = serializers.CharField()
     state = serializers.CharField()
-    entity_id = serializers.IntegerField(allow_null=True)
-    source_mode = serializers.CharField()
-    reason_code = serializers.CharField()
-    evidence_summary = serializers.CharField()
+    state_label = serializers.CharField()
+    problem = serializers.CharField()
+    impact = serializers.CharField()
 
 
 class DataCenterQualityCollectionSerializer(serializers.Serializer):
@@ -357,6 +382,9 @@ class DataCenterQualityCollectionSerializer(serializers.Serializer):
 
 
 class DataCenterExportHistoryRowSerializer(serializers.Serializer):
+    package_label = serializers.CharField()
+    class_name = serializers.CharField()
+    artifact_removal_label = serializers.CharField()
     job_id = serializers.UUIDField()
     package = serializers.CharField()
     experiment_name = serializers.CharField(allow_null=True)
@@ -370,29 +398,10 @@ class DataCenterExportHistoryRowSerializer(serializers.Serializer):
 
 
 class DataCenterExportHistoryCollectionSerializer(serializers.Serializer):
+    scope = DataCenterResearchScopeSerializer()
     items = DataCenterExportHistoryRowSerializer(many=True)
     page = TeacherClassPageMetadataSerializer()
     course = CourseReferenceSerializer()
-
-
-class DataCenterAdvancedTableSerializer(serializers.Serializer):
-    key = serializers.CharField()
-    label = serializers.CharField()
-    path = serializers.CharField()
-    role = serializers.CharField()
-    role_label = serializers.CharField()
-    description = serializers.CharField()
-    schema_version = serializers.CharField()
-    source_layer = serializers.CharField()
-    active = serializers.BooleanField()
-
-
-class DataCenterAdvancedGroupSerializer(serializers.Serializer):
-    key = serializers.CharField()
-    label = serializers.CharField()
-    description = serializers.CharField()
-    tables = DataCenterAdvancedTableSerializer(many=True)
-    active = serializers.BooleanField()
 
 
 class DataCenterPreviewColumnSerializer(serializers.Serializer):
@@ -410,10 +419,14 @@ class DataCenterAdvancedPreviewSerializer(serializers.Serializer):
 
 
 class DataCenterAdvancedSerializer(serializers.Serializer):
+    view = serializers.CharField()
+    workspace = serializers.JSONField()
     course = CourseReferenceSerializer()
     scope = DataCenterResearchScopeSerializer()
     search = serializers.CharField()
-    groups = DataCenterAdvancedGroupSerializer(many=True)
+    tables = DataCenterAdvancedTableSerializer(many=True)
+    session_options = DataCenterSessionOptionSerializer(many=True)
+    generated_at = serializers.DateTimeField()
     selected_table = DataCenterAdvancedTableSerializer()
     selected_experiment = DataCenterExperimentOptionSerializer(allow_null=True)
     preview = DataCenterAdvancedPreviewSerializer(allow_null=True)

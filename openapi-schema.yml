@@ -279,6 +279,34 @@ paths:
         schema:
           type: integer
         required: true
+      - in: query
+        name: client_monotonic_ms
+        schema:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,17}(?:\.\d{0,3})?$
+      - in: query
+        name: client_occurred_at
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: client_time_origin
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: navigation_id
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: reason
+        schema:
+          type: string
+          default: navigation_click
+          maxLength: 32
+          minLength: 1
       - in: path
         name: session_id
         schema:
@@ -3080,6 +3108,10 @@ paths:
         schema:
           type: string
       - in: query
+        name: session_ref
+        schema:
+          type: string
+      - in: query
         name: table
         schema:
           type: string
@@ -4882,16 +4914,26 @@ components:
     DataCenterAdvanced:
       type: object
       properties:
+        view:
+          type: string
+        workspace: {}
         course:
           $ref: '#/components/schemas/CourseReference'
         scope:
           $ref: '#/components/schemas/DataCenterResearchScope'
         search:
           type: string
-        groups:
+        tables:
           type: array
           items:
-            $ref: '#/components/schemas/DataCenterAdvancedGroup'
+            $ref: '#/components/schemas/DataCenterAdvancedTable'
+        session_options:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataCenterSessionOption'
+        generated_at:
+          type: string
+          format: date-time
         selected_table:
           $ref: '#/components/schemas/DataCenterAdvancedTable'
         selected_experiment:
@@ -4904,33 +4946,16 @@ components:
           nullable: true
       required:
       - course
-      - groups
+      - generated_at
       - preview
       - scope
       - search
       - selected_experiment
       - selected_table
-    DataCenterAdvancedGroup:
-      type: object
-      properties:
-        key:
-          type: string
-        label:
-          type: string
-        description:
-          type: string
-        tables:
-          type: array
-          items:
-            $ref: '#/components/schemas/DataCenterAdvancedTable'
-        active:
-          type: boolean
-      required:
-      - active
-      - description
-      - key
-      - label
+      - session_options
       - tables
+      - view
+      - workspace
     DataCenterAdvancedPreview:
       type: object
       properties:
@@ -4961,28 +4986,21 @@ components:
           type: string
         path:
           type: string
-        role:
-          type: string
-        role_label:
-          type: string
         description:
           type: string
-        schema_version:
+        total_items:
+          type: integer
+          minimum: 0
+        level:
           type: string
-        source_layer:
+        format:
           type: string
-        active:
-          type: boolean
       required:
-      - active
       - description
       - key
       - label
       - path
-      - role
-      - role_label
-      - schema_version
-      - source_layer
+      - total_items
     DataCenterClassOption:
       type: object
       properties:
@@ -5059,18 +5077,29 @@ components:
           type: string
         actions:
           $ref: '#/components/schemas/DataCenterExportActions'
+        tables:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataCenterAdvancedTable'
+        generated_at:
+          type: string
+          format: date-time
       required:
       - actions
       - course
       - export_versions
+      - generated_at
       - identified_data_notice
       - packages
       - scope
       - selected_export_version
       - selected_package
+      - tables
     DataCenterExportHistoryCollection:
       type: object
       properties:
+        scope:
+          $ref: '#/components/schemas/DataCenterResearchScope'
         items:
           type: array
           items:
@@ -5083,9 +5112,16 @@ components:
       - course
       - items
       - page
+      - scope
     DataCenterExportHistoryRow:
       type: object
       properties:
+        package_label:
+          type: string
+        class_name:
+          type: string
+        artifact_removal_label:
+          type: string
         job_id:
           type: string
           format: uuid
@@ -5112,7 +5148,9 @@ components:
           type: string
           nullable: true
       required:
+      - artifact_removal_label
       - artifact_removal_reason
+      - class_name
       - created_at
       - created_by_name
       - delete_url
@@ -5120,6 +5158,7 @@ components:
       - experiment_name
       - job_id
       - package
+      - package_label
       - status
       - status_label
     DataCenterExportJobCreate:
@@ -5203,6 +5242,9 @@ components:
         quality_warnings:
           type: integer
           minimum: 0
+        process_records:
+          type: integer
+          minimum: 0
         not_evaluable:
           type: integer
           minimum: 0
@@ -5211,6 +5253,7 @@ components:
       - not_evaluable
       - observed_participants
       - participants
+      - process_records
       - quality_warnings
       - submitted_attempts
       - total_sessions
@@ -5238,6 +5281,8 @@ components:
     DataCenterOverviewActions:
       type: object
       properties:
+        preview_url:
+          type: string
         scope_update_url:
           type: string
         governance_url:
@@ -5254,6 +5299,7 @@ components:
       - exports_url
       - governance_url
       - history_url
+      - preview_url
       - quality_url
       - scope_update_url
       - teaching_url
@@ -5294,32 +5340,38 @@ components:
     DataCenterQualityRow:
       type: object
       properties:
-        rule:
+        student_number:
           type: string
-        rule_version:
+        student_name:
+          type: string
+        session_ref:
+          type: string
+        question_code:
           type: string
         state:
           type: string
-        entity_id:
-          type: integer
-          nullable: true
-        source_mode:
+        state_label:
           type: string
-        reason_code:
+        problem:
           type: string
-        evidence_summary:
+        impact:
           type: string
       required:
-      - entity_id
-      - evidence_summary
-      - reason_code
-      - rule
-      - rule_version
-      - source_mode
+      - impact
+      - problem
+      - question_code
+      - session_ref
       - state
+      - state_label
+      - student_name
+      - student_number
     DataCenterRecentExport:
       type: object
       properties:
+        package_label:
+          type: string
+        class_name:
+          type: string
         job_id:
           type: string
           format: uuid
@@ -5336,10 +5388,12 @@ components:
           type: string
           format: date-time
       required:
+      - class_name
       - created_at
       - experiment_name
       - job_id
       - package
+      - package_label
       - status
       - status_label
     DataCenterResearchScope:
@@ -5352,8 +5406,11 @@ components:
           type: string
         is_single_version:
           type: boolean
+        is_complete:
+          type: boolean
       required:
       - display
+      - is_complete
       - is_single_version
       - query
       - values
@@ -5387,16 +5444,35 @@ components:
           type: integer
           minimum: 1
           nullable: true
+        experiment_ids:
+          type: array
+          items:
+            type: integer
+            minimum: 1
         class_id:
           type: integer
           minimum: 1
           nullable: true
+    DataCenterSessionOption:
+      type: object
+      properties:
+        value:
+          type: string
+        label:
+          type: string
+      required:
+      - label
+      - value
     DataCenterTeachingScope:
       type: object
       properties:
         experiment_id:
           type: integer
           nullable: true
+        experiment_ids:
+          type: array
+          items:
+            type: integer
         class_id:
           type: integer
           nullable: true
@@ -7111,13 +7187,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -9866,6 +9944,16 @@ components:
           nullable: true
         response_version:
           type: integer
+        visit_id:
+          type: integer
+        visit_index:
+          type: integer
+        entry_event_id:
+          type: string
+          format: uuid
+        navigation_id:
+          type: string
+          format: uuid
         session_id:
           type: integer
         attempt_id:
@@ -9886,11 +9974,15 @@ components:
       - app_version
       - attempt_id
       - checkpoint_url
+      - entry_event_id
       - event_batch_url
       - heartbeat_interval_seconds
+      - navigation_id
       - session_id
       - time_sync_create_url
       - time_sync_finalize_url
+      - visit_id
+      - visit_index
     StudentRuntimeProgress:
       type: object
       properties:
@@ -11039,13 +11131,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
