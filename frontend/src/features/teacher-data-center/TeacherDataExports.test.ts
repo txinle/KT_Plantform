@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ api: { exports: vi.fn() } }))
+const mocks = vi.hoisted(() => ({ api: { exports: vi.fn(), createExport: vi.fn() } }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ path: '/teacher/courses/7/data/exports/', params: { courseId: '7' }, query: { experiment_id: '3', version_mode: 'single', version_id: '8', package: 'teaching' } }) }))
 vi.mock('./api', () => ({
   getTeacherDataCenterApi: () => mocks.api,
@@ -21,19 +21,26 @@ describe('TeacherDataExports', () => {
     export_versions: [{ id: 8, version_number: 1 }],
     selected_export_version: { id: 8, version_number: 1 },
     identified_data_notice: '所有数据包均含实名身份数据。',
-    actions: { create_url: '/analytics/courses/7/export-jobs/create/', reset_url: '/teacher/courses/7/data/exports/' },
+    actions: { create_url: '/api/v1/teacher/courses/7/data/export-jobs/', reset_url: '/teacher/courses/7/data/exports/' },
   }))
 
-  it('requires an explicit document POST with the complete frozen scope', async () => {
+  it('creates the export through JSON and shows the server-confirmed result', async () => {
+    mocks.api.createExport.mockResolvedValue({
+      job_id: 'job-1', package: 'teaching', status: 'succeeded', status_label: '已完成',
+      download_url: '/analytics/courses/7/export-jobs/job-1/download/', history_url: '/teacher/courses/7/data/exports/history/',
+    })
     const wrapper = mount(TeacherDataExports)
     await flushPromises()
     expect(wrapper.get('h1').text()).toBe('导出数据包')
     expect(wrapper.text()).toContain('实名身份数据')
-    const form = wrapper.get('form[action="/analytics/courses/7/export-jobs/create/"]')
-    expect(form.attributes('method')).toBe('post')
-    expect(form.get('input[name="csrfmiddlewaretoken"]').attributes('value')).toBe('csrf-token')
-    expect(form.get('input[name="confirm_identified"]').attributes('value')).toBe('yes')
-    expect(form.get('input[name="version_id"]').attributes('value')).toBe('8')
-    expect(form.get('input[name="package"]').attributes('value')).toBe('teaching')
+    const form = wrapper.get('.kt-export-confirm form')
+    await form.trigger('submit')
+    await flushPromises()
+    expect(mocks.api.createExport).toHaveBeenCalledWith(7, {
+      package: 'teaching', confirm_identified: true,
+      scope: { scope_version: 1, experiment_id: 3, version_mode: 'single', version_id: 8 },
+    })
+    expect(wrapper.text()).toContain('已完成')
+    expect(wrapper.get('a[href="/analytics/courses/7/export-jobs/job-1/download/"]')).toBeTruthy()
   })
 })

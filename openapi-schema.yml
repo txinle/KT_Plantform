@@ -1735,6 +1735,38 @@ paths:
               schema:
                 $ref: '#/components/schemas/TeacherCourseDetail'
           description: ''
+  /api/v1/teacher/courses/{course_id}/archive/:
+    post:
+      operationId: teacher_course_archive
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeacherCourseArchiveRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TeacherCourseArchiveRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TeacherCourseArchiveRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherCourseSettings'
+          description: ''
   /api/v1/teacher/courses/{course_id}/banks/:
     get:
       operationId: teacher_question_banks_list
@@ -3042,6 +3074,60 @@ paths:
               schema:
                 $ref: '#/components/schemas/DataCenterAdvanced'
           description: ''
+  /api/v1/teacher/courses/{course_id}/data/export-jobs/:
+    post:
+      operationId: teacher_data_center_export_job_create
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DataCenterExportJobCreate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/DataCenterExportJobCreate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DataCenterExportJobCreate'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataCenterExportJobMutation'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/data/export-jobs/{job_id}/:
+    delete:
+      operationId: teacher_data_center_export_job_destroy
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: job_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '204':
+          description: No response body
   /api/v1/teacher/courses/{course_id}/data/exports/:
     get:
       operationId: teacher_data_center_exports_retrieve
@@ -3141,6 +3227,36 @@ paths:
         required: true
       tags:
       - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataCenterScope'
+          description: ''
+    post:
+      operationId: teacher_data_center_scope_update
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DataCenterScopeUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/DataCenterScopeUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DataCenterScopeUpdate'
       security:
       - SessionAuth: []
       responses:
@@ -3456,6 +3572,76 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TeacherSamplingInventoryResponse'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/purge-requests/:
+    post:
+      operationId: teacher_course_purge_create
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeacherCoursePurgeCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TeacherCoursePurgeCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TeacherCoursePurgeCreateRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherCourseSettings'
+          description: ''
+  /api/v1/teacher/courses/{course_id}/purge-requests/{purge_request_id}/execute/:
+    post:
+      operationId: teacher_course_purge_execute
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: purge_request_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeacherCoursePurgeExecuteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TeacherCoursePurgeExecuteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TeacherCoursePurgeExecuteRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherCourseSettings'
           description: ''
   /api/v1/teacher/courses/{course_id}/settings/:
     get:
@@ -4862,6 +5048,50 @@ components:
       - package
       - status
       - status_label
+    DataCenterExportJobCreate:
+      type: object
+      properties:
+        package:
+          type: string
+        confirm_identified:
+          type: boolean
+        scope: {}
+        tables:
+          type: array
+          items:
+            type: string
+        fields:
+          type: array
+          items:
+            type: string
+      required:
+      - confirm_identified
+      - package
+      - scope
+    DataCenterExportJobMutation:
+      type: object
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        package:
+          type: string
+        status:
+          type: string
+        status_label:
+          type: string
+        download_url:
+          type: string
+          nullable: true
+        history_url:
+          type: string
+      required:
+      - download_url
+      - history_url
+      - job_id
+      - package
+      - status
+      - status_label
     DataCenterExportPackage:
       type: object
       properties:
@@ -5066,6 +5296,17 @@ components:
       - current
       - experiments
       - scope_update_url
+    DataCenterScopeUpdate:
+      type: object
+      properties:
+        experiment_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        class_id:
+          type: integer
+          minimum: 1
+          nullable: true
     DataCenterTeachingScope:
       type: object
       properties:
@@ -7928,6 +8169,16 @@ components:
       description: |-
         * `none` - 不展示
         * `self` - 仅本人
+    ReasonCodeEnum:
+      enum:
+      - research_withdrawal
+      - collection_error
+      - retention_expired
+      type: string
+      description: |-
+        * `research_withdrawal` - research_withdrawal
+        * `collection_error` - collection_error
+        * `retention_expired` - retention_expired
     Recovery:
       type: object
       properties:
@@ -10206,6 +10457,18 @@ components:
       - id
       - is_active
       - name
+    TeacherCourseArchiveRequest:
+      type: object
+      properties:
+        confirmation:
+          $ref: '#/components/schemas/TeacherCourseArchiveRequestConfirmationEnum'
+      required:
+      - confirmation
+    TeacherCourseArchiveRequestConfirmationEnum:
+      enum:
+      - archive
+      type: string
+      description: '* `archive` - archive'
     TeacherCourseCollection:
       type: object
       properties:
@@ -10336,6 +10599,33 @@ components:
       - class_count
       - experiment_count
       - student_count
+    TeacherCoursePurgeCreateRequest:
+      type: object
+      properties:
+        confirmation:
+          $ref: '#/components/schemas/TeacherCoursePurgeCreateRequestConfirmationEnum'
+        reason_code:
+          $ref: '#/components/schemas/ReasonCodeEnum'
+      required:
+      - confirmation
+      - reason_code
+    TeacherCoursePurgeCreateRequestConfirmationEnum:
+      enum:
+      - PURGE
+      type: string
+      description: '* `PURGE` - PURGE'
+    TeacherCoursePurgeExecuteRequest:
+      type: object
+      properties:
+        confirmation:
+          $ref: '#/components/schemas/TeacherCoursePurgeExecuteRequestConfirmationEnum'
+      required:
+      - confirmation
+    TeacherCoursePurgeExecuteRequestConfirmationEnum:
+      enum:
+      - execute
+      type: string
+      description: '* `execute` - execute'
     TeacherCoursePurgeRequest:
       type: object
       properties:

@@ -6,7 +6,6 @@ from django.db import IntegrityError, connection, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.test import Client, TestCase, TransactionTestCase
 from django.urls import reverse
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -28,7 +27,6 @@ from .services import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[2]
 
 
 class ParticipantRuleModelTests(TestCase):
@@ -1050,22 +1048,6 @@ class ParticipantRuleViewTests(TestCase):
         )
         return student
 
-    def test_draft_participant_dom_is_native_disclosure_and_no_js_form_complete(self):
-        response = self.client.get(self.detail_url)
-
-        self.assertContains(response, "参与班级与学生")
-        self.assertContains(response, "当前预览")
-        self.assertContains(response, "<details", html=False)
-        self.assertContains(response, "<summary", html=False)
-        for field_name in ("classes", "includes", "excludes"):
-            self.assertContains(response, f'name="{field_name}"', html=False)
-        self.assertContains(response, 'data-participant-class', html=False)
-        self.assertContains(response, 'aria-live="polite"', html=False)
-        self.assertContains(response, self.class_a.name)
-        self.assertContains(response, self.class_b.name)
-        self.assertNotContains(response, self.inactive_class.name)
-        self.assertNotContains(response, self.inactive_student.student_number)
-
     def test_assignment_post_saves_rule_counts_without_identity_audit_payload(self):
         response = self.client.post(
             self.assign_url,
@@ -1138,58 +1120,6 @@ class ParticipantRuleViewTests(TestCase):
 
         self.client.force_login(self.other_teacher)
         self.assertEqual(self.client.get(self.detail_url).status_code, 404)
-
-    def test_published_experiment_hides_and_locks_participant_entry(self):
-        self.experiment.status = Experiment.Status.PUBLISHED
-        self.experiment.save(update_fields=["status"])
-
-        response = self.client.get(self.detail_url)
-
-        self.assertNotContains(response, 'name="classes"', html=False)
-        self.assertNotContains(response, 'name="includes"', html=False)
-        self.assertNotContains(response, 'name="excludes"', html=False)
-        self.assertContains(response, "实验已锁定")
-
-
-class ParticipantRuleStaticContractTests(TestCase):
-    def test_participant_controls_use_native_disclosure_and_progressive_enhancement(self):
-        template = (ROOT / "templates" / "teacher" / "course_experiment_detail.html").read_text(
-            encoding="utf-8"
-        )
-        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
-        stylesheet = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
-
-        for token in (
-            "<details",
-            "<summary",
-            'name="classes"',
-            'name="includes"',
-            'name="excludes"',
-            "data-participant-class",
-            "data-participant-class-input",
-            "data-participant-include",
-            "data-participant-exclude",
-            "<noscript>",
-        ):
-            self.assertIn(token, template)
-        for token in (
-            "data-participant-rules",
-            "data-participant-class",
-            "data-participant-class-input",
-            "data-participant-include",
-            "data-participant-exclude",
-            "input.disabled = selected",
-            "input.disabled = !selected",
-        ):
-            self.assertIn(token, script)
-        for selector in (
-            ".participant-rule-fieldset",
-            ".participant-class-disclosure",
-            ".participant-student-row",
-            ".participant-student-actions",
-        ):
-            self.assertIn(selector, stylesheet)
-
 
 class ParticipantRuleDemoSeedTests(TestCase):
     def test_seed_demo_configures_participant_rules_before_publishing_course_experiment(self):

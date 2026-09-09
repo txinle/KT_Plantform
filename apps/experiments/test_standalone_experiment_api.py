@@ -1,4 +1,6 @@
 import json
+import os
+from unittest.mock import patch
 
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -200,6 +202,25 @@ class StandaloneExperimentApiTests(TestCase):
                 ),
             },
         )
+
+    def test_standalone_pages_use_the_independent_frontend(self):
+        urls = [
+            reverse("experiments:list"),
+            reverse("experiments:create"),
+            reverse("experiments:detail", args=[self.experiment.pk]),
+            reverse("experiments:edit", args=[self.experiment.pk]),
+            reverse("experiments:results", args=[self.experiment.pk]),
+        ]
+        self.client.force_login(self.teacher)
+        with patch.dict(os.environ, {
+            "FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html",
+        }):
+            responses = [self.client.get(url) for url in urls]
+
+        for response in responses:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+            self.assertFalse(response.templates)
 
     def test_other_teacher_cannot_discover_or_mutate_a_standalone_experiment(self):
         self.client.force_login(self.other_teacher)

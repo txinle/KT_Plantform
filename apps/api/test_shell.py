@@ -14,120 +14,42 @@ from apps.experiments.publication_services import get_or_create_publish_plan
 from apps.question_bank.models import QuestionBank
 
 
-class VueShellRolloutTests(TestCase):
+
+
+class TeacherExperimentFrontendEntryTests(TestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(
-            username="shell-teacher",
-            password="test-password",
+            username="experiment-entry-teacher",
             role=User.Role.TEACHER,
         )
         self.course = Course.objects.create(
-            name="Shell 试点课程",
-            code="SHELL-1",
-            term="2026-Autumn",
+            name="实验前端入口课程",
+            code="EXPERIMENT-ENTRY",
+            term="2026 秋",
             owner=self.teacher,
         )
-        self.client.force_login(self.teacher)
-        self.url = reverse("courses:experiments", args=[self.course.pk])
         self.bank = QuestionBank.objects.create(
-            name="Shell 题库",
+            name="实验前端入口题库",
             course=self.course,
             owner=self.teacher,
         )
         self.experiment = Experiment.objects.create(
-            name="Shell 实验",
+            name="实验前端入口实验",
             course=self.course,
             question_bank=self.bank,
             owner=self.teacher,
             sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
             sampling_total_count=1,
         )
+        self.client.force_login(self.teacher)
 
-    def rollout_env(self, **values):
-        defaults = {
-            "VUE_TEACHER_EXPERIMENTS_ENABLED": "0",
-            "VUE_TEACHER_EXPERIMENTS_COURSE_IDS": "",
-            "VUE_TEACHER_EXPERIMENTS_USER_IDS": "",
-        }
-        defaults.update(values)
-        return patch.dict("os.environ", defaults)
-
-    def test_flag_off_preserves_the_legacy_template(self):
-        with self.rollout_env():
-            response = self.client.get(self.url)
-
-        self.assertContains(response, 'class="table-shell"')
-        self.assertNotContains(response, 'id="kt-app"')
-
-    @override_settings(DEBUG=True, VITE_DEV_SERVER_URL="http://localhost:5173")
-    def test_pilot_course_receives_the_vue_shell_on_the_same_url(self):
-        with self.rollout_env(
-            VUE_TEACHER_EXPERIMENTS_ENABLED="1",
-            VUE_TEACHER_EXPERIMENTS_COURSE_IDS=str(self.course.pk),
-        ):
-            response = self.client.get(self.url)
-
-        self.assertContains(response, 'id="kt-app"')
-        self.assertContains(response, 'data-module="teacher-experiments"')
-        self.assertContains(response, "http://localhost:5173/@vite/client")
-        self.assertNotContains(response, "bootstrap.min.css")
-
-    @override_settings(DEBUG=True, VITE_DEV_SERVER_URL="http://localhost:5173")
-    def test_vue_shell_loads_shared_theme_before_vite_assets(self):
-        with self.rollout_env(VUE_TEACHER_EXPERIMENTS_ENABLED="1"):
-            response = self.client.get(self.url)
-
-        body = response.content.decode()
-        self.assertIn("/static/css/kt-theme.css", body)
-        self.assertLess(body.index("/static/css/kt-theme.css"), body.index("/@vite/client"))
-
-    def test_non_pilot_course_stays_on_the_legacy_template(self):
-        other_course = Course.objects.create(
-            name="旧界面课程",
-            code="SHELL-2",
-            term="2026-Autumn",
-            owner=self.teacher,
-        )
-        with self.rollout_env(
-            VUE_TEACHER_EXPERIMENTS_ENABLED="1",
-            VUE_TEACHER_EXPERIMENTS_COURSE_IDS=str(self.course.pk),
-        ):
-            response = self.client.get(
-                reverse("courses:experiments", args=[other_course.pk])
-            )
-
-        self.assertContains(response, 'class="table-shell"')
-        self.assertNotContains(response, 'id="kt-app"')
-
-    def test_unmigrated_course_navigation_remains_a_django_document(self):
-        with self.rollout_env(
-            VUE_TEACHER_EXPERIMENTS_ENABLED="1",
-            VUE_TEACHER_EXPERIMENTS_COURSE_IDS=str(self.course.pk),
-        ):
-            response = self.client.get(reverse("courses:banks", args=[self.course.pk]))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, 'id="kt-app"')
-
-    def test_unknown_global_url_is_still_a_django_404(self):
-        with self.rollout_env(VUE_TEACHER_EXPERIMENTS_ENABLED="1"):
-            response = self.client.get("/not-a-vue-route/")
-
-        self.assertEqual(response.status_code, 404)
-
-    @override_settings(DEBUG=True, VITE_DEV_SERVER_URL="http://localhost:5173")
-    def test_all_teacher_experiment_get_routes_share_the_vue_boundary(self):
+    def test_all_course_experiment_pages_use_the_independent_frontend(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)
         urls = [
+            reverse("courses:experiments", args=[self.course.pk]),
             reverse("courses:experiment_create", args=[self.course.pk]),
-            reverse(
-                "courses:experiment_detail",
-                args=[self.course.pk, self.experiment.pk],
-            ),
-            reverse(
-                "courses:experiment_edit",
-                args=[self.course.pk, self.experiment.pk],
-            ),
+            reverse("courses:experiment_detail", args=[self.course.pk, self.experiment.pk]),
+            reverse("courses:experiment_edit", args=[self.course.pk, self.experiment.pk]),
             reverse(
                 "courses:experiment_publish_plan",
                 args=[self.course.pk, self.experiment.pk, plan.pk, 1],
@@ -137,13 +59,15 @@ class VueShellRolloutTests(TestCase):
                 args=[self.course.pk, self.experiment.pk, plan.pk, 2],
             ),
         ]
-
-        with self.rollout_env(VUE_TEACHER_EXPERIMENTS_ENABLED="1"):
+        with patch.dict("os.environ", {
+            "FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html",
+        }):
             responses = [self.client.get(url) for url in urls]
 
         for response in responses:
             self.assertEqual(response.status_code, 200)
-            self.assertContains(response, 'id="kt-app"')
+            self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+            self.assertFalse(response.templates)
 
 
 class VueProductionAssetTests(TestCase):

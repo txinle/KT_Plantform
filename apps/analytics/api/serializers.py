@@ -246,6 +246,32 @@ class DataCenterScopeSerializer(serializers.Serializer):
     scope_update_url = serializers.CharField()
 
 
+class DataCenterScopeUpdateSerializer(serializers.Serializer):
+    experiment_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    class_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+
+
+class DataCenterExportJobCreateSerializer(serializers.Serializer):
+    package = serializers.CharField()
+    confirm_identified = serializers.BooleanField()
+    scope = serializers.JSONField()
+    tables = serializers.ListField(
+        child=serializers.CharField(), required=False, default=list
+    )
+    fields = serializers.ListField(
+        child=serializers.CharField(), required=False, default=list
+    )
+
+
+class DataCenterExportJobMutationSerializer(serializers.Serializer):
+    job_id = serializers.UUIDField()
+    package = serializers.CharField()
+    status = serializers.CharField()
+    status_label = serializers.CharField()
+    download_url = serializers.CharField(allow_null=True)
+    history_url = serializers.CharField()
+
+
 class DataCenterFactsSerializer(serializers.Serializer):
     participants = serializers.IntegerField(min_value=0)
     observed_participants = serializers.IntegerField(min_value=0)

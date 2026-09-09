@@ -1,6 +1,7 @@
 import json
 import uuid
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.test import TransactionTestCase, override_settings
 from django.urls import reverse
@@ -329,6 +330,26 @@ class TeacherDrilldownApiTests(TransactionTestCase):
                 ],
             ),
         )
+
+    def test_result_and_session_pages_use_the_independent_frontend(self):
+        urls = [
+            reverse(
+                "courses:experiment_results",
+                args=[self.course.pk, self.experiment.pk],
+            ),
+            reverse(
+                "courses:experiment_session_detail",
+                args=[self.course.pk, self.experiment.pk, self.current_session.pk],
+            ),
+        ]
+
+        with patch.dict("os.environ", {"FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html"}):
+            responses = [self.client.get(url) for url in urls]
+
+        for response in responses:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+            self.assertFalse(response.templates)
 
     def test_result_compatibility_retains_legacy_sessions_and_safe_report_data(self):
         results_url = (

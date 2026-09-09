@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
 
@@ -62,12 +63,14 @@ test('imports usable questions and explained drafts, repairs old drafts, and pub
 
   // Reproduce pre-fix persisted state only inside this test's isolated bank.
   const repository = join(import.meta.dirname, '..', '..')
-  const python = join(repository, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
+  const localPython = join(repository, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
+  const python = process.env.PYTHON || (existsSync(localPython) ? localPython : 'python')
   const seeded = spawnSync(python, ['manage.py', 'shell', '-c', `import os; from apps.question_bank.models import QuestionBank, Question; bank=QuestionBank.objects.get(pk=int(os.environ['READINESS_BANK'])); assert bank.name.startswith('UAT-READINESS-'); assert bank.questions.count()==3; Question.objects.filter(bank=bank,pk=int(os.environ['READINESS_COMPLETE'])).update(status='draft'); Question.objects.filter(bank=bank,pk=int(os.environ['READINESS_NUMERIC'])).update(status='archived')`], {
     cwd: repository, encoding: 'utf8',
     env: { ...process.env, ...requireIsolatedPostgres(process.env), READINESS_BANK: String(bank.id), READINESS_COMPLETE: String(complete.id), READINESS_NUMERIC: String(numeric.id) },
   })
-  expect(seeded.status, seeded.stderr).toBe(0)
+  if (seeded.error) throw seeded.error
+  expect(seeded.status, seeded.stderr || seeded.stdout || `signal=${seeded.signal}`).toBe(0)
   await page.reload({ waitUntil: 'commit' })
   const recheckResponse = page.waitForResponse((response) => response.url().endsWith(`${apiBase}questions/recheck/`) && response.status() === 200)
   await page.locator('[data-recheck-drafts]').click()
@@ -99,7 +102,7 @@ test('imports usable questions and explained drafts, repairs old drafts, and pub
   expect(readiness.candidate_count).toBe(1)
   await page.goto(`/teacher/courses/1/experiments/${experiment.id}/`, { waitUntil: 'commit' })
   await page.getByRole('button', { name: '发布到班级', exact: true }).click()
-  await page.locator('[id^="publish-class-"]').first().check()
+  await page.getByRole('checkbox', { name: '选择 认知追踪实验班', exact: true }).check()
   await page.getByRole('button', { name: '运行发布前检查', exact: true }).click()
   await page.getByRole('button', { name: '进入发布确认', exact: true }).click()
   await page.getByRole('button', { name: '确认发布', exact: true }).click()

@@ -35,14 +35,11 @@ export default defineConfig({
     webServer: {
       command: `"${python}" ../manage.py runserver 127.0.0.1:8124 --noreload`,
       url: `${baseURL}/health/`,
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       env: {
         ...process.env,
         ...requireIsolatedPostgres(process.env),
         VITE_DEV_SERVER_URL: '',
-        VUE_STANDALONE_ENABLED: '1',
-        VUE_STUDENT_ASSESSMENT_ENABLED: '1',
-        VUE_STUDENT_COURSES_ENABLED: '1',
         CLASS_CENTER_ENABLED: '1',
         STUDENT_LEARNING_ANALYTICS_ENABLED: '1',
         CAPTURE_V2_ENABLED: '1',

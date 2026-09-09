@@ -231,68 +231,47 @@ class CourseExperimentSessionReportTests(TestCase):
         return assignment
 
     def test_detail_shows_real_session_content_in_assigned_order(self):
-        response = self.client.get(self.detail_url)
+        api_url = (
+            f"/api/v1/teacher/courses/{self.course.pk}/experiments/"
+            f"{self.experiment.pk}/sessions/{self.session.pk}/resolve/"
+        )
+        with self.settings(CLASS_CENTER_ENABLED=False):
+            response = self.client.get(api_url)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            reverse(
-                "courses:experiment_session_detail",
-                args=[self.course.pk, self.experiment.pk, self.session.pk],
-            ),
-            self.detail_url,
-        )
-        self.assertContains(response, "张小雨")
-        self.assertContains(response, "S-001")
-        self.assertContains(response, "2026 实验班（发布快照）")
-        self.assertContains(response, "v7")
-        self.assertContains(response, "进行中")
-        self.assertContains(response, "实际题数：3")
-        self.assertLess(
-            response.content.find("LEGACY-TF-002".encode()),
-            response.content.find("KT-C-001".encode()),
-        )
-        self.assertLess(
-            response.content.find("KT-C-001".encode()),
-            response.content.find("KT-C-003".encode()),
-        )
-        self.assertContains(response, "正确")
-        self.assertContains(response, "错误")
-        self.assertContains(response, "草稿，未正式提交")
-        self.assertContains(response, "未作答")
-        self.assertContains(response, "回答正确")
-        self.assertContains(response, "B：可以结合历史交互预测下一步表现")
-        self.assertContains(response, "C：可用于诊断知识状态")
-        questions = response.context["report"].questions
-        self.assertEqual([question.assigned_sequence_index for question in questions], [1, 2, 3])
+        payload = response.json()
+        self.assertEqual(payload["kind"], "legacy_report")
+        report = payload["report"]
+        self.assertEqual(report["student_name"], "张小雨")
+        self.assertEqual(report["student_number"], "S-001")
+        self.assertEqual(report["class_snapshot_name"], "2026 实验班（发布快照）")
+        self.assertEqual(report["version_number"], 7)
+        self.assertEqual(report["session_status"], "进行中")
+        self.assertEqual(report["question_count"], 3)
+        questions = report["questions"]
+        self.assertEqual([question["assigned_sequence_index"] for question in questions], [1, 2, 3])
         draft, submitted, unanswered = questions
-        self.assertEqual(draft.stable_code, "LEGACY-TF-002")
-        self.assertEqual(draft.student_answer, "正确")
-        self.assertEqual(draft.correct_answer, "错误")
-        self.assertEqual(draft.answer_status, "草稿，未正式提交")
+        self.assertEqual(draft["stable_code"], "LEGACY-TF-002")
+        self.assertEqual(draft["student_answer"], "正确")
+        self.assertEqual(draft["correct_answer"], "错误")
+        self.assertEqual(draft["answer_status"], "草稿，未正式提交")
         self.assertEqual(
-            submitted.student_answer,
+            submitted["student_answer"],
             "B：可以结合历史交互预测下一步表现；C：可用于诊断知识状态",
         )
-        self.assertNotIn("A：只记录最终分数，不关心过程", submitted.student_answer)
+        self.assertNotIn("A：只记录最终分数，不关心过程", submitted["student_answer"])
         self.assertEqual(
-            [option.display for option in submitted.options],
+            [option["display"] for option in submitted["options"]],
             [
                 "B：可以结合历史交互预测下一步表现",
                 "A：只记录最终分数，不关心过程",
                 "C：可用于诊断知识状态",
             ],
         )
-        self.assertEqual(unanswered.student_answer, "未作答")
-        self.assertEqual(unanswered.answer_status, "未作答")
+        self.assertEqual(unanswered["student_answer"], "未作答")
+        self.assertEqual(unanswered["answer_status"], "未作答")
 
-    def test_presentation_escapes_html_at_the_template_boundary_and_serializes_json_text(self):
-        self.multiple_snapshot.text = "<script>不应执行</script>\x01"
-        self.multiple_snapshot.save(update_fields=["text"])
-
-        response = self.client.get(self.detail_url)
-
-        self.assertContains(response, "&lt;script&gt;不应执行&lt;/script&gt;", html=False)
-        self.assertNotContains(response, "<script>不应执行</script>", html=False)
+    def test_presentation_serializes_json_text_and_removes_invalid_characters(self):
         self.assertEqual(
             format_answer(
                 "short_answer",
@@ -313,14 +292,6 @@ class CourseExperimentSessionReportTests(TestCase):
         self.assertEqual(answer_option_values("true_false", False), ("false",))
         self.assertEqual(answer_option_values("short_answer", "A"), ())
 
-    def test_results_include_a_link_to_the_session_detail(self):
-        response = self.client.get(
-            reverse("courses:experiment_results", args=[self.course.pk, self.experiment.pk])
-        )
-
-        self.assertContains(response, "查看作答详情")
-        self.assertContains(response, self.detail_url)
-
     def test_owner_admin_and_superuser_can_open_detail_but_collaborator_and_outsider_get_404(self):
         for user in (self.teacher, self.admin, self.superuser):
             with self.subTest(user=user.username):
@@ -331,6 +302,14 @@ class CourseExperimentSessionReportTests(TestCase):
             with self.subTest(user=user.username):
                 self.client.force_login(user)
                 self.assertEqual(self.client.get(self.detail_url).status_code, 404)
+
+        api_url = (
+            f"/api/v1/teacher/courses/{self.course.pk}/experiments/"
+            f"{self.experiment.pk}/sessions/{self.session.pk}/resolve/"
+        )
+        self.client.force_login(self.collaborator)
+        with self.settings(CLASS_CENTER_ENABLED=False):
+            self.assertEqual(self.client.get(api_url).status_code, 404)
 
     def test_detail_scope_rejects_session_from_another_experiment_or_course(self):
         other_experiment = Experiment.objects.create(
@@ -486,16 +465,23 @@ class CourseExperimentSessionReportTests(TestCase):
 
     def test_detail_and_word_support_every_session_state(self):
         expected_labels = dict(ExperimentSession.Status.choices)
+        api_url = (
+            f"/api/v1/teacher/courses/{self.course.pk}/experiments/"
+            f"{self.experiment.pk}/sessions/{self.session.pk}/resolve/"
+        )
 
         for status in ExperimentSession.Status.values:
             with self.subTest(status=status):
                 self.session.status = status
                 self.session.save(update_fields=["status"])
-                detail = self.client.get(self.detail_url)
+                with self.settings(CLASS_CENTER_ENABLED=False):
+                    detail = self.client.get(api_url)
                 word = self.client.post(self.word_url)
 
                 self.assertEqual(detail.status_code, 200)
-                self.assertContains(detail, expected_labels[status])
+                self.assertEqual(
+                    detail.json()["report"]["session_status"], expected_labels[status]
+                )
                 self.assertEqual(word.status_code, 200)
 
     def test_word_report_handles_an_empty_assignment_set(self):

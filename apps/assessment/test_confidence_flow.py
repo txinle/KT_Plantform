@@ -118,24 +118,6 @@ class ConfidenceFlowTests(TestCase):
             all(item.assignment_version == "assign-v1" for item in assignments)
         )
 
-    def test_question_page_contains_accessible_deferred_confidence_controls(self):
-        assignment = self.session.assignments.order_by("assigned_sequence_index").first()
-
-        response = self.client.get(
-            reverse(
-                "assessment:question",
-                args=[self.session.pk, assignment.pk],
-            )
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="confidence-panel"')
-        self.assertContains(response, 'aria-labelledby="confidence-title"')
-        self.assertContains(response, 'id="confidence-probability"')
-        self.assertContains(response, 'min="0" max="100" step="10"')
-        self.assertContains(response, 'id="confidence-submit-btn"')
-        self.assertContains(response, 'id="confidence-skip-btn"')
-        self.assertContains(response, 'id="confidence-status"')
 
     def test_prompt_is_available_before_submission_and_feedback_follows_final_confirmation(self):
         assignment = self.session.assignments.order_by("assigned_sequence_index").first()

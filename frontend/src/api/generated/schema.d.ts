@@ -932,6 +932,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/archive/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_archive"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/banks/": {
         parameters: {
             query?: never;
@@ -1464,6 +1480,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/data/export-jobs/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_data_center_export_job_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/data/export-jobs/{job_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["teacher_data_center_export_job_destroy"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/data/exports/": {
         parameters: {
             query?: never;
@@ -1537,7 +1585,7 @@ export interface paths {
         };
         get: operations["teacher_data_center_scope_retrieve"];
         put?: never;
-        post?: never;
+        post: operations["teacher_data_center_scope_update"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1669,6 +1717,38 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["teacher_experiment_sampling_inventory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/purge-requests/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_purge_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/purge-requests/{purge_request_id}/execute/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_purge_execute"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2279,6 +2359,22 @@ export interface components {
             download_url: string | null;
             delete_url: string | null;
         };
+        DataCenterExportJobCreate: {
+            package: string;
+            confirm_identified: boolean;
+            scope: unknown;
+            tables?: string[];
+            fields?: string[];
+        };
+        DataCenterExportJobMutation: {
+            /** Format: uuid */
+            job_id: string;
+            package: string;
+            status: string;
+            status_label: string;
+            download_url: string | null;
+            history_url: string;
+        };
         DataCenterExportPackage: {
             key: string;
             label: string;
@@ -2349,6 +2445,10 @@ export interface components {
             experiments: components["schemas"]["DataCenterExperimentOption"][];
             classes: components["schemas"]["DataCenterClassOption"][];
             scope_update_url: string;
+        };
+        DataCenterScopeUpdate: {
+            experiment_id?: number | null;
+            class_id?: number | null;
         };
         DataCenterTeachingScope: {
             experiment_id: number | null;
@@ -3415,6 +3515,13 @@ export interface components {
          * @enum {string}
          */
         RankModeEnum: "none" | "self";
+        /**
+         * @description * `research_withdrawal` - research_withdrawal
+         *     * `collection_error` - collection_error
+         *     * `retention_expired` - retention_expired
+         * @enum {string}
+         */
+        ReasonCodeEnum: "research_withdrawal" | "collection_error" | "retention_expired";
         Recovery: {
             task_id?: number;
             session_id?: number;
@@ -4328,6 +4435,14 @@ export interface components {
             active_student_count: number;
             detail_url: string;
         };
+        TeacherCourseArchiveRequest: {
+            confirmation: components["schemas"]["TeacherCourseArchiveRequestConfirmationEnum"];
+        };
+        /**
+         * @description * `archive` - archive
+         * @enum {string}
+         */
+        TeacherCourseArchiveRequestConfirmationEnum: "archive";
         TeacherCourseCollection: {
             items: components["schemas"]["TeacherCourseSummary"][];
             create_url: string;
@@ -4373,6 +4488,23 @@ export interface components {
             experiment_count: number;
             student_count: number;
         };
+        TeacherCoursePurgeCreateRequest: {
+            confirmation: components["schemas"]["TeacherCoursePurgeCreateRequestConfirmationEnum"];
+            reason_code: components["schemas"]["ReasonCodeEnum"];
+        };
+        /**
+         * @description * `PURGE` - PURGE
+         * @enum {string}
+         */
+        TeacherCoursePurgeCreateRequestConfirmationEnum: "PURGE";
+        TeacherCoursePurgeExecuteRequest: {
+            confirmation: components["schemas"]["TeacherCoursePurgeExecuteRequestConfirmationEnum"];
+        };
+        /**
+         * @description * `execute` - execute
+         * @enum {string}
+         */
+        TeacherCoursePurgeExecuteRequestConfirmationEnum: "execute";
         TeacherCoursePurgeRequest: {
             /** Format: uuid */
             purge_request_id: string;
@@ -6384,6 +6516,33 @@ export interface operations {
             };
         };
     };
+    teacher_course_archive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeacherCourseArchiveRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["TeacherCourseArchiveRequest"];
+                "multipart/form-data": components["schemas"]["TeacherCourseArchiveRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherCourseSettings"];
+                };
+            };
+        };
+    };
     teacher_question_banks_list: {
         parameters: {
             query?: {
@@ -7469,6 +7628,54 @@ export interface operations {
             };
         };
     };
+    teacher_data_center_export_job_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DataCenterExportJobCreate"];
+                "application/x-www-form-urlencoded": components["schemas"]["DataCenterExportJobCreate"];
+                "multipart/form-data": components["schemas"]["DataCenterExportJobCreate"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataCenterExportJobMutation"];
+                };
+            };
+        };
+    };
+    teacher_data_center_export_job_destroy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     teacher_data_center_exports_retrieve: {
         parameters: {
             query?: never;
@@ -7566,6 +7773,33 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataCenterScope"];
+                };
+            };
+        };
+    };
+    teacher_data_center_scope_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DataCenterScopeUpdate"];
+                "application/x-www-form-urlencoded": components["schemas"]["DataCenterScopeUpdate"];
+                "multipart/form-data": components["schemas"]["DataCenterScopeUpdate"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -7825,6 +8059,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeacherSamplingInventoryResponse"];
+                };
+            };
+        };
+    };
+    teacher_course_purge_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeacherCoursePurgeCreateRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["TeacherCoursePurgeCreateRequest"];
+                "multipart/form-data": components["schemas"]["TeacherCoursePurgeCreateRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherCourseSettings"];
+                };
+            };
+        };
+    };
+    teacher_course_purge_execute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+                purge_request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeacherCoursePurgeExecuteRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["TeacherCoursePurgeExecuteRequest"];
+                "multipart/form-data": components["schemas"]["TeacherCoursePurgeExecuteRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherCourseSettings"];
                 };
             };
         };

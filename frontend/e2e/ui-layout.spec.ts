@@ -143,10 +143,13 @@ test('Vue course forms create, save and reject stale edits through the existing 
   await stalePage.close()
   await page.reload()
   await expect(page.getByLabel('课程名称', { exact: true })).toHaveValue('课程管理浏览器验收已保存')
-  await Promise.all([
-    page.waitForURL(url => url.pathname === coursePath),
-    page.getByRole('button', { name: '归档课程', exact: true }).click(),
-  ])
+  const archived = page.waitForResponse(response => (
+    response.request().method() === 'POST'
+    && response.url().endsWith(`${coursePath}archive/`)
+  ))
+  await page.getByRole('button', { name: '归档课程', exact: true }).click()
+  expect((await archived).status()).toBe(200)
+  await expect(page.getByRole('status')).toContainText('课程已归档并切换为只读')
   await page.goto(`${coursePath}settings/`)
   await expect(page.getByRole('button', { name: '保存设置', exact: true })).toBeDisabled()
   await expect(page.getByLabel('课程名称', { exact: true })).toBeDisabled()

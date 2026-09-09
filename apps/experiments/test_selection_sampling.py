@@ -248,25 +248,6 @@ class QuotaPublishingTests(TestCase):
 
         self.assertFalse(experiment.versions.exists())
 
-    def test_experiment_detail_makes_quota_candidate_pool_and_inventory_visible(self):
-        linked = self.question(1, Question.Type.SINGLE, "A", options={"A": "正确", "B": "错误"})
-        self.question(2, Question.Type.SINGLE, "A", options={"A": "正确", "B": "错误"})
-        experiment = self.experiment(single_choice=1)
-        ExperimentQuestion.objects.create(experiment=experiment, question=linked, display_order=1)
-        self.client.force_login(self.teacher)
-
-        draft = self.client.get(reverse("experiments:detail", args=[experiment.pk]))
-        self.assertContains(draft, "选题方式")
-        self.assertContains(draft, "按题型配额抽题")
-        self.assertContains(draft, "候选池库存")
-
-        publish_experiment(experiment, self.teacher)
-        published = self.client.get(reverse("experiments:detail", args=[experiment.pk]))
-        self.assertContains(published, "候选池与库存明细")
-        self.assertContains(published, "单选题")
-        self.assertContains(published, "需要 1")
-
-
 class SamplingSessionTests(TestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(

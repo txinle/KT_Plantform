@@ -2,14 +2,13 @@ from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.http import HttpResponseBadRequest
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.http import require_POST
 from django.db.models import Q
 from apps.accounts.course_access import accessible_courses, lock_writable_course
 from apps.accounts.permissions import role_required
-from apps.assessment.models import ExperimentSession
+from apps.api.frontend_entry import frontend_response
 from apps.audit.services import log_action
-from apps.analytics.export_fields import FIELD_GROUPS
 from .forms import ExperimentForm, StudentAssignmentForm
 from .models import Experiment
 from .services import (
@@ -17,7 +16,6 @@ from .services import (
     delete_experiment as delete_experiment_tree,
     lock_experiment_question_bank,
     publish_experiment,
-    selection_display_context,
     sync_experiment_questions,
 )
 
@@ -32,16 +30,13 @@ def _owned(request, pk):
 
 @role_required("teacher", "admin")
 def experiment_list(request):
-    if accessible_courses(request.user).exists():
-        return redirect("courses:list")
-    experiments = Experiment.objects.filter(owner=request.user)
-    return render(request, "teacher/experiment_list.html", {"experiments": experiments})
+    return frontend_response()
 
 @role_required("teacher", "admin")
 def experiment_create(request):
     courses = accessible_courses(request.user).filter(status="active")
-    if request.method == "GET" and courses.exists():
-        return redirect("courses:list")
+    if request.method in {"GET", "HEAD"}:
+        return frontend_response()
     form = ExperimentForm(request.POST or None, owner=request.user)
     if request.method == "POST" and form.is_valid():
         try:
@@ -74,7 +69,7 @@ def experiment_create(request):
             if experiment.course_id:
                 return redirect("courses:experiment_detail", experiment.course_id, experiment.pk)
             return redirect("experiments:detail", pk=experiment.pk)
-    return render(request, "teacher/experiment_form.html", {"form": form})
+    return frontend_response()
 
 
 @role_required("teacher", "admin")
@@ -85,6 +80,8 @@ def experiment_edit(request, pk):
         if request.method == "GET":
             return redirect("courses:experiment_edit", experiment.course_id, experiment.pk)
         return course_views.experiment_edit(request, experiment.course_id, experiment.pk)
+    if request.method in {"GET", "HEAD"} and experiment.status == Experiment.Status.DRAFT:
+        return frontend_response()
     if experiment.status != Experiment.Status.DRAFT:
         messages.error(request, "实验发布后不能修改配置")
         return redirect("experiments:detail", pk=experiment.pk)
@@ -116,23 +113,14 @@ def experiment_edit(request, pk):
             if saved:
                 messages.success(request, "实验配置已保存")
                 return redirect("experiments:detail", pk=experiment.pk)
-    return render(request, "teacher/experiment_form.html", {"form": form, "experiment": experiment})
+    return frontend_response()
 
 @role_required("teacher", "admin")
 def experiment_detail(request, pk):
     experiment = _owned(request, pk)
     if experiment.course_id:
         return redirect("courses:experiment_detail", experiment.course_id, experiment.pk)
-    assignment_form = StudentAssignmentForm(initial={"students": experiment.students.all()}, owner=request.user)
-    return render(
-        request,
-        "teacher/experiment_detail.html",
-        {
-            "experiment": experiment,
-            "assignment_form": assignment_form,
-            **selection_display_context(experiment),
-        },
-    )
+    return frontend_response()
 
 @role_required("teacher", "admin")
 def experiment_assign(request, pk):
@@ -183,29 +171,8 @@ def experiment_delete(request, pk):
 
 @role_required("teacher", "admin")
 def experiment_results(request, pk):
-    experiment = _owned(request, pk)
-    if experiment.course_id:
-        return redirect("courses:experiment_results", experiment.course_id, experiment.pk)
-    latest_version = experiment.versions.order_by("-version_number").first()
-    sessions = latest_version.sessions.select_related("student") if latest_version else ExperimentSession.objects.none()
-    valid_statuses = {value for value, _label in ExperimentSession.Status.choices}
-    selected_status = request.GET.get("status", "")
-    if selected_status in valid_statuses:
-        sessions = sessions.filter(status=selected_status)
-    else:
-        selected_status = ""
-    return render(
-        request,
-        "teacher/experiment_results.html",
-        {
-            "experiment": experiment,
-            "sessions": sessions,
-            "session_status_choices": ExperimentSession.Status.choices,
-            "selected_status": selected_status,
-            "export_field_groups": FIELD_GROUPS,
-            "can_export_identity": True,
-        },
-    )
+    _owned(request, pk)
+    return frontend_response()
 
 
 @role_required("teacher", "admin")

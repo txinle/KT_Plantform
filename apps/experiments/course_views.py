@@ -9,7 +9,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import HttpResponse, HttpResponseBadRequest
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -22,13 +22,11 @@ from apps.accounts.course_access import (
 )
 from apps.accounts.models import Course, CourseEnrollment, User
 from apps.accounts.permissions import role_required
-from apps.api.rollout import is_vue_module_enabled
-from apps.api.shell import render_vue_shell
+from apps.api.frontend_entry import frontend_response
 from apps.audit.services import log_action
-from apps.analytics.export_fields import FIELD_GROUPS
 from apps.assessment.models import ExperimentSession, StudentQuestionAssignment
 
-from .forms import ExperimentForm, ParticipantRuleForm
+from .forms import ParticipantRuleForm
 from .models import (
     ClassExperimentTask,
     Experiment,
@@ -49,11 +47,8 @@ from .publication_services import (
 from .presentation import build_session_report_presentation
 from .session_report import build_session_report_document
 from .services import (
-    lock_experiment_question_bank,
     delete_experiment as delete_experiment_tree,
-    publish_experiment,
     save_participant_rules,
-    selection_display_context,
     sync_experiment_questions,
 )
 
@@ -92,86 +87,14 @@ def _session_report_scope(request, course_pk, experiment_pk, session_pk):
     return course, experiment, session, build_session_report_presentation(session, assignments)
 
 
-def _participant_rule_initial(experiment):
-    overrides = dict(
-        experiment.participant_override_links.values_list("student_id", "mode")
-    )
-    return {
-        "classes": experiment.participant_class_links.values_list("class_group_id", flat=True),
-        "includes": [
-            student_id
-            for student_id, mode in overrides.items()
-            if mode == "include"
-        ],
-        "excludes": [
-            student_id
-            for student_id, mode in overrides.items()
-            if mode == "exclude"
-        ],
-    }
 
 
-def _participant_rule_context(experiment, course):
-    selected_class_ids = set(
-        experiment.participant_class_links.values_list("class_group_id", flat=True)
-    )
-    overrides = dict(
-        experiment.participant_override_links.values_list("student_id", "mode")
-    )
-    class_groups = list(course.classes.filter(is_active=True).order_by("academic_year", "name", "pk"))
-    rows_by_class = {
-        class_group.pk: {
-            "class_group": class_group,
-            "selected": class_group.pk in selected_class_ids,
-            "students": [],
-        }
-        for class_group in class_groups
-    }
-    enrollments = (
-        CourseEnrollment.objects.filter(
-            course=course,
-            class_group_id__in=rows_by_class,
-            is_active=True,
-            student__role=User.Role.STUDENT,
-            student__is_active=True,
-        )
-        .select_related("student")
-        .order_by("class_group__academic_year", "class_group__name", "student__student_number", "pk")
-    )
-    for enrollment in enrollments:
-        rows_by_class[enrollment.class_group_id]["students"].append(
-            {
-                "student": enrollment.student,
-                "include_checked": overrides.get(enrollment.student_id) == "include",
-                "exclude_checked": overrides.get(enrollment.student_id) == "exclude",
-            }
-        )
-    return {
-        "participant_class_rows": list(rows_by_class.values()),
-        "participant_rule_summary": {
-            "class_count": len(selected_class_ids),
-            "include_count": sum(mode == "include" for mode in overrides.values()),
-            "exclude_count": sum(mode == "exclude" for mode in overrides.values()),
-            "preview_count": experiment.student_links.count(),
-        },
-    }
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def experiment_list(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
-    if is_vue_module_enabled("teacher_experiments", request.user, course=course):
-        return render_vue_shell(
-            request,
-            module="teacher-experiments",
-            title=f"{course.name}实验 | KT Data Lab",
-            course=course,
-        )
-    return render(
-        request,
-        "teacher/course_experiment_list.html",
-        {"course": course, "current_course": course, "experiments": course.experiments.all()},
-    )
+    return frontend_response()
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
@@ -183,73 +106,22 @@ def experiment_create(request, course_pk):
             status=409,
             content_type="text/plain; charset=utf-8",
         )
-    if request.method == "GET" and is_vue_module_enabled(
-        "teacher_experiments", request.user, course=course
-    ):
-        return render_vue_shell(
-            request,
-            module="teacher-experiments",
-            title=f"创建实验 | {course.name} | KT Data Lab",
-            course=course,
-        )
-    form = ExperimentForm(request.POST or None, owner=request.user, course=course)
-    return render(
-        request,
-        "teacher/course_experiment_form.html",
-        {
-            "course": course,
-            "current_course": course,
-            "form": form,
-            "experiment": None,
-            "legacy_definition_read_only": True,
-        },
-    )
+    return frontend_response()
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def experiment_detail(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     experiment = _experiment(course, pk)
-    if is_vue_module_enabled("teacher_experiments", request.user, course=course):
-        return render_vue_shell(
-            request,
-            module="teacher-experiments",
-            title=f"{experiment.name} | {course.name} | KT Data Lab",
-            course=course,
-        )
-    participant_form = ParticipantRuleForm(
-        initial=_participant_rule_initial(experiment),
-        course=course,
-    )
-    return render(
-        request,
-        "teacher/course_experiment_detail.html",
-        {
-            "course": course,
-            "current_course": course,
-            "experiment": experiment,
-            "assignment_form": participant_form,
-            "participant_form": participant_form,
-            "student_links": experiment.student_links.select_related("student"),
-            **_participant_rule_context(experiment, course),
-            **selection_display_context(experiment),
-        },
-    )
+    return frontend_response()
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def experiment_edit(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     experiment = _experiment(course, pk)
-    if request.method == "GET" and is_vue_module_enabled(
-        "teacher_experiments", request.user, course=course
-    ):
-        return render_vue_shell(
-            request,
-            module="teacher-experiments",
-            title=f"编辑 {experiment.name} | {course.name} | KT Data Lab",
-            course=course,
-        )
+    if request.method in {"GET", "HEAD"} and experiment.status == Experiment.Status.DRAFT:
+        return frontend_response()
     if experiment.status != Experiment.Status.DRAFT:
         messages.error(request, "实验发布后不能修改配置。")
         return redirect("courses:experiment_detail", course.pk, experiment.pk)
@@ -259,18 +131,7 @@ def experiment_edit(request, course_pk, pk):
             status=409,
             content_type="text/plain; charset=utf-8",
         )
-    form = ExperimentForm(request.POST or None, instance=experiment, owner=request.user, course=course)
-    return render(
-        request,
-        "teacher/course_experiment_form.html",
-        {
-            "course": course,
-            "current_course": course,
-            "form": form,
-            "experiment": experiment,
-            "legacy_definition_read_only": True,
-        },
-    )
+    return frontend_response()
 
 
 @require_POST
@@ -534,15 +395,8 @@ def experiment_publish_plan(request, course_pk, pk, plan_pk, step):
         return redirect("courses:experiment_publish_plan", course.pk, experiment.pk, plan.pk, 1)
     if request.method == "GET" and step == 2 and request.GET.get("preview_export") == "1":
         return _preview_export_response(plan)
-    if request.method == "GET" and is_vue_module_enabled(
-        "teacher_experiments", request.user, course=course
-    ):
-        return render_vue_shell(
-            request,
-            module="teacher-experiments",
-            title=f"发布 {experiment.name} | {course.name} | KT Data Lab",
-            course=course,
-        )
+    if request.method in {"GET", "HEAD"}:
+        return frontend_response()
     if request.method == "POST":
         require_writable_course(course)
         try:
@@ -617,17 +471,7 @@ def experiment_publish_plan(request, course_pk, pk, plan_pk, step):
         except (ValidationError, PublicationConflict) as exc:
             messages.error(request, "; ".join(exc.messages))
             plan.refresh_from_db()
-    context = {
-        **_publish_plan_context(course, experiment, plan),
-        "current_step": step,
-    }
-    if step == 2:
-        context.update(_preview_participants_context(request, plan))
-    return render(
-        request,
-        "teacher/course_experiment_publish_wizard.html",
-        context,
-    )
+    return frontend_response()
 
 
 @require_POST
@@ -652,105 +496,30 @@ def experiment_delete(request, course_pk, pk):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def experiment_results(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
-    experiment = _experiment(course, pk)
-    if settings.CLASS_CENTER_ENABLED:
-        tasks = tuple(
-            ClassExperimentTask.objects.filter(
-                experiment=experiment,
-                class_group__course=course,
-            )
-            .select_related("class_group", "class_snapshot")
-            .order_by("class_group__academic_year", "class_group__name", "pk")
-        )
-        analysis_available = experiment.status in {
-            Experiment.Status.FROZEN,
-            Experiment.Status.PUBLISHED,
-            Experiment.Status.CLOSED,
-        }
-        if analysis_available and len(tasks) == 1:
-            task = tasks[0]
-            target = reverse(
-                "courses:class_detail",
-                args=[course.pk, task.class_group_id],
-            )
-            return redirect(
-                f"{target}?section=experiments&experiment_id={experiment.pk}"
-            )
-        return render(
-            request,
-            "teacher/course_experiment_class_tasks.html",
-            {
-                "course": course,
-                "current_course": course,
-                "experiment": experiment,
-                "tasks": tasks if analysis_available else (),
-            },
-        )
-    latest_version = experiment.versions.order_by("-version_number").first()
-    sessions = latest_version.sessions.select_related("student") if latest_version else ExperimentSession.objects.none()
-    valid_statuses = {value for value, _label in ExperimentSession.Status.choices}
-    selected_status = request.GET.get("status", "")
-    if selected_status in valid_statuses:
-        sessions = sessions.filter(status=selected_status)
-    else:
-        selected_status = ""
-    return render(
-        request,
-        "teacher/course_experiment_results.html",
-        {
-            "course": course,
-            "current_course": course,
-            "experiment": experiment,
-            "sessions": sessions,
-            "session_status_choices": ExperimentSession.Status.choices,
-            "selected_status": selected_status,
-            "export_field_groups": FIELD_GROUPS,
-            "can_export_identity": True,
-        },
-    )
+    _experiment(course, pk)
+    return frontend_response()
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def experiment_session_detail(request, course_pk, pk, session_pk):
+    course = get_accessible_course(request.user, course_pk)
+    experiment = get_object_or_404(course.experiments, pk=pk)
+    session = get_object_or_404(
+        ExperimentSession.objects.select_related("class_snapshot"),
+        pk=session_pk,
+        version__experiment=experiment,
+    )
+    task = None
     if settings.CLASS_CENTER_ENABLED:
-        course = get_accessible_course(request.user, course_pk)
-        experiment = get_object_or_404(course.experiments, pk=pk)
-        session = get_object_or_404(
-            ExperimentSession.objects.select_related("class_snapshot"),
-            pk=session_pk,
-            version__experiment=experiment,
-        )
         task = ClassExperimentTask.objects.filter(
             class_group__course=course,
             experiment=experiment,
             release_snapshot=session.version,
             class_snapshot=session.class_snapshot,
-        ).select_related("class_group").first()
-        if task is not None:
-            return redirect(
-                "courses:class_student_experiment_detail",
-                course.pk,
-                task.class_group_id,
-                session.student_id,
-                experiment.pk,
-            )
-    course, experiment, session, report = _session_report_scope(
-        request,
-        course_pk,
-        pk,
-        session_pk,
-    )
-    return render(
-        request,
-        "teacher/course_experiment_session_detail.html",
-        {
-            "course": course,
-            "current_course": course,
-            "experiment": experiment,
-            "session": session,
-            "report": report,
-        },
-    )
+        ).first()
+    if task is None:
+        _session_report_scope(request, course_pk, pk, session_pk)
+    return frontend_response()
 
 
 @require_POST

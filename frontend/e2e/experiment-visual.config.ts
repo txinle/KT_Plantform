@@ -12,7 +12,6 @@ const environment = {
   ...requireIsolatedPostgres(process.env),
   DJANGO_DEBUG: '1',
   VITE_DEV_SERVER_URL: viteUrl,
-  VUE_TEACHER_EXPERIMENTS_ENABLED: '1',
 }
 
 export default defineConfig({
@@ -33,9 +32,9 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: `"${python}" manage.py runserver 127.0.0.1:8011 --noreload`,
+      command: `"${python}" manage.py runserver 127.0.0.1:8000 --noreload`,
       cwd: repositoryDir,
-      url: 'http://127.0.0.1:8011/health/',
+      url: 'http://127.0.0.1:8000/health/',
       env: environment,
       reuseExistingServer: false,
     },

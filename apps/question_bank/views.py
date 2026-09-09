@@ -3,19 +3,18 @@ from django.conf import settings
 from django.contrib import messages
 from django.db import transaction
 from django.http import FileResponse, Http404, HttpResponse
-from django.db.models import Count, Max
+from django.db.models import Max
 from django.db.models import Q
 from django.views.decorators.http import require_GET, require_POST
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, redirect
 from apps.accounts.permissions import role_required
 from apps.accounts.course_access import accessible_courses, lock_writable_course
-from apps.api.rollout import is_vue_module_enabled
-from apps.api.shell import render_vue_shell
+from apps.api.frontend_entry import frontend_response
 from apps.audit.services import log_action
 from .access import lock_question_bank, lock_writable_bank_content, require_writable_bank_content
 from .audit import bank_metadata_audit_details
 from .forms import QuestionBankForm, QuestionBankVisibilityForm, QuestionEditForm, UploadForm
-from .models import Concept, Question, QuestionBank
+from .models import QuestionBank
 from .services.file_reader import read_uploaded_rows
 from .services.import_parsing import ParsedKCMapping, ParsedQuestion, parse_kc_rows, parse_question_rows
 from .services.import_service import copy_shared_bank, import_kc_mappings, import_questions
@@ -34,15 +33,9 @@ def _owned_bank(request, pk):
     return get_object_or_404(qs, pk=pk)
 
 
-def _standalone_question_bank_vue_shell(request, title):
-    if request.method == "GET" and is_vue_module_enabled(
-        "teacher_question_banks", request.user
-    ):
-        return render_vue_shell(
-            request,
-            module="teacher-question-banks",
-            title=title,
-        )
+def _frontend_entry_for_safe_method(request):
+    if request.method in {"GET", "HEAD"}:
+        return frontend_response()
     return None
 
 
@@ -105,25 +98,14 @@ def course_kc_import_template(request):
 def dashboard(request):
     if accessible_courses(request.user).exists():
         return redirect("courses:list")
-    from apps.experiments.models import Experiment
-    banks = QuestionBank.objects.filter(owner=request.user)
-    recent_experiments = Experiment.objects.filter(owner=request.user).select_related("question_bank")[:5]
-    return render(request, "teacher/dashboard.html", {
-        "banks": banks,
-        "question_count": Question.objects.filter(bank__owner=request.user).count(),
-        "recent_experiments": recent_experiments,
-    })
+    return redirect("question_bank:bank_list")
 
 @role_required("teacher", "admin")
 def bank_list(request):
+    if entry := _frontend_entry_for_safe_method(request):
+        return entry
     courses = accessible_courses(request.user).filter(status="active")
     course_ids = list(courses.values_list("pk", flat=True)[:2])
-    if request.method == "GET" and course_ids:
-        return redirect("courses:list")
-    if shell := _standalone_question_bank_vue_shell(request, "题库 | KT Data Lab"):
-        return shell
-    banks = QuestionBank.objects.filter(owner=request.user).annotate(question_count=Count("questions"))
-    shared_banks = QuestionBank.objects.filter(visibility=QuestionBank.Visibility.SHARED).exclude(owner=request.user)
     if request.method == "POST":
         form = QuestionBankForm(request.POST)
         if form.is_valid():
@@ -141,24 +123,16 @@ def bank_list(request):
             if bank.course_id:
                 return redirect("courses:bank_detail", bank.course_id, bank.pk)
             return redirect("question_bank:bank_detail", pk=bank.pk)
-    else: form = QuestionBankForm()
-    return render(request, "teacher/bank_list.html", {
-        "banks": banks,
-        "shared_banks": shared_banks,
-        "form": form,
-        "visibility_choices": QuestionBank.Visibility.choices,
-    })
+    return frontend_response()
 
 @role_required("teacher", "admin")
 def bank_detail(request, pk):
     bank = _owned_bank(request, pk)
     if bank.course_id:
         return redirect("courses:bank_detail", bank.course_id, bank.pk)
-    if shell := _standalone_question_bank_vue_shell(
-        request, f"{bank.name} | KT Data Lab"
-    ):
-        return shell
-    return render(request, "teacher/bank_detail.html", {"bank": bank, "questions": bank.questions.prefetch_related("options", "concept_links__concept")})
+    if entry := _frontend_entry_for_safe_method(request):
+        return entry
+    return frontend_response()
 
 
 @role_required("teacher", "admin")
@@ -203,12 +177,10 @@ def question_edit(request, bank_pk, question_pk):
     else:
         require_writable_bank_content(bank)
         question = get_object_or_404(bank.questions, pk=question_pk)
-        if shell := _standalone_question_bank_vue_shell(
-            request, f"编辑题目 | {bank.name}"
-        ):
-            return shell
+        if entry := _frontend_entry_for_safe_method(request):
+            return entry
         form = QuestionEditForm(instance=question)
-    return render(request, "teacher/question_edit.html", {"bank": bank, "question": question, "form": form})
+    return frontend_response()
 
 @role_required("teacher", "admin")
 def question_import(request, pk):
@@ -217,10 +189,8 @@ def question_import(request, pk):
         from . import course_views
         return course_views.question_import(request, bank.course_id, bank.pk)
     require_writable_bank_content(bank)
-    if shell := _standalone_question_bank_vue_shell(
-        request, f"导入题目 | {bank.name}"
-    ):
-        return shell
+    if entry := _frontend_entry_for_safe_method(request):
+        return entry
     preview = None
     upload_name = ""
     if request.method == "POST" and request.POST.get("action") == "confirm":
@@ -250,7 +220,7 @@ def question_import(request, pk):
             request.session[f"question_import_{bank.pk}"] = [asdict(item) for item in parsed]
             preview = parsed
         except ValueError as exc: form.add_error("file", str(exc))
-    return render(request, "teacher/import_questions.html", {"bank": bank, "form": form, "preview": preview, "upload_name": upload_name})
+    return frontend_response()
 
 @role_required("teacher", "admin")
 def kc_import(request, pk):
@@ -259,10 +229,8 @@ def kc_import(request, pk):
         from . import course_views
         return course_views.kc_import(request, bank.course_id, bank.pk)
     require_writable_bank_content(bank)
-    if shell := _standalone_question_bank_vue_shell(
-        request, f"导入 KC | {bank.name}"
-    ):
-        return shell
+    if entry := _frontend_entry_for_safe_method(request):
+        return entry
     preview = None
     upload_name = ""
     if request.method == "POST" and request.POST.get("action") == "confirm":
@@ -282,19 +250,13 @@ def kc_import(request, pk):
             request.session[f"kc_import_{bank.pk}"] = [asdict(item) for item in parsed]
             preview = parsed
         except ValueError as exc: form.add_error("file", str(exc))
-    return render(request, "teacher/import_kcs.html", {"bank": bank, "form": form, "preview": preview, "upload_name": upload_name})
+    return frontend_response()
 
 @role_required("teacher", "admin")
 def concept_list(request):
-    if accessible_courses(request.user).exists():
-        return redirect("courses:list")
-    if shell := _standalone_question_bank_vue_shell(request, "知识点 | KT Data Lab"):
-        return shell
-    if request.user.is_superuser or request.user.role == "admin":
-        concepts = Concept.objects.all()
-    else:
-        concepts = Concept.objects.filter(owner=request.user) | Concept.objects.filter(scope=Concept.Scope.PUBLIC)
-    return render(request, "teacher/concept_list.html", {"concepts": concepts.distinct()})
+    if entry := _frontend_entry_for_safe_method(request):
+        return entry
+    return frontend_response()
 
 
 @role_required("teacher", "admin")

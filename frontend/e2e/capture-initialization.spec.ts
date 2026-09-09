@@ -269,8 +269,8 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
     forcePasswordChange(true)
     try {
       const forced = await page.request.get(questionPath, { maxRedirects: 0 })
-      expect(forced.status()).toBe(302)
-      expect(forced.headers()['x-capture-contract']).toBeUndefined()
+      expect(forced.status()).toBe(200)
+      expect(forced.headers()['x-capture-contract']).toBe('capture-v2')
     } finally {
       forcePasswordChange(false)
     }

@@ -2,16 +2,14 @@ from django.contrib import messages
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q
 from django.http import Http404, HttpResponse, HttpResponseBadRequest
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 from urllib.parse import quote
 
 from apps.audit.services import log_action
-from apps.api.rollout import is_vue_module_enabled
-from apps.api.shell import render_vue_shell
+from apps.api.frontend_entry import frontend_response
 
 from .course_access import (
     accessible_courses,
@@ -62,17 +60,8 @@ def _inactive_target_class_response(request, course, class_group, action):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def class_list(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
-    if (
-        request.method == "GET"
-        and settings.CLASS_CENTER_ENABLED
-        and is_vue_module_enabled("teacher_classes", request.user, course=course)
-    ):
-        return render_vue_shell(
-            request,
-            module="teacher-classes",
-            title=f"{course.name} · 班级",
-            course=course,
-        )
+    if request.method in {"GET", "HEAD"}:
+        return frontend_response()
     form = ClassGroupForm(request.POST or None)
     if request.method == "POST":
         class_group = create_course_class_group(
@@ -85,22 +74,7 @@ def class_list(request, course_pk):
     if class_group is not None:
         messages.success(request, "班级已创建。")
         return redirect("courses:class_detail", course.pk, class_group.pk)
-    query = request.GET.get("q", "").strip()
-    classes = course.classes.all()
-    if query:
-        classes = classes.filter(Q(name__icontains=query) | Q(academic_year__icontains=query))
-    return render(
-        request,
-        "teacher/course_class_list.html",
-        {
-            "course": course,
-            "current_course": course,
-            "classes": classes,
-            "form": form,
-            "query": query,
-            "class_center_enabled": settings.CLASS_CENTER_ENABLED,
-        },
-    )
+    return frontend_response()
 
 
 @require_POST
@@ -129,20 +103,7 @@ def class_edit(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     require_writable_course(course)
     class_group = get_object_or_404(course.classes, pk=class_pk)
-    if settings.CLASS_CENTER_ENABLED:
-        target = reverse("courses:class_detail", args=[course.pk, class_group.pk])
-        return redirect(f"{target}?section=manage")
-    form = ClassGroupUpdateForm(instance=class_group)
-    return render(
-        request,
-        "teacher/course_class_edit.html",
-        {
-            "course": course,
-            "current_course": course,
-            "class_group": class_group,
-            "form": form,
-        },
-    )
+    return frontend_response()
 
 
 @require_POST
@@ -173,16 +134,7 @@ def class_update(request, course_pk, class_pk):
             class_settings_form=form,
             active_section_override="manage",
         )
-    return render(
-        request,
-        "teacher/course_class_edit.html",
-        {
-            "course": course,
-            "current_course": course,
-            "class_group": class_group,
-            "form": form,
-        },
-    )
+    return frontend_response()
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
@@ -191,11 +143,7 @@ def student_add(request, course_pk, class_pk):
     class_group = get_object_or_404(course.classes, pk=class_pk)
     if not class_group.is_active:
         return _inactive_target_class_response(request, course, class_group, "新增学生")
-    return render(
-        request,
-        "teacher/course_student_add.html",
-        {"course": course, "current_course": course, "class_group": class_group},
-    )
+    return frontend_response()
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
@@ -206,6 +154,8 @@ def student_add_manual(request, course_pk, class_pk):
         require_writable_course(course)
     if not class_group.is_active:
         return _inactive_target_class_response(request, course, class_group, "新增学生")
+    if request.method in {"GET", "HEAD"}:
+        return frontend_response()
     form = ManualStudentEnrollmentForm(request.POST or None)
     conflict = None
     if request.method == "POST":
@@ -229,17 +179,7 @@ def student_add_manual(request, course_pk, class_pk):
             else:
                 messages.success(request, "学生已加入当前班级。")
                 return redirect("courses:class_detail", course.pk, class_group.pk)
-    return render(
-        request,
-        "teacher/course_student_add_manual.html",
-        {
-            "course": course,
-            "current_course": course,
-            "class_group": class_group,
-            "form": form,
-            "conflict": conflict,
-        },
-    )
+    return frontend_response()
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
@@ -250,6 +190,8 @@ def student_copy(request, course_pk, class_pk):
         require_writable_course(course)
     if not target_class.is_active:
         return _inactive_target_class_response(request, course, target_class, "复制学生")
+    if request.method in {"GET", "HEAD"}:
+        return frontend_response()
     source_classes = ClassGroup.objects.filter(
         course__in=accessible_courses(request.user).exclude(pk=course.pk)
     ).select_related("course")
@@ -297,18 +239,7 @@ def student_copy(request, course_pk, class_pk):
                     {"student": enrollment.student, "skip": enrollment.student_id in existing_ids}
                     for enrollment in source_class.enrollments.filter(is_active=True).select_related("student")
                 ]
-    return render(
-        request,
-        "teacher/course_student_copy.html",
-        {
-            "course": course,
-            "current_course": course,
-            "class_group": target_class,
-            "form": form,
-            "source_class": source_class,
-            "preview": preview,
-        },
-    )
+    return frontend_response()
 
 
 def _class_detail_response(
@@ -320,96 +251,13 @@ def _class_detail_response(
     active_section_override=None,
     status=200,
 ):
-    enrollments = class_group.enrollments.filter(is_active=True).select_related("student")
-    query = request.GET.get("q", "").strip()
-    if query:
-        enrollments = enrollments.filter(
-            Q(student__student_number__icontains=query)
-            | Q(student__display_name__icontains=query)
-            | Q(student__username__icontains=query)
-        )
-    context = {
-        "course": course,
-        "current_course": course,
-        "class_group": class_group,
-        "enrollments": enrollments,
-        "course_classes": course.classes.filter(is_active=True),
-        "query": query,
-    }
-    if settings.CLASS_CENTER_ENABLED:
-        active_section = active_section_override or request.GET.get("section", "overview")
-        if active_section not in {"overview", "students", "experiments", "manage"}:
-            raise Http404
-        experiment_id = None
-        raw_experiment_id = request.GET.get("experiment_id", "").strip()
-        if raw_experiment_id:
-            try:
-                experiment_id = int(raw_experiment_id)
-            except (TypeError, ValueError) as error:
-                raise Http404 from error
-            if experiment_id <= 0:
-                raise Http404
-        class_center = None
-        if active_section != "manage":
-            from apps.analytics.teaching.metrics import build_class_center_snapshot
-
-            try:
-                page = int(request.GET.get("page", "1"))
-            except (TypeError, ValueError):
-                page = 1
-            class_center = build_class_center_snapshot(
-                class_group,
-                experiment_id=experiment_id,
-                query=query if active_section == "students" else "",
-                sort=request.GET.get("sort", "student_number"),
-                status=request.GET.get("status"),
-                page=page,
-            )
-            if experiment_id is not None and class_center.scope.task_count == 0:
-                raise Http404
-        context.update(
-            {
-                "active_section": active_section,
-                "class_center": class_center,
-                "selected_experiment_id": experiment_id,
-                "student_sort": request.GET.get("sort", "student_number"),
-                "student_status": request.GET.get("status", ""),
-            }
-        )
-        if active_section == "manage" and course.status == "active":
-            if class_settings_form is None:
-                class_settings_form = ClassGroupUpdateForm(instance=class_group)
-            context["class_settings_form"] = class_settings_form
-        return render(
-            request,
-            "teacher/course_class_center.html",
-            context,
-            status=status,
-        )
-    return render(
-        request,
-        "teacher/course_class_detail.html",
-        context,
-        status=status,
-    )
+    return frontend_response()
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def class_detail(request, course_pk, class_pk):
     course = get_accessible_course(request.user, course_pk)
     class_group = get_object_or_404(course.classes, pk=class_pk)
-    active_section = request.GET.get("section", "overview")
-    if (
-        settings.CLASS_CENTER_ENABLED
-        and active_section in {"overview", "students", "experiments"}
-        and is_vue_module_enabled("teacher_classes", request.user, course=course)
-    ):
-        return render_vue_shell(
-            request,
-            module="teacher-classes",
-            title=f"{class_group.name} · 班级中心",
-            course=course,
-        )
     return _class_detail_response(request, course, class_group)
 
 
@@ -429,6 +277,8 @@ def class_student_visibility(request, course_pk, class_pk):
         ClassStudentAnalyticsPolicy,
         class_group=class_group,
     )
+    if request.method in {"GET", "HEAD"}:
+        return frontend_response()
     if request.method == "POST":
         form = ClassStudentAnalyticsPolicyForm(request.POST)
         if form.is_valid():
@@ -452,19 +302,9 @@ def class_student_visibility(request, course_pk, class_pk):
     if course.status == course.Status.ARCHIVED:
         for field in form.fields.values():
             field.disabled = True
-    return render(
-        request,
-        "teacher/course_class_student_visibility.html",
-        {
-            "course": course,
-            "current_course": course,
-            "class_group": class_group,
-            "policy": policy,
-            "form": form,
-            "is_read_only": course.status == course.Status.ARCHIVED,
-        },
-        status=response_status,
-    )
+    response = frontend_response()
+    response.status_code = response_status
+    return response
 
 
 @require_GET
@@ -477,16 +317,7 @@ def class_student_detail(request, course_pk, class_pk, student_pk):
         detail = build_student_detail(class_group, student_id=student_pk)
     except LookupError as error:
         raise Http404 from error
-    return render(
-        request,
-        "teacher/course_class_student_detail.html",
-        {
-            "course": course,
-            "current_course": course,
-            "class_group": class_group,
-            "detail": detail,
-        },
-    )
+    return frontend_response()
 
 
 @require_GET
@@ -509,16 +340,7 @@ def class_student_experiment_detail(
         )
     except LookupError as error:
         raise Http404 from error
-    return render(
-        request,
-        "teacher/course_class_student_experiment_detail.html",
-        {
-            "course": course,
-            "current_course": course,
-            "class_group": class_group,
-            "detail": detail,
-        },
-    )
+    return frontend_response()
 
 
 @require_GET
@@ -541,16 +363,7 @@ def class_question_detail(
         )
     except LookupError as error:
         raise Http404 from error
-    return render(
-        request,
-        "teacher/course_class_question_detail.html",
-        {
-            "course": course,
-            "current_course": course,
-            "class_group": class_group,
-            "detail": detail,
-        },
-    )
+    return frontend_response()
 
 
 @require_GET
@@ -575,16 +388,7 @@ def class_question_process(
         )
     except LookupError as error:
         raise Http404 from error
-    return render(
-        request,
-        "teacher/course_class_attempt_process.html",
-        {
-            "course": course,
-            "current_course": course,
-            "class_group": class_group,
-            "detail": detail,
-        },
-    )
+    return frontend_response()
 
 
 @require_GET
@@ -682,6 +486,8 @@ def student_import(request, course_pk, class_pk):
         require_writable_course(course)
     if not class_group.is_active:
         return _inactive_target_class_response(request, course, class_group, "新增学生")
+    if request.method in {"GET", "HEAD"}:
+        return frontend_response()
     session_key = f"course_student_import:{course.pk}:{class_group.pk}"
     preview = None
     form = StudentBatchUploadForm()
@@ -732,17 +538,7 @@ def student_import(request, course_pk, class_pk):
                 else:
                     request.session[session_key] = [item.__dict__ for item in preview]
 
-    return render(
-        request,
-        "teacher/course_student_import.html",
-        {
-            "course": course,
-            "current_course": course,
-            "class_group": class_group,
-            "form": form,
-            "preview": preview,
-        },
-    )
+    return frontend_response()
 
 
 @require_POST

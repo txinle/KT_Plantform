@@ -19,6 +19,8 @@ const fieldErrors = ref<Record<string, unknown>>({})
 const error = ref('')
 const saved = ref('')
 const saving = ref(false)
+const governanceBusy = ref('')
+const purgeReason = ref('research_withdrawal')
 
 function hydrate(response: TeacherCourseSettingsResponse) {
   settings.value = response
@@ -60,6 +62,29 @@ async function submit() {
     saving.value = false
   }
 }
+
+async function runGovernance(action: 'archive' | 'create-purge' | 'execute-purge', purgeRequestId = '') {
+  governanceBusy.value = action === 'execute-purge' ? purgeRequestId : action
+  error.value = ''
+  saved.value = ''
+  try {
+    const api = getTeacherCourseApi()
+    if (action === 'archive') {
+      hydrate(await api.archive(courseId))
+      saved.value = '课程已归档并切换为只读。'
+    } else if (action === 'create-purge') {
+      hydrate(await api.createPurgeRequest(courseId, purgeReason.value))
+      saved.value = '清除影响预览已生成。'
+    } else {
+      hydrate(await api.executePurgeRequest(courseId, purgeRequestId))
+      saved.value = '清除请求已执行。'
+    }
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '课程治理操作失败。'
+  } finally {
+    governanceBusy.value = ''
+  }
+}
 </script>
 
 <template>
@@ -97,10 +122,10 @@ async function submit() {
             <fieldset :disabled="!settings.capabilities.can_update"><legend>协作教师</legend><label v-for="teacher in settings.form.teacher_options" :key="teacher.id" class="kt-teacher-course-checkbox"><input v-model="form.teachers" type="checkbox" :value="teacher.id">{{ teacher.display_name }} <small>{{ teacher.username }}</small></label><small v-if="fieldErrors.teachers">{{ errorText(fieldErrors.teachers) }}</small></fieldset>
             <div class="kt-teacher-course-form__actions"><button class="kt-button" type="submit" :disabled="saving || !settings.capabilities.can_update">{{ saving ? '正在保存…' : '保存设置' }}</button><a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/`">返回课程</a></div>
           </form>
-          <aside class="kt-card kt-teacher-course-danger"><h2>课程归档</h2><p>归档后课程只读，学生不能开始新的实验会话。</p><form v-if="settings.capabilities.can_archive" method="post" :action="settings.archive_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><button class="kt-button kt-button--danger" type="submit">归档课程</button></form><span v-else class="kt-status kt-status--neutral">{{ settings.course.status_label }}</span></aside>
+          <aside class="kt-card kt-teacher-course-danger"><h2>课程归档</h2><p>归档后课程只读，学生不能开始新的实验会话。</p><button v-if="settings.capabilities.can_archive" class="kt-button kt-button--danger" data-course-archive type="button" :disabled="Boolean(governanceBusy)" @click="runGovernance('archive')">{{ governanceBusy === 'archive' ? '正在归档…' : '归档课程' }}</button><span v-else class="kt-status kt-status--neutral">{{ settings.course.status_label }}</span></aside>
         </div>
-        <section class="kt-card kt-teacher-course-governance"><h2>身份与数据治理</h2><p>课程导出包含学生学号和姓名等直接身份数据。课程协作教师只能在授权范围内生成和下载，后续共享前需自行完成去标识化处理。</p><h3>受控数据清除</h3><p>普通实验页面不提供硬删除。先生成影响预览，执行后仅保留最小审计记录。</p><form method="post" :action="settings.purge_request_create_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><input type="hidden" name="confirmation" value="PURGE"><label>原因<select name="reason_code"><option value="research_withdrawal">学生退出研究</option><option value="collection_error">错误采集纠正</option><option value="retention_expired">保留期限结束</option></select></label><button class="kt-button kt-button--secondary" type="submit">生成清除预览</button></form></section>
-        <section class="kt-card kt-teacher-course-purge"><h2>清除请求</h2><div v-if="settings.purge_requests.length" class="kt-table-scroll"><table><thead><tr><th>清除请求</th><th>预览数量</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="request in settings.purge_requests" :key="request.purge_request_id"><td>{{ request.purge_request_id }}</td><td>{{ request.preview_session_count }} 会话 · {{ request.preview_event_count }} 事件</td><td>{{ request.status_label }}</td><td><form v-if="request.execute_url" method="post" :action="request.execute_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><button class="kt-button kt-button--danger" type="submit">执行清除</button></form></td></tr></tbody></table></div><p v-else>尚无清除请求。</p></section>
+        <section class="kt-card kt-teacher-course-governance"><h2>身份与数据治理</h2><p>课程导出包含学生学号和姓名等直接身份数据。课程协作教师只能在授权范围内生成和下载，后续共享前需自行完成去标识化处理。</p><h3>受控数据清除</h3><p>普通实验页面不提供硬删除。先生成影响预览，执行后仅保留最小审计记录。</p><label>原因<select v-model="purgeReason" name="reason_code"><option value="research_withdrawal">学生退出研究</option><option value="collection_error">错误采集纠正</option><option value="retention_expired">保留期限结束</option></select></label><button class="kt-button kt-button--secondary" data-purge-create type="button" :disabled="Boolean(governanceBusy)" @click="runGovernance('create-purge')">{{ governanceBusy === 'create-purge' ? '正在生成…' : '生成清除预览' }}</button></section>
+        <section class="kt-card kt-teacher-course-purge"><h2>清除请求</h2><div v-if="settings.purge_requests.length" class="kt-table-scroll"><table><thead><tr><th>清除请求</th><th>预览数量</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="request in settings.purge_requests" :key="request.purge_request_id"><td>{{ request.purge_request_id }}</td><td>{{ request.preview_session_count }} 会话 · {{ request.preview_event_count }} 事件</td><td>{{ request.status_label }}</td><td><button v-if="request.execute_url" class="kt-button kt-button--danger" :data-purge-execute="request.purge_request_id" type="button" :disabled="Boolean(governanceBusy)" @click="runGovernance('execute-purge', request.purge_request_id)">{{ governanceBusy === request.purge_request_id ? '正在执行…' : '执行清除' }}</button></td></tr></tbody></table></div><p v-else>尚无清除请求。</p></section>
       </template>
     </WorkspaceShell>
   </div>

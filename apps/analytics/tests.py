@@ -340,12 +340,6 @@ class IdentifiedExportTests(TestCase):
             ).exists()
         )
 
-        results = self.client.get(
-            reverse("courses:experiment_results", args=[course.pk, experiment.pk])
-        )
-        self.assertEqual(results.status_code, 200)
-        self.assertContains(results, "学生名册 CSV")
-
     def test_identified_navigation_contains_original_identity_and_audit(self):
         response = self.client.post(self.navigation_url)
 

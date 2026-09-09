@@ -92,7 +92,7 @@ const fileKind = computed(() => uploadedFile.value?.name.toLowerCase().endsWith(
 
 function classification(row: QuestionImportPreviewRow) {
   const outcome = outcomes.value.get(row.row_id)
-  if (outcome?.status === 'created') return outcome.question_status === 'draft' ? 'draft' : 'ready'
+  if (outcome?.status === 'created' || outcome?.status === 'updated') return outcome.question_status === 'draft' ? 'draft' : 'ready'
   return outcome?.status || row.classification
 }
 function isSelectable(row: QuestionImportPreviewRow) {
@@ -102,6 +102,8 @@ function rowStatus(row: QuestionImportPreviewRow) {
   const outcome = outcomes.value.get(row.row_id)
   const status = outcome?.status || row.classification
   if (outcome?.status === 'created' && outcome.question_status === 'draft') return { label: '已保存为草稿', tone: 'warning' }
+  if (outcome?.status === 'updated' && outcome.question_status === 'draft') return { label: '已更新草稿', tone: 'warning' }
+  if (outcome?.status === 'updated') return { label: '已修复为可用', tone: 'success' }
   if (status === 'created') return { label: '已创建可用', tone: 'success' }
   if (status === 'ready') return { label: '导入后可用', tone: 'success' }
   if (status === 'draft') return { label: '保存为草稿', tone: 'warning' }
@@ -111,7 +113,7 @@ function rowStatus(row: QuestionImportPreviewRow) {
 }
 function rowErrors(row: QuestionImportPreviewRow) {
   const outcome = outcomes.value.get(row.row_id)
-  if (outcome?.status === 'created' && outcome.question_status === 'draft') return outcome.draft_reasons
+  if ((outcome?.status === 'created' || outcome?.status === 'updated') && outcome.question_status === 'draft') return outcome.draft_reasons
   return outcome?.errors ?? row.errors
 }
 function formatValue(value: unknown): string {
@@ -300,7 +302,7 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
       </section>
 
       <Alert v-if="confirmation" :tone="confirmation.failed ? 'warning' : 'success'">
-        <strong>本次导入已完成。</strong>新增 {{ confirmation.created }} 道，其中可用 {{ confirmedActive }} 道、草稿 {{ confirmedDraft }} 道；跳过 {{ confirmation.skipped }} 道，未完成 {{ confirmation.failed }} 道。
+        <strong>本次导入已完成。</strong>新增 {{ confirmation.created }} 道<span v-if="confirmation.updated">，修复 {{ confirmation.updated }} 道</span>，其中可用 {{ confirmedActive }} 道、草稿 {{ confirmedDraft }} 道；跳过 {{ confirmation.skipped }} 道，未完成 {{ confirmation.failed }} 道。
         <span v-if="summary.unselected">另有 {{ summary.unselected }} 道未选择。</span><span v-if="confirmation.failed">未完成的导入行保留在下方，修正后可重新上传完整文件。</span><span v-else-if="confirmedDraft">草稿已成功保存，可在题库中继续补全。</span>
       </Alert>
 

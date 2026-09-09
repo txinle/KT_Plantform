@@ -1,7 +1,0 @@
-{% extends 'base.html' %}
-{% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li class="breadcrumb-item-current" aria-current="page">新建课程</li>{% endblock %}
-{% block title %}新建课程 | KT Data Lab{% endblock %}
-{% block content %}
-<header class="page-header"><div class="page-header-copy"><h1 class="page-title">新建课程</h1><p class="page-subtitle">名称、课程代码和学期共同标识一次开课。</p></div></header>
-<section class="card"><div class="card-body"><form method="post" novalidate>{% csrf_token %}{% include 'components/error_summary.html' with form=form %}{% for field in form %}{% include 'components/form_field.html' with field=field %}{% endfor %}<div class="d-flex gap-2"><button class="btn btn-primary" type="submit">创建课程</button><a class="btn btn-outline-secondary" href="{% url 'courses:list' %}">取消</a></div></form></div></section>
-{% endblock %}

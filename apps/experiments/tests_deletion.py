@@ -108,19 +108,11 @@ class ExperimentDeletionTests(TestCase):
         self.assertEqual(self.client.post(url, {"confirmation": "delete"}).status_code, 404)
         self.assertTrue(Experiment.objects.filter(pk=self.experiment.pk).exists())
 
-    def test_published_detail_exposes_modal_confirmation_and_delete_is_csrf_protected(self):
+    def test_published_delete_is_csrf_protected(self):
         self.client.force_login(self.owner)
-        detail = self.client.get(
-            reverse("courses:experiment_detail", args=[self.course.pk, self.experiment.pk])
-        )
         delete_url = reverse(
             "courses:experiment_delete", args=[self.course.pk, self.experiment.pk]
         )
-
-        self.assertContains(detail, "删除实验")
-        self.assertContains(detail, "确认永久删除实验")
-        self.assertContains(detail, f'action="{delete_url}"')
-        self.assertContains(detail, 'name="confirmation" value="delete"')
 
         csrf_client = Client(enforce_csrf_checks=True)
         csrf_client.force_login(self.owner)

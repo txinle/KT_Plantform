@@ -51,8 +51,9 @@ test('teacher business deep links render the independent entry at desktop and mo
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${path}: ${overflow.join(', ')}`).toBe(true)
     }
   }
-  await page.goto('/teacher/courses/999999/classes/')
-  await expect(page.locator('[role="alert"]').first()).toBeVisible()
+  const missingPage = await page.goto('/teacher/courses/999999/classes/')
+  expect(missingPage?.status()).toBe(404)
+  await expect(page.locator('[data-vue-shell]')).toHaveCount(0)
   const missingApi = await page.request.get('/api/v1/not-a-real-endpoint/')
   expect(missingApi.status()).toBe(404)
   expect(await missingApi.text()).not.toContain('id="kt-app"')

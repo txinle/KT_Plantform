@@ -26,6 +26,7 @@ from apps.accounts.forms import (
 from apps.accounts.models import Course, DataPurgeRequest, User
 from apps.api.permissions import RolePermission
 from apps.audit.services import log_action
+from apps.analytics.services import execute_purge_request
 
 from .serializers import (
     CourseContextSerializer,
@@ -33,6 +34,9 @@ from .serializers import (
     TeacherCourseCreateRequestSerializer,
     TeacherCourseCreateResponseSerializer,
     TeacherCourseDetailSerializer,
+    TeacherCourseArchiveRequestSerializer,
+    TeacherCoursePurgeCreateRequestSerializer,
+    TeacherCoursePurgeExecuteRequestSerializer,
     TeacherCourseSettingsRequestSerializer,
     TeacherCourseSettingsSerializer,
 )
@@ -206,9 +210,9 @@ def _course_settings_payload(course):
             "can_update": course.status == Course.Status.ACTIVE,
             "can_archive": course.status == Course.Status.ACTIVE,
         },
-        "archive_url": reverse("courses:archive", args=[course.pk]),
+        "archive_url": reverse("teacher-course-archive", args=[course.pk]),
         "purge_request_create_url": reverse(
-            "analytics:purge_request_create", args=[course.pk]
+            "teacher-course-purge-create", args=[course.pk]
         ),
         "purge_requests": [
             {
@@ -219,7 +223,7 @@ def _course_settings_payload(course):
                 "status_label": purge.get_status_display(),
                 "execute_url": (
                     reverse(
-                        "analytics:purge_request_execute",
+                        "teacher-course-purge-execute",
                         args=[course.pk, purge.purge_request_id],
                     )
                     if purge.status == DataPurgeRequest.Status.PREVIEW
@@ -357,6 +361,91 @@ class TeacherCourseSettingsView(TeacherCourseApiView):
                         "removed_teacher_ids": sorted(previous_teacher_ids - teacher_ids),
                     },
                 )
+        return Response(
+            TeacherCourseSettingsSerializer(_course_settings_payload(course)).data
+        )
+
+
+class TeacherCourseArchiveView(TeacherCourseApiView):
+    @extend_schema(
+        operation_id="teacher_course_archive",
+        request=TeacherCourseArchiveRequestSerializer,
+        responses=TeacherCourseSettingsSerializer,
+    )
+    def post(self, request, course_id):
+        serializer = TeacherCourseArchiveRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        course = get_accessible_course(request.user, course_id)
+        require_course_manager(course, request.user)
+        with transaction.atomic():
+            course = lock_course(course)
+            require_course_manager(course, request.user)
+            if course.status != Course.Status.ARCHIVED:
+                course.status = Course.Status.ARCHIVED
+                course.save(update_fields=["status", "updated_at"])
+                log_action(request, "course.archive", course)
+        return Response(
+            TeacherCourseSettingsSerializer(_course_settings_payload(course)).data
+        )
+
+
+class TeacherCoursePurgeCreateView(TeacherCourseApiView):
+    @extend_schema(
+        operation_id="teacher_course_purge_create",
+        request=TeacherCoursePurgeCreateRequestSerializer,
+        responses={201: TeacherCourseSettingsSerializer},
+    )
+    def post(self, request, course_id):
+        serializer = TeacherCoursePurgeCreateRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        course = get_accessible_course(request.user, course_id)
+        require_course_manager(course, request.user)
+        from apps.assessment.models import AssessmentEvent, ExperimentSession
+
+        preview = {
+            "sessions": ExperimentSession.objects.filter(
+                version__experiment__course=course
+            ).count(),
+            "events": AssessmentEvent.objects.filter(
+                session__version__experiment__course=course
+            ).count(),
+        }
+        DataPurgeRequest.objects.create(
+            scope_type="course",
+            scope_definition={"course_id": course.pk},
+            reason_code=serializer.validated_data["reason_code"],
+            requested_by=request.user,
+            preview_counts=preview,
+        )
+        return Response(
+            TeacherCourseSettingsSerializer(_course_settings_payload(course)).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class TeacherCoursePurgeExecuteView(TeacherCourseApiView):
+    @extend_schema(
+        operation_id="teacher_course_purge_execute",
+        request=TeacherCoursePurgeExecuteRequestSerializer,
+        responses=TeacherCourseSettingsSerializer,
+    )
+    def post(self, request, course_id, purge_request_id):
+        serializer = TeacherCoursePurgeExecuteRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        course = get_accessible_course(request.user, course_id)
+        require_course_manager(course, request.user)
+        purge = get_object_or_404(
+            DataPurgeRequest,
+            purge_request_id=purge_request_id,
+            scope_definition__course_id=course.pk,
+        )
+        execute_purge_request(purge, executed_by=request.user)
+        log_action(
+            request,
+            "data_purge.execute",
+            course,
+            {"purge_request_id": str(purge.purge_request_id)},
+        )
         return Response(
             TeacherCourseSettingsSerializer(_course_settings_payload(course)).data
         )

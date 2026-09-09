@@ -1,7 +1,0 @@
-{% extends 'base.html' %}
-{% block title %}选择班级任务 | {{ experiment.name }}{% endblock %}
-{% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:detail' course.pk %}">{{ course.name }}</a></li><li><a href="{% url 'courses:experiments' course.pk %}">实验</a></li><li class="breadcrumb-item-current" aria-current="page">{{ experiment.name }}</li>{% endblock %}
-{% block content %}
-<header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }}</p><h1 class="page-title">{{ experiment.name }}</h1><p class="page-subtitle">教学分析以发布时冻结的班级任务为范围。请选择要查看的班级。</p></div><div class="page-actions"><a class="btn btn-outline-secondary" href="{% url 'courses:experiments' course.pk %}">返回实验列表</a></div></header>
-{% if tasks %}<div class="table-shell"><table class="table"><thead><tr><th scope="col">学年</th><th scope="col">班级</th><th scope="col">发布时班级快照</th><th scope="col">操作</th></tr></thead><tbody>{% for task in tasks %}<tr><td class="numeric">{{ task.class_group.academic_year|default:'未设置' }}</td><td>{{ task.class_group.name }}</td><td>{{ task.class_snapshot.display_name }}</td><td><a class="btn btn-sm btn-outline-primary" href="{% url 'courses:class_detail' course.pk task.class_group_id %}?section=experiments&amp;experiment_id={{ experiment.pk }}">查看班级分析</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty-state"><h2 class="empty-state-title">没有可进入普通统计的班级任务</h2><p>草稿、归档实验或历史冲突不会进入班级教学分析。</p></div>{% endif %}
-{% endblock %}

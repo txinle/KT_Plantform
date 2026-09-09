@@ -99,38 +99,6 @@ class AssessmentFlowTests(TestCase):
             ).exists()
         )
 
-    def test_question_page_exposes_versioned_native_collector_contract(self):
-        session = get_or_create_session(self.experiment, self.student)
-        assignment = session.assignments.get()
-        self.client.force_login(self.student)
-
-        response = self.client.get(
-            reverse("assessment:question", args=[session.pk, assignment.pk])
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(
-            response,
-            f'data-process-session-id="{session.pk}"',
-        )
-        self.assertContains(
-            response,
-            f'data-process-attempt-id="{assignment.attempt.pk}"',
-        )
-        self.assertContains(
-            response,
-            f'data-process-event-url="{reverse("assessment_process:event_batch")}"',
-        )
-        self.assertContains(
-            response,
-            f'data-time-sync-create-url="{reverse("assessment_process:time_sync_create")}"',
-        )
-        self.assertContains(response, 'data-heartbeat-interval-seconds="30"')
-        content = response.content.decode("utf-8")
-        self.assertLess(
-            content.index("js/process-event-collector.js"),
-            content.index("js/assessment.js"),
-        )
 
     def test_returning_to_saved_draft_exposes_previous_response_state(self):
         session = get_or_create_session(self.experiment, self.student)
@@ -140,12 +108,12 @@ class AssessmentFlowTests(TestCase):
         self.client.force_login(self.student)
 
         response = self.client.get(
-            reverse("assessment:question", args=[session.pk, assignment.pk])
+            f"/api/v1/student/sessions/{session.pk}/questions/{assignment.pk}/"
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="initial-response-state-data"')
-        self.assertContains(response, '"B"')
+        self.assertEqual(response.json()["draft_answer"], "B")
+        self.assertEqual(response.json()["initial_response_state"], "B")
 
     def test_native_collector_source_avoids_prohibited_continuous_capture(self):
         source = (

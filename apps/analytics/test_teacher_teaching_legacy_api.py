@@ -237,7 +237,7 @@ class TeacherTeachingLegacyApiTests(TestCase):
 
 
 @override_settings(DEBUG=True, VITE_DEV_SERVER_URL="http://localhost:5173")
-class TeacherTeachingLegacyVueShellTests(TestCase):
+class TeacherTeachingFrontendEntryTests(TestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(
             username="teaching-shell-teacher",
@@ -252,39 +252,18 @@ class TeacherTeachingLegacyVueShellTests(TestCase):
         self.client.force_login(self.teacher)
         self.url = reverse("courses:data_teaching", args=[self.course.pk])
 
-    def rollout_env(self, **values):
-        defaults = {
-            "VUE_TEACHER_TEACHING_DATA_ENABLED": "0",
-            "VUE_TEACHER_TEACHING_DATA_COURSE_IDS": "",
-            "VUE_TEACHER_TEACHING_DATA_USER_IDS": "",
-        }
-        defaults.update(values)
-        return patch.dict(os.environ, defaults)
-
     @override_settings(CLASS_CENTER_ENABLED=False)
-    def test_flag_off_keeps_the_legacy_teaching_template(self):
-        with self.rollout_env():
-            response = self.client.get(self.url)
-
-        self.assertTemplateUsed(response, "teacher/data_center/teaching.html")
-        self.assertNotContains(response, 'id="kt-app"')
-
-    @override_settings(CLASS_CENTER_ENABLED=False)
-    def test_pilot_receives_the_teaching_vue_shell(self):
-        with self.rollout_env(
-            VUE_TEACHER_TEACHING_DATA_ENABLED="1",
-            VUE_TEACHER_TEACHING_DATA_COURSE_IDS=str(self.course.pk),
-        ):
+    def test_teaching_page_uses_the_independent_frontend(self):
+        with patch.dict(os.environ, {"FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html"}):
             response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="kt-app"')
-        self.assertContains(response, 'data-module="teacher-teaching-data"')
+        self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+        self.assertFalse(response.templates)
 
     @override_settings(CLASS_CENTER_ENABLED=True)
-    def test_class_center_redirect_remains_canonical_even_for_a_vue_pilot(self):
-        with self.rollout_env(VUE_TEACHER_TEACHING_DATA_ENABLED="1"):
-            response = self.client.get(self.url)
+    def test_class_center_redirect_remains_canonical(self):
+        response = self.client.get(self.url)
 
         self.assertRedirects(
             response,

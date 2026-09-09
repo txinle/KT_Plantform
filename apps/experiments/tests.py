@@ -4,8 +4,6 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.urls import reverse
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
-from apps.analytics.export_fields import FIELD_LABELS
-from apps.assessment.models import ExperimentSession
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
 from .forms import ExperimentForm, StudentAssignmentForm
 from .models import Experiment, ExperimentQuestion, ExperimentStudent, ExperimentVersion, QuestionSnapshot
@@ -193,7 +191,6 @@ class ExperimentFormArchivedBankRaceTests(TestCase):
 
     def assert_archived_bank_error(self, response, bank):
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, self.archived_bank_message)
         bank.refresh_from_db()
         self.assertEqual(bank.visibility, QuestionBank.Visibility.ARCHIVED)
 
@@ -361,7 +358,6 @@ class ExperimentFormPublishedRaceTests(TestCase):
 
     def assert_published_experiment_is_unchanged(self, response, experiment, original_name):
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "实验发布后不能修改配置")
         experiment.refresh_from_db()
         self.assertEqual(experiment.status, Experiment.Status.PUBLISHED)
         self.assertEqual(experiment.name, original_name)
@@ -616,96 +612,3 @@ class CourseExperimentInactiveClassAssignmentTests(TestCase):
             list(self.experiment.student_links.values_list("student_id", flat=True)),
             [self.student.pk],
         )
-
-
-class ExperimentResultStatusFilterTests(TestCase):
-    def setUp(self):
-        self.teacher = User.objects.create_user(username="teacher", password="x", role=User.Role.TEACHER)
-        self.other_teacher = User.objects.create_user(username="other", password="x", role=User.Role.TEACHER)
-        bank = QuestionBank.objects.create(owner=self.teacher, name="bank")
-        self.experiment = Experiment.objects.create(owner=self.teacher, question_bank=bank, name="状态实验")
-        old_version = ExperimentVersion.objects.create(
-            experiment=self.experiment,
-            version_number=1,
-            published_by=self.teacher,
-        )
-        self.latest_version = ExperimentVersion.objects.create(
-            experiment=self.experiment,
-            version_number=2,
-            published_by=self.teacher,
-        )
-        self.students = {}
-        for index, (status, label) in enumerate(
-            [
-                (ExperimentSession.Status.IN_PROGRESS, "进行中学生"),
-                (ExperimentSession.Status.COMPLETED, "已完成学生"),
-                (ExperimentSession.Status.EXPIRED, "已超时学生"),
-                (ExperimentSession.Status.INVALIDATED, "已作废学生"),
-            ],
-            start=1,
-        ):
-            student = User.objects.create_user(
-                username=f"S{index}",
-                student_number=f"S{index}",
-                display_name=label,
-                role=User.Role.STUDENT,
-            )
-            ExperimentSession.objects.create(version=self.latest_version, student=student, status=status)
-            self.students[status] = label
-        old_student = User.objects.create_user(
-            username="OLD",
-            student_number="OLD",
-            display_name="旧版本学生",
-            role=User.Role.STUDENT,
-        )
-        ExperimentSession.objects.create(version=old_version, student=old_student)
-        self.client.force_login(self.teacher)
-        self.url = reverse("experiments:results", args=[self.experiment.pk])
-
-    def test_default_lists_only_latest_version_and_all_statuses(self):
-        response = self.client.get(self.url)
-
-        for label in self.students.values():
-            self.assertContains(response, label)
-        self.assertNotContains(response, "旧版本学生")
-        self.assertContains(response, "4 条")
-
-    def test_filters_each_session_status_and_preserves_selection(self):
-        for status, expected_label in self.students.items():
-            with self.subTest(status=status):
-                response = self.client.get(self.url, {"status": status})
-                self.assertContains(response, expected_label)
-                for other_label in set(self.students.values()) - {expected_label}:
-                    self.assertNotContains(response, other_label)
-                self.assertContains(response, f'value="{status}" selected')
-                self.assertContains(response, "1 条")
-
-    def test_invalid_status_falls_back_to_all(self):
-        response = self.client.get(self.url, {"status": "not-a-status"})
-
-        for label in self.students.values():
-            self.assertContains(response, label)
-        self.assertNotContains(response, 'value="not-a-status"')
-
-    def test_other_teacher_receives_404(self):
-        self.client.force_login(self.other_teacher)
-
-        self.assertEqual(self.client.get(self.url, {"status": "completed"}).status_code, 404)
-
-    def test_results_page_makes_identified_exports_primary_and_preserves_csv_paths(self):
-        response = self.client.get(self.url)
-        html = response.content.decode("utf-8")
-
-        identified_url = reverse("analytics:identified_export", args=[self.experiment.pk])
-        navigation_url = reverse("analytics:identified_navigation_export", args=[self.experiment.pk])
-        self.assertContains(response, f'action="{identified_url}"')
-        self.assertContains(response, f'action="{navigation_url}"')
-        self.assertContains(response, "实名可选字段 Excel")
-        self.assertContains(response, "实名 CSV 导出")
-        self.assertEqual(len(FIELD_LABELS), 34)
-        self.assertEqual(html.count('type="checkbox" name="fields"'), 34)
-        for field in FIELD_LABELS:
-            self.assertContains(response, f'name="fields" value="{field}" checked')
-        self.assertContains(response, reverse("analytics:kt_export", args=[self.experiment.pk]))
-        self.assertContains(response, reverse("analytics:navigation_export", args=[self.experiment.pk]))
-        self.assertContains(response, reverse("analytics:identity_export", args=[self.experiment.pk]))

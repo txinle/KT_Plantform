@@ -283,8 +283,7 @@ class TeacherQuestionBankApiTests(TestCase):
         self.assertEqual(inaccessible.status_code, 404)
 
 
-@override_settings(DEBUG=True, VITE_DEV_SERVER_URL="http://localhost:5173")
-class TeacherQuestionBankVueShellTests(TestCase):
+class TeacherQuestionBankFrontendEntryTests(TestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(
             username="teacher-bank-shell-owner",
@@ -307,39 +306,7 @@ class TeacherQuestionBankVueShellTests(TestCase):
         )
         self.client.force_login(self.teacher)
 
-    def rollout_env(self, **values):
-        defaults = {
-            "VUE_TEACHER_QUESTION_BANKS_ENABLED": "0",
-            "VUE_TEACHER_QUESTION_BANKS_COURSE_IDS": "",
-            "VUE_TEACHER_QUESTION_BANKS_USER_IDS": "",
-        }
-        defaults.update(values)
-        return patch.dict(os.environ, defaults)
-
-    def test_flag_off_preserves_question_bank_templates(self):
-        with self.rollout_env():
-            bank_list = self.client.get(self.list_url)
-            bank_detail = self.client.get(self.detail_url)
-
-        self.assertTemplateUsed(bank_list, "teacher/course_bank_list.html")
-        self.assertTemplateUsed(bank_detail, "teacher/course_bank_detail.html")
-        self.assertNotContains(bank_list, 'id="kt-app"')
-        self.assertNotContains(bank_detail, 'id="kt-app"')
-
-    def test_pilot_course_receives_vue_shell_on_existing_read_routes(self):
-        with self.rollout_env(
-            VUE_TEACHER_QUESTION_BANKS_ENABLED="1",
-            VUE_TEACHER_QUESTION_BANKS_COURSE_IDS=str(self.course.pk),
-        ):
-            bank_list = self.client.get(self.list_url)
-            bank_detail = self.client.get(self.detail_url)
-
-        for response in (bank_list, bank_detail):
-            self.assertEqual(response.status_code, 200)
-            self.assertContains(response, 'id="kt-app"')
-            self.assertContains(response, 'data-module="teacher-question-banks"')
-
-    def test_pilot_course_receives_vue_shell_on_remaining_management_get_routes(self):
+    def test_all_course_question_bank_pages_use_the_independent_frontend(self):
         archived = QuestionBank.objects.create(
             course=self.course,
             created_by=self.teacher,
@@ -371,6 +338,8 @@ class TeacherQuestionBankVueShellTests(TestCase):
             visibility=QuestionBank.Visibility.SHARED,
         )
         urls = [
+            self.list_url,
+            self.detail_url,
             reverse("courses:archived_banks", args=[self.course.pk]),
             reverse("courses:shared_sources", args=[self.course.pk]),
             reverse("courses:shared_creators", args=[self.course.pk, source_course.pk]),
@@ -380,46 +349,21 @@ class TeacherQuestionBankVueShellTests(TestCase):
             ),
             reverse("courses:bank_edit", args=[self.course.pk, self.bank.pk]),
             reverse("courses:question_import", args=[self.course.pk, self.bank.pk]),
+            reverse("courses:kc_import", args=[self.course.pk, self.bank.pk]),
             reverse(
                 "courses:question_edit",
                 args=[self.course.pk, self.bank.pk, question.pk],
             ),
         ]
 
-        with self.rollout_env(
-            VUE_TEACHER_QUESTION_BANKS_ENABLED="1",
-            VUE_TEACHER_QUESTION_BANKS_COURSE_IDS=str(self.course.pk),
-        ):
+        with patch.dict(os.environ, {
+            "FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html",
+        }):
             responses = [self.client.get(url) for url in urls]
 
         self.assertEqual(source_bank.visibility, QuestionBank.Visibility.SHARED)
         self.assertEqual(archived.visibility, QuestionBank.Visibility.ARCHIVED)
         for response in responses:
             self.assertEqual(response.status_code, 200, response.content)
-            self.assertContains(response, 'id="kt-app"')
-            self.assertContains(response, 'data-module="teacher-question-banks"')
-
-    def test_nonpilot_and_invalid_create_keep_the_legacy_document_flow(self):
-        other_course = Course.objects.create(
-            owner=self.teacher,
-            name="非试点课程",
-            code="BANK-SHELL-OTHER",
-            term="2026 秋",
-        )
-        with self.rollout_env(
-            VUE_TEACHER_QUESTION_BANKS_ENABLED="1",
-            VUE_TEACHER_QUESTION_BANKS_COURSE_IDS=str(self.course.pk),
-        ):
-            nonpilot = self.client.get(
-                reverse("courses:banks", args=[other_course.pk])
-            )
-            invalid_create = self.client.post(
-                self.list_url,
-                {"name": "", "description": "", "visibility": "private"},
-            )
-
-        self.assertTemplateUsed(nonpilot, "teacher/course_bank_list.html")
-        self.assertTemplateUsed(invalid_create, "teacher/course_bank_list.html")
-        self.assertContains(invalid_create, "该字段是必填项")
-        self.assertNotContains(nonpilot, 'id="kt-app"')
-        self.assertNotContains(invalid_create, 'id="kt-app"')
+            self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+            self.assertFalse(response.templates)

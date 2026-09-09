@@ -567,8 +567,7 @@ class TeacherStandaloneQuestionBankManagementApiTests(TestCase):
             kc_confirmed.json()["error"]["code"], "standalone_kc_mapping_unsupported"
         )
 
-    @override_settings(DEBUG=True, VITE_DEV_SERVER_URL="http://localhost:5173")
-    def test_user_allowlist_serves_vue_shell_for_no_course_urls(self):
+    def test_no_course_pages_use_the_independent_frontend(self):
         urls = [
             "/teacher/banks/",
             f"/teacher/banks/{self.bank.pk}/",
@@ -580,14 +579,12 @@ class TeacherStandaloneQuestionBankManagementApiTests(TestCase):
         with patch.dict(
             os.environ,
             {
-                "VUE_TEACHER_QUESTION_BANKS_ENABLED": "1",
-                "VUE_TEACHER_QUESTION_BANKS_COURSE_IDS": "",
-                "VUE_TEACHER_QUESTION_BANKS_USER_IDS": str(self.teacher.pk),
+                "FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html",
             },
         ):
             responses = [self.client.get(url) for url in urls]
 
         for response in responses:
             self.assertEqual(response.status_code, 200, response.content)
-            self.assertContains(response, 'id="kt-app"')
-            self.assertContains(response, 'data-module="teacher-question-banks"')
+            self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+            self.assertFalse(response.templates)

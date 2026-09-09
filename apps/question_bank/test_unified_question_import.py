@@ -84,14 +84,18 @@ class UnifiedQuestionImportTests(TestCase):
         self.assertEqual(response.status_code, 201, response.content)
         self.assertEqual(response.json()['created'], 2)
         question = self.bank.questions.get(status=Question.Status.ACTIVE)
+        draft = self.bank.questions.get(status=Question.Status.DRAFT)
         identity = question.course_identity.stable_code
         repeat = self.confirm(preview)
         self.assertEqual(repeat.json(), response.json())
         fixed = question_row(题目='第二题')
         second = self.preview([good, fixed])
         self.assertEqual(second['preview']['summary'], {'ready': 1, 'draft': 0, 'duplicate': 1, 'invalid': 0})
-        self.assertEqual(self.confirm(second).json()['created'], 1)
-        self.assertEqual(list(self.bank.questions.values_list('sequence', flat=True)), [1, 2, 3])
+        repaired = self.confirm(second).json()
+        self.assertEqual((repaired['created'], repaired['updated']), (0, 1))
+        self.assertEqual(list(self.bank.questions.values_list('sequence', flat=True)), [1, 2])
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, Question.Status.ACTIVE)
         self.assertEqual(Question.objects.get(pk=question.pk).course_identity.stable_code, identity)
 
     def test_original_numbers_are_ignored_and_neighbors_keep_their_own_mapping(self):
@@ -111,10 +115,11 @@ class UnifiedQuestionImportTests(TestCase):
         self.assertTrue(preview['preview']['confirmable'])
         imported = self.confirm(preview).json()
         self.assertEqual((imported['created'], imported['draft']), (1, 1))
-        self.confirm(self.preview([question_row()]))
+        repaired = self.confirm(self.preview([question_row()])).json()
+        self.assertEqual((repaired['created'], repaired['updated']), (0, 1))
         result = self.confirm(self.preview([question_row(解析='新的解释')]))
         self.assertEqual(result.json()['created'], 1)
-        self.assertEqual(self.bank.questions.count(), 3)
+        self.assertEqual(self.bank.questions.count(), 2)
 
     def test_confirm_revalidates_kc_and_does_not_partially_write_question(self):
         preview = self.preview([question_row()])
@@ -165,18 +170,6 @@ class UnifiedQuestionImportTests(TestCase):
         self.bank.save(update_fields=['visibility'])
         self.assertEqual(self.client.post(self.base + 'preview/', {'file': upload_rows([question_row()])}).status_code, 403)
 
-    def test_legacy_page_uses_unified_import_and_old_kc_get_redirects(self):
-        from django.urls import reverse
-        from django.test import override_settings
-        url = reverse('courses:question_import', args=[self.course.pk, self.bank.pk])
-        with override_settings(VUE_TEACHER_QUESTION_BANKS_ENABLED=False):
-            preview = self.client.post(url, {'file': upload_rows([question_row()])})
-            self.assertContains(preview, '确认导入可导入题目')
-            self.assertFalse(self.bank.questions.exists())
-            result = self.client.post(url, {'action': 'confirm', 'preview_id': str(ImportPreviewBatch.objects.get().pk)})
-            self.assertContains(result, '已导入 1 道题')
-            self.assertEqual(self.bank.questions.get().status, 'active')
-            self.assertRedirects(self.client.get(reverse('courses:kc_import', args=[self.course.pk, self.bank.pk])), url)
 
     def test_downloaded_templates_import_identical_six_question_records(self):
         from django.urls import reverse

@@ -5,6 +5,7 @@ from django.core.paginator import Paginator
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.exceptions import NotFound, ValidationError
@@ -25,18 +26,31 @@ from apps.accounts.forms import ClassGroupForm
 from apps.accounts.models import ClassGroup, Course, User
 from apps.api.pagination import FixedPageNumberPagination
 from apps.assessment.models import ExperimentSession, SubmissionEvent
+from apps.audit.services import log_action
 
 from ..advanced_catalog import enabled_extension_tables
+from ..data_scope import DataScope, ScopeNotFound, ScopeValidationError
+from ..export_catalog import PACKAGE_TABLES
 from ..models import ExportJob
 from ..quality_reports import EvaluationState, build_quality_report
+from ..services import (
+    ExportContractError,
+    create_export_job,
+    create_export_snapshot,
+    run_export_job,
+)
+from ..teaching_scope import TeachingScope
 from ..teaching.metrics import build_class_center_snapshot
 from .serializers import (
     DataCenterAdvancedSerializer,
     DataCenterExportCatalogSerializer,
     DataCenterExportHistoryCollectionSerializer,
+    DataCenterExportJobCreateSerializer,
+    DataCenterExportJobMutationSerializer,
     DataCenterOverviewSerializer,
     DataCenterQualityCollectionSerializer,
     DataCenterScopeSerializer,
+    DataCenterScopeUpdateSerializer,
     TeacherClassCenterSerializer,
     TeacherClassCreateRequestSerializer,
     TeacherClassCreateResponseSerializer,
@@ -110,15 +124,38 @@ class TeacherDataCenterScopeView(APIView):
     )
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
-        scope = _teaching_scope_from_request(request, course)
+        return Response(self._payload(request, course))
+
+    @extend_schema(
+        operation_id="teacher_data_center_scope_update",
+        request=DataCenterScopeUpdateSerializer,
+        responses=DataCenterScopeSerializer,
+    )
+    def post(self, request, course_id):
+        course = _course_for_teacher(request.user, course_id)
+        serializer = DataCenterScopeUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            scope = TeachingScope.from_mapping(course, serializer.validated_data)
+        except ScopeNotFound as error:
+            raise NotFound(str(error)) from error
+        except ScopeValidationError as error:
+            raise ValidationError({"scope": [str(error)]}) from error
+        request.session[f"data_center_teaching_scope_v1:{course.pk}"] = scope.serialize()
+        request.session.pop(f"data_center_scope_v1:{course.pk}", None)
+        request.session.modified = True
+        return Response(self._payload(request, course, scope=scope))
+
+    @staticmethod
+    def _payload(request, course, *, scope=None):
+        scope = scope or _teaching_scope_from_request(request, course)
         experiments = list(
             course.experiments.prefetch_related("versions").order_by("name", "pk")
         )
         classes = course.classes.filter(is_active=True).order_by(
             "academic_year", "name", "pk"
         )
-        return Response(
-            {
+        return {
                 "course": _course_payload(course),
                 "current": _teaching_scope_payload(scope),
                 "experiments": [_experiment_payload(item) for item in experiments],
@@ -131,10 +168,118 @@ class TeacherDataCenterScopeView(APIView):
                     for item in classes
                 ],
                 "scope_update_url": reverse(
-                    "courses:data_scope_update", args=[course.pk]
+                    "teacher-data-center-scope", args=[course.pk]
                 ),
             }
+
+
+def _export_job_payload(job):
+    return {
+        "job_id": job.job_id,
+        "package": job.package,
+        "status": job.status,
+        "status_label": job.get_status_display(),
+        "download_url": (
+            reverse(
+                "analytics:export_job_download",
+                args=[job.course_id, job.job_id],
+            )
+            if job.status == ExportJob.Status.SUCCEEDED and job.artifact_path
+            else None
+        ),
+        "history_url": reverse("courses:data_export_history", args=[job.course_id]),
+    }
+
+
+class TeacherDataCenterExportJobCreateView(APIView):
+    @extend_schema(
+        operation_id="teacher_data_center_export_job_create",
+        request=DataCenterExportJobCreateSerializer,
+        responses={201: DataCenterExportJobMutationSerializer},
+    )
+    def post(self, request, course_id):
+        course = _course_for_teacher(request.user, course_id)
+        serializer = DataCenterExportJobCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+        if not values["confirm_identified"]:
+            raise ValidationError(
+                {"confirm_identified": ["请确认该导出包含实名数据后再生成。"]}
+            )
+        package = values["package"]
+        if package not in PACKAGE_TABLES or package == "identity":
+            raise ValidationError({"package": ["不支持的数据包类型。"]})
+        try:
+            scope = DataScope.from_mapping(course, values["scope"])
+        except ScopeNotFound as error:
+            raise NotFound("导出范围不属于当前课程") from error
+        except ScopeValidationError as error:
+            raise ValidationError({"scope": [str(error)]}) from error
+        experiment = (
+            get_object_or_404(course.experiments, pk=scope.experiment_id)
+            if scope.experiment_id
+            else None
         )
+        extensions = enabled_extension_tables(experiment)
+        if package == "confidence" and "confidence_assignments" not in extensions:
+            raise ValidationError({"package": ["当前实验未启用 Confidence 采集。"]})
+        if package == "simulation" and "simulation_events" not in extensions:
+            raise ValidationError({"package": ["当前实验未启用 Simulation 采集。"]})
+        try:
+            snapshot = create_export_snapshot(
+                course=course,
+                experiment=experiment,
+                created_by=request.user,
+                scope=scope,
+                package=package,
+            )
+            job = create_export_job(
+                course=course,
+                experiment=experiment,
+                snapshot=snapshot,
+                created_by=request.user,
+                package=package,
+                selected_tables=values["tables"],
+                selected_fields=values["fields"],
+            )
+            run_export_job(job)
+        except ExportContractError as error:
+            if "job" in locals():
+                job.status = ExportJob.Status.FAILED
+                job.progress_stage = "contract_error"
+                job.finished_at = timezone.now()
+                job.save(update_fields=["status", "progress_stage", "finished_at"])
+            raise ValidationError({"scope": [str(error)]}) from error
+        log_action(
+            request,
+            "analytics.identified_export_job_create",
+            course,
+            {
+                "job_id": str(job.job_id),
+                "package": package,
+                "experiment_id": experiment.pk if experiment else None,
+            },
+        )
+        return Response(_export_job_payload(job), status=status.HTTP_201_CREATED)
+
+
+class TeacherDataCenterExportJobDetailView(APIView):
+    @extend_schema(
+        operation_id="teacher_data_center_export_job_destroy",
+        responses=DataCenterExportJobMutationSerializer,
+    )
+    def delete(self, request, course_id, job_id):
+        course = _course_for_teacher(request.user, course_id)
+        job = get_object_or_404(ExportJob, course=course, job_id=job_id)
+        job.expire_artifact(reason="user_requested_removal")
+        log_action(
+            request,
+            "analytics.export_job_delete",
+            course,
+            {"job_id": str(job.job_id), "package": job.package},
+        )
+        job.refresh_from_db()
+        return Response(_export_job_payload(job))
 
 
 class TeacherDataCenterOverviewView(APIView):
@@ -187,7 +332,7 @@ class TeacherDataCenterOverviewView(APIView):
                 ],
                 "actions": {
                     "scope_update_url": reverse(
-                        "courses:data_scope_update", args=[course.pk]
+                        "teacher-data-center-scope", args=[course.pk]
                     ),
                     "governance_url": f"{reverse('courses:settings', args=[course.pk])}#identity-governance",
                     "teaching_url": reverse(
@@ -267,7 +412,7 @@ class TeacherDataCenterExportCatalogView(APIView):
                 ),
                 "actions": {
                     "create_url": reverse(
-                        "analytics:export_job_create", args=[course.pk]
+                        "teacher-data-center-export-job-create", args=[course.pk]
                     ),
                     "reset_url": reverse("courses:data_exports", args=[course.pk]),
                 },
@@ -339,7 +484,7 @@ class TeacherDataCenterExportHistoryView(APIView):
                     if can_manage_artifact and job.artifact_path
                     else None,
                     "delete_url": reverse(
-                        "analytics:export_job_delete",
+                        "teacher-data-center-export-job-detail",
                         args=[course.pk, job.job_id],
                     )
                     if can_manage_artifact

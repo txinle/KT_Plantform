@@ -147,3 +147,18 @@ class TeacherCourseSettingsSerializer(serializers.Serializer):
 class TeacherCourseSettingsRequestSerializer(TeacherCourseCreateRequestSerializer):
     state_token = serializers.CharField()
     teachers = serializers.ListField(child=serializers.IntegerField(), required=False)
+
+
+class TeacherCourseArchiveRequestSerializer(serializers.Serializer):
+    confirmation = serializers.ChoiceField(choices=("archive",))
+
+
+class TeacherCoursePurgeCreateRequestSerializer(serializers.Serializer):
+    confirmation = serializers.ChoiceField(choices=("PURGE",))
+    reason_code = serializers.ChoiceField(
+        choices=("research_withdrawal", "collection_error", "retention_expired")
+    )
+
+
+class TeacherCoursePurgeExecuteRequestSerializer(serializers.Serializer):
+    confirmation = serializers.ChoiceField(choices=("execute",))

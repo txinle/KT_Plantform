@@ -10,14 +10,6 @@ class DataGovernanceTests(TestCase):
         self.other = User.objects.create_user(username="gov-other", role=User.Role.TEACHER)
         self.course = Course.objects.create(owner=self.teacher, name="治理课程", code="GOV", term="2026")
 
-    def test_settings_exposes_identity_governance_and_purge_preview(self):
-        self.client.force_login(self.teacher)
-        response = self.client.get(reverse("courses:settings", args=[self.course.pk]))
-        body = response.content.decode("utf-8")
-        self.assertIn("identity-governance", body)
-        self.assertIn("受控数据清除", body)
-        self.assertIn("不会删除课程账号", body)
-
     def test_purge_request_is_scoped_to_course_manager(self):
         self.client.force_login(self.other)
         response = self.client.post(
@@ -32,10 +24,3 @@ class DataGovernanceTests(TestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertEqual(DataPurgeRequest.objects.count(), 1)
-
-    def test_settings_lists_preview_and_exposes_execute_action(self):
-        DataPurgeRequest.objects.create(scope_type="course", scope_definition={"course_id": self.course.pk}, reason_code="collection_error", requested_by=self.teacher, preview_counts={"sessions": 2, "events": 4})
-        self.client.force_login(self.teacher)
-        body = self.client.get(reverse("courses:settings", args=[self.course.pk])).content.decode("utf-8")
-        self.assertIn("待确认", body)
-        self.assertIn("/execute/", body)

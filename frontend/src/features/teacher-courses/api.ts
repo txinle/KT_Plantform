@@ -124,6 +124,9 @@ export function createTeacherCourseApi(client: TeacherCourseApiClient) {
     detail: (courseId: number) => client.get<TeacherCourseDetailResponse>(`/api/v1/teacher/courses/${courseId}/`),
     settings: (courseId: number) => client.get<TeacherCourseSettingsResponse>(`/api/v1/teacher/courses/${courseId}/settings/`),
     saveSettings: (courseId: number, input: TeacherCourseSettingsInput) => client.mutate<TeacherCourseSettingsResponse>(`/api/v1/teacher/courses/${courseId}/settings/`, { method: 'POST', body: input }),
+    archive: (courseId: number) => client.mutate<TeacherCourseSettingsResponse>(`/api/v1/teacher/courses/${courseId}/archive/`, { method: 'POST', body: { confirmation: 'archive' } }),
+    createPurgeRequest: (courseId: number, reasonCode: string) => client.mutate<TeacherCourseSettingsResponse>(`/api/v1/teacher/courses/${courseId}/purge-requests/`, { method: 'POST', body: { confirmation: 'PURGE', reason_code: reasonCode } }),
+    executePurgeRequest: (courseId: number, purgeRequestId: string) => client.mutate<TeacherCourseSettingsResponse>(`/api/v1/teacher/courses/${courseId}/purge-requests/${purgeRequestId}/execute/`, { method: 'POST', body: { confirmation: 'execute' } }),
   }
 }
 

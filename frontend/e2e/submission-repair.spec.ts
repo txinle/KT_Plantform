@@ -1,11 +1,13 @@
 import { expect, test } from '@playwright/test'
 import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { connect, createServer, type Server, type Socket } from 'node:net'
 import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
 
 const root = join(import.meta.dirname, '../..')
-const python = join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
+const localPython = join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
+const python = process.env.PYTHON || (existsSync(localPython) ? localPython : 'python')
 let proxy: Server | undefined
 const sockets = new Set<Socket>()
 async function startNetwork() {

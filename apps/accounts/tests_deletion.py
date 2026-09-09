@@ -60,16 +60,11 @@ class ClassDeletionTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertTrue(ClassGroup.objects.filter(pk=self.class_group.pk).exists())
 
-    def test_class_list_exposes_modal_confirmation_and_delete_is_csrf_protected(self):
+    def test_class_delete_is_csrf_protected(self):
         self.client.force_login(self.owner)
-        page = self.client.get(reverse("courses:classes", args=[self.course.pk]))
         delete_url = reverse(
             "courses:class_delete", args=[self.course.pk, self.class_group.pk]
         )
-
-        self.assertContains(page, "删除班级")
-        self.assertContains(page, "确认删除班级")
-        self.assertContains(page, f'action="{delete_url}"')
 
         csrf_client = Client(enforce_csrf_checks=True)
         csrf_client.force_login(self.owner)

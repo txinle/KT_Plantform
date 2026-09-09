@@ -13,7 +13,6 @@ from django.utils import timezone
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.audit.models import AuditLog
 from apps.experiments.models import Experiment, ExperimentSamplingKC
-from apps.experiments.models import ScheduleRevision
 from apps.experiments.publication_services import (
     commit_publish_plan,
     generate_preview,
@@ -426,41 +425,7 @@ class StudentTaskApiTests(StudentApiTestCase):
             ),
         )
 
-    def test_legacy_course_template_posts_to_the_retained_start_url(self):
-        self.client.force_login(self.student)
 
-        response = self.client.get(
-            reverse("assessment:course", args=[self.course.pk])
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'method="post"')
-        self.assertContains(
-            response,
-            f'action="{reverse("assessment:start", args=[self.experiment.pk])}"',
-        )
-        self.assertContains(response, "1 题")
-
-    def test_legacy_course_template_hides_start_until_the_formal_task_opens(self):
-        ScheduleRevision.objects.create(
-            class_task=self.task,
-            revision_no=2,
-            opens_at=timezone.now() + timedelta(days=1),
-            created_by=self.teacher,
-            reason="测试未来开放",
-        )
-        self.client.force_login(self.student)
-
-        response = self.client.get(
-            reverse("assessment:course", args=[self.course.pk])
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "未开始")
-        self.assertNotContains(
-            response,
-            f'action="{reverse("assessment:start", args=[self.experiment.pk])}"',
-        )
 
 
 class StudentAssessmentApiTests(StudentApiTestCase):
@@ -1228,97 +1193,16 @@ class StudentLearningApiTests(StudentApiFixtureMixin, TransactionTestCase):
     CLASS_CENTER_ENABLED=True,
     STUDENT_LEARNING_ANALYTICS_ENABLED=True,
 )
-class StudentVueRolloutTests(StudentApiTestCase):
-    def rollout_env(self, **values):
-        defaults = {
-            "VUE_STUDENT_COURSES_ENABLED": "0",
-            "VUE_STUDENT_COURSES_COURSE_IDS": "",
-            "VUE_STUDENT_COURSES_USER_IDS": "",
-            "VUE_STUDENT_ASSESSMENT_ENABLED": "0",
-            "VUE_STUDENT_ASSESSMENT_COURSE_IDS": "",
-            "VUE_STUDENT_ASSESSMENT_USER_IDS": "",
-        }
-        defaults.update(values)
-        return patch.dict("os.environ", defaults)
-
-    def test_flag_off_preserves_legacy_student_course_template(self):
-        self.client.force_login(self.student)
-
-        with self.rollout_env():
-            response = self.client.get(
-                reverse("assessment:course", args=[self.course.pk])
-            )
-
-        self.assertContains(response, 'class="student-experiment-list"')
-        self.assertNotContains(response, 'id="kt-app"')
-
-    def test_assessment_flag_off_preserves_the_legacy_question_template(self):
+class StudentFrontendEntryTests(StudentApiTestCase):
+    def test_course_learning_and_result_pages_use_the_independent_frontend(self):
         self.start()
         session = ExperimentSession.objects.get(
             class_task=self.task,
             student=self.student,
         )
-        assignment = session.assignments.get()
-
-        with self.rollout_env():
-            response = self.client.get(
-                reverse("assessment:question", args=[session.pk, assignment.pk])
-            )
-
-        self.assertContains(response, 'id="question-form"')
-        self.assertNotContains(response, 'id="kt-app"')
-
-    def test_assessment_course_allowlist_mounts_the_focus_shell_on_the_same_url(self):
-        self.start()
-        session = ExperimentSession.objects.get(
-            class_task=self.task,
-            student=self.student,
-        )
-        assignment = session.assignments.get()
-
-        with self.rollout_env(
-            VUE_STUDENT_ASSESSMENT_ENABLED="1",
-            VUE_STUDENT_ASSESSMENT_COURSE_IDS=str(self.course.pk),
-        ):
-            response = self.client.get(
-                reverse("assessment:question", args=[session.pk, assignment.pk])
-            )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="kt-app"')
-        self.assertContains(response, 'data-module="student-assessment"')
-        self.assertNotContains(response, 'id="question-form"')
-        self.assertContains(response, "js/process-event-collector.js")
-        self.assertNotContains(response, "js/assessment.js")
-        content = response.content.decode("utf-8")
-        self.assertLess(
-            content.index("js/process-event-collector.js"),
-            content.index("http://localhost:5173/src/main.ts"),
-        )
-
-    def test_assessment_non_allowlisted_course_keeps_the_legacy_question_template(self):
-        self.start()
-        session = ExperimentSession.objects.get(
-            class_task=self.task,
-            student=self.student,
-        )
-        assignment = session.assignments.get()
-
-        with self.rollout_env(
-            VUE_STUDENT_ASSESSMENT_ENABLED="1",
-            VUE_STUDENT_ASSESSMENT_COURSE_IDS=str(self.course.pk + 999),
-        ):
-            response = self.client.get(
-                reverse("assessment:question", args=[session.pk, assignment.pk])
-            )
-
-        self.assertContains(response, 'id="question-form"')
-        self.assertNotContains(response, 'id="kt-app"')
-
-    def test_course_allowlist_mounts_vue_on_course_and_learning_urls(self):
-        self.client.force_login(self.student)
         question_snapshot = self.task.release_snapshot.question_snapshots.get()
         urls = [
+            reverse("assessment:dashboard"),
             reverse("assessment:course", args=[self.course.pk]),
             reverse("assessment:learning", args=[self.course.pk]),
             reverse(
@@ -1329,96 +1213,30 @@ class StudentVueRolloutTests(StudentApiTestCase):
                 "assessment:learning_question",
                 args=[self.course.pk, self.experiment.pk, question_snapshot.pk],
             ),
+            reverse("assessment:complete", args=[session.pk]),
         ]
 
-        with self.rollout_env(
-            VUE_STUDENT_COURSES_ENABLED="1",
-            VUE_STUDENT_COURSES_COURSE_IDS=str(self.course.pk),
-        ):
+        with patch.dict("os.environ", {"FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html"}):
             responses = [self.client.get(url) for url in urls]
 
         for response in responses:
             self.assertEqual(response.status_code, 200)
-            self.assertContains(response, 'id="kt-app"')
-            self.assertContains(response, 'data-module="student-courses"')
-            self.assertContains(response, '"student_number": "STUDENT-001"')
+            self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+            self.assertFalse(response.templates)
 
-    def test_user_allowlist_mounts_vue_course_collection_on_original_dashboard_url(self):
-        self.client.force_login(self.student)
-
-        with self.rollout_env(
-            VUE_STUDENT_COURSES_ENABLED="1",
-            VUE_STUDENT_COURSES_USER_IDS=str(self.student.pk),
-        ):
-            response = self.client.get(reverse("assessment:dashboard"))
-
-        self.assertContains(response, 'id="kt-app"')
-        self.assertContains(response, 'data-module="student-courses"')
-
-    def test_non_allowlisted_student_course_keeps_legacy_template(self):
-        self.client.force_login(self.student)
-
-        with self.rollout_env(
-            VUE_STUDENT_COURSES_ENABLED="1",
-            VUE_STUDENT_COURSES_COURSE_IDS=str(self.course.pk + 999),
-        ):
-            response = self.client.get(
-                reverse("assessment:course", args=[self.course.pk])
-            )
-
-        self.assertContains(response, 'class="student-experiment-list"')
-        self.assertNotContains(response, 'id="kt-app"')
-
-
-@override_settings(
-    DEBUG=True,
-    VITE_DEV_SERVER_URL="http://localhost:5173",
-    CLASS_CENTER_ENABLED=True,
-    STUDENT_LEARNING_ANALYTICS_ENABLED=True,
-)
-class StudentVueFallbackTransactionTests(
-    StudentApiFixtureMixin,
-    TransactionTestCase,
-):
-    def rollout_env(self):
-        return patch.dict(
-            "os.environ",
-            {
-                "VUE_STUDENT_COURSES_ENABLED": "0",
-                "VUE_STUDENT_COURSES_COURSE_IDS": "",
-                "VUE_STUDENT_COURSES_USER_IDS": "",
-                "VUE_STUDENT_ASSESSMENT_ENABLED": "0",
-                "VUE_STUDENT_ASSESSMENT_COURSE_IDS": "",
-                "VUE_STUDENT_ASSESSMENT_USER_IDS": "",
-            },
-        )
-
-    def test_flag_off_preserves_legacy_learning_result_and_question_fallbacks(self):
+    def test_assessment_question_uses_the_independent_frontend(self):
         self.start()
         session = ExperimentSession.objects.get(
             class_task=self.task,
             student=self.student,
         )
-        self.complete_session(session)
-        question_snapshot = self.task.release_snapshot.question_snapshots.get()
+        assignment = session.assignments.get()
 
-        with self.rollout_env():
-            result_response = self.client.get(
-                reverse(
-                    "assessment:learning_experiment",
-                    args=[self.course.pk, self.experiment.pk],
-                )
-            )
-            question_response = self.client.get(
-                reverse(
-                    "assessment:learning_question",
-                    args=[self.course.pk, self.experiment.pk, question_snapshot.pk],
-                )
+        with patch.dict("os.environ", {"FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html"}):
+            response = self.client.get(
+                reverse("assessment:question", args=[session.pk, assignment.pk])
             )
 
-        self.assertContains(result_response, 'id="student-item-results-title"')
-        self.assertContains(result_response, "查看题目反馈")
-        self.assertNotContains(result_response, 'id="kt-app"')
-        self.assertContains(question_response, 'id="student-own-answer-title"')
-        self.assertContains(question_response, "正确答案")
-        self.assertNotContains(question_response, 'id="kt-app"')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+        self.assertFalse(response.templates)

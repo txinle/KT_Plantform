@@ -161,8 +161,8 @@ test('nested question-bank navigation and detail tables preserve local scrolling
 test('experiment selection and expanded research tools retain all inputs within the workspace', async ({ page }, info) => {
   test.setTimeout(120_000)
   await login(page)
-  await page.goto('/teacher/courses/1/experiments/1/edit/')
-  await expect(page.getByRole('heading', { name: '编辑实验定义' })).toBeVisible()
+  await page.goto('/teacher/courses/1/experiments/create/')
+  await expect(page.getByRole('heading', { name: '创建实验' })).toBeVisible()
   await page.locator('[data-type-picker]').click()
   await expect(page.locator('.kt-type-tree-selector')).toBeVisible()
   await page.getByText('可选研究工具', { exact: true }).click()

@@ -1,7 +1,4 @@
 from types import SimpleNamespace
-from unittest.mock import patch
-
-from django.core.checks import Error
 from django.test import Client, SimpleTestCase, TestCase
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.test import APIRequestFactory, force_authenticate
@@ -9,7 +6,6 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 from apps.accounts.models import Course, User
 from apps.api.exceptions import ApiConflict, api_exception_handler
 from apps.api.permissions import CourseManagerPermission, RolePermission
-from apps.api.rollout import check_vue_rollout_settings
 
 
 class ApiPermissionBaseTests(SimpleTestCase):
@@ -98,30 +94,3 @@ class ApiCsrfContractTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json()["error"]["code"], "CSRF_FAILED")
         self.assertEqual(response.json()["error"]["fields"], {})
-
-
-class RolloutSystemCheckTests(SimpleTestCase):
-    def test_invalid_allowlist_is_reported_by_django_system_check(self):
-        with patch.dict(
-            "os.environ",
-            {"VUE_TEACHER_EXPERIMENTS_COURSE_IDS": "17,invalid"},
-            clear=False,
-        ):
-            errors = check_vue_rollout_settings(None)
-
-        self.assertEqual(errors, [
-            Error(
-                "VUE_TEACHER_EXPERIMENTS_COURSE_IDS must contain comma-separated positive IDs.",
-                id="api.E001",
-            )
-        ])
-
-    def test_invalid_enabled_value_is_reported(self):
-        with patch.dict(
-            "os.environ",
-            {"VUE_TEACHER_EXPERIMENTS_ENABLED": "true"},
-            clear=False,
-        ):
-            errors = check_vue_rollout_settings(None)
-
-        self.assertEqual(errors[0].id, "api.E002")

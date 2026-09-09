@@ -1,7 +1,6 @@
-from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import RequestFactory, SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 
 class IndependentFrontendEntryTests(SimpleTestCase):
@@ -22,12 +21,14 @@ class IndependentFrontendEntryTests(SimpleTestCase):
         self.assertIn('no-store', response['Cache-Control'])
         self.assertNotIn('kt-bootstrap', response.content.decode())
 
-    def test_assessment_entry_keeps_its_authoritative_page_gate(self):
-        from .frontend_entry import IndependentFrontendMiddleware
-        request = RequestFactory().get('/student/sessions/1/questions/2/')
-        request.user = SimpleNamespace(is_authenticated=True, role='student', pk=1)
-        request.resolver_match = SimpleNamespace(view_name='assessment:question')
-        with patch('apps.api.frontend_entry.is_vue_module_enabled', return_value=True):
-            response = IndependentFrontendMiddleware(lambda request: None).process_view(request, lambda request: None, (), {'session_id': 1, 'assignment_id': 2})
-        self.assertIsNone(response)
-        self.assertTrue(request._kt_standalone)
+    @override_settings(DEBUG=True, VITE_DEV_SERVER_URL='http://127.0.0.1:5173')
+    def test_development_entry_loads_vite_without_a_django_template(self):
+        from .frontend_entry import frontend_response
+
+        with patch.dict('os.environ', {'FRONTEND_INTERNAL_REDIRECT': ''}):
+            response = frontend_response()
+
+        content = response.content.decode()
+        self.assertIn('http://127.0.0.1:5173/@vite/client', content)
+        self.assertIn('http://127.0.0.1:5173/src/main.ts', content)
+        self.assertNotIn('kt-bootstrap', content)

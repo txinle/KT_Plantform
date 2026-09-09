@@ -91,18 +91,6 @@ class StudentCourseNavigationTests(TestCase):
         )
         self.experiment.refresh_from_db()
 
-    def test_student_selects_course_before_experiment(self):
-        self.client.force_login(self.student)
-
-        dashboard = self.client.get(reverse("assessment:dashboard"))
-        self.assertContains(dashboard, "我的课程")
-        self.assertContains(dashboard, "高等数学")
-        self.assertNotContains(dashboard, "开始实验")
-
-        course_page = self.client.get(reverse("assessment:course", args=[self.course.pk]))
-        self.assertContains(course_page, "MATH101")
-        self.assertContains(course_page, "测验")
-        self.assertContains(course_page, "开始实验")
 
     def test_student_navigation_keeps_assigned_numbers_and_shows_the_stable_course_code(self):
         self.client.force_login(self.student)
@@ -111,11 +99,15 @@ class StudentCourseNavigationTests(TestCase):
         assignment = session.assignments.get()
 
         response = self.client.get(
-            reverse("assessment:question", args=[session.pk, assignment.pk])
+            f"/api/v1/student/sessions/{session.pk}/questions/{assignment.pk}/"
         )
 
-        self.assertContains(response, "第 1 题")
-        self.assertContains(response, self.question_identity.stable_code)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["assignment"]["sequence_index"], 1)
+        self.assertEqual(
+            response.json()["question"]["stable_code"],
+            self.question_identity.stable_code,
+        )
 
     def test_student_cannot_open_course_without_active_enrollment(self):
         self.client.force_login(self.other_student)

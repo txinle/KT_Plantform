@@ -5,7 +5,7 @@ from unittest.mock import patch
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from apps.accounts.models import Course, CourseTeacher, User
+from apps.accounts.models import Course, CourseTeacher, DataPurgeRequest, User
 from apps.audit.models import AuditLog
 
 
@@ -168,6 +168,63 @@ class TeacherCourseApiTests(TestCase):
             {"can_update": False, "can_archive": False},
         )
 
+    def test_course_archive_is_a_json_mutation_with_audit(self):
+        response = self.post_json(
+            f"{self.detail_url}archive/",
+            {"confirmation": "archive"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.status, Course.Status.ARCHIVED)
+        self.assertEqual(response.json()["course"]["status"], Course.Status.ARCHIVED)
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="course.archive", object_id=str(self.course.pk)
+            ).exists()
+        )
+
+    def test_course_purge_preview_and_execute_use_json_mutations(self):
+        created = self.post_json(
+            f"{self.detail_url}purge-requests/",
+            {"confirmation": "PURGE", "reason_code": "collection_error"},
+        )
+
+        self.assertEqual(created.status_code, 201, created.content)
+        purge = DataPurgeRequest.objects.get(scope_definition__course_id=self.course.pk)
+        self.assertEqual(purge.reason_code, "collection_error")
+        self.assertEqual(
+            created.json()["purge_requests"][0]["purge_request_id"],
+            str(purge.purge_request_id),
+        )
+
+        executed = self.post_json(
+            f"{self.detail_url}purge-requests/{purge.purge_request_id}/execute/",
+            {"confirmation": "execute"},
+        )
+
+        self.assertEqual(executed.status_code, 200, executed.content)
+        purge.refresh_from_db()
+        self.assertEqual(purge.status, DataPurgeRequest.Status.EXECUTED)
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="data_purge.execute", object_id=str(self.course.pk)
+            ).exists()
+        )
+
+    def test_course_governance_mutations_reject_missing_confirmation(self):
+        archive = self.post_json(f"{self.detail_url}archive/", {})
+        purge = self.post_json(
+            f"{self.detail_url}purge-requests/",
+            {"reason_code": "collection_error"},
+        )
+
+        self.assertEqual(archive.status_code, 400)
+        self.assertEqual(purge.status_code, 400)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.status, Course.Status.ACTIVE)
+        self.assertFalse(DataPurgeRequest.objects.exists())
+
     def test_role_and_course_access_are_server_authorized(self):
         self.client.force_login(self.student)
         self.assertEqual(self.client.get(self.collection_url).status_code, 403)
@@ -175,10 +232,13 @@ class TeacherCourseApiTests(TestCase):
         self.client.force_login(self.outsider)
         self.assertEqual(self.client.get(self.detail_url).status_code, 404)
         self.assertEqual(self.client.get(self.settings_url).status_code, 404)
+        self.assertEqual(
+            self.post_json(f"{self.detail_url}archive/", {"confirmation": "archive"}).status_code,
+            404,
+        )
 
 
-@override_settings(DEBUG=True, VITE_DEV_SERVER_URL="http://localhost:5173")
-class TeacherCourseVueShellTests(TestCase):
+class TeacherCourseFrontendEntryTests(TestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(
             username="teacher-course-shell-owner",
@@ -198,51 +258,24 @@ class TeacherCourseVueShellTests(TestCase):
         )
         self.client.force_login(self.teacher)
 
-    def rollout_env(self, **values):
-        defaults = {
-            "VUE_TEACHER_COURSES_ENABLED": "0",
-            "VUE_TEACHER_COURSES_COURSE_IDS": "",
-            "VUE_TEACHER_COURSES_USER_IDS": "",
-        }
-        defaults.update(values)
-        return patch.dict(os.environ, defaults)
-
-    def test_flag_off_preserves_existing_documents(self):
-        with self.rollout_env():
-            course_list, create, detail, settings = [self.client.get(url) for url in self.urls]
-
-        self.assertTemplateUsed(course_list, "teacher/course_list.html")
-        self.assertTemplateUsed(create, "teacher/course_form.html")
-        self.assertTemplateUsed(detail, "teacher/course_detail.html")
-        self.assertTemplateUsed(settings, "teacher/course_settings.html")
-        self.assertNotContains(course_list, 'id="kt-app"')
-
-    def test_user_pilot_receives_vue_shell_on_all_four_existing_get_routes(self):
-        with self.rollout_env(
-            VUE_TEACHER_COURSES_ENABLED="1",
-            VUE_TEACHER_COURSES_USER_IDS=str(self.teacher.pk),
-        ):
+    def test_all_course_pages_use_the_independent_frontend(self):
+        with patch.dict(os.environ, {
+            "FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html",
+        }):
             responses = [self.client.get(url) for url in self.urls]
 
         for response in responses:
             self.assertEqual(response.status_code, 200)
-            self.assertContains(response, 'id="kt-app"')
-            self.assertContains(response, 'data-module="teacher-courses"')
+            self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+            self.assertFalse(response.templates)
 
-    def test_post_remains_the_existing_django_form_flow_while_vue_is_enabled(self):
-        with self.rollout_env(
-            VUE_TEACHER_COURSES_ENABLED="1",
-            VUE_TEACHER_COURSES_USER_IDS=str(self.teacher.pk),
-        ):
-            response = self.client.post(
-                reverse("courses:create"),
-                {
-                    "name": "仍由 Django 表单创建",
-                    "code": "FALLBACK",
-                    "term": "2026 秋",
-                    "description": "",
-                },
-            )
+    def test_legacy_course_form_posts_are_retired(self):
+        create = self.client.post(reverse("courses:create"), {"name": "旧表单"})
+        settings = self.client.post(
+            reverse("courses:settings", args=[self.course.pk]),
+            {"name": "旧表单"},
+        )
 
-        created = Course.objects.get(code="FALLBACK")
-        self.assertRedirects(response, reverse("courses:detail", args=[created.pk]))
+        self.assertEqual(create.status_code, 405)
+        self.assertEqual(settings.status_code, 405)
+        self.assertFalse(Course.objects.filter(name="旧表单").exists())

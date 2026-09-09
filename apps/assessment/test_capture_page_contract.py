@@ -14,7 +14,7 @@ class CapturePageContractTests(StudentApiFixtureMixin, TestCase):
         self.session = ExperimentSession.objects.get(class_task=self.task, student=self.student)
         self.assignment = self.session.assignments.get()
         self.url = f'/student/sessions/{self.session.pk}/questions/{self.assignment.pk}/'
-        self.env = patch.dict('os.environ', {'VUE_STANDALONE_ENABLED': '1', 'FRONTEND_INTERNAL_REDIRECT': '/__frontend/index.html'})
+        self.env = patch.dict('os.environ', {'FRONTEND_INTERNAL_REDIRECT': '/__frontend/index.html'})
         self.env.start()
         self.addCleanup(self.env.stop)
 

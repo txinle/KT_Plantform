@@ -30,6 +30,15 @@ export interface DataCenterAdvanced {
   page: components['schemas']['TeacherClassPageMetadata']
 }
 
+export interface DataCenterExportJobMutation {
+  job_id: string
+  package: string
+  status: string
+  status_label: string
+  download_url: string | null
+  history_url: string
+}
+
 type ApiClient = ReturnType<typeof createApiClient>
 type QueryValue = string | number | null | undefined | (string | null)[]
 export type DataQuery = Record<string, QueryValue>
@@ -61,6 +70,12 @@ export function createTeacherDataCenterApi(client: ApiClient) {
     scope(courseId: number, query: DataQuery = {}) {
       return client.get<DataCenterScope>(`/api/v1/teacher/courses/${courseId}/data/scope/${queryString(query)}`)
     },
+    updateScope(courseId: number, input: { experiment_id: number | null; class_id: number | null }) {
+      return client.mutate<DataCenterScope>(`/api/v1/teacher/courses/${courseId}/data/scope/`, {
+        method: 'POST',
+        body: input,
+      })
+    },
     overview(courseId: number, query: DataQuery = {}) {
       return client.get<DataCenterOverview>(`/api/v1/teacher/courses/${courseId}/data/overview/${queryString(query)}`)
     },
@@ -75,6 +90,15 @@ export function createTeacherDataCenterApi(client: ApiClient) {
     },
     advanced(courseId: number, query: DataQuery = {}) {
       return client.get<DataCenterAdvanced>(`/api/v1/teacher/courses/${courseId}/data/advanced/${queryString(query)}`)
+    },
+    createExport(courseId: number, input: { package: string; confirm_identified: true; scope: Record<string, unknown> }) {
+      return client.mutate<DataCenterExportJobMutation>(`/api/v1/teacher/courses/${courseId}/data/export-jobs/`, {
+        method: 'POST',
+        body: input,
+      })
+    },
+    removeExport(url: string) {
+      return client.mutate<DataCenterExportJobMutation>(url, { method: 'DELETE' })
     },
   }
 }

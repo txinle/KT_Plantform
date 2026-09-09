@@ -50,16 +50,6 @@ class DataCenterContractTests(TransactionTestCase):
             name="实验一",
         )
 
-    def test_course_data_uses_identified_navigation_tree_and_identity_notice(self):
-        self.client.force_login(self.teacher)
-        response = self.client.get(reverse("courses:data", args=[self.course.pk]))
-
-        self.assertEqual(response.status_code, 200)
-        body = response.content.decode("utf-8")
-        for text in ("数据中心", "教学数据", "导出", "数据质量", "高级数据工具", "参与学生"):
-            self.assertIn(text, body)
-        self.assertNotIn("assessment_events.csv", body)
-
     def test_data_navigation_links_to_experiment_scoped_table_preview(self):
         self.client.force_login(self.teacher)
         response = self.client.get(
@@ -75,9 +65,6 @@ class DataCenterContractTests(TransactionTestCase):
 
     def test_data_center_exposes_unified_quality_navigation(self):
         self.client.force_login(self.teacher)
-        response = self.client.get(reverse("courses:data", args=[self.course.pk]))
-        body = response.content.decode("utf-8")
-        self.assertIn(reverse("courses:data_quality", args=[self.course.pk]), body)
         quality = self.client.get(
             reverse("courses:data", args=[self.course.pk]), {"view": "quality"}
         )
@@ -86,18 +73,6 @@ class DataCenterContractTests(TransactionTestCase):
             reverse("courses:data_quality", args=[self.course.pk]),
             fetch_redirect_response=False,
         )
-        quality_page = self.client.get(reverse("courses:data_quality", args=[self.course.pk]))
-        self.assertIn("NOT_EVALUABLE", quality_page.content.decode("utf-8"))
-
-    def test_multiple_versions_do_not_leak_version_selection_into_teaching_scope(self):
-        ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)
-        ExperimentVersion.objects.create(experiment=self.experiment, version_number=2, published_by=self.teacher)
-        self.client.force_login(self.teacher)
-        response = self.client.get(reverse("courses:data_teaching", args=[self.course.pk]))
-        self.assertEqual(response.status_code, 200)
-        body = response.content.decode("utf-8")
-        self.assertIn("普通教学范围只需要确定实验和班级", body)
-        self.assertNotIn('name="version_id"', body)
 
     def test_table_export_uses_selected_table_and_scope(self):
         self.client.force_login(self.teacher)
@@ -303,15 +278,6 @@ class DataCenterContractTests(TransactionTestCase):
         self.assertIsNotNone(job.expires_at)
         self.assertEqual(ExportJob.objects.filter(experiment=self.experiment, package="complete").count(), 2)
 
-    def test_data_center_uses_task_cards_not_export_queue_details(self):
-        self.client.force_login(self.teacher)
-        response = self.client.get(reverse("courses:data", args=[self.course.pk]))
-        body = response.content.decode("utf-8")
-        self.assertIn("查看学生作答", body)
-        self.assertIn("导出数据包", body)
-        self.assertNotIn("排队中", body)
-        self.assertNotIn("过期时间", body)
-
     def test_delete_removes_only_export_record_and_artifact(self):
         self.client.force_login(self.teacher)
         self.client.post(
@@ -352,7 +318,7 @@ class DataCenterContractTests(TransactionTestCase):
         self.assertEqual(values[headers.index("is_correct")], "True")
         self.assertEqual(values[headers.index("score")], "1.00")
 
-    def test_class_snapshot_and_student_number_scope_preview_and_export(self):
+    def test_class_snapshot_and_student_number_scope_export(self):
         version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)
         question = Question.objects.create(bank=self.experiment.question_bank, sequence=1, question_type=Question.Type.SHORT, text="题目", correct_answer="答案")
         snapshot = QuestionSnapshot.objects.create(version=version, source_question=question, source_sequence=1, code="Q1", question_type=Question.Type.SHORT, text="题目", correct_answer="答案", primary_kc="KC1", all_kcs=["KC1"])
@@ -366,14 +332,6 @@ class DataCenterContractTests(TransactionTestCase):
             StudentQuestionAssignment.objects.create(session=session, snapshot=snapshot, item_instance=get_or_create_default_item_instance(snapshot), assigned_sequence_index=1)
 
         self.client.force_login(self.teacher)
-        response = self.client.get(reverse("courses:data_advanced", args=[self.course.pk]), {
-            "table": "assignments", "experiment_id": self.experiment.pk, "version_mode": "single", "version_id": version.pk,
-            "class_snapshot_id": first_class.pk, "student_id": first.pk,
-        })
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "学生作答预览")
-        self.assertNotContains(response, "A001")
         export = self.client.post(reverse("analytics:table_export_create", args=[self.course.pk]), {
             "table": "assignments", "experiment_id": self.experiment.pk, "version_mode": "single", "version_id": version.pk,
             "class_snapshot_id": first_class.pk, "student_id": first.pk, "confirm_identified": "yes",
@@ -401,14 +359,6 @@ class DataCenterContractTests(TransactionTestCase):
             StudentQuestionAssignment.objects.create(session=session, snapshot=snapshot, item_instance=get_or_create_default_item_instance(snapshot), assigned_sequence_index=1)
 
         self.client.force_login(self.teacher)
-        response = self.client.get(reverse("courses:data_advanced", args=[self.course.pk]), {
-            "table": "assignments", "experiment_id": self.experiment.pk, "version_mode": "single", "version_id": version.pk,
-            "class_snapshot_id": unrecorded_class.pk,
-        })
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "学生作答预览")
-        self.assertNotContains(response, "N001")
         export = self.client.post(reverse("analytics:table_export_create", args=[self.course.pk]), {
             "table": "assignments", "experiment_id": self.experiment.pk, "version_mode": "single", "version_id": version.pk,
             "class_snapshot_id": unrecorded_class.pk, "confirm_identified": "yes",
@@ -420,28 +370,6 @@ class DataCenterContractTests(TransactionTestCase):
             rows = list(csv.reader(StringIO(archive.read("02_core/assignments.csv").decode("utf-8-sig"))))
         self.assertEqual(rows[1][:2], ["N001", "未记录同学"])
         self.assertEqual(len(rows), 2)
-
-    def test_ambiguous_legacy_class_label_is_rejected_instead_of_string_filtering(self):
-        first_version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)
-        second_version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=2, published_by=self.teacher)
-        question = Question.objects.create(bank=self.experiment.question_bank, sequence=1, question_type=Question.Type.SHORT, text="题目", correct_answer="答案")
-        first_snapshot = QuestionSnapshot.objects.create(version=first_version, source_question=question, source_sequence=1, code="Q1", question_type=Question.Type.SHORT, text="题目", correct_answer="答案", primary_kc="KC1", all_kcs=["KC1"])
-        second_snapshot = QuestionSnapshot.objects.create(version=second_version, source_question=question, source_sequence=1, code="Q2", question_type=Question.Type.SHORT, text="题目", correct_answer="答案", primary_kc="KC1", all_kcs=["KC1"])
-        student = User.objects.create_user(username="historical-class", display_name="历史同学", role=User.Role.STUDENT, student_number="H001")
-        first_class = ExperimentClassSnapshot.objects.create(version=first_version, name_snapshot="历史一班", capture_mode=ExperimentClassSnapshot.CaptureMode.LEGACY_LABEL_PROJECTION)
-        second_class = ExperimentClassSnapshot.objects.create(version=second_version, name_snapshot="历史一班", capture_mode=ExperimentClassSnapshot.CaptureMode.LEGACY_LABEL_PROJECTION)
-        first_session = ExperimentSession.objects.create(version=first_version, student=student, class_snapshot=first_class, class_snapshot_name="历史一班")
-        second_session = ExperimentSession.objects.create(version=second_version, student=student, class_snapshot=second_class, class_snapshot_name="历史一班")
-        StudentQuestionAssignment.objects.create(session=first_session, snapshot=first_snapshot, item_instance=get_or_create_default_item_instance(first_snapshot), assigned_sequence_index=1)
-        StudentQuestionAssignment.objects.create(session=second_session, snapshot=second_snapshot, item_instance=get_or_create_default_item_instance(second_snapshot), assigned_sequence_index=1)
-
-        self.client.force_login(self.teacher)
-        response = self.client.get(reverse("courses:data_advanced", args=[self.course.pk]), {
-            "table": "assignments", "experiment_id": self.experiment.pk,
-            "class_name": "历史一班",
-        })
-
-        self.assertEqual(response.status_code, 400)
 
     def test_table_export_rejects_duplicate_question_code_within_one_version(self):
         version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)
@@ -475,14 +403,6 @@ class DataCenterContractTests(TransactionTestCase):
             {"package": "identity", "experiment_id": self.experiment.pk, "confirm_identified": "yes"},
         )
         self.assertEqual(response.status_code, 400)
-
-    def test_collection_quality_page_reports_process_metrics(self):
-        self.client.force_login(self.teacher)
-        response = self.client.get(reverse("courses:quality", args=[self.course.pk]))
-        self.assertEqual(response.status_code, 200)
-        body = response.content.decode("utf-8")
-        for label in ("数据质量", "PASS", "WARN", "FAIL", "NOT_EVALUABLE", "NOT_APPLICABLE", "来源"):
-            self.assertIn(label, body)
 
     def test_worker_claims_job_with_lease_and_builds_manifest_zip(self):
         snapshot = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)

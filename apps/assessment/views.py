@@ -1,32 +1,24 @@
 import json
 from django.conf import settings
 from django.contrib import messages
-from django.core.exceptions import PermissionDenied, ValidationError
-from django.http import Http404, HttpResponse, JsonResponse
+from django.core.exceptions import ValidationError
+from django.http import Http404, JsonResponse
 from django.db.models import F
-from django.shortcuts import get_object_or_404, redirect, render
-from django.templatetags.static import static
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_GET, require_POST
 from apps.accounts.permissions import role_required
-from apps.accounts.models import Course, CourseEnrollment
-from apps.api.rollout import is_vue_module_enabled
-from apps.api.shell import render_vue_shell
+from apps.accounts.models import CourseEnrollment
+from apps.api.frontend_entry import frontend_response
 from apps.experiments.models import ClassExperimentTask, Experiment
 from .models import (
     Attempt,
-    ConfidenceAssignment,
     ExperimentSession,
     StudentQuestionAssignment,
 )
-from .confidence_services import (
-    confidence_prompt_contract,
-    ensure_confidence_assignment,
-    frozen_feedback_payload,
-)
-from .response_snapshot_services import canonical_response_state
+from .confidence_services import frozen_feedback_payload
 from .writer_lease_services import WriterLeaseConflict
 from .services import (
     SubmissionValidationError,
@@ -34,7 +26,6 @@ from .services import (
     get_or_create_session,
     mark_skipped,
     record_submission_rejection,
-    record_visit,
     save_draft,
     submit_attempt,
 )
@@ -76,37 +67,9 @@ def _next_url_after_attempt(attempt, *, finish_if_last):
     return reverse("assessment:complete", args=[attempt.session_id])
 
 
-def _confidence_client_contract(attempt, confidence):
-    return {
-        **confidence_prompt_contract(confidence),
-        "prompt_shown_url": reverse(
-            "assessment_process:confidence_prompt_shown",
-            args=[attempt.pk],
-        ),
-        "commit_url": reverse(
-            "assessment_process:confidence_commit",
-            args=[attempt.pk],
-        ),
-        "skip_url": reverse(
-            "assessment_process:confidence_skip",
-            args=[attempt.pk],
-        ),
-    }
-
-
 @role_required("student")
 def dashboard(request):
-    if is_vue_module_enabled("student_courses", request.user):
-        return render_vue_shell(
-            request,
-            module="student-courses",
-            title="我的课程 | KT Data Lab",
-        )
-    enrollments = CourseEnrollment.objects.filter(
-        student=request.user,
-        is_active=True,
-    ).select_related("course", "class_group")
-    return render(request, "student/dashboard.html", {"course_enrollments": enrollments})
+    return frontend_response()
 
 
 @role_required("student")
@@ -117,71 +80,7 @@ def course_dashboard(request, course_id):
         student=request.user,
         is_active=True,
     )
-    if is_vue_module_enabled(
-        "student_courses",
-        request.user,
-        course=enrollment.course,
-    ):
-        return render_vue_shell(
-            request,
-            module="student-courses",
-            title=f"{enrollment.course.name} | 我的课程",
-            course=enrollment.course,
-        )
-    from .api.views import _student_task_queryset, _task_projection
-
-    status_labels = {
-        "scheduled": "未开始",
-        "open": "进行中",
-        "closed": "已结束",
-        "cancelled": "已取消",
-    }
-    cards = []
-    for task in _student_task_queryset(request.user, course_id=enrollment.course_id):
-        projection = _task_projection(task, course=enrollment.course)
-        configuration = task.release_snapshot.configuration
-        session = next(iter(task.current_student_sessions), None)
-        status_label = status_labels.get(
-            projection["business_status"], projection["business_status"]
-        )
-        if session is not None and session.status != ExperimentSession.Status.IN_PROGRESS:
-            status_label = session.get_status_display()
-        cards.append(
-            {
-                "experiment": task.experiment,
-                "session": session,
-                "question_count": projection["progress"]["total"],
-                "primary_action": projection["primary_action"],
-                "status_label": status_label,
-                "status_tone": (
-                    "success"
-                    if projection["primary_action"] == "view_result"
-                    else "info"
-                    if projection["business_status"] == "open"
-                    else "neutral"
-                ),
-                "time_mode_label": Experiment.TimeMode(
-                    configuration.get("time_mode", Experiment.TimeMode.NONE)
-                ).label,
-                "feedback_mode_label": Experiment.Feedback(
-                    configuration.get("feedback_mode", Experiment.Feedback.NONE)
-                ).label,
-                "resume_mode_label": Experiment.ResumeMode(
-                    configuration.get("resume_mode", Experiment.ResumeMode.RESUMABLE)
-                ).label,
-            }
-        )
-    return render(
-        request,
-        "student/course.html",
-        {
-            "enrollment": enrollment,
-            "course": enrollment.course,
-            "experiment_cards": cards,
-            "student_learning_enabled": settings.STUDENT_LEARNING_ANALYTICS_ENABLED,
-            "student_course_section": "experiments",
-        },
-    )
+    return frontend_response()
 
 
 def _student_learning_enrollment(request, course_id):
@@ -195,140 +94,25 @@ def _student_learning_enrollment(request, course_id):
     )
 
 
-def _student_learning_forbidden(request, enrollment, message):
-    return render(
-        request,
-        "student/learning_forbidden.html",
-        {
-            "course": enrollment.course,
-            "enrollment": enrollment,
-            "message": message,
-            "student_learning_enabled": True,
-            "student_course_section": "learning",
-        },
-        status=403,
-    )
-
-
 @require_GET
 @role_required("student")
 def student_learning(request, course_id):
-    enrollment = _student_learning_enrollment(request, course_id)
-    if is_vue_module_enabled(
-        "student_courses",
-        request.user,
-        course=enrollment.course,
-    ):
-        return render_vue_shell(
-            request,
-            module="student-courses",
-            title=f"我的学习 | {enrollment.course.name}",
-            course=enrollment.course,
-        )
-    from apps.analytics.teaching.student_projection import (
-        build_student_learning_projection,
-    )
-
-    try:
-        learning = build_student_learning_projection(enrollment)
-    except LookupError as error:
-        raise Http404 from error
-    return render(
-        request,
-        "student/learning.html",
-        {
-            "course": enrollment.course,
-            "enrollment": enrollment,
-            "learning": learning,
-            "student_learning_enabled": True,
-            "student_course_section": "learning",
-        },
-    )
+    _student_learning_enrollment(request, course_id)
+    return frontend_response()
 
 
 @require_GET
 @role_required("student")
 def student_learning_experiment(request, course_id, experiment_id):
-    enrollment = _student_learning_enrollment(request, course_id)
-    if is_vue_module_enabled(
-        "student_courses",
-        request.user,
-        course=enrollment.course,
-    ):
-        return render_vue_shell(
-            request,
-            module="student-courses",
-            title=f"实验结果 | {enrollment.course.name}",
-            course=enrollment.course,
-        )
-    from apps.analytics.teaching.student_projection import (
-        build_student_experiment_projection,
-    )
-
-    try:
-        detail = build_student_experiment_projection(
-            enrollment,
-            experiment_id=experiment_id,
-            require_results=True,
-        )
-    except PermissionDenied as error:
-        return _student_learning_forbidden(request, enrollment, str(error))
-    except LookupError as error:
-        raise Http404 from error
-    return render(
-        request,
-        "student/learning_experiment.html",
-        {
-            "course": enrollment.course,
-            "enrollment": enrollment,
-            "detail": detail,
-            "student_learning_enabled": True,
-            "student_course_section": "learning",
-        },
-    )
+    _student_learning_enrollment(request, course_id)
+    return frontend_response()
 
 
 @require_GET
 @role_required("student")
 def student_learning_question(request, course_id, experiment_id, question_id):
-    enrollment = _student_learning_enrollment(request, course_id)
-    if is_vue_module_enabled(
-        "student_courses",
-        request.user,
-        course=enrollment.course,
-    ):
-        return render_vue_shell(
-            request,
-            module="student-courses",
-            title=f"题目结果 | {enrollment.course.name}",
-            course=enrollment.course,
-            classic_scripts=(f"{static('js/process-event-collector.js')}?v=20260906.capture-v2",),
-        )
-    from apps.analytics.teaching.student_projection import (
-        build_student_question_projection,
-    )
-
-    try:
-        detail = build_student_question_projection(
-            enrollment,
-            experiment_id=experiment_id,
-            question_id=question_id,
-        )
-    except PermissionDenied as error:
-        return _student_learning_forbidden(request, enrollment, str(error))
-    except LookupError as error:
-        raise Http404 from error
-    return render(
-        request,
-        "student/learning_question.html",
-        {
-            "course": enrollment.course,
-            "enrollment": enrollment,
-            "detail": detail,
-            "student_learning_enabled": True,
-            "student_course_section": "learning",
-        },
-    )
+    _student_learning_enrollment(request, course_id)
+    return frontend_response()
 
 
 @require_POST
@@ -367,102 +151,25 @@ def start_experiment(request, experiment_id):
 
 @role_required("student")
 def question_page(request, session_id, assignment_id):
-    request_received_at = timezone.now()
     session = get_object_or_404(
-        ExperimentSession.objects.select_related(
-            "version__experiment",
-            "class_task__class_group",
-            "class_task__experiment",
-        ),
+        ExperimentSession.objects.select_related("version__experiment"),
         pk=session_id,
         student=request.user,
     )
-    if getattr(request, '_kt_standalone', False) or is_vue_module_enabled(
-        "student_assessment",
-        request.user,
-        task=session.class_task,
+    get_object_or_404(
+        StudentQuestionAssignment,
+        pk=assignment_id,
+        session=session,
+    )
+    response = frontend_response()
+    if (
+        session.capture_contract_id
+        and session.capture_contract.contract_name == "capture-v2"
     ):
-        get_object_or_404(
-            StudentQuestionAssignment,
-            pk=assignment_id,
-            session=session,
-        )
-        response = render_vue_shell(
-            request,
-            module="student-assessment",
-            title=f"作答 | {session.version.experiment.name}",
-            classic_scripts=(
-                f"{static('js/process-event-collector.js')}?v=20260906.capture-v2",
-            ),
-        )
-        if session.capture_contract_id and session.capture_contract.contract_name == 'capture-v2':
-            response['X-Capture-Contract'] = 'capture-v2'
-            if response.has_header('X-Accel-Redirect'):
-                response['X-Accel-Redirect'] = '/__frontend/capture-v2.html'
-        return response
-    from .capture_v2_services import uses_capture_v2
-    if uses_capture_v2(session):
-        return HttpResponse('当前采集版本暂不可用。请保留本机作答记录，稍后从此任务继续。', status=503)
-    assignment = get_object_or_404(StudentQuestionAssignment.objects.select_related("snapshot"), pk=assignment_id, session=session)
-    reason = request.GET.get("reason", "navigation_click")
-    try:
-        attempt = record_visit(
-            session.id,
-            assignment.id,
-            reason,
-            request_received_at=request_received_at,
-        )
-    except ValidationError as exc:
-        messages.error(request, "; ".join(exc.messages))
-        return redirect("assessment:complete", session_id=session.id)
-    pending_confidence = ConfidenceAssignment.objects.filter(
-        attempt=attempt, condition=ConfidenceAssignment.Condition.PROMPT,
-    ).first() if attempt.status != Attempt.Status.SUBMITTED else None
-    session.refresh_from_db()
-    assignments = list(session.assignments.select_related("snapshot", "attempt"))
-    remaining = None
-    config = session.version.configuration
-    if attempt.initial_effective_deadline_at:
-        remaining = max(
-            0,
-            int((attempt.initial_effective_deadline_at - timezone.now()).total_seconds()),
-        )
-    elif config.get("time_mode") == "per_question":
-        remaining = max(0, int(config.get("per_question_time_limit_seconds") or 0) - attempt.active_seconds)
-    elif config.get("time_mode") == "total" and session.deadline_at:
-        remaining = max(0, int((session.deadline_at - timezone.now()).total_seconds()))
-    next_assignment = _next_assignment(session, assignment.id)
-    fallback_next_url = reverse("assessment:question", args=[session.id, next_assignment.id]) if next_assignment else reverse("assessment:complete", args=[session.id])
-    initial_response_state = None
-    question_type = assignment.snapshot.question_type
-    if question_type == "short_answer" and attempt.saved_response_snapshot is not None:
-        saved = attempt.saved_response_snapshot
-        initial_response_state = {
-            "snapshot_id": str(saved.pk),
-            "state_hash": saved.state_hash,
-            "content_hash": saved.content_hash,
-            "content_length": saved.content_length,
-            "schema_version": saved.schema_version,
-        }
-    elif attempt.draft_answer is not None:
-        initial_response_state = canonical_response_state(
-            question_type, attempt.draft_answer
-        )
-    return render(request, "student/question.html", {
-        "session": session,
-        "assignment": assignment,
-        "attempt": attempt,
-        "assignments": assignments,
-        "snapshot": assignment.snapshot,
-        "remaining_seconds": remaining,
-        "fallback_next_url": fallback_next_url,
-        "initial_response_state": initial_response_state,
-        "pending_confidence": (
-            _confidence_client_contract(attempt, pending_confidence)
-            if pending_confidence is not None
-            else None
-        ),
-    })
+        response["X-Capture-Contract"] = "capture-v2"
+        if response.has_header("X-Accel-Redirect"):
+            response["X-Accel-Redirect"] = "/__frontend/capture-v2.html"
+    return response
 
 
 @role_required("student")
@@ -594,4 +301,4 @@ def finish(request, session_id):
 @role_required("student")
 def complete(request, session_id):
     session = get_object_or_404(ExperimentSession.objects.select_related("version__experiment"), pk=session_id, student=request.user)
-    return render(request, "student/complete.html", {"session": session})
+    return frontend_response()

@@ -122,9 +122,86 @@ class TeacherDataCenterApiTests(TestCase):
         self.assertEqual(payload["facts"]["observed_participants"], 1)
         self.assertEqual(payload["facts"]["completed_sessions"], 1)
         self.assertEqual(payload["actions"]["scope_update_url"], reverse(
-            "courses:data_scope_update", args=[self.course.pk]
+            "teacher-data-center-scope", args=[self.course.pk]
         ))
         self.assertNotIn("password", str(payload))
+
+    def test_scope_update_is_json_and_persists_the_authoritative_selection(self):
+        url = self.api("scope/")
+
+        updated = self.client.post(
+            url,
+            {
+                "experiment_id": self.experiment.pk,
+                "class_id": self.class_group.pk,
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(
+            updated.json()["current"],
+            {
+                "experiment_id": self.experiment.pk,
+                "class_id": self.class_group.pk,
+                "is_complete": True,
+                "display": "数据实验 · 实验班",
+            },
+        )
+        self.assertEqual(self.client.get(url).json()["current"]["class_id"], self.class_group.pk)
+
+    def test_scope_update_rejects_cross_course_values_without_replacing_the_saved_scope(self):
+        url = self.api("scope/")
+        self.client.post(
+            url,
+            {"experiment_id": self.experiment.pk, "class_id": self.class_group.pk},
+            content_type="application/json",
+        )
+        other = User.objects.create_user(username="data-other-owner", role=User.Role.TEACHER)
+        other_course = Course.objects.create(owner=other, name="其他数据课程", code="DATA-OTHER", term="2026")
+        other_class = ClassGroup.objects.create(course=other_course, name="越界班", academic_year="2026")
+
+        rejected = self.client.post(
+            url,
+            {"experiment_id": self.experiment.pk, "class_id": other_class.pk},
+            content_type="application/json",
+        )
+
+        self.assertEqual(rejected.status_code, 404)
+        self.assertEqual(self.client.get(url).json()["current"]["class_id"], self.class_group.pk)
+
+    def test_export_job_create_and_artifact_removal_use_json_contracts(self):
+        create_url = self.api("export-jobs/")
+        payload = {
+            "package": "complete",
+            "confirm_identified": True,
+            "scope": {
+                "experiment_id": self.experiment.pk,
+                "version_mode": "single",
+                "version_id": self.version.pk,
+                "class_snapshot_id": self.class_snapshot.pk,
+            },
+        }
+
+        unconfirmed = self.client.post(
+            create_url,
+            {**payload, "confirm_identified": False},
+            content_type="application/json",
+        )
+        created = self.client.post(create_url, payload, content_type="application/json")
+
+        self.assertEqual(unconfirmed.status_code, 400)
+        self.assertEqual(created.status_code, 201)
+        job = ExportJob.objects.get(job_id=created.json()["job_id"])
+        self.assertEqual(job.status, ExportJob.Status.SUCCEEDED)
+        self.assertEqual(job.snapshot.filter_definition["version_id"], self.version.pk)
+        removed = self.client.delete(
+            self.api(f"export-jobs/{job.job_id}/"),
+            content_type="application/json",
+        )
+        self.assertEqual(removed.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.artifact_removal_reason, "user_requested_removal")
 
     def test_export_catalog_preserves_single_version_scope_and_confirmation_boundary(self):
         response = self.client.get(
@@ -146,7 +223,7 @@ class TeacherDataCenterApiTests(TestCase):
         self.assertEqual(payload["scope"]["values"]["version_id"], self.version.pk)
         self.assertEqual(
             payload["actions"]["create_url"],
-            reverse("analytics:export_job_create", args=[self.course.pk]),
+            reverse("teacher-data-center-export-job-create", args=[self.course.pk]),
         )
         self.assertIn("实名", payload["identified_data_notice"])
 
@@ -199,7 +276,11 @@ class TeacherDataCenterApiTests(TestCase):
         self.assertEqual(len(payload["items"]), 20)
         self.assertEqual(payload["items"][0]["package"], "package-20")
         self.assertTrue(payload["items"][0]["download_url"].endswith("/download/"))
-        self.assertTrue(payload["items"][0]["delete_url"].endswith("/delete/"))
+        self.assertTrue(
+            payload["items"][0]["delete_url"].endswith(
+                f"/export-jobs/{payload['items'][0]['job_id']}/"
+            )
+        )
 
     def test_advanced_preview_is_one_student_per_row_searchable_and_business_only(self):
         self.student.display_name = "张同学"
@@ -272,7 +353,7 @@ class TeacherDataCenterApiTests(TestCase):
 
 
 @override_settings(DEBUG=True, VITE_DEV_SERVER_URL="http://localhost:5173")
-class TeacherDataCenterVueShellTests(TestCase):
+class TeacherDataCenterFrontendEntryTests(TestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(
             username="data-shell-teacher", role=User.Role.TEACHER
@@ -292,42 +373,19 @@ class TeacherDataCenterVueShellTests(TestCase):
             reverse("courses:data_advanced", args=[self.course.pk]),
         ]
 
-    def rollout_env(self, **values):
-        defaults = {
-            "VUE_TEACHER_DATA_CENTER_ENABLED": "0",
-            "VUE_TEACHER_DATA_CENTER_COURSE_IDS": "",
-            "VUE_TEACHER_DATA_CENTER_USER_IDS": "",
-        }
-        defaults.update(values)
-        return patch.dict(os.environ, defaults)
-
-    def test_flag_off_preserves_data_center_templates(self):
-        with self.rollout_env():
-            responses = [self.client.get(url) for url in self.urls]
-
-        self.assertTemplateUsed(responses[0], "teacher/data_center/overview.html")
-        self.assertTemplateUsed(responses[-1], "teacher/data_center/advanced.html")
-        for response in responses:
-            self.assertNotContains(response, 'id="kt-app"')
-
-    def test_pilot_course_receives_vue_shell_on_existing_read_routes(self):
-        with self.rollout_env(
-            VUE_TEACHER_DATA_CENTER_ENABLED="1",
-            VUE_TEACHER_DATA_CENTER_COURSE_IDS=str(self.course.pk),
-        ):
+    def test_all_data_center_pages_use_the_independent_frontend(self):
+        with patch.dict(os.environ, {"FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html"}):
             responses = [self.client.get(url) for url in self.urls]
 
         for response in responses:
             self.assertEqual(response.status_code, 200)
-            self.assertContains(response, 'id="kt-app"')
-            self.assertContains(response, 'data-module="teacher-data-center"')
+            self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+            self.assertFalse(response.templates)
 
-    def test_scope_post_remains_the_existing_document_flow(self):
-        target = reverse("courses:data", args=[self.course.pk])
-        with self.rollout_env(VUE_TEACHER_DATA_CENTER_ENABLED="1"):
-            response = self.client.post(
-                reverse("courses:data_scope_update", args=[self.course.pk]),
-                {"experiment_id": "", "class_id": "", "next": target},
-            )
+    def test_legacy_document_scope_post_is_retired(self):
+        response = self.client.post(
+            reverse("courses:data_scope_update", args=[self.course.pk]),
+            {"experiment_id": "", "class_id": ""},
+        )
 
-        self.assertRedirects(response, target, fetch_redirect_response=False)
+        self.assertEqual(response.status_code, 405)

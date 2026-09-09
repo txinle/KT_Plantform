@@ -250,20 +250,6 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
         self.assertEqual(row.grading_coverage.submitted, 2)
         self.assertTrue(row.grading_coverage.is_partial)
 
-        with override_settings(
-            CLASS_CENTER_ENABLED=True,
-            STUDENT_LEARNING_ANALYTICS_ENABLED=True,
-        ):
-            self.client.force_login(self.students[0])
-            response = self.client.get(
-                reverse(
-                    "assessment:learning_experiment",
-                    args=[self.course.pk, partial.pk],
-                )
-            )
-        self.assertContains(response, "已评分 1 / 2 题")
-        self.assertContains(response, "部分结果")
-
     def test_home_projection_intersects_feedback_policy_and_minimum_sample(self):
         projection = build_student_learning_projection(self.enrollment)
         data = projection.to_dict()
@@ -598,55 +584,6 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
                 question_id=question_id + 999,
             )
 
-    @override_settings(
-        CLASS_CENTER_ENABLED=True,
-        STUDENT_LEARNING_ANALYTICS_ENABLED=True,
-    )
-    def test_student_learning_pages_render_allow_list_without_peer_or_process_data(self):
-        self.client.force_login(self.students[0])
-        home_url = reverse("assessment:learning", args=[self.course.pk])
-        experiment_url = reverse(
-            "assessment:learning_experiment",
-            args=[self.course.pk, self.experiments["full"].pk],
-        )
-        full_question = self.experiments["full"].versions.get().question_snapshots.get()
-        question_url = reverse(
-            "assessment:learning_question",
-            args=[self.course.pk, self.experiments["full"].pk, full_question.pk],
-        )
-
-        course_page = self.client.get(
-            reverse("assessment:course", args=[self.course.pk])
-        )
-        home = self.client.get(home_url)
-        experiment = self.client.get(experiment_url)
-        question = self.client.get(question_url)
-
-        self.assertEqual(home.status_code, 200)
-        self.assertContains(course_page, home_url)
-        self.assertContains(home, "我的学习")
-        self.assertContains(home, "本人 vs 班级")
-        self.assertContains(home, experiment_url)
-        self.assertEqual(experiment.status_code, 200)
-        self.assertContains(experiment, question_url)
-        self.assertEqual(question.status_code, 200)
-        self.assertContains(question, "正确答案")
-        self.assertContains(question, "闭合回路电压代数和为零")
-        combined = "".join(
-            response.content.decode() for response in (home, experiment, question)
-        )
-        for peer in self.students[1:]:
-            self.assertNotIn(peer.shown_name, combined)
-            self.assertNotIn(peer.student_number, combined)
-        for forbidden in (
-            "作答过程",
-            "event_id",
-            "snapshot_id",
-            "payload",
-            "content_hash",
-            "完整排行榜",
-        ):
-            self.assertNotIn(forbidden, combined)
 
     @override_settings(
         CLASS_CENTER_ENABLED=True,
@@ -654,37 +591,29 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
     )
     def test_student_result_routes_distinguish_forbidden_from_cross_scope(self):
         self.client.force_login(self.students[0])
-        none_url = reverse(
-            "assessment:learning_experiment",
-            args=[self.course.pk, self.experiments["none"].pk],
+        none_url = (
+            f"/api/v1/student/courses/{self.course.pk}/learning/experiments/"
+            f"{self.experiments['none'].pk}/"
         )
         full_question = self.experiments["full"].versions.get().question_snapshots.get()
-        wrong_question_url = reverse(
-            "assessment:learning_question",
-            args=[
-                self.course.pk,
-                self.experiments["full"].pk,
-                full_question.pk + 999,
-            ],
+        question_api = (
+            f"/api/v1/student/courses/{self.course.pk}/learning/experiments/"
+            f"{self.experiments['full'].pk}/questions/"
         )
+        wrong_question_url = f"{question_api}{full_question.pk + 999}/"
 
         forbidden = self.client.get(none_url)
         missing = self.client.get(wrong_question_url)
 
         self.assertEqual(forbidden.status_code, 403)
-        self.assertContains(forbidden, "返回实验任务", status_code=403)
         self.assertEqual(missing.status_code, 404)
 
         policy = self.class_group.student_analytics_policy
         policy.show_item_results = False
         policy.save(update_fields=["show_item_results"])
-        item_url = reverse(
-            "assessment:learning_question",
-            args=[self.course.pk, self.experiments["full"].pk, full_question.pk],
-        )
+        item_url = f"{question_api}{full_question.pk}/"
         item_forbidden = self.client.get(item_url)
         self.assertEqual(item_forbidden.status_code, 403)
-        self.assertContains(item_forbidden, "返回实验任务", status_code=403)
 
     @override_settings(
         CLASS_CENTER_ENABLED=True,
@@ -697,9 +626,15 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
         Course.objects.filter(pk=self.course.pk).update(
             status=Course.Status.ARCHIVED
         )
-        archived = self.client.get(url)
+        archived = self.client.get(
+            f"/api/v1/student/courses/{self.course.pk}/learning/"
+        )
+        course_collection = self.client.get("/api/v1/student/courses/")
         self.assertEqual(archived.status_code, 200)
-        self.assertContains(archived, "课程已归档")
+        self.assertEqual(
+            course_collection.json()["items"][0]["course_status"],
+            Course.Status.ARCHIVED,
+        )
 
         CourseEnrollment.objects.filter(pk=self.enrollment.pk).update(is_active=False)
         self.assertEqual(self.client.get(url).status_code, 404)
@@ -722,12 +657,14 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
         CLASS_CENTER_ENABLED=True,
         STUDENT_LEARNING_ANALYTICS_ENABLED=False,
     )
-    def test_student_learning_flag_closes_routes_and_hides_course_navigation(self):
+    def test_student_learning_flag_closes_page_and_api_routes(self):
         self.client.force_login(self.students[0])
         learning_url = reverse("assessment:learning", args=[self.course.pk])
 
         self.assertEqual(self.client.get(learning_url).status_code, 404)
-        course_page = self.client.get(
-            reverse("assessment:course", args=[self.course.pk])
+        self.assertEqual(
+            self.client.get(
+                f"/api/v1/student/courses/{self.course.pk}/learning/"
+            ).status_code,
+            404,
         )
-        self.assertNotContains(course_page, learning_url)

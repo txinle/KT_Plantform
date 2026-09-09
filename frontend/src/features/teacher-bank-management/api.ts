@@ -112,6 +112,7 @@ export interface QuestionImportPreview {
 
 export interface QuestionImportConfirmation {
   created: number
+  updated?: number
   active?: number
   draft?: number
   skipped: number
@@ -119,7 +120,7 @@ export interface QuestionImportConfirmation {
   detail_url: string
   rows: Array<{
     row_id: string
-    status: 'created'
+    status: 'created' | 'updated'
     question_id: number
     question_status: 'active' | 'draft'
     draft_reasons: string[]

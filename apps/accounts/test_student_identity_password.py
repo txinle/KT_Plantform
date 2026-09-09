@@ -462,7 +462,7 @@ class StudentPasswordTests(TestCase):
         self.assertEqual(json.loads(again.getvalue())["recorded"], 0)
         self.assertEqual(self.student.password, original)
 
-    def test_password_change_requires_csrf_and_legacy_login_honors_safe_next(self):
+    def test_password_change_requires_csrf_and_legacy_login_post_is_retired(self):
         client = Client(enforce_csrf_checks=True)
         client.force_login(self.student)
         response = client.post(
@@ -477,4 +477,4 @@ class StudentPasswordTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json()["error"]["code"], "CSRF_FAILED")
         response = self.client.post("/login/?next=/student/", {"username": "PW-001", "password": "SPW-001"})
-        self.assertRedirects(response, "/student/", fetch_redirect_response=False)
+        self.assertEqual(response.status_code, 405)

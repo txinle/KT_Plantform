@@ -4,9 +4,30 @@ on:
   push:
   pull_request:
 
+env:
+  POSTGRES_HOST: 127.0.0.1
+  POSTGRES_PORT: '5432'
+  POSTGRES_DB: kt_platform
+  POSTGRES_USER: kt_user
+  POSTGRES_PASSWORD: kt_password
+
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: kt_platform
+          POSTGRES_USER: kt_user
+          POSTGRES_PASSWORD: kt_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kt_user -d kt_platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -60,6 +81,20 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: kt_platform
+          POSTGRES_USER: kt_user
+          POSTGRES_PASSWORD: kt_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kt_user -d kt_platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -88,6 +123,18 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: application
+            config: playwright.config.ts
+          - profile: capture-v2
+            config: playwright.capture-v2.config.ts
+          - profile: capture-initialization
+            config: playwright.capture-initialization.config.ts
+          - profile: submission-repair
+            config: playwright.submission-repair.config.ts
     services:
       postgres:
         image: postgres:17
@@ -125,13 +172,18 @@ jobs:
       - run: npx playwright install --with-deps chromium firefox webkit
         working-directory: frontend
       - name: Run browser end-to-end tests
-        run: npm run test:e2e
+        run: |
+          node --test scripts/e2e-database.test.mjs
+          npm run build
+          node scripts/prepare-e2e.mjs --capture-v2
+          npx playwright test --config ${{ matrix.config }}
         working-directory: frontend
       - name: Upload Playwright failure artifacts
         if: ${{ failure() }}
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          name: playwright-e2e-failure-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
           path: |
             frontend/.e2e-results/
             frontend/playwright-report/

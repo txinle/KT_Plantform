@@ -119,7 +119,7 @@ test('long names and mobile question-bank actions remain usable', async ({ page 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
   await page.screenshot({ path: info.outputPath('long-bank-name-390.png'), fullPage: true })
   await page.goto('/teacher/courses/1/banks/?tab=course-kcs')
-  await expect(page.locator('.kt-qb-mobile-list [data-concept-delete]').first()).toBeVisible()
+  await expect(page.locator('.kt-qb-mobile-list [data-concept-archive]').first()).toBeVisible()
   await page.locator('.kt-qb-mobile-list [data-concept-rename]').first().click()
   const editor = page.locator('.kt-qb-mobile-list [data-concept-rename-form]').first()
   await expect(editor.getByLabel('知识点名称')).toBeVisible()

@@ -2,7 +2,7 @@ import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { copyFileSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const origin = 'http://127.0.0.1:8011'
+const origin = 'http://127.0.0.1:8000'
 const requestedOutputDir = process.env.KT_VISUAL_OUTPUT_DIR
 
 test('KC quota inventory agrees with saved preflight and permits publication', async ({ page }, testInfo) => {
@@ -45,7 +45,7 @@ test('KC quota inventory agrees with saved preflight and permits publication', a
   await expect(preflight).toBeVisible()
   await page.goto(detailUrl)
   await page.getByRole('button', { name: '发布到班级', exact: true }).click()
-  await page.locator('[id^="publish-class-"]').first().check()
+  await page.getByRole('checkbox', { name: '选择 认知追踪实验班', exact: true }).check()
   await page.getByRole('button', { name: '运行发布前检查', exact: true }).click()
   await page.getByRole('button', { name: '进入发布确认', exact: true }).click()
   await page.getByRole('button', { name: '确认发布', exact: true }).click()

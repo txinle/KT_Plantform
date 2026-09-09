@@ -7,4 +7,3 @@ class ApiConfig(AppConfig):
 
     def ready(self):
         from . import schema  # noqa: F401
-        from . import rollout  # noqa: F401

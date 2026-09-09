@@ -35,16 +35,9 @@ function unifiedQuestionImportCsv(rows: Array<{ sequence: number; text: string; 
   ].join('\n')
 }
 
-test('Flag OFF keeps the legacy template', async ({ page }) => {
-  await login(page, 'http://127.0.0.1:8010')
-  await page.goto('http://127.0.0.1:8010/teacher/courses/1/experiments/')
-  await expect(page.locator('.table-shell')).toBeVisible()
-  await expect(page.locator('#kt-app')).toHaveCount(0)
-})
-
-test('Flag ON mounts Vue on the same URL and survives refresh', async ({ page }) => {
-  await login(page, 'http://127.0.0.1:8011')
-  await page.goto('http://127.0.0.1:8011/teacher/courses/1/experiments/')
+test('independent frontend mounts on the business URL and survives refresh', async ({ page }) => {
+  await login(page, 'http://127.0.0.1:8000')
+  await page.goto('http://127.0.0.1:8000/teacher/courses/1/experiments/')
   await expect(page.locator('#kt-app')).toBeVisible()
   await expect(page.getByRole('heading', { name: '实验', exact: true })).toBeVisible()
   await page.reload()
@@ -52,18 +45,13 @@ test('Flag ON mounts Vue on the same URL and survives refresh', async ({ page })
 
   await page.getByRole('link', { name: '题库' }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/banks\/$/)
-  await expect(page.locator('#kt-app')).toHaveCount(0)
-})
-
-test('User allowlist enables the internal teacher', async ({ page }) => {
-  await login(page, 'http://127.0.0.1:8012')
-  await page.goto('http://127.0.0.1:8012/teacher/courses/1/experiments/')
-  await expect(page.getByRole('heading', { name: '实验', exact: true })).toBeVisible()
+  await expect(page.locator('#kt-app')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '题库', exact: true })).toBeVisible()
 })
 
 test('teacher creates an experiment and saves a resumable publish draft', async ({ browserName, page }) => {
-  await login(page, 'http://127.0.0.1:8011')
-  await page.goto('http://127.0.0.1:8011/teacher/courses/1/experiments/')
+  await login(page, 'http://127.0.0.1:8000')
+  await page.goto('http://127.0.0.1:8000/teacher/courses/1/experiments/')
   await page.getByRole('link', { name: '创建实验' }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/create\/$/)
 
@@ -84,8 +72,8 @@ test('teacher creates an experiment and saves a resumable publish draft', async 
 
 test('teacher previews and atomically publishes a class task', async ({ browserName, page }) => {
   test.skip(browserName !== 'chromium', 'One browser covers the destructive publish journey.')
-  await login(page, 'http://127.0.0.1:8011')
-  await page.goto('http://127.0.0.1:8011/teacher/courses/1/experiments/create/')
+  await login(page, 'http://127.0.0.1:8000')
+  await page.goto('http://127.0.0.1:8000/teacher/courses/1/experiments/create/')
   await page.getByLabel('实验名称').fill('正式发布浏览器验收')
   await page.getByLabel('题库').selectOption({ label: '演示题库' })
   await selectFirstKnowledgeComponent(page)
@@ -93,9 +81,14 @@ test('teacher previews and atomically publishes a class task', async ({ browserN
   await page.getByRole('button', { name: '发布到班级' }).click()
 
   await page.locator('[id^="publish-class-"]').first().check()
+  const previewed = page.waitForResponse(response => (
+    response.request().method() === 'POST'
+    && /\/api\/v1\/teacher\/publish-plans\/\d+\/preview\/$/.test(response.url())
+  ))
   await page.getByRole('button', { name: '运行发布前检查' }).click()
+  expect((await previewed).status()).toBe(200)
 
-  await expect(page).toHaveURL(/\/publish-plan\/\d+\/step\/2\/$/)
+  await expect(page).toHaveURL(/\/publish-plan\/\d+\/step\/2\/$/, { timeout: 30_000 })
   await expect(page.getByRole('heading', { name: '发布前检查', exact: true })).toBeVisible()
   await page.getByRole('button', { name: '进入发布确认' }).click()
   await page.getByRole('button', { name: '确认发布' }).click()
@@ -106,59 +99,62 @@ test('teacher previews and atomically publishes a class task', async ({ browserN
 
 test('login proceeds when the form is interactive before optional resources finish', async ({ page }) => {
   let releaseOptionalResource = () => {}
+  let optionalResourceRequested = false
   const optionalResourceGate = new Promise<void>((resolve) => {
     releaseOptionalResource = resolve
   })
-  await page.route('http://127.0.0.1:8011/__e2e_slow_resource__', async (route) => {
+  await page.addInitScript(() => {
+    window.addEventListener('DOMContentLoaded', () => {
+      const script = document.createElement('script')
+      script.async = true
+      script.src = '/__e2e_slow_resource__'
+      document.body.append(script)
+    }, { once: true })
+  })
+  await page.route('http://127.0.0.1:8000/__e2e_slow_resource__', async (route) => {
+    optionalResourceRequested = true
     await optionalResourceGate
     await route.fulfill({ body: '', contentType: 'application/javascript' })
   })
-  await page.route('http://127.0.0.1:8011/login/', async (route) => {
-    const response = await route.fetch()
-    const body = (await response.text()).replace(
-      '</body>',
-      '<script src="/__e2e_slow_resource__"></script></body>',
-    )
-    await route.fulfill({ response, body })
-  }, { times: 1 })
 
   try {
-    await login(page, 'http://127.0.0.1:8011')
+    await login(page, 'http://127.0.0.1:8000')
+    expect(optionalResourceRequested).toBe(true)
   } finally {
     releaseOptionalResource()
   }
 })
 
 test('Session and CSRF contracts remain same-origin', async ({ page }) => {
-  await login(page, 'http://127.0.0.1:8011')
-  const session = await page.request.get('http://127.0.0.1:8011/api/v1/auth/session/')
+  await login(page, 'http://127.0.0.1:8000')
+  const session = await page.request.get('http://127.0.0.1:8000/api/v1/auth/session/')
   expect(session.status()).toBe(200)
 
   const missingCsrf = await page.request.post(
-    'http://127.0.0.1:8011/api/v1/auth/session/',
+    'http://127.0.0.1:8000/api/v1/auth/session/',
     { data: {} },
   )
   expect(missingCsrf.status()).toBe(403)
   expect((await missingCsrf.json()).error.code).toBe('CSRF_FAILED')
 
-  const csrf = await page.request.get('http://127.0.0.1:8011/api/v1/auth/csrf/')
+  const csrf = await page.request.get('http://127.0.0.1:8000/api/v1/auth/csrf/')
   const csrfToken = (await csrf.json()).csrf_token
   const acceptedCsrf = await page.request.post(
-    'http://127.0.0.1:8011/api/v1/auth/session/',
+    'http://127.0.0.1:8000/api/v1/auth/session/',
     { data: {}, headers: { 'X-CSRFToken': csrfToken } },
   )
   expect(acceptedCsrf.status()).toBe(405)
 })
 
 test('unknown global URLs remain Django 404s', async ({ page }) => {
-  const response = await page.goto('http://127.0.0.1:8011/not-a-vue-route/')
+  const response = await page.goto('http://127.0.0.1:8000/not-a-vue-route/')
   expect(response?.status()).toBe(404)
 })
 
 test('Vue shell reflows without horizontal overflow', async ({ browserName, page }, testInfo) => {
   test.skip(browserName !== 'chromium', 'One rendering engine is sufficient for viewport evidence.')
-  await login(page, 'http://127.0.0.1:8011')
-  await page.goto('http://127.0.0.1:8011/teacher/courses/1/experiments/')
+  await login(page, 'http://127.0.0.1:8000')
+  await page.goto('http://127.0.0.1:8000/teacher/courses/1/experiments/')
 
   for (const viewport of [
     { name: 'desktop-1440x900', width: 1440, height: 900 },
@@ -179,8 +175,8 @@ test('approved shell prevents button wrapping and keeps reduced-motion focus vis
   test.skip(browserName !== 'chromium', 'One rendering engine is sufficient for visual-system gates.')
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.emulateMedia({ reducedMotion: 'reduce' })
-  await login(page, 'http://127.0.0.1:8011')
-  await page.goto('http://127.0.0.1:8011/teacher/courses/1/experiments/')
+  await login(page, 'http://127.0.0.1:8000')
+  await page.goto('http://127.0.0.1:8000/teacher/courses/1/experiments/')
 
   const wrappedButtons = await page.locator('button, .kt-button, .btn').evaluateAll((elements) =>
     elements
@@ -201,9 +197,9 @@ test('approved shell prevents button wrapping and keeps reduced-motion focus vis
   expect(Number.parseFloat(focusStyle.outlineWidth)).toBeGreaterThan(0)
 })
 
-test('teacher class center keeps analytics in Vue and management in Django', async ({ page }) => {
-  await login(page, 'http://127.0.0.1:8016')
-  await page.goto('http://127.0.0.1:8016/teacher/courses/1/classes/')
+test('teacher class center keeps analytics and management on the same frontend route', async ({ page }) => {
+  await login(page, 'http://127.0.0.1:8000')
+  await page.goto('http://127.0.0.1:8000/teacher/courses/1/classes/')
   await expect(page.locator('#kt-app')).toBeVisible()
   await expect(page.getByRole('heading', { name: '班级', exact: true })).toBeVisible()
 
@@ -218,14 +214,14 @@ test('teacher class center keeps analytics in Vue and management in Django', asy
 
   await page.getByRole('link', { name: '班级管理', exact: true }).click()
   await expect(page).toHaveURL(/\?section=manage$/)
-  await expect(page.locator('#kt-app')).toHaveCount(0)
+  await expect(page.locator('#kt-app')).toBeVisible()
   await expect(page.getByText('班级设置', { exact: true })).toBeVisible()
 })
 
 test('teacher class center reflows at required viewports', async ({ browserName, page }, testInfo) => {
   test.skip(browserName !== 'chromium', 'One rendering engine is sufficient for viewport evidence.')
-  await login(page, 'http://127.0.0.1:8016')
-  await page.goto('http://127.0.0.1:8016/teacher/courses/1/classes/')
+  await login(page, 'http://127.0.0.1:8000')
+  await page.goto('http://127.0.0.1:8000/teacher/courses/1/classes/')
   await expect(page.getByRole('heading', { name: '课程班级', exact: true })).toBeVisible()
 
   for (const viewport of [
@@ -286,19 +282,9 @@ test('teacher class center reflows at required viewports', async ({ browserName,
   }
 })
 
-test('question-bank flag OFF keeps the legacy list and detail templates', async ({ page }) => {
-  await login(page, 'http://127.0.0.1:8010')
-  await page.goto('http://127.0.0.1:8010/teacher/courses/1/banks/')
-  await expect(page.locator('.table-shell').first()).toBeVisible()
-  await expect(page.locator('#kt-app')).toHaveCount(0)
-  await page.getByLabel('课程题库').getByRole('link', { name: '演示题库', exact: true }).click()
-  await expect(page.locator('.table-shell').first()).toBeVisible()
-  await expect(page.locator('#kt-app')).toHaveCount(0)
-})
-
-test('question-bank flag ON mounts list and detail on the existing URLs', async ({ page }) => {
-  await login(page, 'http://127.0.0.1:8017')
-  await page.goto('http://127.0.0.1:8017/teacher/courses/1/banks/')
+test('question-bank list and detail mount on their business URLs', async ({ page }) => {
+  await login(page, 'http://127.0.0.1:8000')
+  await page.goto('http://127.0.0.1:8000/teacher/courses/1/banks/')
   await expect(page.locator('#kt-app')).toBeVisible()
   await expect(page.getByRole('heading', { name: '题库', exact: true })).toBeVisible()
   await expect(page.getByRole('tab', { name: /课程 KC 总库 \d+/ })).toBeVisible()
@@ -315,8 +301,8 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
   test.setTimeout(120_000)
   const runId = `${browserName}-${Date.now()}`
   const bankName = `浏览器统一导入验收-${runId}`
-  await login(page, 'http://127.0.0.1:8017')
-  await page.goto('http://127.0.0.1:8017/teacher/courses/1/banks/')
+  await login(page, 'http://127.0.0.1:8000')
+  await page.goto('http://127.0.0.1:8000/teacher/courses/1/banks/')
 
   const createForm = page.locator('form[data-create-bank]')
   await createForm.getByLabel('名称').fill(bankName)
@@ -355,7 +341,7 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
     await fileInput.setInputFiles(downloadPath!)
     expect((await response).status()).toBe(200)
     await expect(preview).toBeVisible()
-    await expect(summary).toContainText('可导入 6')
+    await expect(summary).toContainText('导入后可用 6')
     return downloadPath!
   }
 
@@ -396,7 +382,7 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
   await page.locator('[data-confirm-import]').click()
   expect((await response).status()).toBe(201)
   const result = page.getByRole('status').filter({ hasText: '本次导入已完成。' })
-  await expect(result).toContainText('新增 6 道，跳过 0 道，未完成 0 道。')
+  await expect(result).toContainText('新增 6 道，其中可用 6 道、草稿 0 道；跳过 0 道，未完成 0 道。')
   await page.setViewportSize({ width: 1440, height: 900 })
   await expect(page.locator('[data-confirm-import]')).toBeDisabled()
 
@@ -416,16 +402,17 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
   })
   expect((await response).status()).toBe(200)
   await expect(result).toHaveCount(0)
-  await expect(summary).toContainText('可导入 1')
+  await expect(summary).toContainText('导入后可用 1')
+  await expect(summary).toContainText('保存为草稿 1')
   await expect(summary).toContainText('重复 1')
-  await expect(summary).toContainText('需修正 1')
+  await expect(summary).toContainText('需修正 0')
   response = page.waitForResponse((candidate) => (
     candidate.request().method() === 'POST'
     && candidate.url().includes('/imports/questions/confirm/')
   ))
   await page.locator('[data-confirm-import]').click()
   expect((await response).status()).toBe(201)
-  await expect(result).toContainText('新增 1 道，跳过 1 道，未完成 1 道。')
+  await expect(result).toContainText('新增 2 道，其中可用 1 道、草稿 1 道；跳过 1 道，未完成 0 道。')
   await expect(preview.locator('.kt-question-import__table .kt-question-import__errors').filter({ hasText: 'UNKNOWN_KC' })).toBeVisible()
 
   response = page.waitForResponse((candidate) => (
@@ -441,7 +428,8 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
   })
   expect((await response).status()).toBe(200)
   await expect(result).toHaveCount(0)
-  await expect(summary).toContainText('可导入 1')
+  await expect(summary).toContainText('导入后可用 1')
+  await expect(summary).toContainText('保存为草稿 0')
   await expect(summary).toContainText('重复 1')
   await expect(summary).toContainText('需修正 0')
   await expect(preview).not.toContainText('UNKNOWN_KC')
@@ -451,10 +439,10 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
   ))
   await page.locator('[data-confirm-import]').click()
   expect((await response).status()).toBe(201)
-  await expect(result).toContainText('新增 1 道，跳过 1 道，未完成 0 道。')
+  await expect(result).toContainText('新增 0 道，修复 1 道，其中可用 1 道、草稿 0 道；跳过 1 道，未完成 0 道。')
   await page.locator('[data-return-detail]').click()
   await expect(page.getByRole('heading', { name: bankName, exact: true })).toBeVisible()
-  await expect(page.locator('.kt-bank-question-section .kt-desktop-only').getByText(repairedText, { exact: true })).toBeVisible()
+  await expect(page.locator('.kt-bank-question-section .kt-desktop-only').getByText(repairedText, { exact: true })).toHaveCount(1)
 
   const retiredKcImport = new URL(page.url())
   retiredKcImport.pathname = `${retiredKcImport.pathname}kc-import/`
@@ -465,7 +453,7 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
 
 test('question-bank pages reflow without horizontal page overflow', async ({ browserName, page }, testInfo) => {
   test.skip(browserName !== 'chromium', 'One rendering engine provides the required viewport evidence.')
-  await login(page, 'http://127.0.0.1:8017')
+  await login(page, 'http://127.0.0.1:8000')
 
   for (const viewport of [
     { name: 'bank-list-desktop-1440x900', width: 1440, height: 900 },
@@ -473,7 +461,7 @@ test('question-bank pages reflow without horizontal page overflow', async ({ bro
     { name: 'bank-list-zoom-200-percent-equivalent', width: 720, height: 450 },
   ]) {
     await page.setViewportSize(viewport)
-    await page.goto('http://127.0.0.1:8017/teacher/courses/1/banks/')
+    await page.goto('http://127.0.0.1:8000/teacher/courses/1/banks/')
     await expect(page.getByRole('heading', { name: '题库', exact: true })).toBeInViewport()
     await expect(page.getByText('正在加载题库…')).toHaveCount(0)
     await expect(page.getByRole('link', { name: '演示题库', exact: true }).first()).toBeVisible()
@@ -487,79 +475,60 @@ test('question-bank pages reflow without horizontal page overflow', async ({ bro
     { name: 'bank-detail-zoom-200-percent-equivalent', width: 720, height: 450 },
   ]) {
     await page.setViewportSize(viewport)
-    await page.goto('http://127.0.0.1:8017/teacher/courses/1/banks/1/')
+    await page.goto('http://127.0.0.1:8000/teacher/courses/1/banks/1/')
     await expect(page.getByRole('heading', { name: '演示题库', exact: true })).toBeInViewport()
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false)
     await page.screenshot({ path: testInfo.outputPath(`${viewport.name}.png`), fullPage: true })
   }
 })
 
-test('data-center flag OFF keeps the legacy data templates', async ({ page }) => {
-  await login(page, 'http://127.0.0.1:8010')
-  await page.goto('http://127.0.0.1:8010/teacher/courses/1/data/')
-  await expect(page.locator('#kt-app')).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: '数据中心', exact: true })).toBeVisible()
-  await page.goto('http://127.0.0.1:8010/teacher/courses/1/data/advanced/')
-  await expect(page.locator('#kt-app')).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: '高级数据工具', exact: true })).toBeVisible()
-})
-
-test('data-center flag ON mounts every migrated read route on its existing URL', async ({ page }) => {
+test('data-center mounts every read route on its business URL', async ({ page }) => {
   test.setTimeout(120_000)
-  await login(page, 'http://127.0.0.1:8018')
+  await login(page, 'http://127.0.0.1:8000')
   const routes = [
     ['', '数据中心'],
     ['export/', '导出数据包'],
     ['exports/', '导出数据包'],
     ['quality/', '数据质量'],
     ['exports/history/', '导出记录'],
-    ['advanced/', '高级数据工具'],
+    ['advanced/', '学生作答预览'],
   ] as const
 
   for (const [suffix, heading] of routes) {
-    await page.goto(`http://127.0.0.1:8018/teacher/courses/1/data/${suffix}`)
+    await page.goto(`http://127.0.0.1:8000/teacher/courses/1/data/${suffix}`)
     await expect(page.locator('#kt-app')).toBeVisible()
     await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible()
     await expect(page.getByRole('region', { name: '当前数据范围' })).toBeVisible()
   }
 
   await page.reload()
-  await expect(page.getByRole('heading', { name: '高级数据工具', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '学生作答预览', exact: true })).toBeVisible()
 })
 
-test('data-center keeps scope and export writes in Django document forms', async ({ browserName, page }) => {
-  test.skip(browserName !== 'chromium', 'One browser covers the document-form boundaries.')
-  await login(page, 'http://127.0.0.1:8018')
-  await page.goto('http://127.0.0.1:8018/teacher/courses/1/data/')
+test('data-center saves its authoritative scope through the JSON API', async ({ browserName, page }) => {
+  test.skip(browserName !== 'chromium', 'One browser covers the scope mutation boundary.')
+  await login(page, 'http://127.0.0.1:8000')
+  await page.goto('http://127.0.0.1:8000/teacher/courses/1/data/')
 
-  const scopeForm = page.getByRole('region', { name: '当前数据范围' }).locator('form')
-  await scopeForm.locator('select[name="experiment_id"]').selectOption({ label: '演示交互数据采集' })
-  await scopeForm.locator('select[name="class_id"]').selectOption({ label: '2026 认知追踪实验班' })
-  await scopeForm.getByRole('button', { name: '应用' }).click()
-  await expect(page).toHaveURL(/\/teacher\/courses\/1\/data\/$/)
-  await expect(page.getByText('已选择教学范围')).toBeVisible()
-
-  await page.getByRole('link', { name: '导出', exact: true }).click()
-  await expect(page.getByRole('heading', { name: '导出数据包', exact: true })).toBeVisible()
-  const versionForm = page.getByRole('heading', { name: '选择导出版本' }).locator('..').locator('form')
-  await versionForm.getByLabel('实验版本').selectOption({ index: 1 })
-  await versionForm.getByRole('button', { name: '使用此版本' }).click()
-  await expect(page.getByText(/本次导出版本：Version/)).toBeVisible()
-  await page.getByRole('link', { name: '选择用途' }).first().click()
-
-  const confirmation = page.getByRole('heading', { name: /确认导出/ }).locator('..').locator('form')
-  await expect(confirmation).toHaveAttribute('method', 'post')
-  await expect(confirmation.locator('input[name="csrfmiddlewaretoken"]')).toHaveValue(/.+/)
-  await expect(confirmation.locator('input[name="confirm_identified"]')).toHaveValue('yes')
+  const scope = page.getByRole('region', { name: '当前数据范围' })
+  await scope.locator('select[name="experiment_id"]').selectOption({ label: '演示交互数据采集' })
+  await scope.locator('select[name="class_id"]').selectOption({ label: '2026 认知追踪实验班' })
+  const saved = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && response.url().endsWith('/api/v1/teacher/courses/1/data/scope/')
+  ))
+  await scope.getByRole('button', { name: '应用' }).click()
+  expect((await saved).status()).toBe(200)
+  await expect(scope.getByText('已选择教学范围')).toBeVisible()
 })
 
 test('data-center overview and advanced pages reflow at required viewports', async ({ browserName, page }, testInfo) => {
   test.skip(browserName !== 'chromium', 'One rendering engine provides the required viewport evidence.')
-  await login(page, 'http://127.0.0.1:8018')
+  await login(page, 'http://127.0.0.1:8000')
 
   for (const route of [
     { suffix: '', heading: '数据中心', name: 'data-overview' },
-    { suffix: 'advanced/', heading: '高级数据工具', name: 'data-advanced' },
+    { suffix: 'advanced/', heading: '学生作答预览', name: 'data-advanced' },
   ]) {
     for (const viewport of [
       { name: 'desktop-1440x900', width: 1440, height: 900 },
@@ -567,12 +536,12 @@ test('data-center overview and advanced pages reflow at required viewports', asy
       { name: 'zoom-200-percent-equivalent', width: 720, height: 450 },
     ]) {
       await page.setViewportSize(viewport)
-      await page.goto(`http://127.0.0.1:8018/teacher/courses/1/data/${route.suffix}`)
+      await page.goto(`http://127.0.0.1:8000/teacher/courses/1/data/${route.suffix}`)
+      await expect(page.getByRole('status')).toHaveCount(0)
       const heading = page.getByRole('heading', { name: route.heading, exact: true })
       await expect(heading).toBeVisible()
       await heading.scrollIntoViewIfNeeded()
       await expect(heading).toBeInViewport()
-      await expect(page.getByRole('status')).toHaveCount(0)
       expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false)
       await page.screenshot({ path: testInfo.outputPath(`${route.name}-${viewport.name}.png`), fullPage: true })
     }

@@ -1,10 +1,8 @@
 from io import BytesIO
 from urllib.parse import quote
 
-from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.views import LoginView
 from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
 from django.db.models import Q
@@ -12,26 +10,21 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_http_methods
-from django.core.exceptions import ValidationError
 from openpyxl import Workbook
 
+from apps.api.frontend_entry import frontend_response
 from .enrollment_services import import_legacy_students
 from .forms import ClassGroupForm, PasswordResetForm, StudentBatchUploadForm, StudentCreateForm
 from .models import ClassGroup, User
-from .password_services import change_student_password, reset_student_initial_password
-from .forms import StudentPasswordChangeForm
+from .password_services import reset_student_initial_password
 from .permissions import role_required
 from .student_import import ParsedStudent, StudentImportError, parse_student_workbook
 from apps.audit.services import log_action
 
 
-class PlatformLoginView(LoginView):
-    template_name = "registration/login.html"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["show_demo_credentials"] = settings.DEBUG
-        return context
+@require_http_methods(["GET", "HEAD"])
+def login_page(request):
+    return frontend_response()
 
 
 def resolve_home_url(user):
@@ -43,19 +36,11 @@ def resolve_home_url(user):
 
 
 @login_required
-@require_http_methods(["GET", "POST"])
+@require_http_methods(["GET", "HEAD"])
 def password_change(request):
     if request.user.role != User.Role.STUDENT or request.user.is_superuser:
         return redirect(resolve_home_url(request.user))
-    form = StudentPasswordChangeForm(request.POST or None, user=request.user)
-    if request.method == "POST" and form.is_valid():
-        try:
-            student = change_student_password(request=request, data=request.POST)
-        except ValidationError as exc:
-            form.add_error(None, exc)
-        else:
-            return redirect(resolve_home_url(student))
-    return render(request, "registration/password_change.html", {"form": form})
+    return frontend_response()
 
 
 @login_required
@@ -84,6 +69,8 @@ def _require_active_import_class(class_group, class_name):
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def class_list(request):
+    if request.method in {"GET", "HEAD"}:
+        return frontend_response()
     form = ClassGroupForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
         class_group = form.save(commit=False)
@@ -92,11 +79,13 @@ def class_list(request):
         log_action(request, "class.create", class_group, {"name": class_group.name, "academic_year": class_group.academic_year})
         messages.success(request, "班级已创建")
         return redirect("accounts:class_list")
-    return render(request, "teacher/class_list.html", {"classes": _class_queryset(request.user), "form": form})
+    return frontend_response()
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def student_list(request):
+    if request.method in {"GET", "HEAD"}:
+        return frontend_response()
     form = StudentCreateForm(request.POST or None, owner=request.user)
     if request.method == "POST" and form.is_valid():
         try:
@@ -108,28 +97,7 @@ def student_list(request):
         else:
             messages.success(request, "学生账号已创建")
             return redirect("accounts:student_list")
-    classes = _class_queryset(request.user)
-    students = _student_queryset(request.user)
-    query = request.GET.get("q", "").strip()
-    selected_class_id = request.GET.get("class_id", "").strip()
-    if query:
-        students = students.filter(Q(student_number__icontains=query) | Q(display_name__icontains=query))
-    if selected_class_id.isdecimal() and classes.filter(pk=selected_class_id).exists():
-        students = students.filter(class_group_id=selected_class_id)
-    else:
-        selected_class_id = ""
-    return render(
-        request,
-        "teacher/student_list.html",
-        {
-            "students": students,
-            "classes": classes,
-            "form": form,
-            "query": query,
-            "selected_class_id": selected_class_id,
-            "has_filters": bool(query or selected_class_id),
-        },
-    )
+    return frontend_response()
 
 
 @require_GET
@@ -171,6 +139,8 @@ def student_import_template(request):
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def student_import(request):
+    if request.method in {"GET", "HEAD"}:
+        return frontend_response()
     session_key = "student_batch_import"
     preview = None
     form = StudentBatchUploadForm()
@@ -206,11 +176,7 @@ def student_import(request):
             else:
                 preview = candidate_preview
                 request.session[session_key] = [item.__dict__ for item in preview]
-    return render(
-        request,
-        "teacher/student_import.html",
-        {"form": form, "preview": preview},
-    )
+    return frontend_response()
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)

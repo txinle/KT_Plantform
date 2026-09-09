@@ -57,18 +57,6 @@ class CourseWorkspaceScopeTests(TestCase):
         )
         self.client.force_login(self.teacher)
 
-    def test_course_navigation_nests_banks_and_students_under_classes(self):
-        response = self.client.get(reverse("courses:detail", args=[self.course_a.pk]))
-
-        for label in ("概览", "题库", "班级", "实验", "数据", "设置"):
-            self.assertContains(response, f">{label}</a>")
-        self.assertContains(response, f"{self.course_a.name} · {self.course_a.code} · {self.course_a.term}")
-        self.assertContains(response, reverse("courses:banks", args=[self.course_a.pk]))
-        self.assertContains(response, reverse("courses:classes", args=[self.course_a.pk]))
-        self.assertContains(response, reverse("courses:experiments", args=[self.course_a.pk]))
-        self.assertNotContains(response, ">学生</a>")
-        self.assertNotContains(response, ">KC</a>")
-
     def test_bank_detail_and_class_detail_cannot_cross_course_boundary(self):
         bank_url = reverse("courses:bank_detail", args=[self.course_a.pk, self.bank_b.pk])
         class_url = reverse("courses:class_detail", args=[self.course_a.pk, self.class_b.pk])

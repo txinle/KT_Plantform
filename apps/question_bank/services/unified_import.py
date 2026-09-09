@@ -131,6 +131,20 @@ def _fingerprint(content, mapping, *, raw_kc_intent=None):
     return hashlib.sha256(json.dumps(canonical, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+def _question_content(question):
+    return {
+        'text': question.text,
+        'question_type': question.question_type,
+        'answer': question.correct_answer,
+        'accepted_answers': question.accepted_answers,
+        'explanation': question.explanation,
+        'teacher_difficulty': question.teacher_difficulty,
+        'absolute_tolerance': question.absolute_tolerance,
+        'relative_tolerance': question.relative_tolerance,
+        'options': {option.key: option.text for option in question.options.all()},
+    }
+
+
 def _existing_fingerprints(bank):
     result = {}
     for question in bank.questions.prefetch_related('options', 'concept_links__concept', 'concept_links__parent_link__concept'):
@@ -141,13 +155,25 @@ def _existing_fingerprints(bank):
         mapping = {'root_kc_code': roots[0], 'nodes': [
             {'kc_code': link.concept.code, 'parent_kc_code': link.parent_link.concept.code if link.parent_link_id else None,
              'order': link.display_order} for link in links]}
-        content = {'text': question.text, 'question_type': question.question_type,
-                   'answer': question.correct_answer, 'accepted_answers': question.accepted_answers,
-                   'explanation': question.explanation, 'teacher_difficulty': question.teacher_difficulty,
-                   'absolute_tolerance': question.absolute_tolerance, 'relative_tolerance': question.relative_tolerance,
-                   'options': {option.key: option.text for option in question.options.all()}}
-        result.setdefault(_fingerprint(content, mapping), question.pk)
+        result.setdefault(_fingerprint(_question_content(question), mapping), question.pk)
     return result
+
+
+def _repairable_draft_fingerprints(bank):
+    candidates = {}
+    drafts = bank.questions.filter(status=Question.Status.DRAFT).prefetch_related(
+        'options', 'concept_links',
+    )
+    for question in drafts:
+        if question.concept_links.exists():
+            continue
+        fingerprint = _fingerprint(_question_content(question), None)
+        candidates.setdefault(fingerprint, []).append(question.pk)
+    return {
+        fingerprint: question_ids[0]
+        for fingerprint, question_ids in candidates.items()
+        if len(question_ids) == 1
+    }
 
 
 def _project_row(row, ordinal, source_label):
@@ -193,6 +219,7 @@ class UnifiedQuestionImportService:
         source = read_unified_rows(uploaded)
         rows, projected = [], []
         seen = _existing_fingerprints(bank)
+        repairable_drafts = _repairable_draft_fingerprints(bank)
         summary = {'ready': 0, 'draft': 0, 'duplicate': 0, 'invalid': 0}
         for ordinal, raw in enumerate(source, 1):
             invalid_errors = list(raw.get('_errors', []))
@@ -244,6 +271,10 @@ class UnifiedQuestionImportService:
                     seen[fingerprint] = None
                     if row['errors']:
                         row['classification'] = 'draft'
+                    elif row['kc_mapping']:
+                        row['existing_question_id'] = repairable_drafts.get(
+                            _fingerprint(row['content'], None),
+                        )
             rows.append(row)
             summary[row['classification']] += 1
             projected.append(_project_row(
@@ -279,7 +310,7 @@ class UnifiedQuestionImportService:
         )
         seen = _existing_fingerprints(bank)
         sequence = bank.questions.aggregate(value=Max('sequence'))['value'] or 0
-        result = {'created': 0, 'active': 0, 'draft': 0, 'skipped': 0, 'failed': 0,
+        result = {'created': 0, 'updated': 0, 'active': 0, 'draft': 0, 'skipped': 0, 'failed': 0,
                   'detail_url': reverse('courses:bank_detail', args=[course.pk, bank.pk]), 'rows': []}
         for row in batch.payload['rows']:
             outcome = {'row_id': row['row_id'], 'status': 'invalid', 'errors': list(row['errors'])}
@@ -324,6 +355,33 @@ class UnifiedQuestionImportService:
                 outcome.update(status='duplicate', question_id=row.get('existing_question_id'))
                 result['skipped'] += 1
                 continue
+            repair_question_id = row.get('existing_question_id') if mapping_is_valid and not draft_reasons else None
+            if repair_question_id is not None:
+                question = (
+                    bank.questions.select_for_update()
+                    .filter(pk=repair_question_id, status=Question.Status.DRAFT)
+                    .prefetch_related('options', 'concept_links')
+                    .first()
+                )
+                if (
+                    question is not None
+                    and not question.concept_links.exists()
+                    and _fingerprint(_question_content(question), None) == _fingerprint(content, None)
+                ):
+                    replace_question_kc_mapping(question, **mapping)
+                    readiness_errors = refresh_question_readiness(question)
+                    outcome.update(
+                        status='updated',
+                        question_id=question.pk,
+                        question_status=question.status,
+                        draft_reasons=(
+                            readiness_errors if question.status == Question.Status.DRAFT else []
+                        ),
+                    )
+                    result['updated'] += 1
+                    result[question.status] += 1
+                    seen[fingerprint] = question.pk
+                    continue
             sequence += 1
             question = Question.objects.create(
                 bank=bank, sequence=sequence, status=Question.Status.DRAFT, text=content['text'],
@@ -367,5 +425,7 @@ class UnifiedQuestionImportService:
         if audit_request is not None:
             log_action(audit_request, 'question.import', bank,
                        {'course_id': course.pk, 'batch_id': str(batch.pk),
-                        'count': result['created'], 'skipped': result['skipped'], 'failed': result['failed']})
+                        'count': result['created'] + result['updated'],
+                        'created': result['created'], 'updated': result['updated'],
+                        'skipped': result['skipped'], 'failed': result['failed']})
         return result

@@ -1,9 +1,0 @@
-{% extends 'base.html' %}
-{% block breadcrumb_items %}<li><a href="{% url 'courses:list' %}">我的课程</a></li><li><a href="{% url 'courses:data' course.pk %}">数据中心</a></li><li class="breadcrumb-item-current" aria-current="page">数据质量</li>{% endblock %}
-{% block title %}数据质量 | {{ course.name }}{% endblock %}
-{% block content %}
-  <header class="page-header"><div class="page-header-copy"><p class="page-kicker mono">{{ course.code }} · {{ course.term }}</p><h1 class="page-title">数据质量</h1><p class="page-subtitle">质量规则描述身份、状态链、提交、排序时间和血缘；不把技术记录推断为心理状态。</p></div></header>
-  {% include 'teacher/data_center/_workbench_nav.html' %}
-  <section class="quality-counts" aria-label="质量状态汇总">{% for state, count in report.counts.items %}<span class="quality-state quality-state-{{ state|lower }}"><strong>{{ count }}</strong> {{ state }}</span>{% empty %}<span class="text-muted">当前范围尚无可评估作答。</span>{% endfor %}</section>
-  <div class="table-shell"><table class="table table-sm align-middle"><thead><tr><th>规则</th><th>结果</th><th>作答</th><th>来源</th><th>原因</th><th>证据</th></tr></thead><tbody>{% for row in report.rows %}<tr><td><code>{{ row.rule }}</code><small class="d-block text-muted">{{ row.rule_version }}</small></td><td><span class="quality-state quality-state-{{ row.state|lower }}">{{ row.state }}</span></td><td class="numeric">{{ row.entity_id|default:'—' }}</td><td>{{ row.source_mode }}</td><td><code>{{ row.reason_code|default:'—' }}</code></td><td>{{ row.evidence_summary|default:'—' }}</td></tr>{% empty %}<tr><td colspan="6" class="text-muted">当前范围没有质量规则结果。</td></tr>{% endfor %}</tbody></table></div>
-{% endblock %}

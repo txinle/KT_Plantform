@@ -217,6 +217,13 @@ class TeacherExperimentSessionResolutionView(TeacherExperimentCompatibilityApiVi
                     TeacherExperimentSessionResolutionSerializer(payload).data
                 )
 
+        if not (
+            request.user.is_superuser
+            or request.user.role == User.Role.ADMIN
+            or course.owner_id == request.user.pk
+        ):
+            raise NotFound()
+
         assignments = (
             StudentQuestionAssignment.objects.filter(session=session)
             .select_related("snapshot", "attempt")

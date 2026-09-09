@@ -68,7 +68,7 @@ test('corrects a removed student, preserves identity and password, and allows op
   management = await (await page.request.get(`${base}manage/`)).json()
   expect(management.enrollments.find((item: { student: { id: number } }) => item.student.id === originalId).student.student_number).toBe(correctedNumber)
 
-  const studentContext = await browser.newContext({ baseURL: 'http://127.0.0.1:8011', viewport: { width: 1440, height: 900 } })
+  const studentContext = await browser.newContext({ baseURL: testInfo.project.use.baseURL, viewport: { width: 1440, height: 900 } })
   try {
     const studentPage = await studentContext.newPage()
     // Editing the number must preserve even a not-yet-changed initial password.

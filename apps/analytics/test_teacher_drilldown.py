@@ -3,6 +3,7 @@ from dataclasses import asdict
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.test import TransactionTestCase, override_settings
 from django.urls import reverse
@@ -425,26 +426,6 @@ class TeacherQuestionDrilldownTests(TransactionTestCase):
             [step.time_source for step in detail.process.steps],
         )
 
-        self.client.force_login(self.teacher)
-        response = self.client.get(reverse(
-            "courses:class_question_process",
-            args=[
-                self.course.pk,
-                self.class_group.pk,
-                self.experiment.pk,
-                self.single_snapshot.pk,
-                self.students["A"].pk,
-            ],
-        ))
-        html = response.content.decode()
-
-        self.assertEqual(response.status_code, 200)
-        for expected in ("过程记录不完整", "步骤间隔可可靠比较", "未记录离开题目"):
-            self.assertIn(expected, html)
-        self.assertIn("缺失事件不会被解释为未发生行为。", html)
-        for forbidden in ("partial", "exact_monotonic", "server_received_at", str(run.run_id)):
-            self.assertNotIn(forbidden, html)
-
     @override_settings(CLASS_CENTER_ENABLED=True)
     def test_process_page_labels_question_visits_in_chinese(self):
         attempt = self.attempts[("A", "single")]
@@ -512,46 +493,34 @@ class TeacherQuestionDrilldownTests(TransactionTestCase):
         )
 
         self.client.force_login(self.teacher)
-        response = self.client.get(reverse(
-            "courses:class_question_process",
-            args=[
-                self.course.pk,
-                self.class_group.pk,
-                self.experiment.pk,
-                self.single_snapshot.pk,
-                self.students["A"].pk,
-            ],
-        ))
-        html = response.content.decode()
-
+        response = self.client.get(
+            f"/api/v1/teacher/courses/{self.course.pk}/classes/"
+            f"{self.class_group.pk}/experiments/{self.experiment.pk}/questions/"
+            f"{self.single_snapshot.pk}/students/{self.students['A'].pk}/process/"
+        )
+        payload = response.json()
         self.assertEqual(response.status_code, 200)
+        serialized = str(payload)
         for expected in ("已前往下一题", "作答超时"):
-            self.assertIn(expected, html)
-        for forbidden in (
-            f"目标分配 {destination.pk}",
-            "timed_out",
-        ):
-            self.assertNotIn(forbidden, html)
+            self.assertIn(expected, serialized)
+        self.assertNotIn(f"目标分配 {destination.pk}", serialized)
+        self.assertNotIn("timed_out", serialized)
 
     @override_settings(CLASS_CENTER_ENABLED=True)
     def test_process_page_pending_coverage_uses_chinese_finalization_message(self):
         self.client.force_login(self.teacher)
-        response = self.client.get(reverse(
-            "courses:class_question_process",
-            args=[
-                self.course.pk,
-                self.class_group.pk,
-                self.experiment.pk,
-                self.single_snapshot.pk,
-                self.students["C"].pk,
-            ],
-        ))
-        html = response.content.decode()
+        response = self.client.get(
+            f"/api/v1/teacher/courses/{self.course.pk}/classes/"
+            f"{self.class_group.pk}/experiments/{self.experiment.pk}/questions/"
+            f"{self.single_snapshot.pk}/students/{self.students['C'].pk}/process/"
+        )
+        payload = response.json()
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("过程记录等待确认", html)
+        self.assertEqual(payload["detail"]["coverage_status_title"], "过程记录等待确认")
+        serialized = str(payload)
         for forbidden in ("pending_finalization", "unknown", "CoverageRun"):
-            self.assertNotIn(forbidden, html)
+            self.assertNotIn(forbidden, serialized)
 
     @override_settings(CLASS_CENTER_ENABLED=True)
     def test_process_page_without_coverage_outside_grace_uses_legacy_message(self):
@@ -561,23 +530,23 @@ class TeacherQuestionDrilldownTests(TransactionTestCase):
         )
 
         self.client.force_login(self.teacher)
-        response = self.client.get(reverse(
-            "courses:class_question_process",
-            args=[
-                self.course.pk,
-                self.class_group.pk,
-                self.experiment.pk,
-                self.single_snapshot.pk,
-                self.students["B"].pk,
-            ],
-        ))
-        html = response.content.decode()
+        response = self.client.get(
+            f"/api/v1/teacher/courses/{self.course.pk}/classes/"
+            f"{self.class_group.pk}/experiments/{self.experiment.pk}/questions/"
+            f"{self.single_snapshot.pk}/students/{self.students['B'].pk}/process/"
+        )
+        detail = response.json()["detail"]
 
         self.assertEqual(response.status_code, 200)
-        for expected in ("历史记录无法评估", "尚未生成记录质量评估"):
-            self.assertIn(expected, html)
+        self.assertEqual(detail["coverage_status_title"], "历史记录无法评估")
+        self.assertEqual(
+            detail["coverage_status_description"],
+            "旧记录没有当前采集契约，不能按新标准判断。",
+        )
+        self.assertIn("尚未生成记录质量评估", detail["coverage_reason_labels"])
+        serialized = str(detail)
         for forbidden in ("legacy_unknown", "coverage_run_missing", "unknown", "CoverageRun"):
-            self.assertNotIn(forbidden, html)
+            self.assertNotIn(forbidden, serialized)
 
     def test_cross_experiment_question_and_nonparticipant_fail_closed(self):
         outsider = User.objects.create_user(
@@ -689,7 +658,7 @@ class TeacherQuestionDrilldownTests(TransactionTestCase):
         self.assertTrue(single.process_complete)
 
     @override_settings(CLASS_CENTER_ENABLED=True)
-    def test_teacher_drilldown_routes_link_current_and_historical_students_without_leaking_raw_fields(self):
+    def test_teacher_drilldown_pages_use_the_independent_frontend_and_keep_scope_checks(self):
         self.client.force_login(self.teacher)
         current_url = reverse(
             "courses:class_student_detail",
@@ -724,32 +693,18 @@ class TeacherQuestionDrilldownTests(TransactionTestCase):
             ],
         )
 
-        current = self.client.get(current_url)
-        historical = self.client.get(historical_url)
-        question = self.client.get(question_url)
-        process = self.client.get(process_url)
+        with patch.dict("os.environ", {"FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html"}):
+            responses = [
+                self.client.get(current_url),
+                self.client.get(historical_url),
+                self.client.get(question_url),
+                self.client.get(process_url),
+            ]
 
-        self.assertEqual(current.status_code, 200)
-        self.assertTemplateUsed(current, "teacher/course_class_student_detail.html")
-        self.assertEqual(historical.status_code, 200)
-        self.assertContains(historical, "历史参与者")
-        self.assertEqual(question.status_code, 200)
-        self.assertContains(question, "首答错误 → 终答正确")
-        self.assertContains(question, "过程链覆盖率")
-        self.assertContains(question, "有效时长中位数")
-        self.assertContains(question, "时长质量构成")
-        self.assertContains(question, process_url)
-        self.assertEqual(process.status_code, 200)
-        self.assertContains(process, "完整链")
-        html = process.content.decode()
-        for forbidden in (
-            "event_id",
-            "snapshot_id",
-            "client_instance_id",
-            "raw payload",
-            "content_hash",
-        ):
-            self.assertNotIn(forbidden, html)
+        for response in responses:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+            self.assertFalse(response.templates)
 
         historical_class_detail = reverse(
             "courses:class_student_detail",
@@ -757,48 +712,6 @@ class TeacherQuestionDrilldownTests(TransactionTestCase):
         )
         self.assertEqual(self.client.get(historical_class_detail).status_code, 404)
 
-    @override_settings(CLASS_CENTER_ENABLED=True)
-    def test_class_center_links_current_roster_and_frozen_experiment_cohort_to_drilldowns(self):
-        self.client.force_login(self.teacher)
-        center_url = reverse(
-            "courses:class_detail",
-            args=[self.course.pk, self.class_group.pk],
-        )
-        student_url = reverse(
-            "courses:class_student_detail",
-            args=[self.course.pk, self.class_group.pk, self.students["A"].pk],
-        )
-        historical_experiment_url = reverse(
-            "courses:class_student_experiment_detail",
-            args=[
-                self.course.pk,
-                self.class_group.pk,
-                self.students["C"].pk,
-                self.experiment.pk,
-            ],
-        )
-        question_url = reverse(
-            "courses:class_question_detail",
-            args=[
-                self.course.pk,
-                self.class_group.pk,
-                self.experiment.pk,
-                self.single_snapshot.pk,
-            ],
-        )
-
-        students = self.client.get(center_url, {"section": "students"})
-        experiment = self.client.get(
-            center_url,
-            {"section": "experiments", "experiment_id": self.experiment.pk},
-        )
-
-        self.assertEqual(students.status_code, 200)
-        self.assertContains(students, student_url)
-        self.assertEqual(experiment.status_code, 200)
-        self.assertContains(experiment, historical_experiment_url)
-        self.assertContains(experiment, "历史参与者")
-        self.assertContains(experiment, question_url)
 
     @override_settings(CLASS_CENTER_ENABLED=True)
     def test_drilldown_permissions_and_cross_scope_combinations_fail_closed(self):
@@ -841,27 +754,6 @@ class TeacherQuestionDrilldownTests(TransactionTestCase):
         self.assertEqual(self.client.get(wrong_question).status_code, 404)
         self.assertEqual(self.client.get(wrong_student).status_code, 404)
 
-    @override_settings(CLASS_CENTER_ENABLED=True)
-    def test_legacy_session_detail_redirects_to_student_experiment_fact_page(self):
-        self.client.force_login(self.teacher)
-        session = self.attempts[("A", "single")].session
-        legacy = reverse(
-            "courses:experiment_session_detail",
-            args=[self.course.pk, self.experiment.pk, session.pk],
-        )
-        expected = reverse(
-            "courses:class_student_experiment_detail",
-            args=[
-                self.course.pk,
-                self.class_group.pk,
-                self.students["A"].pk,
-                self.experiment.pk,
-            ],
-        )
-
-        response = self.client.get(legacy)
-
-        self.assertRedirects(response, expected, fetch_redirect_response=False)
 
     @override_settings(CLASS_CENTER_ENABLED=False)
     def test_new_drilldown_routes_are_closed_when_class_center_flag_is_off(self):

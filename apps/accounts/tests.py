@@ -1,7 +1,9 @@
 from io import BytesIO
+import json
+from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from django.urls import reverse
 from openpyxl import Workbook, load_workbook
 
@@ -21,181 +23,79 @@ class HomeRoutingTests(TestCase):
         self.assertRedirects(self.client.get(reverse("home")), reverse("assessment:dashboard"))
 
 
-class LoginPresentationTests(TestCase):
-    @override_settings(DEBUG=True)
-    def test_demo_credentials_are_visible_in_debug(self):
-        response = self.client.get(reverse("login"))
-        self.assertContains(response, "teacher / teacher123")
+class AuthenticationEntryTests(TestCase):
+    def test_login_get_always_uses_the_independent_frontend(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html",
+            },
+        ):
+            response = self.client.get(reverse("login"))
 
-    @override_settings(DEBUG=False)
-    def test_demo_credentials_are_hidden_outside_debug(self):
-        response = self.client.get(reverse("login"))
-        self.assertNotContains(response, "teacher / teacher123")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+        self.assertTemplateNotUsed(response, "registration/login.html")
 
-    def test_login_page_explains_identified_export_boundary(self):
-        response = self.client.get(reverse("login"))
-
-        self.assertContains(response, "实名主导出仅限授权场景")
-        self.assertContains(response, "导出文件均包含学生学号和姓名")
-        self.assertNotContains(response, "研究导出默认使用匿名编号")
-
-
-class HeaderIdentityTests(TestCase):
-    def test_teacher_header_shows_name_and_login_account(self):
-        teacher = User.objects.create_user(
-            username="teacher-account",
-            password="x",
-            role=User.Role.TEACHER,
-            display_name="陈老师",
+    def test_legacy_login_form_post_is_retired(self):
+        response = self.client.post(
+            reverse("login"),
+            {"username": "teacher", "password": "teacher123"},
         )
-        self.client.force_login(teacher)
 
-        response = self.client.get(reverse("question_bank:dashboard"))
+        self.assertEqual(response.status_code, 405)
 
-        self.assertContains(response, '<span class="account-name">陈老师</span>', html=True)
-        self.assertContains(response, '<span class="account-username mono">teacher-account</span>', html=True)
-        self.assertNotContains(response, "陈老师 / 教师")
-
-    def test_student_header_uses_the_same_name_and_account_format(self):
+    def test_password_change_entry_keeps_authentication_and_role_guards(self):
         student = User.objects.create_user(
-            username="S101",
-            password="x",
+            username="S-auth-entry",
+            password="current-password",
             role=User.Role.STUDENT,
-            student_number="S101",
-            display_name="林同学",
+            student_number="S-auth-entry",
         )
-        self.client.force_login(student)
-
-        response = self.client.get(reverse("assessment:dashboard"))
-
-        self.assertContains(response, '<span class="account-name">林同学</span>', html=True)
-        self.assertContains(response, '<span class="account-username mono">S101</span>', html=True)
-        self.assertNotContains(response, "林同学 / 学生")
-
-    def test_header_does_not_repeat_account_when_name_falls_back_to_username(self):
         teacher = User.objects.create_user(
-            username="fallback-account",
-            password="x",
+            username="teacher-auth-entry",
+            password="current-password",
             role=User.Role.TEACHER,
         )
+
+        anonymous = self.client.get(reverse("password-change"))
+        self.assertRedirects(
+            anonymous,
+            f'{reverse("login")}?next={reverse("password-change")}',
+            fetch_redirect_response=False,
+        )
+
         self.client.force_login(teacher)
+        wrong_role = self.client.get(reverse("password-change"))
+        self.assertRedirects(wrong_role, reverse("courses:list"), fetch_redirect_response=False)
 
-        response = self.client.get(reverse("question_bank:dashboard"))
-        account_label = response.content.decode("utf-8").split("account-label", 1)[1].split("</span>", 1)[0]
-
-        self.assertEqual(account_label.count("fallback-account"), 1)
-
-
-class StudentListFilterTests(TestCase):
-    def setUp(self):
-        self.teacher = User.objects.create_user(
-            username="teacher",
-            password="x",
-            role=User.Role.TEACHER,
-        )
-        self.other_teacher = User.objects.create_user(
-            username="other",
-            password="x",
-            role=User.Role.TEACHER,
-        )
-        self.class_a = ClassGroup.objects.create(
-            owner=self.teacher,
-            academic_year="2026",
-            name="认知追踪实验班",
-        )
-        self.class_b = ClassGroup.objects.create(
-            owner=self.teacher,
-            academic_year="2026",
-            name="数据分析班",
-        )
-        self.other_class = ClassGroup.objects.create(
-            owner=self.other_teacher,
-            academic_year="2026",
-            name="其他教师班级",
-        )
-        self.student_a = User.objects.create_user(
-            username="00123",
-            student_number="00123",
-            display_name="张晓明",
-            class_group=self.class_a,
-            role=User.Role.STUDENT,
-        )
-        self.student_b = User.objects.create_user(
-            username="S002",
-            student_number="S002",
-            display_name="李华",
-            class_group=self.class_b,
-            role=User.Role.STUDENT,
-        )
-        self.other_student = User.objects.create_user(
-            username="O001",
-            student_number="O001",
-            display_name="越权学生",
-            class_group=self.other_class,
-            role=User.Role.STUDENT,
-        )
-        self.client.force_login(self.teacher)
-
-    def test_searches_by_student_number_or_chinese_name(self):
-        url = reverse("accounts:student_list")
-
-        number_response = self.client.get(url, {"q": "012"})
-        name_response = self.client.get(url, {"q": "晓明"})
-
-        self.assertContains(number_response, "00123")
-        self.assertNotContains(number_response, "S002")
-        self.assertContains(name_response, "张晓明")
-        self.assertNotContains(name_response, "李华")
-
-    def test_combines_search_and_owned_class_filter(self):
-        response = self.client.get(
-            reverse("accounts:student_list"),
-            {"q": "张", "class_id": str(self.class_a.pk)},
-        )
-
-        self.assertContains(response, "张晓明")
-        self.assertNotContains(response, "李华")
-        self.assertContains(response, 'value="张"')
-        self.assertContains(response, f'value="{self.class_a.pk}" selected')
-
-    def test_foreign_class_filter_never_exposes_foreign_students(self):
-        response = self.client.get(
-            reverse("accounts:student_list"),
-            {"class_id": str(self.other_class.pk)},
-        )
-
+        self.client.force_login(student)
+        with patch.dict(
+            "os.environ",
+            {
+                "FRONTEND_INTERNAL_REDIRECT": "/__frontend/index.html",
+            },
+        ):
+            response = self.client.get(reverse("password-change"))
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, "越权学生")
-        self.assertNotContains(response, "其他教师班级")
+        self.assertEqual(response["X-Accel-Redirect"], "/__frontend/index.html")
+        self.assertTemplateNotUsed(response, "registration/password_change.html")
 
-    def test_malformed_class_id_falls_back_without_server_error(self):
-        response = self.client.get(
-            reverse("accounts:student_list"),
-            {"class_id": "not-a-number"},
+        retired_post = self.client.post(
+            reverse("password-change"),
+            {
+                "current_password": "current-password",
+                "new_password1": "new-password-1",
+                "new_password2": "new-password-1",
+            },
         )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "张晓明")
-        self.assertContains(response, "李华")
-        self.assertNotContains(response, 'value="not-a-number"')
-
-    def test_no_results_preserves_filter_controls_and_shows_filtered_empty_state(self):
-        response = self.client.get(reverse("accounts:student_list"), {"q": "不存在"})
-
-        self.assertContains(response, 'value="不存在"')
-        self.assertContains(response, "没有符合筛选条件的学生")
-        self.assertContains(response, "清除筛选")
-
-    def test_student_page_links_to_batch_import(self):
-        response = self.client.get(reverse("accounts:student_list"))
-
-        self.assertContains(response, reverse("accounts:student_import"))
-        self.assertContains(response, "批量导入学生")
+        self.assertEqual(retired_post.status_code, 405)
 
 
 class StudentBatchImportCoreTests(TestCase):
     template_url = "/teacher/accounts/students/import-template.xlsx"
-    import_url = "/teacher/accounts/students/import/"
+    preview_url = "/api/v1/teacher/accounts/students/import/preview/"
+    confirm_url = "/api/v1/teacher/accounts/students/import/confirm/"
 
     def setUp(self):
         self.teacher = User.objects.create_user(
@@ -274,21 +174,22 @@ class StudentBatchImportCoreTests(TestCase):
             [["2026 认知追踪实验班", "林晓雨", "00123"]],
         )
 
-        response = self.client.post(self.import_url, {"file": upload})
+        response = self.client.post(self.preview_url, {"file": upload})
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "校验通过")
-        self.assertContains(response, "00123")
-        self.assertContains(response, "林晓雨")
-        self.assertContains(response, "2026 认知追踪实验班")
+        self.assertEqual(
+            response.json()["preview"],
+            [
+                {
+                    "student_number": "00123",
+                    "display_name": "林晓雨",
+                    "class_id": self.class_group.pk,
+                    "class_name": "2026 认知追踪实验班",
+                    "account_action": "create",
+                }
+            ],
+        )
         self.assertFalse(User.objects.filter(student_number="00123").exists())
-
-    def test_import_page_has_a_real_accessible_region_label(self):
-        response = self.client.get(self.import_url)
-
-        self.assertContains(response, 'id="student-import-title"')
-        self.assertContains(response, 'aria-labelledby="student-import-title"')
-        self.assertContains(response, "停用班级不能作为导入目标")
 
     def test_confirm_creates_students_atomically_with_documented_password(self):
         upload = self._upload(
@@ -298,12 +199,17 @@ class StudentBatchImportCoreTests(TestCase):
                 ["A-02", "王强", "2026 认知追踪实验班"],
             ],
         )
-        preview = self.client.post(self.import_url, {"file": upload})
+        preview = self.client.post(self.preview_url, {"file": upload})
         self.assertEqual(preview.status_code, 200)
 
-        response = self.client.post(self.import_url, {"action": "confirm"})
+        response = self.client.post(
+            self.confirm_url,
+            data=json.dumps({}),
+            content_type="application/json",
+        )
 
-        self.assertRedirects(response, reverse("accounts:student_list"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"imported": 2})
         first = User.objects.get(student_number="00123")
         second = User.objects.get(student_number="A-02")
         self.assertEqual(first.display_name, "林晓雨")
@@ -318,9 +224,9 @@ class StudentBatchImportCoreTests(TestCase):
 class StudentBatchImportValidationTests(StudentBatchImportCoreTests):
     def _assert_upload_error(self, headers, rows, expected):
         before = User.objects.filter(role=User.Role.STUDENT).count()
-        response = self.client.post(self.import_url, {"file": self._upload(headers, rows)})
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, expected)
+        response = self.client.post(self.preview_url, {"file": self._upload(headers, rows)})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(expected, str(response.json()))
         self.assertEqual(User.objects.filter(role=User.Role.STUDENT).count(), before)
 
     def test_rejects_duplicate_existing_unknown_class_and_blank_fields(self):
@@ -369,10 +275,11 @@ class StudentBatchImportValidationTests(StudentBatchImportCoreTests):
                 self._assert_upload_error(headers, rows, "表头必须且只能包含")
 
         response = self.client.post(
-            self.import_url,
+            self.preview_url,
             {"file": SimpleUploadedFile("名单.csv", b"student,name,class")},
         )
-        self.assertContains(response, "仅支持 .xlsx 文件")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("仅支持 .xlsx 文件", str(response.json()))
 
     def test_rejects_values_longer_than_model_fields(self):
         self._assert_upload_error(
@@ -394,7 +301,7 @@ class StudentBatchImportValidationTests(StudentBatchImportCoreTests):
                 ["SAFE", "不应写入", str(self.class_group)],
             ],
         )
-        self.client.post(self.import_url, {"file": upload})
+        self.client.post(self.preview_url, {"file": upload})
         User.objects.create_user(
             username="RACE",
             student_number="RACE",
@@ -403,10 +310,14 @@ class StudentBatchImportValidationTests(StudentBatchImportCoreTests):
             role=User.Role.STUDENT,
         )
 
-        response = self.client.post(self.import_url, {"action": "confirm"})
+        response = self.client.post(
+            self.confirm_url,
+            data=json.dumps({}),
+            content_type="application/json",
+        )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "部分学号已存在")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("部分学号已存在", str(response.json()))
         self.assertFalse(User.objects.filter(student_number="SAFE").exists())
         self.assertEqual(User.objects.filter(student_number="RACE").count(), 1)
 
@@ -415,7 +326,7 @@ class StudentBatchImportValidationTests(StudentBatchImportCoreTests):
         self.class_group.save(update_fields=["is_active"])
 
         response = self.client.post(
-            self.import_url,
+            self.preview_url,
             {
                 "file": self._upload(
                     ["学号", "姓名", "班级"],
@@ -424,14 +335,13 @@ class StudentBatchImportValidationTests(StudentBatchImportCoreTests):
             },
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "班级已停用，不能导入学生")
-        self.assertNotContains(response, "校验通过")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("班级已停用，不能导入学生", str(response.json()))
         self.assertFalse(User.objects.filter(student_number="INACTIVE-PREVIEW").exists())
 
     def test_direct_legacy_import_confirm_rejects_a_class_deactivated_after_preview(self):
         preview = self.client.post(
-            self.import_url,
+            self.preview_url,
             {
                 "file": self._upload(
                     ["学号", "姓名", "班级"],
@@ -440,14 +350,17 @@ class StudentBatchImportValidationTests(StudentBatchImportCoreTests):
             },
         )
         self.assertEqual(preview.status_code, 200)
-        self.assertContains(preview, "校验通过")
         self.class_group.is_active = False
         self.class_group.save(update_fields=["is_active"])
 
-        response = self.client.post(self.import_url, {"action": "confirm"})
+        response = self.client.post(
+            self.confirm_url,
+            data=json.dumps({}),
+            content_type="application/json",
+        )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "班级已停用，不能导入学生")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("班级已停用，不能导入学生", str(response.json()))
         self.assertFalse(User.objects.filter(student_number="INACTIVE-CONFIRM").exists())
 
     def test_student_role_cannot_download_template_or_open_import(self):
@@ -459,22 +372,33 @@ class StudentBatchImportValidationTests(StudentBatchImportCoreTests):
         self.client.force_login(student)
 
         self.assertEqual(self.client.get(self.template_url).status_code, 403)
-        self.assertEqual(self.client.get(self.import_url).status_code, 403)
+        self.assertEqual(
+            self.client.post(
+                self.preview_url,
+                {"file": self._upload(["学号", "姓名", "班级"], [])},
+            ).status_code,
+            403,
+        )
 
     def test_failed_new_upload_invalidates_previous_preview(self):
         valid = self._upload(
             ["学号", "姓名", "班级"],
             [["STALE", "旧预览学生", str(self.class_group)]],
         )
-        self.client.post(self.import_url, {"file": valid})
+        self.client.post(self.preview_url, {"file": valid})
         invalid = SimpleUploadedFile("错误名单.csv", b"student,name,class")
-        failed_upload = self.client.post(self.import_url, {"file": invalid})
-        self.assertContains(failed_upload, "仅支持 .xlsx 文件")
+        failed_upload = self.client.post(self.preview_url, {"file": invalid})
+        self.assertEqual(failed_upload.status_code, 400)
+        self.assertIn("仅支持 .xlsx 文件", str(failed_upload.json()))
 
-        response = self.client.post(self.import_url, {"action": "confirm"})
+        response = self.client.post(
+            self.confirm_url,
+            data=json.dumps({}),
+            content_type="application/json",
+        )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "导入预览已失效")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("导入预览已失效", str(response.json()))
         self.assertFalse(User.objects.filter(student_number="STALE").exists())
 
     def test_existing_account_check_uses_constant_query_count(self):

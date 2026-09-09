@@ -1,12 +1,8 @@
 """Explicit HTML entry routing. APIs and mutations always remain Django routes."""
 import os
-from types import SimpleNamespace
 
 from django.conf import settings
 from django.http import HttpResponse
-from django.utils.deprecation import MiddlewareMixin
-
-from .rollout import is_vue_module_enabled
 
 
 PAGE_NAMES = {
@@ -44,6 +40,17 @@ def frontend_response():
     if internal_uri:
         response = HttpResponse(content_type='text/html; charset=utf-8')
         response['X-Accel-Redirect'] = internal_uri
+    elif settings.DEBUG and settings.VITE_DEV_SERVER_URL:
+        entry = settings.BASE_DIR / 'frontend' / 'index.html'
+        vite_url = settings.VITE_DEV_SERVER_URL.rstrip('/')
+        content = entry.read_text(encoding='utf-8').replace(
+            '<script type="module" src="/src/main.ts"></script>',
+            (
+                f'<script type="module" src="{vite_url}/@vite/client"></script>\n'
+                f'    <script type="module" src="{vite_url}/src/main.ts"></script>'
+            ),
+        )
+        response = HttpResponse(content, content_type='text/html; charset=utf-8')
     else:
         entry = settings.BASE_DIR / 'frontend' / 'dist' / 'spa-assets' / 'index.html'
         if not entry.is_file():
@@ -51,35 +58,3 @@ def frontend_response():
         response = HttpResponse(entry.read_bytes(), content_type='text/html; charset=utf-8')
     response['Cache-Control'] = 'no-store'
     return response
-
-
-class IndependentFrontendMiddleware(MiddlewareMixin):
-    def process_view(self, request, view_func, view_args, view_kwargs):
-        name = request.resolver_match.view_name
-        if not is_frontend_page(name, request.method):
-            return None
-        if name == 'login':
-            if os.getenv('VUE_STANDALONE_ENABLED', '0') == '1':
-                return frontend_response()
-            return None
-        user = request.user
-        if not user.is_authenticated:
-            return None
-        expected_role = 'student' if name.startswith('assessment:') or name == 'password-change' else 'teacher'
-        if user.role != expected_role and user.role != 'admin' and not user.is_superuser:
-            return None
-        course_id = view_kwargs.get('course_pk') or view_kwargs.get('course_id')
-        if not course_id and name.startswith('assessment:') and os.getenv('VUE_STANDALONE_COURSE_IDS'):
-            from apps.assessment.models import ExperimentSession
-            course_id = ExperimentSession.objects.filter(
-                pk=view_kwargs.get('session_id'), student=user,
-            ).values_list('version__experiment__course_id', flat=True).first()
-        course = SimpleNamespace(pk=course_id) if course_id else None
-        if not is_vue_module_enabled('standalone', user, course=course):
-            return None
-        request._kt_standalone = True
-        # The question view checks ownership/assignment and adds the authorized
-        # capture contract header used by the offline worker.
-        if name in {'assessment:question', 'courses:data_teaching'}:
-            return None
-        return frontend_response()

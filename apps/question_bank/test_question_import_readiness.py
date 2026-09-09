@@ -262,6 +262,44 @@ class QuestionImportReadinessTests(TestCase):
             "draft",
         )
 
+    def test_corrected_mapping_updates_the_matching_draft_without_creating_a_duplicate(self):
+        initial = self.preview(
+            [question_row(序号="repair-source", 题目="待补 KC 的题目", 一级知识点="KC-MISSING")]
+        )
+        first = self.client.post(
+            self.base_url + "confirm/",
+            {"preview_id": initial["preview_id"]},
+            content_type="application/json",
+        )
+        self.assertEqual(first.status_code, 201, first.content)
+        draft = self.bank.questions.get()
+        self.assertEqual(draft.status, Question.Status.DRAFT)
+
+        corrected = self.preview(
+            [question_row(序号="repair-source", 题目="待补 KC 的题目", 一级知识点="KC1")]
+        )
+        corrected_row = corrected["preview"]["rows"][0]
+        self.assertEqual(corrected_row["classification"], "ready")
+        self.assertEqual(corrected_row["existing_question_id"], draft.pk)
+
+        second = self.client.post(
+            self.base_url + "confirm/",
+            {"preview_id": corrected["preview_id"]},
+            content_type="application/json",
+        )
+        self.assertEqual(second.status_code, 201, second.content)
+        self.assertEqual(
+            {key: second.json()[key] for key in ("created", "updated", "active", "draft")},
+            {"created": 0, "updated": 1, "active": 1, "draft": 0},
+        )
+        self.assertEqual(self.bank.questions.count(), 1)
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, Question.Status.ACTIVE)
+        self.assertEqual(
+            list(draft.concept_links.values_list("concept__code", flat=True)),
+            ["KC1"],
+        )
+
     def test_identical_content_with_different_unresolved_kcs_creates_two_drafts(self):
         preview = self.preview(
             [

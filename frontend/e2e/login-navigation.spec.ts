@@ -20,7 +20,7 @@ test.beforeEach(({ browserName }) => {
   test.skip(browserName !== 'firefox', 'Regression for Firefox navigation bookkeeping.')
 })
 
-for (const origin of ['http://127.0.0.1:8000', 'http://127.0.0.1:8010']) {
+for (const origin of ['http://127.0.0.1:8000']) {
   test(`recovers a fully loaded login whose navigation promise times out: ${origin}`, async ({ page }, info) => {
     const injected = injectCompletedNavigationTimeout(page)
     try {

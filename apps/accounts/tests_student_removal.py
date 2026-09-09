@@ -325,7 +325,7 @@ class StudentRemovalTests(TestCase):
         self.assertTrue(CourseEnrollment.objects.filter(pk=self.enrollment.pk).exists())
         self.assertTrue(ExperimentStudent.objects.filter(pk=draft_student.pk).exists())
 
-    def test_concurrent_transfer_returns_a_controlled_message_and_rolls_back(self):
+    def test_concurrent_transfer_rolls_back_the_removal(self):
         other_class = ClassGroup.objects.create(
             course=self.course,
             name="并发转班目标",
@@ -348,36 +348,8 @@ class StudentRemovalTests(TestCase):
             response = self.client.post(
                 self.removal_url(),
                 {"confirmation": "delete"},
-                follow=True,
             )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "选课关系已被其他操作更新，请刷新后重试")
+        self.assertEqual(response.status_code, 302)
         self.enrollment.refresh_from_db()
         self.assertEqual(self.enrollment.class_group_id, self.class_group.pk)
-
-    def test_class_detail_exposes_one_shared_accessible_removal_dialog(self):
-        inactive_student = User.objects.create_user(
-            username="REMOVE-INACTIVE",
-            student_number="REMOVE-INACTIVE",
-            display_name="停用选课学生",
-            role=User.Role.STUDENT,
-        )
-        CourseEnrollment.objects.create(
-            course=self.course,
-            class_group=self.class_group,
-            student=inactive_student,
-            is_active=False,
-        )
-        self.client.force_login(self.owner)
-
-        response = self.client.get(
-            f"/teacher/courses/{self.course.pk}/classes/{self.class_group.pk}/"
-        )
-
-        self.assertContains(response, "移出课程")
-        self.assertContains(response, 'id="remove-student-dialog"', count=1)
-        self.assertContains(response, "将立即失去本课程及未完成实验的访问权限")
-        self.assertContains(response, f'data-student-remove-url="{self.removal_url()}"')
-        self.assertContains(response, 'name="confirmation" value="delete"')
-        self.assertNotContains(response, "停用选课学生")

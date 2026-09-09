@@ -1,7 +1,0 @@
-{% extends 'base.html' %}
-{% block title %}当前反馈未开放 | {{ course.name }}{% endblock %}
-{% block content %}
-<header class="page-header student-page-header"><div class="page-header-copy"><p class="page-kicker">{{ enrollment.class_group.name }}</p><h1 class="page-title">当前反馈未开放</h1><p class="page-subtitle">{{ message }}</p></div></header>
-{% include 'student/partials/_course_nav.html' %}
-<div class="notice-panel"><p>实验完成与提交状态仍可在实验任务页查看；未开放的数据不会发送到此页面。</p><a class="btn btn-outline-primary mt-3" href="{% url 'assessment:course' course.pk %}">返回实验任务</a></div>
-{% endblock %}

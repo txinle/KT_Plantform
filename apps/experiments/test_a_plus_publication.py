@@ -20,7 +20,7 @@ from apps.assessment.services import (
     save_draft,
     submit_attempt,
 )
-from apps.assessment.models import AssessmentEvent
+from apps.assessment.models import AssessmentEvent, Attempt
 from apps.experiments.models import (
     ClassExperimentTask,
     Experiment,
@@ -914,7 +914,7 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
             mapping.question_release_fingerprint,
         )
 
-    def test_a_plus_task_preserves_the_legacy_student_start_draft_submit_contract(self):
+    def test_a_plus_task_preserves_the_student_start_draft_submit_contract(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)
         PublishPlanClass.objects.create(
             publish_plan=plan,
@@ -933,10 +933,23 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
             reverse("assessment:start", args=[self.experiment.pk])
         )
         self.assertEqual(start.status_code, 302)
-        question_page = self.client.get(start["Location"])
-        self.assertEqual(question_page.status_code, 200)
-        self.assertContains(question_page, "发布预览题")
-        attempt = question_page.context["attempt"]
+        attempt = Attempt.objects.get(
+            session__student=self.student,
+            session__version__experiment=self.experiment,
+        )
+        self.assertEqual(
+            start["Location"],
+            reverse(
+                "assessment:question",
+                args=[attempt.session_id, attempt.assignment_id],
+            ),
+        )
+        question = self.client.get(
+            f"/api/v1/student/sessions/{attempt.session_id}/questions/"
+            f"{attempt.assignment_id}/"
+        )
+        self.assertEqual(question.status_code, 200)
+        self.assertEqual(question.json()["question"]["text"], "发布预览题")
 
         draft = self.client.post(
             reverse("assessment:save_draft", args=[attempt.pk]),
@@ -1017,23 +1030,7 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
 
         self.assertEqual(raised.exception.reason_code, "task_terminated")
 
-    def test_teacher_enters_the_two_step_publish_flow(self):
-        self.client.force_login(self.teacher)
-
-        response = self.client.post(
-            reverse(
-                "courses:experiment_publish_plan_start",
-                args=[self.course.pk, self.experiment.pk],
-            )
-        )
-
-        self.assertEqual(response.status_code, 302)
-        response = self.client.get(response["Location"])
-        self.assertContains(response, "01 班级与排期")
-        self.assertContains(response, "02 检查并发布")
-        self.assertNotContains(response, "03 抽题与顺序预览")
-
-    def test_preview_step_shows_all_participants_and_offers_csv_export(self):
+    def test_preview_export_contains_all_participants(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)
         PublishPlanClass.objects.create(
             publish_plan=plan,
@@ -1047,11 +1044,8 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
             args=[self.course.pk, self.experiment.pk, plan.pk, 2],
         )
 
-        response = self.client.get(url)
         export = self.client.get(f"{url}?preview_export=1")
 
-        self.assertContains(response, "A-001")
-        self.assertContains(response, "确认并原子发布")
         self.assertEqual(export.status_code, 200)
         self.assertIn("text/csv", export["Content-Type"])
         self.assertIn("A-001", export.content.decode("utf-8-sig"))

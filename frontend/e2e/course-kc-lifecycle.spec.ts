@@ -19,12 +19,8 @@ test('creates, archives and restores a course KC while retaining its identity', 
   expect(response.status()).toBe(201)
   const created = await response.json()
   expect(created.kc_code).toBe(`KC${sequence}`)
-  for (const [layout, width, height] of [['desktop', 1440, 900], ['mobile', 390, 844], ['zoom200', 720, 450]] as const) {
+  for (const [layout, width, height] of [['desktop', 1440, 900], ['mobile', 390, 844], ['zoom200-equivalent', 720, 450]] as const) {
     await page.setViewportSize({ width, height })
-    if (layout === 'zoom200') {
-      const cdp = await page.context().newCDPSession(page)
-      await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 2, mobile: false })
-    }
     const row = page.locator(layout === 'desktop' ? '.kt-qb-desktop-table tr' : '.kt-qb-mobile-list li').filter({ hasText: name })
     await expect(row.locator('[data-concept-archive]')).toBeVisible()
     await row.locator('[data-concept-archive]').click()

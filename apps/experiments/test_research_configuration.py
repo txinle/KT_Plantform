@@ -4,7 +4,6 @@ from django.apps import apps as django_apps
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
-from django.urls import reverse
 
 from apps.accounts.models import User
 from apps.question_bank.models import (
@@ -136,23 +135,6 @@ class ResearchExperimentConfigurationTests(TestCase):
             "heartbeat_interval_seconds",
         ):
             self.assertIn(field_name, form.fields)
-
-    def test_teacher_form_renders_research_collection_as_a_distinct_section(self):
-        self.client.force_login(self.teacher)
-
-        response = self.client.get(reverse("experiments:create"))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "研究过程采集")
-        self.assertContains(response, 'name="confidence_mode"')
-        self.assertContains(response, 'name="confidence_sampling_unit"')
-        self.assertContains(response, 'name="confidence_probability"')
-        self.assertContains(response, 'name="confidence_randomization_seed"')
-        self.assertContains(response, 'name="confidence_assignment_version"')
-        self.assertContains(response, 'name="confidence_scale_version"')
-        self.assertContains(response, 'name="confidence_prompt_version"')
-        self.assertContains(response, 'name="heartbeat_interval_seconds"')
-
 
 class ResearchConfigurationPublishingTests(TestCase):
     def setUp(self):

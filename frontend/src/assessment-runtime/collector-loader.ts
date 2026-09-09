@@ -8,7 +8,7 @@ export function ensureProcessCollector(): Promise<void> {
   if (pending) return pending
   pending = new Promise<void>((resolve, reject) => {
     const script = document.createElement('script')
-    script.src = collectorUrl
+    script.src = new URL(collectorUrl, import.meta.url).href
     script.async = true
     script.dataset.ktCollector = 'true'
     const fail = () => { script.remove(); reject(new Error('采集器加载失败，请检查网络后重试。')) }

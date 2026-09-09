@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
+import collectorUrl from '../../../static/js/process-event-collector.js?url'
 
 afterEach(() => { document.head.querySelectorAll('[data-kt-collector]').forEach(node => node.remove()); vi.unstubAllGlobals(); vi.resetModules() })
 
@@ -9,7 +10,7 @@ it('loads the unchanged collector once for concurrent consumers without a Django
   const second = ensureProcessCollector()
   const scripts = document.head.querySelectorAll<HTMLScriptElement>('[data-kt-collector]')
   expect(scripts).toHaveLength(1)
-  expect(scripts[0]!.src).toContain('process-event-collector')
+  expect(scripts[0]!.src).toBe(new URL(collectorUrl, import.meta.url).href)
   vi.stubGlobal('KTProcessData', { ProcessEventCollector() {} })
   scripts[0]!.dispatchEvent(new Event('load'))
   await Promise.all([first, second])

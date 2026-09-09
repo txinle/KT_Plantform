@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 
 import { createApiClient } from '@/api/client'
@@ -17,13 +17,36 @@ const bootstrap = getBootstrapContext()
 const api = getTeacherDataCenterApi()
 const course = ref<components['schemas']['CourseContext']>()
 const scope = ref<DataCenterScope>()
-const currentPath = computed(() => route.path)
-
 function dataPath(suffix = '') {
   return `/teacher/courses/${courseId}/data/${suffix}`
 }
 
 const contextError = ref('')
+const scopeSaving = ref(false)
+const selectedExperiment = ref<number | ''>('')
+const selectedClass = ref<number | ''>('')
+
+function applyScopeSelection(value: DataCenterScope) {
+  selectedExperiment.value = value.current.experiment_id ?? ''
+  selectedClass.value = value.current.class_id ?? ''
+}
+
+async function saveScope() {
+  contextError.value = ''
+  scopeSaving.value = true
+  try {
+    const result = await api.updateScope(courseId, {
+      experiment_id: selectedExperiment.value === '' ? null : Number(selectedExperiment.value),
+      class_id: selectedClass.value === '' ? null : Number(selectedClass.value),
+    })
+    scope.value = result
+    applyScopeSelection(result)
+  } catch (caught) {
+    contextError.value = caught instanceof Error ? caught.message : '数据范围保存失败，请检查选择后重试。'
+  } finally {
+    scopeSaving.value = false
+  }
+}
 
 onMounted(async () => {
   try {
@@ -34,6 +57,7 @@ onMounted(async () => {
     ])
     course.value = courseContext
     scope.value = scopeContext
+    applyScopeSelection(scopeContext)
   } catch (caught) {
     contextError.value = caught instanceof Error ? caught.message : '课程信息加载失败，请刷新重试。'
   }
@@ -70,7 +94,7 @@ onMounted(async () => {
     </SidebarSection>
     <section v-if="scope" class="kt-card kt-scope-bar" aria-label="当前数据范围">
       <div><span>范围</span><strong>{{ scope.current.display }}</strong><small>{{ scope.current.is_complete ? '已选择教学范围' : '未选择完整范围' }}</small></div>
-      <details :open="!scope.current.is_complete"><summary>更改范围</summary><form method="post" :action="scope.scope_update_url"><input type="hidden" name="csrfmiddlewaretoken" :value="bootstrap.csrf_token"><input type="hidden" name="next" :value="currentPath"><label>实验<select name="experiment_id" :value="scope.current.experiment_id ?? ''"><option value="">选择实验</option><option v-for="experiment in scope.experiments" :key="experiment.id" :value="experiment.id">{{ experiment.name }}</option></select></label><label>班级<select name="class_id" :value="scope.current.class_id ?? ''"><option value="">选择班级</option><option v-for="item in scope.classes" :key="item.id" :value="item.id">{{ item.academic_year }} {{ item.name }}</option></select></label><button class="kt-button" type="submit">应用</button></form></details>
+      <details :open="!scope.current.is_complete"><summary>更改范围</summary><form @submit.prevent="saveScope"><label>实验<select v-model="selectedExperiment" name="experiment_id"><option value="">选择实验</option><option v-for="experiment in scope.experiments" :key="experiment.id" :value="experiment.id">{{ experiment.name }}</option></select></label><label>班级<select v-model="selectedClass" name="class_id"><option value="">选择班级</option><option v-for="item in scope.classes" :key="item.id" :value="item.id">{{ item.academic_year }} {{ item.name }}</option></select></label><button class="kt-button" type="submit" :disabled="scopeSaving">{{ scopeSaving ? '正在保存…' : '应用' }}</button></form></details>
     </section>
     <p v-if="contextError" class="kt-alert kt-alert--danger" role="alert">{{ contextError }}</p>
     <RouterView v-else />

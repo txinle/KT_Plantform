@@ -77,7 +77,7 @@ class StudentQuestionTypeFlowTests(TestCase):
 
     def save_and_submit(self, assignment, answer):
         page = self.client.get(
-            reverse("assessment:question", args=[self.session.pk, assignment.pk])
+            f"/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/"
         )
         self.assertEqual(page.status_code, 200)
         save_response = self.client.post(
@@ -92,15 +92,14 @@ class StudentQuestionTypeFlowTests(TestCase):
             content_type="application/json",
         )
 
-    def test_fill_blank_renders_single_line_restores_draft_and_scores_accepted_answer(self):
+    def test_fill_blank_runtime_and_scoring_accept_the_configured_answer(self):
         assignment = self.assignment_for(Question.Type.FILL_BLANK)
         response = self.client.get(
-            reverse("assessment:question", args=[self.session.pk, assignment.pk])
+            f"/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/"
         )
 
-        self.assertContains(response, "填空答案")
-        self.assertContains(response, 'type="text"')
-        self.assertNotContains(response, '<textarea id="answer-input"')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["question"]["question_type"], Question.Type.FILL_BLANK)
 
         submitted = self.save_and_submit(assignment, "  kt  ")
         self.assertEqual(submitted.status_code, 200)
@@ -110,10 +109,13 @@ class StudentQuestionTypeFlowTests(TestCase):
     def test_judgement_renders_fixed_bool_payload_and_is_available_in_identified_export(self):
         assignment = self.assignment_for(Question.Type.TRUE_FALSE)
         page = self.client.get(
-            reverse("assessment:question", args=[self.session.pk, assignment.pk])
+            f"/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/"
         )
-        self.assertContains(page, 'value="true"')
-        self.assertContains(page, 'value="false"')
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(
+            [option["key"] for option in page.json()["question"]["options"]],
+            ["true", "false"],
+        )
 
         submitted = self.save_and_submit(assignment, "false")
         self.assertEqual(submitted.status_code, 200)
@@ -141,7 +143,9 @@ class StudentQuestionTypeFlowTests(TestCase):
         ).order_by("assigned_sequence_index")
         for assignment, answer in zip(assignments, ("NaN", "sNaN", "Infinity")):
             with self.subTest(answer=answer):
-                self.client.get(reverse("assessment:question", args=[self.session.pk, assignment.pk]))
+                self.client.get(
+                    f"/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/"
+                )
                 saved = self.client.post(
                     reverse("assessment:save_draft", args=[assignment.attempt.pk]),
                     data=json.dumps({"answer": answer}),
