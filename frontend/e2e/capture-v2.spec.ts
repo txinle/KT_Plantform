@@ -101,7 +101,8 @@ test('five short-response types retain trajectories through offline reload, IME 
     const body = await submitResponse.json()
     expect(submitResponse.ok(), JSON.stringify(body)).toBe(true)
     if (row !== rows.at(-1)) expect(body).not.toHaveProperty('correct_answer')
-    await expect(page).toHaveURL(new RegExp(body.next_url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'))
+    await expect(page).toHaveURL((url) => url.pathname === new URL(body.next_url, page.url()).pathname)
+    if (row !== rows.at(-1)) expect(new URL(page.url()).searchParams.get('reason')).toBe('submit_next')
   }
   const single = fixture.question_refs.find((row: { question_type: string }) => row.question_type === 'single_choice')
   await page.goto(`/student/courses/${fixture.course.id}/learning/experiments/${fixture.tasks[0].experiment_id}/questions/${single.question_id}/`)

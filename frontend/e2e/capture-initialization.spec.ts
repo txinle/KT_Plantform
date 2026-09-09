@@ -142,7 +142,8 @@ async function submitAnswer(page: Page) {
   const response = await submitted
   const body = await response.json()
   expect(response.ok(), JSON.stringify(body)).toBe(true)
-  await expect(page).toHaveURL(new RegExp(`${body.next_url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`))
+  await expect(page).toHaveURL((url) => url.pathname === new URL(body.next_url, page.url()).pathname)
+  if (new URL(page.url()).pathname.includes('/questions/')) expect(new URL(page.url()).searchParams.get('reason')).toBe('submit_next')
 }
 
 async function login(page: Page, username: string, password: string) {
@@ -293,7 +294,7 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
   ])
 
   for (const [index, row] of rows.entries()) {
-    await expect(page).toHaveURL(new RegExp(`/questions/${row.assignment_id}/$`))
+    await expect(page).toHaveURL((url) => url.pathname.endsWith(`/questions/${row.assignment_id}/`))
     await expect(page.locator('main[data-init-state="ready"]')).toBeVisible()
     await setAnswer(page, row.kind)
     if (index === 0) {
@@ -303,7 +304,7 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
     if (row.kind === 'short_answer') {
       const offlinePreparation = await page.evaluate(async ({ sessionId, assignmentId }) => {
         const cache = await caches.open('kt-capture-v2-runtime-1')
-        const pageResponse = await cache.match(location.href)
+        const pageResponse = await cache.match(location.href, { ignoreSearch: true })
         const apiResponse = await cache.match(`/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/`)
         const html = pageResponse ? await pageResponse.text() : ''
         const document = new DOMParser().parseFromString(html, 'text/html')

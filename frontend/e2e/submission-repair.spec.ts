@@ -179,22 +179,19 @@ test('initial-password reminder, pre-submit confidence and response-loss recover
     await teacher.getByRole('button', { name: '登录', exact: true }).click()
     await expect(teacher).toHaveURL(/\/teacher\/courses\/$/)
     const task = fixture.tasks[0]
-    await teacher.goto(`/teacher/courses/${fixture.course.id}/data/advanced/?experiment_id=${task.experiment_id}&class_id=${task.class_group_id}&table=attempts&search=${username}`)
-    await expect(teacher.getByRole('heading', { name: '高级数据工具', exact: true })).toBeVisible()
-    for (const group of ['实验与参与者', '题目与知识结构', '作答与评分', '行为过程', '扩展观测', '派生研究数据']) {
-      await expect(teacher.getByText(group, { exact: true })).toBeVisible()
+    await teacher.goto(`/teacher/courses/${fixture.course.id}/data/advanced/?experiment_id=${task.experiment_id}&class_id=${task.class_group_id}&table=responses&student_id=${fixture.student.id}`)
+    await expect(teacher.getByRole('heading', { name: '研究数据预览', exact: true })).toBeVisible()
+    for (const key of ['sessions', 'questions', 'knowledge_points', 'question_kc_mapping', 'responses', 'behavior_events']) {
+      await expect(teacher.locator(`[data-card-key="${key}"]`)).toBeVisible()
     }
-    await expect(teacher.getByLabel('按学生姓名或学号搜索')).toHaveValue(username)
-    const readablePreview = teacher.getByTestId('readable-preview')
-    await expect(readablePreview).toContainText(username)
+    await expect(teacher.getByLabel('按学生姓名或学号搜索')).toHaveValue(new RegExp(username))
+    const readablePreview = teacher.getByRole('table')
+    await expect(readablePreview.locator('tbody tr')).toHaveCount(rows.length)
+    await expect(readablePreview.locator('tbody tr').filter({ hasText: '已提交' })).toHaveCount(2)
+    await expect(readablePreview).toContainText('离线保留的答案')
     await expect(readablePreview).not.toContainText('attempt_id')
-    await readablePreview.getByRole('button', { name: '查看完整记录', exact: true }).first().click()
-    const fullRecord = teacher.getByRole('dialog', { name: '完整记录' })
-    await expect(fullRecord).toContainText('作答记录唯一标识')
-    await expect(fullRecord).toContainText(String(formal.attempt_id))
     await teacher.evaluate(() => scrollTo(0, 0))
     await teacher.screenshot({ path: testInfo.outputPath('advanced-record-desktop-1440.png'), fullPage: true })
-    await teacher.getByRole('button', { name: '关闭完整记录', exact: true }).click()
     for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
       await teacher.setViewportSize(viewport)
       await teacher.evaluate(() => scrollTo(0, 0))
