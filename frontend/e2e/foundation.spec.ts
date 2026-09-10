@@ -13,11 +13,18 @@ async function login(page: Page, origin: string) {
 
 async function selectFirstKnowledgeComponent(page: Page) {
   await page.getByText('选择知识点', { exact: true }).click()
+  const inventoryUpdated = page.waitForResponse((response) => {
+    if (response.request().method() !== 'POST'
+      || !response.url().endsWith('/experiments/sampling-inventory/')) return false
+    const payload = response.request().postDataJSON() as { kc_codes?: string[] }
+    return Boolean(payload.kc_codes?.length)
+  })
   await page
     .locator('.kt-kc-config-panel', { hasText: '知识点范围' })
     .locator('.kt-kc-tree-selector input[type="checkbox"]')
     .first()
     .check()
+  expect((await inventoryUpdated).status()).toBe(200)
 }
 
 const unifiedQuestionImportHeaders = [

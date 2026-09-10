@@ -6,6 +6,7 @@ async function login(page: Page, user: string, password: string) {
   await page.getByLabel('密码').fill(password)
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page.locator('.kt-workspace')).toBeVisible()
+  await page.waitForLoadState('networkidle')
 }
 
 async function inspect(page: Page, info: TestInfo, name: string) {

@@ -142,8 +142,9 @@ test('assessment runtime retains an offline answer and saves it after reconnecti
   await vueDemoTask(page).getByRole('button', { name: /^(开始作业|继续作答)$/ }).click()
   await page.locator('.kt-assessment-question').waitFor({ state: 'visible' })
 
-  await context.setOffline(true)
   const answer = page.locator('.kt-assessment-question [name="answer"]').first()
+  await expect(answer).toBeEnabled({ timeout: 30_000 })
+  await context.setOffline(true)
   const inputType = await answer.getAttribute('type')
   const inputMode = await answer.getAttribute('inputmode')
   const checkable = inputType === 'radio' || inputType === 'checkbox'
