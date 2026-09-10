@@ -218,24 +218,24 @@ watch(
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <p v-if="loading && !data" class="kt-research-loading" role="status">正在加载研究数据…</p>
   <template v-else-if="data">
+    <header v-if="view === 'overview'" class="kt-research-heading">
+      <div>
+        <p class="kt-research-kicker">实验数据</p>
+        <h1>研究数据预览</h1>
+        <p>按实验、班级、学生和作答会话查看可直接用于研究的六张数据表。</p>
+      </div>
+      <aside v-if="selectedStudent" class="kt-step-note">
+        <ResearchDataIcon name="info" />
+        <div><strong>步骤 1/5：筛选单一学生</strong><span>通过选择学生，查看该学生的研究数据预览。</span></div>
+      </aside>
+    </header>
+
     <EmptyState v-if="!data.scope.is_complete" title="请先选择实验和班级">
       <p>研究数据预览需要明确的实验和班级范围。</p>
     </EmptyState>
 
     <div v-else class="kt-research-workspace" :class="{ 'kt-research-workspace--timeline': view === 'timeline' }">
       <template v-if="view === 'overview'">
-        <header class="kt-research-heading">
-          <div>
-            <p class="kt-research-kicker">实验数据</p>
-            <h1>研究数据预览</h1>
-            <p>按实验、班级、学生和作答会话查看可直接用于研究的六张数据表。</p>
-          </div>
-          <aside v-if="selectedStudent" class="kt-step-note">
-            <ResearchDataIcon name="info" />
-            <div><strong>步骤 1/5：筛选单一学生</strong><span>通过选择学生，查看该学生的研究数据预览。</span></div>
-          </aside>
-        </header>
-
         <form class="kt-research-filter-panel" role="search" @submit.prevent="submitFilters">
           <label class="kt-student-search">学生
             <span class="kt-input-wrap">

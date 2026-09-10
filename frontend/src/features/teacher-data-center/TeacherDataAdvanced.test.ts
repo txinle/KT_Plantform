@@ -78,6 +78,17 @@ describe('TeacherDataAdvanced', () => {
     mocks.api.advanced.mockImplementation(async () => response())
   })
 
+  it('keeps its page heading when the research scope is incomplete', async () => {
+    const incomplete = response()
+    incomplete.scope.is_complete = false
+    mocks.api.advanced.mockResolvedValueOnce(incomplete)
+    const wrapper = mount(TeacherDataAdvanced)
+    await flushPromises()
+    expect(wrapper.findAll('h1')).toHaveLength(1)
+    expect(wrapper.get('h1').text()).toBe('研究数据预览')
+    expect(wrapper.text()).toContain('请先选择实验和班级')
+  })
+
   it('shows six cards and applies a uniquely selected student', async () => {
     const wrapper = mount(TeacherDataAdvanced)
     await flushPromises()
