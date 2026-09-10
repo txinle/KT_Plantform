@@ -4,6 +4,8 @@ from decimal import Decimal, InvalidOperation
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from apps.experiments.confidence_scales import confidence_scale
+
 from .event_services import append_assessment_event
 from .feedback_services import frozen_feedback_payload
 from .models import Attempt, ConfidenceAssignment
@@ -15,6 +17,32 @@ class ConfidenceFlowError(ValueError):
 
 def _configuration(attempt):
     return attempt.session.version.configuration or {}
+
+
+def confidence_scale_contract(attempt):
+    version = _configuration(attempt).get("confidence_scale_version", "v1")
+    try:
+        return {"scale_version": version, **confidence_scale(version)}
+    except ValueError as error:
+        raise ConfidenceFlowError("未知的信心量表版本。") from error
+
+
+def validate_confidence_probability(attempt, probability):
+    scale = confidence_scale_contract(attempt)
+    minimum = scale["minimum"]
+    maximum = scale["maximum"]
+    step = scale["step"]
+    if (
+        isinstance(probability, bool)
+        or not isinstance(probability, int)
+        or probability < minimum
+        or probability > maximum
+        or (probability - minimum) % step
+    ):
+        raise ConfidenceFlowError(
+            f"请选择 {minimum} 到 {maximum} 之间、以 {step} 为间隔的整数信心值。"
+        )
+    return probability
 
 
 def _assignment_unit_key(attempt, configuration):
@@ -126,8 +154,8 @@ def validate_submission_confidence(attempt, response):
     if response['status'] == 'skipped':
         if probability is not None:
             raise ConfidenceFlowError("跳过评价不能同时填写信心值。")
-    elif isinstance(probability, bool) or not isinstance(probability, int) or not 0 <= probability <= 100 or probability % 10:
-        raise ConfidenceFlowError("请选择 0 到 100 之间、以 10 为间隔的信心值。")
+    else:
+        validate_confidence_probability(attempt, probability)
     return assignment
 
 
@@ -145,19 +173,21 @@ def confidence_prompt_contract(assignment):
     configuration = _configuration(assignment.attempt)
     return {
         "confidence_assignment_id": str(assignment.pk),
-        "scale_version": configuration.get("confidence_scale_version", "v1"),
+        **confidence_scale_contract(assignment.attempt),
         "prompt_version": configuration.get("confidence_prompt_version", "v1"),
-        "minimum": 0,
-        "maximum": 100,
-        "step": 10,
     }
 
 
 def _append_confidence_event(assignment, *, event_type, payload):
     attempt = assignment.attempt
+    scale_version = _configuration(attempt).get("confidence_scale_version", "v1")
     return append_assessment_event(
         event_type=event_type,
-        event_version=1,
+        event_version=(
+            2
+            if event_type == "confidence_committed" and scale_version == "v2"
+            else 1
+        ),
         event_domain="assessment",
         actor_source="server",
         session=attempt.session,
@@ -232,15 +262,8 @@ def mark_confidence_prompt_shown(*, attempt_id, student):
 
 @transaction.atomic
 def commit_confidence(*, attempt_id, student, probability):
-    if (
-        isinstance(probability, bool)
-        or not isinstance(probability, int)
-        or probability < 0
-        or probability > 100
-        or probability % 10
-    ):
-        raise ConfidenceFlowError("Confidence probability must use 10 percent steps.")
     assignment = _locked_assignment(attempt_id=attempt_id, student=student)
+    validate_confidence_probability(assignment.attempt, probability)
     if assignment.response_status == ConfidenceAssignment.ResponseStatus.COMMITTED:
         if assignment.probability == probability:
             return assignment

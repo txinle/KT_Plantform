@@ -471,6 +471,7 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                 "navigation_id": str(visit_entry.navigation_id),
                 "writer_lease_acquire_url": reverse('assessment_process:writer_lease_acquire', args=[attempt.pk]),
                 "writer_lease_renew_url": reverse('assessment_process:writer_lease_renew', args=[attempt.pk]),
+                "writer_lease_release_url": reverse('assessment_process:writer_lease_release', args=[attempt.pk]),
                 "capture_version": session.capture_contract.contract_name if session.capture_contract_id else 'legacy',
                 "active_response_event_id": str(attempt.active_response_event_id) if attempt.active_response_event_id else None,
                 "response_version": attempt.response_version,
@@ -496,7 +497,7 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
             payload.pop('research_tools', None)
             payload['actions'].pop('research_tools_url', None)
             payload['actions'].pop('resolve_branch_url', None)
-            for key in ('capture_version', 'active_response_event_id', 'response_version', 'writer_lease_acquire_url', 'writer_lease_renew_url'):
+            for key in ('capture_version', 'active_response_event_id', 'response_version', 'writer_lease_acquire_url', 'writer_lease_renew_url', 'writer_lease_release_url'):
                 payload['process'].pop(key, None)
         else:
             from datetime import timedelta

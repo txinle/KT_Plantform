@@ -17,6 +17,9 @@ const state = {
 let workerResponse: Record<string, unknown>
 let postedMessage: Record<string, unknown> | undefined
 let originalServiceWorker: PropertyDescriptor | undefined
+let worker: { postMessage: ReturnType<typeof vi.fn> }
+let getRegistration: ReturnType<typeof vi.fn>
+let register: ReturnType<typeof vi.fn>
 
 class TestMessageChannel {
   port1 = {
@@ -32,17 +35,20 @@ describe('prepareOfflineQuestion', () => {
     window.history.replaceState({}, '', '/student/sessions/7/questions/11/')
     Object.defineProperty(globalThis.navigator, 'onLine', { configurable: true, value: true })
     originalServiceWorker = Object.getOwnPropertyDescriptor(globalThis.navigator, 'serviceWorker')
-    const worker = {
+    worker = {
       postMessage: vi.fn((message: Record<string, unknown>, ports: Array<{ replyTo: TestMessageChannel['port1'] }>) => {
         postedMessage = message
         queueMicrotask(() => ports[0]!.replyTo.onmessage?.({ data: workerResponse }))
       }),
     }
+    getRegistration = vi.fn().mockResolvedValue(undefined)
+    register = vi.fn().mockResolvedValue({ active: worker })
     Object.defineProperty(globalThis.navigator, 'serviceWorker', {
       configurable: true,
       value: {
-        register: vi.fn().mockResolvedValue({ active: worker }),
-        ready: Promise.resolve(),
+        getRegistration,
+        register,
+        ready: Promise.resolve({ active: worker }),
       },
     })
     vi.stubGlobal('MessageChannel', TestMessageChannel)
@@ -68,6 +74,76 @@ describe('prepareOfflineQuestion', () => {
       code: 'capture_contract_unavailable',
       message: '离线恢复准备失败：capture page response did not carry its contract marker',
     })
+  })
+
+  it('reuses an active worker for the assessment scope before registering', async () => {
+    workerResponse = { ok: true }
+    getRegistration.mockResolvedValue({ active: worker })
+
+    await prepareOfflineQuestion(state)
+
+    expect(getRegistration).toHaveBeenCalledWith('/student/sessions/')
+    expect(register).not.toHaveBeenCalled()
+  })
+
+  it('registers only when the assessment scope has no active worker', async () => {
+    workerResponse = { ok: true }
+
+    await prepareOfflineQuestion(state)
+
+    expect(register).toHaveBeenCalledTimes(1)
+    expect(register).toHaveBeenCalledWith(
+      '/assessment/process/capture-v2/offline-worker.js',
+      { scope: '/student/sessions/' },
+    )
+  })
+
+  it('rechecks the scope and retries registration once after a transient failure', async () => {
+    workerResponse = { ok: true }
+    register
+      .mockRejectedValueOnce(new TypeError('worker script fetch failed'))
+      .mockResolvedValueOnce({ active: worker })
+
+    await prepareOfflineQuestion(state)
+
+    expect(getRegistration).toHaveBeenCalledTimes(2)
+    expect(register).toHaveBeenCalledTimes(2)
+  })
+
+  it('hard-fails with a concise message and logs worker response diagnostics', async () => {
+    const registrationError = new TypeError('worker script fetch failed')
+    register.mockRejectedValue(registrationError)
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response('', {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/javascript',
+        'Service-Worker-Allowed': '/student/sessions/',
+      },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('isSecureContext', true)
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(prepareOfflineQuestion(state)).rejects.toMatchObject({
+      code: 'offline_worker_initialization_failed',
+      message: '安全作答环境初始化失败，请刷新页面后重试。',
+    })
+    expect(register).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/assessment/process/capture-v2/offline-worker.js',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    )
+    expect(consoleError).toHaveBeenCalledWith(
+      'Capture V2 offline worker initialization failed.',
+      expect.objectContaining({
+        origin: 'http://localhost:3000',
+        isSecureContext: true,
+        scriptStatus: 200,
+        scriptContentType: 'application/javascript',
+        serviceWorkerAllowed: '/student/sessions/',
+      }),
+    )
+    consoleError.mockRestore()
   })
 
   it('still accepts the existing service-worker error response shape', async () => {

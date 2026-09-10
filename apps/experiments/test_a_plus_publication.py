@@ -308,6 +308,12 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
 
         self.experiment.refresh_from_db()
         self.assertEqual(self.experiment.status, Experiment.Status.FROZEN)
+        self.assertEqual(
+            self.experiment.frozen_release_snapshot.configuration[
+                "confidence_scale_version"
+            ],
+            "v2",
+        )
         self.assertEqual(len(tasks), 1)
         self.assertEqual(ReleaseSnapshotQuestionMapping.objects.count(), 1)
         self.assertEqual(tasks[0].participant_snapshots.count(), 1)

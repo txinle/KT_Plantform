@@ -53,3 +53,43 @@ class ResearchToolTests(TestCase):
             validate_research_tools({'steps_enabled': True})
         with self.assertRaises(ValidationError):
             validate_research_tools({'hints': [{'id': 'h1', 'text': 'answer'}]})
+
+    def test_confidence_tool_uses_the_frozen_v2_scale(self):
+        from .research_tool_services import available_tools, record_tool_action
+
+        attempt = self.enabled_attempt()
+        configuration = self.version.configuration
+        configuration.update({
+            'confidence_mode': 'all',
+            'confidence_scale_version': 'v2',
+            'research_tools': {
+                'rules': [{
+                    'id': 'confidence1', 'tool': 'confidence', 'trigger': 'item_enter',
+                    'question_code': '', 'after_seconds': 0, 'max_exposures': 1,
+                    'required': True, 'hint_id': '',
+                }],
+            },
+        })
+        self.version.configuration = configuration
+        self.version.save(update_fields=['configuration'])
+        attempt.session.version = self.version
+
+        self.assertEqual(available_tools(attempt)['confidence_scale']['step'], 1)
+        base = {
+            'student': self.student,
+            'attempt_id': attempt.pk,
+            'tool': 'confidence',
+            'data': {'rule_id': 'confidence1'},
+            'initiation_type': 'task_required',
+        }
+        record_tool_action(**base, stage='requested', operation_id=str(uuid.uuid4()))
+        record_tool_action(**base, stage='presented', operation_id=str(uuid.uuid4()))
+        record_tool_action(**{
+            **base,
+            'stage': 'responded',
+            'operation_id': str(uuid.uuid4()),
+            'data': {'rule_id': 'confidence1', 'probability': 57},
+        })
+
+        attempt.confidence_assignment.refresh_from_db()
+        self.assertEqual(attempt.confidence_assignment.probability, 57)

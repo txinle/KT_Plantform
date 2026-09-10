@@ -182,3 +182,39 @@ it('does not start a queued hint after the component unmounts', async () => {
   await flushPromises()
   expect(hintRequests()).toEqual(['h1'])
 })
+
+it('uses the frozen v2 scale and blocks invalid confidence input', async () => {
+  mocks.post.mockImplementation((_endpoint, body: { tool?: string; stage?: string; data?: Record<string, unknown> } = {}) => {
+    if (!body.tool) return Promise.resolve(toolsResponse({
+      confidence_scale: { scale_version: 'v2', minimum: 0, maximum: 100, step: 1 },
+      rules: [{ id: 'confidence-1', tool: 'confidence', required: true }],
+    }))
+    return Promise.resolve({ event_id: `event-${body.stage}`, content_version: 'v1' })
+  })
+  const wrapper = mount(StudentResearchTools, { props: {
+    endpoint: '/tools/', answerEventId: null, waitForCapture: async () => undefined, runtime: runtime(),
+  } })
+  await flushPromises()
+  const numberInput = wrapper.get<HTMLInputElement>('[data-tool-confidence-number]')
+  const rangeInput = wrapper.get<HTMLInputElement>('[data-tool-confidence-range]')
+  const submit = buttonWithText(wrapper, '记录信心')
+
+  expect(rangeInput.attributes('step')).toBe('1')
+  expect(submit.attributes('disabled')).toBeDefined()
+  await numberInput.setValue('57.5')
+  expect(wrapper.get('[data-tool-confidence-error]').text()).toContain('整数')
+  expect(submit.attributes('disabled')).toBeDefined()
+  expect(mocks.post.mock.calls.some(([, body]) => body?.stage === 'responded')).toBe(false)
+
+  await numberInput.setValue('57')
+  expect(rangeInput.element.value).toBe('57')
+  expect(submit.attributes('disabled')).toBeUndefined()
+  await rangeInput.setValue('58')
+  expect(numberInput.element.value).toBe('58')
+  await submit.trigger('click')
+  await flushPromises()
+  expect(mocks.post).toHaveBeenCalledWith('/tools/', expect.objectContaining({
+    stage: 'responded', data: expect.objectContaining({ probability: 58 }),
+  }))
+  wrapper.unmount()
+})

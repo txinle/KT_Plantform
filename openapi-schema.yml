@@ -4811,6 +4811,14 @@ components:
         * `student` - 学生
         * `session` - 会话
         * `attempt` - 作答
+    ConfidenceScaleVersionEnum:
+      enum:
+      - v1
+      - v2
+      type: string
+      description: |-
+        * `v1` - v1（10% 步进）
+        * `v2` - v2（1% 步进）
     ConfirmationF49Enum:
       enum:
       - delete
@@ -7307,8 +7315,7 @@ components:
           type: string
           maxLength: 64
         confidence_scale_version:
-          type: string
-          maxLength: 64
+          $ref: '#/components/schemas/ConfidenceScaleVersionEnum'
         confidence_prompt_version:
           type: string
           maxLength: 64
@@ -9079,8 +9086,7 @@ components:
           type: string
           maxLength: 64
         confidence_scale_version:
-          type: string
-          maxLength: 64
+          $ref: '#/components/schemas/ConfidenceScaleVersionEnum'
         confidence_prompt_version:
           type: string
           maxLength: 64
@@ -10266,6 +10272,8 @@ components:
         writer_lease_acquire_url:
           type: string
         writer_lease_renew_url:
+          type: string
+        writer_lease_release_url:
           type: string
         capture_version:
           type: string

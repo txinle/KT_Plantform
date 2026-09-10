@@ -19,11 +19,11 @@ class APlusMigrationContractTests(SimpleTestCase):
 
         self.assertEqual(
             loader.graph.leaf_nodes("experiments"),
-            [("experiments", "0025_allow_unassigned_draft_bank")],
+            [("experiments", "0026_confidence_scale_v2")],
         )
         self.assertIn(
             ("experiments", "0022_participant_snapshot_assignment_provenance"),
-            loader.graph.forwards_plan(("experiments", "0025_allow_unassigned_draft_bank")),
+            loader.graph.forwards_plan(("experiments", "0026_confidence_scale_v2")),
         )
         experiment = loader.project_state().apps.get_model("experiments", "Experiment")
         self.assertTrue(experiment._meta.get_field("question_bank").null)

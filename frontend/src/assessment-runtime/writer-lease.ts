@@ -3,7 +3,7 @@ import { ApiError } from '@/api/client'
 const DEFAULT_RENEW_BEFORE_MS = 5_000
 
 export interface WriterLeaseClient {
-  post<T>(url: string, body: Record<string, unknown>): Promise<T>
+  post<T>(url: string, body: Record<string, unknown>, options?: { keepalive?: boolean }): Promise<T>
 }
 
 interface WriterLeaseResponse {
@@ -25,6 +25,7 @@ export interface WriterLeaseCredentials {
 
 export interface WriterLease {
   beforePointerWrite(): Promise<WriterLeaseCredentials>
+  release(options?: { keepalive?: boolean }): Promise<void>
   invalidate(): void
 }
 
@@ -33,6 +34,7 @@ export interface CreateWriterLeaseOptions {
   clientInstanceId: string
   acquireUrl: string
   renewUrl: string
+  releaseUrl: string
   now?: () => number
   renewBeforeMs?: number
 }
@@ -42,7 +44,7 @@ export class WriterLeaseConflictError extends Error {
   readonly cause: unknown
 
   constructor(cause: unknown) {
-    super('该题正在其他设备上作答，当前页面不能保存或提交。')
+    super('另一页面或设备正在作答，当前页面暂不能保存或提交。')
     this.name = 'WriterLeaseConflictError'
     this.cause = cause
   }
@@ -79,6 +81,7 @@ export function createWriterLease(options: CreateWriterLeaseOptions): WriterLeas
   const renewBeforeMs = options.renewBeforeMs ?? DEFAULT_RENEW_BEFORE_MS
   let cached: CachedWriterLease | undefined
   let pending: Promise<CachedWriterLease> | undefined
+  let releasePending: Promise<void> | undefined
 
   async function request(url: string, body: Record<string, unknown>) {
     try {
@@ -117,6 +120,7 @@ export function createWriterLease(options: CreateWriterLeaseOptions): WriterLeas
 
   return {
     async beforePointerWrite() {
+      if (releasePending) await releasePending.catch(() => undefined)
       if (!pending) {
         pending = ensureLease().finally(() => {
           pending = undefined
@@ -127,6 +131,31 @@ export function createWriterLease(options: CreateWriterLeaseOptions): WriterLeas
         writer_lease_token: active.token,
         writer_client_instance_id: options.clientInstanceId,
       }
+    },
+    async release(releaseOptions = {}) {
+      if (releasePending) return releasePending
+      releasePending = (async () => {
+        if (pending) await pending
+        const active = cached
+        if (!active) return
+        try {
+          await options.client.post<{ success: boolean }>(
+            options.releaseUrl,
+            {
+              lease_token: active.token,
+              client_instance_id: options.clientInstanceId,
+            },
+            releaseOptions,
+          )
+        } catch (error) {
+          throw asWriterLeaseConflict(error)
+        } finally {
+          if (cached === active) cached = undefined
+        }
+      })().finally(() => {
+        releasePending = undefined
+      })
+      return releasePending
     },
     invalidate() {
       cached = undefined

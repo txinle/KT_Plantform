@@ -49,6 +49,8 @@ def _assert_tool(attempt, tool, data):
 
 
 def available_tools(attempt):
+    from .confidence_services import confidence_scale_contract
+
     config = tool_configuration(attempt)
     state = {'doubt': False, 'pending_check': False, 'checking': False, 'doubt_note': ''}
     for row in AssessmentEvent.objects.filter(attempt=attempt, event_type='research_tool').order_by('server_ingest_sequence_no'):
@@ -59,7 +61,7 @@ def available_tools(attempt):
                 state['doubt_note'] = row.payload['data'].get('note', '')
         if tool == 'check' and stage in {'started', 'finished'}:
             state['checking'] = stage == 'started'
-    return {
+    result = {
         'state': state,
         'doubt_enabled': config.get('doubt_enabled', False),
         'check_enabled': config.get('check_enabled', False),
@@ -68,6 +70,9 @@ def available_tools(attempt):
         'hints': [{'id': hint['id'], 'level': hint['level']} for hint in config.get('hints', [])
                   if hint['question_code'] == attempt.assignment.snapshot.code and not hint['contains_answer']],
     }
+    if any(rule.get('tool') == 'confidence' for rule in config.get('rules', [])):
+        result['confidence_scale'] = confidence_scale_contract(attempt)
+    return result
 
 
 def _response_reference(attempt, event_id):
@@ -135,13 +140,16 @@ def record_tool_action(*, student, attempt_id, tool, stage, operation_id, data=N
             event_type='research_tool', payload__stage='requested', payload__data__rule_id=rule_id).count() >= rule['max_exposures']:
             raise ValidationError('该规则已达到出现上限。')
     if tool == 'confidence':
-        from .confidence_services import mark_confidence_prompt_shown, commit_confidence
+        from .confidence_services import (
+            commit_confidence,
+            mark_confidence_prompt_shown,
+            validate_confidence_probability,
+        )
         if stage == 'presented':
             mark_confidence_prompt_shown(attempt_id=attempt.pk, student=student)
         if stage == 'responded':
             probability = data.get('probability')
-            if type(probability) is not int or probability not in range(0, 101, 10):
-                raise ValidationError('信心必须为 0–100 之间的 10 的整数倍。')
+            validate_confidence_probability(attempt, probability)
             from .confidence_services import ensure_confidence_assignment
             assignment = ensure_confidence_assignment(attempt)
             if assignment.response_status != assignment.ResponseStatus.COMMITTED:

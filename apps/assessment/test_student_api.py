@@ -469,6 +469,32 @@ class StudentAssessmentApiTests(StudentApiTestCase):
         self.assertEqual(entered.payload["visit_id"], process["visit_id"])
 
     @override_settings(
+        CAPTURE_V2_ENABLED=True,
+        CAPTURE_V2_COURSE_IDS=frozenset({"*"}),
+        CAPTURE_V2_USER_IDS=frozenset(),
+    )
+    def test_capture_v2_question_entry_exposes_the_writer_release_url(self):
+        self.start()
+        session = ExperimentSession.objects.get(
+            class_task=self.task,
+            student=self.student,
+        )
+        assignment = session.assignments.get()
+
+        response = self.client.get(
+            f"/api/v1/student/sessions/{session.pk}/questions/{assignment.pk}/"
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(
+            response.json()["process"]["writer_lease_release_url"],
+            reverse(
+                "assessment_process:writer_lease_release",
+                args=[assignment.attempt.pk],
+            ),
+        )
+
+    @override_settings(
         CAPTURE_V2_ENABLED=False,
         CAPTURE_V2_USER_IDS=frozenset(),
         CAPTURE_V2_COURSE_IDS=frozenset(),
@@ -746,6 +772,7 @@ class StudentAssessmentApiTests(StudentApiTestCase):
         ):
             self.assertNotIn(forbidden, item)
 
+    @override_settings(STUDENT_SESSION_IDLE_TIMEOUT_SECONDS=3 * 60 * 60)
     def test_deadline_policy_releases_results_only_after_the_class_deadline(self):
         now = timezone.now()
         _experiment, task = self.publish_task(
@@ -1003,7 +1030,8 @@ class StudentAssessmentApiTests(StudentApiTestCase):
                 },
             },
         )
-        self.assertLessEqual(len(result_queries), 17)
+        # Sliding student-session renewal adds three session-backend queries.
+        self.assertLessEqual(len(result_queries), 20)
 
     def test_result_openapi_contract_is_a_feedback_mode_discriminated_union(self):
         self.client.force_login(self.student)

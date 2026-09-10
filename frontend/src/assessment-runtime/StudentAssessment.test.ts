@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     params: { sessionId: string; assignmentId: string }
     query: Record<string, string>
   }) => Promise<unknown>),
+  beforeRouteLeave: undefined as undefined | (() => Promise<unknown>),
   afterRouteEach: undefined as undefined | ((to: {
     params: { sessionId: string; assignmentId: string }
     query: Record<string, string>
@@ -46,6 +47,9 @@ vi.mock('vue-router', () => ({
   }),
   onBeforeRouteUpdate: (callback: typeof mocks.beforeRouteUpdate) => {
     mocks.beforeRouteUpdate = callback
+  },
+  onBeforeRouteLeave: (callback: typeof mocks.beforeRouteLeave) => {
+    mocks.beforeRouteLeave = callback
   },
 }))
 vi.mock('./api', () => ({ getStudentAssessmentApi: () => mocks.api }))
@@ -119,9 +123,10 @@ function captureV2Question(overrides: Record<string, unknown> = {}) {
       ...structuredClone(questionState.process),
       capture_version: 'capture-v2',
       response_version: 0,
-      active_response_event_id: null,
+      active_response_event_id: null as string | null,
       writer_lease_acquire_url: '/assessment/process/capture-v2/attempts/13/lease/acquire/',
       writer_lease_renew_url: '/assessment/process/capture-v2/attempts/13/lease/renew/',
+      writer_lease_release_url: '/assessment/process/capture-v2/attempts/13/lease/release/',
     },
     ...overrides,
   }
@@ -138,6 +143,7 @@ describe('StudentAssessment', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.beforeRouteUpdate = undefined
+    mocks.beforeRouteLeave = undefined
     mocks.afterRouteEach = undefined
     vi.stubGlobal('indexedDB', {})
     Object.defineProperty(globalThis.navigator, 'onLine', { configurable: true, value: true })
@@ -425,6 +431,134 @@ describe('StudentAssessment', () => {
     })
   })
 
+  it('releases the capture-v2 writer lease after closing a navigation', async () => {
+    const captured = captureV2Question()
+    captured.process.active_response_event_id = '00000000-0000-4000-8000-000000000050'
+    mocks.api.question.mockResolvedValue(captured)
+    mocks.api.post.mockImplementation(async (url: string) => (
+      url.endsWith('/lease/acquire/')
+        ? {
+            success: true,
+            lease_token: '00000000-0000-4000-8000-000000000099',
+            client_instance_id: mocks.runtime.clientInstanceId,
+            expires_at: '2099-01-01T00:00:00Z',
+          }
+        : { success: true }
+    ))
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+
+    await wrapper.get('[data-nav-assignment="12"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.post).toHaveBeenCalledWith(
+      captured.process.writer_lease_release_url,
+      {
+        lease_token: '00000000-0000-4000-8000-000000000099',
+        client_instance_id: mocks.runtime.clientInstanceId,
+      },
+      {},
+    )
+    const releaseCall = mocks.api.post.mock.calls.findIndex((call) => String(call[0]).endsWith('/lease/release/'))
+    expect(mocks.runtime.closeAttempt.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.api.post.mock.invocationCallOrder[releaseCall]!,
+    )
+    expect(mocks.api.post.mock.invocationCallOrder[releaseCall]).toBeLessThan(
+      mocks.push.mock.invocationCallOrder[0]!,
+    )
+    wrapper.unmount()
+  })
+
+  it('releases the capture-v2 writer lease after marking a question skipped', async () => {
+    const captured = captureV2Question()
+    captured.process.active_response_event_id = '00000000-0000-4000-8000-000000000050'
+    mocks.api.question.mockResolvedValue(captured)
+    mocks.api.post.mockImplementation(async (url: string) => (
+      url.endsWith('/lease/acquire/')
+        ? {
+            success: true,
+            lease_token: '00000000-0000-4000-8000-000000000099',
+            client_instance_id: mocks.runtime.clientInstanceId,
+            expires_at: '2099-01-01T00:00:00Z',
+          }
+        : { success: true }
+    ))
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+
+    await wrapper.get('[data-skip-request]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.post).toHaveBeenCalledWith(
+      captured.process.writer_lease_release_url,
+      expect.objectContaining({
+        lease_token: '00000000-0000-4000-8000-000000000099',
+      }),
+      {},
+    )
+    wrapper.unmount()
+  })
+
+  it('flushes and releases before leaving the assessment module', async () => {
+    const captured = captureV2Question()
+    captured.process.active_response_event_id = '00000000-0000-4000-8000-000000000050'
+    mocks.api.question.mockResolvedValue(captured)
+    mocks.api.post.mockImplementation(async (url: string) => (
+      url.endsWith('/lease/acquire/')
+        ? {
+            success: true,
+            lease_token: '00000000-0000-4000-8000-000000000099',
+            client_instance_id: mocks.runtime.clientInstanceId,
+            expires_at: '2099-01-01T00:00:00Z',
+          }
+        : { success: true }
+    ))
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+
+    await mocks.beforeRouteLeave?.()
+    await flushPromises()
+
+    expect(mocks.api.saveDraft).toHaveBeenCalled()
+    expect(mocks.runtime.closeAttempt).toHaveBeenCalledWith('navigation')
+    expect(mocks.api.post).toHaveBeenCalledWith(
+      captured.process.writer_lease_release_url,
+      expect.any(Object),
+      {},
+    )
+    wrapper.unmount()
+  })
+
+  it('uses keepalive to best-effort release on pagehide', async () => {
+    const captured = captureV2Question()
+    captured.process.active_response_event_id = '00000000-0000-4000-8000-000000000050'
+    mocks.api.question.mockResolvedValue(captured)
+    mocks.api.post.mockImplementation(async (url: string) => (
+      url.endsWith('/lease/acquire/')
+        ? {
+            success: true,
+            lease_token: '00000000-0000-4000-8000-000000000099',
+            client_instance_id: mocks.runtime.clientInstanceId,
+            expires_at: '2099-01-01T00:00:00Z',
+          }
+        : { success: true }
+    ))
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    await wrapper.findAll<HTMLInputElement>('input[name="answer"]')[0]!.setValue(true)
+    await flushPromises()
+
+    globalThis.dispatchEvent(new Event('pagehide'))
+    await flushPromises()
+
+    expect(mocks.api.post).toHaveBeenCalledWith(
+      captured.process.writer_lease_release_url,
+      expect.any(Object),
+      { keepalive: true },
+    )
+    wrapper.unmount()
+  })
+
   it('replaces the assessment runtime when Vue Router reuses the component for another question', async () => {
     const secondQuestion = {
       ...structuredClone(questionState),
@@ -670,11 +804,11 @@ describe('StudentAssessment', () => {
     mocks.api.question.mockResolvedValue(captureV2Question({
       pending_confidence: {
         confidence_assignment_id: '31',
-        scale_version: 'v1',
+        scale_version: 'v2',
         prompt_version: 'v1',
         minimum: 0,
         maximum: 100,
-        step: 10,
+        step: 1,
         prompt_shown_url: '/assessment/process/confidence/13/prompt-shown/',
         commit_url: '/assessment/process/confidence/13/commit/',
         skip_url: '/assessment/process/confidence/13/skip/',
@@ -696,9 +830,14 @@ describe('StudentAssessment', () => {
     expect(wrapper.get('[data-confidence-submit]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-confidence-panel]').text()).toContain('你对这次答案有多大把握？')
 
-    await wrapper.get<HTMLInputElement>('[data-confidence-input]').setValue(80)
-    await wrapper.get<HTMLInputElement>('[data-confidence-input]').setValue(0)
-    await wrapper.get<HTMLInputElement>('[data-confidence-input]').setValue(80)
+    const slider = wrapper.get<HTMLInputElement>('[data-confidence-input]')
+    const numberInput = wrapper.get<HTMLInputElement>('[data-confidence-number]')
+    expect(slider.attributes('step')).toBe('1')
+    await slider.setValue(57)
+    expect(numberInput.element.value).toBe('57')
+    await numberInput.setValue(0)
+    expect(slider.element.value).toBe('0')
+    await numberInput.setValue(57)
     await wrapper.get('[data-confidence-submit]').trigger('click')
     await flushPromises()
 
@@ -713,13 +852,21 @@ describe('StudentAssessment', () => {
         writer_lease_token: '00000000-0000-4000-8000-000000000099',
         writer_client_instance_id: mocks.runtime.clientInstanceId,
       },
-      { status: 'committed', probability: 80, answer_event_id: null },
+      { status: 'committed', probability: 57, answer_event_id: null },
+    )
+    expect(mocks.api.post).toHaveBeenCalledWith(
+      captureV2Question().process.writer_lease_release_url,
+      expect.objectContaining({
+        lease_token: '00000000-0000-4000-8000-000000000099',
+      }),
+      {},
     )
     expect(mocks.api.post.mock.calls.every(call => !String(call[0]).endsWith('/commit/'))).toBe(true)
     const confidenceEvents = mocks.runtime.record.mock.calls.filter(call => (
       call[0] === 'confidence_observed' && call[1].stage === 'responded'
     ))
-    expect(confidenceEvents.map(call => call[1].probability)).toEqual([80, 0, 80])
+    expect(confidenceEvents.map(call => call[1].probability)).toEqual([57, 0, 57])
+    expect(confidenceEvents.every(call => call[2]?.eventVersion === 2)).toBe(true)
     expect(wrapper.text()).not.toContain('正确答案')
     expect(mocks.runtime.record).toHaveBeenCalledWith(
       'feedback_shown',
@@ -735,6 +882,41 @@ describe('StudentAssessment', () => {
       path: '/student/sessions/7/questions/12/',
       query: { reason: 'submit_next' },
     })
+  })
+
+  it('blocks empty, fractional, and out-of-range confidence without recording research events', async () => {
+    mocks.api.question.mockResolvedValue(captureV2Question({
+      pending_confidence: {
+        confidence_assignment_id: '31', scale_version: 'v2', prompt_version: 'v1',
+        minimum: 0, maximum: 100, step: 1,
+        prompt_shown_url: '/assessment/process/confidence/13/prompt-shown/',
+        commit_url: '/assessment/process/confidence/13/commit/',
+        skip_url: '/assessment/process/confidence/13/skip/',
+      },
+    }))
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    await wrapper.findAll<HTMLInputElement>('input[name="answer"]')[1]?.setValue(true)
+    await wrapper.get('[data-submit-request]').trigger('click')
+    await flushPromises()
+    const numberInput = wrapper.get<HTMLInputElement>('[data-confidence-number]')
+    const respondedEvents = () => mocks.runtime.record.mock.calls.filter(call => (
+      call[0] === 'confidence_observed' && call[1].stage === 'responded'
+    ))
+
+    for (const value of ['', '57.5', '101']) {
+      await numberInput.setValue(value)
+      expect(wrapper.get('[data-confidence-error]').text()).not.toBe('')
+      expect(wrapper.get('[data-confidence-submit]').attributes('disabled')).toBeDefined()
+      expect(respondedEvents()).toHaveLength(0)
+    }
+
+    await numberInput.setValue('100')
+    expect(wrapper.find('[data-confidence-error]').exists()).toBe(false)
+    expect(wrapper.get<HTMLInputElement>('[data-confidence-input]').element.value).toBe('100')
+    expect(wrapper.get('[data-confidence-submit]').attributes('disabled')).toBeUndefined()
+    expect(respondedEvents().map(call => call[1].probability)).toEqual([100])
+    wrapper.unmount()
   })
 
   it('cancels pending confidence resolution when returning to edit', async () => {

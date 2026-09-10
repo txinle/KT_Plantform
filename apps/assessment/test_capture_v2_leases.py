@@ -1,8 +1,12 @@
 import json
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Barrier
+from unittest import skipUnless
 
-from django.test import TestCase
+from django.db import connection, connections
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
 
@@ -14,6 +18,7 @@ from .writer_lease_services import (
     WriterLeaseConflict,
     acquire_attempt_writer_lease,
     assert_attempt_writer_lease,
+    release_attempt_writer_lease,
 )
 
 
@@ -75,6 +80,59 @@ class CaptureV2WriterLeaseTests(TestCase):
             )
         )
 
+    def test_releasing_twice_is_safe_and_another_client_can_acquire_immediately(self):
+        now = timezone.now()
+        first = acquire_attempt_writer_lease(
+            self.attempt,
+            client_instance_id=self.client_instance_id,
+            now=now,
+        )
+
+        release_attempt_writer_lease(
+            self.attempt,
+            lease_token=first.token,
+            client_instance_id=self.client_instance_id,
+        )
+        release_attempt_writer_lease(
+            self.attempt,
+            lease_token=first.token,
+            client_instance_id=self.client_instance_id,
+        )
+        replacement = acquire_attempt_writer_lease(
+            self.attempt,
+            client_instance_id=uuid.uuid4(),
+            now=now + timedelta(seconds=1),
+        )
+
+        self.assertNotEqual(replacement.token, first.token)
+
+    def test_old_release_token_cannot_clear_a_new_active_lease(self):
+        now = timezone.now()
+        first = acquire_attempt_writer_lease(
+            self.attempt,
+            client_instance_id=self.client_instance_id,
+            now=now,
+        )
+        replacement_client = uuid.uuid4()
+        replacement = acquire_attempt_writer_lease(
+            self.attempt,
+            client_instance_id=replacement_client,
+            now=first.expires_at,
+        )
+
+        with self.assertRaises(WriterLeaseConflict):
+            release_attempt_writer_lease(
+                self.attempt,
+                lease_token=first.token,
+                client_instance_id=self.client_instance_id,
+            )
+        self.attempt.refresh_from_db()
+        self.assertEqual(self.attempt.writer_lease_token, replacement.token)
+        self.assertEqual(
+            self.attempt.writer_client_instance_id,
+            replacement_client,
+        )
+
     def test_other_client_gets_a_structured_conflict_instead_of_a_server_error(self):
         acquire_url = reverse("assessment_process:writer_lease_acquire", args=[self.attempt.pk])
         first = self.client.post(
@@ -91,6 +149,64 @@ class CaptureV2WriterLeaseTests(TestCase):
         self.assertEqual(first.status_code, 201)
         self.assertEqual(other.status_code, 409)
         self.assertEqual(other.json()["error"]["code"], "writer_lease_conflict")
+
+
+@skipUnless(connection.vendor == "postgresql", "PostgreSQL row locking is required")
+class CaptureV2WriterLeaseConcurrencyTests(TransactionTestCase):
+    def setUp(self):
+        snapshot_fixtures.ResponseSnapshotServiceTests.setUp(self)
+        self.attempt = self.attempts[Question.Type.SHORT]
+
+    def test_expired_release_racing_reacquire_never_clears_the_replacement(self):
+        first_client = uuid.uuid4()
+        replacement_client = uuid.uuid4()
+        first = acquire_attempt_writer_lease(
+            self.attempt,
+            client_instance_id=first_client,
+            now=timezone.now(),
+        )
+        race_time = first.expires_at
+        barrier = Barrier(2)
+
+        def release_expired():
+            connections.close_all()
+            barrier.wait()
+            try:
+                release_attempt_writer_lease(
+                    self.attempt,
+                    lease_token=first.token,
+                    client_instance_id=first_client,
+                    now=race_time,
+                )
+            except WriterLeaseConflict:
+                pass
+            finally:
+                connections.close_all()
+
+        def acquire_replacement():
+            connections.close_all()
+            barrier.wait()
+            try:
+                return acquire_attempt_writer_lease(
+                    self.attempt,
+                    client_instance_id=replacement_client,
+                    now=race_time,
+                )
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            release_future = pool.submit(release_expired)
+            acquire_future = pool.submit(acquire_replacement)
+            replacement = acquire_future.result(timeout=5)
+            release_future.result(timeout=5)
+
+        self.attempt.refresh_from_db()
+        self.assertEqual(self.attempt.writer_lease_token, replacement.token)
+        self.assertEqual(
+            self.attempt.writer_client_instance_id,
+            replacement_client,
+        )
 
 
 class CaptureV2WriterLeaseEndpointTests(TestCase):
@@ -144,6 +260,33 @@ class CaptureV2WriterLeaseEndpointTests(TestCase):
         )
         self.assertEqual(response.status_code, 201)
         return response.json()
+
+    def test_release_endpoint_is_idempotent_for_the_same_credentials(self):
+        lease = self.acquire(uuid.uuid4())
+        release_url = reverse(
+            "assessment_process:writer_lease_release",
+            args=[self.attempt.pk],
+        )
+        body = json.dumps(
+            {
+                "lease_token": lease["lease_token"],
+                "client_instance_id": lease["client_instance_id"],
+            }
+        )
+
+        first = self.client.post(
+            release_url,
+            data=body,
+            content_type="application/json",
+        )
+        replay = self.client.post(
+            release_url,
+            data=body,
+            content_type="application/json",
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(replay.status_code, 200)
 
     @staticmethod
     def credentials(lease):

@@ -48,7 +48,7 @@ class ConfidenceFlowTests(TestCase):
             confidence_sampling_unit=Experiment.ConfidenceSamplingUnit.ATTEMPT,
             confidence_randomization_seed="confidence-fixed-seed",
             confidence_assignment_version="assign-v1",
-            confidence_scale_version="scale-v2",
+            confidence_scale_version="v2",
             confidence_prompt_version="prompt-v3",
         )
         for sequence in range(1, 5):
@@ -123,7 +123,8 @@ class ConfidenceFlowTests(TestCase):
         assignment = self.session.assignments.order_by("assigned_sequence_index").first()
         entry = self.client.get(f'/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/')
         contract = entry.json()['pending_confidence']
-        self.assertEqual(contract['scale_version'], 'scale-v2')
+        self.assertEqual(contract['scale_version'], 'v2')
+        self.assertEqual(contract['step'], 1)
         self.assertEqual(contract['prompt_version'], 'prompt-v3')
         rejected = self.submit_assignment(assignment)
         self.assertEqual(rejected.status_code, 400)
@@ -139,6 +140,35 @@ class ConfidenceFlowTests(TestCase):
         confidence = ConfidenceAssignment.objects.get(attempt=assignment.attempt)
         self.assertEqual(confidence.response_status, 'committed')
         self.assertEqual(confidence.probability, 80)
+        self.assertEqual(
+            AssessmentEvent.objects.get(
+                attempt=assignment.attempt,
+                event_type="confidence_committed",
+            ).event_version,
+            2,
+        )
+
+    def test_frozen_scale_version_controls_probability_validation(self):
+        from .confidence_services import ConfidenceFlowError, validate_confidence_probability
+
+        attempt = self.session.attempts.order_by("pk").first()
+        for probability in (0, 1, 57, 100):
+            self.assertEqual(validate_confidence_probability(attempt, probability), probability)
+        for probability in (-1, 57.5, 101, True):
+            with self.assertRaises(ConfidenceFlowError):
+                validate_confidence_probability(attempt, probability)
+
+        configuration = self.session.version.configuration
+        configuration["confidence_scale_version"] = "v1"
+        self.session.version.configuration = configuration
+        self.session.version.save(update_fields=["configuration"])
+        attempt.session.version = self.session.version
+
+        for probability in range(0, 101, 10):
+            self.assertEqual(validate_confidence_probability(attempt, probability), probability)
+        for probability in (1, 57, 57.5, 101):
+            with self.assertRaises(ConfidenceFlowError):
+                validate_confidence_probability(attempt, probability)
 
     def test_prompt_may_be_skipped_but_commit_and_skip_are_mutually_exclusive(self):
         assignment = self.session.assignments.order_by("assigned_sequence_index")[1]

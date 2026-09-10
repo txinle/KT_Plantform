@@ -66,7 +66,7 @@ export interface NavigationResponse {
 
 interface StudentAssessmentClient {
   get<T>(path: string): Promise<T>
-  mutate<T>(path: string, mutation: { method: 'POST'; body?: unknown }): Promise<T>
+  mutate<T>(path: string, mutation: { method: 'POST'; body?: unknown; keepalive?: boolean }): Promise<T>
 }
 
 export function createStudentAssessmentApi(client: StudentAssessmentClient) {
@@ -104,8 +104,8 @@ export function createStudentAssessmentApi(client: StudentAssessmentClient) {
       })
     ),
     skip: (url: string) => client.mutate<NavigationResponse>(url, { method: 'POST' }),
-    post: <T = SubmissionResponse>(url: string, body: Record<string, unknown>) => (
-      client.mutate<T>(url, { method: 'POST', body })
+    post: <T = SubmissionResponse>(url: string, body: Record<string, unknown>, options: { keepalive?: boolean } = {}) => (
+      client.mutate<T>(url, { method: 'POST', body, ...options })
     ),
   }
 }

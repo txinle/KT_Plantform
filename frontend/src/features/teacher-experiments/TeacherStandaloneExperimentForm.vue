@@ -45,7 +45,7 @@ const form = reactive({
   confidence_probability: null as number | null,
   confidence_randomization_seed: '',
   confidence_assignment_version: 'v1',
-  confidence_scale_version: 'v1',
+  confidence_scale_version: 'v2',
   confidence_prompt_version: 'v1',
   heartbeat_interval_seconds: 30,
 })
@@ -228,7 +228,7 @@ onMounted(load)
         <fieldset class="kt-radio-group kt-compact-form-row"><legend>作答信心采集</legend><div class="kt-radio-options"><label v-for="choice in choices?.confidence_modes || []" :key="choice.value"><input v-model="form.confidence_mode" name="confidence_mode" type="radio" :value="choice.value"><span>{{ choice.label }}</span></label></div></fieldset>
         <div v-if="form.confidence_mode !== 'off'" class="kt-form-grid"><fieldset class="kt-radio-group"><legend>抽样单位</legend><div class="kt-radio-options"><label v-for="choice in choices?.confidence_sampling_units || []" :key="choice.value"><input v-model="form.confidence_sampling_unit" name="confidence_sampling_unit" type="radio" :value="choice.value"><span>{{ choice.label }}</span></label></div></fieldset><FormField v-if="form.confidence_mode === 'sampled'" for-id="standalone-confidence-probability" label="抽样概率（0–1）" :error="fieldErrors.confidence_probability"><input id="standalone-confidence-probability" v-model.number="form.confidence_probability" type="number" min="0" max="1" step="0.001"></FormField></div>
         <FormField for-id="standalone-heartbeat" label="活跃心跳间隔（秒）" :error="fieldErrors.heartbeat_interval_seconds"><input id="standalone-heartbeat" v-model.number="form.heartbeat_interval_seconds" type="number" min="15" max="120"></FormField>
-        <details class="kt-collapsible-step"><summary>版本与可复现配置</summary><div class="kt-collapsible-step__body kt-form-grid"><FormField for-id="standalone-randomization-seed" label="随机分配种子（可选）"><input id="standalone-randomization-seed" v-model="form.confidence_randomization_seed" maxlength="128"></FormField><FormField for-id="standalone-assignment-version" label="分配规则版本"><input id="standalone-assignment-version" v-model="form.confidence_assignment_version" maxlength="64"></FormField><FormField for-id="standalone-scale-version" label="量表版本"><input id="standalone-scale-version" v-model="form.confidence_scale_version" maxlength="64"></FormField><FormField for-id="standalone-prompt-version" label="提示版本"><input id="standalone-prompt-version" v-model="form.confidence_prompt_version" maxlength="64"></FormField></div></details>
+        <details class="kt-collapsible-step"><summary>版本与可复现配置</summary><div class="kt-collapsible-step__body kt-form-grid"><FormField for-id="standalone-randomization-seed" label="随机分配种子（可选）"><input id="standalone-randomization-seed" v-model="form.confidence_randomization_seed" maxlength="128"></FormField><FormField for-id="standalone-assignment-version" label="分配规则版本"><input id="standalone-assignment-version" v-model="form.confidence_assignment_version" maxlength="64"></FormField><FormField for-id="standalone-scale-version" label="量表版本"><select id="standalone-scale-version" v-model="form.confidence_scale_version"><option value="v1">v1（10% 步进）</option><option value="v2">v2（1% 步进）</option></select></FormField><FormField for-id="standalone-prompt-version" label="提示版本"><input id="standalone-prompt-version" v-model="form.confidence_prompt_version" maxlength="64"></FormField></div></details>
       </div>
     </section>
 

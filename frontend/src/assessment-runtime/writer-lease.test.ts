@@ -32,6 +32,7 @@ describe('capture-v2 writer lease', () => {
       clientInstanceId,
       acquireUrl: '/process/attempts/13/writer-lease/acquire/',
       renewUrl: '/process/attempts/13/writer-lease/renew/',
+      releaseUrl: '/process/attempts/13/writer-lease/release/',
       now: () => now,
     })
 
@@ -64,6 +65,7 @@ describe('capture-v2 writer lease', () => {
       clientInstanceId,
       acquireUrl: '/process/attempts/13/writer-lease/acquire/',
       renewUrl: '/process/attempts/13/writer-lease/renew/',
+      releaseUrl: '/process/attempts/13/writer-lease/release/',
       now: () => now,
       renewBeforeMs: 5_000,
     })
@@ -98,6 +100,7 @@ describe('capture-v2 writer lease', () => {
       clientInstanceId,
       acquireUrl: '/process/attempts/13/writer-lease/acquire/',
       renewUrl: '/process/attempts/13/writer-lease/renew/',
+      releaseUrl: '/process/attempts/13/writer-lease/release/',
       now: () => now,
       renewBeforeMs: 0,
     })
@@ -123,13 +126,43 @@ describe('capture-v2 writer lease', () => {
       clientInstanceId,
       acquireUrl: '/process/attempts/13/writer-lease/acquire/',
       renewUrl: '/process/attempts/13/writer-lease/renew/',
+      releaseUrl: '/process/attempts/13/writer-lease/release/',
     })
 
     await expect(writerLease.beforePointerWrite()).rejects.toMatchObject({
       name: 'WriterLeaseConflictError',
       code: 'writer_lease_conflict',
-      message: expect.stringContaining('其他设备'),
+      message: expect.stringContaining('另一页面或设备'),
     })
     expect(post).toHaveBeenCalledOnce()
+  })
+
+  it('releases cached credentials with keepalive and does not reacquire', async () => {
+    const now = Date.parse('2026-09-06T00:00:00.000Z')
+    const post = vi.fn()
+      .mockResolvedValueOnce(lease('lease-one', now + 30_000))
+      .mockResolvedValueOnce({ success: true })
+    const writerLease = createWriterLease({
+      client: clientFor(post),
+      clientInstanceId,
+      acquireUrl: '/process/attempts/13/writer-lease/acquire/',
+      renewUrl: '/process/attempts/13/writer-lease/renew/',
+      releaseUrl: '/process/attempts/13/writer-lease/release/',
+      now: () => now,
+    })
+    await writerLease.beforePointerWrite()
+
+    await writerLease.release({ keepalive: true })
+    await writerLease.release({ keepalive: true })
+
+    expect(post).toHaveBeenCalledTimes(2)
+    expect(post).toHaveBeenLastCalledWith(
+      '/process/attempts/13/writer-lease/release/',
+      {
+        lease_token: 'lease-one',
+        client_instance_id: clientInstanceId,
+      },
+      { keepalive: true },
+    )
   })
 })

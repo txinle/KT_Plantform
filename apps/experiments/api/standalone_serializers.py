@@ -87,8 +87,8 @@ class StandaloneExperimentInputSerializer(serializers.Serializer):
         max_length=64,
         required=False,
     )
-    confidence_scale_version = serializers.CharField(
-        max_length=64,
+    confidence_scale_version = serializers.ChoiceField(
+        choices=Experiment._meta.get_field("confidence_scale_version").choices,
         required=False,
     )
     confidence_prompt_version = serializers.CharField(

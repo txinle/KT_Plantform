@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { getStudentAssessmentApi } from './api'
 import type { StudentProcessRuntime } from './process-bridge'
 import type { ToolRule } from '@/features/teacher-experiments/research-tools'
@@ -11,7 +11,18 @@ const props = defineProps<{
   waitForCapture: () => Promise<unknown>
 }>()
 const emit = defineEmits<{ interaction: [] }>()
-const available = ref<{ doubt_enabled?: boolean; check_enabled?: boolean; hints?: { id: string; level: number }[] }>({})
+interface ConfidenceScale {
+  scale_version: string
+  minimum: number
+  maximum: number
+  step: number
+}
+const available = ref<{
+  doubt_enabled?: boolean
+  check_enabled?: boolean
+  hints?: { id: string; level: number }[]
+  confidence_scale?: ConfidenceScale
+}>({})
 const activeRules = ref<ToolRule[]>([])
 const displayed = new Set<string>()
 const doubt = ref(false)
@@ -19,6 +30,12 @@ const pendingCheck = ref(false)
 const checking = ref(false)
 const doubtNote = ref('')
 const probability = ref(50)
+const probabilityInput = ref('50')
+const probabilityTouched = ref(false)
+const probabilityError = ref('')
+const confidenceScale = computed(() => available.value.confidence_scale || {
+  scale_version: 'v1', minimum: 0, maximum: 100, step: 10,
+})
 const hint = shallowRef<{ text: string; source: ToolResponse; data: Record<string, unknown>; initiation: string }>()
 const error = ref('')
 const contentVersion = ref('')
@@ -119,8 +136,41 @@ async function closeHint() {
 }
 
 async function respondConfidence(rule: ToolRule) {
+  if (!probabilityTouched.value || probabilityError.value) return
   await action('confidence', 'responded', { probability: probability.value }, rule)
   activeRules.value = activeRules.value.filter((row) => row.id !== rule.id)
+}
+
+function selectConfidenceFromRange() {
+  probabilityInput.value = String(probability.value)
+  probabilityError.value = ''
+  probabilityTouched.value = true
+}
+
+function selectConfidenceFromNumber(event: Event) {
+  const rawValue = (event.target as HTMLInputElement).value
+  probabilityInput.value = rawValue
+  const scale = confidenceScale.value
+  if (rawValue.trim() === '') {
+    probabilityError.value = '请输入作答信心。'
+    return
+  }
+  const value = Number(rawValue)
+  if (!Number.isInteger(value)) {
+    probabilityError.value = '作答信心必须是整数。'
+    return
+  }
+  if (value < scale.minimum || value > scale.maximum) {
+    probabilityError.value = `请输入 ${scale.minimum} 到 ${scale.maximum} 之间的整数。`
+    return
+  }
+  if ((value - scale.minimum) % scale.step !== 0) {
+    probabilityError.value = `当前量表要求以 ${scale.step}% 为间隔。`
+    return
+  }
+  probability.value = value
+  probabilityError.value = ''
+  probabilityTouched.value = true
 }
 
 async function refresh() {
@@ -146,6 +196,12 @@ async function refresh() {
       continue
     }
     const source = rule.pending_request || await action(rule.tool, 'requested', {}, rule)
+    if (rule.tool === 'confidence') {
+      probability.value = 50
+      probabilityInput.value = '50'
+      probabilityTouched.value = false
+      probabilityError.value = ''
+    }
     activeRules.value.push(rule)
     await nextTick()
     const initiation = rule.required ? 'task_required' : 'system_prompted'
@@ -172,8 +228,10 @@ onBeforeUnmount(() => {
       <p>{{ rule.required ? '本题要求完成' : '作答提醒' }}：{{ rule.tool === 'confidence' ? '信心评价' : rule.tool === 'check' ? '检查答案' : '查看提示' }}</p>
       <button v-if="rule.tool === 'check'" class="kt-button" type="button" @click="run(() => check(rule))">{{ checking ? '完成检查' : '开始检查' }}</button>
       <template v-if="rule.tool === 'confidence'">
-        <label>你认为当前答案正确的概率：{{ probability }}%<input v-model.number="probability" type="range" min="0" max="100" step="10"></label>
-        <button class="kt-button" type="button" @click="run(() => respondConfidence(rule))">记录信心</button>
+        <label>你认为当前答案正确的概率：{{ probability }}%<input v-model.number="probability" data-tool-confidence-range type="range" :min="confidenceScale.minimum" :max="confidenceScale.maximum" :step="confidenceScale.step" @input="selectConfidenceFromRange"></label>
+        <label>信心百分比<input data-tool-confidence-number type="number" inputmode="numeric" :value="probabilityInput" :min="confidenceScale.minimum" :max="confidenceScale.maximum" :step="confidenceScale.step" :aria-invalid="probabilityError ? 'true' : undefined" @input="selectConfidenceFromNumber">%</label>
+        <p v-if="probabilityError" class="kt-field__error" role="alert" data-tool-confidence-error>{{ probabilityError }}</p>
+        <button class="kt-button" type="button" :disabled="!probabilityTouched || !!probabilityError" @click="run(() => respondConfidence(rule))">记录信心</button>
       </template>
     </div>
     <div v-if="hint" class="kt-alert kt-alert--info"><p>{{ hint.text }}</p><button class="kt-button kt-button--secondary" type="button" @click="run(closeHint)">关闭提示</button></div>

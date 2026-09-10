@@ -88,7 +88,7 @@ function experiment(overrides = {}) {
     confidence_probability: null,
     confidence_randomization_seed: '',
     confidence_assignment_version: 'v1',
-    confidence_scale_version: 'v1',
+    confidence_scale_version: 'v2',
     confidence_prompt_version: 'v1',
     heartbeat_interval_seconds: 30,
     question_count: 1,

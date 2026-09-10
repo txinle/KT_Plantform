@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 
 import { getBootstrapContext } from '@/app/bootstrap'
 import InitialPasswordReminder from '@/app/InitialPasswordReminder.vue'
@@ -50,7 +50,9 @@ const timedOut = ref(false)
 const online = ref(globalThis.navigator.onLine)
 const pendingConfidence = ref<ConfidenceContract>()
 const confidenceValue = ref(50)
+const confidenceNumberValue = ref('50')
 const confidenceTouched = ref(false)
+const confidenceValidationError = ref('')
 const submissionConfidence = ref<SubmissionConfidence>()
 let confirmationAnswer: string | undefined
 let confirmationHead: string | null | undefined
@@ -104,6 +106,10 @@ interface ConfidenceContract {
   skip_url: string
 }
 
+function confidenceEventOptions(contract: ConfidenceContract) {
+  return { eventVersion: contract.scale_version === 'v2' ? 2 : 1 }
+}
+
 const sequenceLabel = computed(() => {
   if (!state.value) return ''
   return `第 ${state.value.assignment.sequence_index}/${state.value.progress.total} 题`
@@ -117,6 +123,9 @@ const answerLocked = computed(() => (
 ))
 const responseDisabled = computed(() => answerLocked.value || taskClosed.value || submitting.value || submissionUncertain.value || submitDialogOpen.value || !!pendingConfidence.value || loading.value || !!responseConflict.value
   || !captureReady.value)
+const confidenceCanSubmit = computed(() => (
+  confidenceTouched.value && !confidenceValidationError.value
+))
 
 function interactionAllowed() {
   return !!state.value && captureReady.value && initializationState.value === 'ready'
@@ -187,7 +196,7 @@ function startCountdown() {
       timedOut.value = true
       error.value = '本题或实验时间已结束，页面将刷新并同步服务器状态。'
       if (countdown !== undefined) globalThis.clearInterval(countdown)
-      void flushTextObservation().then(() => processRuntime?.closeAttempt('timeout')).finally(() => {
+      void flushTextObservation().then(() => closeAttemptAndRelease('timeout')).finally(() => {
         globalThis.setTimeout(() => globalThis.location.reload(), 1_200)
       })
     }
@@ -494,6 +503,8 @@ async function openSubmitDialog() {
   submissionConfidence.value = undefined
   confidenceTouched.value = false
   confidenceValue.value = 50
+  confidenceNumberValue.value = '50'
+  confidenceValidationError.value = ''
   confidenceResolving.value = false
   confidenceObservationQueue = Promise.resolve(undefined)
   pendingConfidence.value = confidenceContract(state.value.pending_confidence)
@@ -537,9 +548,21 @@ async function acceptSubmission(response: SubmissionResponse) {
   pendingConfidence.value = undefined
   await processRuntime?.saveSubmissionIntent?.(null)
   pendingSubmission.value = undefined
-  await processRuntime?.closeAttempt('submit')
+  await closeAttemptAndRelease('submit')
   await showFeedback(response)
   await navigate(response.next_url, true, 'submit_next')
+}
+
+async function closeAttemptAndRelease(reason: string, toAssignmentId?: number | null) {
+  if (toAssignmentId === undefined) await processRuntime?.closeAttempt(reason)
+  else await processRuntime?.closeAttempt(reason, toAssignmentId)
+  if (!writerLease) return
+  await processRuntime?.flushBounded(1500)
+  await writerLease.release().catch(() => undefined)
+}
+
+function releaseWriterLeaseOnPageHide() {
+  void writerLease?.release({ keepalive: true }).catch(() => undefined)
 }
 
 async function recoverSubmission() {
@@ -667,7 +690,7 @@ async function showConfidencePrompt() {
     capture_version: 'capture-v2', operation_id: crypto.randomUUID(),
     confidence_assignment_id: pendingConfidence.value.confidence_assignment_id,
     stage: 'presented', answer_event_id: trajectory.head, probability: null, feedback_phase: 'before_feedback',
-  })
+  }, confidenceEventOptions(pendingConfidence.value))
   confidenceStatus.value = '正在确认评价表已显示'
   confidencePromptPromise = getStudentAssessmentApi().post(
     pendingConfidence.value.prompt_shown_url,
@@ -700,7 +723,7 @@ async function showFeedback(response: SubmissionResponse) {
 
 async function resolveConfidence(skip: boolean) {
   if (!interactionAllowed() || !pendingConfidence.value || confidenceResolving.value) return
-  if (!skip && !confidenceTouched.value) return
+  if (!skip && !confidenceCanSubmit.value) return
   const generation = confirmationGeneration
   const assignmentId = pendingConfidence.value.confidence_assignment_id
   const probability = confidenceValue.value
@@ -717,7 +740,7 @@ async function resolveConfidence(skip: boolean) {
       confidence_assignment_id: assignmentId,
       stage: 'skipped', answer_event_id: head,
       probability: null, feedback_phase: 'before_feedback',
-    })
+    }, confidenceEventOptions(pendingConfidence.value))
     if (generation !== confirmationGeneration) return
     submissionConfidence.value = {
       status: skip ? 'skipped' : 'committed',
@@ -734,11 +757,10 @@ async function resolveConfidence(skip: boolean) {
   }
 }
 
-function recordConfidenceSelection() {
+function recordValidConfidenceSelection(probability: number) {
   confidenceTouched.value = true
   if (!trajectory || !pendingConfidence.value) return
   const assignmentId = pendingConfidence.value.confidence_assignment_id
-  const probability = confidenceValue.value
   const observation = processRuntime?.record(
     'confidence_observed',
     {
@@ -747,12 +769,45 @@ function recordConfidenceSelection() {
       stage: 'responded', answer_event_id: confirmationHead,
       probability, feedback_phase: 'before_feedback',
     },
+    confidenceEventOptions(pendingConfidence.value),
   )
   if (!observation) return
   confidenceObservationQueue = Promise.all([confidenceObservationQueue, observation])
   void observation.catch((caught) => {
     error.value = caught instanceof Error ? caught.message : '信心选择记录失败，请重新选择。'
   })
+}
+
+function recordConfidenceSelection() {
+  confidenceNumberValue.value = String(confidenceValue.value)
+  confidenceValidationError.value = ''
+  recordValidConfidenceSelection(confidenceValue.value)
+}
+
+function recordConfidenceNumberInput(event: Event) {
+  const rawValue = (event.target as HTMLInputElement).value
+  confidenceNumberValue.value = rawValue
+  const contract = pendingConfidence.value
+  if (!contract || rawValue.trim() === '') {
+    confidenceValidationError.value = '请输入作答信心。'
+    return
+  }
+  const probability = Number(rawValue)
+  if (!Number.isInteger(probability)) {
+    confidenceValidationError.value = '作答信心必须是整数。'
+    return
+  }
+  if (probability < contract.minimum || probability > contract.maximum) {
+    confidenceValidationError.value = `请输入 ${contract.minimum} 到 ${contract.maximum} 之间的整数。`
+    return
+  }
+  if ((probability - contract.minimum) % contract.step !== 0) {
+    confidenceValidationError.value = `当前量表要求以 ${contract.step}% 为间隔。`
+    return
+  }
+  confidenceValidationError.value = ''
+  confidenceValue.value = probability
+  recordValidConfidenceSelection(probability)
 }
 
 async function navigateToAssignment(item: StudentRuntimeQuestionEntry['navigation'][number]) {
@@ -771,7 +826,7 @@ async function navigateToAssignment(item: StudentRuntimeQuestionEntry['navigatio
   try {
     await flushTextObservation()
     if (!answerLocked.value) await saveDraft(true)
-    await processRuntime?.closeAttempt('navigation', item.assignment_id)
+    await closeAttemptAndRelease('navigation', item.assignment_id)
     await navigate(item.url, true, 'navigation_click', navigation)
   } catch (caught) {
     error.value = caught instanceof Error
@@ -799,7 +854,7 @@ async function skipCurrent() {
     await flushTextObservation()
     await saveDraft(true)
     const response = await getStudentAssessmentApi().skip(state.value.actions.skip_url)
-    await processRuntime?.closeAttempt('skip')
+    await closeAttemptAndRelease('skip')
     await navigate(response.next_url, true, 'skip_next')
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '跳过操作失败。'
@@ -829,7 +884,7 @@ async function confirmFinish() {
   try {
     await flushTextObservation()
     if (!answerLocked.value) await saveDraft(true)
-    await processRuntime?.closeAttempt('finish')
+    await closeAttemptAndRelease('finish')
     submitFinishForm(state.value.actions.finish_url)
   } catch {
     finishing.value = false
@@ -1056,9 +1111,10 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
     submissionUncertain.value = !!pendingSubmission.value
     if (state.value.process.capture_version === 'capture-v2') {
       const process = state.value.process
-      if (!process.writer_lease_acquire_url || !process.writer_lease_renew_url || !processRuntime.clientInstanceId) throw new Error('缺少写入租约契约，无法保存正式答案。')
+      if (!process.writer_lease_acquire_url || !process.writer_lease_renew_url || !process.writer_lease_release_url || !processRuntime.clientInstanceId) throw new Error('缺少写入租约契约，无法保存正式答案。')
       writerLease = createWriterLease({ client: getStudentAssessmentApi(), clientInstanceId: processRuntime.clientInstanceId,
-        acquireUrl: process.writer_lease_acquire_url, renewUrl: process.writer_lease_renew_url })
+        acquireUrl: process.writer_lease_acquire_url, renewUrl: process.writer_lease_renew_url,
+        releaseUrl: process.writer_lease_release_url })
       responseVersion = state.value.process.response_version || 0
       let head = state.value.process.active_response_event_id || null
       const restored = !answerLocked.value && processRuntime.restoredResponse
@@ -1136,7 +1192,7 @@ onBeforeRouteUpdate(async (to) => {
     if (!routeTransitionPrepared && state.value) {
       await flushTextObservation()
       if (!answerLocked.value) await saveDraft(true)
-      await processRuntime?.closeAttempt('navigation', targetAssignmentId)
+      await closeAttemptAndRelease('navigation', targetAssignmentId)
     }
     routeTransitionPrepared = false
     disposeQuestionRuntime()
@@ -1149,6 +1205,18 @@ onBeforeRouteUpdate(async (to) => {
   }
 })
 
+onBeforeRouteLeave(async () => {
+  if (!state.value || !interactionAllowed()) return
+  try {
+    await flushTextObservation()
+    if (!answerLocked.value) await saveDraft(true)
+    await closeAttemptAndRelease('navigation')
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '离开作答页面失败，请重试。'
+    return false
+  }
+})
+
 onMounted(async () => {
   if (!checkCapabilities()) {
     loading.value = false
@@ -1156,14 +1224,17 @@ onMounted(async () => {
   }
   globalThis.addEventListener('offline', handleOffline)
   globalThis.addEventListener('online', handleOnline)
+  globalThis.addEventListener('pagehide', releaseWriterLeaseOnPageHide)
   await loadQuestion()
 })
 
 onBeforeUnmount(() => {
+  releaseWriterLeaseOnPageHide()
   disposeQuestionRuntime()
   removeAfterEach()
   globalThis.removeEventListener('offline', handleOffline)
   globalThis.removeEventListener('online', handleOnline)
+  globalThis.removeEventListener('pagehide', releaseWriterLeaseOnPageHide)
 })
 </script>
 
@@ -1340,21 +1411,42 @@ onBeforeUnmount(() => {
         <h2 id="confidence-title">你对这次答案有多大把握？</h2>
         <p>该评价不影响得分，也可以跳过。</p>
         <label for="confidence-probability">作答信心：{{ confidenceValue }}%</label>
-        <input
-          id="confidence-probability"
-          v-model.number="confidenceValue"
-          data-confidence-input
-          type="range"
-          :min="pendingConfidence.minimum"
-          :max="pendingConfidence.maximum"
-          :step="pendingConfidence.step"
-          :disabled="confidenceResolving || !captureReady"
-          @input="recordConfidenceSelection"
-        >
+        <div class="kt-assessment-confidence__controls">
+          <input
+            id="confidence-probability"
+            v-model.number="confidenceValue"
+            data-confidence-input
+            type="range"
+            :min="pendingConfidence.minimum"
+            :max="pendingConfidence.maximum"
+            :step="pendingConfidence.step"
+            :disabled="confidenceResolving || !captureReady"
+            @input="recordConfidenceSelection"
+          >
+          <label class="kt-assessment-confidence__number" for="confidence-probability-number">
+            <span class="kt-visually-hidden">作答信心百分比</span>
+            <input
+              id="confidence-probability-number"
+              data-confidence-number
+              type="number"
+              inputmode="numeric"
+              :value="confidenceNumberValue"
+              :min="pendingConfidence.minimum"
+              :max="pendingConfidence.maximum"
+              :step="pendingConfidence.step"
+              :disabled="confidenceResolving || !captureReady"
+              :aria-invalid="confidenceValidationError ? 'true' : undefined"
+              :aria-describedby="confidenceValidationError ? 'confidence-probability-error' : undefined"
+              @input="recordConfidenceNumberInput"
+            >
+            <span aria-hidden="true">%</span>
+          </label>
+        </div>
+        <p v-if="confidenceValidationError" id="confidence-probability-error" class="kt-field__error" role="alert" data-confidence-error>{{ confidenceValidationError }}</p>
         <p role="status">{{ confidenceStatus }}</p>
         <div class="kt-assessment-actions">
           <button type="button" class="kt-button kt-button--secondary" :disabled="confidenceResolving || !captureReady" @click="resolveConfidence(true)">跳过评价</button>
-          <button type="button" class="kt-button" data-confidence-submit :disabled="confidenceResolving || !captureReady || !confidenceTouched" @click="resolveConfidence(false)">下一步：确认提交</button>
+          <button type="button" class="kt-button" data-confidence-submit :disabled="confidenceResolving || !captureReady || !confidenceCanSubmit" @click="resolveConfidence(false)">下一步：确认提交</button>
           <button type="button" class="kt-button kt-button--secondary" data-return-answer @click="returnToAnswer">返回修改答案</button>
         </div>
       </section>

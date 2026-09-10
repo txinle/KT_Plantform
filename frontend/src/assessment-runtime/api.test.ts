@@ -21,6 +21,11 @@ describe('student assessment API', () => {
     await api.submit('/student/attempts/13/submit/', '00000000-0000-4000-8000-000000000001', '2026-08-30T08:00:01Z')
     await api.skip('/student/attempts/13/skip/')
     await api.post('/assessment/process/confidence/13/commit/', { probability: 80 })
+    await api.post(
+      '/assessment/process/attempts/13/writer-lease/release/',
+      { lease_token: 'lease-one' },
+      { keepalive: true },
+    )
 
     expect(client.get.mock.calls).toEqual([
       ['/api/v1/student/sessions/7/questions/10/?reason=direct_open'],
@@ -50,6 +55,10 @@ describe('student assessment API', () => {
       [
         '/assessment/process/confidence/13/commit/',
         { method: 'POST', body: { probability: 80 } },
+      ],
+      [
+        '/assessment/process/attempts/13/writer-lease/release/',
+        { method: 'POST', body: { lease_token: 'lease-one' }, keepalive: true },
       ],
     ])
   })

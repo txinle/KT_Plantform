@@ -8,6 +8,8 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, router, transaction
 from django.db.models import Q
 
+from .confidence_scales import CONFIDENCE_SCALE_CHOICES
+
 
 def canonical_presentation_hash(
     *,
@@ -275,7 +277,11 @@ class Experiment(models.Model):
     )
     confidence_randomization_seed = models.CharField(max_length=128, blank=True, default="")
     confidence_assignment_version = models.CharField(max_length=64, default="v1")
-    confidence_scale_version = models.CharField(max_length=64, default="v1")
+    confidence_scale_version = models.CharField(
+        max_length=64,
+        choices=CONFIDENCE_SCALE_CHOICES,
+        default="v2",
+    )
     confidence_prompt_version = models.CharField(max_length=64, default="v1")
     assignment_unit_type = models.CharField(max_length=16, choices=(("subject", "Subject"), ("session", "Session")), default="subject")
     heartbeat_interval_seconds = models.PositiveSmallIntegerField(

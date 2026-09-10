@@ -1054,6 +1054,7 @@ def _release_configuration(experiment, candidates):
         "confidence_mode": experiment.confidence_mode,
         "confidence_sampling_unit": experiment.confidence_sampling_unit,
         "confidence_probability": str(experiment.confidence_probability or ""),
+        "confidence_scale_version": experiment.confidence_scale_version,
         "heartbeat_interval_seconds": experiment.heartbeat_interval_seconds,
         "timezone": settings.TIME_ZONE,
     }

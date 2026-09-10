@@ -159,7 +159,7 @@ class SubmissionConfirmationTests(TestCase):
     def test_invalid_probability_does_not_partially_submit(self):
         attempt = self.prepare_answer()
         self.post_process('confidence_prompt_shown', attempt)
-        response = self.submit(attempt, {'status': 'committed', 'probability': 75})
+        response = self.submit(attempt, {'status': 'committed', 'probability': 75.5})
         self.assertEqual(response.status_code, 400)
         self.assertFalse(SubmissionEvent.objects.filter(attempt=attempt).exists())
         self.assertEqual(ConfidenceAssignment.objects.get(attempt=attempt).response_status, 'prompt_shown')

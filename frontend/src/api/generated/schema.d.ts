@@ -2238,6 +2238,12 @@ export interface components {
          */
         ConfidenceSamplingUnitEnum: "student" | "session" | "attempt";
         /**
+         * @description * `v1` - v1（10% 步进）
+         *     * `v2` - v2（1% 步进）
+         * @enum {string}
+         */
+        ConfidenceScaleVersionEnum: "v1" | "v2";
+        /**
          * @description * `delete` - delete
          * @enum {string}
          */
@@ -3175,7 +3181,7 @@ export interface components {
             confidence_probability?: string | null;
             confidence_randomization_seed?: string;
             confidence_assignment_version?: string;
-            confidence_scale_version?: string;
+            confidence_scale_version?: components["schemas"]["ConfidenceScaleVersionEnum"];
             confidence_prompt_version?: string;
             heartbeat_interval_seconds?: number;
         };
@@ -3838,7 +3844,7 @@ export interface components {
             confidence_probability?: string | null;
             confidence_randomization_seed?: string;
             confidence_assignment_version?: string;
-            confidence_scale_version?: string;
+            confidence_scale_version?: components["schemas"]["ConfidenceScaleVersionEnum"];
             confidence_prompt_version?: string;
             heartbeat_interval_seconds?: number;
         };
@@ -4334,6 +4340,7 @@ export interface components {
         StudentRuntimeProcess: {
             writer_lease_acquire_url?: string;
             writer_lease_renew_url?: string;
+            writer_lease_release_url?: string;
             capture_version?: string;
             active_response_event_id?: string | null;
             response_version?: number;

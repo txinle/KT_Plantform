@@ -69,6 +69,7 @@ interface MutationOptions<TState> {
   method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
   signal?: AbortSignal
+  keepalive?: boolean
   refreshAuthoritativeState?: () => Promise<TState>
 }
 
@@ -155,6 +156,7 @@ export function createApiClient(options: ClientOptions = {}) {
           headers,
           body: mutation.body === undefined ? undefined : JSON.stringify(mutation.body),
           signal: mutation.signal,
+          keepalive: mutation.keepalive,
         })
         return await parse<T>(response)
       } catch (error) {

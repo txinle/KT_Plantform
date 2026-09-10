@@ -119,6 +119,7 @@ class StudentRuntimeQuestionEntryQuerySerializer(serializers.Serializer):
 class StudentRuntimeProcessSerializer(serializers.Serializer):
     writer_lease_acquire_url = serializers.CharField(required=False)
     writer_lease_renew_url = serializers.CharField(required=False)
+    writer_lease_release_url = serializers.CharField(required=False)
     capture_version = serializers.CharField(required=False)
     active_response_event_id = serializers.CharField(allow_null=True, required=False)
     response_version = serializers.IntegerField(required=False)

@@ -82,11 +82,33 @@ def renew_attempt_writer_lease(attempt, *, lease_token, client_instance_id, now=
     return WriterLease(token, client, current.writer_lease_expires_at)
 
 
-def release_attempt_writer_lease(attempt, *, lease_token, client_instance_id):
+def release_attempt_writer_lease(
+    attempt,
+    *,
+    lease_token,
+    client_instance_id,
+    now=None,
+):
+    now = now or timezone.now()
     token = uuid.UUID(str(lease_token)); client = uuid.UUID(str(client_instance_id))
     with transaction.atomic():
         current = Attempt.objects.select_for_update().get(pk=attempt.pk)
-        if current.writer_lease_token != token or current.writer_client_instance_id != client:
+        active = (
+            current.writer_lease_expires_at
+            and current.writer_lease_expires_at > now
+        )
+        if active and (
+            current.writer_lease_token != token
+            or current.writer_client_instance_id != client
+        ):
             raise WriterLeaseConflict("writer lease is not owned by client")
+        if not any(
+            (
+                current.writer_lease_token,
+                current.writer_client_instance_id,
+                current.writer_lease_expires_at,
+            )
+        ):
+            return
         current.writer_lease_token = None; current.writer_client_instance_id = None; current.writer_lease_expires_at = None
         current.save(update_fields=["writer_lease_token", "writer_client_instance_id", "writer_lease_expires_at"])

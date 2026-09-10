@@ -253,6 +253,22 @@ class EventSchemaRegistryContractTests(SimpleTestCase):
         with self.assertRaises(registry.EventSchemaNotFound):
             registry.get_event_schema("session_started", 3)
 
+    def test_confidence_v2_accepts_one_percent_values_without_weakening_v1(self):
+        registry = load_registry_module()
+        assignment_id = str(uuid.uuid4())
+
+        with self.assertRaises(registry.EventPayloadValidationError):
+            registry.validate_event_payload(
+                "confidence_committed",
+                1,
+                {"confidence_assignment_id": assignment_id, "probability": 57},
+            )
+        registry.validate_event_payload(
+            "confidence_committed",
+            2,
+            {"confidence_assignment_id": assignment_id, "probability": 57},
+        )
+
     def test_schema_hash_is_stable_sha256(self):
         registry = load_registry_module()
         self.assertIsNotNone(registry)

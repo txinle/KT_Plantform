@@ -55,7 +55,7 @@ class ResearchExperimentConfigurationTests(TestCase):
         self.assertEqual(experiment.confidence_sampling_unit, "attempt")
         self.assertIsNone(experiment.confidence_probability)
         self.assertEqual(experiment.confidence_assignment_version, "v1")
-        self.assertEqual(experiment.confidence_scale_version, "v1")
+        self.assertEqual(experiment.confidence_scale_version, "v2")
         self.assertEqual(experiment.confidence_prompt_version, "v1")
         self.assertEqual(experiment.heartbeat_interval_seconds, 30)
 
@@ -203,7 +203,7 @@ class ResearchConfigurationPublishingTests(TestCase):
             "confidence_probability": Decimal("0.40"),
             "confidence_randomization_seed": "fixed-seed",
             "confidence_assignment_version": "assign-v2",
-            "confidence_scale_version": "scale-v3",
+            "confidence_scale_version": "v2",
             "confidence_prompt_version": "prompt-v4",
             "heartbeat_interval_seconds": 45,
         }.items():
@@ -233,7 +233,7 @@ class ResearchConfigurationPublishingTests(TestCase):
                 "confidence_probability": "0.4",
                 "randomization_seed": "fixed-seed",
                 "assignment_version": "assign-v2",
-                "confidence_scale_version": "scale-v3",
+                "confidence_scale_version": "v2",
                 "confidence_prompt_version": "prompt-v4",
                 "heartbeat_interval_seconds": 45,
             },

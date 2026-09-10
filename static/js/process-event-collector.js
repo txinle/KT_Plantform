@@ -694,7 +694,7 @@
         (sequence) => {
           const document = {
             event_type: eventType,
-            event_version: V2_EVENT_TYPES.has(eventType) ? 2 : 1,
+            event_version: options.eventVersion || (V2_EVENT_TYPES.has(eventType) ? 2 : 1),
             session_id: this.sessionId,
             attempt_id: this.attemptId,
             client_sequence_no: sequence,

@@ -32,6 +32,20 @@ test('interactive presentation survives payload sanitization for the v2 schema',
   assert.deepEqual(event.payload, { presentation_state: 'interactive' });
 });
 
+test('an explicit event version preserves versioned confidence schemas', async () => {
+  const collector = new ProcessEventCollector(eventPayload());
+  const event = await collector.record('confidence_observed', {
+    capture_version: 'capture-v2',
+    operation_id: INSTANCE_A,
+    confidence_assignment_id: INSTANCE_B,
+    stage: 'responded',
+    answer_event_id: null,
+    probability: 57,
+    feedback_phase: 'before_feedback',
+  }, { eventVersion: 2 });
+  assert.equal(event.event_version, 2);
+});
+
 test('atomic capture-v2 rejection retains all evidence instead of dead-lettering valid neighbours', async () => {
   const outbox = new MemoryOutbox();
   const collector = new ProcessEventCollector(eventPayload({

@@ -53,6 +53,22 @@ describe('API client', () => {
     )
   })
 
+  it('forwards keepalive for a pagehide mutation', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ success: true }))
+    const client = createApiClient({ fetchImpl })
+
+    await client.mutate('/assessment/process/lease/release/', {
+      method: 'POST',
+      body: {},
+      keepalive: true,
+    } as never)
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/assessment/process/lease/release/',
+      expect.objectContaining({ keepalive: true }),
+    )
+  })
+
   it('uploads multipart mutations without forcing a JSON content type', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ batch_id: 'batch-1' }))
     const client = createApiClient({ fetchImpl, getCsrfToken: () => 'csrf-token' })
