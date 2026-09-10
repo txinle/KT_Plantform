@@ -18,7 +18,10 @@ async function inspect(page: Page, info: TestInfo, name: string) {
     if (size.width >= 1024) {
       const sidebar = await page.locator('.kt-workspace-sidebar').boundingBox()
       const main = await page.locator('.kt-workspace-main').boundingBox()
-      expect(sidebar?.width).toBe(224)
+      const expectedSidebarWidth = await page.locator('.kt-workspace').evaluate(
+        element => element.querySelector('.kt-workspace-navigation--teacher-course') ? 236 : 224,
+      )
+      expect(sidebar?.width).toBe(expectedSidebarWidth)
       expect(main!.x).toBeGreaterThanOrEqual(sidebar!.x + sidebar!.width)
     }
   }

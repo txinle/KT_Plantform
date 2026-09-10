@@ -9,6 +9,7 @@
 .kt-teacher-experiments .kt-paginator { display: flex; align-items: center; justify-content: flex-end; gap: 0.75rem; padding: 1rem; }
 .kt-teacher-experiments .kt-paginator button,
 .kt-teacher-experiments .kt-text-button { border: 0; padding: 0.45rem; background: transparent; color: var(--kt-color-primary); font-weight: 700; cursor: pointer; }
+.kt-teacher-experiments .kt-text-button { white-space: nowrap; }
 .kt-teacher-experiments .kt-paginator button:disabled { color: var(--kt-color-muted); cursor: not-allowed; }
 .kt-teacher-experiments .kt-empty-state { padding: 2rem; text-align: center; }
 .kt-teacher-experiments .kt-empty-state p { margin-bottom: 0; color: var(--kt-color-muted); }

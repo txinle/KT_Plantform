@@ -487,11 +487,11 @@ test('data-center mounts every read route on its business URL', async ({ page })
   await login(page, 'http://127.0.0.1:8000')
   const routes = [
     ['', '数据中心'],
-    ['export/', '导出数据包'],
-    ['exports/', '导出数据包'],
+    ['export/', '导出研究数据'],
+    ['exports/', '导出研究数据'],
     ['quality/', '数据质量'],
     ['exports/history/', '导出记录'],
-    ['advanced/', '高级数据工具'],
+    ['advanced/', '研究数据预览'],
   ] as const
 
   for (const [suffix, heading] of routes) {
@@ -502,7 +502,7 @@ test('data-center mounts every read route on its business URL', async ({ page })
   }
 
   await page.reload()
-  await expect(page.getByRole('heading', { name: '高级数据工具', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '研究数据预览', exact: true })).toBeVisible()
 })
 
 test('data-center saves its authoritative scope through the JSON API', async ({ browserName, page }) => {
@@ -511,7 +511,9 @@ test('data-center saves its authoritative scope through the JSON API', async ({ 
   await page.goto('http://127.0.0.1:8000/teacher/courses/1/data/')
 
   const scope = page.getByRole('region', { name: '当前数据范围' })
-  await scope.locator('select[name="experiment_id"]').selectOption({ label: '演示交互数据采集' })
+  const experiment = scope.locator('label').filter({ hasText: '演示交互数据采集' })
+  await experiment.click()
+  await expect(experiment.getByRole('checkbox')).toBeChecked()
   await scope.locator('select[name="class_id"]').selectOption({ label: '2026 认知追踪实验班' })
   const saved = page.waitForResponse((response) => (
     response.request().method() === 'POST'
@@ -519,7 +521,8 @@ test('data-center saves its authoritative scope through the JSON API', async ({ 
   ))
   await scope.getByRole('button', { name: '应用' }).click()
   expect((await saved).status()).toBe(200)
-  await expect(scope.getByText('已选择教学范围')).toBeVisible()
+  await expect(scope).toContainText('班级：2026 认知追踪实验班')
+  await expect(scope).toContainText('已选择实验：演示交互数据采集（1 个实验）')
 })
 
 test('data-center overview and advanced pages reflow at required viewports', async ({ browserName, page }, testInfo) => {
@@ -528,7 +531,7 @@ test('data-center overview and advanced pages reflow at required viewports', asy
 
   for (const route of [
     { suffix: '', heading: '数据中心', name: 'data-overview' },
-    { suffix: 'advanced/', heading: '高级数据工具', name: 'data-advanced' },
+    { suffix: 'advanced/', heading: '研究数据预览', name: 'data-advanced' },
   ]) {
     for (const viewport of [
       { name: 'desktop-1440x900', width: 1440, height: 900 },

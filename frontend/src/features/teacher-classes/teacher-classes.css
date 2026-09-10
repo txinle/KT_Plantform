@@ -42,6 +42,10 @@
   gap: .5rem;
 }
 
+.kt-class-row-actions > * {
+  white-space: nowrap;
+}
+
 .kt-inline-controls input {
   flex: 1;
 }

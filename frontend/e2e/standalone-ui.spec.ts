@@ -14,6 +14,7 @@ test('teacher business deep links render the independent entry at desktop and mo
   await page.getByLabel('密码').fill('teacher123')
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/$/)
+  await page.waitForLoadState('networkidle')
   const paths = [
     '/teacher/courses/', '/teacher/courses/1/', '/teacher/courses/1/settings/',
     '/teacher/accounts/classes/', '/teacher/accounts/students/', '/teacher/accounts/students/import/',
@@ -37,8 +38,15 @@ test('teacher business deep links render the independent entry at desktop and mo
       await page.setViewportSize({ width, height: width === 390 ? 844 : 900 })
       await page.goto(path)
       await page.waitForLoadState('networkidle')
-      await expect(page.locator('[data-vue-shell] h1').first(), path).toBeVisible()
-      await expect(page.locator('[data-vue-shell] h1').first(), path).toHaveCSS('font-size', width === 390 ? '24px' : /^(26|28)px$/)
+      const heading = page.locator('[data-vue-shell] h1').first()
+      await expect(heading, path).toBeVisible()
+      if (path === '/teacher/courses/1/data/advanced/') {
+        const fontSize = Number.parseFloat(await heading.evaluate(element => getComputedStyle(element).fontSize))
+        expect(fontSize, path).toBeGreaterThanOrEqual(28)
+        expect(fontSize, path).toBeLessThanOrEqual(32)
+      } else {
+        await expect(heading, path).toHaveCSS('font-size', width === 390 ? '24px' : /^(26|28)px$/)
+      }
       await expect(page.locator('#kt-bootstrap')).toHaveCount(0)
       if (path === '/teacher/courses/1/classes/') {
         await expect(page.locator(width === 390 ? '.kt-desktop-only' : '.kt-mobile-only')).toBeHidden()

@@ -4,7 +4,7 @@
 
 **Goal:** Restore the application E2E job by preserving the redesigned data-center UI, giving the advanced empty-scope state a stable page heading, and aligning stale browser contracts with current behavior.
 
-**Architecture:** Keep Django APIs and data-scope semantics unchanged. Make one accessibility-focused Vue template adjustment, then update only the browser assertions that still encode retired labels, controls, or the shared sidebar width.
+**Architecture:** Keep Django APIs and data-scope semantics unchanged. Make one accessibility-focused Vue template adjustment, then update only the browser assertions that still encode retired labels, controls, or the default sidebar width.
 
 **Tech Stack:** Vue 3, TypeScript, Vitest, Playwright, Django 5.2, PostgreSQL 17
 
@@ -77,14 +77,19 @@ git commit -m "fix: preserve advanced data page identity"
 
 **Files:**
 - Modify: `frontend/e2e/foundation.spec.ts`
+- Modify: `frontend/e2e/standalone-ui.spec.ts`
 - Modify: `frontend/e2e/ui-layout.spec.ts`
+- Modify: `frontend/src/features/teacher-classes/teacher-classes.css`
+- Modify: `frontend/src/features/teacher-experiments/teacher-experiments.css`
 
 - [ ] **Step 1: Update the foundation data-center contract**
 
 Use `导出研究数据` for both export URLs and `研究数据预览` for the advanced route and reload. In the scope mutation test, select the experiment checkbox and class select, then verify the new summary:
 
 ```ts
-await scope.getByRole('checkbox', { name: '演示交互数据采集', exact: true }).check()
+const experiment = scope.locator('label').filter({ hasText: '演示交互数据采集' })
+await experiment.click()
+await expect(experiment.getByRole('checkbox')).toBeChecked()
 await scope.locator('select[name="class_id"]').selectOption({ label: '2026 认知追踪实验班' })
 // after the POST succeeds
 await expect(scope).toContainText('班级：2026 认知追踪实验班')
@@ -99,12 +104,16 @@ In `inspect`, derive the expected width from the workspace type rather than weak
 
 ```ts
 const expectedSidebarWidth = await page.locator('.kt-workspace').evaluate(
-  element => element.classList.contains('kt-data-center') ? 236 : 224,
+  element => element.querySelector('.kt-workspace-navigation--teacher-course') ? 236 : 224,
 )
 expect(sidebar?.width).toBe(expectedSidebarWidth)
 ```
 
-- [ ] **Step 3: Run the affected Chromium E2E cases**
+- [ ] **Step 3: Preserve the redesigned responsive title and experiment actions**
+
+In the standalone-shell audit, wait for the post-login course list to settle before starting the deep-link loop, then keep the generic title-size contract for ordinary pages and validate the advanced page against its intentional 28–32 px responsive range. Add `white-space: nowrap` to class and experiment text actions so the 236 px course sidebar cannot force a short action into a vertical label at the 1024 px audit boundary, including after an earlier browser project creates a longer E2E class row.
+
+- [ ] **Step 4: Run the affected Chromium E2E cases**
 
 After preparing isolated `kt_e2e`, run:
 
@@ -114,7 +123,7 @@ npx playwright test e2e/foundation.spec.ts e2e/ui-layout.spec.ts --project=chrom
 
 Expected: all selected tests pass, including scope mutation, current labels, empty-scope heading, and the two data-center width visits.
 
-- [ ] **Step 4: Run cross-browser heading/layout audits**
+- [ ] **Step 5: Run cross-browser heading/layout audits**
 
 ```powershell
 npx playwright test e2e/layout-audit.spec.ts e2e/standalone-ui.spec.ts
@@ -122,10 +131,10 @@ npx playwright test e2e/layout-audit.spec.ts e2e/standalone-ui.spec.ts
 
 Expected: Chromium, Firefox, and WebKit complete with no missing advanced-page heading.
 
-- [ ] **Step 5: Commit the E2E contract repair**
+- [ ] **Step 6: Commit the E2E contract repair**
 
 ```powershell
-git add frontend/e2e/foundation.spec.ts frontend/e2e/ui-layout.spec.ts
+git add frontend/e2e/foundation.spec.ts frontend/e2e/standalone-ui.spec.ts frontend/e2e/ui-layout.spec.ts frontend/src/features/teacher-classes/teacher-classes.css frontend/src/features/teacher-experiments/teacher-experiments.css
 git commit -m "test: align data-center browser contracts"
 ```
 
@@ -177,4 +186,3 @@ Expected: local and GitHub `main` point to the verified feature head. Do not pus
 - [ ] **Step 5: Observe the triggered GitHub Actions run**
 
 Use `gh run list` to identify the run for the pushed main SHA and `gh run watch` or bounded status reads until completion. Report every job conclusion and any unresolved failure without claiming success early.
-
