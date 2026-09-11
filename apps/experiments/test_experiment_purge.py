@@ -58,6 +58,10 @@ OWNED_SCOPES = {
     'assessment.AssessmentEvent': 'session__version__experiment_id',
     'analytics.RecordingCoverageSession': 'session__version__experiment_id',
     'analytics.RecordingCoverageAttempt': 'attempt__session__version__experiment_id',
+    'analytics.ResearchSessionMaterialization': 'session__version__experiment_id',
+    'analytics.ResearchSessionResponse': 'materialization__session__version__experiment_id',
+    'analytics.ResearchSessionVisit': 'materialization__session__version__experiment_id',
+    'analytics.ResearchSessionBehavior': 'materialization__session__version__experiment_id',
 }
 
 

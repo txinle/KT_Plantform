@@ -1496,6 +1496,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/data/advanced/students/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_data_center_advanced_students_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/data/export-jobs/": {
         parameters: {
             query?: never;
@@ -2357,11 +2373,15 @@ export interface components {
             selected_table: components["schemas"]["DataCenterAdvancedTable"];
             selected_experiment: components["schemas"]["DataCenterExperimentOption"] | null;
             preview: components["schemas"]["DataCenterAdvancedPreview"] | null;
+            preparation?: components["schemas"]["DataCenterPreparation"];
         };
         DataCenterAdvancedPreview: {
             columns: components["schemas"]["DataCenterPreviewColumn"][];
             rows: unknown[][];
             page: components["schemas"]["TeacherClassPageMetadata"];
+            cursor?: {
+                [key: string]: unknown;
+            };
             data_status: string;
         };
         DataCenterAdvancedTable: {
@@ -2475,6 +2495,15 @@ export interface components {
             quality_url: string;
             history_url: string;
         };
+        DataCenterPreparation: {
+            state: string;
+            message: string;
+            /** Format: date-time */
+            updated_at: string | null;
+            result_version: string | null;
+            projection_version: string;
+            stale: boolean;
+        };
         DataCenterPreviewColumn: {
             name: string;
             description: string;
@@ -2532,6 +2561,15 @@ export interface components {
         DataCenterSessionOption: {
             value: string;
             label: string;
+        };
+        DataCenterStudentSearch: {
+            items: components["schemas"]["DataCenterStudentSearchItem"][];
+            limit: number;
+        };
+        DataCenterStudentSearchItem: {
+            id: number;
+            student_number: string;
+            name: string;
         };
         DataCenterTeachingScope: {
             experiment_id: number | null;
@@ -3225,7 +3263,9 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -4771,7 +4811,9 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -7868,6 +7910,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DataCenterAdvanced"];
+                };
+            };
+        };
+    };
+    teacher_data_center_advanced_students_list: {
+        parameters: {
+            query?: {
+                class_id?: number;
+                experiment_id?: number;
+                experiment_ids?: string;
+                q?: string;
+            };
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataCenterStudentSearch"];
                 };
             };
         };

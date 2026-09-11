@@ -281,3 +281,138 @@ class RecordingCoverageAttempt(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValueError("RecordingCoverageAttempt rows are immutable")
+
+
+class ResearchSessionMaterialization(models.Model):
+    class Status(models.TextChoices):
+        QUEUED = "queued", "排队中"
+        RUNNING = "running", "生成中"
+        SUCCEEDED = "succeeded", "已完成"
+        FAILED = "failed", "失败"
+
+    materialization_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        "assessment.ExperimentSession", on_delete=models.CASCADE,
+        related_name="research_materializations",
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
+    is_current = models.BooleanField(default=False)
+    source_cutoff_at = models.DateTimeField(default=timezone.now)
+    event_high_watermark = models.PositiveBigIntegerField(default=0)
+    grade_high_watermark = models.JSONField(default=dict)
+    source_high_watermarks = models.JSONField(default=dict)
+    projection_version = models.CharField(max_length=64, default="research-session-v1")
+    locked_by = models.CharField(max_length=128, blank=True, default="")
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
+    last_reconciled_at = models.DateTimeField(null=True, blank=True)
+    retry_count = models.PositiveSmallIntegerField(default=0)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    activated_at = models.DateTimeField(null=True, blank=True)
+    superseded_at = models.DateTimeField(null=True, blank=True)
+    error = models.TextField(blank=True, default="")
+    session_summary = models.JSONField(default=dict)
+    session_row = models.JSONField(default=list)
+    row_counts = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "materialization_id"]
+        indexes = [
+            models.Index(
+                fields=["status", "lease_expires_at", "created_at"],
+                name="analytics_research_claim_idx",
+            ),
+            models.Index(
+                fields=["is_current", "last_reconciled_at"],
+                name="analytics_reconcile_idx",
+            ),
+            models.Index(
+                fields=["status", "activated_at", "superseded_at"],
+                name="analytics_result_window_idx",
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session"], condition=models.Q(is_current=True),
+                name="analytics_one_current_research_session",
+            ),
+            models.UniqueConstraint(
+                fields=["session"], condition=models.Q(status__in=("queued", "running")),
+                name="analytics_one_active_research_session_job",
+            ),
+        ]
+
+
+class ResearchSessionResponse(models.Model):
+    materialization = models.ForeignKey(
+        ResearchSessionMaterialization, on_delete=models.CASCADE, related_name="response_rows"
+    )
+    ordinal = models.PositiveIntegerField()
+    question_ref = models.CharField(max_length=32, blank=True, default="")
+    assigned_order = models.PositiveIntegerField(null=True, blank=True)
+    first_visit_order = models.PositiveIntegerField(null=True, blank=True)
+    row = models.JSONField(default=list)
+    payload = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["ordinal"]
+        constraints = [models.UniqueConstraint(
+            fields=["materialization", "ordinal"],
+            name="unique_research_materialization_response_ordinal",
+        )]
+        indexes = [models.Index(
+            fields=["materialization", "question_ref", "ordinal"],
+            name="analytics_response_lookup_idx",
+        )]
+
+
+class ResearchSessionVisit(models.Model):
+    materialization = models.ForeignKey(
+        ResearchSessionMaterialization, on_delete=models.CASCADE, related_name="visit_rows"
+    )
+    ordinal = models.PositiveIntegerField()
+    question_ref = models.CharField(max_length=32, blank=True, default="")
+    visit_key = models.CharField(max_length=64, blank=True, default="")
+    visit_index = models.PositiveIntegerField(null=True, blank=True)
+    entered_at = models.CharField(max_length=40, blank=True, default="")
+    row = models.JSONField(default=list)
+    payload = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["ordinal"]
+        constraints = [models.UniqueConstraint(
+            fields=["materialization", "ordinal"],
+            name="unique_research_materialization_visit_ordinal",
+        )]
+        indexes = [models.Index(
+            fields=["materialization", "question_ref", "visit_key", "ordinal"],
+            name="analytics_visit_lookup_idx",
+        )]
+
+
+class ResearchSessionBehavior(models.Model):
+    materialization = models.ForeignKey(
+        ResearchSessionMaterialization, on_delete=models.CASCADE, related_name="behavior_rows"
+    )
+    ordinal = models.PositiveIntegerField()
+    question_ref = models.CharField(max_length=32, blank=True, default="")
+    visit_key = models.CharField(max_length=64, blank=True, default="")
+    sequence = models.PositiveIntegerField(null=True, blank=True)
+    category = models.CharField(max_length=64, blank=True, default="")
+    action = models.CharField(max_length=128, blank=True, default="")
+    occurred_at = models.CharField(max_length=40, blank=True, default="")
+    row = models.JSONField(default=list)
+    payload = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["ordinal"]
+        constraints = [models.UniqueConstraint(
+            fields=["materialization", "ordinal"],
+            name="unique_research_materialization_behavior_ordinal",
+        )]
+        indexes = [models.Index(
+            fields=["materialization", "question_ref", "visit_key", "ordinal"],
+            name="analytics_behavior_lookup_idx",
+        )]

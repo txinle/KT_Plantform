@@ -3,6 +3,7 @@ from unittest.mock import patch
 from django.urls import reverse
 
 from apps.accounts.models import Course, CourseTeacher, User
+from apps.analytics.models import ResearchSessionMaterialization
 from apps.assessment.models import ExperimentSession, StudentQuestionAssignment
 from apps.audit.models import AuditLog
 
@@ -100,6 +101,22 @@ class ExperimentDeletionTests(TestCase):
         )
         audit = AuditLog.objects.get(action="experiment.delete")
         self.assertEqual(audit.details["status"], Experiment.Status.PUBLISHED)
+
+    def test_delete_experiment_cascades_materialized_session_results(self):
+        from .services import delete_experiment
+
+        session = ExperimentSession.objects.create(
+            version=self.version,
+            student=self.owner,
+            class_snapshot_name="教师",
+        )
+        materialization = ResearchSessionMaterialization.objects.create(session=session)
+
+        delete_experiment(self.experiment)
+
+        self.assertFalse(
+            ResearchSessionMaterialization.objects.filter(pk=materialization.pk).exists()
+        )
 
     def test_outsider_cannot_delete_experiment(self):
         self.client.force_login(self.outsider)

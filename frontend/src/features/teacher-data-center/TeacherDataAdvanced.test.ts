@@ -2,7 +2,7 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  api: { advanced: vi.fn() },
+  api: { advanced: vi.fn(), advancedStudents: vi.fn() },
   push: vi.fn(),
   route: {
     params: { courseId: '7' },
@@ -28,6 +28,7 @@ vi.mock('./api', () => ({ getTeacherDataCenterApi: () => mocks.api, routeQuery: 
 
 import TeacherDataAdvanced from './TeacherDataAdvanced.vue'
 enableAutoUnmount(afterEach)
+afterEach(() => vi.useRealTimers())
 
 const tables = [
   ['sessions', '会话', 3], ['questions', '题目', 5], ['knowledge_points', '知识点', 8],
@@ -76,6 +77,7 @@ describe('TeacherDataAdvanced', () => {
     vi.clearAllMocks()
     mocks.applyRouteQuery({ view: 'overview', experiment_ids: '3,5', class_id: '4', table: 'sessions' })
     mocks.api.advanced.mockImplementation(async () => response())
+    mocks.api.advancedStudents.mockResolvedValue({ items: [{ id: 31, student_number: '20231001', name: '张同学' }], limit: 20 })
   })
 
   it('keeps its page heading when the research scope is incomplete', async () => {
@@ -143,7 +145,85 @@ describe('TeacherDataAdvanced', () => {
     expect(mocks.push).toHaveBeenLastCalledWith({ query: expect.objectContaining({ visit: 'Q001:1' }) })
     mocks.applyRouteQuery({ view: 'question', experiment_ids: '3,5', class_id: '4', student_id: '31', session_ref: 'S-001', question_ref: 'Q002' })
     await flushPromises()
-    expect(mocks.api.advanced).toHaveBeenLastCalledWith(7, expect.objectContaining({ view: 'question', question_ref: 'Q002' }))
+    expect(mocks.api.advanced).toHaveBeenLastCalledWith(7, expect.objectContaining({ view: 'question', question_ref: 'Q002' }), expect.any(AbortSignal))
     expect(wrapper.text()).toContain('题目行为过程')
+  })
+
+  it('searches students remotely with a bounded endpoint', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(TeacherDataAdvanced)
+    await flushPromises()
+    await wrapper.get('input[aria-label="按学生姓名或学号搜索"]').setValue('张')
+    await wrapper.get('input[aria-label="按学生姓名或学号搜索"]').trigger('input')
+    await vi.advanceTimersByTimeAsync(250)
+    await flushPromises()
+    expect(mocks.api.advancedStudents).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ q: '张' }),
+      expect.any(AbortSignal),
+    )
+    expect(wrapper.findAll('[data-testid="student-suggestion"]')).toHaveLength(1)
+    vi.useRealTimers()
+  })
+
+  it('aborts superseded data requests and exposes refresh busy state', async () => {
+    const resolvers: Array<(value: ReturnType<typeof response>) => void> = []
+    mocks.api.advanced.mockImplementation(() => new Promise(resolve => resolvers.push(resolve)))
+    const wrapper = mount(TeacherDataAdvanced)
+    expect(wrapper.text()).toContain('正在加载研究数据')
+    resolvers.shift()?.(response())
+    await flushPromises()
+
+    mocks.applyRouteQuery({ ...mocks.route.query, table: 'questions' })
+    await flushPromises()
+    const firstRefreshSignal = mocks.api.advanced.mock.calls.at(-1)?.[2] as AbortSignal
+    expect(wrapper.get('[aria-busy="true"]')).toBeTruthy()
+    expect(wrapper.text()).toContain('正在刷新研究数据')
+    mocks.applyRouteQuery({ ...mocks.route.query, table: 'knowledge_points' })
+    await flushPromises()
+    expect(firstRefreshSignal.aborted).toBe(true)
+    resolvers.at(-1)?.(response())
+    await flushPromises()
+  })
+
+  it('shows materialization preparation state and navigates behavior with its fixed cursor', async () => {
+    const payload = response() as ReturnType<typeof response> & {
+      preparation: { state: string; message: string; updated_at: null; result_version: null; projection_version: string; stale: boolean }
+      preview: ReturnType<typeof response>['preview'] & { cursor: { previous: null; next: string; result_version: string } }
+    }
+    payload.preparation = {
+      state: 'preparing',
+      message: '会话已结束，研究数据正在后台整理。',
+      updated_at: null,
+      result_version: null,
+      projection_version: 'v1',
+      stale: false,
+    }
+    payload.selected_table = tables[5]
+    payload.preview.cursor = { previous: null, next: 'signed-next', result_version: 'fixed-v1' }
+    mocks.api.advanced.mockResolvedValueOnce(payload)
+    const wrapper = mount(TeacherDataAdvanced)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="preparation-state"]').text()).toContain('正在后台整理')
+    await wrapper.get('nav[aria-label="行为记录翻页"] button:last-child').trigger('click')
+    expect(mocks.push).toHaveBeenLastCalledWith({ query: expect.objectContaining({ cursor: 'signed-next' }) })
+  })
+
+  it('clears a behavior cursor when the selected session changes', async () => {
+    mocks.applyRouteQuery({
+      view: 'overview', experiment_ids: '3,5', class_id: '4',
+      table: 'behavior_events', cursor: 'signed-old',
+    })
+    const wrapper = mount(TeacherDataAdvanced)
+    await flushPromises()
+
+    await wrapper.get('select[aria-label="选择作答会话"]').setValue('S-002')
+
+    expect(mocks.push).toHaveBeenLastCalledWith({
+      query: expect.objectContaining({
+        session_ref: 'S-002', page: undefined, cursor: undefined,
+      }),
+    })
   })
 })

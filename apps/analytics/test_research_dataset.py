@@ -6,7 +6,9 @@ import zipfile
 from uuid import uuid4
 from unittest.mock import patch
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.analytics import test_teacher_data_center_api as fixtures
@@ -16,6 +18,30 @@ from apps.analytics.services import create_export_job, create_export_snapshot, r
 from apps.assessment.models import Attempt, ConfidenceAssignment, ExperimentSession, StudentQuestionAssignment, SubmissionEvent
 from apps.experiments.models import ExperimentClassSnapshot, ExperimentVersion, QuestionSnapshot
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
+from apps.question_bank.models import Concept, Question
+from apps.question_bank.services.question_kc_mapping import replace_question_kc_mapping
+
+
+class SinglePassList(list):
+    def __init__(self, values):
+        super().__init__(values)
+        self.iterations = 0
+
+    def __iter__(self):
+        self.iterations += 1
+        if self.iterations > 1:
+            raise AssertionError("collection was scanned more than once")
+        return super().__iter__()
+
+
+class CountingQuestionRef(str):
+    comparisons = 0
+
+    def __eq__(self, other):
+        type(self).comparisons += 1
+        return super().__eq__(other)
+
+    __hash__ = str.__hash__
 
 
 class ResearchDatasetTests(TestCase):
@@ -155,6 +181,189 @@ class ResearchDatasetTests(TestCase):
         question.save(update_fields=["correct_answer"])
         import json
         self.assertEqual(json.loads(self.rows("questions")[0]["答案"]), {"answer": "  标准答案\n"})
+
+    def test_research_bundle_bulk_loads_question_mappings_without_changing_order(self):
+        from .research_dataset import read_research_bundle
+
+        root = Concept.objects.create(course=self.course, code="KC1", name="根知识点")
+        branch = Concept.objects.create(course=self.course, code="KC2", name="二级知识点")
+        leaf = Concept.objects.create(course=self.course, code="KC3", name="三级知识点")
+        questions = [self.attempt.assignment.snapshot.source_question]
+        questions.extend(
+            Question.objects.create(
+                bank=self.experiment.question_bank,
+                sequence=sequence,
+                question_type=Question.Type.SHORT,
+                text=f"数据题 {sequence}",
+                correct_answer="答案",
+            )
+            for sequence in (2, 3)
+        )
+        replace_question_kc_mapping(
+            questions[0],
+            root_kc_code=root.code,
+            nodes=[{"kc_code": root.code, "parent_kc_code": None, "order": 1}],
+        )
+        replace_question_kc_mapping(
+            questions[1],
+            root_kc_code=root.code,
+            nodes=[
+                {"kc_code": root.code, "parent_kc_code": None, "order": 1},
+                {"kc_code": branch.code, "parent_kc_code": root.code, "order": 1},
+            ],
+        )
+        replace_question_kc_mapping(
+            questions[2],
+            root_kc_code=root.code,
+            nodes=[
+                {"kc_code": root.code, "parent_kc_code": None, "order": 1},
+                {"kc_code": branch.code, "parent_kc_code": root.code, "order": 1},
+                {"kc_code": leaf.code, "parent_kc_code": branch.code, "order": 1},
+            ],
+        )
+        scope = DataScope.from_mapping(self.course, self.query)
+
+        with CaptureQueriesContext(connection) as queries:
+            bundle, _now = read_research_bundle(scope)
+
+        mapping_queries = [
+            query["sql"]
+            for query in queries.captured_queries
+            if '"question_bank_questionconcept"' in query["sql"]
+        ]
+        self.assertLessEqual(len(mapping_queries), 1)
+        self.assertEqual(
+            bundle["files"]["course_mapping"],
+            [
+                [self.course.name, "Q001", "KC1", "", ""],
+                [self.course.name, "Q002", "KC1", "KC2", ""],
+                [self.course.name, "Q003", "KC1", "KC2", "KC2>KC3"],
+            ],
+        )
+
+    def test_export_capture_does_not_fetch_submission_event_per_attempt(self):
+        from .research_dataset import read_research_bundle
+
+        session = self.attempt.session
+        now = timezone.now()
+        attempts = [self.attempt]
+        for sequence in (2, 3, 4):
+            snapshot = QuestionSnapshot.objects.create(
+                version=self.version,
+                source_question=self.attempt.assignment.snapshot.source_question,
+                source_sequence=sequence,
+                code=f"DATA-Q{sequence}",
+                question_type=Question.Type.SHORT,
+                text=f"冻结题 {sequence}",
+                correct_answer="答案",
+            )
+            assignment = StudentQuestionAssignment.objects.create(
+                session=session,
+                snapshot=snapshot,
+                item_instance=get_or_create_default_item_instance(snapshot),
+                assigned_sequence_index=sequence,
+            )
+            attempts.append(Attempt.objects.create(session=session, assignment=assignment))
+        for attempt in attempts:
+            SubmissionEvent.objects.create(
+                attempt=attempt,
+                submission_token=uuid4(),
+                final_answer="答案",
+                server_received_at=now,
+                committed_at=now,
+            )
+        scope = DataScope.from_mapping(self.course, self.query)
+
+        with CaptureQueriesContext(connection) as queries:
+            read_research_bundle(scope)
+
+        per_attempt_submission_queries = [
+            query["sql"]
+            for query in queries.captured_queries
+            if 'FROM "assessment_submissionevent"' in query["sql"]
+            and '"assessment_submissionevent"."attempt_id" =' in query["sql"]
+            and "LIMIT 21" in query["sql"]
+        ]
+        self.assertEqual(per_attempt_submission_queries, [])
+
+    def test_research_bundle_indexes_visits_and_session_counts_once(self):
+        from .research_dataset import read_research_bundle
+
+        second_session, _assignment = self.another_session()
+        first_session = self.attempt.session
+        for sequence in (2, 3, 4):
+            question = Question.objects.create(
+                bank=self.experiment.question_bank,
+                sequence=sequence,
+                question_type=Question.Type.SHORT,
+                text=f"索引题 {sequence}",
+                correct_answer="答案",
+            )
+            snapshot = QuestionSnapshot.objects.create(
+                version=self.version,
+                source_question=question,
+                source_sequence=sequence,
+                code=f"INDEX-Q{sequence}",
+                question_type=Question.Type.SHORT,
+                text=question.text,
+                correct_answer=question.correct_answer,
+            )
+            StudentQuestionAssignment.objects.create(
+                session=first_session,
+                snapshot=snapshot,
+                item_instance=get_or_create_default_item_instance(snapshot),
+                assigned_sequence_index=sequence,
+            )
+        question_refs = {
+            sequence: CountingQuestionRef(f"Q{sequence:03d}")
+            for sequence in range(1, 5)
+        }
+        visit_rows = SinglePassList(
+            [
+                {
+                    "session_id": str(first_session.pk),
+                    "question_ref": question_refs[sequence],
+                    "clicked_at": "",
+                    "entered_at": "",
+                    "left_at": "",
+                }
+                for sequence in (4, 3, 2, 1, 4)
+            ]
+        )
+        behavior_rows = SinglePassList(
+            [
+                {"session_id": str(first_session.pk), "row": ["first"]},
+                {"session_id": str(second_session.pk), "row": ["second"]},
+            ]
+        )
+        scope = DataScope.from_mapping(self.course, self.query)
+        CountingQuestionRef.comparisons = 0
+
+        with patch("apps.analytics.research_dataset.build_visits", return_value=visit_rows), patch(
+            "apps.analytics.research_events.build_standard_behavior",
+            return_value=behavior_rows,
+        ):
+            bundle, _now = read_research_bundle(scope)
+
+        self.assertEqual(visit_rows.iterations, 1)
+        self.assertEqual(behavior_rows.iterations, 1)
+        self.assertLess(CountingQuestionRef.comparisons, 16)
+        self.assertEqual(
+            [row["first_visit_order"] for row in bundle["responses"]],
+            [4, 3, 2, 1, None],
+        )
+        self.assertIs(bundle["behavior"], behavior_rows)
+        refs = scope.session_references()
+        self.assertEqual(
+            {
+                row["session_ref"]: (row["question_count"], row["behavior_count"])
+                for row in bundle["sessions"]
+            },
+            {
+                refs[str(first_session.pk)]: (4, 1),
+                refs[str(second_session.pk)]: (1, 1),
+            },
+        )
 
     def test_single_choice_capture_chain_and_transport_retry_match_final_answer(self):
         from apps.assessment.capture_v2_services import ingest_capture_batch

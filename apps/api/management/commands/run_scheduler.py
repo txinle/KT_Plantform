@@ -29,6 +29,7 @@ class Command(BaseCommand):
     def run_once(self):
         call_command("expire_publish_plans")
         call_command("expire_due_sessions")
+        call_command("reconcile_research_materializations")
         call_command("run_export_jobs")
 
     def handle(self, *args, **options):

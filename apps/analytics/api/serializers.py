@@ -416,7 +416,28 @@ class DataCenterAdvancedPreviewSerializer(serializers.Serializer):
         child=serializers.ListField(child=serializers.JSONField())
     )
     page = TeacherClassPageMetadataSerializer()
+    cursor = serializers.DictField(required=False)
     data_status = serializers.CharField()
+
+
+class DataCenterPreparationSerializer(serializers.Serializer):
+    state = serializers.CharField()
+    message = serializers.CharField()
+    updated_at = serializers.DateTimeField(allow_null=True)
+    result_version = serializers.CharField(allow_null=True)
+    projection_version = serializers.CharField()
+    stale = serializers.BooleanField()
+
+
+class DataCenterStudentSearchItemSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    student_number = serializers.CharField()
+    name = serializers.CharField()
+
+
+class DataCenterStudentSearchSerializer(serializers.Serializer):
+    items = DataCenterStudentSearchItemSerializer(many=True)
+    limit = serializers.IntegerField()
 
 
 class DataCenterAdvancedSerializer(serializers.Serializer):
@@ -431,3 +452,4 @@ class DataCenterAdvancedSerializer(serializers.Serializer):
     selected_table = DataCenterAdvancedTableSerializer()
     selected_experiment = DataCenterExperimentOptionSerializer(allow_null=True)
     preview = DataCenterAdvancedPreviewSerializer(allow_null=True)
+    preparation = DataCenterPreparationSerializer(required=False)

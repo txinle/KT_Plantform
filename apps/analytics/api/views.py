@@ -28,22 +28,27 @@ from apps.assessment.models import AssessmentEvent, ExperimentSession, Submissio
 from apps.audit.services import log_action
 
 from ..advanced_catalog import enabled_extension_tables
+from ..advanced_materialized import (
+    materialized_advanced_payload,
+    materialized_student_search,
+)
 from ..data_scope import DataScope, ScopeNotFound, ScopeValidationError
 from ..export_catalog import PACKAGE_TABLES
 from ..models import ExportJob
 from ..research_dataset import read_research_dataset, read_research_bundle, workspace_payload, context_tables, scope_label, session_options, table_catalog
 from ..research_contract import file_catalog
+from ..research_materialization_jobs import materialization_enabled_for_course
 from ..quality_reports import EvaluationState, QualityReport, build_quality_report
 from ..services import (
     ExportContractError,
     create_export_job,
     create_export_snapshot,
-    run_export_job,
 )
 from ..teaching_scope import TeachingScope
 from ..teaching.metrics import build_class_center_snapshot
 from .serializers import (
     DataCenterAdvancedSerializer,
+    DataCenterStudentSearchSerializer,
     DataCenterExportCatalogSerializer,
     DataCenterExportHistoryCollectionSerializer,
     DataCenterExportJobCreateSerializer,
@@ -269,7 +274,6 @@ class TeacherDataCenterExportJobCreateView(APIView):
                 selected_tables=values["tables"],
                 selected_fields=values["fields"],
             )
-            run_export_job(job)
         except ExportContractError as error:
             if "job" in locals():
                 ExportJob.objects.filter(pk=job.pk, status__in=[ExportJob.Status.RUNNING, ExportJob.Status.QUEUED]).update(
@@ -525,6 +529,9 @@ class TeacherDataCenterAdvancedView(APIView):
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
         scope = _scope_from_request(request, course)
+        if materialization_enabled_for_course(course.pk):
+            payload = materialized_advanced_payload(course, scope, request.query_params)
+            return Response(DataCenterAdvancedSerializer(payload).data)
         selected_key = request.query_params.get("table", "sessions" if request.query_params.get("view", "overview") == "overview" else "responses")
         if selected_key == "attempts":
             selected_key = "responses"
@@ -564,6 +571,24 @@ class TeacherDataCenterAdvancedView(APIView):
             "workspace": workspace,
         }
         return Response(DataCenterAdvancedSerializer(payload).data)
+
+
+class TeacherDataCenterAdvancedStudentSearchView(APIView):
+    @extend_schema(
+        operation_id="teacher_data_center_advanced_students_list",
+        parameters=[
+            OpenApiParameter("experiment_id", int, required=False),
+            OpenApiParameter("experiment_ids", str, required=False),
+            OpenApiParameter("class_id", int, required=False),
+            OpenApiParameter("q", str, required=False),
+        ],
+        responses=DataCenterStudentSearchSerializer,
+    )
+    def get(self, request, course_id):
+        course = _course_for_teacher(request.user, course_id)
+        scope = _scope_from_request(request, course)
+        payload = materialized_student_search(course, scope, request.query_params.get("q"))
+        return Response(DataCenterStudentSearchSerializer(payload).data)
 
 
 

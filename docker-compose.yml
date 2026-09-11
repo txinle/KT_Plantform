@@ -65,6 +65,19 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  analytics-worker:
+    build:
+      context: .
+      target: analytics-worker
+    env_file: .env
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: db
+      DJANGO_DEBUG: 0
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   nginx:
     build:
       context: .

@@ -24,6 +24,10 @@ FROM python-app AS scheduler
 ENTRYPOINT ["docker/entrypoint.sh"]
 CMD ["python", "manage.py", "run_scheduler"]
 
+FROM python-app AS analytics-worker
+ENTRYPOINT ["docker/entrypoint.sh"]
+CMD ["python", "manage.py", "run_research_materializations"]
+
 FROM nginx:1.27-alpine AS nginx
 COPY nginx/kt-platform.conf /etc/nginx/conf.d/default.conf
 COPY --from=python-app /app/staticfiles /static

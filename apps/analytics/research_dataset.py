@@ -1,8 +1,10 @@
 """Course libraries and scoped research facts shared by preview and frozen export."""
 
 import json
+from collections import Counter, defaultdict
 from dataclasses import replace
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from django.db.models import Max
 from django.utils import timezone
@@ -98,80 +100,116 @@ def response_status(attempt, *, submitted, visited, skipped):
     return "未访问"
 
 
-def build_research_bundle(captured, *, scope):
+def build_research_bundle(captured, *, scope, include_course_catalog=True):
     from apps.accounts.models import CourseEnrollment
     from apps.assessment.models import ExperimentSession, QuestionVisitEvent
     from apps.question_bank.models import Concept, Question
-    from apps.question_bank.services.question_kc_mapping import project_question_kc_mapping
     from .research_events import build_standard_behavior
 
     course = scope.course
     files = {item["key"]: [] for item in FILES}
-    roster = list(CourseEnrollment.objects.filter(course=course).select_related("student", "class_group").order_by("student_id", "pk"))
+    session_objects = {str(item.pk): item for item in captured["sessions"]}
     students = {}
-    for enrollment in roster:
-        student = enrollment.student
-        students.setdefault(student.pk, {"id": student.pk, "student_number": student.student_number or "",
-            "name": student.shown_name, "class_name": enrollment.class_group.name if enrollment.class_group else "",
-            "course_name": course.name, "experiment_count": 0})
-    files["course_students"] = [[course.name, item["student_number"], item["name"]] for item in students.values()]
-    refs = scope.session_references()
-    all_sessions = list(ExperimentSession.objects.filter(version__experiment__course=course)
-        .select_related("student", "version__experiment").order_by("pk"))
-    for session in all_sessions:
-        if session.student_id not in students:
-            students[session.student_id] = {"id": session.student_id, "student_number": session.student.student_number or "",
+    if include_course_catalog:
+        from apps.question_bank.services.question_kc_mapping import (
+            project_question_kc_mapping,
+            question_kc_mapping_prefetch,
+        )
+
+        roster = list(CourseEnrollment.objects.filter(course=course).select_related("student", "class_group").order_by("student_id", "pk"))
+        for enrollment in roster:
+            student = enrollment.student
+            students.setdefault(student.pk, {"id": student.pk, "student_number": student.student_number or "",
+                "name": student.shown_name, "class_name": enrollment.class_group.name if enrollment.class_group else "",
+                "course_name": course.name, "experiment_count": 0})
+        files["course_students"] = [[course.name, item["student_number"], item["name"]] for item in students.values()]
+        refs = scope.session_references()
+        all_sessions = list(ExperimentSession.objects.filter(version__experiment__course=course)
+            .select_related("student", "version__experiment").order_by("pk"))
+        for session in all_sessions:
+            if session.student_id not in students:
+                students[session.student_id] = {"id": session.student_id, "student_number": session.student.student_number or "",
+                    "name": session.student.shown_name, "class_name": session.class_snapshot_name,
+                    "course_name": course.name, "experiment_count": 0}
+            files["session_bindings"].append([course.name, session.student.student_number or "", session.student.shown_name,
+                session.version.experiment_id, session.version.experiment.name, refs[str(session.pk)]])
+        files["course_students"] = [[course.name, item["student_number"], item["name"]] for item in students.values()]
+        files["course_knowledge"] = [[course.name, kc.code, kc.name] for kc in Concept.objects.filter(course=course).order_by("code", "pk")]
+        questions = Question.objects.filter(bank__course=course).select_related(
+            "course_identity"
+        ).prefetch_related("options", question_kc_mapping_prefetch()).order_by(
+            "course_identity__course_sequence", "pk"
+        )
+        for question in questions:
+            qref = f"Q{question.course_identity.course_sequence:03d}"
+            nodes = project_question_kc_mapping(question)["nodes"]
+            files["course_mapping"].append([course.name, qref,
+                ";".join(node["kc_code"] for node in nodes if node["depth"] == 1),
+                ";".join(node["kc_code"] for node in nodes if node["depth"] == 2),
+                ";".join(f"{node['parent_kc_code']}>{node['kc_code']}" for node in nodes if node["depth"] == 3)])
+            files["question_library"].append({"题号": qref, "题干": question.text,
+                "选项": {option.key: option.text for option in question.options.all()}, "答案": question.correct_answer,
+                "解析": question.explanation, "难度": float(question.teacher_difficulty) if question.teacher_difficulty is not None else None})
+    else:
+        refs = {
+            sid: f"S{session.started_at.astimezone(ZoneInfo('Asia/Shanghai')):%Y%m%d}_{session.pk:04d}"
+            for sid, session in session_objects.items()
+        }
+        for session in session_objects.values():
+            students[session.student_id] = {"id": session.student_id,
+                "student_number": session.student.student_number or "",
                 "name": session.student.shown_name, "class_name": session.class_snapshot_name,
                 "course_name": course.name, "experiment_count": 0}
-        files["session_bindings"].append([course.name, session.student.student_number or "", session.student.shown_name,
-            session.version.experiment_id, session.version.experiment.name, refs[str(session.pk)]])
-    files["course_students"] = [[course.name, item["student_number"], item["name"]] for item in students.values()]
-    files["course_knowledge"] = [[course.name, kc.code, kc.name] for kc in Concept.objects.filter(course=course).order_by("code", "pk")]
-    question_ids = {}
-    for question in Question.objects.filter(bank__course=course).select_related("course_identity").prefetch_related("options").order_by("course_identity__course_sequence", "pk"):
-        qref = f"Q{question.course_identity.course_sequence:03d}"
-        question_ids[question.pk] = qref
-        nodes = project_question_kc_mapping(question)["nodes"]
-        files["course_mapping"].append([course.name, qref,
-            ";".join(node["kc_code"] for node in nodes if node["depth"] == 1),
-            ";".join(node["kc_code"] for node in nodes if node["depth"] == 2),
-            ";".join(f"{node['parent_kc_code']}>{node['kc_code']}" for node in nodes if node["depth"] == 3)])
-        files["question_library"].append({"题号": qref, "题干": question.text,
-            "选项": {option.key: option.text for option in question.options.all()}, "答案": question.correct_answer,
-            "解析": question.explanation, "难度": float(question.teacher_difficulty) if question.teacher_difficulty is not None else None})
     raw = captured["rows"]
     question_refs = {}
     question_types = {}
     for row in records(raw, "question_content"):
         snapshot_id = str(row["question_snapshot_id"])
-        source = row.get("source_question_id")
-        sequence = row.get("course_sequence")
-        question_refs[snapshot_id] = question_ids.get(int(source)) if source else None
-        if not question_refs[snapshot_id] and sequence:
-            question_refs[snapshot_id] = f"Q{int(sequence):03d}"
+        sequence = row.get("course_sequence") or row.get("source_sequence")
+        question_refs[snapshot_id] = (
+            f"Q{int(sequence):03d}" if sequence else row.get("question_code", "")
+        )
         question_types[snapshot_id] = dict(Question.Type.choices).get(row.get("question_type"), "题型未记录")
     # The authoritative snapshot retains its course identity even after publication.
     for attempt in captured["attempts"]:
         snapshot = attempt.assignment.snapshot
-        question_refs[str(snapshot.pk)] = question_ids.get(snapshot.source_question_id) or f"Q{snapshot.course_sequence:03d}"
-    session_objects = {str(item.pk): item for item in captured["sessions"]}
+        sequence = snapshot.course_sequence or snapshot.source_sequence
+        question_refs[str(snapshot.pk)] = (
+            f"Q{sequence:03d}"
+            if sequence
+            else snapshot.code
+        )
     visits = build_visits(QuestionVisitEvent.objects.filter(session_id__in=session_objects)
         .select_related("attempt__assignment").order_by("session_id", "event_sequence", "pk"), captured["events"], question_refs)
+    visits_by_session_question = defaultdict(list)
+    first_visit_order_by_session_question = {}
+    visit_question_counts = Counter()
+    for visit in visits:
+        sid = visit["session_id"]
+        qref = visit["question_ref"]
+        key = (sid, qref)
+        visits_by_session_question[key].append(visit)
+        if key not in first_visit_order_by_session_question:
+            visit_question_counts[sid] += 1
+            first_visit_order_by_session_question[key] = visit_question_counts[sid]
     identities = {sid: (item.student.student_number or "", item.student.shown_name) for sid, item in session_objects.items()}
     behavior = build_standard_behavior(captured, question_refs=question_refs, session_refs=refs, identities=identities, visits=visits)
-    files["behavior_events"] = [item["row"] for item in behavior]
+    behavior_counts = Counter()
+    for item in behavior:
+        files["behavior_events"].append(item["row"])
+        behavior_counts[item["session_id"]] += 1
     attempts = {(str(row["session_id"]), str(row["question_snapshot_id"])): row for row in records(raw, "attempts")}
     instances = {str(row["item_instance_id"]): row for row in records(raw, "item_instances")}
     submissions = {str(item.attempt_id): item for item in captured["submissions"]}
     responses = []
     skipped_attempts = {str(event.attempt_id) for event in captured["events"]
         if event.event_type == "item_left" and event.payload.get("leave_reason") == "skip"}
+    response_counts = Counter()
     for assignment in sorted(records(raw, "assignments"), key=lambda row: (int(row["session_id"]), int(row["assigned_sequence_index"]))):
         sid, qid = str(assignment["session_id"]), str(assignment["question_snapshot_id"])
         attempt = attempts.get((sid, qid), {})
         qref = question_refs[qid]
-        question_visits = [visit for visit in visits if visit["session_id"] == sid and visit["question_ref"] == qref]
-        entered_questions = list(dict.fromkeys(visit["question_ref"] for visit in visits if visit["session_id"] == sid))
+        question_visits = visits_by_session_question[(sid, qref)]
         submission = submissions.get(str(attempt.get("attempt_id")))
         submitted = submission is not None and submission.committed_at is not None
         final_answer = format_answer_value(submission.final_answer) if submitted else ""
@@ -184,7 +222,7 @@ def build_research_bundle(captured, *, scope):
                 correct = {"True": True, "False": False, "true": True, "false": False}.get(str(correct))
         item = {"session_id": sid, "question_ref": qref, "question_type": question_types.get(qid, ""),
             "assigned_order": int(assignment["assigned_sequence_index"]),
-            "first_visit_order": entered_questions.index(qref) + 1 if qref in entered_questions else None,
+            "first_visit_order": first_visit_order_by_session_question.get((sid, qref)),
             "visit_count": len(question_visits) if len(question_visits) == int(attempt.get("visit_count") or 0) else None,
             "clicked_times": [research_time(visit["clicked_at"]) for visit in question_visits],
             "entered_times": [research_time(visit["entered_at"]) for visit in question_visits],
@@ -194,6 +232,7 @@ def build_research_bundle(captured, *, scope):
                 visited=bool(question_visits), skipped=str(attempt.get("attempt_id")) in skipped_attempts),
             "is_correct": correct}
         responses.append(item)
+        response_counts[sid] += 1
         option_order = parsed(instances.get(str(assignment.get("item_instance_id")), {}).get("option_order"), [])
         files["responses"].append([refs[sid], *identities[sid], qref, item["assigned_order"], item["first_visit_order"],
             ";".join(map(str, option_order)), item["visit_count"], *[";".join(item[key]) for key in ("clicked_times", "entered_times", "left_times")],
@@ -207,8 +246,8 @@ def build_research_bundle(captured, *, scope):
             "status_label": session.get_status_display(), "started_at": research_time(session.started_at),
             "ended_at": research_time(end), "submitted_at": research_time(session.completed_at),
             "duration_minutes": round((end - session.started_at).total_seconds() / 60, 2) if end else None,
-            "question_count": sum(item["session_id"] == sid for item in responses),
-            "behavior_count": sum(item["session_id"] == sid for item in behavior)})
+            "question_count": response_counts[sid],
+            "behavior_count": behavior_counts[sid]})
     files["event_dictionary"] = event_dictionary()
     headers = {item["key"]: item["headers"] for item in FILES}
     tables = {"sessions": ("sessionID 学号 姓名 课程 实验名称 开始时间 结束时间 时长(分钟)".split(),
@@ -225,7 +264,7 @@ def build_research_dataset(captured, *, scope):
     return build_research_bundle(captured, scope=scope)["tables"]
 
 
-def read_research_bundle(scope):
+def read_research_bundle(scope, *, include_course_catalog=True):
     from django.db import connection, transaction
     from apps.assessment.models import AssessmentEvent
     from apps.experiments.models import ExperimentVersion
@@ -247,9 +286,22 @@ def read_research_bundle(scope):
             filter_definition=scope.serialize(), event_high_watermark=AssessmentEvent.objects.filter(session__in=scope.sessions())
                 .aggregate(value=Max("server_ingest_sequence_no"))["value"] or 0,
             selected_versions=[{"id": row.pk, "version": row.version_number} for row in versions])
-        captured = _capture_export_source(SimpleNamespace(snapshot=snapshot, course_id=scope.course.pk,
-            experiment=None, experiment_id=None, research_study=None, research_study_id=None))
-        return build_research_bundle(captured, scope=scope), now
+        captured = _capture_export_source(
+            SimpleNamespace(
+                snapshot=snapshot,
+                course_id=scope.course.pk,
+                experiment=None,
+                experiment_id=None,
+                research_study=None,
+                research_study_id=None,
+            ),
+            session_projection=not include_course_catalog,
+        )
+        return build_research_bundle(
+            captured,
+            scope=scope,
+            include_course_catalog=include_course_catalog,
+        ), now
 
 
 def read_research_dataset(scope):

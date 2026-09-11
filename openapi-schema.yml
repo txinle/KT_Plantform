@@ -3221,6 +3221,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/DataCenterAdvanced'
           description: ''
+  /api/v1/teacher/courses/{course_id}/data/advanced/students/:
+    get:
+      operationId: teacher_data_center_advanced_students_list
+      parameters:
+      - in: query
+        name: class_id
+        schema:
+          type: integer
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: experiment_id
+        schema:
+          type: integer
+      - in: query
+        name: experiment_ids
+        schema:
+          type: string
+      - in: query
+        name: q
+        schema:
+          type: string
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataCenterStudentSearch'
+          description: ''
   /api/v1/teacher/courses/{course_id}/data/export-jobs/:
     post:
       operationId: teacher_data_center_export_job_create
@@ -5128,6 +5164,8 @@ components:
           allOf:
           - $ref: '#/components/schemas/DataCenterAdvancedPreview'
           nullable: true
+        preparation:
+          $ref: '#/components/schemas/DataCenterPreparation'
       required:
       - course
       - generated_at
@@ -5154,6 +5192,9 @@ components:
             items: {}
         page:
           $ref: '#/components/schemas/TeacherClassPageMetadata'
+        cursor:
+          type: object
+          additionalProperties: {}
         data_status:
           type: string
       required:
@@ -5487,6 +5528,31 @@ components:
       - quality_url
       - scope_update_url
       - teaching_url
+    DataCenterPreparation:
+      type: object
+      properties:
+        state:
+          type: string
+        message:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+        result_version:
+          type: string
+          nullable: true
+        projection_version:
+          type: string
+        stale:
+          type: boolean
+      required:
+      - message
+      - projection_version
+      - result_version
+      - stale
+      - state
+      - updated_at
     DataCenterPreviewColumn:
       type: object
       properties:
@@ -5647,6 +5713,31 @@ components:
       required:
       - label
       - value
+    DataCenterStudentSearch:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataCenterStudentSearchItem'
+        limit:
+          type: integer
+      required:
+      - items
+      - limit
+    DataCenterStudentSearchItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        student_number:
+          type: string
+        name:
+          type: string
+      required:
+      - id
+      - name
+      - student_number
     DataCenterTeachingScope:
       type: object
       properties:
@@ -7437,13 +7528,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -11473,13 +11566,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'

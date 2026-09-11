@@ -92,7 +92,7 @@ onMounted(async () => {
       <p>数据包包含学生姓名和学号，请按研究数据管理要求使用。</p>
       <p v-if="activePackage.blocked || !data.scope.is_complete" class="kt-warning-text">请先选择完整的实验和班级范围。</p>
       <form v-else @submit.prevent="createExport">
-        <button class="kt-button kt-button--danger" type="submit" :disabled="creating">{{ creating ? '正在生成…' : '导出实验数据包' }}</button>
+        <button class="kt-button kt-button--danger" type="submit" :disabled="creating">{{ creating ? '正在提交…' : '导出实验数据包' }}</button>
       </form>
       <Alert v-if="createdJob" tone="success">导出任务状态：{{ createdJob.status_label }}。 <a v-if="createdJob.download_url" :href="createdJob.download_url">下载文件</a> <a :href="createdJob.history_url">查看导出记录</a></Alert>
     </section>

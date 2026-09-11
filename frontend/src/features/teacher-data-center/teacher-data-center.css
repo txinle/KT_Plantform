@@ -110,6 +110,9 @@
 .kt-data-center .kt-icon-heading p { margin: 0; color: var(--kt-research-muted); font-size: 14px; }
 .kt-data-center .kt-research-panel-meta { display: grid; justify-items: end; gap: 5px; color: var(--kt-research-text); text-align: right; }
 .kt-data-center .kt-research-panel-meta span { color: var(--kt-research-muted); font-size: 13px; }
+.kt-data-center .kt-research-cursor { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.kt-data-center .kt-research-cursor button { min-width: 76px; min-height: 44px; border: 1px solid var(--kt-research-border); border-radius: 6px; padding: 0 14px; background: #fff; color: var(--kt-research-purple); cursor: pointer; font: inherit; font-weight: 700; }
+.kt-data-center .kt-research-cursor button:disabled { opacity: .45; cursor: not-allowed; }
 
 .kt-data-center .kt-research-table-scroll { max-width: 100%; overflow: auto; border: 1px solid var(--kt-research-border); border-radius: 7px; }
 .kt-data-center .kt-research-table { width: 100%; min-width: 760px; border-collapse: collapse; color: var(--kt-research-text); font-size: 14px; }

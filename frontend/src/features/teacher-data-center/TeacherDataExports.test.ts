@@ -42,8 +42,8 @@ describe('TeacherDataExports', () => {
 
   it('groups the exact seven CSV files and fixed question-library JSON, then creates the package', async () => {
     mocks.api.createExport.mockResolvedValue({
-      job_id: 'job-1', package: 'experiment', status: 'succeeded', status_label: '已完成',
-      download_url: '/analytics/courses/7/export-jobs/job-1/download/', history_url: '/teacher/courses/7/data/exports/history/',
+      job_id: 'job-1', package: 'experiment', status: 'queued', status_label: '排队中',
+      download_url: null, history_url: '/teacher/courses/7/data/exports/history/',
     })
     const wrapper = mount(TeacherDataExports)
     await flushPromises()
@@ -66,6 +66,7 @@ describe('TeacherDataExports', () => {
       package: 'experiment', confirm_identified: true,
       scope: { experiment_id: 3, class_id: 4, search: '张同学', session_ref: 'S-001' },
     })
-    expect(wrapper.text()).toContain('已完成')
+    expect(wrapper.text()).toContain('排队中')
+    expect(wrapper.text()).not.toContain('下载文件')
   })
 })

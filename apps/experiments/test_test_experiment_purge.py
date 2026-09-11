@@ -4,7 +4,14 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from apps.accounts.models import CourseEnrollment, User
-from apps.analytics.models import ExportJob, ExportSnapshot
+from apps.analytics.models import (
+    ExportJob,
+    ExportSnapshot,
+    ResearchSessionBehavior,
+    ResearchSessionMaterialization,
+    ResearchSessionResponse,
+    ResearchSessionVisit,
+)
 from apps.assessment.models import ExperimentSession, SubmissionEvent
 from apps.assessment.test_student_api import StudentApiFixtureMixin
 from apps.audit.models import AuditLog
@@ -50,10 +57,15 @@ class TestExperimentPurgeTests(StudentApiFixtureMixin, TestCase):
         job = ExportJob.objects.create(course=self.course, experiment=self.experiment, snapshot=snapshot, created_by=self.teacher)
         other_snapshot = ExportSnapshot.objects.create(course=self.course, experiment=self.other_experiment, created_by=self.teacher,
             selected_versions=[{'id': self.other_session.version_id, 'version': 1}], source_bundle={'keep': True})
+        materialization = ResearchSessionMaterialization.objects.create(session=self.session)
+        ResearchSessionResponse.objects.create(materialization=materialization, ordinal=1)
+        ResearchSessionVisit.objects.create(materialization=materialization, ordinal=1)
+        ResearchSessionBehavior.objects.create(materialization=materialization, ordinal=1)
         with self.captureOnCommitCallbacks(execute=True):
             result = self.purge(apply=True)
         self.assertTrue(result['applied'])
         self.assertFalse(Experiment.objects.filter(pk=self.experiment.pk).exists())
+        self.assertFalse(ResearchSessionMaterialization.objects.filter(pk=materialization.pk).exists())
         self.assertTrue(ExperimentSession.objects.filter(pk=self.other_session.pk).exists())
         self.assertEqual(set(User.objects.values_list('pk', flat=True)), user_ids)
         self.assertEqual(set(Question.objects.values_list('pk', flat=True)), question_ids)

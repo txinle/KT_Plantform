@@ -932,13 +932,14 @@ FEEDBACK_ACTIONS = {'detail_entered': '查看反馈详情', 'answer_presented': 
 
 
 def build_standard_behavior(captured, *, question_refs, session_refs, identities, visits):
-    from .research_visits import match_visit, research_time
+    from .research_visits import build_visit_index, match_visit, research_time
     tables = captured['rows']
     attempts = {str(row['attempt_id']): row for row in _table_dicts(tables, 'attempts')}
     assignments = {str(row['assignment_id']): str(row['question_snapshot_id']) for row in _table_dicts(tables, 'assignments')}
     contents = {str(row['snapshot_id']): row.get('content') for row in _table_dicts(tables, 'response_snapshots')}
     replay = _replay_evidence(tables)
     native = {str(event.event_id): event for event in captured['events']}
+    visit_index = build_visit_index(visits)
     grouped = defaultdict(list)
     for event in _event_rows(tables, attempts, include_all=True):
         attempt = attempts.get(str(event.get('attempt_id')), {})
@@ -1001,7 +1002,7 @@ def build_standard_behavior(captured, *, question_refs, session_refs, identities
                     'document_hidden': ('visible', 'hidden'), 'document_visible': ('hidden', 'visible'),
                     'network_offline': ('online', 'offline'), 'network_online': ('offline', 'online')}[kind]
             source = native.get(str(event.get('event_id')))
-            visit = match_visit(source, visits) if source else None
+            visit = match_visit(source, visit_index) if source else None
             occurred = None
             basis = '发生时间未记录'
             if source:

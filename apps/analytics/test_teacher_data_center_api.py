@@ -1,6 +1,7 @@
 import os
 from unittest.mock import patch
 
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
@@ -266,7 +267,7 @@ class TeacherDataCenterApiTests(TestCase):
         self.assertNotIn(key, self.client.session)
         self.assertEqual(self.client.get(url, {"experiment_id": 999999}).status_code, 404)
 
-    def test_export_job_create_and_artifact_removal_use_json_contracts(self):
+    def test_export_job_create_queues_background_work_and_artifact_removal_uses_json(self):
         create_url = self.api("export-jobs/")
         payload = {
             "package": "complete",
@@ -289,8 +290,13 @@ class TeacherDataCenterApiTests(TestCase):
         self.assertEqual(unconfirmed.status_code, 400)
         self.assertEqual(created.status_code, 201)
         job = ExportJob.objects.get(job_id=created.json()["job_id"])
-        self.assertEqual(job.status, ExportJob.Status.SUCCEEDED)
+        self.assertEqual(job.status, ExportJob.Status.QUEUED)
+        self.assertFalse(job.artifact_path)
         self.assertEqual(job.snapshot.filter_definition["version_id"], self.version.pk)
+        call_command("run_export_jobs", once=True)
+        job.refresh_from_db()
+        self.assertEqual(job.status, ExportJob.Status.SUCCEEDED)
+        self.assertTrue(job.artifact_path)
         removed = self.client.delete(
             self.api(f"export-jobs/{job.job_id}/"),
             content_type="application/json",

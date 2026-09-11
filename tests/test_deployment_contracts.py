@@ -16,7 +16,7 @@ class DeploymentContractTests(TestCase):
     def test_compose_injects_application_environment_and_supports_host_proxy_port(self):
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
-        self.assertEqual(compose.count("env_file: .env"), 3)
+        self.assertEqual(compose.count("env_file: .env"), 4)
         self.assertIn('"${HTTP_PORT:-80}:80"', compose)
 
     def test_example_environment_lists_all_production_rollout_controls(self):

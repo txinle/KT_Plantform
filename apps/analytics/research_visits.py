@@ -1,5 +1,6 @@
 """One visit projection for research rows and the teacher's session timeline."""
 
+from bisect import bisect_right
 from collections import defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -20,6 +21,47 @@ def research_time(value):
     if value is None or value.tzinfo is None:
         return ""
     return value.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%dT%H%M%S.%f")[:-3]
+
+
+class VisitIndex:
+    def __init__(self, visits):
+        candidates_by_scope = defaultdict(list)
+        for item in visits:
+            candidates_by_scope[(item["session_id"], item["attempt_id"])].append(item)
+        self.groups = {}
+        for scope, candidates in candidates_by_scope.items():
+            by_key = {}
+            by_correlation = {}
+            for item in candidates:
+                by_key.setdefault(item["key"], item)
+                for correlation in (item["navigation_id"], item["entry_event_id"]):
+                    if correlation:
+                        by_correlation.setdefault(correlation, item)
+            timeline = sorted(
+                (
+                    (as_datetime(item["entered_at"]), position, item)
+                    for position, item in enumerate(candidates)
+                ),
+                key=lambda value: (value[0], value[1]),
+            )
+            times = []
+            fallback = []
+            latest = None
+            for entered_at, _position, item in timeline:
+                times.append(entered_at)
+                if latest is None or item["entered_at"] > latest["entered_at"]:
+                    latest = item
+                fallback.append(latest)
+            self.groups[scope] = {
+                "by_key": by_key,
+                "by_correlation": by_correlation,
+                "times": times,
+                "fallback": fallback,
+            }
+
+
+def build_visit_index(visits):
+    return VisitIndex(visits)
 
 
 def build_visits(visit_records, events, question_refs):
@@ -49,10 +91,11 @@ def build_visits(visit_records, events, question_refs):
         }
         by_attempt[record.attempt_id].append(item)
         visits.append(item)
+    visit_index = build_visit_index(visits)
     for event in events:
         if event.event_type != "item_left":
             continue
-        item = match_visit(event, visits)
+        item = match_visit(event, visit_index)
         if item:
             occurred = event.estimated_occurred_at_utc or event.client_wall_time_utc or event.server_committed_at
             if not item["left_at"]:
@@ -66,13 +109,16 @@ def build_visits(visit_records, events, question_refs):
 
 
 def match_visit(event, visits):
-    candidates = [item for item in visits if item["session_id"] == str(event.session_id) and item["attempt_id"] == str(event.attempt_id)]
+    index = visits if isinstance(visits, VisitIndex) else build_visit_index(visits)
+    group = index.groups.get((str(event.session_id), str(event.attempt_id)))
+    if group is None:
+        return None
     explicit = event.payload.get("visit_id")
     if explicit is not None:
-        return next((item for item in candidates if item["key"] == str(explicit)), None)
+        return group["by_key"].get(str(explicit))
     correlation = str(event.correlation_id) if event.correlation_id else ""
     if correlation:
-        matched = next((item for item in candidates if item["navigation_id"] == correlation or item["entry_event_id"] == correlation), None)
+        matched = group["by_correlation"].get(correlation)
         if matched:
             return matched
     # Never use delayed server receipt as the time of a client operation.
@@ -81,10 +127,10 @@ def match_visit(event, visits):
         occurred = event.server_committed_at
     if occurred is None:
         return None
-    eligible = [item for item in candidates if as_datetime(item["entered_at"]) <= occurred]
-    if not eligible:
+    position = bisect_right(group["times"], occurred) - 1
+    if position < 0:
         return None
-    item = max(eligible, key=lambda value: value["entered_at"])
+    item = group["fallback"][position]
     if item["left_at"] and occurred > as_datetime(item["left_at"]):
         return None
     return item

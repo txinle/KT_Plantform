@@ -12,7 +12,14 @@ from django.db import close_old_connections
 from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings, skipUnlessDBFeature
 
 from apps.accounts.models import ClassGroup, CourseEnrollment, User
-from apps.analytics.models import ExportJob, ExportSnapshot
+from apps.analytics.models import (
+    ExportJob,
+    ExportSnapshot,
+    ResearchSessionBehavior,
+    ResearchSessionMaterialization,
+    ResearchSessionResponse,
+    ResearchSessionVisit,
+)
 from apps.assessment.models import Attempt, ExperimentSession, ResponseSnapshot
 from apps.assessment.response_snapshot_services import create_response_snapshot
 from apps.assessment.services import get_or_create_session, record_visit
@@ -101,12 +108,19 @@ class ResearchDeletionTests(TestCase):
     def test_confirmed_global_delete_removes_formal_tree_and_keeps_course_resources(self):
         job, path = self.export([self.experiment])
         snapshot_id = job.snapshot_id
+        materialization = ResearchSessionMaterialization.objects.create(
+            session=self.sessions[0]
+        )
+        ResearchSessionResponse.objects.create(materialization=materialization, ordinal=1)
+        ResearchSessionVisit.objects.create(materialization=materialization, ordinal=1)
+        ResearchSessionBehavior.objects.create(materialization=materialization, ordinal=1)
         result = self.execute(self.url())
         self.assertEqual(result.status_code, 200, result.content)
         self.assertTrue(result.json()["deleted"])
         self.assertFalse(Experiment.objects.filter(pk=self.experiment.pk).exists())
         self.assertFalse(ClassExperimentTask.objects.exists())
         self.assertFalse(ExperimentSession.objects.exists())
+        self.assertFalse(ResearchSessionMaterialization.objects.exists())
         self.assertFalse(ResponseSnapshot.objects.exists())
         self.assertFalse(QuestionSnapshot.objects.exists())
         self.assertFalse(ExportJob.objects.filter(pk=job.pk).exists())

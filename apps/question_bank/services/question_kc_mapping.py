@@ -3,11 +3,23 @@ import json
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Prefetch
 
 from ..models import Concept, Question, QuestionConcept
 
 
 SCHEMA_VERSION = "question-kc-tree-v2"
+_PREFETCHED_LINKS_ATTR = "_prefetched_question_kc_mapping_links"
+
+
+def question_kc_mapping_prefetch():
+    return Prefetch(
+        "concept_links",
+        queryset=QuestionConcept.objects.select_related(
+            "concept", "parent_link__concept"
+        ).order_by("display_order", "concept__code", "pk"),
+        to_attr=_PREFETCHED_LINKS_ATTR,
+    )
 
 
 def _validated_tree(question, *, root_kc_code, nodes):
@@ -118,11 +130,13 @@ def replace_question_kc_mapping(question, *, root_kc_code, nodes):
 
 
 def project_question_kc_mapping(question):
-    links = list(
-        question.concept_links.select_related("concept", "parent_link__concept").order_by(
-            "display_order", "concept__code", "pk"
+    links = getattr(question, _PREFETCHED_LINKS_ATTR, None)
+    if links is None:
+        links = list(
+            question.concept_links.select_related("concept", "parent_link__concept").order_by(
+                "display_order", "concept__code", "pk"
+            )
         )
-    )
     if not links:
         return {
             "schema_version": SCHEMA_VERSION,

@@ -11,7 +11,16 @@ from django.utils import timezone
 
 from apps.accounts.course_access import lock_writable_course, require_course_manager
 from apps.accounts.models import ClassGroup, CourseEnrollment, User
-from apps.analytics.models import ExportJob, RecordingCoverageAttempt, RecordingCoverageRun, RecordingCoverageSession
+from apps.analytics.models import (
+    ExportJob,
+    RecordingCoverageAttempt,
+    RecordingCoverageRun,
+    RecordingCoverageSession,
+    ResearchSessionBehavior,
+    ResearchSessionMaterialization,
+    ResearchSessionResponse,
+    ResearchSessionVisit,
+)
 from apps.analytics.research_deletion import affected_export_snapshots, cleanup_state, retire_research_exports
 from apps.assessment import models as assessment
 from apps.audit.services import log_action
@@ -162,6 +171,10 @@ def _purge_sessions(session_ids, counts, coverage_run_ids):
     # All incoming runtime references are explicitly scoped to these sessions or
     # attempts. Shared schema/contract artifacts and student identities survive.
     querysets = [
+        ResearchSessionResponse.objects.filter(materialization__session_id__in=session_ids),
+        ResearchSessionVisit.objects.filter(materialization__session_id__in=session_ids),
+        ResearchSessionBehavior.objects.filter(materialization__session_id__in=session_ids),
+        ResearchSessionMaterialization.objects.filter(session_id__in=session_ids),
         RecordingCoverageAttempt.objects.filter(run_id__in=coverage_run_ids),
         RecordingCoverageSession.objects.filter(run_id__in=coverage_run_ids),
         experiments.ConditionAssignment.objects.filter(session_id__in=session_ids),

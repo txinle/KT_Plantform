@@ -281,9 +281,8 @@ def create_export_job(*, course, snapshot, created_by, experiment=None,
         package=package,
         selected_tables=selected_tables or [],
         selected_fields=selected_fields or [],
-        status=ExportJob.Status.RUNNING,
-        started_at=timezone.now(),
-        progress_stage="snapshot",
+        status=ExportJob.Status.QUEUED,
+        progress_stage="queued",
     )
 
 
@@ -510,7 +509,7 @@ def _csv_bytes(headers, rows):
     return ("\ufeff" + stream.getvalue()).encode("utf-8")
 
 
-def _capture_export_source(job):
+def _capture_export_source(job, *, session_projection=False):
     """Read the live source only while ``create_export_snapshot`` is open."""
     snapshot = job.snapshot
     study_course_ids = list(job.research_study.course_links.values_list("course_id", flat=True)) if job.research_study_id else []
@@ -539,7 +538,7 @@ def _capture_export_source(job):
     with transaction.atomic():
         sessions = list(
             session_queryset.filter(started_at__lte=snapshot.source_cutoff_at)
-            .select_related("student", "version", "capture_contract")
+            .select_related("student", "version__experiment", "capture_contract")
         )
         session_ids = [s.pk for s in sessions]
         attempt_queryset = (
@@ -557,7 +556,9 @@ def _capture_export_source(job):
         }
         if scope is None and legacy_attempt_status:
             attempt_queryset = attempt_queryset.filter(status=filter_definition["status"])
-        attempts = list(attempt_queryset.select_related("session", "assignment__snapshot", "assignment__item_instance"))
+        attempts = list(attempt_queryset.select_related(
+            "session", "assignment__snapshot", "assignment__item_instance", "submission_event"
+        ))
         if (scope is not None and scope.attempt_status is not None) or legacy_attempt_status:
             selected_session_ids = {attempt.session_id for attempt in attempts}
             sessions = [session for session in sessions if session.pk in selected_session_ids]
@@ -744,6 +745,7 @@ def _capture_export_source(job):
         class_snapshots=class_snapshots,
         participant_snapshots=participant_snapshots,
         snapshot=snapshot,
+        session_projection=session_projection,
     )
     selected_version_number = None
     if filter_definition.get("version_id"):
@@ -1274,7 +1276,7 @@ def preview_export_table(*, course, experiment, table, version_id=None,
     attempt_queryset = (
         scope.attempts() if scope is not None else Attempt.objects.all()
     ).filter(session_id__in=session_ids).select_related(
-        "session", "assignment__snapshot", "assignment__item_instance"
+        "session", "assignment__snapshot", "assignment__item_instance", "submission_event"
     )
     has_attempt_status = (
         scope is not None and scope.attempt_status is not None
@@ -1386,7 +1388,7 @@ def preview_export_table(*, course, experiment, table, version_id=None,
 def _table_rows(job, sessions, assignments, attempts, events, confidence_assignments, simulations,
                 *, response_snapshots=(), input_observations=(), submissions=(),
                 grade_records=(), condition_assignments=(), class_snapshots=(),
-                participant_snapshots=(), snapshot=None):
+                participant_snapshots=(), snapshot=None, session_projection=False):
     identity_headers = ("student_number", "student_name")
     session_by_id = {session.pk: session for session in sessions}
     attempt_by_assignment = {attempt.assignment_id: attempt for attempt in attempts}
@@ -1845,13 +1847,16 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         if grade.validity_status == GradeRecord.ValidityStatus.EFFECTIVE:
             grade_by_attempt[grade.submission.attempt_id] = grade
     submission_by_attempt = {submission.attempt_id: submission for submission in submissions}
-    task_ids = {session.class_task_id for session in sessions if session.class_task_id}
-    task_ids.update(
-        participant.class_task_id
-        for participant in participant_snapshots
-        if participant.class_task_id
-    )
-    class_tasks = list(
+    task_ids = set() if session_projection else {
+        session.class_task_id for session in sessions if session.class_task_id
+    }
+    if not session_projection:
+        task_ids.update(
+            participant.class_task_id
+            for participant in participant_snapshots
+            if participant.class_task_id
+        )
+    class_tasks = [] if session_projection else list(
         ClassExperimentTask.objects.filter(pk__in=task_ids)
         .select_related(
             "class_group",
@@ -1861,7 +1866,7 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         )
         .order_by("pk")
     )
-    schedule_revisions = list(
+    schedule_revisions = [] if session_projection else list(
         ScheduleRevision.objects.filter(class_task_id__in=task_ids)
         .select_related("class_task")
         .order_by("class_task_id", "revision_no")
@@ -1873,14 +1878,14 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
     } | {
         class_snapshot.version_id for class_snapshot in class_snapshots
     }
-    releases = list(
+    releases = [] if session_projection else list(
         ExperimentVersion.objects.filter(pk__in=release_ids)
         .select_related("experiment")
         .order_by("experiment_id", "version_number")
     )
-    release_mappings = list(
+    release_mappings = [] if session_projection else list(
         ReleaseSnapshotQuestionMapping.objects.filter(release_snapshot_id__in=release_ids)
-        .select_related("source_question", "question_snapshot")
+        .select_related("question_snapshot")
         .order_by("release_snapshot_id", "source_question_id")
     )
     metadata_snapshots_by_id = {
@@ -1890,7 +1895,7 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
     metadata_snapshots_by_id.update(
         {assignment.snapshot_id: assignment.snapshot for assignment in assignments}
     )
-    participant_snapshot_question_ids = {
+    participant_snapshot_question_ids = set() if session_projection else {
         item.get("question_snapshot_id")
         for participant in participant_snapshots
         for item in participant.assignment_snapshot

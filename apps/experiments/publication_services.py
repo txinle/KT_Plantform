@@ -1555,6 +1555,9 @@ def manual_close_task(task, actor, *, reason):
         task.save(update_fields=["manual_closed_at", "terminal_reason"])
     from apps.assessment.models import Attempt, ExperimentSession
     from apps.assessment.services import _append_session_event, _close_open_attempts
+    from apps.analytics.research_materialization_jobs import (
+        schedule_session_materializations,
+    )
 
     sessions = list(
         ExperimentSession.objects.select_for_update().filter(
@@ -1591,4 +1594,5 @@ def manual_close_task(task, actor, *, reason):
             event_type="session_expired",
             payload={"expiration_reason": "manual_closed", "terminal_at": now.isoformat()},
         )
+    schedule_session_materializations(session.pk for session in sessions)
     return task

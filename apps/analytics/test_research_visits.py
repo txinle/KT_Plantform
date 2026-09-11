@@ -8,6 +8,18 @@ from .research_visits import build_visits, match_visit, research_time
 from .test_research_events import EVENT_HEADERS, event_row, state
 
 
+class SinglePassVisits(list):
+    def __init__(self, values):
+        super().__init__(values)
+        self.iterations = 0
+
+    def __iter__(self):
+        self.iterations += 1
+        if self.iterations > 1:
+            raise AssertionError("visits were scanned once per event")
+        return super().__iter__()
+
+
 class ResearchVisitTests(SimpleTestCase):
     def test_question_visit_options_exclude_other_questions(self):
         from .research_dataset import workspace_payload
@@ -99,3 +111,92 @@ class StandardBehaviorTests(SimpleTestCase):
         self.assertEqual([row['action'] for row in result[-2:]], ['网络断开', '仿真完成'])
         self.assertTrue(all(row['occurred_at'] == '' for row in result))
         self.assertTrue(all(row['visit_index'] is None for row in result))
+
+    def test_multiple_events_share_one_visit_index_for_all_matching_modes(self):
+        start = datetime(2026, 9, 9, 1, 0, 0, tzinfo=timezone.utc)
+        sources = [
+            SimpleNamespace(
+                event_id="explicit",
+                event_type="window_blurred",
+                session_id=11,
+                attempt_id=21,
+                payload={"visit_id": "10"},
+                correlation_id=None,
+                server_committed_at=start + timedelta(seconds=2),
+                estimated_occurred_at_utc=None,
+                client_wall_time_utc=None,
+                actor_source="server",
+            ),
+            SimpleNamespace(
+                event_id="correlated",
+                event_type="window_focused",
+                session_id=11,
+                attempt_id=21,
+                payload={},
+                correlation_id="nav-11",
+                server_committed_at=start + timedelta(seconds=5),
+                estimated_occurred_at_utc=None,
+                client_wall_time_utc=None,
+                actor_source="server",
+            ),
+            SimpleNamespace(
+                event_id="timestamp",
+                event_type="document_hidden",
+                session_id=11,
+                attempt_id=21,
+                payload={},
+                correlation_id=None,
+                server_committed_at=start + timedelta(seconds=3),
+                estimated_occurred_at_utc=None,
+                client_wall_time_utc=None,
+                actor_source="server",
+            ),
+        ]
+        rows = [
+            event_row(source.event_id, source.event_type, sequence, {})
+            for sequence, source in enumerate(sources, 1)
+        ]
+        visits = SinglePassVisits(
+            [
+                {
+                    "key": "10",
+                    "session_id": "11",
+                    "attempt_id": "21",
+                    "question_ref": "Q001",
+                    "visit_index": 1,
+                    "entered_at": (start + timedelta(seconds=1)).isoformat(),
+                    "left_at": (start + timedelta(seconds=4)).isoformat(),
+                    "navigation_id": "nav-10",
+                    "entry_event_id": "entry-10",
+                },
+                {
+                    "key": "11",
+                    "session_id": "11",
+                    "attempt_id": "21",
+                    "question_ref": "Q001",
+                    "visit_index": 2,
+                    "entered_at": (start + timedelta(seconds=4)).isoformat(),
+                    "left_at": "",
+                    "navigation_id": "nav-11",
+                    "entry_event_id": "entry-11",
+                },
+            ]
+        )
+        tables = {
+            "assessment_events": (EVENT_HEADERS, rows),
+            "attempts": (
+                ["attempt_id", "session_id", "question_snapshot_id"],
+                [["21", "11", "31"]],
+            ),
+        }
+
+        result = build_standard_behavior(
+            {"rows": tables, "events": sources},
+            question_refs={"31": "Q001"},
+            session_refs={"11": "S20260909_0011"},
+            identities={"11": ("0001", "同名")},
+            visits=visits,
+        )
+
+        self.assertEqual(visits.iterations, 1)
+        self.assertEqual([item["visit_key"] for item in result], ["10", "11", "10"])

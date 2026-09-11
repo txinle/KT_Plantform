@@ -81,6 +81,26 @@ export interface ResearchBehavior {
   details: string
 }
 
+export interface ResearchPreparation {
+  state: 'ready' | 'preparing' | 'updating' | 'failed' | 'in_progress' | 'invalidated'
+  message: string
+  updated_at: string | null
+  result_version: string | null
+  projection_version: string
+  stale: boolean
+}
+
+export interface ResearchBehaviorCursor {
+  previous: string | null
+  next: string | null
+  result_version: string
+}
+
+export interface ResearchStudentSearch {
+  items: ResearchStudent[]
+  limit: number
+}
+
 export interface ResearchWorkspace {
   students: ResearchStudent[]
   student: ResearchStudentSummary | null
@@ -96,6 +116,8 @@ export interface ResearchWorkspace {
 export type DataCenterAdvanced = GeneratedDataCenterAdvanced & {
   view: 'overview' | 'student' | 'session' | 'question' | 'timeline'
   workspace: ResearchWorkspace
+  preparation?: ResearchPreparation
+  preview: (GeneratedDataCenterAdvanced['preview'] & { cursor?: ResearchBehaviorCursor }) | null
 }
 
 export type DataCenterExportTable = GeneratedDataCenterAdvanced['tables'][number] & {
@@ -162,8 +184,11 @@ export function createTeacherDataCenterApi(client: ApiClient) {
     history(courseId: number, query: DataQuery = {}) {
       return client.get<DataCenterExportHistoryCollection>(`/api/v1/teacher/courses/${courseId}/data/exports/history/${queryString(query)}`)
     },
-    advanced(courseId: number, query: DataQuery = {}) {
-      return client.get<DataCenterAdvanced>(`/api/v1/teacher/courses/${courseId}/data/advanced/${queryString(query)}`)
+    advanced(courseId: number, query: DataQuery = {}, signal?: AbortSignal) {
+      return client.get<DataCenterAdvanced>(`/api/v1/teacher/courses/${courseId}/data/advanced/${queryString(query)}`, { signal })
+    },
+    advancedStudents(courseId: number, query: DataQuery = {}, signal?: AbortSignal) {
+      return client.get<ResearchStudentSearch>(`/api/v1/teacher/courses/${courseId}/data/advanced/students/${queryString(query)}`, { signal })
     },
     createExport(courseId: number, input: { package: string; confirm_identified: true; scope: Record<string, unknown> }) {
       return client.mutate<DataCenterExportJobMutation>(`/api/v1/teacher/courses/${courseId}/data/export-jobs/`, {

@@ -78,6 +78,14 @@ def _append_session_event(session, *, event_type, payload):
     )
 
 
+def _schedule_research_materialization(session_id):
+    from apps.analytics.research_materialization_jobs import (
+        schedule_session_materialization,
+    )
+
+    schedule_session_materialization(session_id)
+
+
 def _append_attempt_closed(attempt, *, close_reason):
     existing = AssessmentEvent.objects.filter(
         attempt=attempt,
@@ -454,6 +462,7 @@ def _terminate_for_deadline(session, *, now, reason, attempt=None):
         event_type="session_expired",
         payload=expiry_payload,
     )
+    _schedule_research_materialization(session.pk)
 
 
 def _validate_session_time(session, attempt=None, *, request_received_at=None):
@@ -1068,6 +1077,7 @@ def grade_submission(
         attempt.save(update_fields=["score", "is_correct"])
     else:
         submission.save(update_fields=["grading_status"])
+    _schedule_research_materialization(submission.attempt.session_id)
     return record
 
 
@@ -1101,6 +1111,7 @@ def void_grade_record(grade_record_id, *, reason, actor=None):
         attempt.score = None
         attempt.is_correct = None
         attempt.save(update_fields=["score", "is_correct"])
+    _schedule_research_materialization(record.submission.attempt.session_id)
     return record
 
 
@@ -1185,6 +1196,7 @@ def finish_session(session_id):
         event_type="session_completed",
         payload={"completion_reason": "student_finished", "terminal_at": now.isoformat()},
     )
+    _schedule_research_materialization(session.pk)
     return session
 
 

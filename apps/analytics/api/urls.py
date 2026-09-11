@@ -4,6 +4,7 @@ from .views import (
     TeacherClassCenterView,
     TeacherClassCollectionView,
     TeacherDataCenterAdvancedView,
+    TeacherDataCenterAdvancedStudentSearchView,
     TeacherDataCenterExportCatalogView,
     TeacherDataCenterExportHistoryView,
     TeacherDataCenterExportJobCreateView,
@@ -56,6 +57,11 @@ urlpatterns = [
         "courses/<int:course_id>/data/advanced/",
         TeacherDataCenterAdvancedView.as_view(),
         name="teacher-data-center-advanced",
+    ),
+    path(
+        "courses/<int:course_id>/data/advanced/students/",
+        TeacherDataCenterAdvancedStudentSearchView.as_view(),
+        name="teacher-data-center-advanced-students",
     ),
     path(
         "courses/<int:course_id>/classes/",

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import Alert from '@/design-system/components/Alert.vue'
@@ -34,7 +34,14 @@ const loading = ref(false)
 const studentSearch = ref('')
 const showSuggestions = ref(false)
 const pendingStudent = ref<ResearchStudent | null | undefined>(undefined)
+const remoteStudents = ref<ResearchStudent[]>([])
+const studentSearchLoading = ref(false)
+const studentSearchError = ref('')
 let latestRequest = 0
+let latestStudentRequest = 0
+let dataController: AbortController | undefined
+let studentController: AbortController | undefined
+let studentTimer: ReturnType<typeof setTimeout> | undefined
 
 const cardCopy: Record<string, { label: string; description: string; icon: string }> = {
   sessions: { label: '会话', description: '一名学生参加实验的一次会话', icon: 'session' },
@@ -68,10 +75,11 @@ const selectedVisit = computed(() => {
 const suggestions = computed(() => {
   const search = studentSearch.value.trim().toLowerCase()
   if (!search || !workspace.value) return []
-  return workspace.value.students.filter(student => {
+  const candidates = remoteStudents.value.length ? remoteStudents.value : workspace.value.students
+  return candidates.filter(student => {
     const label = studentLabel(student).toLowerCase()
     return label.includes(search) && label !== search
-  }).slice(0, 8)
+  }).slice(0, 20)
 })
 const activeCardKey = computed(() => {
   if (view.value === 'question' || view.value === 'timeline') return 'behavior_events'
@@ -127,10 +135,12 @@ async function go(overrides: Record<string, string | number | undefined>) {
 
 async function load(query = routeQuery(route.query)) {
   const request = ++latestRequest
+  dataController?.abort()
+  dataController = new AbortController()
   error.value = ''
   loading.value = true
   try {
-    const result = await api.advanced(courseId, query)
+    const result = await api.advanced(courseId, query, dataController.signal)
     if (request !== latestRequest) return
     data.value = result
     if (pendingStudent.value !== undefined) studentSearch.value = pendingStudent.value ? studentLabel(pendingStudent.value) : studentSearch.value
@@ -140,13 +150,55 @@ async function load(query = routeQuery(route.query)) {
       studentSearch.value = student ? studentLabel(student) : ''
     }
   } catch (caught) {
-    if (request === latestRequest) error.value = caught instanceof Error ? caught.message : '研究数据预览加载失败。'
+    if (request === latestRequest && !isAbortError(caught)) error.value = caught instanceof Error ? caught.message : '研究数据预览加载失败。'
   } finally {
     if (request === latestRequest) loading.value = false
   }
 }
 
+function isAbortError(caught: unknown) {
+  return caught instanceof Error && caught.name === 'AbortError'
+}
+
+async function searchStudents(search: string) {
+  const request = ++latestStudentRequest
+  studentController?.abort()
+  studentController = new AbortController()
+  studentSearchError.value = ''
+  studentSearchLoading.value = true
+  try {
+    const result = await api.advancedStudents(
+      courseId,
+      { ...routeQuery(route.query), q: search },
+      studentController.signal,
+    )
+    if (request === latestStudentRequest) remoteStudents.value = result.items
+  } catch (caught) {
+    if (request === latestStudentRequest && !isAbortError(caught)) {
+      remoteStudents.value = []
+      studentSearchError.value = caught instanceof Error ? caught.message : '学生搜索失败。'
+    }
+  } finally {
+    if (request === latestStudentRequest) studentSearchLoading.value = false
+  }
+}
+
+function scheduleStudentSearch() {
+  latestStudentRequest += 1
+  if (studentTimer) clearTimeout(studentTimer)
+  studentController?.abort()
+  remoteStudents.value = []
+  studentSearchError.value = ''
+  studentSearchLoading.value = false
+  const search = studentSearch.value.trim()
+  if (!search) return
+  studentTimer = setTimeout(() => { void searchStudents(search) }, 250)
+}
+
 async function selectStudent(student: ResearchStudent) {
+  latestStudentRequest += 1
+  if (studentTimer) clearTimeout(studentTimer)
+  studentController?.abort()
   pendingStudent.value = student
   studentSearch.value = studentLabel(student)
   showSuggestions.value = false
@@ -156,50 +208,56 @@ function clearStudent() {
   pendingStudent.value = null
   studentSearch.value = ''
   showSuggestions.value = true
+  scheduleStudentSearch()
 }
 
 function studentInput() {
   pendingStudent.value = null
   showSuggestions.value = true
+  scheduleStudentSearch()
 }
 
 async function submitFilters() {
   if (!selectedStudent.value) return
   const sessionRef = typeof route.query.session_ref === 'string' ? route.query.session_ref : undefined
-  await go({ view: 'student', student_id: String(selectedStudent.value.id), session_ref: sessionRef, question_ref: undefined, visit: undefined, page: undefined })
+  await go({ view: 'student', student_id: String(selectedStudent.value.id), session_ref: sessionRef, question_ref: undefined, visit: undefined, page: undefined, cursor: undefined })
 }
 
 async function selectTable(key: string) {
   if (view.value !== 'overview' && key === 'behavior_events') {
-    await go({ view: 'timeline', question_ref: selectedQuestion.value?.question_ref, visit: selectedVisit.value?.key, page: undefined })
+    await go({ view: 'timeline', question_ref: selectedQuestion.value?.question_ref, visit: selectedVisit.value?.key, page: undefined, cursor: undefined })
     return
   }
-  if (view.value === 'overview') await go({ table: key, page: undefined })
+  if (view.value === 'overview') await go({ table: key, page: undefined, cursor: undefined })
 }
 
 async function selectStudentSession(session: ResearchSession) {
-  await go({ session_ref: session.session_ref, question_ref: undefined, visit: undefined, page: undefined })
+  await go({ session_ref: session.session_ref, question_ref: undefined, visit: undefined, page: undefined, cursor: undefined })
 }
 
 async function openSession() {
-  if (selectedSession.value) await go({ view: 'session', session_ref: selectedSession.value.session_ref, question_ref: undefined, visit: undefined, page: undefined })
+  if (selectedSession.value) await go({ view: 'session', session_ref: selectedSession.value.session_ref, question_ref: undefined, visit: undefined, page: undefined, cursor: undefined })
 }
 
 async function openQuestion(questionRef: string) {
-  await go({ view: 'question', question_ref: questionRef, visit: undefined, page: undefined })
+  await go({ view: 'question', question_ref: questionRef, visit: undefined, page: undefined, cursor: undefined })
 }
 
 async function selectQuestion(questionRef: string) {
-  await go({ question_ref: questionRef || undefined, visit: undefined, page: undefined })
+  await go({ question_ref: questionRef || undefined, visit: undefined, page: undefined, cursor: undefined })
 }
 
 async function selectVisit(key: string) {
   const visit = workspace.value?.visits.find(item => item.key === key)
-  await go({ visit: key || undefined, question_ref: visit?.question_ref || selectedQuestion.value?.question_ref, page: undefined })
+  await go({ visit: key || undefined, question_ref: visit?.question_ref || selectedQuestion.value?.question_ref, page: undefined, cursor: undefined })
 }
 
 async function navigate(page: number) {
-  await go({ page: page === 1 ? undefined : String(page) })
+  await go({ page: page === 1 ? undefined : String(page), cursor: undefined })
+}
+
+async function navigateBehavior(cursor: string | null | undefined) {
+  if (cursor) await go({ cursor, page: undefined })
 }
 
 watch(
@@ -212,12 +270,26 @@ watch(
   query => { void load(routeQuery(query)) },
   { deep: true, immediate: true },
 )
+
+onBeforeUnmount(() => {
+  dataController?.abort()
+  studentController?.abort()
+  if (studentTimer) clearTimeout(studentTimer)
+})
 </script>
 
 <template>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <p v-if="loading && !data" class="kt-research-loading" role="status">正在加载研究数据…</p>
+  <p v-else-if="loading" class="kt-research-loading" role="status" aria-busy="true">正在刷新研究数据…</p>
   <template v-else-if="data">
+    <Alert
+      v-if="data.preparation && data.preparation.state !== 'ready'"
+      :tone="data.preparation.state === 'failed' ? 'danger' : data.preparation.state === 'updating' ? 'info' : 'warning'"
+      data-testid="preparation-state"
+    >
+      <strong>研究数据状态：</strong>{{ data.preparation.message }}
+    </Alert>
     <header v-if="view === 'overview'" class="kt-research-heading">
       <div>
         <p class="kt-research-kicker">实验数据</p>
@@ -256,12 +328,14 @@ watch(
                 <strong>{{ student.name }}</strong><span>{{ student.student_number }}</span>
               </button>
             </span>
+            <small v-if="studentSearchLoading" role="status">正在搜索学生…</small>
+            <small v-else-if="studentSearchError" role="alert">{{ studentSearchError }}</small>
           </label>
           <label>作答会话
             <select
               :value="typeof route.query.session_ref === 'string' ? route.query.session_ref : ''"
               aria-label="选择作答会话"
-              @change="go({ session_ref: ($event.target as HTMLSelectElement).value || undefined, page: undefined })"
+              @change="go({ session_ref: ($event.target as HTMLSelectElement).value || undefined, page: undefined, cursor: undefined })"
             >
               <option value="">全部作答会话</option>
               <option v-for="option in data.session_options" :key="option.value" :value="option.value">{{ option.label }}</option>
@@ -292,7 +366,11 @@ watch(
               </table>
             </div>
             <EmptyState v-else title="当前范围暂无记录" />
-            <Paginator :page="data.preview.page.number" :total-pages="data.preview.page.total_pages" @navigate="navigate" />
+            <nav v-if="data.preview.cursor" class="kt-research-cursor" aria-label="行为记录翻页">
+              <button type="button" :disabled="!data.preview.cursor.previous" @click="navigateBehavior(data.preview.cursor.previous)">上一页</button>
+              <button type="button" :disabled="!data.preview.cursor.next" @click="navigateBehavior(data.preview.cursor.next)">下一页</button>
+            </nav>
+            <Paginator v-else :page="data.preview.page.number" :total-pages="data.preview.page.total_pages" @navigate="navigate" />
           </template>
         </section>
       </template>
@@ -363,6 +441,10 @@ watch(
           <p><ResearchDataIcon name="info" />仅展示该题目内的行为数据，不包含其他题目的行为。</p>
         </section>
         <ResearchBehaviorTable :behavior="workspace?.behavior || []" :generated-at="data.generated_at" />
+        <nav v-if="data.preview?.cursor" class="kt-research-cursor" aria-label="行为记录翻页">
+          <button type="button" :disabled="!data.preview.cursor.previous" @click="navigateBehavior(data.preview.cursor.previous)">上一页</button>
+          <button type="button" :disabled="!data.preview.cursor.next" @click="navigateBehavior(data.preview.cursor.next)">下一页</button>
+        </nav>
       </template>
 
       <template v-else-if="view === 'timeline' && selectedSession">
@@ -384,6 +466,10 @@ watch(
             </div>
             <div v-if="selectedVisit" class="kt-visit-highlight"><strong>题目：{{ selectedVisit.question_ref }}（第 {{ selectedVisit.visit_index }} 次访问）</strong><span>进入时间：{{ formatTime(selectedVisit.entered_at) }}<br>离开时间：{{ formatTime(selectedVisit.left_at) }}<br>停留时长：{{ formatDuration(selectedVisit.duration_seconds) }}</span></div>
             <ResearchBehaviorCompactTable :behavior="workspace?.behavior || []" />
+            <nav v-if="data.preview?.cursor" class="kt-research-cursor" aria-label="行为记录翻页">
+              <button type="button" :disabled="!data.preview.cursor.previous" @click="navigateBehavior(data.preview.cursor.previous)">上一页</button>
+              <button type="button" :disabled="!data.preview.cursor.next" @click="navigateBehavior(data.preview.cursor.next)">下一页</button>
+            </nav>
           </article>
         </section>
         <section class="kt-research-panel kt-timeline-results">

@@ -8,6 +8,12 @@ CAPTURE_V2_ENABLED = os.getenv('CAPTURE_V2_ENABLED', '0') == '1'
 DATA_UPLOAD_MAX_MEMORY_SIZE = 8 * 1024 * 1024
 CAPTURE_V2_USER_IDS = frozenset(filter(None, os.getenv('CAPTURE_V2_USER_IDS', '').split(',')))
 CAPTURE_V2_COURSE_IDS = frozenset(filter(None, os.getenv('CAPTURE_V2_COURSE_IDS', '').split(',')))
+ADVANCED_DATA_MATERIALIZED_ENABLED = os.getenv(
+    "ADVANCED_DATA_MATERIALIZED_ENABLED", "0"
+) == "1"
+ADVANCED_DATA_MATERIALIZED_COURSE_IDS = frozenset(
+    filter(None, os.getenv("ADVANCED_DATA_MATERIALIZED_COURSE_IDS", "").split(","))
+)
 CANONICAL_PUBLIC_ORIGIN = os.getenv("CANONICAL_PUBLIC_ORIGIN", "").strip().rstrip("/")
 STUDENT_SESSION_IDLE_TIMEOUT_SECONDS = int(
     os.getenv("STUDENT_SESSION_IDLE_TIMEOUT_SECONDS", "1800")
