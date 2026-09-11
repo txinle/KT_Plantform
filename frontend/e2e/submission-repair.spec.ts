@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { connect, createServer, type Server, type Socket } from 'node:net'
 import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
+import { openLoginPage } from './login-navigation'
 
 const root = join(import.meta.dirname, '../..')
 const localPython = join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
@@ -175,7 +176,7 @@ test('initial-password reminder, pre-submit confidence and response-loss recover
   const teacherContext = await browser.newContext({ baseURL: 'http://127.0.0.1:8127' })
   try {
     const teacher = await teacherContext.newPage()
-    await teacher.goto('/login/')
+    await openLoginPage(teacher, 'http://127.0.0.1:8127')
     await teacher.getByLabel('账号或学号').fill('teacher')
     await teacher.getByLabel('密码', { exact: true }).fill('teacher123')
     await teacher.getByRole('button', { name: '登录', exact: true }).click()
