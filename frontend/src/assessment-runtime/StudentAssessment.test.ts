@@ -198,6 +198,28 @@ describe('StudentAssessment', () => {
     expect(wrapper.text()).not.toContain('回答错误')
   })
 
+  it.each([
+    ['single_choice', '单选题'],
+    ['multiple_choice', '多选题'],
+    ['numeric', '数值题'],
+    ['short_answer', '简答题'],
+    ['fill_blank', '填空题'],
+    ['true_false', '判断题'],
+  ])('shows the %s label instead of the internal question code', async (questionType, expectedLabel) => {
+    mocks.api.question.mockResolvedValue({
+      ...structuredClone(questionState),
+      question: { ...structuredClone(questionState.question), question_type: questionType },
+    })
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+
+    const context = wrapper.get('.kt-assessment-context').text()
+    expect(context).toContain(`题型：${expectedLabel}`)
+    expect(context).toContain('主 KC：基础运算')
+    expect(context).not.toContain('C000001-Q000001')
+    wrapper.unmount()
+  })
+
   it('places the answer before the number card and moving the drawer does not collect an answer', async () => {
     const wrapper = mount(StudentAssessment)
     await flushPromises()

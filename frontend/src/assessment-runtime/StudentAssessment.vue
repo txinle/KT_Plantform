@@ -143,6 +143,17 @@ function statusLabel(status: string) {
   }[status] || status
 }
 
+function questionTypeLabel(questionType: string) {
+  return {
+    single_choice: '单选题',
+    multiple_choice: '多选题',
+    numeric: '数值题',
+    short_answer: '简答题',
+    fill_blank: '填空题',
+    true_false: '判断题',
+  }[questionType] || questionType
+}
+
 function timerLabel(value: number) {
   const minutes = Math.floor(value / 60).toString().padStart(2, '0')
   const seconds = (value % 60).toString().padStart(2, '0')
@@ -1287,7 +1298,7 @@ onBeforeUnmount(() => {
           </div>
         </header>
         <p class="kt-assessment-context">
-          {{ state.question.stable_code || state.question.code }}<span v-if="state.question.primary_kc"> · 主 KC：{{ state.question.primary_kc }}</span>
+          题型：{{ questionTypeLabel(state.question.question_type) }}<span v-if="state.question.primary_kc"> 主 KC：{{ state.question.primary_kc }}</span>
         </p>
         <p class="kt-assessment-stem">{{ state.question.text }}</p>
         <fieldset v-if="['single_choice', 'multiple_choice', 'true_false'].includes(state.question.question_type)">
