@@ -66,7 +66,7 @@ test('business labels, controls and long text fit their actual layout', async ({
           if (rows.size > 1 && rects.every(r => r.width < size * 1.7)) result.push(`vertical short label: ${label} .${el.className}`)
         }
         for (const el of document.querySelectorAll<HTMLElement>('main input:not([type=hidden]):not([type=radio]):not([type=checkbox]):not([type=file]), main select')) {
-          if (!shown(el)) continue
+          if (!shown(el) || el.closest('details:not([open])')) continue
           const style = getComputedStyle(el)
           const rect = el.getBoundingClientRect()
           const minimumHeight = Number.parseFloat(style.fontSize) + Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom)

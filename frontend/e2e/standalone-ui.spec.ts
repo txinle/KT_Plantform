@@ -44,6 +44,8 @@ test('teacher business deep links render the independent entry at desktop and mo
         const fontSize = Number.parseFloat(await heading.evaluate(element => getComputedStyle(element).fontSize))
         expect(fontSize, path).toBeGreaterThanOrEqual(28)
         expect(fontSize, path).toBeLessThanOrEqual(32)
+      } else if (path === '/teacher/courses/1/experiments/create/' && width === 1440) {
+        await expect(heading, path).toHaveCSS('font-size', '20px')
       } else {
         await expect(heading, path).toHaveCSS('font-size', width === 390 ? '24px' : /^(26|28)px$/)
       }

@@ -12,7 +12,10 @@ async function login(page: Page, origin: string) {
 }
 
 async function selectFirstKnowledgeComponent(page: Page) {
-  await page.getByText('选择知识点', { exact: true }).click()
+  const picker = page
+    .locator('.kt-kc-config-panel', { hasText: '知识点范围' })
+    .locator('details.kt-kc-picker')
+  await picker.locator('summary').click()
   const inventoryUpdated = page.waitForResponse((response) => {
     if (response.request().method() !== 'POST'
       || !response.url().endsWith('/experiments/sampling-inventory/')) return false
@@ -25,6 +28,8 @@ async function selectFirstKnowledgeComponent(page: Page) {
     .first()
     .check()
   expect((await inventoryUpdated).status()).toBe(200)
+  await picker.locator('summary').click()
+  await expect(picker).not.toHaveAttribute('open', '')
 }
 
 const unifiedQuestionImportHeaders = [
@@ -65,7 +70,7 @@ test('teacher creates an experiment and saves a resumable publish draft', async 
   await page.getByLabel('实验名称').fill(`渐进式发布验证-${browserName}`)
   await page.getByLabel('题库').selectOption({ label: '演示题库' })
   await selectFirstKnowledgeComponent(page)
-  await page.getByRole('button', { name: '保存实验' }).click()
+  await page.getByRole('button', { name: '保存草稿', exact: true }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/)
   await expect(page.getByRole('heading', { name: `渐进式发布验证-${browserName}` })).toBeVisible()
 
@@ -84,7 +89,8 @@ test('teacher previews and atomically publishes a class task', async ({ browserN
   await page.getByLabel('实验名称').fill('正式发布浏览器验收')
   await page.getByLabel('题库').selectOption({ label: '演示题库' })
   await selectFirstKnowledgeComponent(page)
-  await page.getByRole('button', { name: '保存实验' }).click()
+  await page.locator('input[name="cross_experiment_item_policy"][value="unrestricted"]').check()
+  await page.getByRole('button', { name: '保存草稿', exact: true }).click()
   await page.getByRole('button', { name: '发布到班级' }).click()
 
   await page.locator('[id^="publish-class-"]').first().check()
@@ -93,7 +99,8 @@ test('teacher previews and atomically publishes a class task', async ({ browserN
     && /\/api\/v1\/teacher\/publish-plans\/\d+\/preview\/$/.test(response.url())
   ))
   await page.getByRole('button', { name: '运行发布前检查' }).click()
-  expect((await previewed).status()).toBe(200)
+  const previewResponse = await previewed
+  expect(previewResponse.status(), await previewResponse.text()).toBe(200)
 
   await expect(page).toHaveURL(/\/publish-plan\/\d+\/step\/2\/$/, { timeout: 30_000 })
   await expect(page.getByRole('heading', { name: '发布前检查', exact: true })).toBeVisible()
