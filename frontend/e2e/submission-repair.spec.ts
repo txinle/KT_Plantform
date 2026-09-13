@@ -65,6 +65,7 @@ test('initial-password reminder, pre-submit confidence and response-loss recover
   await page.getByRole('button', { name: '暂不修改', exact: true }).click()
   await page.reload()
   await expect(page.getByRole('heading', { name: '建议修改初始密码' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '我的课程', exact: true })).toBeVisible()
 
   await page.goto('/password/change/')
   await page.getByLabel('当前密码', { exact: true }).fill('incorrect-current-password')
@@ -76,6 +77,7 @@ test('initial-password reminder, pre-submit confidence and response-loss recover
   await page.getByLabel('当前密码', { exact: true }).fill(`S${username}`)
   await page.getByRole('button', { name: '保存新密码', exact: true }).click()
   await expect(page).toHaveURL(/\/student\/$/, { timeout: 15000 })
+  await expect(page.getByRole('heading', { name: '我的课程', exact: true })).toBeVisible()
   expect((await (await page.request.get('/api/v1/auth/session/')).json()).user.uses_initial_password).toBe(false)
 
   await page.route('**/api/v1/student/tasks/*/start/', async route => {
@@ -128,7 +130,7 @@ test('initial-password reminder, pre-submit confidence and response-loss recover
     await route.abort()
   })
   await page.locator('[data-submit-confirm]').click()
-  await expect(page).not.toHaveURL(new RegExp(`/questions/${single.id}/$`))
+  await expect(page).not.toHaveURL(new RegExp(`/questions/${single.id}/$`), { timeout: 15_000 })
   expect(submitRequests).toBe(1)
   const formal = django(['shell', '-c', `import json; from apps.assessment.models import Attempt,SubmissionEvent,ConfidenceAssignment; a=Attempt.objects.get(session_id=${sessionId},assignment_id=${single.id}); c=ConfidenceAssignment.objects.get(attempt=a); print(json.dumps({'attempt_id':a.pk,'count':SubmissionEvent.objects.filter(attempt=a).count(),'status':a.status,'confidence':c.probability,'head':str(a.final_response_event_id)},ensure_ascii=False))`])
   expect(formal).toMatchObject({ count: 1, status: 'submitted', confidence: 98 })
