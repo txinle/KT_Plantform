@@ -737,7 +737,7 @@
   font-size: 1.05rem;
 }
 
-@media (min-width: 64.01rem) {
+@media (min-width: 64rem) {
   .kt-teacher-experiments .kt-workspace { --kt-workspace-header: 48px; --kt-workspace-sidebar: 194px; }
   .kt-teacher-experiments .kt-workspace > .kt-app-header,
   .kt-teacher-experiments .kt-workspace > .kt-app-header .kt-app-header__inner { height: 48px; min-height: 48px; }
@@ -924,7 +924,7 @@
   padding: 1rem 1.35rem 1.25rem;
 }
 
-@media (min-width: 64.01rem) {
+@media (min-width: 64rem) {
   .kt-teacher-experiments .kt-research-settings-card {
     padding: 0;
   }

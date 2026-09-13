@@ -61,6 +61,17 @@ test('teacher course and module pages share a left sidebar without losing existi
   expect(errors).toEqual([])
 })
 
+test('experiment workspace switches cleanly at the 1024px desktop boundary', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 900 })
+  await login(page, 'teacher', 'teacher123')
+  await page.goto('/teacher/courses/1/experiments/')
+  await expect(page.getByRole('heading', { name: '实验', exact: true })).toBeVisible()
+
+  const sidebar = await page.locator('.kt-workspace-sidebar').boundingBox()
+  expect(sidebar?.width).toBe(194)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+})
+
 test('student course cards, assignment list and class center reflow with their original links', async ({ browserName, page }, info) => {
   test.setTimeout(90_000)
   test.skip(browserName !== 'chromium', 'Chromium provides the responsive visual evidence for this multi-page flow.')
