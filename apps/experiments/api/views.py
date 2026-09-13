@@ -312,12 +312,13 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
             )
         bank_candidates = SamplingService.total_count_candidates(
             question_bank_id=bank.pk,
-            concept_ids=[concept.pk for concept in concepts],
+            concept_ids=[],
             match_scope=Experiment.MatchScope.ANY_LEVEL,
         )
         selected_ids = [concept.pk for concept in concepts if concept.code in data["kc_codes"]]
-        candidates = [
-            question for question in bank_candidates
+        candidates = bank_candidates if not selected_ids else [
+            question
+            for question in bank_candidates
             if any(
                 SamplingService._question_matches(question, concept_id, data["match_scope"])
                 for concept_id in selected_ids

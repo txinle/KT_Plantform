@@ -701,9 +701,11 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
         )
         self.assertEqual(configuration["sampling_mode"], "total_count")
         self.assertEqual(configuration["sampling_total_count"], 1)
+        self.assertEqual(configuration["candidate_scope"], "selected_kcs")
+        self.assertEqual(configuration["sampling"]["candidate_scope"], "selected_kcs")
         self.assertEqual(
             configuration["sampling"]["schema_version"],
-            "sampling-snapshot-v2",
+            "sampling-snapshot-v4",
         )
         self.assertEqual(
             configuration["sampling"]["seed_derivation_version"],
@@ -842,7 +844,7 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
         )
         self.assertTrue(
             all(
-                source["algorithm_version"] == "deterministic-union-type-quota-v3"
+                source["algorithm_version"] == "deterministic-scope-type-quota-v4"
                 for source in sources
             )
         )
@@ -855,10 +857,10 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
         )
         self.experiment.refresh_from_db()
         configuration = self.experiment.frozen_release_snapshot.configuration
-        self.assertEqual(configuration["sampling"]["schema_version"], "sampling-snapshot-v3")
+        self.assertEqual(configuration["sampling"]["schema_version"], "sampling-snapshot-v4")
         self.assertEqual(
             configuration["sampling"]["sampling_algorithm_version"],
-            "deterministic-union-type-quota-v3",
+            "deterministic-scope-type-quota-v4",
         )
         self.assertEqual(
             configuration["sampling"]["type_quotas"],

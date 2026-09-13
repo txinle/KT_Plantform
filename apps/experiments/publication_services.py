@@ -727,6 +727,10 @@ def _select_frozen_mixed_review(items, configuration, item_context, sampling_see
         )
     by_source_id = {_candidate_source_question(item).pk: item for item in items}
     rules = {row["kc_code"]: row for row in configuration.get("sampling_kcs", [])}
+    algorithm_version = configuration.get("sampling", {}).get(
+        "sampling_algorithm_version",
+        "history-grouped-flow-v1",
+    )
     return [
         {
             "candidate": by_source_id[source_id],
@@ -748,7 +752,7 @@ def _select_frozen_mixed_review(items, configuration, item_context, sampling_see
                     if configuration["sampling_mode"] == Experiment.SamplingMode.KC_QUOTA
                     else configuration["sampling_match_scope"]
                 ),
-                "algorithm_version": "history-grouped-flow-v1",
+                "algorithm_version": algorithm_version,
                 "history_role": "review" if source_id in completed_ids else "new",
                 "cross_experiment_item_policy": Experiment.CrossExperimentItemPolicy.MIXED_REVIEW,
             },
@@ -812,6 +816,9 @@ def _select_questions(
             )
         elif configuration is not None:
             rng = random.Random(int(sampling_seed[:16], 16))
+            frozen_algorithm_version = configuration.get("sampling", {}).get(
+                "sampling_algorithm_version"
+            )
             if configuration["sampling_mode"] == Experiment.SamplingMode.TOTAL_COUNT:
                 type_quotas = configuration.get("sampling_type_quotas", [])
                 if type_quotas:
@@ -837,7 +844,10 @@ def _select_questions(
                                 "quota_kc_code": None,
                                 "quota_question_type": _candidate_question_type(item),
                                 "match_scope": configuration["sampling_match_scope"],
-                                "algorithm_version": "deterministic-union-type-quota-v3",
+                                "algorithm_version": (
+                                    frozen_algorithm_version
+                                    or "deterministic-union-type-quota-v3"
+                                ),
                             },
                         }
                         for item in selected
@@ -869,7 +879,10 @@ def _select_questions(
                                 "quota_kc_code": None,
                                 "quota_question_type": None,
                                 "match_scope": configuration["sampling_match_scope"],
-                                "algorithm_version": "deterministic-union-sample-v2",
+                                "algorithm_version": (
+                                    frozen_algorithm_version
+                                    or "deterministic-union-sample-v2"
+                                ),
                             },
                         }
                         for item in rng.sample(items, requested)
@@ -896,10 +909,10 @@ def _select_questions(
                         "quota_question_type": row["quota_question_type"],
                         "match_scope": row["match_scope"],
                         "algorithm_version": (
-                            "deterministic-union-type-quota-v3"
+                            "deterministic-scope-type-quota-v4"
                             if row["quota_question_type"] is not None
                             else (
-                                "deterministic-union-sample-v2"
+                                "deterministic-scope-sample-v3"
                                 if experiment.sampling_mode
                                 == Experiment.SamplingMode.TOTAL_COUNT
                                 else "deterministic-bipartite-v2"
@@ -1327,6 +1340,15 @@ def _release_configuration(experiment, candidates):
         configuration["sampling_mode"] = experiment.sampling_mode
         configuration["sampling_total_count"] = experiment.sampling_total_count
         configuration["sampling_match_scope"] = experiment.sampling_match_scope
+        candidate_scope = (
+            "entire_bank"
+            if (
+                experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+                and not experiment.sampling_kcs.exists()
+            )
+            else "selected_kcs"
+        )
+        configuration["candidate_scope"] = candidate_scope
         configuration["sampling_type_quotas"] = sampling_type_quotas
         configuration["sampling_kcs"] = [
             {
@@ -1412,13 +1434,14 @@ def _release_configuration(experiment, candidates):
         )
         configuration["sampling"] = {
             "schema_version": (
-                "sampling-snapshot-v3"
-                if sampling_type_quotas
+                "sampling-snapshot-v4"
+                if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
                 else "sampling-snapshot-v2"
             ),
             "mode": configuration["sampling_mode"],
             "total_count": configuration["sampling_total_count"],
             "match_scope": configuration["sampling_match_scope"],
+            "candidate_scope": candidate_scope,
             "selected_nodes": configuration["sampling_kcs"],
             "type_quotas": sampling_type_quotas,
             "type_inventory": sampling_type_inventory,
@@ -1430,14 +1453,20 @@ def _release_configuration(experiment, candidates):
             "candidate_resolution": configuration["candidate_resolution"],
             "inventory": configuration["sampling_inventory"],
             "sampling_algorithm_version": (
-                "history-grouped-flow-v1"
+                "history-grouped-scope-flow-v2"
+                if (
+                    experiment.cross_experiment_item_policy
+                    == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+                    and experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+                )
+                else "history-grouped-flow-v1"
                 if experiment.cross_experiment_item_policy
                 == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
                 else (
-                    "deterministic-union-type-quota-v3"
+                    "deterministic-scope-type-quota-v4"
                     if sampling_type_quotas
                     else (
-                        "deterministic-union-sample-v2"
+                        "deterministic-scope-sample-v3"
                         if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
                         else "deterministic-bipartite-v2"
                     )

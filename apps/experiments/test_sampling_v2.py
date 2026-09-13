@@ -23,6 +23,7 @@ from .models import (
     QuestionSnapshot,
 )
 from .presentation_instances import get_or_create_default_item_instance
+from .publication_services import _release_configuration
 from .sampling import SamplingService, SamplingValidationError
 
 
@@ -165,6 +166,39 @@ class SamplingV2Tests(TestCase):
             Counter(item["quota_question_type"] for item in first),
             Counter({Question.Type.SINGLE: 2, Question.Type.MULTIPLE: 2}),
         )
+
+    def test_total_count_without_kcs_samples_all_active_bank_questions(self):
+        single = self.question(1, self.a, question_type=Question.Type.SINGLE)
+        multiple = self.question(2, self.b, question_type=Question.Type.MULTIPLE)
+        draft = Question.objects.create(
+            bank=self.bank,
+            sequence=3,
+            question_type=Question.Type.SINGLE,
+            text="草稿题",
+            correct_answer="A",
+            status=Question.Status.DRAFT,
+        )
+        experiment = self.experiment(Experiment.SamplingMode.TOTAL_COUNT, total_count=2)
+        ExperimentQuestionQuota.objects.filter(
+            experiment=experiment,
+            question_type=Question.Type.SINGLE,
+        ).update(amount=1)
+        ExperimentQuestionQuota.objects.filter(
+            experiment=experiment,
+            question_type=Question.Type.MULTIPLE,
+        ).update(amount=1)
+
+        resolution = SamplingService(experiment).resolve()
+        selected = SamplingService(experiment).select_with_attribution("e" * 64)
+
+        self.assertEqual({question.pk for question in resolution.candidates}, {single.pk, multiple.pk})
+        self.assertNotIn(draft.pk, {question.pk for question in resolution.candidates})
+        self.assertEqual({row["question"].pk for row in selected}, {single.pk, multiple.pk})
+
+        configuration = _release_configuration(experiment, list(resolution.candidates))
+        self.assertEqual(configuration["candidate_scope"], "entire_bank")
+        self.assertEqual(configuration["sampling"]["candidate_scope"], "entire_bank")
+        self.assertEqual(configuration["sampling"]["schema_version"], "sampling-snapshot-v4")
 
     def test_total_count_type_quota_preflight_reports_shortage(self):
         self.question(1, self.a, question_type=Question.Type.SINGLE)

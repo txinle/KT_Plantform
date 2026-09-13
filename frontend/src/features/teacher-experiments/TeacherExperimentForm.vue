@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { ApiError } from '@/api/client'
 import type { components } from '@/api/generated/schema'
+import Icon from '@/design-system/Icon.vue'
 import Alert from '@/design-system/components/Alert.vue'
 import Button from '@/design-system/components/Button.vue'
 import FormField from '@/design-system/components/FormField.vue'
@@ -48,6 +49,7 @@ const samplingInventory = ref<SamplingInventory>()
 const inventoryLoading = ref(false)
 const inventoryError = ref('')
 const savedSamplingConfiguration = ref('')
+const runtimeEditor = ref<HTMLElement>()
 let inventoryRequest = 0
 
 function convertLegacySampling() {
@@ -128,6 +130,7 @@ const typeQuotaError = computed(() => {
   }
   if (inventoryLoading.value) return '正在校验题型库存…'
   if (inventoryError.value) return inventoryError.value
+  if (!samplingInventory.value) return '正在校验题型库存…'
   const inventory = new Map(
     (samplingInventory.value?.question_types || []).map((item) => [item.question_type, item.available]),
   )
@@ -143,7 +146,16 @@ const typeQuotaInvalid = computed(() => Boolean(typeQuotaError.value))
 function questionTypeAvailable(questionType: ExperimentQuestionType) {
   return samplingInventory.value?.question_types.find(
     (item) => item.question_type === questionType,
-  )?.available ?? 0
+  )?.available
+}
+
+function questionTypeAvailabilityLabel(questionType: ExperimentQuestionType) {
+  const available = questionTypeAvailable(questionType)
+  return available === undefined ? '正在读取' : `${available} 道可用`
+}
+
+function focusRuntimeEditor() {
+  runtimeEditor.value?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus()
 }
 
 function setQuestionTypeSelected(questionType: ExperimentQuestionType, selected: boolean) {
@@ -394,14 +406,14 @@ onMounted(load)
       <div class="kt-numbered-form-section__heading"><span aria-hidden="true">2</span><h2 id="definition-selection">抽题设置</h2></div>
       <div class="kt-card kt-numbered-form-section__content">
         <Alert v-if="conversionWarning" tone="warning">{{ conversionWarning }}</Alert>
-        <fieldset v-else class="kt-radio-group kt-compact-form-row"><legend>抽题方式</legend><div class="kt-radio-options"><label><input v-model="form.sampling_mode" name="sampling_mode" type="radio" value="total_count"><span>设置总题数<small>从所选知识点覆盖的可用题目中抽取指定数量</small></span></label><label><input v-model="form.sampling_mode" name="sampling_mode" type="radio" value="kc_quota"><span>按知识点配额<small>每行可按根 KC 或任意层级匹配并设置题数</small></span></label></div><p v-if="fieldErrors.sampling_mode" class="kt-field__error" role="alert">{{ fieldErrors.sampling_mode }}</p></fieldset>
+        <fieldset v-else class="kt-radio-group kt-compact-form-row"><legend>抽题方式</legend><div class="kt-radio-options"><label><input v-model="form.sampling_mode" name="sampling_mode" type="radio" value="total_count"><span>设置总题数<small>从当前题库或所选知识点范围内抽取指定数量</small></span></label><label><input v-model="form.sampling_mode" name="sampling_mode" type="radio" value="kc_quota"><span>按知识点配额<small>每行可按根 KC 或任意层级匹配并设置题数</small></span></label></div><p v-if="fieldErrors.sampling_mode" class="kt-field__error" role="alert">{{ fieldErrors.sampling_mode }}</p></fieldset>
         <template v-if="!legacySampling && form.sampling_mode === 'total_count'">
           <FormField class="kt-compact-form-row kt-count-field" for-id="sampling-total-count" label="每位参与者题目数" :error="fieldErrors.sampling_total_count"><input id="sampling-total-count" v-model.number="form.sampling_total_count" type="number" min="1"></FormField>
-          <div class="kt-type-config-panel kt-compact-form-row"><strong class="kt-config-label">题型构成</strong><div class="kt-kc-config-content"><div class="kt-kc-config-top"><div><span class="kt-muted">{{ selectedQuestionTypes.length ? '已选择的题型' : '不限题型' }}</span><div v-if="selectedQuestionTypes.length" class="kt-selected-kcs"><span v-for="questionType in selectedQuestionTypes" :key="questionType.value">{{ questionType.label }} {{ form.type_quotas[questionType.value] }}</span></div></div><div class="kt-selection-facts">已分配 {{ typeQuotaTotal }} / 总题数 {{ form.sampling_total_count || 0 }}</div><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary" data-type-picker>选择题型</summary><div class="kt-kc-tree-selector kt-type-tree-selector"><label v-for="questionType in QUESTION_TYPES" :key="questionType.value"><input name="question_type_choice" type="checkbox" :value="questionType.value" :checked="Boolean(form.selected_question_types[questionType.value])" @change="setQuestionTypeSelected(questionType.value, ($event.target as HTMLInputElement).checked)"><span>{{ questionType.label }}</span><small>{{ questionTypeAvailable(questionType.value) }} 道可用</small><input v-model.number="form.type_quotas[questionType.value]" :aria-label="`${questionType.label}数量`" type="number" min="1" :max="questionTypeAvailable(questionType.value)" :disabled="!form.selected_question_types[questionType.value]" @click.stop></label></div></details></div><div class="kt-type-allocation-status" :class="{ 'is-error': typeQuotaError || fieldErrors.sampling_type_quotas }"><span v-if="!selectedQuestionTypes.length && !fieldErrors.sampling_type_quotas">不限制各题型数量，系统从去重后的候选题中抽取。</span><span v-else-if="typeQuotaError || fieldErrors.sampling_type_quotas" role="alert">{{ typeQuotaError || fieldErrors.sampling_type_quotas }}</span><span v-else>题型构成有效，按各题型候选桶确定性抽取。</span></div></div></div>
-          <div class="kt-kc-config-panel kt-compact-form-row"><strong class="kt-config-label">知识点范围</strong><div class="kt-kc-config-content"><div class="kt-kc-config-top"><div><span class="kt-muted">已选择的 KC</span><div class="kt-selected-kcs"><span v-for="concept in selectedConcepts" :key="concept.id"><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><span v-if="!selectedConcepts.length" class="is-empty">尚未选择</span></div></div><div class="kt-selection-facts">已选择 {{ selectedConcepts.length }} 个 KC</div><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary">选择知识点</summary><div class="kt-kc-tree-selector"><label v-for="concept in concepts" :key="concept.id"><input v-model="form.selected_kcs[concept.id]" type="checkbox" :value="concept.id" :disabled="concept.status !== 'active'"><span><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><small>{{ concept.status === 'active' ? `${availableCount(concept)} 道可用` : '已归档' }}</small></label></div></details></div><div class="kt-match-scope"><span>匹配层级</span><label><input v-model="form.sampling_match_scope" type="radio" value="primary">根 KC</label><small>仅匹配所选节点本身</small><label><input v-model="form.sampling_match_scope" type="radio" value="any_level">任意层级</label><small>包含其在题目树中任意层级的出现</small></div></div></div>
+          <div class="kt-type-config-panel kt-compact-form-row"><strong class="kt-config-label">题型构成</strong><div class="kt-kc-config-content"><div class="kt-kc-config-top"><div><span class="kt-muted">{{ selectedQuestionTypes.length ? '已选择的题型' : '不限题型' }}</span><div v-if="selectedQuestionTypes.length" class="kt-selected-kcs"><span v-for="questionType in selectedQuestionTypes" :key="questionType.value">{{ questionType.label }} {{ form.type_quotas[questionType.value] }}</span></div></div><div class="kt-selection-facts">已分配 {{ typeQuotaTotal }} / 总题数 {{ form.sampling_total_count || 0 }}</div><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary" data-type-picker>选择题型</summary><div class="kt-kc-tree-selector kt-type-tree-selector"><label v-for="questionType in QUESTION_TYPES" :key="questionType.value"><input name="question_type_choice" type="checkbox" :value="questionType.value" :checked="Boolean(form.selected_question_types[questionType.value])" @change="setQuestionTypeSelected(questionType.value, ($event.target as HTMLInputElement).checked)"><span>{{ questionType.label }}</span><small>{{ questionTypeAvailabilityLabel(questionType.value) }}</small><input v-model.number="form.type_quotas[questionType.value]" :aria-label="`${questionType.label}数量`" type="number" min="1" :max="questionTypeAvailable(questionType.value)" :disabled="!form.selected_question_types[questionType.value]" @click.stop></label></div></details></div><div class="kt-type-allocation-status" :class="{ 'is-error': typeQuotaError || fieldErrors.sampling_type_quotas }"><span v-if="!selectedQuestionTypes.length && !fieldErrors.sampling_type_quotas">不限制各题型数量，系统从去重后的候选题中抽取。</span><span v-else-if="typeQuotaError || fieldErrors.sampling_type_quotas" role="alert">{{ typeQuotaError || fieldErrors.sampling_type_quotas }}</span><span v-else>题型构成有效，按各题型候选桶确定性抽取。</span></div></div></div>
+          <div class="kt-kc-config-panel kt-compact-form-row"><strong class="kt-config-label">知识点范围（可选）</strong><div class="kt-kc-config-content"><div class="kt-kc-config-top"><div><span class="kt-muted">{{ selectedConcepts.length ? '已选择的 KC' : '当前使用整个题库' }}</span><div class="kt-selected-kcs"><span v-for="concept in selectedConcepts" :key="concept.id"><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><span v-if="!selectedConcepts.length" class="is-empty">将从当前题库全部可用题目中抽取</span></div></div><div class="kt-selection-facts">{{ selectedConcepts.length ? `已选择 ${selectedConcepts.length} 个 KC` : '全题库范围' }}</div><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary">选择知识点</summary><div class="kt-kc-tree-selector"><label v-for="concept in concepts" :key="concept.id"><input v-model="form.selected_kcs[concept.id]" type="checkbox" :value="concept.id" :disabled="concept.status !== 'active'"><span><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><small>{{ concept.status === 'active' ? `${availableCount(concept)} 道可用` : '已归档' }}</small></label></div></details></div><div v-if="selectedConcepts.length" class="kt-match-scope"><span>匹配层级</span><label><input v-model="form.sampling_match_scope" type="radio" value="primary">根 KC</label><small>仅匹配所选节点本身</small><label><input v-model="form.sampling_match_scope" type="radio" value="any_level">任意层级</label><small>包含其在题目树中任意层级的出现</small></div></div></div>
         </template>
         <div v-if="!legacySampling && form.sampling_mode === 'kc_quota'" class="kt-quota-panel kt-compact-form-row"><strong class="kt-config-label">知识点配额</strong><div class="kt-kc-config-content"><div class="kt-quota-toolbar"><p>按所选 KC 及匹配层级设置每位参与者题量。</p><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary">＋ 添加 KC</summary><div class="kt-kc-tree-selector"><label v-for="concept in concepts" :key="concept.id"><input v-model="form.selected_kcs[concept.id]" type="checkbox" :value="concept.id" :disabled="concept.status !== 'active'"><span><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><small>{{ concept.status === 'active' ? `${availableCount(concept)} 道可用` : '已归档' }}</small></label></div></details></div><div class="kt-quota-table-wrap"><table class="kt-quota-table"><thead><tr><th>KC</th><th>匹配层级</th><th>可用题目</th><th>配额</th><th>操作</th></tr></thead><tbody><tr v-for="concept in selectedConcepts" :key="concept.id"><td><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</td><td><select v-model="form.kc_match_scopes[concept.id]" :aria-label="`${concept.name}匹配层级`"><option value="primary">根 KC</option><option value="any_level">任意层级</option></select></td><td>{{ availableCount(concept) }}</td><td><input v-model.number="form.kc_quotas[concept.id]" :aria-label="`${concept.name}配额`" type="number" min="1"></td><td><button class="kt-text-button kt-text-button--danger" type="button" @click="form.selected_kcs[concept.id] = false">删除</button></td></tr><tr v-if="!selectedConcepts.length"><td colspan="5" class="kt-empty-quota">请添加需要设置配额的 KC</td></tr></tbody><tfoot><tr><td colspan="5">每位参与者共抽 <strong>{{ quotaTotal }}</strong> 题</td></tr></tfoot></table></div></div></div>
-        <p v-if="!legacySampling && form.sampling_mode === 'total_count'" class="kt-muted">可用题数仅统计当前所选题库中状态为“可用”的题目；同一道题可能匹配多个 KC，发布时会校验能否无重复地满足配额。</p>
+        <p v-if="!legacySampling && form.sampling_mode === 'total_count'" class="kt-muted">未选择知识点时使用当前题库全部“可用”题目；选择知识点后按所选范围过滤。同一道题可能匹配多个 KC，发布时会校验能否无重复地满足配额。</p>
         <p v-if="inventoryLoading" role="status">正在加载当前题库库存…</p>
         <Alert v-if="inventoryError" tone="danger">{{ inventoryError }}</Alert>
         <p v-if="fieldErrors.sampling_kcs" class="kt-field__error" role="alert">{{ fieldErrors.sampling_kcs }}</p>
@@ -441,19 +453,34 @@ onMounted(load)
 
     <section :inert="legacySampling" class="kt-numbered-form-section" aria-labelledby="definition-runtime">
       <div class="kt-numbered-form-section__heading"><span aria-hidden="true">4</span><h2 id="definition-runtime">作答与反馈</h2></div>
-      <div class="kt-card kt-numbered-form-section__content kt-runtime-primary">
-        <fieldset class="kt-radio-group kt-compact-form-row"><legend>题目顺序</legend><div class="kt-radio-options"><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="fixed"><span>固定顺序</span></label><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="random"><span>随机顺序</span></label><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="stratified_random"><span>分层随机</span></label></div></fieldset>
-        <fieldset class="kt-radio-group kt-compact-form-row"><legend>反馈</legend><div class="kt-radio-options"><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="none"><span>仅显示已提交</span></label><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="correctness"><span>显示正误</span></label><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="full"><span>显示正误、答案与解析</span></label></div></fieldset>
-        <fieldset class="kt-radio-group kt-compact-form-row"><legend>反馈发布</legend><div class="kt-radio-options"><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="after_personal_submission"><span>学生完成后</span></label><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="after_assignment_deadline"><span>班级任务截止后</span></label><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="manual_release"><span>教师人工发布</span></label></div></fieldset>
-      </div>
-      <details class="kt-card kt-numbered-form-section__content kt-collapsible-step">
-        <summary><span>时限：{{ form.time_mode === 'none' ? '无时限' : (form.time_mode === 'total' ? '实验总时限' : '单题时限') }}</span><span>中断：{{ form.resume_mode === 'resumable' ? '允许续答' : '必须一次完成' }}</span><span aria-hidden="true">›</span></summary>
-        <div class="kt-collapsible-step__body">
-          <fieldset class="kt-radio-group kt-compact-form-row"><legend>时限</legend><div class="kt-radio-options"><label><input v-model="form.time_mode" name="time_mode" type="radio" value="none"><span>无时限</span></label><label><input v-model="form.time_mode" name="time_mode" type="radio" value="total"><span>实验总时限</span></label><label><input v-model="form.time_mode" name="time_mode" type="radio" value="per_question"><span>单题时限</span></label></div><p v-if="fieldErrors.time_mode" class="kt-field__error" role="alert">{{ fieldErrors.time_mode }}</p></fieldset>
-          <div class="kt-form-grid"><FormField class="kt-compact-form-row" for-id="experiment-total-time" label="总时限（分钟）" :error="fieldErrors.total_time_limit_minutes"><input id="experiment-total-time" v-model.number="form.total_time_limit_minutes" type="number" min="1" :disabled="form.time_mode !== 'total'"></FormField><FormField class="kt-compact-form-row" for-id="experiment-question-time" label="单题限时（秒）" :error="fieldErrors.per_question_time_limit_seconds"><input id="experiment-question-time" v-model.number="form.per_question_time_limit_seconds" type="number" min="1" :disabled="form.time_mode !== 'per_question'"></FormField></div>
-          <fieldset class="kt-radio-group kt-compact-form-row"><legend>中断后继续</legend><div class="kt-radio-options"><label><input v-model="form.resume_mode" name="resume_mode" type="radio" value="resumable"><span>允许断点续答</span></label><label><input v-model="form.resume_mode" name="resume_mode" type="radio" value="single_session"><span>必须一次完成</span></label></div><p v-if="fieldErrors.resume_mode" class="kt-field__error" role="alert">{{ fieldErrors.resume_mode }}</p></fieldset>
+      <div ref="runtimeEditor" class="kt-card kt-numbered-form-section__content kt-runtime-primary">
+        <div class="kt-runtime-summary">
+          <Icon aria-hidden="true" class="kt-runtime-summary__icon" name="definition" :size="18" />
+          <strong>当前配置：</strong>
+          <span>{{ form.time_mode === 'none' ? '无时限' : (form.time_mode === 'total' ? '实验总时限' : '单题时限') }} / {{ form.resume_mode === 'resumable' ? '允许续答' : '必须一次完成' }} / {{ form.feedback_mode === 'none' ? '仅显示已提交' : (form.feedback_mode === 'correctness' ? '显示正误' : '显示答案与解析') }}</span>
+          <button type="button" class="kt-runtime-summary__edit" @click="focusRuntimeEditor">✎ <span>编辑</span></button>
         </div>
-      </details>
+        <div class="kt-runtime-settings-grid">
+          <section class="kt-runtime-settings-card" aria-labelledby="runtime-control-title">
+            <header><h3 id="runtime-control-title">作答控制</h3><p>设置学生的作答方式、时间限制和中断后是否允许继续作答</p></header>
+            <fieldset class="kt-radio-group kt-runtime-row"><legend>题目顺序</legend><div class="kt-radio-options"><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="fixed"><span>固定顺序</span></label><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="random"><span>随机顺序</span></label><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="stratified_random"><span>分层随机</span></label></div></fieldset>
+            <div class="kt-runtime-divider" />
+            <fieldset class="kt-radio-group kt-runtime-row"><legend>时限</legend><div class="kt-radio-options"><label><input v-model="form.time_mode" name="time_mode" type="radio" value="none"><span>无时限</span></label><label><input v-model="form.time_mode" name="time_mode" type="radio" value="total"><span>实验总时限</span></label><label><input v-model="form.time_mode" name="time_mode" type="radio" value="per_question"><span>单题时限</span></label></div><p v-if="fieldErrors.time_mode" class="kt-field__error" role="alert">{{ fieldErrors.time_mode }}</p></fieldset>
+            <div class="kt-runtime-time-fields">
+              <FormField for-id="experiment-total-time" label="总时限（分钟）" :error="fieldErrors.total_time_limit_minutes"><input id="experiment-total-time" v-model.number="form.total_time_limit_minutes" type="number" min="1" :disabled="form.time_mode !== 'total'"><small>完成整个实验的最长作答时间</small></FormField>
+              <FormField for-id="experiment-question-time" label="单题限时（秒）" :error="fieldErrors.per_question_time_limit_seconds"><input id="experiment-question-time" v-model.number="form.per_question_time_limit_seconds" type="number" min="1" :disabled="form.time_mode !== 'per_question'"><small>每道题的最长作答时间</small></FormField>
+            </div>
+            <div class="kt-runtime-divider" />
+            <fieldset class="kt-radio-group kt-runtime-row kt-runtime-resume-row"><legend>中断后继续</legend><div class="kt-radio-options"><label><input v-model="form.resume_mode" name="resume_mode" type="radio" value="resumable"><span>允许中断续答</span></label><label><input v-model="form.resume_mode" name="resume_mode" type="radio" value="single_session"><span>必须一次完成</span></label></div><p>学生在作答过程中退出后，可在有效期内继续作答。</p><p v-if="fieldErrors.resume_mode" class="kt-field__error" role="alert">{{ fieldErrors.resume_mode }}</p></fieldset>
+          </section>
+          <section class="kt-runtime-settings-card" aria-labelledby="runtime-feedback-title">
+            <header><h3 id="runtime-feedback-title">反馈设置</h3><p>设置学生完成作答后的反馈内容和发布时间</p></header>
+            <fieldset class="kt-radio-group kt-runtime-row"><legend>反馈</legend><div class="kt-radio-options"><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="none"><span>仅显示已提交</span></label><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="correctness"><span>显示正误</span></label><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="full"><span>显示正误、答案与解析</span></label></div><p>学生完成作答后，将显示题目的正确答案和解析内容。</p></fieldset>
+            <div class="kt-runtime-divider" />
+            <fieldset class="kt-radio-group kt-runtime-row"><legend>反馈发布</legend><div class="kt-radio-options"><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="after_personal_submission"><span>学生完成后</span></label><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="after_assignment_deadline"><span>班级任务截止后</span></label><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="manual_release"><span>教师人工发布</span></label></div><p>选择反馈内容的发布时间点。</p></fieldset>
+          </section>
+        </div>
+      </div>
     </section>
 
     <section :inert="legacySampling" class="kt-numbered-form-section" aria-labelledby="definition-collection">

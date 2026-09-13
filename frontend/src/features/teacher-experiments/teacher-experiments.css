@@ -346,6 +346,27 @@
   .kt-teacher-experiments .kt-numbered-form-section[aria-labelledby='definition-runtime'] .kt-form-grid {
     grid-template-columns: 1fr 1fr;
   }
+
+  .kt-teacher-experiments .kt-runtime-settings-card fieldset.kt-runtime-row {
+    display: block;
+    min-height: 28px;
+  }
+
+  .kt-teacher-experiments .kt-runtime-settings-card fieldset.kt-runtime-row > legend {
+    float: left;
+    width: 110px;
+    padding: 3px 12px 0 0;
+  }
+
+  .kt-teacher-experiments .kt-runtime-settings-card fieldset.kt-runtime-row > .kt-radio-options,
+  .kt-teacher-experiments .kt-runtime-settings-card fieldset.kt-runtime-row > p,
+  .kt-teacher-experiments .kt-runtime-settings-card fieldset.kt-runtime-row > .kt-field__error {
+    margin-left: 118px;
+  }
+
+  .kt-teacher-experiments .kt-runtime-settings-card fieldset.kt-runtime-row > p {
+    margin-top: 8px;
+  }
 }
 
 /* Reference-aligned experiment definition rail. */
@@ -515,7 +536,169 @@
 }
 
 .kt-teacher-experiments .kt-runtime-primary {
+  display: grid;
   grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 12px 18px;
+}
+
+.kt-teacher-experiments .kt-runtime-summary {
+  display: flex;
+  min-width: 497px;
+  min-height: 40px;
+  justify-self: end;
+  align-items: center;
+  gap: 7px;
+  border-radius: 8px;
+  padding: 8px 14px;
+  background: var(--kt-action-050);
+  color: var(--kt-muted);
+  font-size: 13px;
+}
+
+.kt-teacher-experiments .kt-runtime-summary strong {
+  color: var(--kt-text);
+}
+
+.kt-teacher-experiments .kt-runtime-summary__icon,
+.kt-teacher-experiments .kt-runtime-summary__edit {
+  color: var(--kt-action-600);
+}
+
+.kt-teacher-experiments .kt-runtime-summary__icon {
+  font-size: 18px;
+}
+
+.kt-teacher-experiments .kt-runtime-summary__edit {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-left: 1px solid color-mix(in srgb, var(--kt-action-600) 18%, var(--kt-border));
+  padding: 0 0 0 14px;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.kt-teacher-experiments .kt-runtime-summary__edit:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--kt-action-600);
+  outline-offset: 2px;
+}
+
+.kt-teacher-experiments .kt-runtime-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.kt-teacher-experiments .kt-runtime-settings-card {
+  min-width: 0;
+  min-height: 350px;
+  border: 1px solid var(--kt-border);
+  border-radius: 8px;
+  padding: 14px 18px;
+  background: var(--kt-surface);
+}
+
+.kt-teacher-experiments .kt-runtime-settings-card header {
+  margin-bottom: 16px;
+}
+
+.kt-teacher-experiments .kt-runtime-settings-card h3,
+.kt-teacher-experiments .kt-runtime-settings-card header p,
+.kt-teacher-experiments .kt-runtime-row p {
+  margin: 0;
+}
+
+.kt-teacher-experiments .kt-runtime-settings-card h3 {
+  color: var(--kt-text);
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.kt-teacher-experiments .kt-runtime-settings-card header p,
+.kt-teacher-experiments .kt-runtime-row p,
+.kt-teacher-experiments .kt-runtime-time-fields small {
+  color: var(--kt-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.kt-teacher-experiments .kt-runtime-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.kt-teacher-experiments .kt-runtime-row > legend {
+  grid-column: 1;
+  padding-top: 3px;
+  color: var(--kt-text);
+  font-weight: 700;
+}
+
+.kt-teacher-experiments .kt-runtime-row > .kt-radio-options,
+.kt-teacher-experiments .kt-runtime-row > p,
+.kt-teacher-experiments .kt-runtime-row > .kt-field__error {
+  grid-column: 2;
+}
+
+.kt-teacher-experiments .kt-runtime-row > .kt-radio-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 26px;
+}
+
+.kt-teacher-experiments .kt-runtime-row > .kt-radio-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.kt-teacher-experiments .kt-runtime-divider {
+  height: 1px;
+  margin: 14px 0;
+  background: var(--kt-border);
+}
+
+.kt-teacher-experiments .kt-runtime-time-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin: 12px 0 0 118px;
+}
+
+.kt-teacher-experiments .kt-runtime-time-fields .kt-field {
+  display: grid;
+  grid-template-columns: minmax(0, auto) 100px;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.kt-teacher-experiments .kt-runtime-time-fields .kt-field label {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.kt-teacher-experiments .kt-runtime-time-fields .kt-field input {
+  width: 100px;
+  min-height: 36px;
+}
+
+.kt-teacher-experiments .kt-runtime-time-fields .kt-field small,
+.kt-teacher-experiments .kt-runtime-time-fields .kt-field .kt-field__error {
+  grid-column: 1 / -1;
 }
 
 .kt-teacher-experiments .kt-research-settings-card { gap: 0; padding: 0; overflow: hidden; }
@@ -738,7 +921,7 @@
 }
 
 @media (min-width: 64rem) {
-  .kt-teacher-experiments .kt-workspace { --kt-workspace-header: 48px; --kt-workspace-sidebar: 194px; }
+  .kt-teacher-experiments .kt-workspace { --kt-workspace-header: 48px; --kt-workspace-sidebar: 164px; }
   .kt-teacher-experiments .kt-workspace > .kt-app-header,
   .kt-teacher-experiments .kt-workspace > .kt-app-header .kt-app-header__inner { height: 48px; min-height: 48px; }
   .kt-teacher-experiments .kt-workspace > .kt-app-header .kt-app-header__inner { padding-inline: 18px; }
@@ -832,53 +1015,6 @@
     padding: .55rem .8rem;
   }
 
-  .kt-teacher-experiments .kt-numbered-form-section[aria-labelledby='definition-runtime'] {
-    grid-template-columns: 160px minmax(0, 1fr) 255px;
-    column-gap: 0;
-  }
-
-  .kt-teacher-experiments .kt-numbered-form-section[aria-labelledby='definition-runtime'] > .kt-numbered-form-section__heading {
-    margin-right: 10px;
-  }
-
-  .kt-teacher-experiments .kt-numbered-form-section[aria-labelledby='definition-runtime'] .kt-runtime-primary {
-    grid-column: 2;
-    grid-row: 1;
-    grid-template-columns: 1fr;
-    gap: 6px;
-    border-radius: 8px 0 0 8px;
-    padding: 5px 18px;
-  }
-
-  .kt-teacher-experiments .kt-numbered-form-section[aria-labelledby='definition-runtime'] .kt-runtime-primary .kt-compact-form-row {
-    grid-template-columns: 110px minmax(0, 1fr);
-  }
-
-  .kt-teacher-experiments .kt-numbered-form-section[aria-labelledby='definition-runtime'] .kt-runtime-primary .kt-compact-form-row > legend,
-  .kt-teacher-experiments .kt-numbered-form-section[aria-labelledby='definition-runtime'] .kt-runtime-primary .kt-compact-form-row > .kt-radio-options {
-    grid-column: auto;
-  }
-
-  .kt-teacher-experiments .kt-numbered-form-section[aria-labelledby='definition-runtime'] .kt-collapsible-step {
-    grid-column: 3;
-    grid-row: 1;
-    align-self: stretch;
-    border-left: 0;
-    border-radius: 0 8px 8px 0;
-  }
-
-  .kt-teacher-experiments .kt-numbered-form-section[aria-labelledby='definition-runtime'] .kt-collapsible-step > summary {
-    grid-template-columns: 1fr;
-    align-content: center;
-    min-height: 100%;
-    gap: 8px;
-    padding: 12px 18px;
-    background: var(--kt-action-050);
-  }
-
-  .kt-teacher-experiments .kt-numbered-form-section[aria-labelledby='definition-runtime'] .kt-collapsible-step > summary span:last-child {
-    display: none;
-  }
 }
 
 .kt-teacher-experiments .kt-empty-quota {
@@ -950,6 +1086,28 @@
   }
 }
 
+@media (max-width: 72rem) {
+  .kt-teacher-experiments .kt-runtime-settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .kt-teacher-experiments .kt-runtime-settings-card {
+    min-height: 0;
+  }
+
+  .kt-teacher-experiments .kt-runtime-summary {
+    width: 100%;
+    min-width: 0;
+    justify-self: stretch;
+  }
+}
+
+@media (min-width: 72.01rem) {
+  .kt-teacher-experiments .kt-runtime-settings-card {
+    min-height: 350px;
+  }
+}
+
 @media (max-width: 48rem) {
   .kt-teacher-experiments .kt-numbered-form-section,
   .kt-teacher-experiments .kt-step-one-grid,
@@ -1005,6 +1163,38 @@
 
   .kt-teacher-experiments .kt-type-tree-selector input[type='number'] {
     width: 100%;
+  }
+
+  .kt-teacher-experiments .kt-runtime-primary {
+    padding: 12px;
+  }
+
+  .kt-teacher-experiments .kt-runtime-summary {
+    flex-wrap: wrap;
+  }
+
+  .kt-teacher-experiments .kt-runtime-summary__edit {
+    margin-left: auto;
+  }
+
+  .kt-teacher-experiments .kt-runtime-settings-card {
+    padding: 14px;
+  }
+
+  .kt-teacher-experiments .kt-runtime-row {
+    grid-template-columns: 1fr;
+  }
+
+  .kt-teacher-experiments .kt-runtime-row > legend,
+  .kt-teacher-experiments .kt-runtime-row > .kt-radio-options,
+  .kt-teacher-experiments .kt-runtime-row > p,
+  .kt-teacher-experiments .kt-runtime-row > .kt-field__error {
+    grid-column: 1;
+  }
+
+  .kt-teacher-experiments .kt-runtime-time-fields {
+    grid-template-columns: 1fr;
+    margin-left: 0;
   }
 
   .kt-teacher-experiments .kt-collapsible-step > summary {

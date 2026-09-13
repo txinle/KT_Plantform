@@ -7855,8 +7855,9 @@ components:
           default: exclude_previous
         review_count:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -7880,13 +7881,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -11937,8 +11940,9 @@ components:
           default: exclude_previous
         review_count:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -11962,13 +11966,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'

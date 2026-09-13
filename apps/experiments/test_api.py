@@ -528,6 +528,7 @@ class TeacherExperimentApiTests(TestCase):
         other_bank = QuestionBank.objects.create(
             course=self.course, owner=self.teacher, name="其他题库"
         )
+
         for sequence, bank, status, primary in (
             (1, self.bank, Question.Status.ACTIVE, True),
             (2, self.bank, Question.Status.ACTIVE, False),
@@ -576,8 +577,45 @@ class TeacherExperimentApiTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 200, response.content)
-        self.assertEqual(response.json()["candidate_count"], 0)
+        self.assertEqual(response.json()["candidate_count"], 2)
+        self.assertEqual(
+            next(
+                item["available"]
+                for item in response.json()["question_types"]
+                if item["question_type"] == Question.Type.SHORT
+            ),
+            2,
+        )
         self.assertEqual(len(response.json()["kc_counts"]), 2)
+
+    def test_create_total_count_without_kcs_uses_the_entire_bank(self):
+        self.client.force_login(self.teacher)
+
+        response = self.client.post(
+            self.api_url(),
+            data=json.dumps(
+                {
+                    "name": "全题库题型构成实验",
+                    "question_bank_id": self.bank.pk,
+                    "sampling": {
+                        "mode": Experiment.SamplingMode.TOTAL_COUNT,
+                        "total_count": 2,
+                        "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                        "nodes": [],
+                        "type_quotas": [
+                            {"question_type": Question.Type.SINGLE, "amount": 1},
+                            {"question_type": Question.Type.MULTIPLE, "amount": 1},
+                        ],
+                    },
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        experiment = Experiment.objects.get(pk=response.json()["id"])
+        self.assertFalse(experiment.sampling_kcs.exists())
+        self.assertEqual(response.json()["sampling"]["nodes"], [])
 
     def test_create_rejects_legacy_question_type_sampling_fields(self):
         self.client.force_login(self.teacher)

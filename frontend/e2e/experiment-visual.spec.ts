@@ -55,6 +55,67 @@ test('KC quota inventory agrees with saved preflight and permits publication', a
   await expect(page.getByRole('heading', { name: '已发布班级任务', exact: true })).toBeVisible()
 })
 
+test('total-count mode uses the whole bank and keeps type allocation usable', async ({ browserName, page }, testInfo) => {
+  test.setTimeout(90_000)
+  test.skip(browserName !== 'chromium', 'Chromium is the visual acceptance engine.')
+  await page.setViewportSize({ width: 1672, height: 941 })
+  await login(page)
+  await page.goto(origin + '/teacher/courses/1/experiments/create/')
+  await page.getByLabel('实验名称', { exact: true }).fill('全题库题型回归 ' + Date.now())
+  await page.getByLabel('题库', { exact: true }).selectOption({ label: '演示题库' })
+  await expect(page.getByText('当前使用整个题库', { exact: true })).toBeVisible()
+  await expect(page.locator('.kt-match-scope')).toHaveCount(0)
+
+  await page.getByLabel('每位参与者题目数', { exact: true }).fill('1')
+  await page.getByText('选择题型', { exact: true }).click()
+  const singleType = page.locator('.kt-type-tree-selector label').filter({ hasText: '单选题' })
+  await expect(singleType.locator('small')).not.toHaveText('正在读取')
+  await expect(singleType.locator('small')).toHaveText(/[1-9]\d* 道可用/)
+  await singleType.locator('input[type="checkbox"]').check()
+  await singleType.locator('input[type="number"]').fill('1')
+  await page.getByText('选择题型', { exact: true }).click()
+  await page.locator('input[name="cross_experiment_item_policy"][value="unrestricted"]').check()
+  await expect(page.getByRole('button', { name: '保存草稿', exact: true })).toBeEnabled()
+
+  await page.locator('[aria-labelledby="definition-runtime"]').scrollIntoViewIfNeeded()
+  await capture(page, testInfo, 'runtime-control-1672x941.png')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1673)
+  const runtimeHeadingBox = await page.locator('[aria-labelledby="definition-runtime"] > .kt-numbered-form-section__heading').boundingBox()
+  const runtimeContentBox = await page.locator('.kt-runtime-primary').boundingBox()
+  const runtimeSummaryBox = await page.locator('.kt-runtime-summary').boundingBox()
+  const runtimeCards = page.locator('.kt-runtime-settings-card')
+  const leftCardBox = await runtimeCards.nth(0).boundingBox()
+  const rightCardBox = await runtimeCards.nth(1).boundingBox()
+  expect(runtimeHeadingBox?.x).toBeCloseTo(182, 0)
+  expect(runtimeHeadingBox?.width).toBeCloseTo(160, 0)
+  expect(runtimeContentBox?.x).toBeCloseTo(352, 0)
+  expect(runtimeSummaryBox?.width).toBeGreaterThanOrEqual(493)
+  expect(runtimeSummaryBox?.width).toBeLessThanOrEqual(501)
+  expect(leftCardBox?.height).toBeCloseTo(350, 0)
+  expect(rightCardBox?.height).toBeCloseTo(350, 0)
+  expect(Math.abs(Number(leftCardBox?.width) - Number(rightCardBox?.width))).toBeLessThanOrEqual(1)
+  expect(Number(rightCardBox?.x) - Number(leftCardBox?.x) - Number(leftCardBox?.width)).toBeCloseTo(10, 0)
+  for (const [name, width, height] of [
+    ['1440x900', 1440, 900],
+    ['390x844', 390, 844],
+    ['200-percent-equivalent', 720, 450],
+  ] as const) {
+    await page.setViewportSize({ width, height })
+    await page.locator('[aria-labelledby="definition-runtime"]').scrollIntoViewIfNeeded()
+    await capture(page, testInfo, 'runtime-control-' + name + '.png')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1)
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+
+  await page.getByRole('button', { name: '保存草稿', exact: true }).click()
+  await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/)
+  await page.getByRole('button', { name: '发布到班级', exact: true }).click()
+  await page.locator('[id^="publish-class-"]').first().check()
+  await page.getByRole('button', { name: '运行发布前检查', exact: true }).click()
+  await expect(page).toHaveURL(/\/publish-plan\/\d+\/step\/2\/$/)
+  await expect(page.getByText('发布前检查', { exact: false }).first()).toBeVisible()
+})
+
 async function login(page: Page) {
   await page.goto(`${origin}/login/`)
   await page.getByLabel('账号或学号').fill('teacher')

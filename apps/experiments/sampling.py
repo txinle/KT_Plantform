@@ -257,6 +257,8 @@ class SamplingService:
             .prefetch_related("concept_links")
             .order_by("sequence", "pk")
         )
+        if not concept_ids:
+            return questions
         return [
             question
             for question in questions
@@ -270,11 +272,11 @@ class SamplingService:
         mode = self.experiment.sampling_mode
         rules = list(self.experiment.sampling_kcs.select_related("concept").order_by("concept_id"))
         if mode == Experiment.SamplingMode.TOTAL_COUNT:
-            if not self.experiment.sampling_total_count or not rules:
+            if not self.experiment.sampling_total_count:
                 raise SamplingValidationError([
                     self._issue(
                         "TOTAL_COUNT_CONFIGURATION_REQUIRED",
-                        "按总题数抽题必须设置总题数并至少选择一个知识点范围。",
+                        "按总题数抽题必须设置总题数。",
                         field="sampling_total_count",
                     )
                 ])
@@ -342,7 +344,7 @@ class SamplingService:
                 raise SamplingValidationError([
                     self._issue(
                         "TOTAL_COUNT_INSUFFICIENT",
-                        f"所选知识点范围需要 {self.experiment.sampling_total_count} 题，可用 {len(candidates)} 题。",
+                        f"当前题目范围需要 {self.experiment.sampling_total_count} 题，可用 {len(candidates)} 题。",
                         field="sampling_total_count",
                     )
                 ])

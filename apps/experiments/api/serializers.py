@@ -347,9 +347,9 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
                 for row in sampling_kcs:
                     row["match_scope"] = sampling_match_scope
             if sampling_mode == Experiment.SamplingMode.TOTAL_COUNT:
-                if not sampling_total_count or not sampling_kcs:
+                if not sampling_total_count:
                     raise serializers.ValidationError(
-                        {"sampling_kcs": "总题数模式必须设置题数并选择知识点范围。"}
+                        {"sampling_total_count": "总题数模式必须设置题数。"}
                     )
                 if any(row.get("quota") is not None for row in sampling_kcs):
                     raise serializers.ValidationError(

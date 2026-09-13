@@ -124,6 +124,10 @@ describe('TeacherExperimentForm', () => {
     expect(wrapper.findAll('.kt-numbered-form-section .kt-compact-form-row').length).toBeGreaterThanOrEqual(4)
     expect(wrapper.find('#experiment-total-time').exists()).toBe(true)
     expect(wrapper.find('#experiment-question-time').exists()).toBe(true)
+    expect(wrapper.find('.kt-runtime-settings-grid').exists()).toBe(true)
+    expect(wrapper.findAll('.kt-runtime-settings-card')).toHaveLength(2)
+    expect(wrapper.find('[aria-labelledby="definition-runtime"] details').exists()).toBe(false)
+    expect(wrapper.get('.kt-runtime-summary').text()).toContain('当前配置：')
 
     await wrapper.get('#experiment-name').setValue('分数比较实验')
     await wrapper.get('#experiment-bank').setValue('3')
@@ -307,6 +311,62 @@ describe('TeacherExperimentForm', () => {
         }),
       }),
     )
+  })
+
+  it('uses the whole bank when total-count mode has no selected knowledge points', async () => {
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('知识点范围（可选）')
+    expect(wrapper.text()).toContain('当前使用整个题库')
+    expect(wrapper.find('.kt-match-scope').exists()).toBe(false)
+
+    await wrapper.get('#experiment-name').setValue('全题库题型构成实验')
+    await wrapper.get('#sampling-total-count').setValue('10')
+    await wrapper.get('summary[data-type-picker]').trigger('click')
+    await wrapper.get('input[name="question_type_choice"][value="single_choice"]').setValue(true)
+    await wrapper.get('input[name="question_type_choice"][value="multiple_choice"]').setValue(true)
+    await wrapper.get('input[aria-label="单选题数量"]').setValue('6')
+    await wrapper.get('input[aria-label="多选题数量"]').setValue('4')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.api.create).toHaveBeenCalledWith(7, expect.objectContaining({
+      sampling: expect.objectContaining({
+        mode: 'total_count',
+        total_count: 10,
+        nodes: [],
+        type_quotas: [
+          { question_type: 'single_choice', amount: 6 },
+          { question_type: 'multiple_choice', amount: 4 },
+        ],
+      }),
+    }))
+  })
+
+  it('does not show zero type inventory while the whole-bank request is loading', async () => {
+    let resolveInventory!: (value: unknown) => void
+    mocks.api.samplingInventory.mockReturnValueOnce(new Promise((resolve) => { resolveInventory = resolve }))
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+
+    await wrapper.get('summary[data-type-picker]').trigger('click')
+    expect(wrapper.get('.kt-type-tree-selector').text()).toContain('正在读取')
+    expect(wrapper.get('.kt-type-tree-selector').text()).not.toContain('0 道可用')
+
+    resolveInventory({
+      candidate_count: 12,
+      kc_counts: [],
+      question_types: [
+        { question_type: 'single_choice', label: '单选题', available: 8 },
+        { question_type: 'multiple_choice', label: '多选题', available: 4 },
+        { question_type: 'numeric', label: '数值题', available: 0 },
+        { question_type: 'short_answer', label: '简答题', available: 0 },
+        { question_type: 'fill_blank', label: '填空题', available: 0 },
+        { question_type: 'true_false', label: '判断题', available: 0 },
+      ],
+    })
+    await flushPromises()
   })
 
   it('blocks saving when selected type amounts do not equal the total', async () => {
