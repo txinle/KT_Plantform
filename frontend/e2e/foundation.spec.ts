@@ -55,7 +55,7 @@ test('independent frontend mounts on the business URL and survives refresh', asy
   await page.reload()
   await expect(page.getByRole('heading', { name: '实验', exact: true })).toBeVisible()
 
-  await page.getByRole('link', { name: '题库' }).click()
+  await page.getByRole('link', { name: '题库', exact: true }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/banks\/$/)
   await expect(page.locator('#kt-app')).toBeVisible()
   await expect(page.getByRole('heading', { name: '题库', exact: true })).toBeVisible()
@@ -68,7 +68,7 @@ test('teacher creates an experiment and saves a resumable publish draft', async 
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/create\/$/)
 
   await page.getByLabel('实验名称').fill(`渐进式发布验证-${browserName}`)
-  await page.getByLabel('题库').selectOption({ label: '演示题库' })
+  await page.getByLabel('题库', { exact: true }).selectOption({ label: '演示题库' })
   await selectFirstKnowledgeComponent(page)
   await page.getByRole('button', { name: '保存草稿', exact: true }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/)
@@ -87,7 +87,7 @@ test('teacher previews and atomically publishes a class task', async ({ browserN
   await login(page, 'http://127.0.0.1:8000')
   await page.goto('http://127.0.0.1:8000/teacher/courses/1/experiments/create/')
   await page.getByLabel('实验名称').fill('正式发布浏览器验收')
-  await page.getByLabel('题库').selectOption({ label: '演示题库' })
+  await page.getByLabel('题库', { exact: true }).selectOption({ label: '演示题库' })
   await selectFirstKnowledgeComponent(page)
   await page.locator('input[name="cross_experiment_item_policy"][value="unrestricted"]').check()
   await page.getByRole('button', { name: '保存草稿', exact: true }).click()

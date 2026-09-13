@@ -21,7 +21,7 @@ async function inspect(page: Page, info: TestInfo, name: string) {
       const main = await page.locator('.kt-workspace-main').boundingBox()
       const expectedSidebarWidth = await page.locator('.kt-workspace').evaluate(
         element => element.closest('.kt-teacher-experiments')
-          ? 194
+          ? 164
           : (element.querySelector('.kt-workspace-navigation--teacher-course') ? 236 : 224),
       )
       expect(sidebar?.width).toBe(expectedSidebarWidth)
@@ -68,7 +68,7 @@ test('experiment workspace switches cleanly at the 1024px desktop boundary', asy
   await expect(page.getByRole('heading', { name: '实验', exact: true })).toBeVisible()
 
   const sidebar = await page.locator('.kt-workspace-sidebar').boundingBox()
-  expect(sidebar?.width).toBe(194)
+  expect(sidebar?.width).toBe(164)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
 })
 
