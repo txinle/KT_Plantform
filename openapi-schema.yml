@@ -1631,6 +1631,102 @@ paths:
               schema:
                 $ref: '#/components/schemas/ClassTask'
           description: ''
+  /api/v1/teacher/class-tasks/{task_id}/grading/:
+    get:
+      operationId: teacher_class_task_grading_overview
+      parameters:
+      - in: path
+        name: task_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManualGradingOverview'
+          description: ''
+  /api/v1/teacher/class-tasks/{task_id}/grading/questions/{snapshot_id}/:
+    get:
+      operationId: teacher_class_task_grading_question
+      parameters:
+      - in: query
+        name: page
+        schema:
+          type: integer
+          default: 1
+      - in: path
+        name: snapshot_id
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - all
+          - completed
+          - pending
+          default: pending
+      - in: path
+        name: task_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManualGradingQuestionDetail'
+          description: ''
+  /api/v1/teacher/class-tasks/{task_id}/grading/submissions/{submission_id}/:
+    post:
+      operationId: teacher_class_task_grade_submission
+      parameters:
+      - in: path
+        name: submission_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: task_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManualGradeInput'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManualGradeInput'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManualGradeInput'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManualGradeResponse'
+          description: ''
   /api/v1/teacher/class-tasks/{task_id}/manual-close/:
     post:
       operationId: teacher_class_task_manual_close
@@ -4750,6 +4846,9 @@ components:
         participant_count:
           type: integer
           minimum: 0
+        grading:
+          type: object
+          additionalProperties: {}
         available_actions:
           type: array
           items:
@@ -4762,6 +4861,7 @@ components:
       - closes_at
       - experiment_id
       - experiment_name
+      - grading
       - id
       - opens_at
       - participant_count
@@ -5124,6 +5224,16 @@ components:
       required:
       - created_accounts
       - enrollments
+    CrossExperimentItemPolicyEnum:
+      enum:
+      - exclude_previous
+      - mixed_review
+      - unrestricted
+      type: string
+      description: |-
+        * `exclude_previous` - 排除已正式作答题目
+        * `mixed_review` - 混合复测
+        * `unrestricted` - 不限制历史题目
     CsrfToken:
       type: object
       properties:
@@ -5985,6 +6095,16 @@ components:
           type: string
       required:
       - status
+    HistoryRoleEnum:
+      enum:
+      - review
+      - new
+      - unrestricted
+      type: string
+      description: |-
+        * `review` - review
+        * `new` - new
+        * `unrestricted` - unrestricted
     ImportConfirmRequest:
       type: object
       properties:
@@ -7190,6 +7310,230 @@ components:
       required:
       - created_account
       - student
+    ManualGradeInput:
+      type: object
+      properties:
+        expected_grade_version:
+          type: integer
+          minimum: 1
+        is_correct:
+          type: boolean
+        comment:
+          type: string
+          maxLength: 2000
+      required:
+      - expected_grade_version
+      - is_correct
+    ManualGradeResponse:
+      type: object
+      properties:
+        submission:
+          $ref: '#/components/schemas/ManualGradingSubmission'
+        question_progress:
+          $ref: '#/components/schemas/ManualGradingQuestionSummary'
+        task_progress:
+          $ref: '#/components/schemas/ManualGradingTotals'
+      required:
+      - question_progress
+      - submission
+      - task_progress
+    ManualGradingOverview:
+      type: object
+      properties:
+        task:
+          $ref: '#/components/schemas/ManualGradingTask'
+        totals:
+          $ref: '#/components/schemas/ManualGradingTotals'
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManualGradingQuestionSummary'
+      required:
+      - questions
+      - task
+      - totals
+    ManualGradingPage:
+      type: object
+      properties:
+        number:
+          type: integer
+          minimum: 1
+        size:
+          type: integer
+          minimum: 1
+        total_items:
+          type: integer
+          minimum: 0
+        total_pages:
+          type: integer
+          minimum: 0
+        start:
+          type: integer
+          minimum: 0
+        end:
+          type: integer
+          minimum: 0
+      required:
+      - end
+      - number
+      - size
+      - start
+      - total_items
+      - total_pages
+    ManualGradingQuestion:
+      type: object
+      properties:
+        question_snapshot_id:
+          type: integer
+        code:
+          type: string
+        text:
+          type: string
+        correct_answer: {}
+        accepted_answers: {}
+        explanation:
+          type: string
+      required:
+      - accepted_answers
+      - code
+      - correct_answer
+      - explanation
+      - question_snapshot_id
+      - text
+    ManualGradingQuestionDetail:
+      type: object
+      properties:
+        question:
+          $ref: '#/components/schemas/ManualGradingQuestion'
+        submissions:
+          $ref: '#/components/schemas/ManualGradingSubmissionCollection'
+      required:
+      - question
+      - submissions
+    ManualGradingQuestionSummary:
+      type: object
+      properties:
+        question_snapshot_id:
+          type: integer
+        code:
+          type: string
+        text_summary:
+          type: string
+        submitted_count:
+          type: integer
+          minimum: 0
+        pending_count:
+          type: integer
+          minimum: 0
+        graded_count:
+          type: integer
+          minimum: 0
+      required:
+      - code
+      - graded_count
+      - pending_count
+      - question_snapshot_id
+      - submitted_count
+      - text_summary
+    ManualGradingSubmission:
+      type: object
+      properties:
+        submission_id:
+          type: integer
+        student_id:
+          type: integer
+        student_number:
+          type: string
+        display_name:
+          type: string
+        final_answer:
+          nullable: true
+        submitted_at:
+          type: string
+          format: date-time
+        grading_status:
+          type: string
+        latest_grade_version:
+          type: integer
+          minimum: 0
+        current_is_correct:
+          type: boolean
+          nullable: true
+        current_comment:
+          type: string
+        graded_at:
+          type: string
+          format: date-time
+          nullable: true
+        grader_name:
+          type: string
+      required:
+      - current_comment
+      - current_is_correct
+      - display_name
+      - final_answer
+      - graded_at
+      - grader_name
+      - grading_status
+      - latest_grade_version
+      - student_id
+      - student_number
+      - submission_id
+      - submitted_at
+    ManualGradingSubmissionCollection:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManualGradingSubmission'
+        page:
+          $ref: '#/components/schemas/ManualGradingPage'
+      required:
+      - items
+      - page
+    ManualGradingTask:
+      type: object
+      properties:
+        id:
+          type: integer
+        experiment_id:
+          type: integer
+        experiment_name:
+          type: string
+        class_id:
+          type: integer
+        class_name:
+          type: string
+      required:
+      - class_id
+      - class_name
+      - experiment_id
+      - experiment_name
+      - id
+    ManualGradingTotals:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        short_answer_questions:
+          type: integer
+          minimum: 0
+        submitted:
+          type: integer
+          minimum: 0
+        pending:
+          type: integer
+          minimum: 0
+        graded:
+          type: integer
+          minimum: 0
+      required:
+      - enabled
+      - graded
+      - pending
+      - short_answer_questions
+      - submitted
     MatchScopeEnum:
       enum:
       - primary
@@ -7505,6 +7849,15 @@ components:
           readOnly: true
         sampling:
           $ref: '#/components/schemas/SamplingDefinition'
+        cross_experiment_item_policy:
+          allOf:
+          - $ref: '#/components/schemas/CrossExperimentItemPolicyEnum'
+          default: exclude_previous
+        review_count:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -7528,13 +7881,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -7641,14 +7996,28 @@ components:
           type: boolean
         excluded:
           type: boolean
+        review_item_count:
+          type: integer
+          minimum: 0
+        new_item_count:
+          type: integer
+          minimum: 0
+        cross_experiment_item_policy:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/CrossExperimentItemPolicyEnum'
+          - $ref: '#/components/schemas/NullEnum'
       required:
       - class_id
       - class_name
+      - cross_experiment_item_policy
       - display_name
       - excluded
       - id
       - is_valid
       - item_count
+      - new_item_count
+      - review_item_count
       - student_number
     PublishParticipantCollection:
       type: object
@@ -7682,6 +8051,17 @@ components:
           type: boolean
         excluded:
           type: boolean
+        review_item_count:
+          type: integer
+          minimum: 0
+        new_item_count:
+          type: integer
+          minimum: 0
+        cross_experiment_item_policy:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/CrossExperimentItemPolicyEnum'
+          - $ref: '#/components/schemas/NullEnum'
         items:
           type: array
           items:
@@ -7689,12 +8069,15 @@ components:
       required:
       - class_id
       - class_name
+      - cross_experiment_item_policy
       - display_name
       - excluded
       - id
       - is_valid
       - item_count
       - items
+      - new_item_count
+      - review_item_count
       - student_number
     PublishParticipantItem:
       type: object
@@ -7708,8 +8091,14 @@ components:
           type: string
         question_type:
           type: string
+        history_role:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/HistoryRoleEnum'
+          - $ref: '#/components/schemas/NullEnum'
       required:
       - assigned_sequence_index
+      - history_role
       - question_code
       - question_id
       - question_type
@@ -7794,6 +8183,10 @@ components:
         descendant_kc_id:
           type: integer
         descendant_kc_path:
+          type: string
+        student_id:
+          type: integer
+        student_number:
           type: string
       required:
       - class_id
@@ -11541,6 +11934,15 @@ components:
           readOnly: true
         sampling:
           $ref: '#/components/schemas/SamplingDefinition'
+        cross_experiment_item_policy:
+          allOf:
+          - $ref: '#/components/schemas/CrossExperimentItemPolicyEnum'
+          default: exclude_previous
+        review_count:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -11564,13 +11966,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'

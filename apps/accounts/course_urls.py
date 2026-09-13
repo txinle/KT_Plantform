@@ -66,6 +66,7 @@ urlpatterns = [
     path("<int:course_pk>/experiments/", experiment_views.experiment_list, name="experiments"),
     path("<int:course_pk>/experiments/create/", experiment_views.experiment_create, name="experiment_create"),
     path("<int:course_pk>/experiments/<int:pk>/", experiment_views.experiment_detail, name="experiment_detail"),
+    path("<int:course_pk>/experiments/<int:pk>/class-tasks/<int:task_pk>/grading/", experiment_views.experiment_task_grading, name="experiment_task_grading"),
     path("<int:course_pk>/experiments/<int:pk>/edit/", experiment_views.experiment_edit, name="experiment_edit"),
     path("<int:course_pk>/experiments/<int:pk>/sync-questions/", experiment_views.experiment_sync_questions, name="experiment_sync_questions"),
     path("<int:course_pk>/experiments/<int:pk>/assign/", experiment_views.experiment_assign, name="experiment_assign"),

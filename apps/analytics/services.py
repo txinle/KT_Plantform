@@ -2007,6 +2007,8 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                     else "",
                     source.get("algorithm_version")
                     or participant.sampling_algorithm_version,
+                    source.get("history_role") or "",
+                    source.get("cross_experiment_item_policy") or "",
                 ]
             )
     preview_results = [
@@ -2079,7 +2081,7 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
             q_matrix_v2_rows,
         ),
         "participant_question_attribution_v2": (
-            ("participant_id", "version_id", "question_code", "stable_question_code", "assigned_sequence_index", "quota_kc_code", "quota_question_type", "match_scope", "sampling_seed_sha256", "algorithm_version"),
+            ("participant_id", "version_id", "question_code", "stable_question_code", "assigned_sequence_index", "quota_kc_code", "quota_question_type", "match_scope", "sampling_seed_sha256", "algorithm_version", "history_role", "cross_experiment_item_policy"),
             attribution_v2_rows,
         ),
         "response_snapshots": (
@@ -2282,8 +2284,10 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                     "published_at", "timer_semantics_version",
                     "randomization_semantics_version", "definition_fingerprint",
                     "canonicalization_version", "feedback_mode",
-                    "feedback_release_policy", "sampling_mode",
+                    "feedback_release_policy", "short_answer_grading_policy",
+                    "sampling_mode",
                     "sampling_total_count", "sampling_kcs", "sampling_inventory",
+                    "cross_experiment_item_policy", "review_count",
                     "taxonomy_snapshot", "candidate_resolution",
                     "sampling_definition", "timezone",
                 ),
@@ -2295,6 +2299,7 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                         release.definition_fingerprint, release.canonicalization_version,
                         release.configuration.get("feedback_mode", ""),
                         release.configuration.get("feedback_release_policy", ""),
+                        release.configuration.get("short_answer_grading_policy", ""),
                         release.configuration.get("sampling_mode")
                         or (
                             "type_quota_legacy"
@@ -2304,6 +2309,8 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                         release.configuration.get("sampling_total_count", ""),
                         json.dumps(release.configuration.get("sampling_kcs", []), ensure_ascii=False),
                         json.dumps(release.configuration.get("sampling_inventory", []), ensure_ascii=False),
+                        release.configuration.get("cross_experiment_item_policy", "unrestricted"),
+                        release.configuration.get("review_count", 0),
                         json.dumps(release.configuration.get("taxonomy_snapshot", []), ensure_ascii=False),
                         json.dumps(release.configuration.get("candidate_resolution", []), ensure_ascii=False),
                         json.dumps(release.configuration.get("sampling", {}), ensure_ascii=False),

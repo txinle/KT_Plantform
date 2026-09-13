@@ -136,6 +136,8 @@ class Experiment(models.Model):
         "sampling_mode",
         "sampling_total_count",
         "sampling_match_scope",
+        "cross_experiment_item_policy",
+        "review_count",
         "ordering_mode",
         "feedback_mode",
         "feedback_release_policy",
@@ -174,6 +176,10 @@ class Experiment(models.Model):
     class MatchScope(models.TextChoices):
         PRIMARY = "primary", "主 KC"
         ANY_LEVEL = "any_level", "任意层级"
+    class CrossExperimentItemPolicy(models.TextChoices):
+        EXCLUDE_PREVIOUS = "exclude_previous", "排除已正式作答题目"
+        MIXED_REVIEW = "mixed_review", "混合复测"
+        UNRESTRICTED = "unrestricted", "不限制历史题目"
     class Feedback(models.TextChoices):
         NONE = "none", "仅显示已提交"
         CORRECTNESS = "correctness", "显示正误"
@@ -246,6 +252,12 @@ class Experiment(models.Model):
         choices=MatchScope.choices,
         default=MatchScope.ANY_LEVEL,
     )
+    cross_experiment_item_policy = models.CharField(
+        max_length=20,
+        choices=CrossExperimentItemPolicy.choices,
+        default=CrossExperimentItemPolicy.UNRESTRICTED,
+    )
+    review_count = models.PositiveIntegerField(default=0)
     ordering_mode = models.CharField(max_length=24, choices=Ordering.choices, default=Ordering.FIXED)
     feedback_mode = models.CharField(max_length=16, choices=Feedback.choices, default=Feedback.NONE)
     feedback_release_policy = models.CharField(
@@ -354,6 +366,24 @@ class Experiment(models.Model):
                 errors["confidence_probability"] = "抽样采集必须设置抽样概率。"
         elif self.confidence_probability is not None:
             errors["confidence_probability"] = "仅抽样采集模式可以设置抽样概率。"
+        if (
+            self.cross_experiment_item_policy != self.CrossExperimentItemPolicy.MIXED_REVIEW
+            and self.review_count != 0
+        ):
+            errors["review_count"] = "仅混合复测策略可以设置复测题数。"
+        if self.cross_experiment_item_policy == self.CrossExperimentItemPolicy.MIXED_REVIEW:
+            assignment_size = (
+                int(self.sampling_total_count or 0)
+                if self.sampling_mode == self.SamplingMode.TOTAL_COUNT
+                else sum(
+                    quota or 0
+                    for quota in self.sampling_kcs.values_list("quota", flat=True)
+                )
+                if self.pk and self.sampling_mode == self.SamplingMode.KC_QUOTA
+                else 0
+            )
+            if assignment_size and not 1 <= self.review_count < assignment_size:
+                errors["review_count"] = "混合复测题数必须大于 0 且小于本次总题数。"
         if errors:
             raise ValidationError(errors)
 

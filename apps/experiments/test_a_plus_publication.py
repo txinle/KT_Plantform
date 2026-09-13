@@ -20,7 +20,13 @@ from apps.assessment.services import (
     save_draft,
     submit_attempt,
 )
-from apps.assessment.models import AssessmentEvent, Attempt
+from apps.assessment.models import (
+    AssessmentEvent,
+    Attempt,
+    ExperimentSession,
+    StudentQuestionAssignment,
+    SubmissionEvent,
+)
 from apps.experiments.models import (
     ClassExperimentTask,
     Experiment,
@@ -45,6 +51,8 @@ from apps.experiments.publication_services import (
     save_plan_selection,
     save_plan_schedules,
 )
+from apps.experiments.presentation_instances import get_or_create_default_item_instance
+from apps.experiments.sampling import SamplingValidationError
 from apps.question_bank.models import (
     Concept,
     Question,
@@ -271,6 +279,249 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
             [self.class_group.pk],
         )
 
+    def test_mixed_review_preview_uses_one_submitted_item_and_one_new_item(self):
+        historical_question = self.experiment.question_bank.questions.get(code="Q01")
+        concept = self.experiment.sampling_kcs.get().concept
+        new_question = Question.objects.create(
+            bank=self.experiment.question_bank,
+            sequence=2,
+            code="Q02",
+            question_type=Question.Type.SHORT,
+            text="新的发布预览题",
+            correct_answer="答案",
+        )
+        QuestionConcept.objects.create(
+            question=new_question,
+            concept=concept,
+            is_primary=True,
+        )
+        prior = Experiment.objects.create(
+            course=self.course,
+            owner=self.teacher,
+            created_by=self.teacher,
+            question_bank=self.experiment.question_bank,
+            name="历史实验",
+            cross_experiment_item_policy=Experiment.CrossExperimentItemPolicy.UNRESTRICTED,
+        )
+        prior_version = ExperimentVersion.objects.create(
+            experiment=prior,
+            version_number=1,
+            published_by=self.teacher,
+        )
+        prior_snapshot = QuestionSnapshot.objects.create(
+            version=prior_version,
+            source_question=historical_question,
+            source_sequence=historical_question.sequence,
+            code=historical_question.code,
+            question_type=historical_question.question_type,
+            text=historical_question.text,
+            correct_answer=historical_question.correct_answer,
+            primary_kc=concept.name,
+        )
+        prior_session = ExperimentSession.objects.create(
+            version=prior_version,
+            student=self.student,
+        )
+        prior_assignment = StudentQuestionAssignment.objects.create(
+            session=prior_session,
+            snapshot=prior_snapshot,
+            item_instance=get_or_create_default_item_instance(prior_snapshot),
+            assigned_sequence_index=1,
+        )
+        prior_attempt = Attempt.objects.create(
+            session=prior_session,
+            assignment=prior_assignment,
+        )
+        now = timezone.now()
+        SubmissionEvent.objects.create(
+            attempt=prior_attempt,
+            submission_token=uuid.uuid4(),
+            final_answer="答案",
+            server_received_at=now,
+            committed_at=now,
+        )
+        self.experiment.sampling_total_count = 2
+        self.experiment.cross_experiment_item_policy = Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+        self.experiment.review_count = 1
+        self.experiment.save(update_fields=[
+            "sampling_total_count",
+            "cross_experiment_item_policy",
+            "review_count",
+        ])
+
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        plan.refresh_from_db()
+        preview = generate_preview(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+        )
+
+        participant = preview.class_results.get().participants.get()
+        roles = list(
+            participant.items.order_by("assigned_sequence_index").values_list(
+                "sampling_source__history_role", flat=True
+            )
+        )
+        self.assertCountEqual(roles, ["review", "new"])
+        plan.refresh_from_db()
+        task = commit_publish_plan(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+        )[0]
+        session = get_or_create_session(
+            self.experiment,
+            self.student,
+            class_task=task,
+        )
+        self.assertEqual(session.attempts.count(), 2)
+        self.assertFalse(session.attempts.filter(pk=prior_attempt.pk).exists())
+        repeated = session.attempts.get(
+            assignment__snapshot__source_question=historical_question
+        )
+        self.assertIsNone(repeated.draft_answer)
+        self.assertFalse(hasattr(repeated, "submission_event"))
+        self.assertTrue(SubmissionEvent.objects.filter(pk=prior_attempt.submission_event.pk).exists())
+
+    def test_exclude_previous_avoids_other_active_frozen_assignment(self):
+        first_plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        PublishPlanClass.objects.create(
+            publish_plan=first_plan,
+            class_group=self.class_group,
+        )
+        generate_preview(
+            first_plan,
+            self.teacher,
+            expected_revision=first_plan.plan_revision,
+        )
+        first_plan.refresh_from_db()
+        first_task = commit_publish_plan(
+            first_plan,
+            self.teacher,
+            expected_revision=first_plan.plan_revision,
+        )[0]
+        reserved_id = first_task.participant_snapshots.get(
+            student=self.student
+        ).assignment_snapshot[0]["source_question_id"]
+
+        concept = self.experiment.sampling_kcs.get().concept
+        available = Question.objects.create(
+            bank=self.experiment.question_bank,
+            sequence=2,
+            code="Q02",
+            question_type=Question.Type.SHORT,
+            text="未被其他任务分配的题",
+            correct_answer="答案",
+        )
+        QuestionConcept.objects.create(question=available, concept=concept, is_primary=True)
+        later = Experiment.objects.create(
+            course=self.course,
+            owner=self.teacher,
+            created_by=self.teacher,
+            question_bank=self.experiment.question_bank,
+            name="后续排重实验",
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=1,
+            cross_experiment_item_policy=Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS,
+        )
+        ExperimentSamplingKC.objects.create(experiment=later, concept=concept)
+        later_plan = get_or_create_publish_plan(later, self.teacher)
+        PublishPlanClass.objects.create(
+            publish_plan=later_plan,
+            class_group=self.class_group,
+        )
+
+        preview = generate_preview(
+            later_plan,
+            self.teacher,
+            expected_revision=later_plan.plan_revision,
+        )
+
+        selected_id = preview.class_results.get().participants.get().items.get().source_question_id
+        self.assertNotEqual(selected_id, reserved_id)
+        self.assertEqual(selected_id, available.pk)
+
+    def test_frozen_total_count_preview_reports_filtered_pool_shortage(self):
+        self.experiment.cross_experiment_item_policy = (
+            Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS
+        )
+        self.experiment.save(update_fields=["cross_experiment_item_policy"])
+
+        first_plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        PublishPlanClass.objects.create(
+            publish_plan=first_plan,
+            class_group=self.class_group,
+        )
+        generate_preview(
+            first_plan,
+            self.teacher,
+            expected_revision=first_plan.plan_revision,
+        )
+        first_plan.refresh_from_db()
+        commit_publish_plan(
+            first_plan,
+            self.teacher,
+            expected_revision=first_plan.plan_revision,
+        )
+
+        concept = self.experiment.sampling_kcs.get().concept
+        occupying_experiment = Experiment.objects.create(
+            course=self.course,
+            owner=self.teacher,
+            created_by=self.teacher,
+            question_bank=self.experiment.question_bank,
+            name="并行占用实验",
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=1,
+            cross_experiment_item_policy=(
+                Experiment.CrossExperimentItemPolicy.UNRESTRICTED
+            ),
+        )
+        ExperimentSamplingKC.objects.create(
+            experiment=occupying_experiment,
+            concept=concept,
+        )
+        occupying_plan = get_or_create_publish_plan(occupying_experiment, self.teacher)
+        PublishPlanClass.objects.create(
+            publish_plan=occupying_plan,
+            class_group=self.class_group_b,
+        )
+        generate_preview(
+            occupying_plan,
+            self.teacher,
+            expected_revision=occupying_plan.plan_revision,
+        )
+        occupying_plan.refresh_from_db()
+        commit_publish_plan(
+            occupying_plan,
+            self.teacher,
+            expected_revision=occupying_plan.plan_revision,
+        )
+
+        later_plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        PublishPlanClass.objects.create(
+            publish_plan=later_plan,
+            class_group=self.class_group_b,
+        )
+
+        with self.assertRaises(SamplingValidationError) as raised:
+            generate_preview(
+                later_plan,
+                self.teacher,
+                expected_revision=later_plan.plan_revision,
+            )
+
+        self.assertEqual(raised.exception.issues[0]["code"], "NEW_POOL_INSUFFICIENT")
+        self.assertEqual(raised.exception.issues[0]["student_id"], self.student_b.pk)
+
     def test_preview_is_non_formal_then_commit_creates_one_frozen_release_mapping(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)
         PublishPlanClass.objects.create(
@@ -350,6 +601,45 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
             session.pk,
         )
 
+    def test_new_course_short_answer_submission_starts_pending(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        PublishPlanClass.objects.create(
+            publish_plan=plan,
+            class_group=self.class_group,
+        )
+        generate_preview(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+        )
+        plan.refresh_from_db()
+        task = commit_publish_plan(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+        )[0]
+        session = get_or_create_session(
+            self.experiment,
+            self.student,
+            class_task=task,
+        )
+        attempt = record_visit(session.pk, session.assignments.get().pk)
+        save_draft(attempt.pk, "与参考答案不同的合理表达")
+
+        submitted_attempt = submit_attempt(attempt.pk, uuid.uuid4())
+
+        submission = SubmissionEvent.objects.get(attempt=submitted_attempt)
+        grade = submission.grade_records.get(version=1)
+        self.assertEqual(submission.grading_status, SubmissionEvent.GradingStatus.PENDING)
+        self.assertIsNone(submission.is_correct)
+        self.assertIsNone(submission.score)
+        self.assertIsNone(submitted_attempt.is_correct)
+        self.assertIsNone(submitted_attempt.score)
+        self.assertEqual(grade.validity_status, "candidate")
+        self.assertEqual(grade.grading_method, "manual_binary_v1")
+        self.assertEqual(grade.grading_version, "manual_binary_v1")
+        self.assertEqual(str(grade.max_score), "1.00")
+
     def test_preview_uses_the_normalized_total_count_sampling_configuration(self):
         concept = Concept.objects.get(course=self.course, name="KC-A")
         second = Question.objects.create(
@@ -405,6 +695,10 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
         self.experiment.refresh_from_db()
         release = self.experiment.frozen_release_snapshot
         configuration = release.configuration
+        self.assertEqual(
+            configuration["short_answer_grading_policy"],
+            "manual_binary_v1",
+        )
         self.assertEqual(configuration["sampling_mode"], "total_count")
         self.assertEqual(configuration["sampling_total_count"], 1)
         self.assertEqual(

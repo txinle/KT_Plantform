@@ -552,6 +552,7 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
 
         self.assertEqual(pending_detail["final_answer"], "B：正确选项")
         self.assertEqual(pending_detail["result_state"], "pending")
+        self.assertEqual(pending_detail["result_label"], "待教师批改")
         self.assertNotIn("correct_answer", pending_detail)
         self.assertNotIn("explanation", pending_detail)
         self.assertEqual(

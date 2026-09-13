@@ -17,6 +17,7 @@ from apps.api.pagination import FixedPageNumberPagination
 from apps.api.permissions import RolePermission
 from apps.assessment.deadline_services import DeadlineDecisionService
 from apps.assessment.feedback_services import FeedbackReleaseError, release_task_feedback
+from apps.assessment.manual_grading_services import task_grading_summary
 from apps.assessment.models import ExperimentSession
 from apps.audit.services import log_action
 from apps.question_bank.models import Concept, Question, QuestionBank
@@ -70,6 +71,8 @@ from .serializers import (
 def _raise_api_domain_error(exc):
     if isinstance(exc, PublicationConflict):
         raise ApiConflict("; ".join(exc.messages), code=exc.code) from exc
+    if isinstance(exc, SamplingValidationError):
+        raise ValidationError({"participants": exc.issues}) from exc
     raise ValidationError({"non_field_errors": exc.messages}) from exc
 
 
@@ -138,6 +141,8 @@ def _preview_projection(preview_run):
 
 def _participant_projection(participant, *, include_items=False):
     class_group = participant.class_result.publish_plan_class.class_group
+    preview_items = list(participant.items.all())
+    history_roles = [item.sampling_source.get("history_role") for item in preview_items]
     result = {
         "id": participant.pk,
         "student_number": participant.student.student_number,
@@ -147,10 +152,17 @@ def _participant_projection(participant, *, include_items=False):
         "item_count": participant.item_count,
         "is_valid": participant.is_valid,
         "excluded": False,
+        "review_item_count": history_roles.count("review"),
+        "new_item_count": history_roles.count("new"),
+        "cross_experiment_item_policy": (
+            preview_items[0].sampling_source.get("cross_experiment_item_policy")
+            if preview_items
+            else None
+        ),
     }
     if include_items:
         items = []
-        for item in participant.items.all():
+        for item in preview_items:
             frozen = (
                 item.release_mapping.question_snapshot
                 if item.release_mapping_id is not None
@@ -166,6 +178,7 @@ def _participant_projection(participant, *, include_items=False):
                         if frozen
                         else item.source_question.question_type
                     ),
+                    "history_role": item.sampling_source.get("history_role"),
                 }
             )
         result["items"] = items
@@ -182,6 +195,9 @@ def _draft_participant_projection(enrollment, *, include_items=False):
         "item_count": 0,
         "is_valid": True,
         "excluded": enrollment.excluded,
+        "review_item_count": 0,
+        "new_item_count": 0,
+        "cross_experiment_item_policy": None,
     }
     if include_items:
         result["items"] = []
@@ -189,11 +205,17 @@ def _draft_participant_projection(enrollment, *, include_items=False):
 
 
 def _task_available_actions(task, *, now=None):
+    grading = task_grading_summary(task)
+    grading_actions = (
+        ["grade_short_answers"]
+        if grading["enabled"] and grading["short_answer_questions"] > 0
+        else []
+    )
     if task.cancelled_at or task.manual_closed_at or task.invalidated_at:
-        return []
+        return grading_actions
     now = now or database_now()
     schedule = task.schedule_revisions.order_by("-revision_no").first()
-    actions = []
+    actions = list(grading_actions)
     if (
         schedule is not None
         and schedule.opens_at is not None
@@ -226,6 +248,7 @@ def _task_projection(task):
     )
     schedule = task.schedule_revisions.order_by("-revision_no").first()
     now = database_now()
+    grading = task_grading_summary(task)
     return {
         "id": task.pk,
         "experiment_id": task.experiment_id,
@@ -238,6 +261,7 @@ def _task_projection(task):
         "closes_at": schedule.closes_at if schedule else None,
         "schedule_revision": schedule.revision_no if schedule else 1,
         "participant_count": task.participant_snapshots.count(),
+        "grading": grading,
         "available_actions": _task_available_actions(task, now=now),
     }
 
@@ -539,7 +563,12 @@ class TeacherExperimentReadinessView(TeacherExperimentApiMixin, APIView):
                         }
                         for rule in rules
                     ]
-                    service.resolve(validate_inventory=True)
+                    service.resolve(
+                        validate_inventory=(
+                            experiment.cross_experiment_item_policy
+                            != Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+                        )
+                    )
                 except SamplingValidationError as exc:
                     issues.extend(issue["message"] for issue in exc.issues)
                     blocking_issues.extend(exc.issues)

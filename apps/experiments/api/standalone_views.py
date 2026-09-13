@@ -367,6 +367,9 @@ class TeacherStandaloneExperimentCollectionView(
                     question_bank = lock_experiment_question_bank(
                         form.cleaned_data["question_bank"]
                     )
+                    experiment.cross_experiment_item_policy = (
+                        Experiment.CrossExperimentItemPolicy.UNRESTRICTED
+                    )
                 experiment.question_bank = question_bank
                 experiment.owner = request.user
                 experiment.save()

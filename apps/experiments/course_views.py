@@ -117,6 +117,14 @@ def experiment_detail(request, course_pk, pk):
 
 
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
+def experiment_task_grading(request, course_pk, pk, task_pk):
+    course = get_accessible_course(request.user, course_pk)
+    experiment = _experiment(course, pk)
+    get_object_or_404(ClassExperimentTask, pk=task_pk, experiment=experiment)
+    return frontend_response()
+
+
+@role_required(User.Role.TEACHER, User.Role.ADMIN)
 def experiment_edit(request, course_pk, pk):
     course = get_accessible_course(request.user, course_pk)
     experiment = _experiment(course, pk)

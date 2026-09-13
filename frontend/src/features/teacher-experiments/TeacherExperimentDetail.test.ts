@@ -42,6 +42,8 @@ describe('TeacherExperimentDetail', () => {
       status: 'draft',
       status_label: '草稿',
       selection_mode_label: '全量题池',
+      cross_experiment_item_policy: 'exclude_previous',
+      review_count: 0,
       ordering_mode_label: '固定顺序',
       feedback_mode_label: '仅显示已提交',
       feedback_release_policy_label: '学生完成后',
@@ -89,7 +91,8 @@ describe('TeacherExperimentDetail', () => {
     expect(wrapper.get('.kt-experiment-tabs').classes()).toContain('kt-sidebar-secondary-nav')
     expect(wrapper.find('.kt-experiment-draft-grid').exists()).toBe(true)
     expect(tabs[0]?.attributes('aria-selected')).toBe('true')
-    expect(wrapper.findAll('[data-summary-icon]')).toHaveLength(9)
+    expect(wrapper.findAll('[data-summary-icon]')).toHaveLength(10)
+    expect(wrapper.get('.kt-definition-summary').text()).toContain('排除已正式作答题目')
     expect(wrapper.get('.kt-definition-summary').text()).not.toContain('时限模式')
     expect(wrapper.get('.kt-definition-summary').text()).toContain('总限时')
     expect(wrapper.get('.kt-definition-summary').text()).toContain('45 分钟')
@@ -154,7 +157,8 @@ describe('TeacherExperimentDetail', () => {
         opens_at: '2026-09-01T00:00:00Z',
         closes_at: '2026-09-03T00:00:00Z',
         business_status: '采集中',
-        available_actions: ['revise_schedule', 'manual_close', 'release_feedback'],
+        grading: { enabled: true, short_answer_questions: 1, submitted: 12, pending: 4, graded: 8 },
+        available_actions: ['grade_short_answers', 'revise_schedule', 'manual_close', 'release_feedback'],
       }],
     })
     mocks.api.progress.mockResolvedValue({ total_participants: 36, not_started: 11, in_progress: 8, completed: 17 })
@@ -167,6 +171,7 @@ describe('TeacherExperimentDetail', () => {
     expect(wrapper.get('[data-action="revise-schedule"]').text()).toBe('修订排期')
     expect(wrapper.get('[data-action="manual-close"]').text()).toBe('提前结束')
     expect(wrapper.get('[data-action="release-feedback"]').text()).toBe('发布反馈')
+    expect(wrapper.get('[data-action="grade-short-answers"]').text()).toContain('待批改 4')
 
     await wrapper.get('[data-action="release-feedback"]').trigger('click')
     await flushPromises()

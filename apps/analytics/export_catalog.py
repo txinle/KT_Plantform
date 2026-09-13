@@ -268,6 +268,13 @@ TABLE_FIELD_DESCRIPTIONS = {
     "release_metadata": {
         "feedback_mode": "正式版本冻结的反馈内容级别",
         "feedback_release_policy": "正式版本冻结的反馈发布策略",
+        "short_answer_grading_policy": "正式版本冻结的简答题评分规则",
+        "cross_experiment_item_policy": "正式版本冻结的跨实验题目策略",
+        "review_count": "混合复测策略要求的复测题数量；其他策略为 0",
+    },
+    "participant_question_attribution_v2": {
+        "history_role": "生成冻结题单时该题的历史角色：review、new 或 unrestricted",
+        "cross_experiment_item_policy": "生成该参与者题单时使用的跨实验题目策略",
     },
     "grade_records": {
         "grader_id": "本次评分记录的评分者用户标识；自动评分为空。",

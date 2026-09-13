@@ -54,6 +54,61 @@ export type ClassTask = components['schemas']['ClassTask']
 export type ClassTaskProgress = components['schemas']['ClassTaskProgress']
 export type ScheduleRevisionInput = components['schemas']['ScheduleRevisionInput']
 export type CourseConceptCollection = components['schemas']['CourseConceptCollection']
+export type GradingStatusFilter = 'pending' | 'completed' | 'all'
+export type ManualGradingTotals = {
+  enabled: boolean
+  short_answer_questions: number
+  submitted: number
+  pending: number
+  graded: number
+}
+export type ManualGradingQuestionSummary = {
+  question_snapshot_id: number
+  code: string
+  text_summary: string
+  submitted_count: number
+  pending_count: number
+  graded_count: number
+}
+export type ManualGradingSubmission = {
+  submission_id: number
+  student_id: number
+  student_number: string
+  display_name: string
+  final_answer: unknown
+  submitted_at: string
+  grading_status: string
+  latest_grade_version: number
+  current_is_correct: boolean | null
+  current_comment: string
+  graded_at: string | null
+  grader_name: string
+}
+export type ManualGradingOverview = {
+  task: { id: number; experiment_id: number; experiment_name: string; class_id: number; class_name: string }
+  totals: ManualGradingTotals
+  questions: ManualGradingQuestionSummary[]
+}
+export type ManualGradingQuestionDetail = {
+  question: {
+    question_snapshot_id: number
+    code: string
+    text: string
+    correct_answer: unknown
+    accepted_answers: unknown[]
+    explanation: string
+  }
+  submissions: {
+    items: ManualGradingSubmission[]
+    page: { number: number; size: number; total_items: number; total_pages: number; start: number; end: number }
+  }
+}
+export type ManualGradeInput = { expected_grade_version: number; is_correct: boolean; comment: string }
+export type ManualGradeResponse = {
+  submission: ManualGradingSubmission
+  question_progress: ManualGradingQuestionSummary
+  task_progress: ManualGradingTotals
+}
 
 type ApiClient = ReturnType<typeof createApiClient>
 
@@ -183,6 +238,24 @@ export function createTeacherExperimentApi(client: ApiClient) {
         body: reason ? { reason } : {},
         refreshAuthoritativeState: () => this.task(taskId),
       })
+    },
+    grading(taskId: number) {
+      return client.get<ManualGradingOverview>(`/api/v1/teacher/class-tasks/${taskId}/grading/`)
+    },
+    gradingQuestion(taskId: number, snapshotId: number, status: GradingStatusFilter = 'pending', page = 1) {
+      return client.get<ManualGradingQuestionDetail>(
+        `/api/v1/teacher/class-tasks/${taskId}/grading/questions/${snapshotId}/?status=${status}&page=${page}`,
+      )
+    },
+    gradeSubmission(taskId: number, snapshotId: number, submissionId: number, input: ManualGradeInput) {
+      return client.mutate<ManualGradeResponse>(
+        `/api/v1/teacher/class-tasks/${taskId}/grading/submissions/${submissionId}/`,
+        {
+          method: 'POST',
+          body: input,
+          refreshAuthoritativeState: () => this.gradingQuestion(taskId, snapshotId, 'all', 1),
+        },
+      )
     },
   }
 }

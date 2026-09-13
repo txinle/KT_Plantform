@@ -962,6 +962,7 @@ def _submit_attempt_transaction(
         max_score=grading.max_score,
         graded_at=now if grading.status == GradeRecord.Status.COMPLETED else None,
         grading_method=grading.method,
+        grading_version=grading.method,
     )
     append_assessment_event(
         event_type="response_committed",

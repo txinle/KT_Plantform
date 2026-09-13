@@ -79,6 +79,10 @@ class SamplingDefinitionSerializer(serializers.Serializer):
 
 
 class TeacherExperimentSerializer(serializers.ModelSerializer):
+    cross_experiment_item_policy = serializers.ChoiceField(
+        choices=Experiment.CrossExperimentItemPolicy.choices,
+        default=Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS,
+    )
     question_bank = QuestionBankReferenceSerializer(read_only=True, allow_null=True)
     question_bank_id = serializers.PrimaryKeyRelatedField(
         source="question_bank",
@@ -140,6 +144,8 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "sampling_match_scope",
             "sampling_kcs",
             "sampling",
+            "cross_experiment_item_policy",
+            "review_count",
             "ordering_mode",
             "ordering_mode_label",
             "feedback_mode",
@@ -193,6 +199,8 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "selection_mode",
             "sampling_mode",
             "sampling_total_count",
+            "cross_experiment_item_policy",
+            "review_count",
             "ordering_mode",
             "feedback_mode",
             "feedback_release_policy",
@@ -234,6 +242,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         label_fields = {
             "selection_mode": Experiment.SelectionMode,
             "sampling_mode": Experiment.SamplingMode,
+            "cross_experiment_item_policy": Experiment.CrossExperimentItemPolicy,
             "ordering_mode": Experiment.Ordering,
             "feedback_mode": Experiment.Feedback,
             "feedback_release_policy": Experiment.FeedbackReleasePolicy,
@@ -395,6 +404,32 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
                 {"question_quotas": "按题型配额抽题至少需要抽取 1 道题。"}
             )
 
+        policy = self._effective_value(attrs, "cross_experiment_item_policy")
+        review_count = self._effective_value(attrs, "review_count")
+        assignment_size = (
+            sampling_total_count
+            if sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+            else sum(
+                row.get("quota") or 0
+                for row in (
+                    sampling_kcs
+                    if sampling_kcs is not None
+                    else self.instance.sampling_kcs.values("quota")
+                    if self.instance is not None
+                    else []
+                )
+            )
+        )
+        if policy == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW:
+            if not assignment_size or not 1 <= review_count < assignment_size:
+                raise serializers.ValidationError(
+                    {"review_count": "混合复测题数必须大于 0 且小于本次总题数。"}
+                )
+        elif review_count != 0:
+            raise serializers.ValidationError(
+                {"review_count": "仅混合复测策略可以设置复测题数。"}
+            )
+
         time_mode = self._effective_value(attrs, "time_mode")
         total_limit = self._effective_value(attrs, "total_time_limit_minutes")
         question_limit = self._effective_value(
@@ -488,13 +523,13 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             )
         for field_name, value in validated_data.items():
             setattr(instance, field_name, value)
+        instance.save()
+        self._save_quotas(instance, quotas)
+        self._save_sampling_kcs(instance, sampling_kcs)
         try:
             instance.full_clean()
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc.message_dict) from exc
-        instance.save()
-        self._save_quotas(instance, quotas)
-        self._save_sampling_kcs(instance, sampling_kcs)
         if instance.sampling_mode:
             try:
                 SamplingService(instance).resolve(validate_inventory=False)
@@ -623,6 +658,8 @@ class PublishPlanBlockingIssueSerializer(serializers.Serializer):
     ancestor_kc_path = serializers.CharField(required=False)
     descendant_kc_id = serializers.IntegerField(required=False)
     descendant_kc_path = serializers.CharField(required=False)
+    student_id = serializers.IntegerField(required=False)
+    student_number = serializers.CharField(required=False, allow_blank=True)
 
 
 class PublishPlanSerializer(serializers.Serializer):
@@ -748,6 +785,12 @@ class PublishParticipantSerializer(serializers.Serializer):
     item_count = serializers.IntegerField(min_value=0)
     is_valid = serializers.BooleanField()
     excluded = serializers.BooleanField()
+    review_item_count = serializers.IntegerField(min_value=0)
+    new_item_count = serializers.IntegerField(min_value=0)
+    cross_experiment_item_policy = serializers.ChoiceField(
+        choices=Experiment.CrossExperimentItemPolicy.choices,
+        allow_null=True,
+    )
 
 
 class PublishParticipantCollectionSerializer(serializers.Serializer):
@@ -760,6 +803,10 @@ class PublishParticipantItemSerializer(serializers.Serializer):
     question_id = serializers.IntegerField()
     question_code = serializers.CharField()
     question_type = serializers.CharField()
+    history_role = serializers.ChoiceField(
+        choices=("review", "new", "unrestricted"),
+        allow_null=True,
+    )
 
 
 class PublishParticipantDetailSerializer(PublishParticipantSerializer):
@@ -778,6 +825,7 @@ class ClassTaskSerializer(serializers.Serializer):
     closes_at = serializers.DateTimeField(allow_null=True)
     schedule_revision = serializers.IntegerField(min_value=1)
     participant_count = serializers.IntegerField(min_value=0)
+    grading = serializers.DictField()
     available_actions = serializers.ListField(child=serializers.CharField())
 
 

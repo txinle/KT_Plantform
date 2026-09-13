@@ -204,6 +204,7 @@ onMounted(load)
           <dl class="kt-description-list kt-definition-summary__list">
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="bank" :size="17" /></span><dt>题库</dt><dd>{{ experiment.question_bank?.name || '未选择题库' }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="definition" :size="17" /></span><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}<span v-if="experiment.sampling_mode === 'total_count'"> · {{ experiment.sampling_total_count }} 题</span></dd></div>
+            <div><span class="kt-summary-icon" data-summary-icon><Icon name="summary" :size="17" /></span><dt>跨实验题目</dt><dd>{{ experiment.cross_experiment_item_policy === 'mixed_review' ? `混合复测 · ${experiment.review_count} 题` : (experiment.cross_experiment_item_policy === 'exclude_previous' ? '排除已正式作答题目' : '不限制历史题目') }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="summary" :size="17" /></span><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>反馈</dt><dd>{{ experiment.feedback_mode_label }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>反馈发布</dt><dd>{{ experiment.feedback_release_policy_label || '未设置' }}</dd></div>
@@ -259,6 +260,12 @@ onMounted(load)
                     <td>{{ progress[task.id]?.not_started ?? '—' }}</td><td>{{ progress[task.id]?.in_progress ?? '—' }}</td><td>{{ progress[task.id]?.completed ?? '—' }}</td>
                     <td>
                       <div class="kt-table-actions">
+                        <a
+                          v-if="task.available_actions.includes('grade_short_answers')"
+                          data-action="grade-short-answers"
+                          class="kt-text-button"
+                          :href="`/teacher/courses/${courseId}/experiments/${experimentId}/class-tasks/${task.id}/grading/`"
+                        >批改简答题 · 待批改 {{ task.grading?.pending ?? 0 }}</a>
                         <button v-if="task.available_actions.includes('revise_schedule')" data-action="revise-schedule" class="kt-text-button" type="button" @click="editSchedule(task)">修订排期</button>
                         <button v-if="task.available_actions.includes('cancel')" data-action="cancel-task" class="kt-text-button kt-text-button--danger" type="button" @click="requestTerminalAction(task.id, 'cancel')">取消任务</button>
                         <button v-if="task.available_actions.includes('manual_close')" data-action="manual-close" class="kt-text-button kt-text-button--danger" type="button" @click="requestTerminalAction(task.id, 'manual_close')">提前结束</button>

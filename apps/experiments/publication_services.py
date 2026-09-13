@@ -46,7 +46,8 @@ from .services import (
     _quota_map,
     validate_for_publish,
 )
-from .sampling import SamplingService, SamplingValidationError
+from .cross_experiment_items import StudentItemContext, student_item_context
+from .sampling import SamplingService, SamplingValidationError, _grouped_quota_flow
 
 
 PLAN_TTL = timedelta(hours=72)
@@ -215,7 +216,12 @@ def publish_plan_setup_projection(plan):
     ]
     if plan.experiment.sampling_mode and not plan.experiment.frozen_release_snapshot_id:
         try:
-            SamplingService(plan.experiment).resolve()
+            SamplingService(plan.experiment).resolve(
+                validate_inventory=(
+                    plan.experiment.cross_experiment_item_policy
+                    != Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+                )
+            )
         except SamplingValidationError as exc:
             blocking_issues.extend(exc.issues)
     return {
@@ -649,7 +655,117 @@ def _frozen_quota_selection(items, configuration, sampling_seed):
     ]
 
 
-def _select_questions(experiment, candidates, sampling_seed, ordering_seed):
+def _select_frozen_mixed_review(items, configuration, item_context, sampling_seed):
+    review_count = int(configuration.get("review_count", 0) or 0)
+    requested = (
+        int(configuration["sampling_total_count"])
+        if configuration["sampling_mode"] == Experiment.SamplingMode.TOTAL_COUNT
+        else sum(int(row.get("quota") or 0) for row in configuration["sampling_kcs"])
+    )
+    completed_ids = item_context.completed_question_ids
+    review_available = sum(
+        _candidate_source_question(item).pk in completed_ids for item in items
+    )
+    new_available = len(items) - review_available
+    issues = []
+    if review_available < review_count:
+        issues.append({
+            "code": "REVIEW_POOL_INSUFFICIENT",
+            "message": f"复测题需要 {review_count} 题，可用 {review_available} 题。",
+            "field": "review_count",
+            "class_id": None,
+            "kc_id": None,
+        })
+    if new_available < requested - review_count:
+        issues.append({
+            "code": "NEW_POOL_INSUFFICIENT",
+            "message": f"新题需要 {requested - review_count} 题，可用 {new_available} 题。",
+            "field": "review_count",
+            "class_id": None,
+            "kc_id": None,
+        })
+    if issues:
+        raise SamplingValidationError(issues)
+
+    if configuration["sampling_mode"] == Experiment.SamplingMode.KC_QUOTA:
+        evidence = {
+            row["question_id"]: row
+            for row in configuration.get("candidate_resolution", [])
+        }
+        capacities = {
+            row["kc_code"]: int(row.get("quota") or 0)
+            for row in configuration["sampling_kcs"]
+        }
+
+        def bucket_ids(item):
+            source_id = _candidate_source_question(item).pk
+            return evidence.get(source_id, {}).get("matched_kc_codes", [])
+    else:
+        type_quotas = configuration.get("sampling_type_quotas", [])
+        capacities = (
+            {row["question_type"]: int(row["amount"]) for row in type_quotas}
+            if type_quotas
+            else {"all": requested}
+        )
+
+        def bucket_ids(item):
+            return [_candidate_question_type(item)] if type_quotas else ["all"]
+
+    maximum, allocation = _grouped_quota_flow(
+        candidates=items,
+        completed_ids=completed_ids,
+        review_count=review_count,
+        bucket_capacities=capacities,
+        bucket_ids_for_question=bucket_ids,
+        candidate_id=lambda item: _candidate_source_question(item).pk,
+        rng=random.Random(int(sampling_seed[:16], 16)),
+    )
+    if maximum < requested:
+        raise PublicationConflict(
+            f"题目历史构成与现有配额无法同时满足：需要 {requested} 题，最多可分配 {maximum} 题。",
+            code="GLOBAL_MATCHING_INSUFFICIENT",
+        )
+    by_source_id = {_candidate_source_question(item).pk: item for item in items}
+    rules = {row["kc_code"]: row for row in configuration.get("sampling_kcs", [])}
+    return [
+        {
+            "candidate": by_source_id[source_id],
+            "sampling_source": {
+                "mode": configuration["sampling_mode"],
+                "quota_kc_code": (
+                    bucket_id
+                    if configuration["sampling_mode"] == Experiment.SamplingMode.KC_QUOTA
+                    else None
+                ),
+                "quota_question_type": (
+                    _candidate_question_type(by_source_id[source_id])
+                    if configuration["sampling_mode"] == Experiment.SamplingMode.TOTAL_COUNT
+                    and bucket_id != "all"
+                    else None
+                ),
+                "match_scope": (
+                    rules[bucket_id]["match_scope"]
+                    if configuration["sampling_mode"] == Experiment.SamplingMode.KC_QUOTA
+                    else configuration["sampling_match_scope"]
+                ),
+                "algorithm_version": "history-grouped-flow-v1",
+                "history_role": "review" if source_id in completed_ids else "new",
+                "cross_experiment_item_policy": Experiment.CrossExperimentItemPolicy.MIXED_REVIEW,
+            },
+        }
+        for source_id, bucket_id in allocation.items()
+    ]
+
+
+def _select_questions(
+    experiment,
+    candidates,
+    sampling_seed,
+    ordering_seed,
+    *,
+    item_context=None,
+):
+    item_context = item_context or StudentItemContext(frozenset(), frozenset(), ())
     items = sorted(
         candidates,
         key=lambda item: (_candidate_sequence(item), _candidate_id(item)),
@@ -664,8 +780,37 @@ def _select_questions(experiment, candidates, sampling_seed, ordering_seed):
         if configuration is not None
         else experiment.sampling_mode
     )
+    policy = (
+        configuration.get(
+            "cross_experiment_item_policy",
+            Experiment.CrossExperimentItemPolicy.UNRESTRICTED,
+        )
+        if configuration is not None
+        else experiment.cross_experiment_item_policy
+    )
+    if policy != Experiment.CrossExperimentItemPolicy.UNRESTRICTED:
+        items = [
+            item for item in items
+            if _candidate_source_question(item).pk
+            not in item_context.active_frozen_question_ids
+            and (
+                policy == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+                or _candidate_source_question(item).pk
+                not in item_context.completed_question_ids
+            )
+        ]
     if sampling_mode:
-        if configuration is not None:
+        if (
+            configuration is not None
+            and policy == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+        ):
+            items = _select_frozen_mixed_review(
+                items,
+                configuration,
+                item_context,
+                sampling_seed,
+            )
+        elif configuration is not None:
             rng = random.Random(int(sampling_seed[:16], 16))
             if configuration["sampling_mode"] == Experiment.SamplingMode.TOTAL_COUNT:
                 type_quotas = configuration.get("sampling_type_quotas", [])
@@ -698,6 +843,24 @@ def _select_questions(experiment, candidates, sampling_seed, ordering_seed):
                         for item in selected
                     ]
                 else:
+                    requested = int(configuration["sampling_total_count"])
+                    if len(items) < requested:
+                        raise SamplingValidationError([{
+                            "code": (
+                                "NEW_POOL_INSUFFICIENT"
+                                if policy
+                                == Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS
+                                else "TOTAL_COUNT_INSUFFICIENT"
+                            ),
+                            "message": (
+                                f"本次需要 {requested} 题，当前可用 {len(items)} 题。"
+                            ),
+                            "field": "sampling_total_count",
+                            "class_id": None,
+                            "kc_id": None,
+                            "requested": requested,
+                            "available": len(items),
+                        }])
                     items = [
                         {
                             "candidate": item,
@@ -709,7 +872,7 @@ def _select_questions(experiment, candidates, sampling_seed, ordering_seed):
                                 "algorithm_version": "deterministic-union-sample-v2",
                             },
                         }
-                        for item in rng.sample(items, configuration["sampling_total_count"])
+                        for item in rng.sample(items, requested)
                     ]
             else:
                 items = _frozen_quota_selection(
@@ -742,9 +905,17 @@ def _select_questions(experiment, candidates, sampling_seed, ordering_seed):
                                 else "deterministic-bipartite-v2"
                             )
                         ),
+                        "history_role": row["history_role"],
+                        "cross_experiment_item_policy": row[
+                            "cross_experiment_item_policy"
+                        ],
                     },
                 }
-                for row in SamplingService(experiment).select_with_attribution(
+                for row in SamplingService(
+                    experiment,
+                    completed_question_ids=item_context.completed_question_ids,
+                    active_frozen_question_ids=item_context.active_frozen_question_ids,
+                ).select_with_attribution(
                     sampling_seed
                 )
             ]
@@ -760,6 +931,15 @@ def _select_questions(experiment, candidates, sampling_seed, ordering_seed):
             ]
             selected.extend(rng.sample(options, int(quota_map.get(question_type, 0))))
         items = selected
+    if sampling_mode:
+        for row in items:
+            row["sampling_source"].setdefault(
+                "history_role",
+                "new"
+                if policy == Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS
+                else "unrestricted",
+            )
+            row["sampling_source"].setdefault("cross_experiment_item_policy", policy)
     if not sampling_mode:
         items = [{"candidate": item, "sampling_source": {}} for item in items]
     items = sorted(
@@ -807,7 +987,12 @@ def _preview_candidates(experiment):
     if release is None:
         validate_for_publish(experiment, experiment.question_bank, participant_count=1)
         if experiment.sampling_mode:
-            candidates = SamplingService(experiment).resolve().candidates
+            candidates = SamplingService(experiment).resolve(
+                validate_inventory=(
+                    experiment.cross_experiment_item_policy
+                    != Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+                )
+            ).candidates
         else:
             candidates = _publish_candidates(experiment.question_bank)
             _candidate_inventory(candidates, experiment.selection_mode, _quota_map(experiment))
@@ -832,7 +1017,12 @@ def _preview_definition_fingerprint(experiment, candidates):
     if frozen is not None:
         sampling_kcs = frozen.get("sampling_kcs", [])
     elif experiment.sampling_mode:
-        SamplingService(experiment).resolve()
+        SamplingService(experiment).resolve(
+            validate_inventory=(
+                experiment.cross_experiment_item_policy
+                != Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+            )
+        )
         sampling_kcs = [
             {
                 "kc_code": rule.concept.code,
@@ -867,9 +1057,20 @@ def _preview_definition_fingerprint(experiment, candidates):
             "sampling_mode": frozen.get("sampling_mode") if frozen else experiment.sampling_mode,
             "sampling_total_count": frozen.get("sampling_total_count") if frozen else experiment.sampling_total_count,
             "sampling_match_scope": frozen.get("sampling_match_scope") if frozen else experiment.sampling_match_scope,
+            "cross_experiment_item_policy": (
+                frozen.get("cross_experiment_item_policy")
+                if frozen
+                else experiment.cross_experiment_item_policy
+            ),
+            "review_count": frozen.get("review_count", 0) if frozen else experiment.review_count,
             "sampling_kcs": sampling_kcs,
             "ordering_mode": frozen.get("ordering_mode") if frozen else experiment.ordering_mode,
             "feedback_mode": frozen.get("feedback_mode") if frozen else experiment.feedback_mode,
+            "short_answer_grading_policy": (
+                frozen.get("short_answer_grading_policy", "legacy_exact_match")
+                if frozen
+                else "manual_binary_v1"
+            ),
             "research_tools": frozen.get("research_tools", {}) if frozen else experiment.research_tools,
             "resume_mode": frozen.get("resume_mode") if frozen else experiment.resume_mode,
             "assignment_unit_type": frozen.get("assignment_unit_type") if frozen else experiment.assignment_unit_type,
@@ -940,6 +1141,7 @@ def generate_preview(plan, actor, *, expected_revision):
         created_by=actor,
     )
     seen_students = {}
+    participant_issues = []
     for plan_class in plan_classes:
         if plan_class.class_group.course_id != experiment.course_id:
             raise ValidationError("发布班级必须属于实验所属课程。")
@@ -992,7 +1194,45 @@ def generate_preview(plan, actor, *, expected_revision):
             subject_key = randomization_subject_key(subject)
             sampling_seed = _derive_seed(root_seed, "sampling:v2", subject_key)
             ordering_seed = _derive_seed(root_seed, "ordering:v2", subject_key)
-            selected = _select_questions(experiment, candidates, sampling_seed, ordering_seed)
+            item_context = student_item_context(experiment, student)
+            if (
+                experiment.cross_experiment_item_policy
+                != Experiment.CrossExperimentItemPolicy.UNRESTRICTED
+                and item_context.unresolved_task_ids
+            ):
+                participant_issues.append({
+                    "code": "ACTIVE_ASSIGNMENT_UNRESOLVED",
+                    "message": (
+                        f"学生 {student.student_number or student.username} 的有效任务缺少可验证冻结题单："
+                        + "、".join(str(task_id) for task_id in item_context.unresolved_task_ids)
+                        + "。"
+                    ),
+                    "field": "cross_experiment_item_policy",
+                    "class_id": plan_class.class_group_id,
+                    "student_id": student.pk,
+                    "student_number": student.student_number,
+                    "kc_id": None,
+                })
+                continue
+            try:
+                selected = _select_questions(
+                    experiment,
+                    candidates,
+                    sampling_seed,
+                    ordering_seed,
+                    item_context=item_context,
+                )
+            except SamplingValidationError as exc:
+                participant_issues.extend([
+                    {
+                        **issue,
+                        "class_id": plan_class.class_group_id,
+                        "student_id": student.pk,
+                        "student_number": student.student_number,
+                    }
+                    for issue in exc.issues
+                ])
+                continue
             participant = PublishPreviewParticipant.objects.create(
                 class_result=class_result,
                 student=student,
@@ -1022,6 +1262,8 @@ def generate_preview(plan, actor, *, expected_revision):
         class_result.output_hash = canonical_json_hash(result_payload)
         class_result.save(update_fields=["output_hash"])
         preview_payload.append((plan_class.class_group_id, result_payload))
+    if participant_issues:
+        raise SamplingValidationError(participant_issues)
     run.input_hash = canonical_json_hash(class_inputs)
     run.output_hash = canonical_json_hash(preview_payload)
     run.save(update_fields=["input_hash", "output_hash"])
@@ -1035,6 +1277,7 @@ def generate_preview(plan, actor, *, expected_revision):
 def _release_configuration(experiment, candidates):
     from .research_tool_config import validate_research_tools
     configuration = {
+        "short_answer_grading_policy": "manual_binary_v1",
         "research_tools": validate_research_tools(experiment.research_tools),
         "ordering_mode": experiment.ordering_mode,
         "feedback_mode": experiment.feedback_mode,
@@ -1045,6 +1288,8 @@ def _release_configuration(experiment, candidates):
         "resume_mode": experiment.resume_mode,
         "assignment_unit_type": experiment.assignment_unit_type,
         "selection_mode": experiment.selection_mode,
+        "cross_experiment_item_policy": experiment.cross_experiment_item_policy,
+        "review_count": experiment.review_count,
         "quota_map": _quota_map(experiment),
         "candidate_count": len(candidates),
         "candidate_fingerprints": {
@@ -1063,7 +1308,12 @@ def _release_configuration(experiment, candidates):
             project_question_kc_mapping,
         )
 
-        resolution = SamplingService(experiment).resolve()
+        resolution = SamplingService(experiment).resolve(
+            validate_inventory=(
+                experiment.cross_experiment_item_policy
+                != Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+            )
+        )
         quota_map = _quota_map(experiment)
         sampling_type_quotas = (
             [
@@ -1180,12 +1430,17 @@ def _release_configuration(experiment, candidates):
             "candidate_resolution": configuration["candidate_resolution"],
             "inventory": configuration["sampling_inventory"],
             "sampling_algorithm_version": (
-                "deterministic-union-type-quota-v3"
-                if sampling_type_quotas
+                "history-grouped-flow-v1"
+                if experiment.cross_experiment_item_policy
+                == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
                 else (
-                    "deterministic-union-sample-v2"
-                    if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
-                    else "deterministic-bipartite-v2"
+                    "deterministic-union-type-quota-v3"
+                    if sampling_type_quotas
+                    else (
+                        "deterministic-union-sample-v2"
+                        if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+                        else "deterministic-bipartite-v2"
+                    )
                 )
             ),
             "candidate_ordering": "source_sequence_then_pk",
@@ -1492,6 +1747,43 @@ def commit_publish_plan(plan, actor, *, expected_revision):
             experiment,
             list(result.participants.values_list("student", flat=True)),
         )
+        for participant in result.participants.select_related("student").prefetch_related("items"):
+            item_context = student_item_context(experiment, participant.student)
+            if (
+                experiment.cross_experiment_item_policy
+                != Experiment.CrossExperimentItemPolicy.UNRESTRICTED
+                and item_context.unresolved_task_ids
+            ):
+                raise PublicationConflict(
+                    "有效任务题单发生变化，请重新运行发布前检查。",
+                    code="PREVIEW_ELIGIBILITY_CHANGED",
+                )
+            try:
+                current = _select_questions(
+                    experiment,
+                    candidates,
+                    participant.sampling_seed,
+                    participant.ordering_seed,
+                    item_context=item_context,
+                )
+            except (SamplingValidationError, PublicationConflict) as exc:
+                raise PublicationConflict(
+                    "学生历史题目资格已变化，请重新运行发布前检查。",
+                    code="PREVIEW_ELIGIBILITY_CHANGED",
+                ) from exc
+            current_ids = [
+                _candidate_source_question(row["candidate"]).pk for row in current
+            ]
+            preview_ids = list(
+                participant.items.order_by("assigned_sequence_index").values_list(
+                    "source_question_id", flat=True
+                )
+            )
+            if current_ids != preview_ids:
+                raise PublicationConflict(
+                    "学生历史题目资格已变化，请重新运行发布前检查。",
+                    code="PREVIEW_ELIGIBILITY_CHANGED",
+                )
     tasks = [
         _create_task_from_preview(result, release_snapshot, actor, now)
         for result in class_results

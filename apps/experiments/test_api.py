@@ -170,6 +170,154 @@ class TeacherExperimentApiTests(TestCase):
         self.assertEqual(
             response.json()["sampling"]["nodes"][0]["kc_code"], concept.code
         )
+        self.assertEqual(
+            created.cross_experiment_item_policy,
+            Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS,
+        )
+        self.assertEqual(created.review_count, 0)
+
+    def test_create_validates_mixed_review_count_against_assignment_size(self):
+        concept = Concept.objects.create(course=self.course, code="KC3", name="复测范围")
+        self.client.force_login(self.teacher)
+        base = {
+            "name": "混合复测实验",
+            "question_bank_id": self.bank.pk,
+            "sampling": {
+                "mode": Experiment.SamplingMode.TOTAL_COUNT,
+                "total_count": 4,
+                "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                "nodes": [{
+                    "kc_code": concept.code,
+                    "quota": None,
+                    "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                }],
+            },
+            "cross_experiment_item_policy": "mixed_review",
+        }
+
+        for review_count in (0, 4, 5):
+            with self.subTest(review_count=review_count):
+                response = self.client.post(
+                    self.api_url(),
+                    data=json.dumps({**base, "review_count": review_count}),
+                    content_type="application/json",
+                )
+                self.assertEqual(response.status_code, 400, response.content)
+                self.assertIn("review_count", response.json()["error"]["fields"])
+
+        response = self.client.post(
+            self.api_url(),
+            data=json.dumps({**base, "review_count": 2}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["cross_experiment_item_policy"], "mixed_review")
+        self.assertEqual(response.json()["review_count"], 2)
+
+    def test_non_mixed_policy_rejects_nonzero_review_count(self):
+        concept = Concept.objects.create(course=self.course, code="KC4", name="非复测范围")
+        self.client.force_login(self.teacher)
+        response = self.client.post(
+            self.api_url(),
+            data=json.dumps({
+                "name": "排重实验",
+                "question_bank_id": self.bank.pk,
+                "sampling": {
+                    "mode": Experiment.SamplingMode.TOTAL_COUNT,
+                    "total_count": 2,
+                    "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                    "nodes": [{
+                        "kc_code": concept.code,
+                        "quota": None,
+                        "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                    }],
+                },
+                "cross_experiment_item_policy": "exclude_previous",
+                "review_count": 1,
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("review_count", response.json()["error"]["fields"])
+
+    def test_update_validates_mixed_review_against_submitted_kc_quotas(self):
+        old_concept = Concept.objects.create(
+            course=self.course,
+            code="KC2",
+            name="旧总题数范围",
+        )
+        new_concept = Concept.objects.create(
+            course=self.course,
+            code="KC3",
+            name="新知识点配额范围",
+        )
+        self.experiment.sampling_mode = Experiment.SamplingMode.TOTAL_COUNT
+        self.experiment.sampling_total_count = 2
+        self.experiment.save(update_fields=["sampling_mode", "sampling_total_count"])
+        ExperimentSamplingKC.objects.create(
+            experiment=self.experiment,
+            concept=old_concept,
+            quota=None,
+        )
+        self.client.force_login(self.teacher)
+
+        response = self.client.patch(
+            self.api_url(f"{self.experiment.pk}/"),
+            data=json.dumps(
+                {
+                    "sampling": {
+                        "mode": Experiment.SamplingMode.KC_QUOTA,
+                        "total_count": None,
+                        "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                        "nodes": [
+                            {
+                                "kc_code": new_concept.code,
+                                "quota": 4,
+                                "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                            }
+                        ],
+                    },
+                    "cross_experiment_item_policy": "mixed_review",
+                    "review_count": 3,
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.review_count, 3)
+        self.assertEqual(
+            list(self.experiment.sampling_kcs.values_list("concept_id", "quota")),
+            [(new_concept.pk, 4)],
+        )
+
+        changed_quota = self.client.patch(
+            self.api_url(f"{self.experiment.pk}/"),
+            data=json.dumps(
+                {
+                    "sampling": {
+                        "mode": Experiment.SamplingMode.KC_QUOTA,
+                        "total_count": None,
+                        "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                        "nodes": [
+                            {
+                                "kc_code": new_concept.code,
+                                "quota": 6,
+                                "match_scope": Experiment.MatchScope.ANY_LEVEL,
+                            }
+                        ],
+                    },
+                    "review_count": 5,
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(changed_quota.status_code, 200, changed_quota.content)
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.review_count, 5)
+        self.assertEqual(self.experiment.sampling_kcs.get().quota, 6)
 
     def test_create_persists_total_count_question_type_quotas(self):
         concept = Concept.objects.create(course=self.course, code="KC101", name="题型配额范围")
@@ -1054,7 +1202,7 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertEqual(detail.json()["business_status"], "scheduled")
         self.assertEqual(
             detail.json()["available_actions"],
-            ["revise_schedule", "cancel", "manual_close"],
+            ["grade_short_answers", "revise_schedule", "cancel", "manual_close"],
         )
 
         progress = self.client.get(
@@ -1086,7 +1234,7 @@ class TeacherPublishPlanApiTests(TestCase):
         )
         self.assertEqual(cancelled.status_code, 200)
         self.assertEqual(cancelled.json()["business_status"], "cancelled")
-        self.assertEqual(cancelled.json()["available_actions"], [])
+        self.assertEqual(cancelled.json()["available_actions"], ["grade_short_answers"])
 
         other_task_id = next(
             item["id"]

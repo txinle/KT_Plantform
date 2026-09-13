@@ -28,6 +28,11 @@ from .views import (
     TeacherPublishParticipantExportView,
     TeacherPublishParticipantListView,
 )
+from .grading_views import (
+    TeacherClassTaskGradeSubmissionView,
+    TeacherClassTaskGradingOverviewView,
+    TeacherClassTaskGradingQuestionView,
+)
 from .standalone_views import (
     TeacherStandaloneExperimentCollectionView,
     TeacherStandaloneExperimentDetailView,
@@ -154,6 +159,21 @@ urlpatterns = [
         "class-tasks/<int:task_id>/progress/",
         TeacherClassTaskProgressView.as_view(),
         name="teacher-class-task-progress",
+    ),
+    path(
+        "class-tasks/<int:task_id>/grading/",
+        TeacherClassTaskGradingOverviewView.as_view(),
+        name="teacher-class-task-grading-overview",
+    ),
+    path(
+        "class-tasks/<int:task_id>/grading/questions/<int:snapshot_id>/",
+        TeacherClassTaskGradingQuestionView.as_view(),
+        name="teacher-class-task-grading-question",
+    ),
+    path(
+        "class-tasks/<int:task_id>/grading/submissions/<int:submission_id>/",
+        TeacherClassTaskGradeSubmissionView.as_view(),
+        name="teacher-class-task-grade-submission",
     ),
     path(
         "class-tasks/<int:task_id>/schedule-revisions/",

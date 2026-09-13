@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
     readiness: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    startPlan: vi.fn(),
   },
   push: vi.fn(),
   route: {
@@ -40,6 +41,7 @@ describe('TeacherExperimentForm', () => {
       summary: { question_banks: [{ id: 3, name: '认知诊断题库' }], classes: [] },
     })
     mocks.api.create.mockResolvedValue({ id: 19 })
+    mocks.api.startPlan.mockResolvedValue({ id: 23, current_step: 1 })
     mocks.api.samplingInventory.mockResolvedValue({
       candidate_count: 12,
       kc_counts: [
@@ -113,10 +115,10 @@ describe('TeacherExperimentForm', () => {
     expect(sections).toHaveLength(5)
     expect(sections.map((section) => section.text())).toEqual(expect.arrayContaining([
       expect.stringContaining('基本信息'),
-      expect.stringContaining('题目工具'),
-      expect.stringContaining('题目与呈现'),
-      expect.stringContaining('作答规则'),
-      expect.stringContaining('研究采集'),
+      expect.stringContaining('抽题设置'),
+      expect.stringContaining('跨实验题目控制'),
+      expect.stringContaining('作答与反馈'),
+      expect.stringContaining('研究设置'),
     ]))
     expect(wrapper.find('input[name="sampling_mode"][value="total_count"]').exists()).toBe(true)
     expect(wrapper.findAll('.kt-numbered-form-section .kt-compact-form-row').length).toBeGreaterThanOrEqual(4)
@@ -150,9 +152,25 @@ describe('TeacherExperimentForm', () => {
         total_time_limit_minutes: 25,
         per_question_time_limit_seconds: null,
         confidence_mode: 'off',
+        cross_experiment_item_policy: 'exclude_previous',
+        review_count: 0,
       }),
     )
     expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/19/')
+  })
+
+  it('creates the experiment and enters publishing from the primary action', async () => {
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+
+    await wrapper.get('#experiment-name').setValue('立即发布实验')
+    await wrapper.get('input[type="checkbox"][value="11"]').setValue(true)
+    await wrapper.get('.kt-experiment-form-actions button:last-child').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.create).toHaveBeenCalled()
+    expect(mocks.api.startPlan).toHaveBeenCalledWith(7, 19)
+    expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/19/publish-plan/23/step/1/')
   })
 
   it('preserves existing feedback settings when editing an experiment', async () => {
@@ -228,6 +246,28 @@ describe('TeacherExperimentForm', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
     expect(mocks.api.update).toHaveBeenCalledWith(7, 19, expect.objectContaining({ question_bank_id: 3 }))
+  })
+
+  it('configures an exact mixed-review count and submits the policy', async () => {
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-history-policy]').length).toBe(3)
+    expect((wrapper.get('input[name="cross_experiment_item_policy"][value="exclude_previous"]').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get('input[name="cross_experiment_item_policy"][value="mixed_review"]').setValue(true)
+    await wrapper.get('#experiment-review-count').setValue('1')
+    await wrapper.get('#experiment-name').setValue('混合复测实验')
+    await wrapper.get('input[type="checkbox"][value="11"]').setValue(true)
+    await wrapper.get('#sampling-total-count').setValue('3')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('[data-review-summary]').text()).toContain('复测 1 题')
+    expect(wrapper.get('[data-review-summary]').text()).toContain('新题 2 题')
+    expect(mocks.api.create).toHaveBeenCalledWith(7, expect.objectContaining({
+      cross_experiment_item_policy: 'mixed_review',
+      review_count: 1,
+    }))
   })
 
   it('selects an exact question-type composition from server inventory', async () => {

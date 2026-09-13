@@ -20,7 +20,9 @@ test('KC quota inventory agrees with saved preflight and permits publication', a
   const available = Number(await row.locator('td').nth(2).innerText())
   expect(available).toBeGreaterThan(0)
   await row.locator('input[type="number"]').fill('1')
-  await page.getByRole('button', { name: '保存实验', exact: true }).click()
+  await page.getByText('＋ 添加 KC', { exact: true }).click()
+  await page.locator('input[name="cross_experiment_item_policy"][value="unrestricted"]').check()
+  await page.getByRole('button', { name: '保存草稿', exact: true }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/)
   const detailUrl = page.url()
   await page.goto(`${detailUrl}edit/`)
@@ -61,15 +63,6 @@ async function login(page: Page) {
   await expect(page).toHaveURL(new RegExp(`${origin}/teacher/courses/`))
 }
 
-async function selectFirstKnowledgeComponent(page: Page) {
-  await page.getByText('选择知识点', { exact: true }).click()
-  await page
-    .locator('.kt-kc-config-panel', { hasText: '知识点范围' })
-    .locator('.kt-kc-tree-selector input[type="checkbox"]')
-    .first()
-    .check()
-}
-
 async function capture(page: Page, testInfo: TestInfo, name: string) {
   await page.getByText(/正在加载/).first().waitFor({ state: 'hidden' })
   await page.evaluate(() => document.fonts.ready)
@@ -85,15 +78,32 @@ async function capture(page: Page, testInfo: TestInfo, name: string) {
 test('captures the six real experiment workflow states', async ({ browserName, page }, testInfo) => {
   test.setTimeout(120_000)
   test.skip(browserName !== 'chromium', 'Chromium is the visual acceptance engine.')
-  await page.setViewportSize({ width: 1586, height: 992 })
+  await page.setViewportSize({ width: 1672, height: 941 })
   await login(page)
 
   await page.goto(`${origin}/teacher/courses/1/experiments/create/`)
   const experimentName = `UI 视觉验收 ${Date.now()}`
-  await page.getByLabel('实验名称').fill(experimentName)
   await page.getByLabel('题库', { exact: true }).selectOption({ index: 1 })
-  await selectFirstKnowledgeComponent(page)
-  await page.getByRole('button', { name: '保存实验' }).click()
+  await page.locator('input[name="sampling_mode"][value="kc_quota"]').check()
+  await page.getByText('＋ 添加 KC', { exact: true }).click()
+  const kcOptions = page.locator('.kt-quota-panel .kt-kc-tree-selector input[type="checkbox"]')
+  for (let index = 0; index < Math.min(3, await kcOptions.count()); index += 1) {
+    await kcOptions.nth(index).check()
+  }
+  await page.getByText('＋ 添加 KC', { exact: true }).click()
+  for (const input of await page.locator('.kt-quota-table tbody input[type="number"]').all()) {
+    await input.fill('1')
+  }
+  await expect(page.locator('[data-history-policy]')).toHaveCount(3)
+  await expect(page.getByText('跨实验题目控制', { exact: true })).toBeVisible()
+  await capture(page, testInfo, '00-create-cross-experiment-policy-1672x941.png')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1673)
+  await page.setViewportSize({ width: 1586, height: 992 })
+  await page.getByLabel('实验名称').fill(experimentName)
+  await page.locator('input[name="sampling_mode"][value="total_count"]').check()
+  await page.getByLabel('每位参与者题目数').fill('1')
+  await page.locator('input[name="cross_experiment_item_policy"][value="unrestricted"]').check()
+  await page.getByRole('button', { name: '保存草稿' }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/)
   const detailUrl = page.url()
   await expect(page.getByRole('heading', { name: experimentName })).toBeVisible()
@@ -103,7 +113,7 @@ test('captures the six real experiment workflow states', async ({ browserName, p
   await expect(page.getByRole('heading', { name: '编辑实验定义' })).toBeVisible()
   await expect(page.getByLabel('实验名称')).toHaveValue(experimentName)
   await capture(page, testInfo, '02-edit-definition.png')
-  await expect(page.getByRole('button', { name: '保存更改' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '保存草稿' })).toBeVisible()
 
   await page.goto(detailUrl)
   await expect(page.getByRole('heading', { name: experimentName })).toBeVisible()

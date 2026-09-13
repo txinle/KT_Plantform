@@ -767,7 +767,10 @@ class ExportLineageV2Tests(TransactionTestCase):
         self.version.configuration = {
             "feedback_mode": "full",
             "feedback_release_policy": "manual_release",
+            "short_answer_grading_policy": "manual_binary_v1",
             "research_tools": {"doubt_enabled": True},
+            "cross_experiment_item_policy": "mixed_review",
+            "review_count": 2,
         }
         self.version.save(update_fields=["configuration"])
 
@@ -796,6 +799,12 @@ class ExportLineageV2Tests(TransactionTestCase):
             release_row["feedback_release_policy"],
             "manual_release",
         )
+        self.assertEqual(
+            release_row["short_answer_grading_policy"],
+            "manual_binary_v1",
+        )
+        self.assertEqual(release_row["cross_experiment_item_policy"], "mixed_review")
+        self.assertEqual(release_row["review_count"], "2")
         self.assertTrue(
             {
                 "feedback_exposure",

@@ -72,6 +72,8 @@ const form = reactive({
   kc_match_scopes: {} as Record<number, 'primary' | 'any_level'>,
   selected_question_types: {} as Record<ExperimentQuestionType, boolean>,
   type_quotas: {} as Record<ExperimentQuestionType, number>,
+  cross_experiment_item_policy: 'exclude_previous' as 'exclude_previous' | 'mixed_review' | 'unrestricted',
+  review_count: 0,
   ordering_mode: 'fixed' as 'fixed' | 'random' | 'stratified_random',
   feedback_mode: 'full' as 'none' | 'correctness' | 'full',
   feedback_release_policy: 'after_personal_submission' as 'after_personal_submission' | 'after_assignment_deadline' | 'manual_release',
@@ -87,6 +89,17 @@ const form = reactive({
 const quotaTotal = computed(() => concepts.value.reduce((total, concept) => (
   form.selected_kcs[concept.id] ? total + Number(form.kc_quotas[concept.id] || 0) : total
 ), 0))
+const assignmentTotal = computed(() => form.sampling_mode === 'total_count'
+  ? Number(form.sampling_total_count || 0)
+  : quotaTotal.value)
+const reviewCountError = computed(() => {
+  if (form.cross_experiment_item_policy !== 'mixed_review') return ''
+  const count = Number(form.review_count)
+  if (!Number.isInteger(count) || count < 1 || count >= assignmentTotal.value) {
+    return '复测题数必须大于 0 且小于本次总题数。'
+  }
+  return ''
+})
 const selectedConcepts = computed(() => concepts.value.filter(
   (concept) => form.selected_kcs[concept.id],
 ))
@@ -195,6 +208,10 @@ function definitionInput(): ExperimentDefinitionInput {
     name: form.name.trim(),
     description: form.description.trim(),
     question_bank_id: Number(form.question_bank_id),
+    cross_experiment_item_policy: form.cross_experiment_item_policy,
+    review_count: form.cross_experiment_item_policy === 'mixed_review'
+      ? Number(form.review_count || 0)
+      : 0,
     ordering_mode: form.ordering_mode,
     feedback_mode: form.feedback_mode,
     feedback_release_policy: form.feedback_release_policy,
@@ -267,6 +284,8 @@ async function load() {
       if (experiment.sampling_mode) form.sampling_mode = experiment.sampling_mode
       form.sampling_total_count = experiment.sampling_total_count || 1
       form.sampling_match_scope = experiment.sampling_match_scope || 'any_level'
+      form.cross_experiment_item_policy = experiment.cross_experiment_item_policy || 'unrestricted'
+      form.review_count = Number(experiment.review_count || 0)
       form.ordering_mode = experiment.ordering_mode || 'fixed'
       form.feedback_mode = experiment.feedback_mode || 'none'
       form.feedback_release_policy = experiment.feedback_release_policy || 'after_personal_submission'
@@ -302,9 +321,12 @@ async function load() {
   }
 }
 
-async function submit() {
-  if (typeQuotaInvalid.value) {
-    fieldErrors.value = { sampling_type_quotas: typeQuotaError.value }
+async function submit(destination: 'detail' | 'publish' = 'detail') {
+  if (typeQuotaInvalid.value || reviewCountError.value) {
+    fieldErrors.value = {
+      ...(typeQuotaInvalid.value ? { sampling_type_quotas: typeQuotaError.value } : {}),
+      ...(reviewCountError.value ? { review_count: reviewCountError.value } : {}),
+    }
     return
   }
   saving.value = true
@@ -314,7 +336,12 @@ async function submit() {
     const saved = editing.value
       ? await api.update(courseId, experimentId.value, definitionInput())
       : await api.create(courseId, definitionInput())
-    await router.push(`/teacher/courses/${courseId}/experiments/${saved.id}/`)
+    if (destination === 'publish') {
+      const plan = await api.startPlan(courseId, saved.id)
+      await router.push(`/teacher/courses/${courseId}/experiments/${saved.id}/publish-plan/${plan.id}/step/${plan.current_step || 1}/`)
+    } else {
+      await router.push(`/teacher/courses/${courseId}/experiments/${saved.id}/`)
+    }
   } catch (caught) {
     if (caught instanceof ApiError) {
       fieldErrors.value = Object.fromEntries(
@@ -342,16 +369,17 @@ onMounted(load)
 
 <template>
   <header class="kt-experiment-page-header">
+    <a class="kt-experiment-back-button" :href="editing ? `/teacher/courses/${courseId}/experiments/${experimentId}/` : `/teacher/courses/${courseId}/experiments/`" aria-label="返回实验列表">‹</a>
     <div class="kt-experiment-page-header__copy">
       <div class="kt-experiment-title-row"><h1>{{ editing ? '编辑实验定义' : '创建实验' }}</h1></div>
-      <p>定义题目选择、顺序、反馈、时限与置信度采集策略。首次正式发布后这些设置将被冻结。</p>
+      <p>定义题目范围、抽样规则和研究采集策略，生成一次新的实验任务。</p>
     </div>
   </header>
 
   <p v-if="loading" role="status">正在加载实验配置…</p>
   <Alert v-else-if="error" tone="danger">{{ error }}</Alert>
 
-  <form v-if="!loading" class="kt-form-stack" novalidate @submit.prevent="submit">
+  <form v-if="!loading" class="kt-form-stack" novalidate @submit.prevent="submit('detail')">
     <Alert v-if="legacySampling" tone="warning">该实验是只读旧版草稿。只有点击“显式转换”并保存完整的新抽题配置后，才能修改其他定义。 <button class="kt-button kt-button--secondary" type="button" @click="convertLegacySampling">显式转换</button></Alert>
     <section :inert="legacySampling" class="kt-numbered-form-section" aria-labelledby="definition-basic">
       <div class="kt-numbered-form-section__heading"><span aria-hidden="true">1</span><h2 id="definition-basic">基本信息</h2></div>
@@ -363,7 +391,7 @@ onMounted(load)
     </section>
 
     <section :inert="legacySampling" class="kt-numbered-form-section" aria-labelledby="definition-selection">
-      <div class="kt-numbered-form-section__heading"><span aria-hidden="true">2</span><h2 id="definition-selection">题目与呈现</h2></div>
+      <div class="kt-numbered-form-section__heading"><span aria-hidden="true">2</span><h2 id="definition-selection">抽题设置</h2></div>
       <div class="kt-card kt-numbered-form-section__content">
         <Alert v-if="conversionWarning" tone="warning">{{ conversionWarning }}</Alert>
         <fieldset v-else class="kt-radio-group kt-compact-form-row"><legend>抽题方式</legend><div class="kt-radio-options"><label><input v-model="form.sampling_mode" name="sampling_mode" type="radio" value="total_count"><span>设置总题数<small>从所选知识点覆盖的可用题目中抽取指定数量</small></span></label><label><input v-model="form.sampling_mode" name="sampling_mode" type="radio" value="kc_quota"><span>按知识点配额<small>每行可按根 KC 或任意层级匹配并设置题数</small></span></label></div><p v-if="fieldErrors.sampling_mode" class="kt-field__error" role="alert">{{ fieldErrors.sampling_mode }}</p></fieldset>
@@ -373,7 +401,7 @@ onMounted(load)
           <div class="kt-kc-config-panel kt-compact-form-row"><strong class="kt-config-label">知识点范围</strong><div class="kt-kc-config-content"><div class="kt-kc-config-top"><div><span class="kt-muted">已选择的 KC</span><div class="kt-selected-kcs"><span v-for="concept in selectedConcepts" :key="concept.id"><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><span v-if="!selectedConcepts.length" class="is-empty">尚未选择</span></div></div><div class="kt-selection-facts">已选择 {{ selectedConcepts.length }} 个 KC</div><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary">选择知识点</summary><div class="kt-kc-tree-selector"><label v-for="concept in concepts" :key="concept.id"><input v-model="form.selected_kcs[concept.id]" type="checkbox" :value="concept.id" :disabled="concept.status !== 'active'"><span><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><small>{{ concept.status === 'active' ? `${availableCount(concept)} 道可用` : '已归档' }}</small></label></div></details></div><div class="kt-match-scope"><span>匹配层级</span><label><input v-model="form.sampling_match_scope" type="radio" value="primary">根 KC</label><small>仅匹配所选节点本身</small><label><input v-model="form.sampling_match_scope" type="radio" value="any_level">任意层级</label><small>包含其在题目树中任意层级的出现</small></div></div></div>
         </template>
         <div v-if="!legacySampling && form.sampling_mode === 'kc_quota'" class="kt-quota-panel kt-compact-form-row"><strong class="kt-config-label">知识点配额</strong><div class="kt-kc-config-content"><div class="kt-quota-toolbar"><p>按所选 KC 及匹配层级设置每位参与者题量。</p><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary">＋ 添加 KC</summary><div class="kt-kc-tree-selector"><label v-for="concept in concepts" :key="concept.id"><input v-model="form.selected_kcs[concept.id]" type="checkbox" :value="concept.id" :disabled="concept.status !== 'active'"><span><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><small>{{ concept.status === 'active' ? `${availableCount(concept)} 道可用` : '已归档' }}</small></label></div></details></div><div class="kt-quota-table-wrap"><table class="kt-quota-table"><thead><tr><th>KC</th><th>匹配层级</th><th>可用题目</th><th>配额</th><th>操作</th></tr></thead><tbody><tr v-for="concept in selectedConcepts" :key="concept.id"><td><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</td><td><select v-model="form.kc_match_scopes[concept.id]" :aria-label="`${concept.name}匹配层级`"><option value="primary">根 KC</option><option value="any_level">任意层级</option></select></td><td>{{ availableCount(concept) }}</td><td><input v-model.number="form.kc_quotas[concept.id]" :aria-label="`${concept.name}配额`" type="number" min="1"></td><td><button class="kt-text-button kt-text-button--danger" type="button" @click="form.selected_kcs[concept.id] = false">删除</button></td></tr><tr v-if="!selectedConcepts.length"><td colspan="5" class="kt-empty-quota">请添加需要设置配额的 KC</td></tr></tbody><tfoot><tr><td colspan="5">每位参与者共抽 <strong>{{ quotaTotal }}</strong> 题</td></tr></tfoot></table></div></div></div>
-        <p v-if="!legacySampling" class="kt-muted">可用题数仅统计当前所选题库中状态为“可用”的题目；同一道题可能匹配多个 KC，发布时会校验能否无重复地满足配额。</p>
+        <p v-if="!legacySampling && form.sampling_mode === 'total_count'" class="kt-muted">可用题数仅统计当前所选题库中状态为“可用”的题目；同一道题可能匹配多个 KC，发布时会校验能否无重复地满足配额。</p>
         <p v-if="inventoryLoading" role="status">正在加载当前题库库存…</p>
         <Alert v-if="inventoryError" tone="danger">{{ inventoryError }}</Alert>
         <p v-if="fieldErrors.sampling_kcs" class="kt-field__error" role="alert">{{ fieldErrors.sampling_kcs }}</p>
@@ -383,14 +411,41 @@ onMounted(load)
           <table v-if="readiness.inventory_buckets.length" class="kt-table"><thead><tr><th>KC</th><th>匹配层级</th><th>计划题数</th><th>可用题数</th></tr></thead><tbody><tr v-for="bucket in readiness.inventory_buckets" :key="bucket.kc_code"><td><span class="kt-mono">{{ bucket.kc_code }}</span> {{ bucket.kc_name }}</td><td>{{ bucket.match_scope === 'primary' ? '仅根 KC' : '任意层级' }}</td><td>{{ bucket.requested ?? '范围' }}</td><td>{{ bucket.available }}</td></tr></tbody></table>
           <small class="kt-muted">库存数据对应当前已保存版本；保存本页更改后会重新计算。</small>
         </div>
-        <fieldset class="kt-radio-group kt-compact-form-row"><legend>题目顺序</legend><div class="kt-radio-options"><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="fixed"><span>固定顺序</span></label><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="random"><span>随机顺序</span></label><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="stratified_random"><span>分层随机</span></label></div><p v-if="fieldErrors.ordering_mode" class="kt-field__error" role="alert">{{ fieldErrors.ordering_mode }}</p></fieldset>
-        <fieldset class="kt-radio-group kt-compact-form-row"><legend>反馈</legend><div class="kt-radio-options"><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="none"><span>仅显示已提交</span></label><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="correctness"><span>显示正误</span></label><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="full"><span>显示正误、答案与解析</span></label></div><p v-if="fieldErrors.feedback_mode" class="kt-field__error" role="alert">{{ fieldErrors.feedback_mode }}</p></fieldset>
-        <fieldset class="kt-radio-group kt-compact-form-row"><legend>反馈发布</legend><div class="kt-radio-options"><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="after_personal_submission"><span>学生完成后</span></label><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="after_assignment_deadline"><span>班级任务截止后</span></label><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="manual_release"><span>教师人工发布</span></label></div><p v-if="fieldErrors.feedback_release_policy" class="kt-field__error" role="alert">{{ fieldErrors.feedback_release_policy }}</p></fieldset>
+      </div>
+    </section>
+
+    <section :inert="legacySampling" class="kt-numbered-form-section" aria-labelledby="definition-history">
+      <div class="kt-numbered-form-section__heading"><span aria-hidden="true">3</span><h2 id="definition-history">跨实验题目控制</h2></div>
+      <div class="kt-card kt-numbered-form-section__content kt-history-policy-section">
+        <fieldset class="kt-history-policy-fieldset">
+          <legend>历史题目策略</legend>
+          <div class="kt-history-policy-grid">
+            <label data-history-policy :class="{ 'is-selected': form.cross_experiment_item_policy === 'exclude_previous' }"><input v-model="form.cross_experiment_item_policy" name="cross_experiment_item_policy" type="radio" value="exclude_previous"><span><strong>排除已正式作答题目</strong><small>推荐</small><em>排除该学生同课程中已正式提交的原题，并避开其他有效任务已冻结分配的原题。</em></span></label>
+            <label data-history-policy :class="{ 'is-selected': form.cross_experiment_item_policy === 'mixed_review' }"><input v-model="form.cross_experiment_item_policy" name="cross_experiment_item_policy" type="radio" value="mixed_review"><span><strong>混合复测</strong><em>精确抽取指定数量的历史正式作答题，其余使用未正式作答题。</em></span></label>
+            <label data-history-policy :class="{ 'is-selected': form.cross_experiment_item_policy === 'unrestricted' }"><input v-model="form.cross_experiment_item_policy" name="cross_experiment_item_policy" type="radio" value="unrestricted"><span><strong>不限制历史题目</strong><em>不依据历史作答或其他任务题单排除原题。</em></span></label>
+          </div>
+        </fieldset>
+        <div v-if="form.cross_experiment_item_policy === 'mixed_review'" class="kt-review-count-row">
+          <FormField for-id="experiment-review-count" label="复测题数" :error="fieldErrors.review_count || reviewCountError"><input id="experiment-review-count" v-model.number="form.review_count" type="number" min="1" :max="Math.max(1, assignmentTotal - 1)"></FormField>
+          <p data-review-summary>本次共 <strong>{{ assignmentTotal }}</strong> 题，其中复测 <strong>{{ Number(form.review_count || 0) }}</strong> 题，新题 <strong>{{ Math.max(0, assignmentTotal - Number(form.review_count || 0)) }}</strong> 题。</p>
+        </div>
+        <p class="kt-history-policy-note">排除已正式作答题目和混合复测都会避开其他有效任务已经冻结分配的原题；复测只创建当前实验的新题单项与新作答记录。</p>
+        <div class="kt-history-resource-strip" role="status">
+          <div class="kt-history-resource-strip__heading"><strong>个体题目资源检查</strong><small>选择班级后执行逐人检查</small></div>
+          <span>当前范围候选 <b>{{ samplingInventory?.candidate_count ?? '—' }}</b> 题</span>
+          <span>本次需要 <b>{{ assignmentTotal || '—' }}</b> 题</span>
+          <span>选择参与班级后，将检查每名学生的历史题、新题和有效任务占用。</span>
+        </div>
       </div>
     </section>
 
     <section :inert="legacySampling" class="kt-numbered-form-section" aria-labelledby="definition-runtime">
-      <div class="kt-numbered-form-section__heading"><span aria-hidden="true">3</span><h2 id="definition-runtime">作答规则</h2></div>
+      <div class="kt-numbered-form-section__heading"><span aria-hidden="true">4</span><h2 id="definition-runtime">作答与反馈</h2></div>
+      <div class="kt-card kt-numbered-form-section__content kt-runtime-primary">
+        <fieldset class="kt-radio-group kt-compact-form-row"><legend>题目顺序</legend><div class="kt-radio-options"><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="fixed"><span>固定顺序</span></label><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="random"><span>随机顺序</span></label><label><input v-model="form.ordering_mode" name="ordering_mode" type="radio" value="stratified_random"><span>分层随机</span></label></div></fieldset>
+        <fieldset class="kt-radio-group kt-compact-form-row"><legend>反馈</legend><div class="kt-radio-options"><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="none"><span>仅显示已提交</span></label><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="correctness"><span>显示正误</span></label><label><input v-model="form.feedback_mode" name="feedback_mode" type="radio" value="full"><span>显示正误、答案与解析</span></label></div></fieldset>
+        <fieldset class="kt-radio-group kt-compact-form-row"><legend>反馈发布</legend><div class="kt-radio-options"><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="after_personal_submission"><span>学生完成后</span></label><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="after_assignment_deadline"><span>班级任务截止后</span></label><label><input v-model="form.feedback_release_policy" name="feedback_release_policy" type="radio" value="manual_release"><span>教师人工发布</span></label></div></fieldset>
+      </div>
       <details class="kt-card kt-numbered-form-section__content kt-collapsible-step">
         <summary><span>时限：{{ form.time_mode === 'none' ? '无时限' : (form.time_mode === 'total' ? '实验总时限' : '单题时限') }}</span><span>中断：{{ form.resume_mode === 'resumable' ? '允许续答' : '必须一次完成' }}</span><span aria-hidden="true">›</span></summary>
         <div class="kt-collapsible-step__body">
@@ -402,25 +457,22 @@ onMounted(load)
     </section>
 
     <section :inert="legacySampling" class="kt-numbered-form-section" aria-labelledby="definition-collection">
-      <div class="kt-numbered-form-section__heading"><span aria-hidden="true">4</span><h2 id="definition-collection">研究采集</h2></div>
-      <details class="kt-card kt-numbered-form-section__content kt-collapsible-step">
-        <summary><span>作答信息：{{ form.confidence_mode === 'off' ? '不采集' : (form.confidence_mode === 'all' ? '全部采集' : '抽样采集') }}</span><span>正式发布时冻结版本快照</span><span aria-hidden="true">›</span></summary>
-        <div class="kt-collapsible-step__body">
-          <fieldset class="kt-radio-group kt-compact-form-row"><legend>作答信心采集</legend><div class="kt-radio-options"><label><input v-model="form.confidence_mode" name="confidence_mode" type="radio" value="off"><span>不采集</span></label><label><input v-model="form.confidence_mode" name="confidence_mode" type="radio" value="all"><span>全部采集</span></label><label><input v-model="form.confidence_mode" name="confidence_mode" type="radio" value="sampled"><span>抽样采集</span></label></div><p v-if="fieldErrors.confidence_mode" class="kt-field__error" role="alert">{{ fieldErrors.confidence_mode }}</p></fieldset>
-          <div v-if="form.confidence_mode !== 'off'" class="kt-form-grid"><fieldset class="kt-radio-group kt-compact-form-row"><legend>采集单元</legend><div class="kt-radio-options"><label><input v-model="form.confidence_sampling_unit" name="confidence_sampling_unit" type="radio" value="student"><span>学生</span></label><label><input v-model="form.confidence_sampling_unit" name="confidence_sampling_unit" type="radio" value="session"><span>会话</span></label><label><input v-model="form.confidence_sampling_unit" name="confidence_sampling_unit" type="radio" value="attempt"><span>作答</span></label></div><p v-if="fieldErrors.confidence_sampling_unit" class="kt-field__error" role="alert">{{ fieldErrors.confidence_sampling_unit }}</p></fieldset><FormField v-if="form.confidence_mode === 'sampled'" class="kt-compact-form-row" for-id="experiment-confidence-probability" label="抽样概率（0–1）" :error="fieldErrors.confidence_probability"><input id="experiment-confidence-probability" v-model.number="form.confidence_probability" type="number" min="0" max="1" step="0.001"></FormField></div>
-          <Alert tone="info">系统会在正式发布时自动生成版本快照与随机化标识，用于审计与复现。</Alert>
-        </div>
-      </details>
-    </section>
-
-    <section :inert="legacySampling" class="kt-numbered-form-section" aria-labelledby="definition-tools">
-      <div class="kt-numbered-form-section__heading"><span aria-hidden="true">5</span><h2 id="definition-tools">题目工具</h2></div>
-      <ResearchToolsEditor v-model="researchTools" class="kt-numbered-form-section__content" />
+      <div class="kt-numbered-form-section__heading"><span aria-hidden="true">5</span><h2 id="definition-collection">研究设置</h2></div>
+      <div class="kt-card kt-numbered-form-section__content kt-research-settings-card">
+        <details class="kt-collapsible-step">
+          <summary><span>研究采集</span><span>作答信息：{{ form.confidence_mode === 'off' ? '不采集' : (form.confidence_mode === 'all' ? '全部采集' : '抽样采集') }}</span><span aria-hidden="true">›</span></summary>
+          <div class="kt-collapsible-step__body">
+            <fieldset class="kt-radio-group kt-compact-form-row"><legend>作答信心采集</legend><div class="kt-radio-options"><label><input v-model="form.confidence_mode" name="confidence_mode" type="radio" value="off"><span>不采集</span></label><label><input v-model="form.confidence_mode" name="confidence_mode" type="radio" value="all"><span>全部采集</span></label><label><input v-model="form.confidence_mode" name="confidence_mode" type="radio" value="sampled"><span>抽样采集</span></label></div><p v-if="fieldErrors.confidence_mode" class="kt-field__error" role="alert">{{ fieldErrors.confidence_mode }}</p></fieldset>
+            <div v-if="form.confidence_mode !== 'off'" class="kt-form-grid"><fieldset class="kt-radio-group kt-compact-form-row"><legend>采集单元</legend><div class="kt-radio-options"><label><input v-model="form.confidence_sampling_unit" name="confidence_sampling_unit" type="radio" value="student"><span>学生</span></label><label><input v-model="form.confidence_sampling_unit" name="confidence_sampling_unit" type="radio" value="session"><span>会话</span></label><label><input v-model="form.confidence_sampling_unit" name="confidence_sampling_unit" type="radio" value="attempt"><span>作答</span></label></div><p v-if="fieldErrors.confidence_sampling_unit" class="kt-field__error" role="alert">{{ fieldErrors.confidence_sampling_unit }}</p></fieldset><FormField v-if="form.confidence_mode === 'sampled'" class="kt-compact-form-row" for-id="experiment-confidence-probability" label="抽样概率（0–1）" :error="fieldErrors.confidence_probability"><input id="experiment-confidence-probability" v-model.number="form.confidence_probability" type="number" min="0" max="1" step="0.001"></FormField></div>
+          </div>
+        </details>
+        <ResearchToolsEditor v-model="researchTools" />
+      </div>
     </section>
 
     <div class="kt-form-actions kt-experiment-form-actions">
-      <a class="kt-button kt-button--secondary" :href="editing ? `/teacher/courses/${courseId}/experiments/${experimentId}/` : `/teacher/courses/${courseId}/experiments/`">{{ editing ? '返回详情' : '取消' }}</a>
-      <Button type="submit" :disabled="saving || legacySampling || typeQuotaInvalid">{{ saving ? '正在保存…' : (editing ? '保存更改' : '保存实验') }}</Button>
+      <button class="kt-button kt-button--secondary" type="submit" :disabled="saving || legacySampling || typeQuotaInvalid">{{ saving ? '正在保存…' : '保存草稿' }}</button>
+      <Button type="button" :disabled="saving || legacySampling || typeQuotaInvalid" @click="submit('publish')">{{ saving ? '正在保存…' : (editing ? '保存并进入发布' : '发布实验') }}</Button>
     </div>
   </form>
 </template>

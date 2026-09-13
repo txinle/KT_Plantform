@@ -20,6 +20,75 @@ class SamplingResolution:
     buckets: dict
     type_buckets: dict
     resolved_leaf_ids_by_node: dict
+    review_candidates: tuple = ()
+    new_candidates: tuple = ()
+
+
+def _grouped_quota_flow(*, candidates, completed_ids, review_count, bucket_capacities,
+                        bucket_ids_for_question, candidate_id=lambda question: question.pk,
+                        rng=None):
+    """Allocate unique questions while satisfying history and quota capacities."""
+    source, sink = "source", "sink"
+    adjacency = {}
+    capacity = {}
+
+    def add_edge(left, right, amount):
+        adjacency.setdefault(left, []).append(right)
+        adjacency.setdefault(right, []).append(left)
+        capacity[(left, right)] = amount
+        capacity.setdefault((right, left), 0)
+
+    requested = sum(bucket_capacities.values())
+    add_edge(source, "group:review", review_count)
+    add_edge(source, "group:new", requested - review_count)
+    ordered = list(candidates)
+    if rng is not None:
+        rng.shuffle(ordered)
+    for question in ordered:
+        identity = candidate_id(question)
+        question_node = f"question:{identity}"
+        group = "group:review" if identity in completed_ids else "group:new"
+        add_edge(group, question_node, 1)
+        bucket_ids = list(bucket_ids_for_question(question))
+        if rng is not None:
+            rng.shuffle(bucket_ids)
+        for bucket_id in bucket_ids:
+            add_edge(question_node, f"bucket:{bucket_id}", 1)
+    for bucket_id, amount in bucket_capacities.items():
+        add_edge(f"bucket:{bucket_id}", sink, amount)
+
+    flow = 0
+    while True:
+        parent = {source: None}
+        queue = [source]
+        for node in queue:
+            for target in adjacency.get(node, []):
+                if target not in parent and capacity[(node, target)] > 0:
+                    parent[target] = node
+                    queue.append(target)
+                    if target == sink:
+                        break
+            if sink in parent:
+                break
+        if sink not in parent:
+            break
+        node = sink
+        while parent[node] is not None:
+            previous = parent[node]
+            capacity[(previous, node)] -= 1
+            capacity[(node, previous)] += 1
+            node = previous
+        flow += 1
+
+    allocation = {}
+    for question in candidates:
+        identity = candidate_id(question)
+        question_node = f"question:{identity}"
+        for target in adjacency.get(question_node, []):
+            if target.startswith("bucket:") and capacity.get((target, question_node), 0) == 1:
+                allocation[identity] = target.removeprefix("bucket:")
+                break
+    return flow, allocation
 
 
 def _maximum_matching(rules, buckets, *, rng=None):
@@ -64,8 +133,31 @@ def _maximum_matching(rules, buckets, *, rng=None):
 
 
 class SamplingService:
-    def __init__(self, experiment):
+    def __init__(self, experiment, *, completed_question_ids=None, active_frozen_question_ids=None):
         self.experiment = experiment
+        self.completed_question_ids = frozenset(completed_question_ids or ())
+        self.active_frozen_question_ids = frozenset(active_frozen_question_ids or ())
+
+    @property
+    def policy(self):
+        return self.experiment.cross_experiment_item_policy
+
+    def requested_count(self):
+        if self.experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT:
+            return int(self.experiment.sampling_total_count or 0)
+        return sum(self.experiment.sampling_kcs.values_list("quota", flat=True))
+
+    def _filter_candidates(self, candidates):
+        if self.policy == Experiment.CrossExperimentItemPolicy.UNRESTRICTED:
+            return list(candidates)
+        return [
+            question for question in candidates
+            if question.pk not in self.active_frozen_question_ids
+            and (
+                self.policy == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+                or question.pk not in self.completed_question_ids
+            )
+        ]
 
     def _issue(self, code, message, *, kc_id=None, field=None, **metadata):
         issue = {
@@ -90,6 +182,70 @@ class SamplingService:
             row.question_type: row.amount
             for row in self.experiment.question_quotas.filter(amount__gt=0)
         }
+
+    def _history_flow_inputs(self, resolution, rules):
+        if self.experiment.sampling_mode == Experiment.SamplingMode.KC_QUOTA:
+            capacities = {str(rule.concept_id): rule.quota for rule in rules}
+            scopes = {rule.concept_id: rule.match_scope for rule in rules}
+
+            def bucket_ids(question):
+                return [
+                    str(rule.concept_id) for rule in rules
+                    if self._question_matches(question, rule.concept_id, scopes[rule.concept_id])
+                ]
+        else:
+            type_quotas = self._type_quota_map()
+            capacities = (
+                {str(question_type): amount for question_type, amount in type_quotas.items()}
+                if type_quotas
+                else {"all": self.requested_count()}
+            )
+
+            def bucket_ids(question):
+                return [str(question.question_type)] if type_quotas else ["all"]
+        return capacities, bucket_ids
+
+    def _validate_history_constraints(self, resolution, rules):
+        if self.policy != Experiment.CrossExperimentItemPolicy.MIXED_REVIEW:
+            return
+        requested = self.requested_count()
+        review_count = int(self.experiment.review_count or 0)
+        new_count = requested - review_count
+        issues = []
+        if len(resolution.review_candidates) < review_count:
+            issues.append(self._issue(
+                "REVIEW_POOL_INSUFFICIENT",
+                f"复测题需要 {review_count} 题，可用 {len(resolution.review_candidates)} 题。",
+                field="review_count",
+                requested=review_count,
+                available=len(resolution.review_candidates),
+            ))
+        if len(resolution.new_candidates) < new_count:
+            issues.append(self._issue(
+                "NEW_POOL_INSUFFICIENT",
+                f"新题需要 {new_count} 题，可用 {len(resolution.new_candidates)} 题。",
+                field="review_count",
+                requested=new_count,
+                available=len(resolution.new_candidates),
+            ))
+        if issues:
+            raise SamplingValidationError(issues)
+        capacities, bucket_ids = self._history_flow_inputs(resolution, rules)
+        maximum, _allocation = _grouped_quota_flow(
+            candidates=resolution.candidates,
+            completed_ids=self.completed_question_ids,
+            review_count=review_count,
+            bucket_capacities=capacities,
+            bucket_ids_for_question=bucket_ids,
+        )
+        if maximum < requested:
+            raise SamplingValidationError([self._issue(
+                "GLOBAL_MATCHING_INSUFFICIENT",
+                f"题目历史构成与现有配额无法同时满足：需要 {requested} 题，最多可分配 {maximum} 题。",
+                field="review_count",
+                requested=requested,
+                maximum_assignable=maximum,
+            )])
 
     @classmethod
     def total_count_candidates(cls, *, question_bank_id, concept_ids, match_scope):
@@ -153,6 +309,7 @@ class SamplingService:
                 concept_ids=[rule.concept_id for rule in rules],
                 match_scope=scope,
             )
+            candidates = self._filter_candidates(candidates)
             type_buckets = {
                 question_type: [
                     question
@@ -179,6 +336,7 @@ class SamplingService:
             if (
                 validate_inventory
                 and not type_quotas
+                and self.policy != Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
                 and len(candidates) < self.experiment.sampling_total_count
             ):
                 raise SamplingValidationError([
@@ -188,7 +346,14 @@ class SamplingService:
                         field="sampling_total_count",
                     )
                 ])
-            return SamplingResolution(candidates, {}, type_buckets, resolved)
+            resolution = SamplingResolution(
+                candidates, {}, type_buckets, resolved,
+                tuple(question for question in candidates if question.pk in self.completed_question_ids),
+                tuple(question for question in candidates if question.pk not in self.completed_question_ids),
+            )
+            if validate_inventory:
+                self._validate_history_constraints(resolution, rules)
+            return resolution
 
         questions = list(
             Question.objects.filter(
@@ -198,6 +363,7 @@ class SamplingService:
             .prefetch_related("concept_links")
             .order_by("sequence", "pk")
         )
+        questions = self._filter_candidates(questions)
         buckets = {
             rule.concept_id: [
                 question for question in questions
@@ -236,11 +402,68 @@ class SamplingService:
             {question.pk: question for bucket in buckets.values() for question in bucket}.values(),
             key=lambda question: (question.sequence, question.pk),
         )
-        return SamplingResolution(candidates, buckets, {}, resolved)
+        resolution = SamplingResolution(
+            candidates, buckets, {}, resolved,
+            tuple(question for question in candidates if question.pk in self.completed_question_ids),
+            tuple(question for question in candidates if question.pk not in self.completed_question_ids),
+        )
+        if validate_inventory:
+            self._validate_history_constraints(resolution, rules)
+        return resolution
 
     def select_with_attribution(self, sampling_seed):
         resolution = self.resolve()
         rng = random.Random(int(sampling_seed[:16], 16))
+        if self.policy == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW:
+            rules = list(
+                self.experiment.sampling_kcs.select_related("concept").order_by("concept_id")
+            )
+            capacities, bucket_ids = self._history_flow_inputs(resolution, rules)
+            maximum, allocation = _grouped_quota_flow(
+                candidates=resolution.candidates,
+                completed_ids=self.completed_question_ids,
+                review_count=self.experiment.review_count,
+                bucket_capacities=capacities,
+                bucket_ids_for_question=bucket_ids,
+                rng=rng,
+            )
+            if maximum < self.requested_count():
+                raise SamplingValidationError([self._issue(
+                    "GLOBAL_MATCHING_INSUFFICIENT",
+                    "题目历史构成与现有配额无法同时满足。",
+                    field="review_count",
+                    requested=self.requested_count(),
+                    maximum_assignable=maximum,
+                )])
+            questions = {question.pk: question for question in resolution.candidates}
+            scope_by_concept = {str(rule.concept_id): rule.match_scope for rule in rules}
+            selected = []
+            for question_id, bucket_id in allocation.items():
+                question = questions[question_id]
+                selected.append({
+                    "question": question,
+                    "quota_kc_id": (
+                        int(bucket_id)
+                        if self.experiment.sampling_mode == Experiment.SamplingMode.KC_QUOTA
+                        else None
+                    ),
+                    "quota_question_type": (
+                        question.question_type
+                        if self.experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+                        and bucket_id != "all"
+                        else None
+                    ),
+                    "match_scope": (
+                        scope_by_concept[bucket_id]
+                        if self.experiment.sampling_mode == Experiment.SamplingMode.KC_QUOTA
+                        else self.experiment.sampling_match_scope
+                    ),
+                    "history_role": (
+                        "review" if question_id in self.completed_question_ids else "new"
+                    ),
+                    "cross_experiment_item_policy": self.policy,
+                })
+            return sorted(selected, key=lambda item: (item["question"].sequence, item["question"].pk))
         if self.experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT:
             type_quotas = self._type_quota_map()
             if type_quotas:
@@ -260,6 +483,12 @@ class SamplingService:
                     "quota_kc_id": None,
                     "quota_question_type": question.question_type if type_quotas else None,
                     "match_scope": self.experiment.sampling_match_scope,
+                    "history_role": (
+                        "new"
+                        if self.policy == Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS
+                        else "unrestricted"
+                    ),
+                    "cross_experiment_item_policy": self.policy,
                 }
                 for question in sorted(selected, key=lambda item: (item.sequence, item.pk))
             ]
@@ -273,6 +502,12 @@ class SamplingService:
                 "quota_kc_id": concept_id,
                 "quota_question_type": None,
                 "match_scope": scope_by_concept[concept_id],
+                "history_role": (
+                    "new"
+                    if self.policy == Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS
+                    else "unrestricted"
+                ),
+                "cross_experiment_item_policy": self.policy,
             }
             for (concept_id, _slot), question_id in matching.items()
         ]

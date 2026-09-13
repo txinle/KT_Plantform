@@ -836,6 +836,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/class-tasks/{task_id}/grading/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_class_task_grading_overview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/class-tasks/{task_id}/grading/questions/{snapshot_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_class_task_grading_question"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/class-tasks/{task_id}/grading/submissions/{submission_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_class_task_grade_submission"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/class-tasks/{task_id}/manual-close/": {
         parameters: {
             query?: never;
@@ -2211,6 +2259,9 @@ export interface components {
             closes_at: string | null;
             schedule_revision: number;
             participant_count: number;
+            grading: {
+                [key: string]: unknown;
+            };
             available_actions: string[];
         };
         ClassTaskCollection: {
@@ -2357,6 +2408,13 @@ export interface components {
             created_accounts: number;
             enrollments: number;
         };
+        /**
+         * @description * `exclude_previous` - 排除已正式作答题目
+         *     * `mixed_review` - 混合复测
+         *     * `unrestricted` - 不限制历史题目
+         * @enum {string}
+         */
+        CrossExperimentItemPolicyEnum: "exclude_previous" | "mixed_review" | "unrestricted";
         CsrfToken: {
             csrf_token: string;
         };
@@ -2667,6 +2725,13 @@ export interface components {
         Health: {
             status: string;
         };
+        /**
+         * @description * `review` - review
+         *     * `new` - new
+         *     * `unrestricted` - unrestricted
+         * @enum {string}
+         */
+        HistoryRoleEnum: "review" | "new" | "unrestricted";
         ImportConfirmRequest: {
             /** Format: uuid */
             batch_id: string;
@@ -3120,6 +3185,83 @@ export interface components {
             student: components["schemas"]["TeacherAccountStudent"];
             created_account: boolean;
         };
+        ManualGradeInput: {
+            expected_grade_version: number;
+            is_correct: boolean;
+            comment?: string;
+        };
+        ManualGradeResponse: {
+            submission: components["schemas"]["ManualGradingSubmission"];
+            question_progress: components["schemas"]["ManualGradingQuestionSummary"];
+            task_progress: components["schemas"]["ManualGradingTotals"];
+        };
+        ManualGradingOverview: {
+            task: components["schemas"]["ManualGradingTask"];
+            totals: components["schemas"]["ManualGradingTotals"];
+            questions: components["schemas"]["ManualGradingQuestionSummary"][];
+        };
+        ManualGradingPage: {
+            number: number;
+            size: number;
+            total_items: number;
+            total_pages: number;
+            start: number;
+            end: number;
+        };
+        ManualGradingQuestion: {
+            question_snapshot_id: number;
+            code: string;
+            text: string;
+            correct_answer: unknown;
+            accepted_answers: unknown;
+            explanation: string;
+        };
+        ManualGradingQuestionDetail: {
+            question: components["schemas"]["ManualGradingQuestion"];
+            submissions: components["schemas"]["ManualGradingSubmissionCollection"];
+        };
+        ManualGradingQuestionSummary: {
+            question_snapshot_id: number;
+            code: string;
+            text_summary: string;
+            submitted_count: number;
+            pending_count: number;
+            graded_count: number;
+        };
+        ManualGradingSubmission: {
+            submission_id: number;
+            student_id: number;
+            student_number: string;
+            display_name: string;
+            final_answer: unknown;
+            /** Format: date-time */
+            submitted_at: string;
+            grading_status: string;
+            latest_grade_version: number;
+            current_is_correct: boolean | null;
+            current_comment: string;
+            /** Format: date-time */
+            graded_at: string | null;
+            grader_name: string;
+        };
+        ManualGradingSubmissionCollection: {
+            items: components["schemas"]["ManualGradingSubmission"][];
+            page: components["schemas"]["ManualGradingPage"];
+        };
+        ManualGradingTask: {
+            id: number;
+            experiment_id: number;
+            experiment_name: string;
+            class_id: number;
+            class_name: string;
+        };
+        ManualGradingTotals: {
+            enabled: boolean;
+            short_answer_questions: number;
+            submitted: number;
+            pending: number;
+            graded: number;
+        };
         /**
          * @description * `primary` - 主 KC
          *     * `any_level` - 任意层级
@@ -3254,6 +3396,10 @@ export interface components {
             readonly sampling_match_scope?: components["schemas"]["SamplingMatchScopeEnum"];
             readonly sampling_kcs?: components["schemas"]["SamplingKC"][];
             sampling?: components["schemas"]["SamplingDefinition"];
+            /** @default exclude_previous */
+            cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
+            review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label?: string;
             feedback_mode?: components["schemas"]["FeedbackMode433Enum"];
@@ -3263,7 +3409,9 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -3304,6 +3452,9 @@ export interface components {
             item_count: number;
             is_valid: boolean;
             excluded: boolean;
+            review_item_count: number;
+            new_item_count: number;
+            cross_experiment_item_policy: (components["schemas"]["CrossExperimentItemPolicyEnum"] | components["schemas"]["NullEnum"]) | null;
         };
         PublishParticipantCollection: {
             items: components["schemas"]["PublishParticipant"][];
@@ -3318,6 +3469,9 @@ export interface components {
             item_count: number;
             is_valid: boolean;
             excluded: boolean;
+            review_item_count: number;
+            new_item_count: number;
+            cross_experiment_item_policy: (components["schemas"]["CrossExperimentItemPolicyEnum"] | components["schemas"]["NullEnum"]) | null;
             items: components["schemas"]["PublishParticipantItem"][];
         };
         PublishParticipantItem: {
@@ -3325,6 +3479,7 @@ export interface components {
             question_id: number;
             question_code: string;
             question_type: string;
+            history_role: (components["schemas"]["HistoryRoleEnum"] | components["schemas"]["NullEnum"]) | null;
         };
         PublishPlan: {
             id: number;
@@ -3356,6 +3511,8 @@ export interface components {
             ancestor_kc_path?: string;
             descendant_kc_id?: number;
             descendant_kc_path?: string;
+            student_id?: number;
+            student_number?: string;
         };
         PublishPlanClass: {
             class_id: number;
@@ -4800,6 +4957,10 @@ export interface components {
             readonly sampling_match_scope: components["schemas"]["SamplingMatchScopeEnum"];
             readonly sampling_kcs: components["schemas"]["SamplingKC"][];
             sampling?: components["schemas"]["SamplingDefinition"];
+            /** @default exclude_previous */
+            cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
+            review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label: string;
             feedback_mode?: components["schemas"]["FeedbackMode433Enum"];
@@ -4809,7 +4970,9 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -6576,6 +6739,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClassTask"];
+                };
+            };
+        };
+    };
+    teacher_class_task_grading_overview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualGradingOverview"];
+                };
+            };
+        };
+    };
+    teacher_class_task_grading_question: {
+        parameters: {
+            query?: {
+                page?: number;
+                status?: "all" | "completed" | "pending";
+            };
+            header?: never;
+            path: {
+                snapshot_id: number;
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualGradingQuestionDetail"];
+                };
+            };
+        };
+    };
+    teacher_class_task_grade_submission: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: number;
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualGradeInput"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManualGradeInput"];
+                "multipart/form-data": components["schemas"]["ManualGradeInput"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualGradeResponse"];
                 };
             };
         };

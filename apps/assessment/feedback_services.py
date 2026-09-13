@@ -285,12 +285,28 @@ def prepare_feedback_exposure(parsed):
 
 
 def initial_grading_result(attempt, correct, score) -> InitialGradingResult:
-    """Keep manual capture-v2 short answers pending without treating them as zero."""
+    """Apply the immutable release grading policy without treating pending as zero."""
     from .capture_v2_services import uses_capture_v2
 
+    question_type = attempt.assignment.snapshot.question_type
+    task = getattr(attempt.session, "class_task", None)
+    configuration = (
+        getattr(getattr(task, "release_snapshot", None), "configuration", {}) or {}
+    )
+    if (
+        question_type == "short_answer"
+        and configuration.get("short_answer_grading_policy") == "manual_binary_v1"
+    ):
+        return InitialGradingResult(
+            status=SubmissionEvent.GradingStatus.PENDING,
+            is_correct=None,
+            score=None,
+            max_score=Decimal("1"),
+            method="manual_binary_v1",
+        )
     if (
         uses_capture_v2(attempt.session)
-        and attempt.assignment.snapshot.question_type == "short_answer"
+        and question_type == "short_answer"
     ):
         return InitialGradingResult(
             status=SubmissionEvent.GradingStatus.PENDING,

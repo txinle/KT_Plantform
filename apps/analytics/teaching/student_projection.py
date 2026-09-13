@@ -829,7 +829,7 @@ def _item_rows(bundle, task):
             effective_grade=grade,
             at=bundle.context.generated_at,
         )
-        result_label = "待评分"
+        result_label = "待教师批改"
         if grade is not None and grade.is_correct is not None:
             result_label = "正确" if grade.is_correct else "错误"
         values = {
@@ -952,7 +952,7 @@ def build_student_question_projection(
             effective_grade=grade,
             at=generated_at,
         )
-        result_label = "待评分"
+        result_label = "待教师批改"
         if grade is not None and grade.is_correct is not None:
             result_label = "正确" if grade.is_correct else "错误"
         options = options_for_snapshot(question)

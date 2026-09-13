@@ -14,6 +14,7 @@ const TeacherExperimentDetail = () => import('@/features/teacher-experiments/Tea
 const TeacherExperimentForm = () => import('@/features/teacher-experiments/TeacherExperimentForm.vue')
 const TeacherExperimentList = () => import('@/features/teacher-experiments/TeacherExperimentList.vue')
 const TeacherExperimentPublishPlan = () => import('@/features/teacher-experiments/TeacherExperimentPublishPlan.vue')
+const TeacherShortAnswerGrading = () => import('@/features/teacher-experiments/TeacherShortAnswerGrading.vue')
 const TeacherExperimentsLayout = () => import('@/features/teacher-experiments/TeacherExperimentsLayout.vue')
 const TeacherQuestionBankDetail = () => import('@/features/teacher-question-banks/TeacherQuestionBankDetail.vue')
 const TeacherQuestionBankList = () => import('@/features/teacher-question-banks/TeacherQuestionBankList.vue')
@@ -71,6 +72,11 @@ export const migratedRoutes: RouteRecordRaw[] = [
       { path: 'create/', name: 'teacher-experiment-create', component: TeacherExperimentForm },
       { path: ':experimentId/', name: 'teacher-experiment-detail', component: TeacherExperimentDetail },
       { path: ':experimentId/edit/', name: 'teacher-experiment-edit', component: TeacherExperimentForm },
+      {
+        path: ':experimentId/class-tasks/:taskId/grading/',
+        name: 'teacher-short-answer-grading',
+        component: TeacherShortAnswerGrading,
+      },
       {
         path: ':experimentId/publish-plan/:planId/step/:step/',
         name: 'teacher-experiment-publish-plan',

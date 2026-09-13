@@ -13,6 +13,51 @@ from .models import SubmissionEvent
 
 
 class InitialGradingResultTests(SimpleTestCase):
+    @patch("apps.assessment.capture_v2_services.uses_capture_v2", return_value=False)
+    def test_course_short_answer_with_frozen_manual_policy_starts_pending(self, _uses_v2):
+        attempt = SimpleNamespace(
+            session=SimpleNamespace(
+                class_task=SimpleNamespace(
+                    release_snapshot=SimpleNamespace(
+                        configuration={"short_answer_grading_policy": "manual_binary_v1"}
+                    )
+                )
+            ),
+            assignment=SimpleNamespace(
+                snapshot=SimpleNamespace(question_type="short_answer")
+            ),
+        )
+
+        result = initial_grading_result(attempt, correct=False, score=0)
+
+        self.assertEqual(result.status, SubmissionEvent.GradingStatus.PENDING)
+        self.assertIsNone(result.is_correct)
+        self.assertIsNone(result.score)
+        self.assertEqual(result.max_score, 1)
+        self.assertEqual(result.method, "manual_binary_v1")
+
+    @patch("apps.assessment.capture_v2_services.uses_capture_v2", return_value=False)
+    def test_course_objective_item_with_manual_short_answer_policy_stays_automatic(self, _uses_v2):
+        attempt = SimpleNamespace(
+            session=SimpleNamespace(
+                class_task=SimpleNamespace(
+                    release_snapshot=SimpleNamespace(
+                        configuration={"short_answer_grading_policy": "manual_binary_v1"}
+                    )
+                )
+            ),
+            assignment=SimpleNamespace(
+                snapshot=SimpleNamespace(question_type="single_choice")
+            ),
+        )
+
+        result = initial_grading_result(attempt, correct=True, score=1)
+
+        self.assertEqual(result.status, SubmissionEvent.GradingStatus.COMPLETED)
+        self.assertTrue(result.is_correct)
+        self.assertEqual(result.score, 1)
+        self.assertEqual(result.method, "automatic")
+
     @patch("apps.assessment.capture_v2_services.uses_capture_v2", return_value=True)
     def test_capture_v2_short_answer_starts_pending_without_zero_values(self, _uses_v2):
         attempt = SimpleNamespace(

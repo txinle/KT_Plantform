@@ -33,6 +33,7 @@ describe('Vue route boundaries', () => {
       'create/',
       ':experimentId/',
       ':experimentId/edit/',
+      ':experimentId/class-tasks/:taskId/grading/',
       ':experimentId/publish-plan/:planId/step/:step/',
     ])
     expect(migratedRoutes.find((route) => route.path.endsWith('/data/'))?.children?.map((route) => route.path)).toEqual([
