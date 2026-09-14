@@ -22,6 +22,25 @@ function context(researchConsentRequired: boolean) {
 }
 
 describe('App research consent gate', () => {
+  it('renders the site registration footer', () => {
+    const wrapper = mount(App, {
+      props: { bootstrapContext: context(false) },
+      global: { stubs: { RouterView: { template: '<div data-route-content />' } } },
+    })
+
+    const footer = wrapper.get('[data-site-registration-footer]')
+    const icpLink = footer.get('[data-icp-registration]')
+    const policeLink = footer.get('[data-police-registration]')
+
+    expect(icpLink.text()).toBe('湘ICP备2026036826号-1')
+    expect(icpLink.attributes('href')).toBe('https://beian.miit.gov.cn/')
+    expect(policeLink.text()).toContain('湘公网安备43010302002391号')
+    expect(policeLink.attributes('href')).toBe(
+      'https://beian.mps.gov.cn/#/query/webSearch?code=43010302002391',
+    )
+    expect(policeLink.get('img').attributes('src')).toBe('/static/icons/beian-police.png')
+  })
+
   it('does not mount the requested route while consent is required', () => {
     const wrapper = mount(App, {
       props: { bootstrapContext: context(true) },

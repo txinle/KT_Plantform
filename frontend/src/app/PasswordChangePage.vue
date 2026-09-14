@@ -90,7 +90,7 @@ async function signOut() {
 <style scoped>
 .kt-password-change-page {
   display: grid;
-  min-height: 100vh;
+  min-height: calc(100dvh - var(--kt-site-registration-height));
   place-items: center;
   padding: 1.5rem;
   background: #f3f6fa;

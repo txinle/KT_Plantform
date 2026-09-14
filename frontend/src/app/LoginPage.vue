@@ -57,7 +57,7 @@ async function submit() {
 </template>
 
 <style scoped>
-.kt-login-page { display: grid; min-height: 100vh; place-items: center; padding: 1.5rem; }
+.kt-login-page { display: grid; min-height: calc(100dvh - var(--kt-site-registration-height)); place-items: center; padding: 1.5rem; }
 .kt-login-card { width: min(100%, 29rem); }
 .kt-login-card__intro { color: var(--kt-color-muted); }
 .kt-login-card__principles { margin: 0 0 1.25rem; padding-left: 1.25rem; color: var(--kt-color-muted); }
