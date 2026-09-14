@@ -6,6 +6,7 @@ import { connect, createServer, type Server, type Socket } from 'node:net'
 import { join } from 'node:path'
 
 import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
+import { acceptResearchConsentIfRequired } from './research-consent'
 
 const root = join(import.meta.dirname, '../..')
 const localPython = join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
@@ -157,6 +158,7 @@ async function login(page: Page, username: string, password: string) {
   await page.getByLabel('密码').fill(password)
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
 }
 
 test('capture-v2 initializes once, recovers safely, and preserves all six response types', async ({ browser, browserName, context, page }, testInfo) => {

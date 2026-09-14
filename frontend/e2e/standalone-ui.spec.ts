@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
 import { openLoginPage } from './login-navigation'
+import { acceptResearchConsentIfRequired } from './research-consent'
 
 test('teacher business deep links render the independent entry at desktop and mobile widths', async ({ page }, info) => {
   test.setTimeout(240_000)
@@ -78,6 +79,7 @@ test('student entry, drawer and feedback navigation stay usable at compact viewp
   await page.getByLabel('密码').fill('student123')
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
   for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 720, height: 450 }]) {
     await page.setViewportSize(size)
     await page.goto('/student/courses/2/')

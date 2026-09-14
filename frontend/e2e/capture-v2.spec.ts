@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
+import { acceptResearchConsentIfRequired } from './research-consent'
 
 const root = join(import.meta.dirname, '../..')
 const localPython = join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
@@ -26,6 +27,7 @@ test('five short-response types retain trajectories through offline reload, IME 
   await page.getByLabel('密码').fill('student123')
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
   await page.goto(`/student/courses/${fixture.course.id}/`)
   await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'E2E Capture V2 五题回放', exact: true }) })
     .getByRole('button', { name: '开始作业' }).click()

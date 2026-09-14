@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { acceptResearchConsentIfRequired } from './research-consent'
 import { writeFileSync } from 'node:fs'
 
 test('business labels, controls and long text fit their actual layout', async ({ page }, info) => {
@@ -135,6 +136,7 @@ test('student records and feedback keep readable controls across responsive boun
   await page.getByLabel('密码').fill('student123')
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
   await page.goto('/student/courses/1/')
   const feedbackTask = page.locator('.kt-student-task-row').filter({
     has: page.getByRole('heading', { name: '完整反馈视觉验证', exact: true }),

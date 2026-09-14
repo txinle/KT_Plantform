@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { acceptResearchConsentIfRequired } from './research-consent'
 
 const demoExperimentName = '演示交互数据采集'
 
@@ -22,6 +23,7 @@ async function loginStudent(page: Page, origin: string, account = 'S001') {
   await page.getByLabel('密码').fill('student123')
   await page.getByRole('button', { name: '登录' }).click()
   await expect(page).toHaveURL(new RegExp(`${origin}/student/`))
+  await acceptResearchConsentIfRequired(page)
 }
 
 async function answerCurrentQuestion(page: Page) {

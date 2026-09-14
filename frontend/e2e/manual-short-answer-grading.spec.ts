@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { acceptResearchConsentIfRequired } from './research-consent'
 
 const origin = 'http://127.0.0.1:8000'
 const experimentName = '人工简答题批改验收'
@@ -14,6 +15,7 @@ async function login(page: Page, account: string, password: string) {
   await expect(page).toHaveURL(
     new RegExp(`${origin}/${account === 'teacher' ? 'teacher/courses' : 'student'}/`),
   )
+  if (account !== 'teacher') await acceptResearchConsentIfRequired(page)
 }
 
 test('student submits a short answer and teacher completes and revises manual grading', async ({ browserName, page }, testInfo) => {

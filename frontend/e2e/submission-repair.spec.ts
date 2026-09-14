@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { connect, createServer, type Server, type Socket } from 'node:net'
 import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
 import { openLoginPage } from './login-navigation'
+import { acceptResearchConsentIfRequired } from './research-consent'
 
 const root = join(import.meta.dirname, '../..')
 const localPython = join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
@@ -54,6 +55,7 @@ test('initial-password reminder, pre-submit confidence and response-loss recover
   await page.getByLabel('账号或学号').fill(username)
   await page.getByLabel('密码', { exact: true }).fill(`S${username}`)
   await page.getByRole('button', { name: '登录', exact: true }).click()
+  await acceptResearchConsentIfRequired(page)
   await expect(page.getByRole('heading', { name: '建议修改初始密码' })).toBeVisible()
   await page.getByRole('button', { name: '暂不修改', exact: true }).click()
   expect((await page.request.get('/api/v1/student/courses/')).ok()).toBe(true)

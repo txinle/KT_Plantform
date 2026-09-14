@@ -1,10 +1,12 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
+import { acceptResearchConsentIfRequired } from './research-consent'
 
 async function login(page: Page, user: string, password: string) {
   await page.goto('/login/')
   await page.getByLabel('账号或学号').fill(user)
   await page.getByLabel('密码').fill(password)
   await page.getByRole('button', { name: '登录', exact: true }).click()
+  if (user !== 'teacher') await acceptResearchConsentIfRequired(page)
   await expect(page.locator('.kt-workspace')).toBeVisible()
   await page.waitForLoadState('networkidle')
 }

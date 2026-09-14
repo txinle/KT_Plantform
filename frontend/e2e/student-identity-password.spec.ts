@@ -1,5 +1,6 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { openLoginPage } from './login-navigation'
+import { acceptResearchConsentIfRequired } from './research-consent'
 
 async function login(page: Page, username: string, password: string) {
   await openLoginPage(page)
@@ -74,6 +75,7 @@ test('corrects a removed student, preserves identity and password, and allows op
     const studentPage = await studentContext.newPage()
     // Editing the number must preserve even a not-yet-changed initial password.
     await login(studentPage, correctedNumber, `S${number}`)
+    await acceptResearchConsentIfRequired(studentPage)
     await expect(studentPage.getByRole('heading', { name: '建议修改初始密码' })).toBeVisible()
     await studentPage.getByRole('button', { name: '暂不修改', exact: true }).click()
     expect((await studentPage.request.get('/api/v1/student/courses/')).status()).toBe(200)
@@ -104,6 +106,7 @@ test('corrects a removed student, preserves identity and password, and allows op
     await expect(page.getByText('的全局登录密码已重置。', { exact: false })).toBeVisible()
     expect((await studentPage.request.get('/api/v1/auth/session/')).status()).toBe(401)
     await login(studentPage, correctedNumber, `S${correctedNumber}`)
+    await acceptResearchConsentIfRequired(studentPage)
     await expect(studentPage.getByRole('heading', { name: '建议修改初始密码' })).toBeVisible()
   } finally {
     await studentContext.close()
