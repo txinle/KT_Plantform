@@ -14,6 +14,7 @@ from . import test_confidence_flow as fixtures
 from . import test_capture_v2 as capture_fixtures
 from .confidence_services import materialize_confidence_assignments
 from .models import AssessmentEvent, Attempt, ConfidenceAssignment, SubmissionEvent
+from .test_support import accept_research_consent
 
 
 class SubmissionConfirmationTests(TestCase):
@@ -128,6 +129,7 @@ class SubmissionConfirmationTests(TestCase):
         self.assertEqual(self.session.deadline_at, deadline)
         self.assertEqual(AssessmentEvent.objects.count(), before)
         other = User.objects.create_user(username='recovery-other', role=User.Role.STUDENT)
+        accept_research_consent(other)
         self.client.force_login(other)
         self.assertEqual(self.client.get(url).status_code, 404)
 

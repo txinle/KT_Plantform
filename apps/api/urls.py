@@ -7,12 +7,18 @@ from .views import (
     InitialPasswordReminderShownView,
     LoginApiView,
     LogoutApiView,
+    ResearchConsentView,
     SessionContextView,
     StudentPasswordChangeView,
 )
 
 
 urlpatterns = [
+    path(
+        "auth/research-consent/",
+        ResearchConsentView.as_view(),
+        name="api-research-consent",
+    ),
     path(
         "auth/password/reminder-shown/",
         InitialPasswordReminderShownView.as_view(),

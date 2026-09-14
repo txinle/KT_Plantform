@@ -40,6 +40,8 @@ class AuthenticationApiTests(TestCase):
                     "home_url": reverse("assessment:dashboard"),
                     "uses_initial_password": False,
                     "initial_password_reminder_pending": False,
+                    "research_consent_required": True,
+                    "research_consent_version": "2026-09-14",
                 }
             },
         )
@@ -79,6 +81,8 @@ class AuthenticationApiTests(TestCase):
                 "home_url": reverse("courses:list"),
                 "uses_initial_password": False,
                 "initial_password_reminder_pending": False,
+                "research_consent_required": False,
+                "research_consent_version": "2026-09-14",
             },
         )
         self.assertEqual(csrf_client.get(reverse("api-session")).status_code, 200)

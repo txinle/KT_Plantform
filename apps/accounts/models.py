@@ -318,6 +318,25 @@ class User(AbstractUser):
         super().save(*args, **kwargs)
 
 
+class ResearchConsent(models.Model):
+    student = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="research_consents",
+        limit_choices_to={"role": User.Role.STUDENT},
+    )
+    version = models.CharField(max_length=32)
+    accepted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "version"],
+                name="unique_student_research_consent_version",
+            )
+        ]
+
+
 class CourseEnrollment(models.Model):
     course = models.ForeignKey(Course, on_delete=models.PROTECT, related_name="enrollments")
     student = models.ForeignKey(User, on_delete=models.PROTECT, related_name="course_enrollments")

@@ -2,7 +2,11 @@ from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 from django.conf import settings
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
+
+from apps.api.frontend_entry import frontend_response
+
+from .research_consent import research_consent_required
 
 
 def _is_loopback_host(hostname):
@@ -72,3 +76,42 @@ class StudentSessionIdleTimeoutMiddleware:
         response = self.get_response(request)
         self._renew_student_session(request)
         return response
+
+
+class ResearchConsentRequiredMiddleware:
+    protected_prefixes = (
+        "/api/v1/student/",
+        "/assessment/process/",
+    )
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        protects_student_page = (
+            request.path.startswith("/student/")
+            and request.method in {"GET", "HEAD"}
+        )
+        protects_student_api = request.path.startswith(self.protected_prefixes)
+        protects_legacy_write = (
+            request.path.startswith("/student/")
+            and request.method not in {"GET", "HEAD", "OPTIONS"}
+        )
+        if (
+            (protects_student_page or protects_student_api or protects_legacy_write)
+            and research_consent_required(request.user)
+        ):
+            if protects_student_page:
+                return frontend_response()
+            return JsonResponse(
+                {
+                    "error": {
+                        "code": "RESEARCH_CONSENT_REQUIRED",
+                        "message": "请先阅读并同意研究参与说明。",
+                        "fields": {},
+                        "request_id": getattr(request, "request_id", ""),
+                    }
+                },
+                status=403,
+            )
+        return self.get_response(request)

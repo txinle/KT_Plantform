@@ -16,6 +16,10 @@ from apps.experiments.presentation_instances import get_or_create_default_item_i
 from apps.question_bank.models import Question, QuestionBank
 
 from .models import ClassGroup, Course, CourseEnrollment, CourseTeacher, User
+from .research_consent import (
+    CURRENT_RESEARCH_CONSENT_VERSION,
+    accept_current_research_consent,
+)
 
 
 class StudentRemovalTests(TestCase):
@@ -206,6 +210,10 @@ class StudentRemovalTests(TestCase):
         self.assertTrue(StudentQuestionAssignment.objects.filter(pk=assignment.pk).exists())
         self.assertTrue(Attempt.objects.filter(pk=attempt.pk).exists())
 
+        accept_current_research_consent(
+            student=self.student,
+            version=CURRENT_RESEARCH_CONSENT_VERSION,
+        )
         self.client.force_login(self.student)
         blocked_write = self.client.post(
             f"/student/attempts/{attempt.pk}/draft/",

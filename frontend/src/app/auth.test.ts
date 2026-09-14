@@ -18,6 +18,44 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 describe('authentication API', () => {
+  it('loads and accepts the current research consent through the authenticated API', async () => {
+    const consent = {
+      version: '2026-09-14',
+      title: '研究参与说明与知情同意',
+      paragraphs: ['说明正文'],
+      researcher_name: '唐鑫乐',
+      researcher_email: 'txinle@163.com',
+      checkbox_label: '我已阅读并理解上述说明',
+      exit_label: '退出',
+      accept_label: '同意并继续',
+    }
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(consent))
+      .mockResolvedValueOnce(jsonResponse({ user: { research_consent_required: false } }))
+    const refreshedContext = {
+      csrf_token: 'csrf-token',
+      user: { research_consent_required: false },
+    }
+    const api = createAuthenticationApi({
+      fetchImpl: fetchImpl as typeof fetch,
+      getCsrfToken: () => 'csrf-token',
+      refreshBootstrapContext: vi.fn().mockResolvedValue(refreshedContext),
+      clearBootstrapContext: vi.fn(),
+    })
+
+    await expect(api.getResearchConsent()).resolves.toEqual(consent)
+    await expect(api.acceptResearchConsent(consent.version)).resolves.toEqual(refreshedContext)
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/auth/research-consent/',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ accepted: true, version: consent.version }),
+        headers: expect.objectContaining({ 'X-CSRFToken': 'csrf-token' }),
+      }),
+    )
+  })
+
   it('sends login credentials with the bootstrap CSRF token then refreshes the session', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ user: {} }))
     const refreshedContext = {
@@ -31,6 +69,8 @@ describe('authentication API', () => {
         home_url: '/teacher/courses/',
       uses_initial_password: false,
       initial_password_reminder_pending: false,
+      research_consent_required: false,
+      research_consent_version: '2026-09-14',
       },
     }
     const refreshBootstrapContext = vi.fn().mockResolvedValue(refreshedContext)
@@ -78,6 +118,8 @@ describe('authentication API', () => {
       home_url: '/student/',
       uses_initial_password: true,
       initial_password_reminder_pending: true,
+      research_consent_required: true,
+      research_consent_version: '2026-09-14',
     }
 
     expect(loginDestination(user, '/student/courses/3/')).toBe('/student/courses/3/')
@@ -98,6 +140,8 @@ describe('authentication API', () => {
         home_url: '/student/',
         uses_initial_password: false,
         initial_password_reminder_pending: false,
+        research_consent_required: false,
+        research_consent_version: '2026-09-14',
       },
     }
     const refreshBootstrapContext = vi.fn().mockResolvedValue(refreshedContext)
@@ -130,6 +174,8 @@ describe('authentication API', () => {
       home_url: '/teacher/courses/',
         uses_initial_password: false,
         initial_password_reminder_pending: false,
+        research_consent_required: false,
+        research_consent_version: '2026-09-14',
     }
 
     expect(authenticatedEntryRedirect(user, '/password/change/')).toBe('/teacher/courses/')

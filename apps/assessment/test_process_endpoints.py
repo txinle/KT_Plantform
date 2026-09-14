@@ -19,6 +19,7 @@ from .models import (
     ExperimentSession,
     StudentQuestionAssignment,
 )
+from .test_support import accept_research_consent
 
 
 class ProcessEndpointContractTests(TestCase):
@@ -37,6 +38,7 @@ class ProcessEndpointContractTests(TestCase):
             student_number="PROCESS-API-S2",
             role=User.Role.STUDENT,
         )
+        accept_research_consent(self.student, self.other_student)
         bank = QuestionBank.objects.create(owner=self.teacher, name="过程 API 题库")
         question = Question.objects.create(
             bank=bank,

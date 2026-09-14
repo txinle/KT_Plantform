@@ -13,6 +13,7 @@ from apps.question_bank.models import Concept, Question, QuestionBank, QuestionC
 
 from .models import Attempt, SubmissionEvent
 from .services import get_or_create_session
+from .test_support import accept_research_consent
 
 
 class StudentQuestionTypeFlowTests(TestCase):
@@ -26,6 +27,7 @@ class StudentQuestionTypeFlowTests(TestCase):
             student_number="student-type-student",
             role=User.Role.STUDENT,
         )
+        accept_research_consent(self.student)
         bank = QuestionBank.objects.create(owner=self.teacher, name="学生题型题库")
         concept = Concept.objects.create(
             owner=self.teacher,

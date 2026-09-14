@@ -13,6 +13,13 @@ from apps.accounts.password_services import (
     acknowledge_initial_password_reminder,
     change_student_password,
 )
+from apps.accounts.models import User
+from apps.accounts.research_consent import (
+    CURRENT_RESEARCH_CONSENT_VERSION,
+    RESEARCH_CONSENT_COPY,
+    accept_current_research_consent,
+    research_consent_required,
+)
 from apps.accounts.student_identity import StudentIdentityError
 from .exceptions import ApiBusinessError
 
@@ -20,6 +27,8 @@ from .serializers import (
     CsrfTokenSerializer,
     HealthSerializer,
     LoginRequestSerializer,
+    ResearchConsentAcceptanceSerializer,
+    ResearchConsentDocumentSerializer,
     SessionContextSerializer,
     StudentPasswordChangeSerializer,
 )
@@ -36,6 +45,8 @@ def session_context(user):
             "home_url": resolve_home_url(user),
             "uses_initial_password": user.uses_initial_password,
             "initial_password_reminder_pending": user.initial_password_reminder_pending,
+            "research_consent_required": research_consent_required(user),
+            "research_consent_version": CURRENT_RESEARCH_CONSENT_VERSION,
         }
     }
 
@@ -110,6 +121,38 @@ class InitialPasswordReminderShownView(APIView):
                 status=exc.status_code,
             ) from exc
         return Response(session_context(student))
+
+
+class ResearchConsentView(APIView):
+    @staticmethod
+    def _require_student(request):
+        if request.user.is_superuser or request.user.role != User.Role.STUDENT:
+            raise PermissionDenied("仅学生账号可以确认研究参与说明。")
+
+    @extend_schema(responses=ResearchConsentDocumentSerializer)
+    def get(self, request):
+        self._require_student(request)
+        return Response(
+            {"version": CURRENT_RESEARCH_CONSENT_VERSION, **RESEARCH_CONSENT_COPY}
+        )
+
+    @extend_schema(
+        request=ResearchConsentAcceptanceSerializer,
+        responses=SessionContextSerializer,
+    )
+    def post(self, request):
+        self._require_student(request)
+        serializer = ResearchConsentAcceptanceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        version = serializer.validated_data["version"]
+        if version != CURRENT_RESEARCH_CONSENT_VERSION:
+            raise ApiBusinessError(
+                "研究参与说明已更新，请重新阅读后确认。",
+                code="RESEARCH_CONSENT_VERSION_STALE",
+                status=409,
+            )
+        accept_current_research_consent(student=request.user, version=version)
+        return Response(session_context(request.user))
 
 
 class LogoutApiView(APIView):

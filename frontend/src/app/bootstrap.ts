@@ -7,6 +7,8 @@ export interface AuthenticatedUser {
   home_url: string
   uses_initial_password: boolean
   initial_password_reminder_pending: boolean
+  research_consent_required: boolean
+  research_consent_version: string
 }
 
 export interface BootstrapContext {
@@ -51,6 +53,8 @@ function isAuthenticatedUser(value: unknown): value is AuthenticatedUser {
     && user.home_url.startsWith('/')
     && typeof user.uses_initial_password === 'boolean'
     && typeof user.initial_password_reminder_pending === 'boolean'
+    && typeof user.research_consent_required === 'boolean'
+    && typeof user.research_consent_version === 'string'
   )
 }
 

@@ -19,6 +19,7 @@ from .models import (
     StudentQuestionAssignment,
 )
 from .services import save_draft
+from .test_support import accept_research_consent
 
 
 class ResponseSnapshotServiceTests(TestCase):
@@ -32,6 +33,7 @@ class ResponseSnapshotServiceTests(TestCase):
             student_number="RESPONSE-SNAPSHOT-S1",
             role=User.Role.STUDENT,
         )
+        accept_research_consent(self.student)
         bank = QuestionBank.objects.create(owner=self.teacher, name="响应快照题库")
         experiment = Experiment.objects.create(
             owner=self.teacher,

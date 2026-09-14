@@ -28,6 +28,8 @@ function installValidOfflineBootstrap() {
       home_url: '/student/',
       uses_initial_password: false,
       initial_password_reminder_pending: false,
+      research_consent_required: false,
+      research_consent_version: '2026-09-14',
     },
   })}</script>`
   window.history.replaceState({}, '', '/student/sessions/17/questions/23/')
@@ -53,6 +55,8 @@ describe('bootstrap initialization', () => {
           home_url: '/teacher/courses/',
           uses_initial_password: false,
           initial_password_reminder_pending: false,
+          research_consent_required: false,
+          research_consent_version: '2026-09-14',
         },
       }))
     const bootstrap = await loadBootstrap()
@@ -72,6 +76,8 @@ describe('bootstrap initialization', () => {
         home_url: '/teacher/courses/',
         uses_initial_password: false,
         initial_password_reminder_pending: false,
+        research_consent_required: false,
+        research_consent_version: '2026-09-14',
       },
     })
     expect(fetchImpl).toHaveBeenNthCalledWith(
@@ -119,6 +125,8 @@ describe('bootstrap initialization', () => {
         home_url: '/student/',
         uses_initial_password: false,
         initial_password_reminder_pending: false,
+        research_consent_required: false,
+        research_consent_version: '2026-09-14',
       },
     })}</script>`
     window.history.replaceState({}, '', '/student/sessions/17/questions/23/')
@@ -235,6 +243,8 @@ describe('bootstrap initialization', () => {
         home_url: '/student/',
         uses_initial_password: false,
         initial_password_reminder_pending: false,
+        research_consent_required: false,
+        research_consent_version: '2026-09-14',
       },
     })}</script>`
     window.history.replaceState({}, '', '/student/sessions/17/questions/23/')

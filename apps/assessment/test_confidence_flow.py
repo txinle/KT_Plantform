@@ -19,6 +19,7 @@ from apps.question_bank.models import (
 from .event_services import append_assessment_event
 from .models import AssessmentEvent, ConfidenceAssignment
 from .services import get_or_create_session
+from .test_support import accept_research_consent
 
 
 class ConfidenceFlowTests(TestCase):
@@ -32,6 +33,7 @@ class ConfidenceFlowTests(TestCase):
             student_number="CONFIDENCE-S1",
             role=User.Role.STUDENT,
         )
+        accept_research_consent(self.student)
         bank = QuestionBank.objects.create(owner=self.teacher, name="Confidence 题库")
         concept = Concept.objects.create(
             owner=self.teacher,
@@ -299,6 +301,7 @@ class ConfidenceFlowTests(TestCase):
             student_number="CONFIDENCE-S2",
             role=User.Role.STUDENT,
         )
+        accept_research_consent(other_student)
         ExperimentStudent.objects.create(
             experiment=self.experiment,
             student=other_student,

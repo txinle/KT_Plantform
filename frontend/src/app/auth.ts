@@ -11,6 +11,17 @@ import {
 
 export const PASSWORD_CHANGE_PATH = '/password/change/'
 
+export interface ResearchConsentDocument {
+  version: string
+  title: string
+  paragraphs: string[]
+  researcher_name: string
+  researcher_email: string
+  checkbox_label: string
+  exit_label: string
+  accept_label: string
+}
+
 interface AuthenticationApiOptions {
   fetchImpl?: typeof fetch
   getCsrfToken: () => string
@@ -32,6 +43,33 @@ export function createAuthenticationApi(options: AuthenticationApiOptions) {
   const fetchImpl = options.fetchImpl || globalThis.fetch.bind(globalThis)
 
   return {
+    async getResearchConsent(): Promise<ResearchConsentDocument> {
+      const response = await fetchImpl('/api/v1/auth/research-consent/', {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+      })
+      if (!response.ok) throw await responseError(response)
+      return response.json() as Promise<ResearchConsentDocument>
+    },
+
+    async acceptResearchConsent(version: string): Promise<BootstrapContext> {
+      const response = await fetchImpl('/api/v1/auth/research-consent/', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRFToken': options.getCsrfToken(),
+        },
+        body: JSON.stringify({ accepted: true, version }),
+      })
+      if (!response.ok) throw await responseError(response)
+      const context = await options.refreshBootstrapContext({ force: true })
+      if (!context) throw new Error('登录状态未建立。')
+      return context
+    },
+
     async login(username: string, password: string): Promise<BootstrapContext> {
       const response = await fetchImpl('/api/v1/auth/login/', {
         method: 'POST',
@@ -111,6 +149,14 @@ function defaultAuthenticationApi() {
 
 export function login(username: string, password: string) {
   return defaultAuthenticationApi().login(username, password)
+}
+
+export function getResearchConsent() {
+  return defaultAuthenticationApi().getResearchConsent()
+}
+
+export function acceptResearchConsent(version: string) {
+  return defaultAuthenticationApi().acceptResearchConsent(version)
 }
 
 export function logout() {

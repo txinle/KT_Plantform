@@ -11,6 +11,7 @@ from apps.question_bank.models import Question
 from .models import AssessmentEvent, ResponseSnapshot
 from .response_snapshot_services import ResponseState
 from . import test_response_snapshots as snapshot_fixtures
+from .test_support import accept_research_consent
 
 
 class CaptureV2Tests(TestCase):
@@ -265,6 +266,7 @@ class CaptureV2Tests(TestCase):
             student_number='capture-v2-conflict-stranger',
             role=User.Role.STUDENT,
         )
+        accept_research_consent(stranger)
         self.client.force_login(stranger)
 
         response = self.client.post(

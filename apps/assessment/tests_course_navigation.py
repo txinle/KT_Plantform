@@ -16,6 +16,7 @@ from apps.question_bank.models import Concept, Question, QuestionBank, QuestionC
 from apps.question_bank.services.course_question_identity import allocate_course_question_identity
 
 from .models import DraftSaveEvent, ExperimentSession
+from .test_support import accept_research_consent
 
 
 class StudentCourseNavigationTests(TestCase):
@@ -31,6 +32,7 @@ class StudentCourseNavigationTests(TestCase):
             student_number="S2",
             role=User.Role.STUDENT,
         )
+        accept_research_consent(self.student, self.other_student)
         self.course = Course.objects.create(
             owner=self.teacher,
             name="高等数学",

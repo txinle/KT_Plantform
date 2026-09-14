@@ -11,11 +11,13 @@ from apps.question_bank.models import Concept, Question, QuestionBank, QuestionC
 from .models import AssessmentEvent, Attempt, SubmissionEvent
 from .services import get_or_create_session, record_visit, save_draft, submit_attempt
 from .event_services import append_assessment_event
+from .test_support import accept_research_consent
 
 class AssessmentFlowTests(TestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(username="teacher", role=User.Role.TEACHER)
         self.student = User.objects.create_user(username="S1", role=User.Role.STUDENT, student_number="S1")
+        accept_research_consent(self.student)
         bank = QuestionBank.objects.create(owner=self.teacher, name="bank")
         concept = Concept.objects.create(owner=self.teacher, scope=Concept.Scope.PRIVATE, name="加法", normalized_name="加法")
         question = Question.objects.create(bank=bank, sequence=1, question_type=Question.Type.SINGLE, text="2+2", correct_answer="B")

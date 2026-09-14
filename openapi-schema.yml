@@ -93,6 +93,45 @@ paths:
               schema:
                 $ref: '#/components/schemas/SessionContext'
           description: ''
+  /api/v1/auth/research-consent/:
+    get:
+      operationId: auth_research_consent_retrieve
+      tags:
+      - auth
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchConsentDocument'
+          description: ''
+    post:
+      operationId: auth_research_consent_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResearchConsentAcceptance'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResearchConsentAcceptance'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResearchConsentAcceptance'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionContext'
+          description: ''
   /api/v1/auth/session/:
     get:
       operationId: auth_session_retrieve
@@ -4516,11 +4555,17 @@ components:
           type: boolean
         initial_password_reminder_pending:
           type: boolean
+        research_consent_required:
+          type: boolean
+        research_consent_version:
+          type: string
       required:
       - display_name
       - home_url
       - id
       - initial_password_reminder_pending
+      - research_consent_required
+      - research_consent_version
       - role
       - student_number
       - username
@@ -7855,8 +7900,9 @@ components:
           default: exclude_previous
         review_count:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -7880,13 +7926,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -9112,6 +9160,47 @@ components:
           type: boolean
       required:
       - removed
+    ResearchConsentAcceptance:
+      type: object
+      properties:
+        version:
+          type: string
+        accepted:
+          type: boolean
+      required:
+      - accepted
+      - version
+    ResearchConsentDocument:
+      type: object
+      properties:
+        version:
+          type: string
+        title:
+          type: string
+        paragraphs:
+          type: array
+          items:
+            type: string
+        researcher_name:
+          type: string
+        researcher_email:
+          type: string
+          format: email
+        checkbox_label:
+          type: string
+        exit_label:
+          type: string
+        accept_label:
+          type: string
+      required:
+      - accept_label
+      - checkbox_label
+      - exit_label
+      - paragraphs
+      - researcher_email
+      - researcher_name
+      - title
+      - version
     ResearchDeletionCleanup:
       type: object
       properties:
@@ -11937,8 +12026,9 @@ components:
           default: exclude_previous
         review_count:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -11962,13 +12052,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'

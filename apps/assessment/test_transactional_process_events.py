@@ -34,6 +34,7 @@ from .services import (
     save_draft,
     submit_attempt,
 )
+from .test_support import accept_research_consent
 
 
 class TransactionalProcessEventTests(TestCase):
@@ -47,6 +48,7 @@ class TransactionalProcessEventTests(TestCase):
             student_number="TRANSACTION-EVENT-S1",
             role=User.Role.STUDENT,
         )
+        accept_research_consent(self.student)
         bank = QuestionBank.objects.create(owner=self.teacher, name="事务事件题库")
         concept = Concept.objects.create(
             owner=self.teacher,

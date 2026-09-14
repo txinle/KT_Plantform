@@ -10,6 +10,10 @@ from django.utils import timezone
 from apps.audit.models import AuditLog
 from .enrollment_services import enroll_single_student, remove_course_enrollment
 from .models import ClassGroup, Course, CourseEnrollment, User
+from .research_consent import (
+    CURRENT_RESEARCH_CONSENT_VERSION,
+    accept_current_research_consent,
+)
 
 
 class StudentIdentityApiTests(TestCase):
@@ -282,6 +286,10 @@ class StudentPasswordTests(TestCase):
         self.assertIsNotNone(self.student.initial_password_state_recorded_at)
 
     def test_initial_password_is_a_reminder_and_never_blocks_student_pages(self):
+        accept_current_research_consent(
+            student=self.student,
+            version=CURRENT_RESEARCH_CONSENT_VERSION,
+        )
         self.client.login(username="PW-001", password="SPW-001")
         session = self.client.get("/api/v1/auth/session/").json()["user"]
         self.assertEqual(session["home_url"], "/student/")

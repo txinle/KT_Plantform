@@ -84,6 +84,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/research-consent/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["auth_research_consent_retrieve"];
+        put?: never;
+        post: operations["auth_research_consent_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/session/": {
         parameters: {
             query?: never;
@@ -2147,6 +2163,8 @@ export interface components {
             home_url: string;
             uses_initial_password: boolean;
             initial_password_reminder_pending: boolean;
+            research_consent_required: boolean;
+            research_consent_version: string;
         };
         AttemptProcess: {
             question_type: string;
@@ -3398,6 +3416,7 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label?: string;
@@ -3408,7 +3427,9 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -3838,6 +3859,21 @@ export interface components {
         };
         RemoveEnrollmentResponse: {
             removed: boolean;
+        };
+        ResearchConsentAcceptance: {
+            version: string;
+            accepted: boolean;
+        };
+        ResearchConsentDocument: {
+            version: string;
+            title: string;
+            paragraphs: string[];
+            researcher_name: string;
+            /** Format: email */
+            researcher_email: string;
+            checkbox_label: string;
+            exit_label: string;
+            accept_label: string;
         };
         ResearchDeletionCleanup: {
             cleanup_pending: boolean;
@@ -4956,6 +4992,7 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label: string;
@@ -4966,7 +5003,9 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -5356,6 +5395,50 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionContext"];
+                };
+            };
+        };
+    };
+    auth_research_consent_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchConsentDocument"];
+                };
+            };
+        };
+    };
+    auth_research_consent_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchConsentAcceptance"];
+                "application/x-www-form-urlencoded": components["schemas"]["ResearchConsentAcceptance"];
+                "multipart/form-data": components["schemas"]["ResearchConsentAcceptance"];
+            };
+        };
         responses: {
             200: {
                 headers: {

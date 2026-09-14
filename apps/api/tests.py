@@ -54,6 +54,8 @@ class ApiFoundationContractTests(TestCase):
                     "home_url": "/teacher/courses/",
                     "uses_initial_password": False,
                     "initial_password_reminder_pending": False,
+                    "research_consent_required": False,
+                    "research_consent_version": "2026-09-14",
                 }
             },
         )

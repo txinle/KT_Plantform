@@ -13,6 +13,10 @@ from apps.accounts.models import (
     CourseEnrollment,
     User,
 )
+from apps.accounts.research_consent import (
+    CURRENT_RESEARCH_CONSENT_VERSION,
+    accept_current_research_consent,
+)
 from apps.assessment.models import (
     Attempt,
     ExperimentSession,
@@ -75,6 +79,10 @@ class StudentVisibilityProjectionTests(TransactionTestCase):
                 student=student,
             )
             self.students.append(student)
+            accept_current_research_consent(
+                student=student,
+                version=CURRENT_RESEARCH_CONSENT_VERSION,
+            )
         self.enrollment = CourseEnrollment.objects.get(
             course=self.course,
             student=self.students[0],

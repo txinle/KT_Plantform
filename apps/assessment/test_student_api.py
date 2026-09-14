@@ -37,6 +37,7 @@ from .models import (
     QuestionVisitEvent,
     SubmissionEvent,
 )
+from .test_support import accept_research_consent
 
 
 class StudentApiFixtureMixin:
@@ -68,6 +69,7 @@ class StudentApiFixtureMixin:
             password="test-password",
             role=User.Role.STUDENT,
         )
+        accept_research_consent(self.student, self.peer, self.outsider)
         self.course = Course.objects.create(
             name="学生 API 课程",
             code="STU-API",
@@ -216,7 +218,9 @@ class StudentApiFixtureMixin:
         return attempt
 
     def start(self, *, task=None, student=None):
-        self.client.force_login(student or self.student)
+        active_student = student or self.student
+        accept_research_consent(active_student)
+        self.client.force_login(active_student)
         return self.client.post(
             f"/api/v1/student/tasks/{(task or self.task).pk}/start/",
             data={},
@@ -1030,8 +1034,9 @@ class StudentAssessmentApiTests(StudentApiTestCase):
                 },
             },
         )
-        # Sliding student-session renewal adds three session-backend queries.
-        self.assertLessEqual(len(result_queries), 20)
+        # Sliding session renewal and the current research-consent check are
+        # fixed per request and do not scale with the task or cohort count.
+        self.assertLessEqual(len(result_queries), 21)
 
     def test_result_openapi_contract_is_a_feedback_mode_discriminated_union(self):
         self.client.force_login(self.student)

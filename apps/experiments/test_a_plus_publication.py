@@ -11,6 +11,10 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
+from apps.accounts.research_consent import (
+    CURRENT_RESEARCH_CONSENT_VERSION,
+    accept_current_research_consent,
+)
 from apps.analytics.models import ExportJob
 from apps.analytics.services import create_export_snapshot, run_export_job
 from apps.assessment.services import (
@@ -1228,6 +1232,10 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
             plan,
             self.teacher,
             expected_revision=plan.plan_revision,
+        )
+        accept_current_research_consent(
+            student=self.student,
+            version=CURRENT_RESEARCH_CONSENT_VERSION,
         )
         self.client.force_login(self.student)
 

@@ -50,7 +50,7 @@ export async function startApplication() {
       return
     }
   }
-  createApp(App).use(createPinia()).use(router).mount('#kt-app')
+  createApp(App, { bootstrapContext: context }).use(createPinia()).use(router).mount('#kt-app')
 }
 
 if (document.getElementById('kt-app')) void startApplication()
