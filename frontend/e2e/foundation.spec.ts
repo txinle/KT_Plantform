@@ -100,7 +100,7 @@ test('teacher previews and atomically publishes a class task', async ({ browserN
   ))
   await page.getByRole('button', { name: '运行发布前检查' }).click()
   const previewResponse = await previewed
-  expect(previewResponse.status(), await previewResponse.text()).toBe(200)
+  expect(previewResponse.status(), await previewResponse.text()).toBe(202)
 
   await expect(page).toHaveURL(/\/publish-plan\/\d+\/step\/2\/$/, { timeout: 30_000 })
   await expect(page.getByRole('heading', { name: '发布前检查', exact: true })).toBeVisible()

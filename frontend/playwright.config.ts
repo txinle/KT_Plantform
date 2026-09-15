@@ -1,15 +1,7 @@
 import { defineConfig } from '@playwright/test'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 
 import { requireIsolatedPostgres } from './scripts/e2e-database.mjs'
 
-const repositoryDir = join(import.meta.dirname, '..')
-const localPython = process.platform === 'win32'
-  ? join(repositoryDir, '.venv', 'Scripts', 'python.exe')
-  : join(repositoryDir, '.venv', 'bin', 'python')
-const python = process.env.PYTHON || (existsSync(localPython) ? localPython : 'python')
-const pythonCommand = JSON.stringify(python)
 const vitePort = Number(process.env.E2E_VITE_PORT || '5173')
 const viteUrl = `http://127.0.0.1:${vitePort}`
 const djangoUrl = 'http://127.0.0.1:8000'
@@ -51,7 +43,7 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: `${pythonCommand} ../manage.py runserver 127.0.0.1:8000 --noreload`,
+      command: 'node scripts/run-e2e-backend.mjs',
       url: `${djangoUrl}/login/`,
       env: commonDjangoEnvironment,
       reuseExistingServer: false,
