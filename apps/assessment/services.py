@@ -532,6 +532,26 @@ def _validate_session_time(session, attempt=None, *, request_received_at=None):
             return "本题作答时间已结束"
     return None
 
+
+def _validate_process_event_time(session, attempt=None, *, request_received_at=None):
+    """Authorize capture writes without treating a completed answer as a closed task."""
+    now = request_received_at or timezone.now()
+    _validate_course_access(session, request_received_at=now)
+    if session.class_task_id:
+        task = ClassExperimentTask.objects.get(pk=session.class_task_id)
+        decision = DeadlineDecisionService.can_write_response(task, session, attempt, now)
+        if not decision.allowed:
+            return (
+                "班级任务已结束"
+                if decision.code == "TASK_TERMINATED"
+                else "作答时间已结束"
+            )
+    if session.deadline_at and now >= session.deadline_at:
+        return "实验总时间已结束"
+    if attempt and attempt.initial_effective_deadline_at and now >= attempt.initial_effective_deadline_at:
+        return "本题作答时间已结束"
+    return None
+
 @dataclass(frozen=True)
 class RecordedVisitEntry:
     attempt: Attempt

@@ -104,6 +104,48 @@ class B2ContractsTests(TestCase):
         )
         self.assertEqual(self.session.next_ingest_sequence_no, 3)
 
+    def test_completed_session_accepts_capture_events_queued_before_completion(self):
+        attempt = Attempt.objects.create(
+            session=self.session,
+            assignment=self.assignment,
+            status=Attempt.Status.SUBMITTED,
+        )
+        self.session.status = ExperimentSession.Status.COMPLETED
+        self.session.completed_at = timezone.now()
+        self.session.save(update_fields=["status", "completed_at"])
+        now = timezone.now().isoformat()
+        payload = {
+            "client_instance_id": str(uuid.uuid4()),
+            "events": [
+                {
+                    "event_type": "item_left",
+                    "event_version": 2,
+                    "session_id": self.session.pk,
+                    "attempt_id": attempt.pk,
+                    "client_sequence_no": 1,
+                    "correlation_id": str(uuid.uuid4()),
+                    "client_wall_time_utc": now,
+                    "client_monotonic_ms": "1",
+                    "client_time_origin": now,
+                    "time_sync_id": None,
+                    "payload": {"leave_reason": "submit", "to_assignment_id": None},
+                    "quality_flags": [],
+                    "app_version": "test",
+                }
+            ],
+        }
+
+        acknowledgements = append_event_batch(student=self.student, document=payload)
+
+        self.assertEqual(len(acknowledgements), 1)
+        self.assertTrue(
+            AssessmentEvent.objects.filter(
+                session=self.session,
+                attempt=attempt,
+                event_type="item_left",
+            ).exists()
+        )
+
     def test_cross_instance_interval_quality_is_degraded(self):
         first = append_assessment_event(
             event_type="session_started", event_version=1, event_domain="assessment", actor_source="client",

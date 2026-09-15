@@ -3478,7 +3478,6 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
-            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label?: string;
@@ -3489,9 +3488,7 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
-            /** Format: int64 */
             total_time_limit_minutes?: number | null;
-            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -5065,7 +5062,6 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
-            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label: string;
@@ -5076,9 +5072,7 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
-            /** Format: int64 */
             total_time_limit_minutes?: number | null;
-            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;

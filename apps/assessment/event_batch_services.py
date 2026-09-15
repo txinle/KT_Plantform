@@ -59,10 +59,6 @@ CLIENT_BATCH_EVENT_TYPES = frozenset(
     }
 ) | SESSION_ONLY_EVENTS
 
-POST_COMPLETION_EVENT_TYPES = frozenset(
-    {"feedback_exposure", "feedback_shown", "explanation_shown"}
-)
-
 BATCH_FIELDS = frozenset({"client_instance_id", "events"})
 EVENT_FIELDS = frozenset(
     {
@@ -303,32 +299,23 @@ def append_event_batch(*, student, document, request_received_at=None):
         student=student,
         document=document,
     )
-    from .services import _validate_course_access, _validate_session_time
+    from .services import _validate_process_event_time
 
     request_received_at = request_received_at or timezone.now()
     validated = set()
     for parsed in events:
-        post_completion_event = parsed.event_type in POST_COMPLETION_EVENT_TYPES
         validation_key = (
             parsed.session.pk,
             getattr(parsed.attempt, "pk", None),
-            post_completion_event,
         )
         if validation_key in validated:
             continue
         try:
-            if post_completion_event:
-                _validate_course_access(
-                    parsed.session,
-                    request_received_at=request_received_at,
-                )
-                time_error = None
-            else:
-                time_error = _validate_session_time(
-                    parsed.session,
-                    parsed.attempt,
-                    request_received_at=request_received_at,
-                )
+            time_error = _validate_process_event_time(
+                parsed.session,
+                parsed.attempt,
+                request_received_at=request_received_at,
+            )
         except ValidationError as exc:
             raise ProcessConflictError("course_access_revoked") from exc
         if time_error:
