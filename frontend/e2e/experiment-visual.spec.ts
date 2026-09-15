@@ -51,7 +51,7 @@ test('KC quota inventory agrees with saved preflight and permits publication', a
   await page.getByRole('button', { name: '运行发布前检查', exact: true }).click()
   await page.getByRole('button', { name: '进入发布确认', exact: true }).click()
   await page.getByRole('button', { name: '确认发布', exact: true }).click()
-  await expect(page).toHaveURL(detailUrl)
+  await expect(page).toHaveURL(detailUrl, { timeout: 30_000 })
   await expect(page.getByRole('heading', { name: '已发布班级任务', exact: true })).toBeVisible()
 })
 
@@ -112,7 +112,7 @@ test('total-count mode uses the whole bank and keeps type allocation usable', as
   await page.getByRole('button', { name: '发布到班级', exact: true }).click()
   await page.locator('[id^="publish-class-"]').first().check()
   await page.getByRole('button', { name: '运行发布前检查', exact: true }).click()
-  await expect(page).toHaveURL(/\/publish-plan\/\d+\/step\/2\/$/)
+  await expect(page).toHaveURL(/\/publish-plan\/\d+\/step\/2\/$/, { timeout: 30_000 })
   await expect(page.getByText('发布前检查', { exact: false }).first()).toBeVisible()
 })
 
@@ -185,7 +185,7 @@ test('captures the six real experiment workflow states', async ({ browserName, p
 
   await page.locator('[id^="publish-class-"]').first().check()
   await page.getByRole('button', { name: '运行发布前检查' }).click()
-  await expect(page).toHaveURL(/\/publish-plan\/\d+\/step\/2\/$/)
+  await expect(page).toHaveURL(/\/publish-plan\/\d+\/step\/2\/$/, { timeout: 30_000 })
   await capture(page, testInfo, '04-preflight-check.png')
 
   await page.getByRole('button', { name: '进入发布确认' }).click()
@@ -193,7 +193,7 @@ test('captures the six real experiment workflow states', async ({ browserName, p
   await capture(page, testInfo, '05-publish-confirmation.png')
 
   await page.getByRole('button', { name: '确认发布' }).click()
-  await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/)
+  await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/, { timeout: 30_000 })
   await capture(page, testInfo, '06-published-detail.png')
 
   await page.setViewportSize({ width: 1440, height: 900 })

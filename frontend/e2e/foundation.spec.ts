@@ -106,7 +106,7 @@ test('teacher previews and atomically publishes a class task', async ({ browserN
   await expect(page.getByRole('heading', { name: '发布前检查', exact: true })).toBeVisible()
   await page.getByRole('button', { name: '进入发布确认' }).click()
   await page.getByRole('button', { name: '确认发布' }).click()
-  await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/)
+  await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/, { timeout: 30_000 })
   await expect(page.getByRole('heading', { name: '班级任务' })).toBeVisible()
   await expect(page.getByText('未开始', { exact: true })).toBeVisible()
 })

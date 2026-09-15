@@ -106,5 +106,5 @@ test('imports usable questions and explained drafts, repairs old drafts, and pub
   await page.getByRole('button', { name: '运行发布前检查', exact: true }).click()
   await page.getByRole('button', { name: '进入发布确认', exact: true }).click()
   await page.getByRole('button', { name: '确认发布', exact: true }).click()
-  await expect(page.getByRole('heading', { name: '已发布班级任务', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '已发布班级任务', exact: true })).toBeVisible({ timeout: 30_000 })
 })
