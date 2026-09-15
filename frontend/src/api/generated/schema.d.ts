@@ -548,6 +548,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/import/jobs/{job_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_course_class_student_import_job"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/import/preview/": {
         parameters: {
             query?: never;
@@ -2420,12 +2436,36 @@ export interface components {
             status: string;
         };
         CourseStudentImportConfirmRequest: {
-            action?: components["schemas"]["ActionF00Enum"];
+            /** Format: uuid */
+            preview_id: string;
+            class_state_token: string;
+        };
+        CourseStudentImportPreview: {
+            preview: components["schemas"]["StudentImportPreviewRow"][];
+            /** Format: uuid */
+            preview_id: string;
+            class_state_token: string;
         };
         CourseStudentImportResult: {
+            /** Format: uuid */
+            job_id: string;
+            status: components["schemas"]["CourseStudentImportResultStatusEnum"];
+            total_rows: number;
+            processed_rows: number;
             created_accounts: number;
             enrollments: number;
+            progress_stage: string;
+            error_code: string;
+            error_message: string;
         };
+        /**
+         * @description * `queued` - queued
+         *     * `running` - running
+         *     * `succeeded` - succeeded
+         *     * `failed` - failed
+         * @enum {string}
+         */
+        CourseStudentImportResultStatusEnum: "queued" | "running" | "succeeded" | "failed";
         /**
          * @description * `exclude_previous` - 排除已正式作答题目
          *     * `mixed_review` - 混合复测
@@ -3416,6 +3456,7 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label?: string;
@@ -3426,7 +3467,9 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -4989,6 +5032,7 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label: string;
@@ -4999,7 +5043,9 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -6191,13 +6237,36 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": components["schemas"]["CourseStudentImportConfirmRequest"];
                 "application/x-www-form-urlencoded": components["schemas"]["CourseStudentImportConfirmRequest"];
                 "multipart/form-data": components["schemas"]["CourseStudentImportConfirmRequest"];
             };
         };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CourseStudentImportResult"];
+                };
+            };
+        };
+    };
+    teacher_course_class_student_import_job: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_id: number;
+                course_id: number;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             200: {
                 headers: {
@@ -6232,7 +6301,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LegacyStudentImportPreview"];
+                    "application/json": components["schemas"]["CourseStudentImportPreview"];
                 };
             };
         };

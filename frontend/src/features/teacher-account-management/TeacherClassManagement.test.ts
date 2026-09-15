@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     confirmCopy: vi.fn(),
     previewCourseImport: vi.fn(),
     confirmCourseImport: vi.fn(),
+    courseImportJob: vi.fn(),
     moveStudent: vi.fn(),
     removeStudent: vi.fn(),
     resetCourseStudentPassword: vi.fn(),
@@ -65,6 +66,7 @@ function payload() {
 describe('TeacherClassManagement', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    sessionStorage.clear()
     route.meta = {}
     router.push.mockResolvedValue(undefined)
     mocks.api.management.mockResolvedValue(payload())
@@ -109,6 +111,68 @@ describe('TeacherClassManagement', () => {
     expect(mocks.deletion.previewClass).toHaveBeenCalledWith(7, 11)
     expect(mocks.deletion.deleteClass).toHaveBeenCalledWith(7, 11, 'class-token')
     expect(router.push).toHaveBeenCalledWith('/teacher/courses/7/classes/')
+  })
+
+  it('shows the specific class field error returned by the API', async () => {
+    mocks.api.updateManagement.mockRejectedValueOnce(new ApiError(400, { error: {
+      code: 'VALIDATION_ERROR',
+      message: '请求数据无效。',
+      fields: { academic_year: ['年级必须填写四位年份，如：2025。'] },
+    } }))
+    const wrapper = mount(TeacherClassManagement)
+    await flushPromises()
+
+    await wrapper.get('[data-course-class-settings]').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('年级必须填写四位年份，如：2025。')
+    expect(wrapper.text()).not.toContain('请求数据无效。')
+  })
+
+  it('queues a validated import and displays its final result after polling', async () => {
+    route.meta = { workflow: 'import' }
+    mocks.api.previewCourseImport.mockResolvedValue({
+      preview_id: 'preview-1',
+      class_state_token: 'class-state-1',
+      preview: [{
+        student_number: 'S002', display_name: '新学生', class_id: 11,
+        class_name: '2026 目标班', account_action: 'create',
+      }],
+    })
+    mocks.api.confirmCourseImport.mockResolvedValue({
+      job_id: 'job-1', status: 'queued', total_rows: 1, processed_rows: 0,
+      created_accounts: 0, enrollments: 0, progress_stage: 'queued',
+      error_code: '', error_message: '',
+    })
+    mocks.api.courseImportJob.mockResolvedValue({
+      job_id: 'job-1', status: 'succeeded', total_rows: 1, processed_rows: 1,
+      created_accounts: 1, enrollments: 1, progress_stage: 'completed',
+      error_code: '', error_message: '',
+    })
+    vi.useFakeTimers()
+    const wrapper = mount(TeacherClassManagement)
+    await flushPromises()
+    const fileInput = wrapper.get('input[type="file"]')
+    Object.defineProperty(fileInput.element, 'files', {
+      configurable: true,
+      value: [new File(['xlsx'], 'students.xlsx')],
+    })
+    await fileInput.trigger('change')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    await wrapper.get('[data-confirm-course-import]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.confirmCourseImport).toHaveBeenCalledWith(7, 11, {
+      preview_id: 'preview-1', class_state_token: 'class-state-1',
+    })
+    expect(wrapper.text()).toContain('名单已进入后台处理')
+
+    await vi.advanceTimersByTimeAsync(1500)
+    await flushPromises()
+    expect(mocks.api.courseImportJob).toHaveBeenCalledWith(7, 11, 'job-1')
+    expect(wrapper.text()).toContain('已建立 1 条课程选课，其中新建 1 个全局学生账号。')
+    vi.useRealTimers()
   })
 
   it('edits only student identity fields with the enrollment state token and refreshes management', async () => {

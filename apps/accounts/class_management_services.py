@@ -15,6 +15,7 @@ from .models import ClassGroup, ClassStudentAnalyticsPolicy
 
 
 CLASS_GROUP_AUDIT_FIELDS = ("name", "academic_year", "is_active")
+CLASS_GROUP_STALE_ERROR = "班级信息已被其他操作更新，请刷新后重试。"
 
 
 class CourseClassDeletionError(ValidationError):
@@ -83,7 +84,7 @@ def update_course_class_group(*, request, course, class_group, form_data):
             if not class_group_state_token_matches(
                 form_data.get("state_token", ""), class_group
             ):
-                form.add_error(None, "班级信息已被其他操作更新，请刷新后重试。")
+                form.add_error(None, CLASS_GROUP_STALE_ERROR)
             elif form.is_valid():
                 changed_fields = [
                     field

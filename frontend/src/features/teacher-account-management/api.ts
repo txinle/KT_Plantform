@@ -102,6 +102,23 @@ export interface StudentImportPreview {
   }>
 }
 
+export interface CourseStudentImportPreview extends StudentImportPreview {
+  preview_id: string
+  class_state_token: string
+}
+
+export interface StudentImportJob {
+  job_id: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  total_rows: number
+  processed_rows: number
+  created_accounts: number
+  enrollments: number
+  progress_stage: string
+  error_code: string
+  error_message: string
+}
+
 interface TeacherAccountManagementApiClient {
   get<T>(path: string): Promise<T>
   mutate<T>(path: string, mutation: { method: 'POST' | 'PATCH'; body: unknown }): Promise<T>
@@ -139,8 +156,9 @@ export function createTeacherAccountManagementApi(client: TeacherAccountManageme
       preview: Array<{ student: AccountStudent; skip: boolean }>
     }>(`${classBase(courseId, classId)}/students/copy/preview/`, { method: 'POST', body: { source_class } }),
     confirmCopy: (courseId: number, classId: number) => client.mutate<{ copied: number; skipped: number }>(`${classBase(courseId, classId)}/students/copy/confirm/`, { method: 'POST', body: {} }),
-    previewCourseImport: (courseId: number, classId: number, body: FormData) => client.mutateForm<StudentImportPreview>(`${classBase(courseId, classId)}/students/import/preview/`, { method: 'POST', body }),
-    confirmCourseImport: (courseId: number, classId: number) => client.mutate<{ created_accounts: number; enrollments: number }>(`${classBase(courseId, classId)}/students/import/confirm/`, { method: 'POST', body: {} }),
+    previewCourseImport: (courseId: number, classId: number, body: FormData) => client.mutateForm<CourseStudentImportPreview>(`${classBase(courseId, classId)}/students/import/preview/`, { method: 'POST', body }),
+    confirmCourseImport: (courseId: number, classId: number, input: { preview_id: string; class_state_token: string }) => client.mutate<StudentImportJob>(`${classBase(courseId, classId)}/students/import/confirm/`, { method: 'POST', body: input }),
+    courseImportJob: (courseId: number, classId: number, jobId: string) => client.get<StudentImportJob>(`${classBase(courseId, classId)}/students/import/jobs/${jobId}/`),
     moveStudent: (courseId: number, classId: number, studentId: number, class_group: number) => client.mutate<{ class_group: AccountClassOption }>(`${classBase(courseId, classId)}/students/${studentId}/move/`, { method: 'POST', body: { class_group } }),
     removeStudent: (courseId: number, classId: number, studentId: number) => client.mutate<{ removed: boolean }>(`${classBase(courseId, classId)}/students/${studentId}/remove/`, { method: 'POST', body: { confirmation: 'delete' } }),
     resetCourseStudentPassword: (courseId: number, classId: number, studentId: number) => client.mutate<{ student: AccountStudent }>(`${classBase(courseId, classId)}/students/${studentId}/reset-password/`, { method: 'POST', body: { confirmation: 'reset' } }),

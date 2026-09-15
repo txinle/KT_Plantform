@@ -1,5 +1,6 @@
 import json
 from io import BytesIO
+from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -160,33 +161,124 @@ class TeacherAccountManagementApiTests(TestCase):
 
         self.assertEqual(preview.status_code, 200)
         self.assertEqual(preview.json()["preview"][0]["account_action"], "reuse")
+        self.assertTrue(preview.json()["preview_id"])
+        self.assertTrue(preview.json()["class_state_token"])
         self.assertFalse(
             CourseEnrollment.objects.filter(
                 course=self.course, student=existing
             ).exists()
         )
 
-        confirmed = self.post_json(confirm_url, {})
+        confirmed = self.post_json(
+            confirm_url,
+            {
+                "preview_id": preview.json()["preview_id"],
+                "class_state_token": preview.json()["class_state_token"],
+            },
+        )
 
-        self.assertEqual(confirmed.status_code, 200)
-        self.assertEqual(confirmed.json()["created_accounts"], 1)
-        self.assertEqual(confirmed.json()["enrollments"], 2)
+        self.assertEqual(confirmed.status_code, 202)
+        self.assertEqual(confirmed.json()["status"], "queued")
+        self.assertEqual(confirmed.json()["total_rows"], 2)
+        self.assertEqual(confirmed.json()["created_accounts"], 0)
+        self.assertEqual(confirmed.json()["enrollments"], 0)
         existing.refresh_from_db()
         self.assertTrue(existing.check_password("preserved-password"))
-        self.assertTrue(
-            CourseEnrollment.objects.filter(
-                course=self.course, class_group=self.class_group, student=existing
-            ).exists()
+        self.assertFalse(CourseEnrollment.objects.filter(course=self.course).exists())
+
+        repeated = self.post_json(
+            confirm_url,
+            {
+                "preview_id": preview.json()["preview_id"],
+                "class_state_token": preview.json()["class_state_token"],
+            },
         )
-        self.assertTrue(
-            AuditLog.objects.filter(
-                action="student.batch_import", object_id=str(self.class_group.pk)
-            ).exists()
+        self.assertEqual(repeated.status_code, 202)
+        self.assertEqual(repeated.json()["job_id"], confirmed.json()["job_id"])
+
+        status_response = self.client.get(
+            f"{self.manage_base}students/import/jobs/{confirmed.json()['job_id']}/"
+        )
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()["status"], "queued")
+        self.assertEqual(status_response.json()["total_rows"], 2)
+
+    def test_course_import_rejects_preview_after_class_changes(self):
+        preview_url = f"{self.manage_base}students/import/preview/"
+        confirm_url = f"{self.manage_base}students/import/confirm/"
+        preview = self.client.post(
+            preview_url,
+            {
+                "file": self.workbook_upload(
+                    [["STALE-IMPORT-001", "状态过期学生", str(self.class_group)]]
+                )
+            },
+        )
+        self.class_group.name = "已修改班级"
+        self.class_group.save(update_fields=["name"])
+
+        confirmed = self.post_json(
+            confirm_url,
+            {
+                "preview_id": preview.json()["preview_id"],
+                "class_state_token": preview.json()["class_state_token"],
+            },
         )
 
-        expired = self.post_json(confirm_url, {})
-        self.assertEqual(expired.status_code, 400)
-        self.assertIn("预览已失效", expired.json()["error"]["message"])
+        self.assertEqual(confirmed.status_code, 409)
+        self.assertEqual(confirmed.json()["error"]["code"], "IMPORT_PREVIEW_STALE")
+        self.assertIn("重新上传", confirmed.json()["error"]["message"])
+        self.assertFalse(User.objects.filter(student_number="STALE-IMPORT-001").exists())
+
+    def test_course_import_confirmation_only_queues_174_students(self):
+        rows = [
+            [f"BATCH-{index:03d}", f"批量学生{index:03d}", str(self.class_group)]
+            for index in range(174)
+        ]
+        preview = self.client.post(
+            f"{self.manage_base}students/import/preview/",
+            {"file": self.workbook_upload(rows)},
+        )
+
+        with patch(
+            "apps.accounts.student_import_jobs.make_password",
+            side_effect=AssertionError("confirmation must not hash passwords"),
+        ):
+            confirmed = self.post_json(
+                f"{self.manage_base}students/import/confirm/",
+                {
+                    "preview_id": preview.json()["preview_id"],
+                    "class_state_token": preview.json()["class_state_token"],
+                },
+            )
+
+        self.assertEqual(confirmed.status_code, 202)
+        self.assertEqual(confirmed.json()["total_rows"], 174)
+        self.assertFalse(User.objects.filter(student_number__startswith="BATCH-").exists())
+        self.assertFalse(CourseEnrollment.objects.filter(course=self.course).exists())
+
+    def test_course_class_update_returns_specific_stale_state_error(self):
+        initial = self.client.get(f"{self.manage_base}manage/").json()
+        stale_token = initial["class_group"]["state_token"]
+        self.class_group.name = "服务端新名称"
+        self.class_group.save(update_fields=["name"])
+
+        response = self.patch_json(
+            f"{self.manage_base}manage/",
+            {
+                "name": "页面旧名称",
+                "academic_year": self.class_group.academic_year,
+                "is_active": True,
+                "state_token": stale_token,
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["error"]["code"], "CLASS_STATE_STALE")
+        self.assertEqual(
+            response.json()["error"]["message"],
+            "班级信息已被其他操作更新，请刷新后重试。",
+        )
 
     def test_course_invalid_repreview_clears_the_previous_import_preview(self):
         preview_url = f"{self.manage_base}students/import/preview/"
@@ -207,7 +299,13 @@ class TeacherAccountManagementApiTests(TestCase):
         )
         self.assertEqual(invalid_preview.status_code, 400)
 
-        expired = self.post_json(confirm_url, {})
+        expired = self.post_json(
+            confirm_url,
+            {
+                "preview_id": valid_preview.json()["preview_id"],
+                "class_state_token": valid_preview.json()["class_state_token"],
+            },
+        )
         self.assertEqual(expired.status_code, 400)
         self.assertIn("预览已失效", expired.json()["error"]["message"])
 
@@ -271,12 +369,14 @@ class TeacherAccountManagementApiTests(TestCase):
         )
         self.assertEqual(course_preview.status_code, 200)
         course_confirmed = self.post_json(
-            f"{self.manage_base}students/import/confirm/", {}
+            f"{self.manage_base}students/import/confirm/",
+            {
+                "preview_id": course_preview.json()["preview_id"],
+                "class_state_token": course_preview.json()["class_state_token"],
+            },
         )
-        self.assertEqual(course_confirmed.status_code, 200)
-        self.assertEqual(
-            course_confirmed.json(), {"created_accounts": 1, "enrollments": 1}
-        )
+        self.assertEqual(course_confirmed.status_code, 202)
+        self.assertEqual(course_confirmed.json()["status"], "queued")
 
     def test_course_class_delete_requires_confirmation_and_cleans_its_policy(self):
         delete_url = (

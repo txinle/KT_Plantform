@@ -26,7 +26,8 @@ describe('teacher account-management API', () => {
     await api.previewCopy(7, 11, 12)
     await api.confirmCopy(7, 11)
     await api.previewCourseImport(7, 11, upload)
-    await api.confirmCourseImport(7, 11)
+    await api.confirmCourseImport(7, 11, { preview_id: 'preview-1', class_state_token: 'class-state-1' })
+    await api.courseImportJob(7, 11, 'job-1')
     await api.moveStudent(7, 11, 9, 12)
     await api.removeStudent(7, 11, 9)
     await api.resetCourseStudentPassword(7, 11, 9)
@@ -78,8 +79,9 @@ describe('teacher account-management API', () => {
       method: 'POST', body: upload,
     })
     expect(client.mutate).toHaveBeenNthCalledWith(10, '/api/v1/teacher/accounts/courses/7/classes/11/students/import/confirm/', {
-      method: 'POST', body: {},
+      method: 'POST', body: { preview_id: 'preview-1', class_state_token: 'class-state-1' },
     })
+    expect(client.get).toHaveBeenNthCalledWith(4, '/api/v1/teacher/accounts/courses/7/classes/11/students/import/jobs/job-1/')
     expect(client.mutate).toHaveBeenNthCalledWith(11, '/api/v1/teacher/accounts/courses/7/classes/11/students/9/move/', {
       method: 'POST', body: { class_group: 12 },
     })
@@ -89,7 +91,7 @@ describe('teacher account-management API', () => {
     expect(client.mutate).toHaveBeenNthCalledWith(13, '/api/v1/teacher/accounts/courses/7/classes/11/students/9/reset-password/', {
       method: 'POST', body: { confirmation: 'reset' },
     })
-    expect(client.get).toHaveBeenNthCalledWith(4, '/api/v1/teacher/accounts/courses/7/classes/11/student-visibility/')
+    expect(client.get).toHaveBeenNthCalledWith(5, '/api/v1/teacher/accounts/courses/7/classes/11/student-visibility/')
     expect(client.mutate).toHaveBeenNthCalledWith(14, '/api/v1/teacher/accounts/courses/7/classes/11/student-visibility/', {
       method: 'PATCH', body: {
         show_scores: true,

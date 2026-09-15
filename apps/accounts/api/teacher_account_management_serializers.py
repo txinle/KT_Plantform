@@ -78,6 +78,11 @@ class LegacyStudentImportPreviewSerializer(serializers.Serializer):
     preview = StudentImportPreviewRowSerializer(many=True)
 
 
+class CourseStudentImportPreviewSerializer(LegacyStudentImportPreviewSerializer):
+    preview_id = serializers.UUIDField()
+    class_state_token = serializers.CharField()
+
+
 class TeacherAccountStudentImportConfirmRequestSerializer(serializers.Serializer):
     action = serializers.ChoiceField(choices=("confirm",), required=False)
 
@@ -212,12 +217,20 @@ class CourseClassCopyResultSerializer(serializers.Serializer):
 
 
 class CourseStudentImportConfirmRequestSerializer(serializers.Serializer):
-    action = serializers.ChoiceField(choices=("confirm",), required=False)
+    preview_id = serializers.UUIDField()
+    class_state_token = serializers.CharField()
 
 
 class CourseStudentImportResultSerializer(serializers.Serializer):
+    job_id = serializers.UUIDField()
+    status = serializers.ChoiceField(choices=("queued", "running", "succeeded", "failed"))
+    total_rows = serializers.IntegerField(min_value=0)
+    processed_rows = serializers.IntegerField(min_value=0)
     created_accounts = serializers.IntegerField(min_value=0)
     enrollments = serializers.IntegerField(min_value=0)
+    progress_stage = serializers.CharField()
+    error_code = serializers.CharField(allow_blank=True)
+    error_message = serializers.CharField(allow_blank=True)
 
 
 class MoveEnrollmentRequestSerializer(serializers.Serializer):

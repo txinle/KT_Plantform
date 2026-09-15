@@ -1006,6 +1006,38 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/CourseStudentImportConfirmRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseStudentImportResult'
+          description: ''
+  /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/import/jobs/{job_id}/:
+    get:
+      operationId: teacher_course_class_student_import_job
+      parameters:
+      - in: path
+        name: class_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: job_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - teacher
       security:
       - SessionAuth: []
       responses:
@@ -1050,7 +1082,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LegacyStudentImportPreview'
+                $ref: '#/components/schemas/CourseStudentImportPreview'
           description: ''
   /api/v1/teacher/accounts/courses/{course_id}/classes/{class_id}/students/manual/:
     post:
@@ -5255,20 +5287,78 @@ components:
     CourseStudentImportConfirmRequest:
       type: object
       properties:
-        action:
-          $ref: '#/components/schemas/ActionF00Enum'
+        preview_id:
+          type: string
+          format: uuid
+        class_state_token:
+          type: string
+      required:
+      - class_state_token
+      - preview_id
+    CourseStudentImportPreview:
+      type: object
+      properties:
+        preview:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentImportPreviewRow'
+        preview_id:
+          type: string
+          format: uuid
+        class_state_token:
+          type: string
+      required:
+      - class_state_token
+      - preview
+      - preview_id
     CourseStudentImportResult:
       type: object
       properties:
+        job_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/CourseStudentImportResultStatusEnum'
+        total_rows:
+          type: integer
+          minimum: 0
+        processed_rows:
+          type: integer
+          minimum: 0
         created_accounts:
           type: integer
           minimum: 0
         enrollments:
           type: integer
           minimum: 0
+        progress_stage:
+          type: string
+        error_code:
+          type: string
+        error_message:
+          type: string
       required:
       - created_accounts
       - enrollments
+      - error_code
+      - error_message
+      - job_id
+      - processed_rows
+      - progress_stage
+      - status
+      - total_rows
+    CourseStudentImportResultStatusEnum:
+      enum:
+      - queued
+      - running
+      - succeeded
+      - failed
+      type: string
+      description: |-
+        * `queued` - queued
+        * `running` - running
+        * `succeeded` - succeeded
+        * `failed` - failed
     CrossExperimentItemPolicyEnum:
       enum:
       - exclude_previous
@@ -7900,8 +7990,9 @@ components:
           default: exclude_previous
         review_count:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -7925,13 +8016,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -12023,8 +12116,9 @@ components:
           default: exclude_previous
         review_count:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -12048,13 +12142,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'

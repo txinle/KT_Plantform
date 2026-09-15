@@ -380,6 +380,59 @@ class CourseEnrollment(models.Model):
         return result
 
 
+class StudentImportJob(models.Model):
+    class Status(models.TextChoices):
+        QUEUED = "queued", "排队中"
+        RUNNING = "running", "处理中"
+        SUCCEEDED = "succeeded", "已完成"
+        FAILED = "failed", "失败"
+
+    job_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    preview_id = models.UUIDField(unique=True, editable=False)
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.PROTECT,
+        related_name="student_import_jobs",
+    )
+    class_group = models.ForeignKey(
+        ClassGroup,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="student_import_jobs",
+    )
+    created_by = models.ForeignKey(
+        "User",
+        on_delete=models.PROTECT,
+        related_name="created_student_import_jobs",
+    )
+    class_state_token = models.TextField()
+    rows = models.JSONField(default=list)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.QUEUED,
+    )
+    total_rows = models.PositiveIntegerField(default=0)
+    processed_rows = models.PositiveIntegerField(default=0)
+    created_accounts = models.PositiveIntegerField(default=0)
+    enrollments = models.PositiveIntegerField(default=0)
+    progress_stage = models.CharField(max_length=32, default="queued")
+    error_code = models.CharField(max_length=64, blank=True)
+    error_message = models.CharField(max_length=255, blank=True)
+    locked_by = models.CharField(max_length=128, blank=True)
+    retry_count = models.PositiveSmallIntegerField(default=0)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    request_ip = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [models.Index(fields=["status", "lease_expires_at", "created_at"])]
+
+
 class CourseSubject(models.Model):
     course = models.ForeignKey(
         Course,

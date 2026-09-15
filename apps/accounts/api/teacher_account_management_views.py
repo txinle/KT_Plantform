@@ -1,3 +1,4 @@
+import uuid
 from urllib.parse import quote
 
 from django.conf import settings
@@ -16,6 +17,7 @@ from rest_framework.views import APIView
 from apps.experiments.api.deletion_views import TeacherClassDeletionView
 
 from apps.accounts.class_management_services import (
+    CLASS_GROUP_STALE_ERROR,
     CourseClassDeletionError,
     delete_course_class_group,
     update_course_class_group,
@@ -27,7 +29,6 @@ from apps.accounts.course_access import (
 )
 from apps.accounts.enrollment_services import (
     copy_class_enrollments,
-    enroll_parsed_students,
     enroll_single_student,
     import_legacy_students,
     remove_course_enrollment,
@@ -42,11 +43,14 @@ from apps.accounts.forms import (
     StudentBatchUploadForm,
     StudentClassCopyForm,
     StudentCreateForm,
+    class_group_state_token,
+    class_group_state_token_matches,
 )
 from apps.accounts.models import (
     ClassGroup,
     ClassStudentAnalyticsPolicy,
     CourseEnrollment,
+    StudentImportJob,
     User,
 )
 from apps.accounts.student_analytics_policy import (
@@ -59,6 +63,7 @@ from apps.accounts.student_import import (
     build_student_import_workbook,
     parse_student_workbook,
 )
+from apps.accounts.student_import_jobs import IMPORT_PREVIEW_STALE_ERROR
 from apps.accounts.views import _class_queryset, _student_queryset
 from apps.accounts.password_services import reset_student_initial_password
 from apps.accounts.student_identity import (
@@ -78,6 +83,7 @@ from .teacher_account_management_serializers import (
     CourseClassManagementSerializer,
     CourseClassUpdateRequestSerializer,
     CourseStudentImportConfirmRequestSerializer,
+    CourseStudentImportPreviewSerializer,
     CourseStudentImportResultSerializer,
     LegacyStudentImportPreviewSerializer,
     LegacyStudentImportResultSerializer,
@@ -193,6 +199,29 @@ def _existing_student_numbers(parsed_students):
         for value in (student_number, username)
         if value in numbers
     }
+
+
+def _student_import_job_payload(job):
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "total_rows": job.total_rows,
+        "processed_rows": job.processed_rows,
+        "created_accounts": job.created_accounts,
+        "enrollments": job.enrollments,
+        "progress_stage": job.progress_stage,
+        "error_code": job.error_code,
+        "error_message": job.error_message,
+    }
+
+
+def _request_ip(request):
+    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    return (
+        forwarded.split(",")[0].strip()
+        if forwarded
+        else request.META.get("REMOTE_ADDR")
+    ) or None
 
 
 def _require_active_class(class_group, action):
@@ -531,6 +560,13 @@ class CourseClassManagementView(TeacherAccountManagementApiView):
             form_data=data,
         )
         if saved_class_group is None:
+            if CLASS_GROUP_STALE_ERROR in form.non_field_errors():
+                raise ApiBusinessError(
+                    CLASS_GROUP_STALE_ERROR,
+                    code="CLASS_STATE_STALE",
+                    fields={"__all__": [CLASS_GROUP_STALE_ERROR]},
+                    status=409,
+                )
             raise ValidationError(form.errors)
         return Response(
             CourseClassManagementSerializer(
@@ -669,7 +705,7 @@ class CourseStudentImportPreviewView(TeacherAccountManagementApiView):
     @extend_schema(
         operation_id="teacher_course_class_student_import_preview",
         request=StudentImportPreviewRequestSerializer,
-        responses=LegacyStudentImportPreviewSerializer,
+        responses=CourseStudentImportPreviewSerializer,
     )
     def post(self, request, course_id, class_id):
         course, class_group = _course_and_class(request.user, course_id, class_id)
@@ -686,10 +722,19 @@ class CourseStudentImportPreviewView(TeacherAccountManagementApiView):
             )
         except StudentImportError as exc:
             raise ValidationError(str(exc)) from exc
-        request.session[session_key] = [item.__dict__ for item in preview]
+        preview_id = uuid.uuid4()
+        state_token = class_group_state_token(class_group)
+        request.session[session_key] = {
+            "preview_id": str(preview_id),
+            "class_id": class_group.pk,
+            "class_state_token": state_token,
+            "rows": [item.__dict__ for item in preview],
+        }
         return Response(
-            LegacyStudentImportPreviewSerializer(
+            CourseStudentImportPreviewSerializer(
                 {
+                    "preview_id": preview_id,
+                    "class_state_token": state_token,
                     "preview": _preview_payload(
                         preview,
                         existing_numbers=_existing_student_numbers(preview),
@@ -703,7 +748,7 @@ class CourseStudentImportConfirmView(TeacherAccountManagementApiView):
     @extend_schema(
         operation_id="teacher_course_class_student_import_confirm",
         request=CourseStudentImportConfirmRequestSerializer,
-        responses=CourseStudentImportResultSerializer,
+        responses={202: CourseStudentImportResultSerializer},
     )
     def post(self, request, course_id, class_id):
         course, class_group = _course_and_class(request.user, course_id, class_id)
@@ -711,38 +756,94 @@ class CourseStudentImportConfirmView(TeacherAccountManagementApiView):
         _require_active_class(class_group, "新增学生")
         confirmation = CourseStudentImportConfirmRequestSerializer(data=request.data)
         confirmation.is_valid(raise_exception=True)
-        session_key = f"course_student_import:{course.pk}:{class_group.pk}"
-        preview = [
-            ParsedStudent(**item) for item in request.session.get(session_key, [])
-        ]
-        if not preview:
-            raise ValidationError("导入预览已失效，请重新上传文件。")
-        try:
-            created_accounts, enrollments = enroll_parsed_students(
-                course, class_group, preview
+        preview_id = confirmation.validated_data["preview_id"]
+        state_token = confirmation.validated_data["class_state_token"]
+        existing_job = StudentImportJob.objects.filter(
+            preview_id=preview_id,
+            course=course,
+            class_group=class_group,
+            created_by=request.user,
+        ).first()
+        if existing_job is not None:
+            return Response(
+                CourseStudentImportResultSerializer(
+                    _student_import_job_payload(existing_job)
+                ).data,
+                status=status.HTTP_202_ACCEPTED,
             )
-        except (StudentImportError, DjangoValidationError) as exc:
-            message = "; ".join(exc.messages) if hasattr(exc, "messages") else str(exc)
-            raise ValidationError(message) from exc
-        request.session.pop(session_key, None)
-        log_action(
-            request,
-            "student.batch_import",
-            class_group,
-            {
-                "course_id": course.pk,
-                "class_id": class_group.pk,
-                "enrollments": enrollments,
-                "created_accounts": created_accounts,
+        session_key = f"course_student_import:{course.pk}:{class_group.pk}"
+        preview_state = request.session.get(session_key, {})
+        if (
+            not preview_state
+            or preview_state.get("preview_id") != str(preview_id)
+            or preview_state.get("class_id") != class_group.pk
+            or preview_state.get("class_state_token") != state_token
+        ):
+            raise ValidationError("导入预览已失效，请重新上传文件。")
+        if not class_group_state_token_matches(state_token, class_group):
+            request.session.pop(session_key, None)
+            raise ApiBusinessError(
+                IMPORT_PREVIEW_STALE_ERROR,
+                code="IMPORT_PREVIEW_STALE",
+                status=409,
+            )
+        rows = preview_state.get("rows", [])
+        if not rows:
+            raise ValidationError("导入预览已失效，请重新上传文件。")
+        job, created = StudentImportJob.objects.get_or_create(
+            preview_id=preview_id,
+            defaults={
+                "course": course,
+                "class_group": class_group,
+                "created_by": request.user,
+                "class_state_token": state_token,
+                "rows": rows,
+                "total_rows": len(rows),
+                "request_ip": _request_ip(request),
             },
         )
+        if (
+            job.course_id != course.pk
+            or job.class_group_id != class_group.pk
+            or job.created_by_id != request.user.pk
+        ):
+            raise ValidationError("导入预览已失效，请重新上传文件。")
+        request.session.pop(session_key, None)
+        if created:
+            log_action(
+                request,
+                "student.batch_import_queued",
+                class_group,
+                {
+                    "course_id": course.pk,
+                    "class_id": class_group.pk,
+                    "job_id": str(job.job_id),
+                    "count": job.total_rows,
+                },
+            )
         return Response(
             CourseStudentImportResultSerializer(
-                {
-                    "created_accounts": created_accounts,
-                    "enrollments": enrollments,
-                }
-            ).data
+                _student_import_job_payload(job)
+            ).data,
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class CourseStudentImportJobView(TeacherAccountManagementApiView):
+    @extend_schema(
+        operation_id="teacher_course_class_student_import_job",
+        responses=CourseStudentImportResultSerializer,
+    )
+    def get(self, request, course_id, class_id, job_id):
+        course, class_group = _course_and_class(request.user, course_id, class_id)
+        job = get_object_or_404(
+            StudentImportJob,
+            job_id=job_id,
+            course=course,
+            class_group=class_group,
+        )
+        return Response(
+            CourseStudentImportResultSerializer(_student_import_job_payload(job)).data
         )
 
 

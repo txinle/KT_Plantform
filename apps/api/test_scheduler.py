@@ -15,6 +15,7 @@ class SchedulerCommandTests(SimpleTestCase):
             [
                 call("expire_publish_plans"),
                 call("expire_due_sessions"),
+                call("run_student_import_jobs"),
                 call("reconcile_research_materializations"),
                 call("run_export_jobs"),
             ],

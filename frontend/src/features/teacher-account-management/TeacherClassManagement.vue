@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import Alert from '@/design-system/components/Alert.vue'
@@ -10,7 +10,7 @@ import { ApiError } from '@/api/client'
 import DeletionDialog from '@/features/teacher-deletion/DeletionDialog.vue'
 import type { DeletionTarget } from '@/features/teacher-deletion/api'
 
-import { getTeacherAccountManagementApi, type AccountStudent, type CourseClassManagement, type StudentImportPreview } from './api'
+import { getTeacherAccountManagementApi, type AccountStudent, type CourseClassManagement, type CourseStudentImportPreview, type StudentImportJob } from './api'
 import './teacher-account-management.css'
 
 type Workflow = 'manage' | 'manual' | 'copy' | 'import'
@@ -53,7 +53,8 @@ const copyPreview = ref<{
   source_class: CourseClassManagement['source_classes'][number]
   preview: Array<{ student: AccountStudent; skip: boolean }>
 }>()
-const importPreview = ref<StudentImportPreview>()
+const importPreview = ref<CourseStudentImportPreview>()
+const importJob = ref<StudentImportJob>()
 const importFile = ref<File>()
 const moveTargets = reactive<Record<number, string>>({})
 const removeCandidate = ref<AccountStudent>()
@@ -63,6 +64,8 @@ const nameConfirmation = ref<StudentNameConfirmation>()
 const nameConfirmationDialog = ref<HTMLDialogElement>()
 const deletionTarget = ref<DeletionTarget>()
 const submitting = ref(false)
+const importJobStorageKey = `course-student-import-job:${courseId}:${classId}`
+let importPollTimer: number | undefined
 
 const currentClass = computed(() => management.value?.class_group)
 const moveTargetClasses = computed(() => {
@@ -73,6 +76,15 @@ const moveTargetClasses = computed(() => {
 })
 
 function message(caught: unknown, fallback: string) {
+  if (caught instanceof ApiError && caught.message === '请求数据无效。') {
+    const pending: unknown[] = Object.values(caught.fields)
+    while (pending.length) {
+      const value = pending.shift()
+      if (typeof value === 'string' && value.trim()) return value
+      if (Array.isArray(value)) pending.unshift(...value)
+      else if (value && typeof value === 'object') pending.unshift(...Object.values(value))
+    }
+  }
   return caught instanceof Error ? caught.message : fallback
 }
 
@@ -291,6 +303,50 @@ function chooseImportFile(event: Event) {
   importPreview.value = undefined
 }
 
+function clearImportPoll() {
+  if (importPollTimer !== undefined) window.clearTimeout(importPollTimer)
+  importPollTimer = undefined
+}
+
+async function applyImportJob(job: StudentImportJob) {
+  importJob.value = job
+  if (job.status === 'succeeded') {
+    clearImportPoll()
+    sessionStorage.removeItem(importJobStorageKey)
+    importJob.value = undefined
+    importPreview.value = undefined
+    importFile.value = undefined
+    await load()
+    success.value = `已建立 ${job.enrollments} 条课程选课，其中新建 ${job.created_accounts} 个全局学生账号。`
+    return
+  }
+  if (job.status === 'failed') {
+    clearImportPoll()
+    sessionStorage.removeItem(importJobStorageKey)
+    importJob.value = undefined
+    importPreview.value = undefined
+    importFile.value = undefined
+    error.value = job.error_message || '名单导入失败。'
+    return
+  }
+  success.value = job.status === 'queued'
+    ? '名单已进入后台处理，请留在当前页面查看结果。'
+    : `正在处理学生账号（${job.processed_rows}/${job.total_rows}）。`
+  clearImportPoll()
+  importPollTimer = window.setTimeout(pollImportJob, 1500)
+}
+
+async function pollImportJob() {
+  const jobId = importJob.value?.job_id || sessionStorage.getItem(importJobStorageKey)
+  if (!jobId) return
+  try {
+    await applyImportJob(await api.courseImportJob(courseId, classId, jobId))
+  } catch (caught) {
+    clearImportPoll()
+    error.value = message(caught, '无法查询名单导入状态。')
+  }
+}
+
 async function previewImport() {
   if (!importFile.value) {
     error.value = '请选择 Excel 文件。'
@@ -311,16 +367,24 @@ async function previewImport() {
 }
 
 async function confirmImport() {
+  if (!importPreview.value) return
   submitting.value = true
   error.value = ''
   success.value = ''
   try {
-    const result = await api.confirmCourseImport(courseId, classId)
+    const result = await api.confirmCourseImport(courseId, classId, {
+      preview_id: importPreview.value.preview_id,
+      class_state_token: importPreview.value.class_state_token,
+    })
     importPreview.value = undefined
     importFile.value = undefined
-    await load()
-    success.value = `已建立 ${result.enrollments} 条课程选课，其中新建 ${result.created_accounts} 个全局学生账号。`
+    sessionStorage.setItem(importJobStorageKey, result.job_id)
+    await applyImportJob(result)
   } catch (caught) {
+    if (caught instanceof ApiError && caught.code === 'IMPORT_PREVIEW_STALE') {
+      importPreview.value = undefined
+      importFile.value = undefined
+    }
     error.value = message(caught, '名单导入失败。')
   } finally {
     submitting.value = false
@@ -382,7 +446,11 @@ async function resetPassword() {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  if (sessionStorage.getItem(importJobStorageKey)) await pollImportJob()
+})
+onUnmounted(clearImportPoll)
 </script>
 
 <template>
@@ -397,7 +465,7 @@ onMounted(load)
     </PageHeader>
 
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
-    <Alert v-if="success" tone="success">{{ success }}</Alert>
+    <Alert v-if="success && !importJob" tone="success">{{ success }}</Alert>
     <p v-if="loading" role="status">正在加载班级管理信息…</p>
 
     <template v-else-if="management">
@@ -460,14 +528,17 @@ onMounted(load)
         <h2 id="excel-import-title">批量导入课程学生</h2>
         <p>上传后先在服务器校验预览；确认时一次性建立选课，任一冲突都会使整批回滚。</p>
         <a class="kt-button kt-button--secondary" :href="management.actions.import_template_url">下载 Excel 参考模板</a>
-        <form v-if="!importPreview" @submit.prevent="previewImport">
+        <form v-if="!importPreview && !importJob" @submit.prevent="previewImport">
           <label>Excel 学生名单<input accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" type="file" required :disabled="submitting" @change="chooseImportFile"></label>
           <button class="kt-button" type="submit" :disabled="submitting">校验并生成预览</button>
         </form>
-        <template v-else>
+        <template v-else-if="importJob">
+          <p class="kt-account-management-notice" role="status">{{ success }}</p>
+        </template>
+        <template v-else-if="importPreview">
           <p class="kt-account-management-notice">名单校验通过，尚未写入数据库。</p>
           <div class="kt-table-scroll"><table class="kt-table"><thead><tr><th>学号</th><th>姓名</th><th>课程班级</th><th>账号处理</th></tr></thead><tbody><tr v-for="row in importPreview.preview" :key="row.student_number"><td>{{ row.student_number }}</td><td>{{ row.display_name }}</td><td>{{ row.class_name }}</td><td>{{ row.account_action === 'reuse' ? '复用已有账号' : '新建账号（S + 学号）' }}</td></tr></tbody></table></div>
-          <div class="kt-account-management-actions"><button class="kt-button" type="button" :disabled="submitting" @click="confirmImport">确认建立 {{ importPreview.preview.length }} 条选课关系</button><button class="kt-button kt-button--secondary" type="button" :disabled="submitting" @click="importPreview = undefined">重新上传</button></div>
+          <div class="kt-account-management-actions"><button class="kt-button" data-confirm-course-import type="button" :disabled="submitting" @click="confirmImport">确认建立 {{ importPreview.preview.length }} 条选课关系</button><button class="kt-button kt-button--secondary" type="button" :disabled="submitting" @click="importPreview = undefined">重新上传</button></div>
         </template>
       </section>
 

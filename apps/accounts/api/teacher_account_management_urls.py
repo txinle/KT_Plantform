@@ -7,6 +7,7 @@ from .teacher_account_management_views import (
     CourseClassManagementView,
     CourseClassManualEnrollmentView,
     CourseStudentImportConfirmView,
+    CourseStudentImportJobView,
     CourseStudentImportPreviewView,
     CourseStudentImportTemplateView,
     CourseStudentMoveView,
@@ -79,6 +80,11 @@ urlpatterns = [
         "courses/<int:course_id>/classes/<int:class_id>/students/import/confirm/",
         CourseStudentImportConfirmView.as_view(),
         name="teacher-course-class-student-import-confirm",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/import/jobs/<uuid:job_id>/",
+        CourseStudentImportJobView.as_view(),
+        name="teacher-course-class-student-import-job",
     ),
     path(
         "courses/<int:course_id>/classes/<int:class_id>/students/import-template.xlsx",
