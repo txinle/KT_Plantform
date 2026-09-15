@@ -53,6 +53,7 @@ class DeploymentContractTests(TestCase):
         self.assertIn("publication-worker:", compose)
         self.assertIn("run_publication_jobs", compose)
         self.assertIn("pgbouncer:", compose)
+        self.assertIn("AUTH_TYPE: scram-sha-256", compose)
         self.assertIn("POOL_MODE: transaction", compose)
         self.assertIn("PUBLICATION_WORKER_CPUS", compose)
         self.assertIn("PUBLICATION_WORKER_MEMORY", compose)
