@@ -4155,6 +4155,27 @@ paths:
               schema:
                 $ref: '#/components/schemas/ClassTaskCollection'
           description: ''
+  /api/v1/teacher/publish-operation-jobs/{job_id}/:
+    get:
+      operationId: teacher_publish_operation_job_retrieve
+      parameters:
+      - in: path
+        name: job_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishOperationJob'
+          description: ''
   /api/v1/teacher/publish-plans/{plan_id}/:
     get:
       operationId: teacher_publish_plan_retrieve
@@ -4201,11 +4222,11 @@ paths:
       security:
       - SessionAuth: []
       responses:
-        '201':
+        '202':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PublishCommit'
+                $ref: '#/components/schemas/PublishOperationJob'
           description: ''
   /api/v1/teacher/publish-plans/{plan_id}/participants/:
     get:
@@ -4299,11 +4320,11 @@ paths:
       security:
       - SessionAuth: []
       responses:
-        '200':
+        '202':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PublishPreviewSummary'
+                $ref: '#/components/schemas/PublishOperationJob'
           description: ''
   /api/v1/teacher/publish-plans/{plan_id}/review/:
     get:
@@ -7741,6 +7762,14 @@ components:
     NullEnum:
       enum:
       - null
+    OperationEnum:
+      enum:
+      - preview
+      - commit
+      type: string
+      description: |-
+        * `preview` - preview
+        * `commit` - commit
     OptionDistribution:
       type: object
       properties:
@@ -8102,15 +8131,66 @@ components:
       - value
       - value_after
       - value_before
-    PublishCommit:
+    PublishOperationJob:
       type: object
       properties:
-        tasks:
-          type: array
-          items:
-            $ref: '#/components/schemas/PublishedTask'
+        job_id:
+          type: string
+          format: uuid
+        operation:
+          $ref: '#/components/schemas/OperationEnum'
+        status:
+          $ref: '#/components/schemas/PublishOperationJobStatusEnum'
+        status_url:
+          type: string
+        plan_revision:
+          type: integer
+          minimum: 1
+        stage:
+          type: string
+        processed:
+          type: integer
+          minimum: 0
+        total:
+          type: integer
+          minimum: 0
+        error_code:
+          type: string
+        error_message:
+          type: string
+        preview_run_id:
+          type: integer
+          nullable: true
+        release_snapshot_id:
+          type: integer
+          nullable: true
       required:
-      - tasks
+      - error_code
+      - error_message
+      - job_id
+      - operation
+      - plan_revision
+      - preview_run_id
+      - processed
+      - release_snapshot_id
+      - stage
+      - status
+      - status_url
+      - total
+    PublishOperationJobStatusEnum:
+      enum:
+      - queued
+      - running
+      - succeeded
+      - failed
+      - stale
+      type: string
+      description: |-
+        * `queued` - queued
+        * `running` - running
+        * `succeeded` - succeeded
+        * `failed` - failed
+        * `stale` - stale
     PublishParticipant:
       type: object
       properties:
@@ -8476,32 +8556,6 @@ components:
       - participant_count
       - plan_revision
       - randomization_validation
-    PublishedTask:
-      type: object
-      properties:
-        id:
-          type: integer
-        class_id:
-          type: integer
-        class_name:
-          type: string
-        business_status:
-          type: string
-        opens_at:
-          type: string
-          format: date-time
-          nullable: true
-        closes_at:
-          type: string
-          format: date-time
-          nullable: true
-      required:
-      - business_status
-      - class_id
-      - class_name
-      - closes_at
-      - id
-      - opens_at
     QuestionBankCollection:
       type: object
       properties:

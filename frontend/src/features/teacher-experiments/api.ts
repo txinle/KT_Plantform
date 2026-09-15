@@ -46,7 +46,7 @@ export type PublishPlan = components['schemas']['PublishPlan']
 export type PublishPlanSetupInput = components['schemas']['PublishPlanSetupInput']
 export type PublishPreviewSummary = components['schemas']['PublishPreviewSummary']
 export type PublishPlanReview = components['schemas']['PublishPlanReview']
-export type PublishCommit = components['schemas']['PublishCommit']
+export type PublishOperationJob = components['schemas']['PublishOperationJob']
 export type PublishParticipantCollection = components['schemas']['PublishParticipantCollection']
 export type PublishParticipantDetail = components['schemas']['PublishParticipantDetail']
 export type ClassTaskCollection = components['schemas']['ClassTaskCollection']
@@ -168,23 +168,30 @@ export function createTeacherExperimentApi(client: ApiClient) {
         refreshAuthoritativeState: () => this.plan(planId),
       })
     },
-    preview(planId: number, expectedRevision: number) {
-      return client.mutate<PublishPreviewSummary>(
+    preview(planId: number, expectedRevision: number, idempotencyKey?: string) {
+      return client.mutate<PublishOperationJob>(
         `/api/v1/teacher/publish-plans/${planId}/preview/`,
         {
           method: 'POST',
           body: { expected_revision: expectedRevision },
+          idempotencyKey,
           refreshAuthoritativeState: () => this.plan(planId),
         },
+      )
+    },
+    operationJob(jobId: string) {
+      return client.get<PublishOperationJob>(
+        `/api/v1/teacher/publish-operation-jobs/${jobId}/`,
       )
     },
     review(planId: number) {
       return client.get<PublishPlanReview>(`/api/v1/teacher/publish-plans/${planId}/review/`)
     },
-    commit(planId: number, expectedRevision: number) {
-      return client.mutate<PublishCommit>(`/api/v1/teacher/publish-plans/${planId}/commit/`, {
+    commit(planId: number, expectedRevision: number, idempotencyKey?: string) {
+      return client.mutate<PublishOperationJob>(`/api/v1/teacher/publish-plans/${planId}/commit/`, {
         method: 'POST',
         body: { expected_revision: expectedRevision },
+        idempotencyKey,
         refreshAuthoritativeState: () => this.plan(planId),
       })
     },

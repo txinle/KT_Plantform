@@ -71,6 +71,7 @@ interface MutationOptions<TState> {
   signal?: AbortSignal
   keepalive?: boolean
   refreshAuthoritativeState?: () => Promise<TState>
+  idempotencyKey?: string
 }
 
 interface FormMutationOptions<TState> {
@@ -150,6 +151,7 @@ export function createApiClient(options: ClientOptions = {}) {
         }
         const csrfToken = getCsrfToken()
         if (csrfToken) headers['X-CSRFToken'] = csrfToken
+        if (mutation.idempotencyKey) headers['Idempotency-Key'] = mutation.idempotencyKey
         const response = await fetchImpl(path, {
           method: mutation.method,
           credentials: 'same-origin',

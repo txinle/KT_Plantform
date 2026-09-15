@@ -7,7 +7,14 @@ from unittest.mock import patch
 from django.test import TransactionTestCase
 from django.utils import timezone
 
-from apps.accounts.models import Course, DataPurgeRequest, User
+from apps.accounts.enrollment_access import open_enrollment_access
+from apps.accounts.models import (
+    ClassGroup,
+    Course,
+    CourseEnrollment,
+    DataPurgeRequest,
+    User,
+)
 from apps.analytics.models import (
     ExportJob,
     ExportSnapshot,
@@ -95,6 +102,16 @@ class PurgeServiceTests(TransactionTestCase):
             code=f"PURGE-{suffix}",
             term="2026秋",
         )
+        class_group = ClassGroup.objects.create(
+            course=course,
+            name=f"Class {suffix}",
+        )
+        enrollment = CourseEnrollment.objects.create(
+            course=course,
+            class_group=class_group,
+            student=student,
+        )
+        open_enrollment_access(enrollment)
         bank = QuestionBank.objects.create(
             owner=self.teacher,
             created_by=self.teacher,

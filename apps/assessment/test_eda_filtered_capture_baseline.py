@@ -7,7 +7,8 @@ import uuid
 from django.test import TestCase
 from django.utils import timezone
 
-from apps.accounts.models import Course, User
+from apps.accounts.enrollment_access import open_enrollment_access
+from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.experiments.models import Experiment, ExperimentVersion, QuestionSnapshot
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.experiments.publication_services import _create_question_snapshot
@@ -111,6 +112,13 @@ class EdaFilteredCaptureBaselineTests(TestCase):
             code="EDA-FILTERED",
             term="2026 验收",
         )
+        class_group = ClassGroup.objects.create(course=course, name="EDA 验收班")
+        enrollment = CourseEnrollment.objects.create(
+            course=course,
+            class_group=class_group,
+            student=student,
+        )
+        open_enrollment_access(enrollment)
         concept_names = {
             name
             for mapping in parsed_kc_trees

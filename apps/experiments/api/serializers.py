@@ -747,6 +747,23 @@ class ExpectedRevisionSerializer(serializers.Serializer):
     expected_revision = serializers.IntegerField(min_value=1)
 
 
+class PublishOperationJobSerializer(serializers.Serializer):
+    job_id = serializers.UUIDField()
+    operation = serializers.ChoiceField(choices=("preview", "commit"))
+    status = serializers.ChoiceField(
+        choices=("queued", "running", "succeeded", "failed", "stale")
+    )
+    status_url = serializers.CharField()
+    plan_revision = serializers.IntegerField(min_value=1)
+    stage = serializers.CharField()
+    processed = serializers.IntegerField(min_value=0)
+    total = serializers.IntegerField(min_value=0)
+    error_code = serializers.CharField(allow_blank=True)
+    error_message = serializers.CharField(allow_blank=True)
+    preview_run_id = serializers.IntegerField(allow_null=True)
+    release_snapshot_id = serializers.IntegerField(allow_null=True)
+
+
 class PublishPreviewSummarySerializer(serializers.Serializer):
     id = serializers.IntegerField()
     plan_revision = serializers.IntegerField(min_value=1)

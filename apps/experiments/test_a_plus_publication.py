@@ -5,8 +5,10 @@ import zipfile
 from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.db.models import QuerySet
 from django.test import TestCase, TransactionTestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
@@ -31,6 +33,7 @@ from apps.assessment.models import (
     StudentQuestionAssignment,
     SubmissionEvent,
 )
+from apps.assessment.event_batch_services import ProcessConflictError, append_event_batch
 from apps.experiments.models import (
     ClassExperimentTask,
     Experiment,
@@ -39,12 +42,15 @@ from apps.experiments.models import (
     ExperimentSamplingKC,
     ExperimentVersion,
     ExperimentVersionParticipantSnapshot,
+    PublishOperationJob,
     PublishPlan,
     PublishPlanClass,
+    PublishPreviewRun,
     QuestionSnapshot,
     ReleaseSnapshotQuestionMapping,
     ScheduleRevision,
 )
+from apps.experiments.publication_jobs import claim_publish_operation, run_publish_operation
 from apps.experiments.publication_services import (
     PublicationConflict,
     commit_publish_plan,
@@ -282,6 +288,335 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
             list(plan.class_plans.values_list("class_group_id", flat=True)),
             [self.class_group.pk],
         )
+
+    def test_preview_api_enqueues_work_without_running_preview_inline(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        plan.refresh_from_db()
+        self.client.force_login(self.teacher)
+
+        response = self.client.post(
+            f"/api/v1/teacher/publish-plans/{plan.pk}/preview/",
+            {"expected_revision": plan.plan_revision},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "queued")
+        self.assertIn("job_id", response.json())
+        self.assertIn("status_url", response.json())
+        plan.refresh_from_db()
+        self.assertIsNone(plan.preview_run_id)
+
+    def test_preview_job_runs_and_exposes_status_to_the_teacher(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        plan.refresh_from_db()
+        self.client.force_login(self.teacher)
+        response = self.client.post(
+            f"/api/v1/teacher/publish-plans/{plan.pk}/preview/",
+            {"expected_revision": plan.plan_revision},
+            content_type="application/json",
+            HTTP_IDEMPOTENCY_KEY="preview-job-1",
+        )
+        job = PublishOperationJob.objects.get(pk=response.json()["job_id"])
+
+        completed = run_publish_operation(job)
+        status_response = self.client.get(response.json()["status_url"])
+
+        self.assertEqual(completed.status, PublishOperationJob.Status.SUCCEEDED)
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()["status"], "succeeded")
+        self.assertIsNotNone(status_response.json()["preview_run_id"])
+
+    def test_preview_api_reuses_the_same_idempotency_key(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        plan.refresh_from_db()
+        self.client.force_login(self.teacher)
+        url = f"/api/v1/teacher/publish-plans/{plan.pk}/preview/"
+        first = self.client.post(
+            url,
+            {"expected_revision": plan.plan_revision},
+            content_type="application/json",
+            HTTP_IDEMPOTENCY_KEY="same-preview-job",
+        )
+        second = self.client.post(
+            url,
+            {"expected_revision": plan.plan_revision},
+            content_type="application/json",
+            HTTP_IDEMPOTENCY_KEY="same-preview-job",
+        )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(first.json()["job_id"], second.json()["job_id"])
+
+    def test_commit_api_enqueues_then_worker_creates_the_release_atomically(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        plan.refresh_from_db()
+        generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
+        plan.refresh_from_db()
+        self.client.force_login(self.teacher)
+
+        response = self.client.post(
+            f"/api/v1/teacher/publish-plans/{plan.pk}/commit/",
+            {"expected_revision": plan.plan_revision},
+            content_type="application/json",
+            HTTP_IDEMPOTENCY_KEY="commit-job-1",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(ClassExperimentTask.objects.exists())
+        completed = run_publish_operation(
+            PublishOperationJob.objects.get(pk=response.json()["job_id"])
+        )
+        self.assertEqual(completed.status, PublishOperationJob.Status.SUCCEEDED)
+        self.assertEqual(ClassExperimentTask.objects.count(), 1)
+        self.assertIsNotNone(completed.result_release_snapshot_id)
+
+    def test_job_becomes_stale_when_plan_revision_changes_before_processing(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        plan.refresh_from_db()
+        self.client.force_login(self.teacher)
+        response = self.client.post(
+            f"/api/v1/teacher/publish-plans/{plan.pk}/preview/",
+            {"expected_revision": plan.plan_revision},
+            content_type="application/json",
+        )
+        job = PublishOperationJob.objects.get(pk=response.json()["job_id"])
+        PublishPlan.objects.filter(pk=plan.pk).update(
+            plan_revision=plan.plan_revision + 1
+        )
+
+        completed = run_publish_operation(job)
+
+        self.assertEqual(completed.status, PublishOperationJob.Status.STALE)
+        self.assertEqual(completed.error_code, "PUBLISH_PLAN_STALE")
+        self.assertFalse(PublishPreviewRun.objects.filter(publish_plan=plan).exists())
+
+    def test_expired_worker_lease_is_reclaimed_with_a_retry_count(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        job = PublishOperationJob.objects.create(
+            publish_plan=plan,
+            operation=PublishOperationJob.Operation.PREVIEW,
+            expected_plan_revision=plan.plan_revision,
+            requested_by=self.teacher,
+            status=PublishOperationJob.Status.RUNNING,
+            locked_by="dead-worker",
+            lease_expires_at=timezone.now() - timedelta(seconds=1),
+        )
+
+        reclaimed = claim_publish_operation(worker_id="replacement-worker")
+
+        self.assertEqual(reclaimed.pk, job.pk)
+        self.assertEqual(reclaimed.retry_count, 1)
+        self.assertEqual(reclaimed.locked_by, "replacement-worker")
+        self.assertGreater(reclaimed.lease_expires_at, timezone.now())
+
+    def test_unexpected_worker_failure_retries_three_times_then_fails(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        job = PublishOperationJob.objects.create(
+            publish_plan=plan,
+            operation=PublishOperationJob.Operation.PREVIEW,
+            expected_plan_revision=plan.plan_revision,
+            requested_by=self.teacher,
+        )
+
+        with patch(
+            "apps.experiments.publication_jobs.generate_preview",
+            side_effect=RuntimeError("worker crashed"),
+        ):
+            first = run_publish_operation(job)
+            second = run_publish_operation(first)
+            third = run_publish_operation(second)
+
+        self.assertEqual(first.status, PublishOperationJob.Status.QUEUED)
+        self.assertEqual(second.status, PublishOperationJob.Status.QUEUED)
+        self.assertEqual(third.status, PublishOperationJob.Status.FAILED)
+        self.assertEqual(third.retry_count, 3)
+        self.assertEqual(third.error_code, "WORKER_FAILED")
+
+    def test_business_validation_failure_is_reported_without_retry(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        job = PublishOperationJob.objects.create(
+            publish_plan=plan,
+            operation=PublishOperationJob.Operation.PREVIEW,
+            expected_plan_revision=plan.plan_revision,
+            requested_by=self.teacher,
+        )
+
+        result = run_publish_operation(job)
+
+        self.assertEqual(result.status, PublishOperationJob.Status.FAILED)
+        self.assertEqual(result.retry_count, 0)
+        self.assertEqual(result.error_code, "PUBLISH_VALIDATION_FAILED")
+        self.assertIn("至少选择一个", result.error_message)
+
+    def test_preview_query_count_is_bounded_for_three_hundred_participants(self):
+        students = [
+            User(
+                username=f"A-PERF-{index:03d}",
+                student_number=f"A-PERF-{index:03d}",
+                role=User.Role.STUDENT,
+            )
+            for index in range(2, 301)
+        ]
+        User.objects.bulk_create(students)
+        CourseEnrollment.objects.bulk_create(
+            [
+                CourseEnrollment(
+                    course=self.course,
+                    class_group=self.class_group,
+                    student=student,
+                )
+                for student in students
+            ]
+        )
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        plan.refresh_from_db()
+
+        with CaptureQueriesContext(connection) as queries:
+            generate_preview(
+                plan,
+                self.teacher,
+                expected_revision=plan.plan_revision,
+            )
+
+        self.assertLess(len(queries), 500)
+
+    def test_commit_query_count_is_bounded_for_three_hundred_participants(self):
+        students = [
+            User(
+                username=f"A-COMMIT-{index:03d}",
+                student_number=f"A-COMMIT-{index:03d}",
+                role=User.Role.STUDENT,
+            )
+            for index in range(2, 301)
+        ]
+        User.objects.bulk_create(students)
+        CourseEnrollment.objects.bulk_create(
+            [
+                CourseEnrollment(
+                    course=self.course,
+                    class_group=self.class_group,
+                    student=student,
+                )
+                for student in students
+            ]
+        )
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        plan.refresh_from_db()
+        generate_preview(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+        )
+        plan.refresh_from_db()
+
+        with CaptureQueriesContext(connection) as queries:
+            commit_publish_plan(
+                plan,
+                self.teacher,
+                expected_revision=plan.plan_revision,
+            )
+
+        self.assertLess(len(queries), 400)
+
+    def test_twenty_item_session_start_uses_batched_assignments(self):
+        concept = self.experiment.sampling_kcs.get().concept
+        for index in range(2, 21):
+            question = Question.objects.create(
+                bank=self.experiment.question_bank,
+                sequence=index,
+                code=f"Q{index:02d}",
+                question_type=Question.Type.SHORT,
+                text=f"发布性能题 {index}",
+                correct_answer="答案",
+            )
+            QuestionConcept.objects.create(
+                question=question,
+                concept=concept,
+                is_primary=True,
+            )
+        self.experiment.sampling_total_count = 20
+        self.experiment.save(update_fields=["sampling_total_count"])
+        accept_current_research_consent(
+            student=self.student,
+            version=CURRENT_RESEARCH_CONSENT_VERSION,
+        )
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        save_plan_selection(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk],
+            exclusions_by_class={},
+        )
+        plan.refresh_from_db()
+        generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
+        plan.refresh_from_db()
+        task = commit_publish_plan(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+        )[0]
+
+        with CaptureQueriesContext(connection) as queries:
+            session = get_or_create_session(
+                self.experiment,
+                self.student,
+                class_task=task,
+            )
+
+        self.assertEqual(session.attempts.count(), 20)
+        self.assertLess(len(queries), 100)
 
     def test_mixed_review_preview_uses_one_submitted_item_and_one_new_item(self):
         historical_question = self.experiment.question_bank.questions.get(code="Q01")
@@ -1312,7 +1647,7 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
 
         self.assertEqual(raised.exception.code, "PARTICIPANT_ALREADY_ASSIGNED")
 
-    def test_manual_close_wins_over_a_submission_that_arrived_earlier(self):
+    def test_submission_received_before_manual_close_is_allowed_to_finish(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)
         PublishPlanClass.objects.create(
             publish_plan=plan,
@@ -1330,15 +1665,81 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
         attempt = record_visit(session.pk, assignment.pk)
         save_draft(attempt.pk, "答案")
         manual_close_task(task, self.teacher, reason="teacher_ended")
+        task.refresh_from_db()
+        session.refresh_from_db()
+        self.assertEqual(session.status, ExperimentSession.Status.IN_PROGRESS)
 
-        with self.assertRaises(SubmissionValidationError) as raised:
-            submit_attempt(
-                attempt.pk,
-                uuid.uuid4(),
-                request_received_at=timezone.now() - timedelta(seconds=1),
+        submitted = submit_attempt(
+            attempt.pk,
+            uuid.uuid4(),
+            request_received_at=task.manual_closed_at - timedelta(milliseconds=1),
+        )
+
+        self.assertEqual(submitted.status, Attempt.Status.SUBMITTED)
+
+    def test_process_event_batch_uses_request_arrival_time_after_manual_close(self):
+        CourseEnrollment.objects.filter(
+            course=self.course,
+            student=self.student,
+        ).update(enrolled_at=timezone.now() - timedelta(minutes=1))
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        PublishPlanClass.objects.create(
+            publish_plan=plan,
+            class_group=self.class_group,
+        )
+        generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
+        plan.refresh_from_db()
+        task = commit_publish_plan(
+            plan,
+            self.teacher,
+            expected_revision=plan.plan_revision,
+        )[0]
+        session = get_or_create_session(self.experiment, self.student)
+        assignment = session.assignments.get()
+        attempt = record_visit(session.pk, assignment.pk)
+        manual_close_task(task, self.teacher, reason="teacher_ended")
+        task.refresh_from_db()
+
+        def document():
+            now = timezone.now().isoformat()
+            return {
+                "client_instance_id": str(uuid.uuid4()),
+                "events": [{
+                    "event_type": "activity_heartbeat",
+                    "event_version": 1,
+                    "session_id": session.pk,
+                    "attempt_id": attempt.pk,
+                    "client_sequence_no": 1,
+                    "correlation_id": None,
+                    "client_wall_time_utc": now,
+                    "client_monotonic_ms": "1",
+                    "client_time_origin": now,
+                    "time_sync_id": None,
+                    "payload": {
+                        "attempt_id": attempt.pk,
+                        "document_visible": True,
+                        "window_focused": True,
+                        "last_device_interaction_age_ms": 0,
+                    },
+                    "quality_flags": [],
+                    "app_version": "test",
+                }],
+            }
+
+        acknowledgements = append_event_batch(
+            student=self.student,
+            document=document(),
+            request_received_at=task.manual_closed_at - timedelta(milliseconds=1),
+        )
+        self.assertEqual(len(acknowledgements), 1)
+
+        with self.assertRaises(ProcessConflictError) as raised:
+            append_event_batch(
+                student=self.student,
+                document=document(),
+                request_received_at=task.manual_closed_at,
             )
-
-        self.assertEqual(raised.exception.reason_code, "task_terminated")
+        self.assertEqual(raised.exception.code, "task_terminated")
 
     def test_preview_export_contains_all_participants(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)

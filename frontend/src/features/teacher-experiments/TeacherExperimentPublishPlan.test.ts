@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     participants: vi.fn(),
     saveSetup: vi.fn(),
     preview: vi.fn(),
+    operationJob: vi.fn(),
     review: vi.fn(),
     commit: vi.fn(),
     participantExportUrl: vi.fn(() => '/api/v1/teacher/publish-plans/23/participants/export/'),
@@ -28,6 +29,7 @@ import TeacherExperimentPublishPlan from './TeacherExperimentPublishPlan.vue'
 describe('TeacherExperimentPublishPlan', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    sessionStorage.clear()
     mocks.route.params.step = '1'
     mocks.api.plan.mockResolvedValue({
       id: 23,
@@ -82,6 +84,16 @@ describe('TeacherExperimentPublishPlan', () => {
       default_opens_at: null,
       default_closes_at: null,
       classes: [{ class_id: 5, class_name: '一班', academic_year: '2026', excluded_count: 0, participant_count: 36, schedule_mode: 'default', opens_at: null, closes_at: null }],
+    })
+    mocks.api.preview.mockResolvedValue({
+      job_id: 'preview-job', operation: 'preview', status: 'queued', status_url: '/jobs/preview-job/',
+      plan_revision: 3, stage: 'queued', processed: 0, total: 36, error_code: '', error_message: '',
+      preview_run_id: null, release_snapshot_id: null,
+    })
+    mocks.api.operationJob.mockResolvedValue({
+      job_id: 'preview-job', operation: 'preview', status: 'succeeded', status_url: '/jobs/preview-job/',
+      plan_revision: 3, stage: 'completed', processed: 36, total: 36, error_code: '', error_message: '',
+      preview_run_id: 41, release_snapshot_id: null,
     })
   })
 
@@ -154,6 +166,78 @@ describe('TeacherExperimentPublishPlan', () => {
     expect(mocks.api.preview).not.toHaveBeenCalled()
   })
 
+  it('waits for the queued preview job before opening the review step', async () => {
+    const completedPlan = {
+      id: 23, experiment_id: 11, status: 'previewed', current_step: 2, setup_status: 'complete',
+      missing_requirements: [], blocking_issues: [], field_errors: {}, plan_revision: 3,
+      expires_at: '2026-08-31T00:00:00Z', default_opens_at: null, default_closes_at: null,
+      classes: [{ class_id: 5, class_name: '一班', academic_year: '2026', excluded_count: 0, participant_count: 36, schedule_mode: 'default', opens_at: null, closes_at: null }],
+    }
+    mocks.api.review.mockResolvedValue({
+      plan: completedPlan,
+      preview: { id: 41, plan_revision: 3, class_count: 1, participant_count: 36, item_count: 36, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z' },
+      effects: [],
+    })
+    const wrapper = mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+
+    await wrapper.get('#publish-class-5').setValue(true)
+    await wrapper.get('[data-action="run-preview"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.operationJob).toHaveBeenCalledWith('preview-job')
+    expect(mocks.api.review).toHaveBeenCalledWith(23)
+    expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/11/publish-plan/23/step/2/')
+  })
+
+  it('restores a queued preview job after a page refresh', async () => {
+    sessionStorage.setItem('kt-publish-operation:23', JSON.stringify({
+      job_id: 'restored-job',
+      operation: 'preview',
+    }))
+    const completedPlan = {
+      id: 23, experiment_id: 11, status: 'previewed', current_step: 2, setup_status: 'complete',
+      missing_requirements: [], blocking_issues: [], field_errors: {}, plan_revision: 3,
+      expires_at: '2026-08-31T00:00:00Z', default_opens_at: null, default_closes_at: null,
+      classes: [{ class_id: 5, class_name: '一班', academic_year: '2026', excluded_count: 0, participant_count: 36, schedule_mode: 'default', opens_at: null, closes_at: null }],
+    }
+    mocks.api.operationJob.mockResolvedValue({
+      job_id: 'restored-job', operation: 'preview', status: 'succeeded', status_url: '/jobs/restored-job/',
+      plan_revision: 3, stage: 'completed', processed: 36, total: 36, error_code: '', error_message: '',
+      preview_run_id: 41, release_snapshot_id: null,
+    })
+    mocks.api.review.mockResolvedValue({
+      plan: completedPlan,
+      preview: { id: 41, plan_revision: 3, class_count: 1, participant_count: 36, item_count: 36, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z' },
+      effects: [],
+    })
+
+    mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+
+    expect(mocks.api.operationJob).toHaveBeenCalledWith('restored-job')
+    expect(sessionStorage.getItem('kt-publish-operation:23')).toBeNull()
+    expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/11/publish-plan/23/step/2/')
+  })
+
+  it('shows the backend stale reason and returns to setup', async () => {
+    mocks.api.operationJob.mockResolvedValue({
+      job_id: 'preview-job', operation: 'preview', status: 'stale', status_url: '/jobs/preview-job/',
+      plan_revision: 3, stage: 'failed', processed: 12, total: 36,
+      error_code: 'PREVIEW_INVALIDATED', error_message: '班级名单已变化，请重新运行发布前检查。',
+      preview_run_id: null, release_snapshot_id: null,
+    })
+    const wrapper = mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+
+    await wrapper.get('#publish-class-5').setValue(true)
+    await wrapper.get('[data-action="run-preview"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('班级名单已变化，请重新运行发布前检查。')
+    expect(mocks.push).not.toHaveBeenCalled()
+  })
+
   it('moves from precheck to confirmation and commits exactly once', async () => {
     mocks.route.params.step = '2'
     const completedPlan = {
@@ -181,8 +265,16 @@ describe('TeacherExperimentPublishPlan', () => {
       preview: { id: 41, plan_revision: 4, class_count: 1, participant_count: 35, item_count: 140, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z' },
       effects: ['将冻结当前实验定义。'],
     })
-    let resolveCommit: (() => void) | undefined
-    mocks.api.commit.mockImplementation(() => new Promise<void>((resolve) => { resolveCommit = resolve }))
+    const queuedCommit = {
+      job_id: 'commit-job', operation: 'commit' as const, status: 'queued' as const, status_url: '/jobs/commit-job/',
+      plan_revision: 4, stage: 'queued', processed: 0, total: 35, error_code: '', error_message: '',
+      preview_run_id: 41, release_snapshot_id: null,
+    }
+    let resolveCommit: ((job: typeof queuedCommit) => void) | undefined
+    mocks.api.commit.mockImplementation(() => new Promise<typeof queuedCommit>((resolve) => { resolveCommit = resolve }))
+    mocks.api.operationJob.mockResolvedValue({
+      ...queuedCommit, status: 'succeeded', stage: 'completed', processed: 35, release_snapshot_id: 12,
+    })
 
     const wrapper = mount(TeacherExperimentPublishPlan)
     await flushPromises()
@@ -201,7 +293,7 @@ describe('TeacherExperimentPublishPlan', () => {
     await wrapper.get('[data-action="commit-publish"]').trigger('click')
     await wrapper.get('[data-action="commit-publish"]').trigger('click')
     expect(mocks.api.commit).toHaveBeenCalledTimes(1)
-    resolveCommit?.()
+    resolveCommit?.(queuedCommit)
     await flushPromises()
 
     expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/11/')

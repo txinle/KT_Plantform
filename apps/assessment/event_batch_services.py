@@ -16,7 +16,7 @@ from .event_schema_registry import (
 )
 from .event_services import EventIdempotencyConflict, append_assessment_event
 from .response_input_services import record_stable_input_observation
-from .models import Attempt, ClientTimeSync
+from .models import Attempt, ClientTimeSync, ExperimentSession
 
 
 MAX_BATCH_EVENTS = 100
@@ -58,6 +58,10 @@ CLIENT_BATCH_EVENT_TYPES = frozenset(
         "simulation_error_returned",
     }
 ) | SESSION_ONLY_EVENTS
+
+POST_COMPLETION_EVENT_TYPES = frozenset(
+    {"feedback_exposure", "feedback_shown", "explanation_shown"}
+)
 
 BATCH_FIELDS = frozenset({"client_instance_id", "events"})
 EVENT_FIELDS = frozenset(
@@ -294,12 +298,58 @@ def parse_event_batch(*, student, document):
 
 
 @transaction.atomic
-def append_event_batch(*, student, document):
+def append_event_batch(*, student, document, request_received_at=None):
     client_instance_id, events = parse_event_batch(
         student=student,
         document=document,
     )
+    from .services import _validate_course_access, _validate_session_time
+
+    request_received_at = request_received_at or timezone.now()
+    validated = set()
+    for parsed in events:
+        post_completion_event = parsed.event_type in POST_COMPLETION_EVENT_TYPES
+        validation_key = (
+            parsed.session.pk,
+            getattr(parsed.attempt, "pk", None),
+            post_completion_event,
+        )
+        if validation_key in validated:
+            continue
+        try:
+            if post_completion_event:
+                _validate_course_access(
+                    parsed.session,
+                    request_received_at=request_received_at,
+                )
+                time_error = None
+            else:
+                time_error = _validate_session_time(
+                    parsed.session,
+                    parsed.attempt,
+                    request_received_at=request_received_at,
+                )
+        except ValidationError as exc:
+            raise ProcessConflictError("course_access_revoked") from exc
+        if time_error:
+            code = (
+                "task_terminated"
+                if time_error == "班级任务已结束"
+                else "deadline_expired"
+            )
+            raise ProcessConflictError(code)
+        validated.add(validation_key)
     acknowledgements = []
+    sessions = {
+        session.pk: session
+        for session in ExperimentSession.objects.select_for_update()
+        .filter(pk__in=sorted({event.session.pk for event in events}))
+        .order_by("pk")
+    }
+    next_sequences = {
+        session_id: session.next_ingest_sequence_no
+        for session_id, session in sessions.items()
+    }
     try:
         for parsed in events:
             payload = parsed.payload
@@ -349,7 +399,11 @@ def append_event_batch(*, student, document):
                 app_version=parsed.app_version,
                 event_id=parsed.event_id,
                 envelope_version=2,
+                server_ingest_sequence_no=next_sequences[parsed.session.pk],
+                session_lock_held=True,
             )
+            if event.server_ingest_sequence_no == next_sequences[parsed.session.pk]:
+                next_sequences[parsed.session.pk] += 1
             acknowledgements.append(
                 {
                     "client_sequence_no": parsed.client_sequence_no,
@@ -384,6 +438,11 @@ def append_event_batch(*, student, document):
                         "is_ime", observation.get("input_method") == "ime"
                     ),
                 )
+        for session_id, session in sessions.items():
+            session.next_ingest_sequence_no = next_sequences[session_id]
+        ExperimentSession.objects.bulk_update(
+            sessions.values(), ["next_ingest_sequence_no"]
+        )
     except EventIdempotencyConflict as error:
         raise ProcessConflictError() from error
     except ProcessRequestError:

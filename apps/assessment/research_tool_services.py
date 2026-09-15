@@ -8,7 +8,6 @@ from django.db import transaction
 from django.utils import timezone
 
 from .capture_v2_services import uses_capture_v2
-from .deadline_services import DeadlineDecisionService
 from .event_services import append_assessment_event
 from .models import AssessmentEvent, Attempt, ExperimentSession
 
@@ -86,15 +85,13 @@ def _response_reference(attempt, event_id):
 
 @transaction.atomic
 def record_tool_action(*, student, attempt_id, tool, stage, operation_id, data=None,
-                       answer_event_id=None, initiation_type='self_initiated'):
+                       answer_event_id=None, initiation_type='self_initiated',
+                       request_received_at=None):
     data = data or {}
+    request_received_at = request_received_at or timezone.now()
     session_id = Attempt.objects.filter(pk=attempt_id, session__student=student).values_list('session_id', flat=True).first()
     if session_id is None:
         raise ValidationError('无权访问此作答。')
-    from apps.experiments.models import ClassExperimentTask
-    task_id = ExperimentSession.objects.values_list('class_task_id', flat=True).get(pk=session_id)
-    if task_id:
-        ClassExperimentTask.objects.select_for_update().get(pk=task_id)
     session = ExperimentSession.objects.select_for_update().get(pk=session_id)
     attempt = Attempt.objects.select_for_update().select_related('assignment__snapshot', 'session__version').get(pk=attempt_id)
     try:
@@ -121,14 +118,15 @@ def record_tool_action(*, student, attempt_id, tool, stage, operation_id, data=N
     if stage in {'requested', 'mark_added', 'mark_changed', 'mark_removed', 'started', 'finished', 'responded'}:
         if attempt.status in {'submitted', 'timed_out', 'unanswered'} or session.status != 'in_progress':
             raise ValidationError('正式作答已经结束。')
-        if session.class_task_id:
-            decision = DeadlineDecisionService.can_write_response(session.class_task, session, attempt, timezone.now())
-            if not decision.allowed:
-                raise ValidationError(decision.code)
-        else:
-            deadline = DeadlineDecisionService.get_item_deadline(attempt)
-            if deadline and timezone.now() >= deadline:
-                raise ValidationError('作答时间已结束。')
+        from .services import _validate_session_time
+
+        time_error = _validate_session_time(
+            session,
+            attempt,
+            request_received_at=request_received_at,
+        )
+        if time_error:
+            raise ValidationError(time_error)
     if initiation_type != 'self_initiated':
         rule_id = data.get('rule_id')
         rule = next((rule for rule in tool_configuration(attempt).get('rules', []) if rule['id'] == rule_id), None)
@@ -146,14 +144,23 @@ def record_tool_action(*, student, attempt_id, tool, stage, operation_id, data=N
             validate_confidence_probability,
         )
         if stage == 'presented':
-            mark_confidence_prompt_shown(attempt_id=attempt.pk, student=student)
+            mark_confidence_prompt_shown(
+                attempt_id=attempt.pk,
+                student=student,
+                request_received_at=request_received_at,
+            )
         if stage == 'responded':
             probability = data.get('probability')
             validate_confidence_probability(attempt, probability)
             from .confidence_services import ensure_confidence_assignment
             assignment = ensure_confidence_assignment(attempt)
             if assignment.response_status != assignment.ResponseStatus.COMMITTED:
-                commit_confidence(attempt_id=attempt.pk, student=student, probability=probability)
+                commit_confidence(
+                    attempt_id=attempt.pk,
+                    student=student,
+                    probability=probability,
+                    request_received_at=request_received_at,
+                )
     event = append_assessment_event(event_type='research_tool', event_version=1, event_domain='assessment',
         actor_source='server', session=session, attempt=attempt, payload=payload, event_id=event_id, app_version='capture-v2')
     return _tool_result(attempt, event)

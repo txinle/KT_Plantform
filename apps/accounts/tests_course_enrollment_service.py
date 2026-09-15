@@ -1,9 +1,17 @@
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase, TransactionTestCase
+from django.utils import timezone
 
-from .models import ClassGroup, Course, CourseEnrollment, User
+from .models import (
+    ClassGroup,
+    Course,
+    CourseEnrollment,
+    CourseEnrollmentAccessPeriod,
+    User,
+)
 from . import enrollment_services
 from .student_import import ParsedStudent, StudentImportError
 
@@ -25,6 +33,81 @@ class CourseEnrollmentImportTests(TestCase):
         )
         self.class_a = ClassGroup.objects.create(course=self.course_a, name="一班")
         self.class_b = ClassGroup.objects.create(course=self.course_b, name="二班")
+
+    def test_remove_preserves_enrollment_and_closes_access_period(self):
+        student = User.objects.create_user(
+            username="REMOVE-1",
+            student_number="REMOVE-1",
+            role=User.Role.STUDENT,
+        )
+        enrollment = CourseEnrollment.objects.create(
+            course=self.course_b,
+            class_group=self.class_b,
+            student=student,
+        )
+        from .enrollment_access import has_course_access, open_enrollment_access
+
+        period = open_enrollment_access(enrollment)
+        enrollment_services.remove_course_enrollment(
+            course=self.course_b,
+            class_group=self.class_b,
+            enrollment=enrollment,
+        )
+
+        enrollment.refresh_from_db()
+        period.refresh_from_db()
+        self.assertFalse(enrollment.is_active)
+        self.assertIsNotNone(period.revoked_at)
+        self.assertTrue(
+            has_course_access(
+                course_id=self.course_b.pk,
+                student_id=student.pk,
+                at=period.revoked_at - timedelta(microseconds=1),
+            )
+        )
+        self.assertFalse(
+            has_course_access(
+                course_id=self.course_b.pk,
+                student_id=student.pk,
+                at=period.revoked_at,
+            )
+        )
+        self.assertTrue(
+            CourseEnrollmentAccessPeriod.objects.filter(enrollment=enrollment).exists()
+        )
+
+    def test_reenrollment_opens_a_new_access_period(self):
+        student = User.objects.create_user(
+            username="RETURN-1",
+            student_number="RETURN-1",
+            display_name="返班学生",
+            role=User.Role.STUDENT,
+        )
+        enrollment = CourseEnrollment.objects.create(
+            course=self.course_b,
+            class_group=self.class_b,
+            student=student,
+        )
+        from .enrollment_access import close_enrollment_access, open_enrollment_access
+
+        open_enrollment_access(enrollment)
+        closed = close_enrollment_access(enrollment, at=timezone.now())
+        enrollment.is_active = False
+        enrollment.save(update_fields=["is_active"])
+
+        created_accounts, enrollments = enrollment_services.enroll_parsed_students(
+            self.course_b,
+            self.class_b,
+            [ParsedStudent("RETURN-1", "返班学生", self.class_b.pk, str(self.class_b))],
+        )
+
+        enrollment.refresh_from_db()
+        self.assertEqual((created_accounts, enrollments), (0, 1))
+        self.assertTrue(enrollment.is_active)
+        periods = list(enrollment.access_periods.order_by("revision"))
+        self.assertEqual(len(periods), 2)
+        self.assertEqual(periods[0].pk, closed.pk)
+        self.assertIsNone(periods[1].revoked_at)
 
     def test_existing_student_account_is_reused_without_changing_password(self):
         student = User.objects.create_user(
@@ -424,7 +507,7 @@ class CourseEnrollmentLockOrderContractTests(TestCase):
         lock_order = []
         original_course_lock = Course.objects.select_for_update
         original_class_lock = ClassGroup.objects.select_for_update
-        original_enrollment_write = CourseEnrollment.objects.get_or_create
+        original_enrollment_write = CourseEnrollment.objects.create
 
         def lock_course(*args, **kwargs):
             lock_order.append("course")
@@ -443,7 +526,7 @@ class CourseEnrollmentLockOrderContractTests(TestCase):
             patch.object(ClassGroup.objects, "select_for_update", side_effect=lock_class),
             patch.object(
                 CourseEnrollment.objects,
-                "get_or_create",
+                "create",
                 side_effect=write_enrollment,
             ),
         ):

@@ -1,6 +1,7 @@
 import json
 
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 from django.views.decorators.http import require_POST
 from django.http import JsonResponse
 from django.http import FileResponse
@@ -45,12 +46,17 @@ def offline_worker(request):
 
 
 def _error(code, *, status):
+    messages = {
+        "task_terminated": "班级任务已结束，本次过程数据未写入。",
+        "deadline_expired": "作答时间已结束，本次过程数据未写入。",
+        "course_access_revoked": "你已不在该实验所属课程中，本次过程数据未写入。",
+    }
     return JsonResponse(
         {
             "success": False,
             "error": {
                 "code": code,
-                "message": "Process data request was rejected.",
+                "message": messages.get(code, "Process data request was rejected."),
             },
         },
         status=status,
@@ -95,6 +101,7 @@ def _sync_document(sample):
 def research_tools(request, attempt_id):
     from .research_tool_services import available_tools, due_rules, record_tool_action
     from .models import Attempt
+    request_received_at = timezone.now()
     try:
         document = _json_document(request)
         attempt = Attempt.objects.select_related('session__version', 'assignment__snapshot').filter(pk=attempt_id, session__student=request.user).first()
@@ -104,7 +111,12 @@ def research_tools(request, attempt_id):
             return JsonResponse({'success': True, **available_tools(attempt), 'rules': due_rules(attempt)})
         require_exact_mapping(document, allowed=frozenset({'tool', 'stage', 'operation_id', 'data', 'answer_event_id', 'initiation_type'}),
                               required=frozenset({'tool', 'stage', 'operation_id'}))
-        result = record_tool_action(student=request.user, attempt_id=attempt_id, **document)
+        result = record_tool_action(
+            student=request.user,
+            attempt_id=attempt_id,
+            request_received_at=request_received_at,
+            **document,
+        )
         return JsonResponse({'success': True, **result})
     except (ValidationError, ValueError) as error:
         return _error(str(error), status=409)
@@ -132,8 +144,13 @@ def resolve_branch(request, attempt_id):
 @require_POST
 def capture_v2_batch(request):
     from .capture_v2_services import ingest_capture_batch
+    request_received_at = timezone.now()
     try:
-        acknowledgements = ingest_capture_batch(student=request.user, document=_json_document(request, max_bytes=8 * 1024 * 1024))
+        acknowledgements = ingest_capture_batch(
+            student=request.user,
+            document=_json_document(request, max_bytes=8 * 1024 * 1024),
+            request_received_at=request_received_at,
+        )
         return JsonResponse({'success': True, 'acknowledgements': acknowledgements, 'rejections': []})
     except (ProcessConflictError, ProcessRequestError) as error:
         return _error(error.code, status=error.status)
@@ -142,6 +159,7 @@ def capture_v2_batch(request):
 @role_required("student")
 @require_POST
 def event_batch(request):
+    request_received_at = timezone.now()
     try:
         document = _json_document(request)
         require_exact_mapping(
@@ -175,6 +193,7 @@ def event_batch(request):
             acknowledgements.extend(
                 append_event_batch(
                     student=request.user,
+                    request_received_at=request_received_at,
                     document={
                         "client_instance_id": document["client_instance_id"],
                         "events": [event_document],
@@ -423,12 +442,14 @@ def writer_lease_release(request, attempt_id):
 @role_required("student")
 @require_POST
 def confidence_prompt_shown(request, attempt_id):
+    request_received_at = timezone.now()
     try:
         document = _json_document(request)
         require_exact_mapping(document, allowed=frozenset())
         assignment = mark_confidence_prompt_shown(
             attempt_id=attempt_id,
             student=request.user,
+            request_received_at=request_received_at,
         )
     except ProcessRequestError as error:
         return _error(error.code, status=error.status)

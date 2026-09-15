@@ -24,6 +24,7 @@ from .views import (
     TeacherPublishPlanReviewView,
     TeacherPublishPlanSetupView,
     TeacherPublishPlanStartView,
+    TeacherPublishOperationJobView,
     TeacherPublishParticipantDetailView,
     TeacherPublishParticipantExportView,
     TeacherPublishParticipantListView,
@@ -129,6 +130,11 @@ urlpatterns = [
         "publish-plans/<int:plan_id>/commit/",
         TeacherPublishPlanCommitView.as_view(),
         name="teacher-publish-plan-commit",
+    ),
+    path(
+        "publish-operation-jobs/<uuid:job_id>/",
+        TeacherPublishOperationJobView.as_view(),
+        name="teacher-publish-operation-job",
     ),
     path(
         "publish-plans/<int:plan_id>/participants/",

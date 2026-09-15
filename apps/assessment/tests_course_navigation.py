@@ -141,7 +141,7 @@ class StudentCourseNavigationTests(TestCase):
         self.assertRedirects(response, reverse("assessment:dashboard"))
         self.assertFalse(ExperimentSession.objects.filter(student=self.other_student).exists())
 
-    def test_start_locks_course_enrollment_before_creating_a_session(self):
+    def test_start_creates_session_without_shared_course_or_enrollment_locks(self):
         lock_order = []
         original_course_lock = Course.objects.select_for_update
         original_enrollment_lock = CourseEnrollment.objects.select_for_update
@@ -179,7 +179,7 @@ class StudentCourseNavigationTests(TestCase):
         ):
             self.client.post(reverse("assessment:start", args=[self.experiment.pk]))
 
-        self.assertEqual(lock_order[:3], ["course", "enrollment", "session"])
+        self.assertEqual(lock_order, ["session"])
 
     def test_archiving_course_blocks_writes_to_existing_session(self):
         self.client.force_login(self.student)
@@ -216,7 +216,7 @@ class StudentCourseNavigationTests(TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertFalse(DraftSaveEvent.objects.exists())
 
-    def test_existing_session_write_locks_enrollment_before_research_event(self):
+    def test_existing_session_write_avoids_shared_course_and_enrollment_locks(self):
         self.client.force_login(self.student)
         self.client.post(reverse("assessment:start", args=[self.experiment.pk]))
         attempt = ExperimentSession.objects.get(student=self.student).attempts.get()
@@ -261,4 +261,4 @@ class StudentCourseNavigationTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(lock_order[:3], ["course", "enrollment", "event"])
+        self.assertEqual(lock_order, ["event"])

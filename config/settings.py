@@ -78,6 +78,11 @@ if os.getenv("POSTGRES_HOST"):
         "PASSWORD": os.getenv("POSTGRES_PASSWORD", "kt_password"),
         "HOST": os.getenv("POSTGRES_HOST", "db"),
         "PORT": os.getenv("POSTGRES_PORT", "5432"),
+        "CONN_MAX_AGE": int(os.getenv("DATABASE_CONN_MAX_AGE", "0")),
+        "CONN_HEALTH_CHECKS": True,
+        "OPTIONS": {
+            "application_name": os.getenv("DATABASE_APPLICATION_NAME", "kt-web")
+        },
     }}
 else:
     DATABASES = {"default": {

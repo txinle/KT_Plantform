@@ -11,6 +11,7 @@ import Icon from '@/design-system/Icon.vue'
 
 import {
   getTeacherExperimentApi,
+  type PublishOperationJob,
   type PublishParticipantCollection,
   type PublishPlan,
   type PublishPlanReview,
@@ -49,8 +50,93 @@ const notice = ref('')
 const confirmCommit = ref(false)
 const scheduleEditClassId = ref<number>()
 const rosterExpanded = ref(false)
+const activeJob = ref<PublishOperationJob>()
 const courseName = computed(() => course?.value?.name || '课程')
 const configuredScheduleCount = computed(() => review.value?.plan.classes.length ?? 0)
+const jobStorageKey = `kt-publish-operation:${planId}`
+const jobStageLabels: Record<string, string> = {
+  queued: '等待后台处理',
+  reading_history: '正在读取名单与历史记录',
+  selecting_questions: '正在计算参与者题目',
+  writing_preview: '正在写入发布检查结果',
+  validating_preview: '正在核对发布检查结果',
+  creating_release: '正在创建正式发布快照',
+  completed: '处理完成',
+  failed: '处理失败',
+}
+
+function newIdempotencyKey(operation: 'preview' | 'commit') {
+  const suffix = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
+  return `${operation}-${planId}-${suffix}`
+}
+
+function rememberJob(job: PublishOperationJob | undefined) {
+  activeJob.value = job
+  if (job) sessionStorage.setItem(jobStorageKey, JSON.stringify({ job_id: job.job_id, operation: job.operation }))
+  else sessionStorage.removeItem(jobStorageKey)
+}
+
+function wait(milliseconds: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds))
+}
+
+async function waitForJob(initial: PublishOperationJob) {
+  let current = initial
+  let interval = 1000
+  while (current.status === 'queued' || current.status === 'running') {
+    try {
+      current = await api.operationJob(current.job_id)
+      activeJob.value = current
+      notice.value = ''
+    } catch {
+      notice.value = '后台任务仍在运行，正在重新连接…'
+      await wait(interval)
+      interval = Math.min(interval + 500, 3000)
+      continue
+    }
+    if (current.status === 'queued' || current.status === 'running') {
+      await wait(interval)
+      interval = Math.min(interval + 500, 3000)
+    }
+  }
+  if (current.status === 'succeeded') {
+    rememberJob(undefined)
+    return current
+  }
+  rememberJob(undefined)
+  if (current.status === 'stale') {
+    await load()
+    throw new Error(current.error_message || '发布数据已变化，请重新运行发布前检查。')
+  }
+  throw new Error(current.error_message || '后台发布任务失败。')
+}
+
+async function resumeStoredJob() {
+  const stored = sessionStorage.getItem(jobStorageKey)
+  if (!stored) return
+  try {
+    const reference = JSON.parse(stored) as { job_id?: string; operation?: 'preview' | 'commit' }
+    if (!reference.job_id || !reference.operation) {
+      rememberJob(undefined)
+      return
+    }
+    working.value = true
+    const current = await api.operationJob(reference.job_id)
+    const completed = await waitForJob(current)
+    if (completed.operation === 'preview') {
+      review.value = await api.review(planId)
+      hydratePlan(review.value.plan)
+      await loadParticipants()
+      await router.push(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/2/`)
+    } else {
+      await router.push(`/teacher/courses/${courseId}/experiments/${experimentId}/`)
+    }
+  } catch (caught) {
+    await recover(caught, '后台发布任务状态恢复失败。')
+  } finally {
+    working.value = false
+  }
+}
 
 function dateTimeLocal(value: string | null | undefined) {
   if (!value) return ''
@@ -190,7 +276,13 @@ async function runPreview() {
   }
   working.value = true
   try {
-    await api.preview(planId, saved.plan_revision)
+    const job = await api.preview(
+      planId,
+      saved.plan_revision,
+      newIdempotencyKey('preview'),
+    )
+    rememberJob(job)
+    await waitForJob(job)
     review.value = await api.review(planId)
     hydratePlan(review.value.plan)
     await loadParticipants()
@@ -260,7 +352,13 @@ async function commit() {
   working.value = true
   error.value = ''
   try {
-    await api.commit(planId, plan.value.plan_revision)
+    const job = await api.commit(
+      planId,
+      plan.value.plan_revision,
+      newIdempotencyKey('commit'),
+    )
+    rememberJob(job)
+    await waitForJob(job)
     await router.push(`/teacher/courses/${courseId}/experiments/${experimentId}/`)
   } catch (caught) {
     await recover(caught, '正式发布失败。')
@@ -269,7 +367,10 @@ async function commit() {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  await resumeStoredJob()
+})
 </script>
 
 <template>
@@ -295,6 +396,10 @@ onMounted(load)
   <p v-if="loading" role="status">正在加载发布计划…</p>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <Alert v-if="notice" tone="success">{{ notice }}</Alert>
+  <Alert v-if="activeJob" tone="info" role="status">
+    {{ jobStageLabels[activeJob.stage] || '后台处理中' }}：
+    {{ activeJob.processed }}/{{ activeJob.total }}
+  </Alert>
 
   <template v-if="!loading && plan && step === 1">
     <Alert v-if="plan.blocking_issues.length" tone="danger">{{ plan.blocking_issues.map((issue) => issue.message).join('；') }}</Alert>

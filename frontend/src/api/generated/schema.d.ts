@@ -1931,6 +1931,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/publish-operation-jobs/{job_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_publish_operation_job_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/publish-plans/{plan_id}/": {
         parameters: {
             query?: never;
@@ -3357,6 +3373,12 @@ export interface components {
         };
         /** @enum {unknown} */
         NullEnum: null;
+        /**
+         * @description * `preview` - preview
+         *     * `commit` - commit
+         * @enum {string}
+         */
+        OperationEnum: "preview" | "commit";
         OptionDistribution: {
             key: string;
             label: string;
@@ -3498,9 +3520,30 @@ export interface components {
             time_source: string;
             interval_ms: number | null;
         };
-        PublishCommit: {
-            tasks: components["schemas"]["PublishedTask"][];
+        PublishOperationJob: {
+            /** Format: uuid */
+            job_id: string;
+            operation: components["schemas"]["OperationEnum"];
+            status: components["schemas"]["PublishOperationJobStatusEnum"];
+            status_url: string;
+            plan_revision: number;
+            stage: string;
+            processed: number;
+            total: number;
+            error_code: string;
+            error_message: string;
+            preview_run_id: number | null;
+            release_snapshot_id: number | null;
         };
+        /**
+         * @description * `queued` - queued
+         *     * `running` - running
+         *     * `succeeded` - succeeded
+         *     * `failed` - failed
+         *     * `stale` - stale
+         * @enum {string}
+         */
+        PublishOperationJobStatusEnum: "queued" | "running" | "succeeded" | "failed" | "stale";
         PublishParticipant: {
             id: number;
             student_number: string;
@@ -3622,16 +3665,6 @@ export interface components {
             randomization_validation: string;
             /** Format: date-time */
             created_at: string;
-        };
-        PublishedTask: {
-            id: number;
-            class_id: number;
-            class_name: string;
-            business_status: string;
-            /** Format: date-time */
-            opens_at: string | null;
-            /** Format: date-time */
-            closes_at: string | null;
         };
         QuestionBankCollection: {
             items: components["schemas"]["QuestionBankSummary"][];
@@ -8945,6 +8978,27 @@ export interface operations {
             };
         };
     };
+    teacher_publish_operation_job_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishOperationJob"];
+                };
+            };
+        };
+    };
     teacher_publish_plan_retrieve: {
         parameters: {
             query?: never;
@@ -8983,12 +9037,12 @@ export interface operations {
             };
         };
         responses: {
-            201: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PublishCommit"];
+                    "application/json": components["schemas"]["PublishOperationJob"];
                 };
             };
         };
@@ -9074,12 +9128,12 @@ export interface operations {
             };
         };
         responses: {
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PublishPreviewSummary"];
+                    "application/json": components["schemas"]["PublishOperationJob"];
                 };
             };
         };

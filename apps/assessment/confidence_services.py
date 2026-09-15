@@ -1,6 +1,7 @@
 import hashlib
 from decimal import Decimal, InvalidOperation
 
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -166,7 +167,55 @@ def materialize_confidence_assignments(session):
         .select_related("session__version")
         .order_by("pk")
     )
-    return [ensure_confidence_assignment(attempt) for attempt in attempts]
+    existing = {
+        assignment.attempt_id: assignment
+        for assignment in ConfidenceAssignment.objects.filter(
+            attempt_id__in=[attempt.pk for attempt in attempts]
+        )
+    }
+    new_rows = []
+    for attempt in attempts:
+        configuration = _configuration(attempt)
+        condition = _condition_for_attempt(attempt, configuration)
+        response_status = (
+            ConfidenceAssignment.ResponseStatus.NOT_ASSIGNED
+            if condition == ConfidenceAssignment.Condition.NOT_ASSIGNED
+            else ConfidenceAssignment.ResponseStatus.ASSIGNED
+        )
+        expected = {
+            "condition": condition,
+            "assignment_unit": configuration.get(
+                "confidence_sampling_unit",
+                ConfidenceAssignment.AssignmentUnit.ATTEMPT,
+            ),
+            "assignment_version": configuration.get("assignment_version", "v1"),
+            "response_status": response_status,
+        }
+        stored = existing.get(attempt.pk)
+        if stored is not None:
+            if any(
+                getattr(stored, field) != value
+                for field, value in expected.items()
+                if field != "response_status"
+            ):
+                raise ConfidenceFlowError(
+                    "Stored Confidence assignment differs from the frozen experiment configuration."
+                )
+            continue
+        new_rows.append(ConfidenceAssignment(attempt=attempt, **expected))
+    if new_rows:
+        ConfidenceAssignment.objects.bulk_create(
+            new_rows,
+            ignore_conflicts=True,
+            batch_size=500,
+        )
+    by_attempt = {
+        assignment.attempt_id: assignment
+        for assignment in ConfidenceAssignment.objects.filter(
+            attempt_id__in=[attempt.pk for attempt in attempts]
+        )
+    }
+    return [by_attempt[attempt.pk] for attempt in attempts]
 
 
 def confidence_prompt_contract(assignment):
@@ -201,17 +250,14 @@ def _append_confidence_event(assignment, *, event_type, payload):
     )
 
 
-def _locked_assignment(*, attempt_id, student):
-    from apps.experiments.models import ClassExperimentTask
+def _locked_assignment(*, attempt_id, student, request_received_at=None):
     from .models import ExperimentSession
 
     link = Attempt.objects.filter(pk=attempt_id, session__student=student).values_list('session_id', 'session__class_task_id').first()
     if link is None:
         raise ConfidenceFlowError('Confidence assignment is unavailable.')
-    session_id, task_id = link
-    if task_id:
-        ClassExperimentTask.objects.select_for_update().get(pk=task_id)
-    ExperimentSession.objects.select_for_update().get(pk=session_id)
+    session_id, _task_id = link
+    session = ExperimentSession.objects.select_for_update().get(pk=session_id)
     Attempt.objects.select_for_update().get(pk=attempt_id)
     assignment = (
         ConfidenceAssignment.objects.select_for_update(of=('self',))
@@ -228,14 +274,30 @@ def _locked_assignment(*, attempt_id, student):
     )
     if assignment is None:
         raise ConfidenceFlowError("Confidence assignment is unavailable.")
+    from .services import _validate_session_time
+
+    try:
+        time_error = _validate_session_time(
+            session,
+            assignment.attempt,
+            request_received_at=request_received_at or timezone.now(),
+        )
+    except ValidationError as exc:
+        raise ConfidenceFlowError("当前作答已不可继续。") from exc
+    if time_error:
+        raise ConfidenceFlowError(time_error)
     if assignment.condition != ConfidenceAssignment.Condition.PROMPT:
         raise ConfidenceFlowError("This attempt was not assigned a Confidence prompt.")
     return assignment
 
 
 @transaction.atomic
-def mark_confidence_prompt_shown(*, attempt_id, student):
-    assignment = _locked_assignment(attempt_id=attempt_id, student=student)
+def mark_confidence_prompt_shown(*, attempt_id, student, request_received_at=None):
+    assignment = _locked_assignment(
+        attempt_id=attempt_id,
+        student=student,
+        request_received_at=request_received_at,
+    )
     if assignment.response_status in {
         ConfidenceAssignment.ResponseStatus.PROMPT_SHOWN,
         ConfidenceAssignment.ResponseStatus.COMMITTED,
@@ -261,8 +323,12 @@ def mark_confidence_prompt_shown(*, attempt_id, student):
 
 
 @transaction.atomic
-def commit_confidence(*, attempt_id, student, probability):
-    assignment = _locked_assignment(attempt_id=attempt_id, student=student)
+def commit_confidence(*, attempt_id, student, probability, request_received_at=None):
+    assignment = _locked_assignment(
+        attempt_id=attempt_id,
+        student=student,
+        request_received_at=request_received_at,
+    )
     validate_confidence_probability(assignment.attempt, probability)
     if assignment.response_status == ConfidenceAssignment.ResponseStatus.COMMITTED:
         if assignment.probability == probability:
@@ -288,8 +354,12 @@ def commit_confidence(*, attempt_id, student, probability):
 
 
 @transaction.atomic
-def skip_confidence(*, attempt_id, student):
-    assignment = _locked_assignment(attempt_id=attempt_id, student=student)
+def skip_confidence(*, attempt_id, student, request_received_at=None):
+    assignment = _locked_assignment(
+        attempt_id=attempt_id,
+        student=student,
+        request_received_at=request_received_at,
+    )
     if assignment.response_status == ConfidenceAssignment.ResponseStatus.SKIPPED:
         return assignment
     if assignment.response_status != ConfidenceAssignment.ResponseStatus.PROMPT_SHOWN:

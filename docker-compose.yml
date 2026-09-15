@@ -14,6 +14,29 @@ services:
       timeout: 5s
       retries: 10
 
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-kt_platform}
+      DB_USER: ${POSTGRES_USER:-kt_user}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-kt_password}
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 1000
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-40}
+      RESERVE_POOL_SIZE: ${PGBOUNCER_RESERVE_POOL_SIZE:-10}
+      SERVER_RESET_QUERY: DISCARD ALL
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-kt_user} -d ${POSTGRES_DB:-kt_platform}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   migrate:
     build:
       context: .
@@ -36,7 +59,8 @@ services:
     env_file: .env
     restart: unless-stopped
     environment:
-      POSTGRES_HOST: db
+      POSTGRES_HOST: pgbouncer
+      DATABASE_APPLICATION_NAME: kt-web
       DJANGO_DEBUG: 0
       VUE_STANDALONE_ENABLED: ${VUE_STANDALONE_ENABLED:-1}
       FRONTEND_INTERNAL_REDIRECT: /__frontend/index.html
@@ -44,6 +68,10 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+    deploy:
+      replicas: ${WEB_REPLICAS:-2}
     volumes:
       - media_data:/app/media
     healthcheck:
@@ -59,11 +87,14 @@ services:
     env_file: .env
     restart: unless-stopped
     environment:
-      POSTGRES_HOST: db
+      POSTGRES_HOST: pgbouncer
+      DATABASE_APPLICATION_NAME: kt-scheduler
       DJANGO_DEBUG: 0
     depends_on:
       migrate:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
 
   analytics-worker:
     build:
@@ -72,11 +103,36 @@ services:
     env_file: .env
     restart: unless-stopped
     environment:
-      POSTGRES_HOST: db
+      POSTGRES_HOST: pgbouncer
+      DATABASE_APPLICATION_NAME: kt-analytics-worker
       DJANGO_DEBUG: 0
     depends_on:
       migrate:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+
+  publication-worker:
+    build:
+      context: .
+      target: publication-worker
+    env_file: .env
+    restart: unless-stopped
+    command: ["python", "manage.py", "run_publication_jobs"]
+    environment:
+      POSTGRES_HOST: pgbouncer
+      DATABASE_APPLICATION_NAME: kt-publication-worker
+      DJANGO_DEBUG: 0
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: ${PUBLICATION_WORKER_CPUS:-2}
+          memory: ${PUBLICATION_WORKER_MEMORY:-2G}
 
   nginx:
     build:

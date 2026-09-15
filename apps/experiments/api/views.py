@@ -25,19 +25,22 @@ from apps.question_bank.models import Concept, Question, QuestionBank
 from ..models import (
     ClassExperimentTask,
     Experiment,
+    PublishOperationJob,
     PublishPlan,
     PublishPlanExclusion,
     PublishPreviewParticipant,
+)
+from ..publication_jobs import (
+    enqueue_publish_operation,
+    publish_operation_projection,
 )
 from ..publication_services import (
     PublicationConflict,
     append_schedule_revision,
     cancel_task,
     class_task_business_status,
-    commit_publish_plan,
     database_now,
     effective_plan_schedule,
-    generate_preview,
     get_or_create_publish_plan,
     manual_close_task,
     publish_plan_setup_projection,
@@ -51,7 +54,7 @@ from .serializers import (
     ClassTaskProgressSerializer,
     ClassTaskSerializer,
     ExpectedRevisionSerializer,
-    PublishCommitSerializer,
+    PublishOperationJobSerializer,
     PublishPlanReviewSerializer,
     PublishPlanSerializer,
     PublishPlanSetupInputSerializer,
@@ -691,27 +694,29 @@ class TeacherPublishPlanPreviewView(TeacherPublishPlanMixin, APIView):
     @extend_schema(
         operation_id="teacher_publish_plan_preview",
         request=ExpectedRevisionSerializer,
-        responses=PublishPreviewSummarySerializer,
+        responses={202: PublishOperationJobSerializer},
     )
     def post(self, request, plan_id):
         plan = self.get_plan()
         serializer = ExpectedRevisionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            preview = generate_preview(
-                plan,
-                request.user,
+            job = enqueue_publish_operation(
+                plan=plan,
+                actor=request.user,
+                operation=PublishOperationJob.Operation.PREVIEW,
                 expected_revision=serializer.validated_data["expected_revision"],
+                idempotency_key=request.headers.get("Idempotency-Key", ""),
             )
         except (PublicationConflict, DjangoValidationError) as exc:
             _raise_api_domain_error(exc)
         log_action(
             request,
-            "experiment.publish_plan.preview",
+            "experiment.publish_plan.preview.queued",
             plan,
-            {"preview_id": preview.pk, "surface": "api"},
+            {"job_id": str(job.pk), "surface": "api"},
         )
-        return Response(_preview_projection(preview))
+        return Response(publish_operation_projection(job), status=202)
 
 
 class TeacherPublishPlanReviewView(TeacherPublishPlanMixin, APIView):
@@ -740,40 +745,47 @@ class TeacherPublishPlanCommitView(TeacherPublishPlanMixin, APIView):
     @extend_schema(
         operation_id="teacher_publish_plan_commit",
         request=ExpectedRevisionSerializer,
-        responses={201: PublishCommitSerializer},
+        responses={202: PublishOperationJobSerializer},
     )
     def post(self, request, plan_id):
         plan = self.get_plan()
         serializer = ExpectedRevisionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            tasks = commit_publish_plan(
-                plan,
-                request.user,
+            job = enqueue_publish_operation(
+                plan=plan,
+                actor=request.user,
+                operation=PublishOperationJob.Operation.COMMIT,
                 expected_revision=serializer.validated_data["expected_revision"],
+                idempotency_key=request.headers.get("Idempotency-Key", ""),
             )
         except (PublicationConflict, DjangoValidationError) as exc:
             _raise_api_domain_error(exc)
-        task_rows = []
-        for task in tasks:
-            schedule = task.schedule_revisions.order_by("-revision_no").first()
-            task_rows.append(
-                {
-                    "id": task.pk,
-                    "class_id": task.class_group_id,
-                    "class_name": task.class_group.name,
-                    "business_status": class_task_business_status(task),
-                    "opens_at": schedule.opens_at if schedule else None,
-                    "closes_at": schedule.closes_at if schedule else None,
-                }
-            )
         log_action(
             request,
-            "experiment.publish_plan.commit",
+            "experiment.publish_plan.commit.queued",
             plan,
-            {"task_ids": [task.pk for task in tasks], "surface": "api"},
+            {"job_id": str(job.pk), "surface": "api"},
         )
-        return Response({"tasks": task_rows}, status=201)
+        return Response(publish_operation_projection(job), status=202)
+
+
+class TeacherPublishOperationJobView(APIView):
+    permission_classes = (RolePermission,)
+    allowed_roles = (User.Role.TEACHER,)
+
+    @extend_schema(
+        operation_id="teacher_publish_operation_job_retrieve",
+        responses=PublishOperationJobSerializer,
+    )
+    def get(self, request, job_id):
+        job = get_object_or_404(
+            PublishOperationJob.objects.select_related("publish_plan__experiment__course"),
+            pk=job_id,
+        )
+        if not job.publish_plan.experiment.course.can_manage(request.user):
+            raise Http404
+        return Response(publish_operation_projection(job))
 
 
 class TeacherPublishParticipantMixin(TeacherPublishPlanMixin):

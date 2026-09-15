@@ -5,6 +5,7 @@ from django.utils import timezone
 
 from .class_lifecycle import lock_active_class_groups
 from .course_access import lock_writable_course
+from .enrollment_access import close_enrollment_access, open_enrollment_access
 from .models import ClassGroup, CourseEnrollment, User
 from .student_import import StudentImportError
 
@@ -37,27 +38,34 @@ def copy_class_enrollments(*, target_course, target_class, source_class):
         source_student_ids = list(
             source_class.enrollments.filter(is_active=True).values_list("student_id", flat=True)
         )
-        existing_ids = set(
+        existing = {
+            enrollment.student_id: enrollment
+            for enrollment in
             CourseEnrollment.objects.filter(
                 course=target_course,
                 student_id__in=source_student_ids,
-            ).values_list("student_id", flat=True)
-        )
+            )
+        }
         created = 0
         skipped = 0
         for student_id in source_student_ids:
-            if student_id in existing_ids:
+            enrollment = existing.get(student_id)
+            if enrollment is not None and enrollment.is_active:
                 skipped += 1
                 continue
-            _, was_created = CourseEnrollment.objects.get_or_create(
-                course=target_course,
-                student_id=student_id,
-                defaults={"class_group": target_class, "is_active": True},
-            )
-            if was_created:
-                created += 1
+            if enrollment is None:
+                enrollment = CourseEnrollment.objects.create(
+                    course=target_course,
+                    student_id=student_id,
+                    class_group=target_class,
+                    is_active=True,
+                )
             else:
-                skipped += 1
+                enrollment.class_group = target_class
+                enrollment.is_active = True
+                enrollment.save(update_fields=["class_group", "is_active"])
+            open_enrollment_access(enrollment)
+            created += 1
         return created, skipped
 
 
@@ -95,7 +103,9 @@ def enroll_parsed_students(course, class_group, parsed_students):
                 raise ValidationError(f"学号与非学生账号冲突：{item.student_number}")
             if user.shown_name != item.display_name:
                 raise ValidationError(f"学号对应姓名不一致：{item.student_number}")
-            if CourseEnrollment.objects.filter(course=course, student=user).exists():
+            if CourseEnrollment.objects.filter(
+                course=course, student=user, is_active=True
+            ).exists():
                 raise ValidationError(f"学生已加入当前课程：{item.student_number}")
 
         created_accounts = 0
@@ -113,12 +123,16 @@ def enroll_parsed_students(course, class_group, parsed_students):
                     initial_password_state_recorded_at=timezone.now(),
                 )
                 created_accounts += 1
-            CourseEnrollment.objects.create(
+            enrollment, created = CourseEnrollment.objects.get_or_create(
                 course=course,
-                class_group=class_group,
                 student=student,
-                is_active=True,
+                defaults={"class_group": class_group, "is_active": True},
             )
+            if not created:
+                enrollment.class_group = class_group
+                enrollment.is_active = True
+                enrollment.save(update_fields=["class_group", "is_active"])
+            open_enrollment_access(enrollment)
             enrollments += 1
         return created_accounts, enrollments
 
@@ -134,9 +148,12 @@ def transfer_course_enrollment(enrollment, target_class):
         target_class = locked_classes[target_class.pk]
         if target_class.course_id != enrollment.course_id:
             raise ValidationError("班级必须属于当前课程")
+        now = timezone.now()
+        close_enrollment_access(enrollment, at=now)
         enrollment.class_group = target_class
         enrollment.full_clean()
         enrollment.save(update_fields=["class_group"])
+        open_enrollment_access(enrollment, at=now)
         return enrollment
 
 
@@ -188,7 +205,9 @@ def remove_course_enrollment(*, course, class_group, enrollment):
         "draft_student_links_removed": draft_student_links_removed,
         "draft_overrides_removed": draft_overrides_removed,
     }
-    enrollment.delete()
+    close_enrollment_access(enrollment)
+    enrollment.is_active = False
+    enrollment.save(update_fields=["is_active"])
     return details
 
 

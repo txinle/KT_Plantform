@@ -17,7 +17,9 @@ from .models import (
     Experiment,
     ExperimentSamplingKC,
     PublishPlan,
+    PublishOperationJob,
 )
+from .publication_jobs import run_publish_operation
 
 
 class TeacherExperimentApiTests(TestCase):
@@ -833,6 +835,14 @@ class TeacherPublishPlanApiTests(TestCase):
             content_type="application/json",
         )
 
+    def complete_operation(self, response):
+        self.assertEqual(response.status_code, 202, response.content)
+        job = PublishOperationJob.objects.get(pk=response.json()["job_id"])
+        run_publish_operation(job)
+        job.refresh_from_db()
+        self.assertEqual(job.status, PublishOperationJob.Status.SUCCEEDED)
+        return job
+
     def test_start_and_get_plan_expose_resumable_setup_without_technical_seeds(self):
         plan, payload = self.start_plan()
 
@@ -1040,7 +1050,7 @@ class TeacherPublishPlanApiTests(TestCase):
         )
 
         self.assertEqual(setup.status_code, 200)
-        self.assertEqual(response.status_code, 200, response.content)
+        self.complete_operation(response)
         plan.refresh_from_db()
         self.assertEqual(plan.status, PublishPlan.Status.PREVIEWED)
         self.assertEqual(
@@ -1077,15 +1087,14 @@ class TeacherPublishPlanApiTests(TestCase):
             data=json.dumps({"expected_revision": plan.plan_revision}),
             content_type="application/json",
         )
-        self.assertEqual(preview.status_code, 200, preview.content)
-        self.assertEqual(preview.json()["class_count"], 2)
-        self.assertEqual(preview.json()["participant_count"], 2)
-        self.assertEqual(preview.json()["randomization_validation"], "2/2")
-        self.assertNotIn("output_hash", preview.json())
+        self.complete_operation(preview)
 
         review = self.client.get(self.plan_url(plan, "review/"))
         self.assertEqual(review.status_code, 200)
         self.assertEqual(review.json()["preview"]["participant_count"], 2)
+        self.assertEqual(review.json()["preview"]["class_count"], 2)
+        self.assertEqual(review.json()["preview"]["randomization_validation"], "2/2")
+        self.assertNotIn("output_hash", review.json()["preview"])
         self.assertIn("发布后实验定义不可修改", review.json()["effects"])
 
         plan.refresh_from_db()
@@ -1094,8 +1103,7 @@ class TeacherPublishPlanApiTests(TestCase):
             data=json.dumps({"expected_revision": plan.plan_revision}),
             content_type="application/json",
         )
-        self.assertEqual(commit.status_code, 201, commit.content)
-        self.assertEqual(len(commit.json()["tasks"]), 2)
+        self.complete_operation(commit)
         self.assertEqual(
             ClassExperimentTask.objects.filter(experiment=self.experiment).count(),
             2,
@@ -1131,7 +1139,7 @@ class TeacherPublishPlanApiTests(TestCase):
             data=json.dumps({"expected_revision": plan.plan_revision}),
             content_type="application/json",
         )
-        self.assertEqual(preview.status_code, 200, preview.content)
+        self.complete_operation(preview)
         plan.refresh_from_db()
         return plan, opens_at
 
@@ -1203,7 +1211,7 @@ class TeacherPublishPlanApiTests(TestCase):
             data=json.dumps({"expected_revision": plan.plan_revision}),
             content_type="application/json",
         )
-        self.assertEqual(commit.status_code, 201, commit.content)
+        self.complete_operation(commit)
         Question.objects.filter(pk=detail.json()["items"][0]["question_id"]).update(
             code="MUTATED",
             question_type=Question.Type.TRUE_FALSE,
@@ -1226,7 +1234,7 @@ class TeacherPublishPlanApiTests(TestCase):
             data=json.dumps({"expected_revision": plan.plan_revision}),
             content_type="application/json",
         )
-        self.assertEqual(commit.status_code, 201, commit.content)
+        self.complete_operation(commit)
 
         task_list = self.client.get(
             f"/api/v1/teacher/experiments/{self.experiment.pk}/class-tasks/"

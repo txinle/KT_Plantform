@@ -26,11 +26,11 @@ class DeadlineDecisionService:
     @classmethod
     def get_task_state(cls, task, at=None):
         at = at or timezone.now()
-        if task.cancelled_at is not None:
+        if task.cancelled_at is not None and at >= task.cancelled_at:
             return "cancelled"
-        if task.manual_closed_at is not None:
+        if task.manual_closed_at is not None and at >= task.manual_closed_at:
             return "manual_closed"
-        if task.invalidated_at is not None:
+        if task.invalidated_at is not None and at >= task.invalidated_at:
             return "invalidated"
         prefetched = getattr(task, "latest_schedule_revisions", None)
         schedule = (
@@ -69,20 +69,23 @@ class DeadlineDecisionService:
         return min_non_null(task_close, total_limit_deadline, item_deadline)
 
     @classmethod
-    def _terminal_decision(cls, task, session=None):
-        if task.cancelled_at is not None:
+    def _terminal_decision(cls, task, session=None, request_received_at=None):
+        at = request_received_at or timezone.now()
+        if task.cancelled_at is not None and at >= task.cancelled_at:
             return DeadlineDecision(False, "TASK_TERMINATED")
-        if task.manual_closed_at is not None:
+        if task.manual_closed_at is not None and at >= task.manual_closed_at:
             return DeadlineDecision(False, "TASK_TERMINATED")
-        if task.invalidated_at is not None:
+        if task.invalidated_at is not None and at >= task.invalidated_at:
             return DeadlineDecision(False, "TASK_TERMINATED")
         if session is not None and getattr(session, "status", "") == "invalidated":
-            return DeadlineDecision(False, "TASK_TERMINATED")
+            terminal_at = getattr(session, "terminal_at", None)
+            if terminal_at is None or at >= terminal_at:
+                return DeadlineDecision(False, "TASK_TERMINATED")
         return None
 
     @classmethod
     def can_start_session(cls, task, request_received_at):
-        terminal = cls._terminal_decision(task)
+        terminal = cls._terminal_decision(task, request_received_at=request_received_at)
         if terminal is not None:
             return terminal
         state = cls.get_task_state(task, request_received_at)
@@ -104,8 +107,12 @@ class DeadlineDecisionService:
 
     @classmethod
     def _can_write(cls, task, session, attempt, request_received_at):
-        # Dynamic terminal facts are judged after the Task lock is acquired.
-        terminal = cls._terminal_decision(task, session)
+        # Terminal facts are evaluated against the trusted API arrival time.
+        terminal = cls._terminal_decision(
+            task,
+            session,
+            request_received_at=request_received_at,
+        )
         if terminal is not None:
             return terminal
         deadline = min_non_null(

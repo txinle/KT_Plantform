@@ -58,6 +58,52 @@ class B2ContractsTests(TestCase):
         self.assertEqual(len(acks), 1)
         self.assertIsNone(AssessmentEvent.objects.get().attempt_id)
 
+    def test_event_batch_reserves_one_contiguous_server_sequence(self):
+        client_instance_id = str(uuid.uuid4())
+        now = timezone.now().isoformat()
+        payload = {
+            "client_instance_id": client_instance_id,
+            "events": [
+                {
+                    "event_type": "session_started",
+                    "event_version": 1,
+                    "session_id": self.session.pk,
+                    "client_sequence_no": 1,
+                    "correlation_id": None,
+                    "client_wall_time_utc": now,
+                    "client_monotonic_ms": "1",
+                    "client_time_origin": now,
+                    "time_sync_id": None,
+                    "payload": {},
+                    "quality_flags": [],
+                    "app_version": "test",
+                },
+                {
+                    "event_type": "session_completed",
+                    "event_version": 1,
+                    "session_id": self.session.pk,
+                    "client_sequence_no": 2,
+                    "correlation_id": None,
+                    "client_wall_time_utc": now,
+                    "client_monotonic_ms": "2",
+                    "client_time_origin": now,
+                    "time_sync_id": None,
+                    "payload": {"completion_reason": "student_finished"},
+                    "quality_flags": [],
+                    "app_version": "test",
+                },
+            ],
+        }
+
+        acknowledgements = append_event_batch(student=self.student, document=payload)
+
+        self.session.refresh_from_db()
+        self.assertEqual(
+            [row["server_ingest_sequence_no"] for row in acknowledgements],
+            [1, 2],
+        )
+        self.assertEqual(self.session.next_ingest_sequence_no, 3)
+
     def test_cross_instance_interval_quality_is_degraded(self):
         first = append_assessment_event(
             event_type="session_started", event_version=1, event_domain="assessment", actor_source="client",

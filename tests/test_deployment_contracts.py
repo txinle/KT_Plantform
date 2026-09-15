@@ -1,5 +1,7 @@
 from pathlib import Path
+import os
 from unittest import TestCase
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,7 +18,7 @@ class DeploymentContractTests(TestCase):
     def test_compose_injects_application_environment_and_supports_host_proxy_port(self):
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
-        self.assertEqual(compose.count("env_file: .env"), 4)
+        self.assertEqual(compose.count("env_file: .env"), 5)
         self.assertIn('"${HTTP_PORT:-80}:80"', compose)
 
     def test_example_environment_lists_all_production_rollout_controls(self):
@@ -34,3 +36,68 @@ class DeploymentContractTests(TestCase):
         ):
             with self.subTest(setting=setting):
                 self.assertIn(setting, example)
+
+    def test_web_worker_count_is_resolved_from_server_resources(self):
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        gunicorn = (ROOT / "config" / "gunicorn.py").read_text(encoding="utf-8")
+
+        self.assertIn('CMD ["gunicorn", "-c", "config/gunicorn.py"', dockerfile)
+        self.assertIn("effective_cpu_count", gunicorn)
+        self.assertIn("effective_memory_bytes", gunicorn)
+        self.assertIn('GUNICORN_WORKERS', gunicorn)
+        self.assertNotIn('"--workers", "3"', dockerfile)
+
+    def test_publication_worker_and_transaction_pool_are_separate_services(self):
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+        self.assertIn("publication-worker:", compose)
+        self.assertIn("run_publication_jobs", compose)
+        self.assertIn("pgbouncer:", compose)
+        self.assertIn("POOL_MODE: transaction", compose)
+        self.assertIn("PUBLICATION_WORKER_CPUS", compose)
+        self.assertIn("PUBLICATION_WORKER_MEMORY", compose)
+
+    @patch.dict(
+        os.environ,
+        {
+            "GUNICORN_WORKERS": "auto",
+            "GUNICORN_MEMORY_PER_WORKER_MB": "512",
+            "WEB_REPLICAS": "2",
+        },
+        clear=False,
+    )
+    def test_auto_workers_share_one_servers_resources_across_replicas(self):
+        from config import gunicorn
+
+        with (
+            patch.object(gunicorn, "effective_cpu_count", return_value=16),
+            patch.object(gunicorn, "effective_memory_bytes", return_value=16 * 1024**3),
+        ):
+            self.assertEqual(gunicorn.server_worker_count(), 8)
+
+    @patch.dict(
+        os.environ,
+        {
+            "WEB_REPLICAS": "2",
+            "DEPLOYMENT_AGGREGATE_VCPU": "",
+            "DEPLOYMENT_AGGREGATE_MEMORY_MB": "",
+            "POSTGRES_HOST": "pgbouncer",
+        },
+        clear=False,
+    )
+    def test_capacity_report_uses_measured_server_resources_when_overrides_are_blank(self):
+        from apps.experiments.management.commands import report_300_capacity
+
+        with (
+            patch.object(report_300_capacity, "server_worker_count", return_value=8),
+            patch.object(report_300_capacity, "effective_cpu_count", return_value=16),
+            patch.object(
+                report_300_capacity,
+                "effective_memory_bytes",
+                return_value=16 * 1024**3,
+            ),
+        ):
+            report = report_300_capacity.capacity_report()
+
+        self.assertEqual(report["aggregate_vcpu"], 16)
+        self.assertEqual(report["aggregate_memory_bytes"], 16 * 1024**3)

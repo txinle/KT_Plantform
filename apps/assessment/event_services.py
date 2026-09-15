@@ -4,7 +4,6 @@ from datetime import timedelta
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import IntegrityError, transaction
-from django.db.models import Max
 from django.utils import timezone
 
 from .event_invariants import validate_event_invariants, validate_response_state_chain
@@ -189,6 +188,8 @@ def append_assessment_event(
     version=None,
     domain=None,
     actor=None,
+    server_ingest_sequence_no=None,
+    session_lock_held=False,
 ) -> AssessmentEvent:
     # v2 envelope names are accepted alongside the historical names.
     if version is not None:
@@ -345,7 +346,11 @@ def append_assessment_event(
     }
 
     with transaction.atomic():
-        ExperimentSession.objects.select_for_update().get(pk=session.pk)
+        locked_session = None
+        if not session_lock_held:
+            locked_session = ExperimentSession.objects.select_for_update().get(
+                pk=session.pk
+            )
         validate_event_invariants(
             event_type=event_type,
             event_domain=event_domain,
@@ -367,12 +372,12 @@ def append_assessment_event(
         if replay is not None:
             return replay
 
-        next_ingest_sequence = (
-            AssessmentEvent.objects.filter(session_id=session.pk).aggregate(
-                maximum=Max("server_ingest_sequence_no")
-            )["maximum"]
-            or 0
-        ) + 1
+        if server_ingest_sequence_no is None:
+            next_ingest_sequence = locked_session.next_ingest_sequence_no
+            locked_session.next_ingest_sequence_no += 1
+            locked_session.save(update_fields=["next_ingest_sequence_no"])
+        else:
+            next_ingest_sequence = server_ingest_sequence_no
         event = AssessmentEvent(
             **values,
             server_ingest_sequence_no=next_ingest_sequence,

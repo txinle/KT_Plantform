@@ -46,8 +46,13 @@ from .services import (
     _quota_map,
     validate_for_publish,
 )
-from .cross_experiment_items import StudentItemContext, student_item_context
+from .cross_experiment_items import (
+    StudentItemContext,
+    student_item_context,
+    student_item_contexts,
+)
 from .sampling import SamplingService, SamplingValidationError, _grouped_quota_flow
+from .presentation_instances import get_or_create_default_item_instance
 
 
 PLAN_TTL = timedelta(hours=72)
@@ -92,8 +97,6 @@ def get_or_create_publish_plan(experiment, actor):
     course_id = Experiment.objects.values_list("course_id", flat=True).get(
         pk=experiment.pk
     )
-    if course_id is not None:
-        Course.objects.select_for_update().get(pk=course_id)
     experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
     if experiment.status == Experiment.Status.ARCHIVED:
         raise PublicationConflict("归档实验不能继续发布班级。", code="EXPERIMENT_ARCHIVED")
@@ -768,6 +771,8 @@ def _select_questions(
     ordering_seed,
     *,
     item_context=None,
+    sampling_rules=None,
+    sampling_type_quotas=None,
 ):
     item_context = item_context or StudentItemContext(frozenset(), frozenset(), ())
     items = sorted(
@@ -894,7 +899,11 @@ def _select_questions(
         else:
             rules_by_id = {
                 rule.concept_id: rule
-                for rule in experiment.sampling_kcs.select_related("concept")
+                for rule in (
+                    sampling_rules
+                    if sampling_rules is not None
+                    else experiment.sampling_kcs.select_related("concept")
+                )
             }
             items = [
                 {
@@ -928,6 +937,9 @@ def _select_questions(
                     experiment,
                     completed_question_ids=item_context.completed_question_ids,
                     active_frozen_question_ids=item_context.active_frozen_question_ids,
+                    prepared_candidates=candidates,
+                    prepared_rules=sampling_rules,
+                    prepared_type_quotas=sampling_type_quotas,
                 ).select_with_attribution(
                     sampling_seed
                 )
@@ -1108,13 +1120,11 @@ def _preview_definition_fingerprint(experiment, candidates):
 
 
 @transaction.atomic
-def generate_preview(plan, actor, *, expected_revision):
+def generate_preview(plan, actor, *, expected_revision, progress=None):
     plan_identity = PublishPlan.objects.values(
         "experiment_id", "experiment__course_id"
     ).get(pk=plan.pk)
     course_id = plan_identity["experiment__course_id"]
-    if course_id is not None:
-        Course.objects.select_for_update().get(pk=course_id)
     experiment = Experiment.objects.select_for_update().get(
         pk=plan_identity["experiment_id"]
     )
@@ -1143,18 +1153,8 @@ def generate_preview(plan, actor, *, expected_revision):
         )
     candidates = _preview_candidates(experiment)
     definition_fingerprint = _preview_definition_fingerprint(experiment, candidates)
-    class_inputs = []
-    preview_payload = []
-    run = PublishPreviewRun.objects.create(
-        publish_plan=plan,
-        plan_revision=plan.plan_revision,
-        definition_fingerprint=definition_fingerprint,
-        input_hash="",
-        output_hash="",
-        created_by=actor,
-    )
+    students_by_class = {}
     seen_students = {}
-    participant_issues = []
     for plan_class in plan_classes:
         if plan_class.class_group.course_id != experiment.course_id:
             raise ValidationError("发布班级必须属于实验所属课程。")
@@ -1167,7 +1167,7 @@ def generate_preview(plan, actor, *, expected_revision):
         students = [enrollment.student for enrollment in enrollments]
         if not students:
             raise ValidationError(f"班级“{plan_class.class_group}”没有可发布参与者。")
-        _assert_participants_not_formally_assigned(experiment, students)
+        students_by_class[plan_class.pk] = students
         for student in students:
             prior_class = seen_students.get(student.pk)
             if prior_class is not None:
@@ -1177,6 +1177,56 @@ def generate_preview(plan, actor, *, expected_revision):
                     code="PARTICIPANT_ALREADY_ASSIGNED",
                 )
             seen_students[student.pk] = plan_class.class_group
+    all_students = [
+        student
+        for students in students_by_class.values()
+        for student in students
+    ]
+    if progress:
+        progress("reading_history", 0, len(all_students))
+    _assert_participants_not_formally_assigned(experiment, all_students)
+    CourseSubject.objects.bulk_create(
+        [
+            CourseSubject(course_id=experiment.course_id, student=student)
+            for student in all_students
+        ],
+        ignore_conflicts=True,
+    )
+    subjects = {
+        subject.student_id: subject
+        for subject in CourseSubject.objects.filter(
+            course_id=experiment.course_id,
+            student_id__in=seen_students,
+        )
+    }
+    contexts = student_item_contexts(experiment, all_students)
+    sampling_rules = list(
+        experiment.sampling_kcs.select_related("concept").order_by("concept_id")
+    )
+    sampling_type_quotas = {
+        row.question_type: row.amount
+        for row in experiment.question_quotas.filter(amount__gt=0)
+    }
+    candidate_fingerprints = {
+        _candidate_id(candidate): _candidate_release_fingerprint(candidate)
+        for candidate in candidates
+    }
+    if progress:
+        progress("selecting_questions", 0, len(all_students))
+    class_inputs = []
+    preview_payload = []
+    run = PublishPreviewRun.objects.create(
+        publish_plan=plan,
+        plan_revision=plan.plan_revision,
+        definition_fingerprint=definition_fingerprint,
+        input_hash="",
+        output_hash="",
+        created_by=actor,
+    )
+    participant_issues = []
+    processed = 0
+    for plan_class in plan_classes:
+        students = students_by_class[plan_class.pk]
         identity = get_or_create_randomization_identity(experiment, plan_class.class_group, actor)
         root_seed = _decrypt_root_seed(identity)
         opens_at, closes_at = effective_plan_schedule(plan_class)
@@ -1199,15 +1249,14 @@ def generate_preview(plan, actor, *, expected_revision):
             output_hash="",
         )
         result_payload = []
+        participant_rows = []
+        participant_selections = []
         for student in students:
-            subject, _ = CourseSubject.objects.get_or_create(
-                course_id=experiment.course_id,
-                student=student,
-            )
+            subject = subjects[student.pk]
             subject_key = randomization_subject_key(subject)
             sampling_seed = _derive_seed(root_seed, "sampling:v2", subject_key)
             ordering_seed = _derive_seed(root_seed, "ordering:v2", subject_key)
-            item_context = student_item_context(experiment, student)
+            item_context = contexts[student.pk]
             if (
                 experiment.cross_experiment_item_policy
                 != Experiment.CrossExperimentItemPolicy.UNRESTRICTED
@@ -1234,6 +1283,8 @@ def generate_preview(plan, actor, *, expected_revision):
                     sampling_seed,
                     ordering_seed,
                     item_context=item_context,
+                    sampling_rules=sampling_rules,
+                    sampling_type_quotas=sampling_type_quotas,
                 )
             except SamplingValidationError as exc:
                 participant_issues.extend([
@@ -1246,37 +1297,73 @@ def generate_preview(plan, actor, *, expected_revision):
                     for issue in exc.issues
                 ])
                 continue
-            participant = PublishPreviewParticipant.objects.create(
-                class_result=class_result,
-                student=student,
-                course_subject=subject,
-                randomization_subject_key=subject_key,
-                sampling_seed=sampling_seed,
-                ordering_seed=ordering_seed,
-                sampling_algorithm_version="task_root_hmac_v2",
-                item_count=len(selected),
+            participant_rows.append(
+                PublishPreviewParticipant(
+                    class_result=class_result,
+                    student=student,
+                    course_subject=subject,
+                    randomization_subject_key=subject_key,
+                    sampling_seed=sampling_seed,
+                    ordering_seed=ordering_seed,
+                    sampling_algorithm_version="task_root_hmac_v2",
+                    item_count=len(selected),
+                )
             )
+            participant_selections.append((student, selected))
+            processed += 1
+            if progress:
+                progress("selecting_questions", processed, len(all_students))
+        if progress:
+            progress("writing_preview", processed, len(all_students))
+        PublishPreviewParticipant.objects.bulk_create(
+            participant_rows,
+            batch_size=500,
+        )
+        item_rows = []
+        for participant, (student, selected) in zip(
+            participant_rows,
+            participant_selections,
+            strict=True,
+        ):
             items_payload = []
             for index, selection in enumerate(selected, start=1):
                 candidate = selection["candidate"]
                 source_question = _candidate_source_question(candidate)
-                fingerprint = _candidate_release_fingerprint(candidate)
-                PublishPreviewItem.objects.create(
-                    participant=participant,
-                    source_question=source_question,
-                    question_release_fingerprint=fingerprint,
-                    assigned_sequence_index=index,
-                    sampling_source=selection["sampling_source"],
+                fingerprint = candidate_fingerprints[_candidate_id(candidate)]
+                item_rows.append(
+                    PublishPreviewItem(
+                        participant=participant,
+                        source_question=source_question,
+                        question_release_fingerprint=fingerprint,
+                        assigned_sequence_index=index,
+                        sampling_source=selection["sampling_source"],
+                    )
                 )
                 items_payload.append(
                     (source_question.pk, fingerprint, selection["sampling_source"])
                 )
             result_payload.append((student.pk, items_payload))
+        PublishPreviewItem.objects.bulk_create(item_rows, batch_size=1000)
         class_result.output_hash = canonical_json_hash(result_payload)
         class_result.save(update_fields=["output_hash"])
         preview_payload.append((plan_class.class_group_id, result_payload))
     if participant_issues:
         raise SamplingValidationError(participant_issues)
+    if _preview_definition_fingerprint(experiment, _preview_candidates(experiment)) != definition_fingerprint:
+        raise PublicationConflict(
+            "实验定义已变化，请重新运行发布前检查。",
+            code="PREVIEW_INVALIDATED",
+        )
+    for plan_class in plan_classes:
+        current_ids = [
+            enrollment.student_id for enrollment in _plan_participants(plan_class)
+        ]
+        expected_ids = [student.pk for student in students_by_class[plan_class.pk]]
+        if current_ids != expected_ids:
+            raise PublicationConflict(
+                "班级名单已变化，请重新运行发布前检查。",
+                code="PREVIEW_INVALIDATED",
+            )
     run.input_hash = canonical_json_hash(class_inputs)
     run.output_hash = canonical_json_hash(preview_payload)
     run.save(update_fields=["input_hash", "output_hash"])
@@ -1584,6 +1671,7 @@ def _create_first_release(experiment, actor, candidates, definition_fingerprint)
     )
     for question in candidates:
         snapshot = _create_question_snapshot(version, question)
+        get_or_create_default_item_instance(snapshot)
         ReleaseSnapshotQuestionMapping.objects.create(
             release_snapshot=version,
             source_question=question,
@@ -1606,7 +1694,8 @@ def _assert_preview_release_mapping(preview_run, release_snapshot):
     items = PublishPreviewItem.objects.select_for_update().filter(
         participant__class_result__preview_run=preview_run
     )
-    for item in items:
+    item_rows = list(items)
+    for item in item_rows:
         mapping = mappings.get(item.source_question_id)
         if mapping is None or mapping.question_release_fingerprint != item.question_release_fingerprint:
             raise PublicationConflict(
@@ -1614,7 +1703,11 @@ def _assert_preview_release_mapping(preview_run, release_snapshot):
                 code="PREVIEW_RELEASE_MISMATCH",
             )
         item.release_mapping = mapping
-        item.save(update_fields=["release_mapping"])
+    PublishPreviewItem.objects.bulk_update(
+        item_rows,
+        ["release_mapping"],
+        batch_size=1000,
+    )
     return mappings
 
 
@@ -1638,7 +1731,14 @@ def _assert_preview_is_current(plan, preview_run, experiment):
     return candidates
 
 
-def _create_task_from_preview(class_result, release_snapshot, actor, now):
+def _create_task_from_preview(
+    class_result,
+    release_snapshot,
+    actor,
+    now,
+    *,
+    participants=None,
+):
     plan_class = class_result.publish_plan_class
     class_group = plan_class.class_group
     snapshot = ExperimentClassSnapshot.objects.create(
@@ -1667,12 +1767,27 @@ def _create_task_from_preview(class_result, release_snapshot, actor, now):
         closes_at=effective_plan_schedule(plan_class)[1],
         created_by=actor,
     )
-    participants = (
-        class_result.participants.select_for_update(of=("self",))
-        .select_related("student", "course_subject")
-        .order_by("student_id")
-    )
+    if participants is None:
+        participants = list(
+            class_result.participants.select_for_update(of=("self",))
+            .select_related("student", "course_subject")
+            .prefetch_related("items__release_mapping__question_snapshot")
+            .order_by("student_id")
+        )
     release_configuration = release_snapshot.configuration
+    ExperimentStudent.objects.bulk_create(
+        [
+            ExperimentStudent(
+                experiment=release_snapshot.experiment,
+                student=participant.student,
+                class_snapshot_name=snapshot.display_name,
+            )
+            for participant in participants
+        ],
+        ignore_conflicts=True,
+        batch_size=500,
+    )
+    snapshot_rows = []
     for participant in participants:
         assignment_snapshot = [
             {
@@ -1695,39 +1810,39 @@ def _create_task_from_preview(class_result, release_snapshot, actor, now):
                     }
                 ),
             }
-            for item in participant.items.select_related(
-                "release_mapping__question_snapshot"
-            ).order_by("assigned_sequence_index")
+            for item in sorted(
+                participant.items.all(),
+                key=lambda value: value.assigned_sequence_index,
+            )
         ]
-        ExperimentStudent.objects.get_or_create(
-            experiment=release_snapshot.experiment,
-            student=participant.student,
-            defaults={"class_snapshot_name": snapshot.display_name},
+        snapshot_rows.append(
+            ExperimentVersionParticipantSnapshot(
+                version=release_snapshot,
+                student=participant.student,
+                class_snapshot=snapshot,
+                class_task=task,
+                course_subject=participant.course_subject,
+                randomization_subject_key=participant.randomization_subject_key,
+                sampling_seed=participant.sampling_seed,
+                ordering_seed=participant.ordering_seed,
+                sampling_algorithm_version=participant.sampling_algorithm_version,
+                assignment_snapshot=assignment_snapshot,
+            )
         )
-        ExperimentVersionParticipantSnapshot.objects.create(
-            version=release_snapshot,
-            student=participant.student,
-            class_snapshot=snapshot,
-            class_task=task,
-            course_subject=participant.course_subject,
-            randomization_subject_key=participant.randomization_subject_key,
-            sampling_seed=participant.sampling_seed,
-            ordering_seed=participant.ordering_seed,
-            sampling_algorithm_version=participant.sampling_algorithm_version,
-            assignment_snapshot=assignment_snapshot,
-        )
+    ExperimentVersionParticipantSnapshot.objects.bulk_create(
+        snapshot_rows,
+        batch_size=500,
+    )
     return task
 
 
 @transaction.atomic
-def commit_publish_plan(plan, actor, *, expected_revision):
+def commit_publish_plan(plan, actor, *, expected_revision, progress=None):
     """Atomically freeze once and create every selected class task or none."""
     plan_identity = PublishPlan.objects.values(
         "experiment_id", "experiment__course_id"
     ).get(pk=plan.pk)
     course_id = plan_identity["experiment__course_id"]
-    if course_id is not None:
-        Course.objects.select_for_update().get(pk=course_id)
     experiment = Experiment.objects.select_for_update().get(
         pk=plan_identity["experiment_id"]
     )
@@ -1762,22 +1877,53 @@ def commit_publish_plan(plan, actor, *, expected_revision):
         PublishPreviewClassResult.objects.select_for_update(of=("self",))
         .filter(preview_run=preview_run)
         .select_related("publish_plan_class__class_group", "randomization_identity")
+        .prefetch_related(
+            "participants__student",
+            "participants__course_subject",
+            "participants__items__release_mapping__question_snapshot",
+        )
         .order_by("publish_plan_class__class_group_id")
     )
     if not class_results:
         raise PublicationConflict("预览中没有可发布班级。", code="PREVIEW_INVALIDATED")
+    participants_by_result = {
+        result.pk: sorted(
+            result.participants.all(),
+            key=lambda participant: participant.student_id,
+        )
+        for result in class_results
+    }
+    all_participants = [
+        participant
+        for participants in participants_by_result.values()
+        for participant in participants
+    ]
+    if progress:
+        progress("validating_preview", 0, len(all_participants))
+    _assert_participants_not_formally_assigned(
+        experiment,
+        [participant.student_id for participant in all_participants],
+    )
+    contexts = student_item_contexts(
+        experiment,
+        [participant.student for participant in all_participants],
+    )
+    sampling_rules = list(
+        experiment.sampling_kcs.select_related("concept").order_by("concept_id")
+    )
+    sampling_type_quotas = {
+        row.question_type: row.amount
+        for row in experiment.question_quotas.filter(amount__gt=0)
+    }
+    processed = 0
     for result in class_results:
         if ClassExperimentTask.objects.select_for_update().filter(
             experiment=experiment,
             class_group_id=result.publish_plan_class.class_group_id,
         ).exists():
             raise PublicationConflict("该班级已存在本实验的正式任务。", code="TASK_ALREADY_EXISTS")
-        _assert_participants_not_formally_assigned(
-            experiment,
-            list(result.participants.values_list("student", flat=True)),
-        )
-        for participant in result.participants.select_related("student").prefetch_related("items"):
-            item_context = student_item_context(experiment, participant.student)
+        for participant in participants_by_result[result.pk]:
+            item_context = contexts[participant.student_id]
             if (
                 experiment.cross_experiment_item_policy
                 != Experiment.CrossExperimentItemPolicy.UNRESTRICTED
@@ -1794,6 +1940,8 @@ def commit_publish_plan(plan, actor, *, expected_revision):
                     participant.sampling_seed,
                     participant.ordering_seed,
                     item_context=item_context,
+                    sampling_rules=sampling_rules,
+                    sampling_type_quotas=sampling_type_quotas,
                 )
             except (SamplingValidationError, PublicationConflict) as exc:
                 raise PublicationConflict(
@@ -1803,18 +1951,31 @@ def commit_publish_plan(plan, actor, *, expected_revision):
             current_ids = [
                 _candidate_source_question(row["candidate"]).pk for row in current
             ]
-            preview_ids = list(
-                participant.items.order_by("assigned_sequence_index").values_list(
-                    "source_question_id", flat=True
+            preview_ids = [
+                item.source_question_id
+                for item in sorted(
+                    participant.items.all(),
+                    key=lambda value: value.assigned_sequence_index,
                 )
-            )
+            ]
             if current_ids != preview_ids:
                 raise PublicationConflict(
                     "学生历史题目资格已变化，请重新运行发布前检查。",
                     code="PREVIEW_ELIGIBILITY_CHANGED",
                 )
+            processed += 1
+            if progress:
+                progress("validating_preview", processed, len(all_participants))
+    if progress:
+        progress("creating_release", processed, len(all_participants))
     tasks = [
-        _create_task_from_preview(result, release_snapshot, actor, now)
+        _create_task_from_preview(
+            result,
+            release_snapshot,
+            actor,
+            now,
+            participants=participants_by_result[result.pk],
+        )
         for result in class_results
     ]
     plan.status = PublishPlan.Status.COMMITTED
@@ -1865,7 +2026,7 @@ def cancel_task(task, actor, *, reason):
 
 @transaction.atomic
 def manual_close_task(task, actor, *, reason):
-    """The Task lock makes manual close win over later waiting submissions."""
+    """Record the authoritative close boundary in one short transaction."""
     task = ClassExperimentTask.objects.select_for_update().get(pk=task.pk)
     now = database_now()
     if task.cancelled_at or task.manual_closed_at or task.invalidated_at:
@@ -1874,46 +2035,4 @@ def manual_close_task(task, actor, *, reason):
     task.terminal_reason = str(reason or "manual_closed").strip() or "manual_closed"
     with _class_experiment_task_terminal_update_scope():
         task.save(update_fields=["manual_closed_at", "terminal_reason"])
-    from apps.assessment.models import Attempt, ExperimentSession
-    from apps.assessment.services import _append_session_event, _close_open_attempts
-    from apps.analytics.research_materialization_jobs import (
-        schedule_session_materializations,
-    )
-
-    sessions = list(
-        ExperimentSession.objects.select_for_update().filter(
-            class_task=task,
-            status=ExperimentSession.Status.IN_PROGRESS,
-        )
-    )
-    for session in sessions:
-        _close_open_attempts(
-            session,
-            status=Attempt.Status.UNANSWERED,
-            close_reason="manual_closed",
-            event_close_reason="unanswered",
-            authoritative_terminal_at=now,
-        )
-        session.status = ExperimentSession.Status.EXPIRED
-        session.completed_at = now
-        session.terminal_at = now
-        session.terminal_reason = "manual_closed"
-        session.authoritative_terminal_at = now
-        session.terminal_recorded_at = timezone.now()
-        session.save(
-            update_fields=[
-                "status",
-                "completed_at",
-                "terminal_at",
-                "terminal_reason",
-                "authoritative_terminal_at",
-                "terminal_recorded_at",
-            ]
-        )
-        _append_session_event(
-            session,
-            event_type="session_expired",
-            payload={"expiration_reason": "manual_closed", "terminal_at": now.isoformat()},
-        )
-    schedule_session_materializations(session.pk for session in sessions)
     return task

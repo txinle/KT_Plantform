@@ -316,127 +316,40 @@ class PostgreSQLConcurrentPublishRegressionTests(TransactionTestCase):
         self.assertFalse(preview_thread.is_alive(), "preview transaction deadlocked")
         self.assertFalse(resume_thread.is_alive(), "resume transaction deadlocked")
         results = [outcomes.get_nowait(), outcomes.get_nowait()]
-        self.assertEqual({status for status, _ in results}, {"preview", "resume"})
+        self.assertEqual(
+            {status for status, _ in results}, {"preview", "resume"}, results
+        )
         self.assertEqual(
             {value for status, value in results if status == "resume"},
             {plan.pk},
         )
 
-    def test_student_start_and_later_class_publish_share_course_first_lock_order(self):
-        first_plan = get_or_create_publish_plan(self.experiment, self.teacher)
-        first_plan = save_plan_selection(
-            first_plan,
+    def test_student_start_does_not_lock_the_shared_course_row(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        plan = save_plan_selection(
+            plan,
             self.teacher,
-            expected_revision=first_plan.plan_revision,
+            expected_revision=plan.plan_revision,
             class_ids=[self.class_group.pk],
             exclusions_by_class={},
         )
-        generate_preview(
-            first_plan, self.teacher, expected_revision=first_plan.plan_revision
-        )
-        first_plan.refresh_from_db()
-        first_task = commit_publish_plan(
-            first_plan, self.teacher, expected_revision=first_plan.plan_revision
+        generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
+        plan.refresh_from_db()
+        task = commit_publish_plan(
+            plan, self.teacher, expected_revision=plan.plan_revision
         )[0]
-
-        later_class = ClassGroup.objects.create(
-            course=self.course, name="稍后发布班", academic_year="2026"
-        )
-        later_student = User.objects.create_user(
-            username="PG-LATER-STUDENT",
-            student_number="PG-LATER-STUDENT",
-            role=User.Role.STUDENT,
-        )
-        CourseEnrollment.objects.create(
-            course=self.course,
-            class_group=later_class,
-            student=later_student,
-        )
-        later_plan = get_or_create_publish_plan(self.experiment, self.teacher)
-        later_plan = save_plan_selection(
-            later_plan,
-            self.teacher,
-            expected_revision=later_plan.plan_revision,
-            class_ids=[later_class.pk],
-            exclusions_by_class={},
-        )
-        generate_preview(
-            later_plan, self.teacher, expected_revision=later_plan.plan_revision
-        )
-        later_plan.refresh_from_db()
 
         from apps.assessment import services as assessment_services
 
-        session_has_course_lock = Event()
-        publisher_reached_course_lock = Event()
-        outcomes = Queue()
-        original_session_course_lock = assessment_services._lock_session_course
-        original_course_select_for_update = Course.objects.select_for_update
-
-        def pause_after_session_course_lock(course_id):
-            course = original_session_course_lock(course_id)
-            session_has_course_lock.set()
-            if not publisher_reached_course_lock.wait(timeout=10):
-                raise AssertionError("publisher did not reach the course lock")
-            return course
-
-        def observe_publisher_course_lock(*args, **kwargs):
-            if current_thread().name == "later-class-publisher":
-                publisher_reached_course_lock.set()
-            return original_course_select_for_update(*args, **kwargs)
-
-        def start_session():
-            close_old_connections()
-            try:
-                session = assessment_services.get_or_create_session(
-                    Experiment.objects.get(pk=self.experiment.pk),
-                    User.objects.get(pk=self.student.pk),
-                    class_task=ClassExperimentTask.objects.get(pk=first_task.pk),
-                )
-                outcomes.put(("session", session.pk))
-            except Exception as exc:  # pragma: no cover - asserted below
-                outcomes.put(("failed", exc))
-            finally:
-                close_old_connections()
-
-        def publish_later_class():
-            close_old_connections()
-            try:
-                if not session_has_course_lock.wait(timeout=10):
-                    raise AssertionError("student session did not lock the course")
-                tasks = commit_publish_plan(
-                    PublishPlan.objects.get(pk=later_plan.pk),
-                    User.objects.get(pk=self.teacher.pk),
-                    expected_revision=later_plan.plan_revision,
-                )
-                outcomes.put(("publish", tasks[0].pk))
-            except Exception as exc:  # pragma: no cover - asserted below
-                outcomes.put(("failed", exc))
-            finally:
-                close_old_connections()
-
-        with (
-            patch.object(
-                assessment_services,
-                "_lock_session_course",
-                side_effect=pause_after_session_course_lock,
-            ),
-            patch.object(
-                Course.objects,
-                "select_for_update",
-                side_effect=observe_publisher_course_lock,
-            ),
+        with patch.object(
+            Course.objects,
+            "select_for_update",
+            side_effect=AssertionError("student start must not lock the course row"),
         ):
-            session_thread = Thread(target=start_session, name="student-session")
-            publish_thread = Thread(
-                target=publish_later_class, name="later-class-publisher"
+            session = assessment_services.get_or_create_session(
+                Experiment.objects.get(pk=self.experiment.pk),
+                User.objects.get(pk=self.student.pk),
+                class_task=ClassExperimentTask.objects.get(pk=task.pk),
             )
-            session_thread.start()
-            publish_thread.start()
-            session_thread.join(timeout=20)
-            publish_thread.join(timeout=20)
 
-        self.assertFalse(session_thread.is_alive(), "student session deadlocked")
-        self.assertFalse(publish_thread.is_alive(), "later publish deadlocked")
-        results = [outcomes.get_nowait(), outcomes.get_nowait()]
-        self.assertEqual({status for status, _ in results}, {"session", "publish"})
+        self.assertEqual(session.class_task_id, task.pk)

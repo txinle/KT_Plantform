@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Max
 from django.utils import timezone
 from apps.experiments.models import (
@@ -13,6 +13,7 @@ from apps.experiments.models import (
     ExperimentStudent,
     ExperimentVersion,
     ExperimentVersionParticipantSnapshot,
+    ItemInstance,
     QuestionSnapshot,
 )
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
@@ -45,12 +46,6 @@ from .models import (
     SubmissionEvent,
 )
 from .deadline_services import DeadlineDecisionService
-
-
-def _lock_session_course(course_id):
-    from apps.accounts.models import Course
-
-    return Course.objects.select_for_update().get(pk=course_id)
 
 
 class SubmissionValidationError(ValidationError):
@@ -166,39 +161,39 @@ def get_or_create_session(
     )
     course = None
     if course_id:
-        from apps.accounts.models import Course, CourseEnrollment
+        from apps.accounts.enrollment_access import has_course_access
+        from apps.accounts.models import Course
 
-        # Publishing and student entry share one global order: Course -> Experiment.
-        course = _lock_session_course(course_id)
-    experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
+        course = Course.objects.get(pk=course_id)
+    experiment = Experiment.objects.get(pk=experiment.pk)
     if experiment.course_id != course_id:
         raise ValidationError("实验所属课程已变化，请重试")
     if experiment.course_id:
         if course.status != Course.Status.ACTIVE:
             raise ValidationError("课程已归档，不能开始或继续实验")
 
-        if not CourseEnrollment.objects.select_for_update().filter(
+        if not has_course_access(
             course_id=experiment.course_id,
-            student=student,
-            is_active=True,
-        ).exists():
+            student_id=student.pk,
+            at=request_received_at,
+        ):
             raise ValidationError("你没有加入该实验所属课程")
     if experiment.status not in {Experiment.Status.PUBLISHED, Experiment.Status.FROZEN}:
         raise ValidationError("实验尚未开放")
     if class_task is not None:
         class_task = (
-            ClassExperimentTask.objects.select_for_update()
+            ClassExperimentTask.objects
             .select_related("release_snapshot")
             .get(pk=class_task.pk, experiment=experiment)
         )
         version = class_task.release_snapshot
     else:
         version = (
-            ExperimentVersion.objects.select_for_update().get(
+            ExperimentVersion.objects.get(
                 pk=experiment.frozen_release_snapshot_id
             )
             if experiment.frozen_release_snapshot_id
-            else ExperimentVersion.objects.select_for_update()
+            else ExperimentVersion.objects
             .filter(experiment=experiment)
             .order_by("-version_number")
             .first()
@@ -227,7 +222,7 @@ def get_or_create_session(
     schedule = None
     if participant_snapshot is not None and participant_snapshot.class_task_id is not None:
         if class_task is None:
-            class_task = ClassExperimentTask.objects.select_for_update().get(
+            class_task = ClassExperimentTask.objects.get(
                 pk=participant_snapshot.class_task_id
             )
         decision = DeadlineDecisionService.can_start_session(
@@ -292,12 +287,20 @@ def get_or_create_session(
             "timer_semantics_version": version.timer_semantics_version,
         }
     if class_task is not None:
-        session = ExperimentSession.objects.create(
-            version=version,
-            student=student,
-            **session_defaults,
-        )
-        created = True
+        try:
+            with transaction.atomic():
+                session = ExperimentSession.objects.create(
+                    version=version,
+                    student=student,
+                    **session_defaults,
+                )
+            created = True
+        except IntegrityError:
+            session = ExperimentSession.objects.get(
+                class_task=class_task,
+                participant_snapshot=participant_snapshot,
+            )
+            created = False
     else:
         session, created = ExperimentSession.objects.get_or_create(
             version=version,
@@ -321,14 +324,35 @@ def get_or_create_session(
         else:
             selected = select_snapshots(version, student.id, sampling_seed)
             ordered = ordered_snapshots(version, student.id, selected, ordering_seed)
-        for index, snapshot in enumerate(ordered, start=1):
-            item_instance = get_or_create_default_item_instance(snapshot)
-            assignment = StudentQuestionAssignment.objects.create(
-                session=session, snapshot=snapshot, assigned_sequence_index=index,
-                random_seed=ordering_seed,
-                item_instance=item_instance,
-            )
-            Attempt.objects.create(session=session, assignment=assignment)
+        item_instances = {
+            item.question_snapshot_id: item
+            for item in ItemInstance.objects.filter(
+                question_snapshot_id__in=[snapshot.pk for snapshot in ordered],
+                presentation_variant="default",
+                parameter_values={},
+                random_seed="",
+            ).order_by("question_snapshot_id", "created_at")
+        }
+        for snapshot in ordered:
+            if snapshot.pk not in item_instances:
+                item_instances[snapshot.pk] = get_or_create_default_item_instance(snapshot)
+        assignments = StudentQuestionAssignment.objects.bulk_create(
+            [
+                StudentQuestionAssignment(
+                    session=session,
+                    snapshot=snapshot,
+                    assigned_sequence_index=index,
+                    random_seed=ordering_seed,
+                    item_instance=item_instances[snapshot.pk],
+                )
+                for index, snapshot in enumerate(ordered, start=1)
+            ],
+            batch_size=500,
+        )
+        Attempt.objects.bulk_create(
+            [Attempt(session=session, assignment=assignment) for assignment in assignments],
+            batch_size=500,
+        )
     materialize_confidence_assignments(session)
     if created:
         _append_session_event(
@@ -345,7 +369,7 @@ def get_or_create_session(
 @transaction.atomic
 def resume_task_session(task, student, *, request_received_at=None):
     request_received_at = request_received_at or timezone.now()
-    task = ClassExperimentTask.objects.select_for_update().get(pk=task.pk)
+    task = ClassExperimentTask.objects.get(pk=task.pk)
     participant = ExperimentVersionParticipantSnapshot.objects.select_for_update().get(
         class_task=task,
         version=task.release_snapshot,
@@ -393,21 +417,22 @@ def _close_previous(session, now):
             _append_attempt_closed(attempt, close_reason="timed_out")
 
 
-def _validate_course_access(session):
+def _validate_course_access(session, *, request_received_at=None):
     experiment = session.version.experiment
     if experiment.course_id is None:
         return
-    from apps.accounts.models import Course, CourseEnrollment
+    from apps.accounts.enrollment_access import has_course_access
+    from apps.accounts.models import Course
 
-    course = Course.objects.select_for_update().get(pk=experiment.course_id)
+    course = Course.objects.get(pk=experiment.course_id)
     if course.status != Course.Status.ACTIVE:
         raise ValidationError("课程已归档，历史会话只读")
 
-    if not CourseEnrollment.objects.select_for_update().filter(
+    if not has_course_access(
         course_id=experiment.course_id,
         student_id=session.student_id,
-        is_active=True,
-    ).exists():
+        at=request_received_at or timezone.now(),
+    ):
         raise ValidationError("你已不在该实验所属课程中")
 
 
@@ -466,15 +491,10 @@ def _terminate_for_deadline(session, *, now, reason, attempt=None):
 
 
 def _validate_session_time(session, attempt=None, *, request_received_at=None):
-    _validate_course_access(session)
     now = request_received_at or timezone.now()
+    _validate_course_access(session, request_received_at=now)
     if session.class_task_id:
-        task = ClassExperimentTask.objects.select_for_update().get(pk=session.class_task_id)
-        # A committed task-level termination is authoritative even when the
-        # manual-close transaction has already projected the Session/Attempt
-        # to an expired state.
-        if task.cancelled_at or task.manual_closed_at or task.invalidated_at:
-            return "班级任务已结束"
+        task = ClassExperimentTask.objects.get(pk=session.class_task_id)
     if session.status != ExperimentSession.Status.IN_PROGRESS:
         raise ValidationError("当前会话不可继续作答")
     if session.class_task_id:
@@ -493,11 +513,6 @@ def _validate_session_time(session, attempt=None, *, request_received_at=None):
                 )
                 return "作答时间已结束"
             if decision.code == "TASK_TERMINATED":
-                _terminate_for_deadline(
-                    session,
-                    now=task.manual_closed_at or task.cancelled_at or task.invalidated_at or now,
-                    reason="task_terminated",
-                )
                 return "班级任务已结束"
             return "当前班级任务尚未开放或已结束"
     if session.deadline_at and now >= session.deadline_at:
@@ -581,9 +596,6 @@ def _record_visit_transaction(
     client_monotonic_ms=None,
     client_time_origin=None,
 ):
-    task_id = ExperimentSession.objects.only("class_task_id").get(pk=session_id).class_task_id
-    if task_id:
-        ClassExperimentTask.objects.select_for_update().get(pk=task_id)
     session = ExperimentSession.objects.select_for_update().select_related(
         "version__experiment"
     ).get(pk=session_id)
@@ -712,11 +724,9 @@ def _save_draft_transaction(
     expected_version=None,
     branch_resolution=None,
 ):
-    session_id, task_id = Attempt.objects.filter(pk=attempt_id).values_list(
-        "session_id", "session__class_task_id"
+    session_id = Attempt.objects.filter(pk=attempt_id).values_list(
+        "session_id", flat=True
     ).get()
-    if task_id:
-        ClassExperimentTask.objects.select_for_update().get(pk=task_id)
     session = ExperimentSession.objects.select_for_update().select_related(
         "version__experiment"
     ).get(pk=session_id)
@@ -819,11 +829,9 @@ def _submit_attempt_transaction(
     target_event_id=None,
     confidence_response=None,
 ):
-    session_id, task_id = Attempt.objects.filter(pk=attempt_id).values_list(
-        "session_id", "session__class_task_id"
+    session_id = Attempt.objects.filter(pk=attempt_id).values_list(
+        "session_id", flat=True
     ).get()
-    if task_id:
-        ClassExperimentTask.objects.select_for_update().get(pk=task_id)
     session = ExperimentSession.objects.select_for_update().select_related(
         "version__experiment"
     ).get(pk=session_id)
@@ -831,7 +839,10 @@ def _submit_attempt_transaction(
         "assignment__snapshot"
     ).get(pk=attempt_id, session=session)
     try:
-        _validate_course_access(session)
+        _validate_course_access(
+            session,
+            request_received_at=request_received_at or timezone.now(),
+        )
     except ValidationError as error:
         raise SubmissionValidationError(
             error.messages,
@@ -1007,9 +1018,18 @@ def _submit_attempt_transaction(
     if confidence is not None:
         from .confidence_services import commit_confidence, skip_confidence
         if confidence_response['status'] == 'skipped':
-            skip_confidence(attempt_id=attempt.pk, student=session.student)
+            skip_confidence(
+                attempt_id=attempt.pk,
+                student=session.student,
+                request_received_at=request_received_at,
+            )
         else:
-            commit_confidence(attempt_id=attempt.pk, student=session.student, probability=confidence_response['probability'])
+            commit_confidence(
+                attempt_id=attempt.pk,
+                student=session.student,
+                probability=confidence_response['probability'],
+                request_received_at=request_received_at,
+            )
     return attempt, None
 
 

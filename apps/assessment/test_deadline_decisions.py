@@ -62,7 +62,7 @@ class DeadlineCalculationTests(SimpleTestCase):
         self.assertEqual(decision.code, "DEADLINE_EXPIRED")
         self.assertEqual(decision.deadline, deadline)
 
-    def test_committed_manual_close_overrides_an_earlier_request_time(self):
+    def test_request_received_before_manual_close_is_allowed(self):
         request_received_at = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
         task = SimpleNamespace(
             cancelled_at=None,
@@ -81,5 +81,4 @@ class DeadlineCalculationTests(SimpleTestCase):
             request_received_at,
         )
 
-        self.assertFalse(decision.allowed)
-        self.assertEqual(decision.code, "TASK_TERMINATED")
+        self.assertTrue(decision.allowed)

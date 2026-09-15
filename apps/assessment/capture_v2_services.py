@@ -77,7 +77,7 @@ def prepare_transition(parsed):
 
 
 @transaction.atomic
-def ingest_capture_batch(*, student, document):
+def ingest_capture_batch(*, student, document, request_received_at=None):
     # Session locks precede attempt/event locks throughout assessment writes.
     if not isinstance(document, dict) or not isinstance(document.get('events'), list):
         raise ProcessRequestError('invalid_request')
@@ -87,7 +87,11 @@ def ingest_capture_batch(*, student, document):
     document = deepcopy(document)
     if isinstance(document.get('events'), list):
         document['events'].sort(key=lambda row: row.get('client_sequence_no', 0) if isinstance(row, dict) and isinstance(row.get('client_sequence_no'), int) else 0)
-    return append_event_batch(student=student, document=document)
+    return append_event_batch(
+        student=student,
+        document=document,
+        request_received_at=request_received_at,
+    )
 
 
 def uses_capture_v2(session):

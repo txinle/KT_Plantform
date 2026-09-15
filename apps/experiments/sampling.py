@@ -133,10 +133,29 @@ def _maximum_matching(rules, buckets, *, rng=None):
 
 
 class SamplingService:
-    def __init__(self, experiment, *, completed_question_ids=None, active_frozen_question_ids=None):
+    def __init__(
+        self,
+        experiment,
+        *,
+        completed_question_ids=None,
+        active_frozen_question_ids=None,
+        prepared_candidates=None,
+        prepared_rules=None,
+        prepared_type_quotas=None,
+    ):
         self.experiment = experiment
         self.completed_question_ids = frozenset(completed_question_ids or ())
         self.active_frozen_question_ids = frozenset(active_frozen_question_ids or ())
+        self.prepared_candidates = prepared_candidates
+        self.prepared_rules = prepared_rules
+        self.prepared_type_quotas = prepared_type_quotas
+
+    def _rules(self):
+        if self.prepared_rules is not None:
+            return list(self.prepared_rules)
+        return list(
+            self.experiment.sampling_kcs.select_related("concept").order_by("concept_id")
+        )
 
     @property
     def policy(self):
@@ -178,6 +197,8 @@ class SamplingService:
         return any(link.concept_id == concept_id for link in links)
 
     def _type_quota_map(self):
+        if self.prepared_type_quotas is not None:
+            return dict(self.prepared_type_quotas)
         return {
             row.question_type: row.amount
             for row in self.experiment.question_quotas.filter(amount__gt=0)
@@ -270,7 +291,7 @@ class SamplingService:
 
     def resolve(self, *, validate_inventory=True):
         mode = self.experiment.sampling_mode
-        rules = list(self.experiment.sampling_kcs.select_related("concept").order_by("concept_id"))
+        rules = self._rules()
         if mode == Experiment.SamplingMode.TOTAL_COUNT:
             if not self.experiment.sampling_total_count:
                 raise SamplingValidationError([
@@ -306,10 +327,14 @@ class SamplingService:
         resolved = {rule.concept_id: [rule.concept_id] for rule in rules}
         if mode == Experiment.SamplingMode.TOTAL_COUNT:
             scope = self.experiment.sampling_match_scope
-            candidates = self.total_count_candidates(
-                question_bank_id=self.experiment.question_bank_id,
-                concept_ids=[rule.concept_id for rule in rules],
-                match_scope=scope,
+            candidates = (
+                list(self.prepared_candidates)
+                if self.prepared_candidates is not None
+                else self.total_count_candidates(
+                    question_bank_id=self.experiment.question_bank_id,
+                    concept_ids=[rule.concept_id for rule in rules],
+                    match_scope=scope,
+                )
             )
             candidates = self._filter_candidates(candidates)
             type_buckets = {
@@ -357,13 +382,17 @@ class SamplingService:
                 self._validate_history_constraints(resolution, rules)
             return resolution
 
-        questions = list(
-            Question.objects.filter(
-                bank_id=self.experiment.question_bank_id,
-                status=Question.Status.ACTIVE,
+        questions = (
+            list(self.prepared_candidates)
+            if self.prepared_candidates is not None
+            else list(
+                Question.objects.filter(
+                    bank_id=self.experiment.question_bank_id,
+                    status=Question.Status.ACTIVE,
+                )
+                .prefetch_related("concept_links")
+                .order_by("sequence", "pk")
             )
-            .prefetch_related("concept_links")
-            .order_by("sequence", "pk")
         )
         questions = self._filter_candidates(questions)
         buckets = {
@@ -417,9 +446,7 @@ class SamplingService:
         resolution = self.resolve()
         rng = random.Random(int(sampling_seed[:16], 16))
         if self.policy == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW:
-            rules = list(
-                self.experiment.sampling_kcs.select_related("concept").order_by("concept_id")
-            )
+            rules = self._rules()
             capacities, bucket_ids = self._history_flow_inputs(resolution, rules)
             maximum, allocation = _grouped_quota_flow(
                 candidates=resolution.candidates,
@@ -494,7 +521,7 @@ class SamplingService:
                 }
                 for question in sorted(selected, key=lambda item: (item.sequence, item.pk))
             ]
-        rules = list(self.experiment.sampling_kcs.select_related("concept").order_by("concept_id"))
+        rules = self._rules()
         matching = _maximum_matching(rules, resolution.buckets, rng=rng)
         questions = {question.pk: question for question in resolution.candidates}
         scope_by_concept = {rule.concept_id: rule.match_scope for rule in rules}

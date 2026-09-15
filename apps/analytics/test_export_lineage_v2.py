@@ -22,6 +22,7 @@ from django.utils import timezone
 from apps.accounts.models import (
     ClassGroup, Course, CourseEnrollment, DataPurgeRequest, User,
 )
+from apps.accounts.enrollment_access import open_enrollment_access
 from apps.analytics.models import ExportJob, ExportSnapshot
 from apps.analytics.services import (
     ExportContractError,
@@ -1031,6 +1032,16 @@ class ExportLineageV2Tests(TransactionTestCase):
             draft_answer="AB",
             capture_contract=capture_contract,
         )
+        capture_class = ClassGroup.objects.create(
+            course=self.course,
+            name="Capture V2",
+        )
+        enrollment = CourseEnrollment.objects.create(
+            course=self.course,
+            class_group=capture_class,
+            student=attempt.session.student,
+        )
+        open_enrollment_access(enrollment)
         self.qs.text = "冻结后的完整题干"
         self.qs.options = [{"key": "A", "text": "甲"}, {"key": "B", "text": "乙"}]
         self.qs.correct_answer = {"answer": "AB"}

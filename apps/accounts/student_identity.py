@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from apps.audit.services import log_action
 from .membership_history import has_course_membership_history, has_other_course_membership_history
+from .enrollment_access import open_enrollment_access
 from .models import ClassGroup, Course, CourseEnrollment, User
 
 
@@ -209,6 +210,7 @@ def enroll_student(course, class_group, student_number, display_name, *, request
     enrollment, _ = CourseEnrollment.objects.update_or_create(
         course=course, student=student, defaults={"class_group": class_group, "is_active": True},
     )
+    open_enrollment_access(enrollment)
     if request is not None:
         log_action(request, "student.manual_enroll", enrollment, {"course_id": course.pk, "class_id": class_group.pk, "student_id": student.pk, "created_account": created})
     return student, created

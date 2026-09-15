@@ -472,5 +472,9 @@ class TeacherAccountManagementApiTests(TestCase):
         )
         self.assertEqual(removed.status_code, 200)
         self.assertFalse(
-            CourseEnrollment.objects.filter(course=self.course, student_id=student_id).exists()
+            CourseEnrollment.objects.filter(
+                course=self.course,
+                student_id=student_id,
+                is_active=True,
+            ).exists()
         )

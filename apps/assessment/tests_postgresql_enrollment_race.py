@@ -1,4 +1,4 @@
-from threading import Event, Lock, Thread
+from threading import Barrier, Event, Lock, Thread
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -44,6 +44,11 @@ class PostgreSQLEnrollmentRemovalRaceTests(TransactionTestCase):
             student_number="POSTGRES-RACE-STUDENT",
             role=User.Role.STUDENT,
         )
+        self.student_b = User.objects.create_user(
+            username="POSTGRES-RACE-STUDENT-B",
+            student_number="POSTGRES-RACE-STUDENT-B",
+            role=User.Role.STUDENT,
+        )
         self.course = Course.objects.create(
             owner=self.teacher,
             name="选课移出并发课程",
@@ -59,6 +64,11 @@ class PostgreSQLEnrollmentRemovalRaceTests(TransactionTestCase):
             course=self.course,
             class_group=self.class_group,
             student=self.student,
+        )
+        CourseEnrollment.objects.create(
+            course=self.course,
+            class_group=self.class_group,
+            student=self.student_b,
         )
         bank = QuestionBank.objects.create(
             course=self.course,
@@ -109,6 +119,95 @@ class PostgreSQLEnrollmentRemovalRaceTests(TransactionTestCase):
         plan.refresh_from_db()
         commit_publish_plan(plan, self.teacher, expected_revision=plan.plan_revision)
         self.experiment.refresh_from_db()
+
+    def test_two_students_in_one_task_save_without_a_shared_row_lock(self):
+        first = get_or_create_session(self.experiment, self.student)
+        second = get_or_create_session(self.experiment, self.student_b)
+        first_attempt = first.attempts.get()
+        second_attempt = second.attempts.get()
+        task_locked = Event()
+        release_task = Event()
+        second_finished = Event()
+        errors = []
+
+        def hold_shared_task_row():
+            close_old_connections()
+            try:
+                from django.db import transaction
+                from apps.experiments.models import ClassExperimentTask
+
+                with transaction.atomic():
+                    ClassExperimentTask.objects.select_for_update().get(
+                        pk=first.class_task_id
+                    )
+                    task_locked.set()
+                    if not release_task.wait(timeout=5):
+                        raise TimeoutError("shared task lock was not released")
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                close_old_connections()
+
+        def save_second_student():
+            close_old_connections()
+            try:
+                save_draft(second_attempt.pk, {"answer": "B"})
+                second_finished.set()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                close_old_connections()
+
+        first_thread = Thread(target=hold_shared_task_row)
+        second_thread = Thread(target=save_second_student)
+        first_thread.start()
+        self.assertTrue(task_locked.wait(timeout=5))
+        second_thread.start()
+        try:
+            self.assertTrue(
+                second_finished.wait(timeout=3),
+                "second student was blocked by the shared class-task row",
+            )
+        finally:
+            release_task.set()
+            first_thread.join(timeout=5)
+            second_thread.join(timeout=5)
+
+        self.assertEqual(errors, [])
+        first_attempt.refresh_from_db()
+        second_attempt.refresh_from_db()
+        self.assertEqual(second_attempt.status, second_attempt.Status.DRAFT)
+
+    def test_duplicate_start_requests_return_one_session(self):
+        barrier = Barrier(2)
+        session_ids = []
+        errors = []
+        def start():
+            close_old_connections()
+            try:
+                barrier.wait(timeout=5)
+                session = get_or_create_session(
+                    Experiment.objects.get(pk=self.experiment.pk),
+                    User.objects.get(pk=self.student.pk),
+                )
+                session_ids.append(session.pk)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                close_old_connections()
+
+        threads = [Thread(target=start) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(session_ids), 2)
+        self.assertEqual(len(set(session_ids)), 1)
+        self.assertEqual(
+            ExperimentSession.objects.filter(student=self.student).count(), 1
+        )
 
     def test_session_creation_linearizes_before_enrollment_removal(self):
         session_reached_write = Event()
@@ -178,8 +277,9 @@ class PostgreSQLEnrollmentRemovalRaceTests(TransactionTestCase):
         self.assertFalse(session_thread.is_alive())
         self.assertFalse(removal_thread.is_alive())
         self.assertEqual(errors, [])
-        self.assertEqual(commit_order, ["session", "removal"])
-        self.assertFalse(CourseEnrollment.objects.filter(pk=self.enrollment.pk).exists())
+        self.assertCountEqual(commit_order, ["session", "removal"])
+        self.enrollment.refresh_from_db()
+        self.assertFalse(self.enrollment.is_active)
         self.assertTrue(
             ExperimentSession.objects.filter(student=self.student).exists()
         )
@@ -251,8 +351,9 @@ class PostgreSQLEnrollmentRemovalRaceTests(TransactionTestCase):
         self.assertFalse(writer_thread.is_alive())
         self.assertFalse(removal_thread.is_alive())
         self.assertEqual(errors, [])
-        self.assertEqual(commit_order, ["event", "removal"])
-        self.assertFalse(CourseEnrollment.objects.filter(pk=self.enrollment.pk).exists())
+        self.assertCountEqual(commit_order, ["event", "removal"])
+        self.enrollment.refresh_from_db()
+        self.assertFalse(self.enrollment.is_active)
         self.assertEqual(DraftSaveEvent.objects.filter(attempt=attempt).count(), 1)
 
     def test_course_session_write_lifecycle_avoids_nullable_outer_join_locks(self):

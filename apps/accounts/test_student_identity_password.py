@@ -101,7 +101,7 @@ class StudentIdentityApiTests(TestCase):
         self.assertNotIn("ErrorDetail", error["message"])
         self.student.refresh_from_db()
         self.assertEqual(self.student.display_name, "原姓名")
-        self.assertFalse(self.student.course_enrollments.exists())
+        self.assertFalse(self.student.course_enrollments.filter(is_active=True).exists())
         response = self.post("students/manual/", {**data, "confirmation_token": error["fields"]["confirmation_token"]})
         self.assertEqual(response.status_code, 201, response.content)
         self.assertEqual(response.json()["student"]["id"], self.student.pk)
@@ -146,7 +146,7 @@ class StudentIdentityApiTests(TestCase):
         self.student.save()
         response = self.post("students/manual/", {**data, "confirmation_token": token})
         self.assertEqual(response.json()["error"]["code"], "STALE_CONFIRMATION")
-        self.assertFalse(self.student.course_enrollments.exists())
+        self.assertFalse(self.student.course_enrollments.filter(is_active=True).exists())
 
     def test_confirmation_is_bound_to_actor_input_role_and_membership_state(self):
         self.remove()
@@ -168,7 +168,7 @@ class StudentIdentityApiTests(TestCase):
         User.objects.filter(pk=self.student.pk).update(role=User.Role.TEACHER)
         altered = self.post("students/manual/", {**data, "confirmation_token": token})
         self.assertEqual(altered.json()["error"]["code"], "STALE_CONFIRMATION")
-        self.assertFalse(self.student.course_enrollments.exists())
+        self.assertFalse(self.student.course_enrollments.filter(is_active=True).exists())
 
     def test_confirmation_audit_failure_rolls_back_identity_and_enrollment(self):
         self.remove()
@@ -179,7 +179,7 @@ class StudentIdentityApiTests(TestCase):
                 self.post("students/manual/", {**data, "confirmation_token": token})
         self.student.refresh_from_db()
         self.assertEqual(self.student.display_name, "原姓名")
-        self.assertFalse(self.student.course_enrollments.exists())
+        self.assertFalse(self.student.course_enrollments.filter(is_active=True).exists())
 
     def test_password_changes_do_not_invalidate_identity_confirmation_or_get_overwritten(self):
         data = self.identity_input()

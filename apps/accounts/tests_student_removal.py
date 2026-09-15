@@ -140,7 +140,8 @@ class StudentRemovalTests(TestCase):
             response,
             f"/teacher/courses/{self.course.pk}/classes/{self.class_group.pk}/",
         )
-        self.assertFalse(CourseEnrollment.objects.filter(pk=self.enrollment.pk).exists())
+        self.enrollment.refresh_from_db()
+        self.assertFalse(self.enrollment.is_active)
         self.assertTrue(CourseEnrollment.objects.filter(pk=other_enrollment.pk).exists())
         self.assertTrue(User.objects.filter(pk=self.student.pk).exists())
         self.assertFalse(ExperimentStudent.objects.filter(pk=draft_student.pk).exists())
@@ -260,7 +261,8 @@ class StudentRemovalTests(TestCase):
                     {"confirmation": "delete"},
                 )
                 self.assertEqual(response.status_code, 302)
-                self.assertFalse(CourseEnrollment.objects.filter(pk=enrollment.pk).exists())
+                enrollment.refresh_from_db()
+                self.assertFalse(enrollment.is_active)
 
         self.client.force_login(self.outsider)
         denied = self.client.post(
@@ -304,7 +306,8 @@ class StudentRemovalTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertFalse(CourseEnrollment.objects.filter(pk=self.enrollment.pk).exists())
+        self.enrollment.refresh_from_db()
+        self.assertFalse(self.enrollment.is_active)
 
     def test_removal_rolls_back_when_audit_write_fails(self):
         draft = Experiment.objects.create(

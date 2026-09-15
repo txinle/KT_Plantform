@@ -4,6 +4,7 @@ from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models, router, transaction
+from django.utils import timezone
 
 
 class Course(models.Model):
@@ -431,6 +432,55 @@ class StudentImportJob(models.Model):
     class Meta:
         ordering = ["created_at"]
         indexes = [models.Index(fields=["status", "lease_expires_at", "created_at"])]
+class CourseEnrollmentAccessPeriod(models.Model):
+    enrollment = models.ForeignKey(
+        CourseEnrollment,
+        on_delete=models.PROTECT,
+        related_name="access_periods",
+    )
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.PROTECT,
+        related_name="enrollment_access_periods",
+    )
+    class_group = models.ForeignKey(
+        ClassGroup,
+        on_delete=models.PROTECT,
+        related_name="enrollment_access_periods",
+    )
+    student = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name="course_access_periods",
+    )
+    revision = models.PositiveIntegerField()
+    active_from = models.DateTimeField(default=timezone.now)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["enrollment_id", "revision"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["enrollment", "revision"],
+                name="unique_enrollment_access_revision",
+            ),
+            models.UniqueConstraint(
+                fields=["course", "student"],
+                condition=models.Q(revoked_at__isnull=True),
+                name="unique_open_course_access_period",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(revoked_at__isnull=True)
+                | models.Q(revoked_at__gt=models.F("active_from")),
+                name="enrollment_access_period_order",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["course", "student", "active_from", "revoked_at"],
+                name="enrollment_access_lookup_idx",
+            )
+        ]
 
 
 class CourseSubject(models.Model):

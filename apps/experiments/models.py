@@ -1481,6 +1481,86 @@ class PublishPlan(models.Model):
         ]
 
 
+class PublishOperationJob(models.Model):
+    class Operation(models.TextChoices):
+        PREVIEW = "preview", "发布前检查"
+        COMMIT = "commit", "正式发布"
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "排队中"
+        RUNNING = "running", "处理中"
+        SUCCEEDED = "succeeded", "已完成"
+        FAILED = "failed", "失败"
+        STALE = "stale", "数据已变化"
+
+    job_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publish_plan = models.ForeignKey(
+        PublishPlan,
+        on_delete=models.CASCADE,
+        related_name="operation_jobs",
+    )
+    operation = models.CharField(max_length=16, choices=Operation.choices)
+    expected_plan_revision = models.PositiveIntegerField()
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="requested_publish_operation_jobs",
+    )
+    idempotency_key = models.CharField(max_length=64, blank=True, default="")
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.QUEUED,
+    )
+    stage = models.CharField(max_length=32, default="queued")
+    total = models.PositiveIntegerField(default=0)
+    processed = models.PositiveIntegerField(default=0)
+    error_code = models.CharField(max_length=64, blank=True, default="")
+    error_message = models.CharField(max_length=255, blank=True, default="")
+    result_preview_run = models.ForeignKey(
+        "PublishPreviewRun",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="operation_jobs",
+    )
+    result_release_snapshot = models.ForeignKey(
+        ExperimentVersion,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="publish_operation_jobs",
+    )
+    locked_by = models.CharField(max_length=128, blank=True, default="")
+    retry_count = models.PositiveSmallIntegerField(default=0)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["publish_plan", "operation"],
+                condition=Q(status__in=["queued", "running"]),
+                name="unique_active_publish_operation",
+            ),
+            models.UniqueConstraint(
+                fields=["requested_by", "idempotency_key"],
+                condition=~Q(idempotency_key=""),
+                name="unique_publish_operation_idempotency",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["status", "lease_expires_at", "created_at"],
+                name="publish_job_lease_idx",
+            )
+        ]
+
+
 class PublishPlanClass(models.Model):
     publish_plan = models.ForeignKey(
         PublishPlan,

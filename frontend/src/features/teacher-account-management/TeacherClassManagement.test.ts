@@ -99,6 +99,22 @@ describe('TeacherClassManagement', () => {
     expect(wrapper.text()).toContain('学生已加入当前班级。')
   })
 
+  it('shows the specific class field validation error returned by the server', async () => {
+    mocks.api.updateManagement.mockRejectedValueOnce(new ApiError(400, { error: {
+      code: 'VALIDATION_ERROR',
+      message: '请求数据无效。',
+      fields: { academic_year: ['年级格式无效，请填写四位年份。'] },
+    } }))
+    const wrapper = mount(TeacherClassManagement)
+    await flushPromises()
+
+    await wrapper.get('[data-course-class-settings]').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('年级格式无效，请填写四位年份。')
+    expect(wrapper.text()).not.toContain('请求数据无效。')
+  })
+
   it('confirms a class deletion through the API before returning to the class list', async () => {
     const wrapper = mount(TeacherClassManagement)
     await flushPromises()
