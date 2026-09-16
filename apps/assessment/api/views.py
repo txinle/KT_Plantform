@@ -405,7 +405,7 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                 "assigned_sequence_index"
             )
         )
-        from ..research_tool_services import available_tools
+        from ..research_tool_services import available_tools, tool_configuration
         research_tools = available_tools(attempt)
         payload = {
             'research_tools': research_tools,
@@ -500,6 +500,14 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
             for key in ('capture_version', 'active_response_event_id', 'response_version', 'writer_lease_acquire_url', 'writer_lease_renew_url', 'writer_lease_release_url'):
                 payload['process'].pop(key, None)
         else:
+            tool_config = tool_configuration(attempt)
+            if not any((
+                tool_config.get('doubt_enabled'),
+                tool_config.get('check_enabled'),
+                tool_config.get('hints'),
+                tool_config.get('rules'),
+            )):
+                payload['actions'].pop('research_tools_url', None)
             from datetime import timedelta
             remaining = payload['remaining_seconds']
             payload['presented_deadline_at'] = request_received_at + timedelta(seconds=remaining) if remaining is not None else None

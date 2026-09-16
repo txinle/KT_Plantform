@@ -133,6 +133,8 @@ class StudentApiFixtureMixin:
         feedback_release_policy=None,
         opens_at=None,
         closes_at=None,
+        research_tools=None,
+        confidence_mode=None,
     ):
         values = {
             "name": name,
@@ -148,6 +150,10 @@ class StudentApiFixtureMixin:
         }
         if feedback_release_policy is not None:
             values["feedback_release_policy"] = feedback_release_policy
+        if research_tools is not None:
+            values["research_tools"] = research_tools
+        if confidence_mode is not None:
+            values["confidence_mode"] = confidence_mode
         experiment = Experiment.objects.create(**values)
         ExperimentSamplingKC.objects.create(
             experiment=experiment,
@@ -435,6 +441,66 @@ class StudentTaskApiTests(StudentApiTestCase):
 
 
 class StudentAssessmentApiTests(StudentApiTestCase):
+    @override_settings(CAPTURE_V2_ENABLED=True, CAPTURE_V2_COURSE_IDS=frozenset({"*"}), CAPTURE_V2_USER_IDS=frozenset())
+    def test_capture_v2_question_entry_omits_research_url_without_tools_or_rules(self):
+        cases = (
+            ("none", {}, Experiment.ConfidenceMode.OFF),
+            ("kc-only", {"kc_visible": True}, Experiment.ConfidenceMode.OFF),
+            ("confidence-only", {}, Experiment.ConfidenceMode.ALL),
+            ("kc-and-confidence", {"kc_visible": True}, Experiment.ConfidenceMode.ALL),
+        )
+        for name, tools, confidence_mode in cases:
+            with self.subTest(name=name):
+                _, task = self.publish_task(
+                    name=f"无研究工具-{name}", feedback_mode=self.feedback_mode,
+                    research_tools=tools, confidence_mode=confidence_mode,
+                )
+                started = self.start(task=task)
+                self.assertEqual(started.status_code, 201, started.content)
+                session = ExperimentSession.objects.get(pk=started.json()["session_id"])
+                assignment = session.assignments.get()
+                response = self.client.get(
+                    f"/api/v1/student/sessions/{session.pk}/questions/{assignment.pk}/"
+                )
+                self.assertEqual(response.status_code, 200, response.content)
+                self.assertNotIn("research_tools_url", response.json()["actions"])
+
+    @override_settings(CAPTURE_V2_ENABLED=True, CAPTURE_V2_COURSE_IDS=frozenset({"*"}), CAPTURE_V2_USER_IDS=frozenset())
+    def test_capture_v2_question_entry_keeps_research_url_for_tools_or_rules(self):
+        hint = {
+            "id": "hint-1", "question_code": "STU-Q1", "level": 1,
+            "text": "想一想加法", "contains_answer": False,
+        }
+        rule = {
+            "id": "rule-1", "tool": "confidence", "trigger": "elapsed_seconds",
+            "question_code": "STU-Q1", "after_seconds": 10,
+            "max_exposures": 1, "required": False, "hint_id": "",
+        }
+        cases = (
+            ("doubt", {"doubt_enabled": True}),
+            ("check", {"check_enabled": True}),
+            ("hint", {"hints": [hint]}),
+            ("rule", {"rules": [rule]}),
+        )
+        for name, tools in cases:
+            with self.subTest(name=name):
+                _, task = self.publish_task(
+                    name=f"有研究工具-{name}", feedback_mode=self.feedback_mode,
+                    research_tools=tools,
+                )
+                started = self.start(task=task)
+                self.assertEqual(started.status_code, 201, started.content)
+                session = ExperimentSession.objects.get(pk=started.json()["session_id"])
+                assignment = session.assignments.get()
+                response = self.client.get(
+                    f"/api/v1/student/sessions/{session.pk}/questions/{assignment.pk}/"
+                )
+                self.assertEqual(response.status_code, 200, response.content)
+                self.assertEqual(
+                    response.json()["actions"]["research_tools_url"],
+                    reverse("assessment_process:research_tools", args=[assignment.attempt.pk]),
+                )
+
     def test_navigation_entry_returns_visit_contract_and_replays_navigation_id(self):
         self.start()
         session = ExperimentSession.objects.get(
