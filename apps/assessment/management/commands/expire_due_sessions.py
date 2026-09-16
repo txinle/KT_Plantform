@@ -21,7 +21,7 @@ class Command(BaseCommand):
         ).values_list("pk", flat=True).iterator():
             with transaction.atomic():
                 session = (
-                    ExperimentSession.objects.select_for_update()
+                    ExperimentSession.objects.select_for_update(of=("self",))
                     .select_related("class_task")
                     .get(pk=session_id)
                 )

@@ -3,6 +3,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
 
@@ -57,6 +58,12 @@ class B2ContractsTests(TestCase):
         acks = append_event_batch(student=self.student, document=payload)
         self.assertEqual(len(acks), 1)
         self.assertIsNone(AssessmentEvent.objects.get().attempt_id)
+
+    def test_expire_due_sessions_handles_session_without_class_task(self):
+        call_command("expire_due_sessions")
+
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.status, ExperimentSession.Status.IN_PROGRESS)
 
     def test_event_batch_reserves_one_contiguous_server_sequence(self):
         client_instance_id = str(uuid.uuid4())
