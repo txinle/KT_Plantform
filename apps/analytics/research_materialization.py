@@ -39,7 +39,7 @@ from .models import (
 from .research_dataset import read_research_bundle
 
 
-PROJECTION_VERSION = "research-session-v1"
+PROJECTION_VERSION = "research-session-v2"
 MAX_RETRIES = 3
 MAX_SOURCE_READ_ATTEMPTS = 3
 

@@ -90,6 +90,39 @@ class StandardBehaviorTests(SimpleTestCase):
             session_refs={'11': 'S20260909_0011'}, identities={'11': ('0001', '同名')}, visits=[])
         self.assertEqual((result[0]['category'], result[0]['action']), ('题目访问', '跳过题目'))
 
+    def test_confidence_projection_keeps_only_the_committed_value(self):
+        events = [
+            event_row('shown', 'confidence_observed', 1, {
+                'confidence_assignment_id': 'confidence-1', 'stage': 'presented',
+                'probability': None, 'feedback_phase': 'before_feedback',
+            }),
+            event_row('step-61', 'confidence_observed', 2, {
+                'confidence_assignment_id': 'confidence-1', 'stage': 'responded',
+                'probability': 61, 'feedback_phase': 'before_feedback',
+            }),
+            event_row('step-62', 'confidence_observed', 3, {
+                'confidence_assignment_id': 'confidence-1', 'stage': 'responded',
+                'probability': 62, 'feedback_phase': 'before_feedback',
+            }),
+            event_row('committed', 'confidence_committed', 4, {
+                'confidence_assignment_id': 'confidence-1', 'probability': 62,
+            }),
+        ]
+        tables = {'assessment_events': (EVENT_HEADERS, events)}
+
+        result = build_standard_behavior(
+            {'rows': tables, 'events': []},
+            question_refs={'31': 'Q001'},
+            session_refs={'11': 'S20260909_0011'},
+            identities={'11': ('0001', '同名')},
+            visits=[],
+        )
+
+        self.assertEqual(
+            [(row['action'], row['after']) for row in result],
+            [('信心题展示', ''), ('提交信心', '62')],
+        )
+
     def test_all_question_events_deduplicate_only_underlying_ids_and_keep_sequence(self):
         events = []
         previous = None

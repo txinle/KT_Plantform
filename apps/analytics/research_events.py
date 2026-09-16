@@ -952,10 +952,11 @@ def build_standard_behavior(captured, *, question_refs, session_refs, identities
     result = []
     for sid, events in grouped.items():
         sequences = defaultdict(int)
-        confidence_values = {}
         for event in _ordered_session_events(events):
             kind = event.get('event_type')
             payload = _json_value(event.get('payload'), {}) or {}
+            if kind == 'confidence_observed' and payload.get('stage') == 'responded':
+                continue
             qref = question_refs[event['question_snapshot_id']]
             category, action = STANDARD_EVENTS.get(kind, ('其他题内记录', str(kind)))
             projection = _project_event(event, assignment_questions=assignments, question_refs=question_refs,
@@ -978,12 +979,7 @@ def build_standard_behavior(captured, *, question_refs, session_refs, identities
                 action = _INPUT_TYPE_LABELS.get(payload.get('input_type'), '操作请求')
                 before, after = None, None
             elif kind == 'confidence_observed':
-                confidence_key = payload.get('confidence_assignment_id')
-                if payload.get('stage') == 'responded':
-                    before, after = confidence_values.get(confidence_key), payload.get('probability')
-                    action = '选择信心' if confidence_key not in confidence_values else '修改信心'
-                    confidence_values[confidence_key] = after
-                elif payload.get('stage') == 'presented':
+                if payload.get('stage') == 'presented':
                     action = '信心题展示'
                 elif payload.get('stage') == 'skipped':
                     action = '跳过信心'

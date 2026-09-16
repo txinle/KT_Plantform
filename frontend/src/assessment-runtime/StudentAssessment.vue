@@ -76,7 +76,6 @@ let saveQueue = Promise.resolve<unknown>(undefined)
 let inputStarted = false
 let processRuntime: StudentProcessRuntime | undefined
 let confidencePromptPromise: Promise<unknown> | undefined
-let confidenceObservationQueue = Promise.resolve<unknown>(undefined)
 let confirmationGeneration = 0
 let lastRecordedResponseState: unknown = null
 let lastStableText = ''
@@ -517,7 +516,6 @@ async function openSubmitDialog() {
   confidenceNumberValue.value = '50'
   confidenceValidationError.value = ''
   confidenceResolving.value = false
-  confidenceObservationQueue = Promise.resolve(undefined)
   pendingConfidence.value = confidenceContract(state.value.pending_confidence)
   if (pendingConfidence.value) {
     try { await showConfidencePrompt() }
@@ -744,7 +742,6 @@ async function resolveConfidence(skip: boolean) {
   error.value = ''
   try {
     await confidencePromptPromise
-    await confidenceObservationQueue
     if (generation !== confirmationGeneration) return
     if (skip && trajectory) await processRuntime?.record('confidence_observed', {
       capture_version: 'capture-v2', operation_id: crypto.randomUUID(),
@@ -768,31 +765,10 @@ async function resolveConfidence(skip: boolean) {
   }
 }
 
-function recordValidConfidenceSelection(probability: number) {
-  confidenceTouched.value = true
-  if (!trajectory || !pendingConfidence.value) return
-  const assignmentId = pendingConfidence.value.confidence_assignment_id
-  const observation = processRuntime?.record(
-    'confidence_observed',
-    {
-      capture_version: 'capture-v2', operation_id: crypto.randomUUID(),
-      confidence_assignment_id: assignmentId,
-      stage: 'responded', answer_event_id: confirmationHead,
-      probability, feedback_phase: 'before_feedback',
-    },
-    confidenceEventOptions(pendingConfidence.value),
-  )
-  if (!observation) return
-  confidenceObservationQueue = Promise.all([confidenceObservationQueue, observation])
-  void observation.catch((caught) => {
-    error.value = caught instanceof Error ? caught.message : '信心选择记录失败，请重新选择。'
-  })
-}
-
 function recordConfidenceSelection() {
   confidenceNumberValue.value = String(confidenceValue.value)
   confidenceValidationError.value = ''
-  recordValidConfidenceSelection(confidenceValue.value)
+  confidenceTouched.value = true
 }
 
 function recordConfidenceNumberInput(event: Event) {
@@ -818,7 +794,7 @@ function recordConfidenceNumberInput(event: Event) {
   }
   confidenceValidationError.value = ''
   confidenceValue.value = probability
-  recordValidConfidenceSelection(probability)
+  confidenceTouched.value = true
 }
 
 async function navigateToAssignment(item: StudentRuntimeQuestionEntry['navigation'][number]) {

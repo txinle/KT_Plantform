@@ -887,8 +887,7 @@ describe('StudentAssessment', () => {
     const confidenceEvents = mocks.runtime.record.mock.calls.filter(call => (
       call[0] === 'confidence_observed' && call[1].stage === 'responded'
     ))
-    expect(confidenceEvents.map(call => call[1].probability)).toEqual([57, 0, 57])
-    expect(confidenceEvents.every(call => call[2]?.eventVersion === 2)).toBe(true)
+    expect(confidenceEvents).toHaveLength(0)
     expect(wrapper.text()).not.toContain('正确答案')
     expect(mocks.runtime.record).toHaveBeenCalledWith(
       'feedback_shown',
@@ -906,7 +905,7 @@ describe('StudentAssessment', () => {
     })
   })
 
-  it('blocks empty, fractional, and out-of-range confidence without recording research events', async () => {
+  it('keeps tentative confidence values local without recording research events', async () => {
     mocks.api.question.mockResolvedValue(captureV2Question({
       pending_confidence: {
         confidence_assignment_id: '31', scale_version: 'v2', prompt_version: 'v1',
@@ -937,7 +936,7 @@ describe('StudentAssessment', () => {
     expect(wrapper.find('[data-confidence-error]').exists()).toBe(false)
     expect(wrapper.get<HTMLInputElement>('[data-confidence-input]').element.value).toBe('100')
     expect(wrapper.get('[data-confidence-submit]').attributes('disabled')).toBeUndefined()
-    expect(respondedEvents().map(call => call[1].probability)).toEqual([100])
+    expect(respondedEvents()).toHaveLength(0)
     wrapper.unmount()
   })
 
