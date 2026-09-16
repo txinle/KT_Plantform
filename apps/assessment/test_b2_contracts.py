@@ -1,6 +1,7 @@
 import uuid
 from datetime import timedelta
 from decimal import Decimal
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
@@ -64,6 +65,13 @@ class B2ContractsTests(TestCase):
 
         self.session.refresh_from_db()
         self.assertEqual(self.session.status, ExperimentSession.Status.IN_PROGRESS)
+
+    def test_expire_due_sessions_avoids_server_side_cursor_with_pgbouncer(self):
+        with mock.patch(
+            "django.db.models.query.QuerySet.iterator",
+            side_effect=AssertionError("server-side cursor is incompatible with transaction pooling"),
+        ):
+            call_command("expire_due_sessions")
 
     def test_event_batch_reserves_one_contiguous_server_sequence(self):
         client_instance_id = str(uuid.uuid4())

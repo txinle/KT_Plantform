@@ -16,9 +16,12 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         count = 0
         now = timezone.now()
-        for session_id in ExperimentSession.objects.filter(
-            status=ExperimentSession.Status.IN_PROGRESS,
-        ).values_list("pk", flat=True).iterator():
+        session_ids = list(
+            ExperimentSession.objects.filter(
+                status=ExperimentSession.Status.IN_PROGRESS,
+            ).values_list("pk", flat=True)
+        )
+        for session_id in session_ids:
             with transaction.atomic():
                 session = (
                     ExperimentSession.objects.select_for_update(of=("self",))
