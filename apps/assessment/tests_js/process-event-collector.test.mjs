@@ -58,6 +58,77 @@ test('atomic capture-v2 rejection retains all evidence instead of dead-lettering
   assert.equal(await outbox.count(), 2);
 });
 
+test('a stale capture-v2 event link is dead-lettered without blocking the current client instance', async () => {
+  const outbox = new MemoryOutbox();
+  const bodies = [];
+  const fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    bodies.push(body);
+    if (body.client_instance_id === INSTANCE_A) {
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({
+          success: false,
+          error: { code: 'invalid_event_link' },
+        }),
+      };
+    }
+    return okResponse({
+      success: true,
+      acknowledgements: body.events.map((event) => ({
+        client_sequence_no: event.client_sequence_no,
+        event_id: INSTANCE_A,
+        server_ingest_sequence_no: event.client_sequence_no,
+      })),
+    });
+  };
+  const stale = new ProcessEventCollector(eventPayload({
+    outbox,
+    endpoint: '/assessment/process/capture-v2/batch/',
+    fetch,
+    uuid: () => INSTANCE_A,
+  }));
+  await stale.record('document_visible', {});
+  const current = new ProcessEventCollector(eventPayload({
+    outbox,
+    endpoint: '/assessment/process/capture-v2/batch/',
+    fetch,
+    uuid: () => INSTANCE_B,
+  }));
+  await current.record('item_rendered', { presentation_state: 'interactive' });
+
+  assert.equal(await current.flush(), true);
+  assert.deepEqual(
+    bodies.map((body) => body.client_instance_id),
+    [INSTANCE_A, INSTANCE_B],
+  );
+  assert.equal(await outbox.count(), 0);
+  assert.equal((await outbox.captureState(INSTANCE_A)).failed, 1);
+  assert.equal((await outbox.captureState(INSTANCE_B)).failed, 0);
+});
+
+test('a terminated capture-v2 task backlog is dead-lettered', async () => {
+  const outbox = new MemoryOutbox();
+  const collector = new ProcessEventCollector(eventPayload({
+    outbox,
+    endpoint: '/assessment/process/capture-v2/batch/',
+    fetch: async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        success: false,
+        error: { code: 'task_terminated' },
+      }),
+    }),
+  }));
+  await collector.record('document_visible', {});
+
+  assert.equal(await collector.flush(), true);
+  assert.equal(await outbox.count(), 0);
+  assert.equal((await outbox.captureState(INSTANCE_A)).failed, 1);
+});
+
 function eventPayload(overrides = {}) {
   return {
     sessionId: 7,

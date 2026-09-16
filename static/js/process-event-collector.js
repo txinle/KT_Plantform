@@ -11,6 +11,12 @@
   const DEFAULT_SYNC_INTERVAL_MS = 15 * 60 * 1000;
   const DATABASE_NAME = 'kt-process-events-v1';
   const DATABASE_VERSION = 2;
+  const PERMANENT_CAPTURE_V2_REJECTIONS = new Set([
+    'invalid_event_link',
+    'task_terminated',
+    'deadline_expired',
+    'course_access_revoked',
+  ]);
   const V2_EVENT_TYPES = new Set([
     'item_rendered', 'item_left', 'response_state_changed', 'text_edit_observed',
   ]);
@@ -759,11 +765,15 @@
           break;
         }
         if (!response.ok) {
+          const rejectionCode = responseDocument?.error?.code;
           const permanentResponse = response.status >= 400
             && response.status < 500
             && response.status !== 408
             && response.status !== 429
-            && !this.endpoint.includes('/capture-v2/');
+            && (
+              !this.endpoint.includes('/capture-v2/')
+              || PERMANENT_CAPTURE_V2_REJECTIONS.has(rejectionCode)
+            );
           if (permanentResponse) {
             for (const event of batch.events) {
               await this.outbox.moveToDeadLetter?.(
@@ -771,7 +781,7 @@
                 event.client_sequence_no,
                 {
                   client_sequence_no: event.client_sequence_no,
-                  code: responseDocument?.error?.code || 'permanent_rejection',
+                  code: rejectionCode || 'permanent_rejection',
                   permanent: true,
                   http_status: response.status,
                 },
