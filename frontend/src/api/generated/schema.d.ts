@@ -2457,10 +2457,19 @@ export interface components {
             class_state_token: string;
         };
         CourseStudentImportPreview: {
-            preview: components["schemas"]["StudentImportPreviewRow"][];
+            preview: components["schemas"]["CourseStudentImportPreviewRow"][];
             /** Format: uuid */
             preview_id: string;
             class_state_token: string;
+        };
+        CourseStudentImportPreviewRow: {
+            student_number: string;
+            display_name: string;
+            class_id: number;
+            class_name: string;
+            account_action: components["schemas"]["AccountActionEnum"];
+            enrollment_action: components["schemas"]["EnrollmentActionEnum"];
+            source_class_name: string;
         };
         CourseStudentImportResult: {
             /** Format: uuid */
@@ -2470,6 +2479,8 @@ export interface components {
             processed_rows: number;
             created_accounts: number;
             enrollments: number;
+            transferred: number;
+            skipped: number;
             progress_stage: string;
             error_code: string;
             error_message: string;
@@ -2736,6 +2747,13 @@ export interface components {
             label: string;
             count: number;
         };
+        /**
+         * @description * `create` - create
+         *     * `transfer` - transfer
+         *     * `skip` - skip
+         * @enum {string}
+         */
+        EnrollmentActionEnum: "create" | "transfer" | "skip";
         ExpectedRevision: {
             expected_revision: number;
         };

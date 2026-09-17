@@ -201,6 +201,51 @@ def _existing_student_numbers(parsed_students):
     }
 
 
+def _course_import_preview(course, parsed_students):
+    numbers = [item.student_number for item in parsed_students]
+    existing = {
+        value: user
+        for user in User.objects.filter(
+            Q(student_number__in=numbers) | Q(username__in=numbers)
+        )
+        for value in (user.student_number, user.username)
+        if value in numbers
+    }
+    enrollments = {
+        enrollment.student_id: enrollment
+        for enrollment in CourseEnrollment.objects.filter(
+            course=course,
+            student_id__in=[user.pk for user in existing.values()],
+        ).select_related("class_group")
+    }
+    preview_rows = []
+    job_rows = []
+    for item in parsed_students:
+        user = existing.get(item.student_number)
+        if user is not None and user.role != User.Role.STUDENT:
+            raise ValidationError(f"学号与非学生账号冲突：{item.student_number}")
+        if user is not None and user.shown_name != item.display_name:
+            raise ValidationError(f"学号对应姓名不一致：{item.student_number}")
+        enrollment = enrollments.get(user.pk) if user is not None else None
+        if enrollment is not None and not enrollment.is_active:
+            raise ValidationError(f"学生当前的课程选课已停用：{item.student_number}")
+        action = (
+            "create" if enrollment is None else
+            "skip" if enrollment.class_group_id == item.class_id else "transfer"
+        )
+        preview_rows.append({
+            **item.__dict__,
+            "account_action": "reuse" if user is not None else "create",
+            "enrollment_action": action,
+            "source_class_name": str(enrollment.class_group) if enrollment else "",
+        })
+        job_rows.append({
+            **item.__dict__,
+            "source_class_id": enrollment.class_group_id if enrollment else None,
+        })
+    return preview_rows, job_rows
+
+
 def _student_import_job_payload(job):
     return {
         "job_id": job.job_id,
@@ -209,6 +254,8 @@ def _student_import_job_payload(job):
         "processed_rows": job.processed_rows,
         "created_accounts": job.created_accounts,
         "enrollments": job.enrollments,
+        "transferred": job.transferred,
+        "skipped": job.skipped,
         "progress_stage": job.progress_stage,
         "error_code": job.error_code,
         "error_message": job.error_message,
@@ -718,27 +765,26 @@ class CourseStudentImportPreviewView(TeacherAccountManagementApiView):
             raise ValidationError(form.errors)
         try:
             preview = parse_student_workbook(
-                form.cleaned_data["file"], [class_group], allow_existing=True
+                form.cleaned_data["file"], [class_group],
+                allow_existing=True, allow_csv=True,
             )
         except StudentImportError as exc:
             raise ValidationError(str(exc)) from exc
+        preview_rows, job_rows = _course_import_preview(course, preview)
         preview_id = uuid.uuid4()
         state_token = class_group_state_token(class_group)
         request.session[session_key] = {
             "preview_id": str(preview_id),
             "class_id": class_group.pk,
             "class_state_token": state_token,
-            "rows": [item.__dict__ for item in preview],
+            "rows": job_rows,
         }
         return Response(
             CourseStudentImportPreviewSerializer(
                 {
                     "preview_id": preview_id,
                     "class_state_token": state_token,
-                    "preview": _preview_payload(
-                        preview,
-                        existing_numbers=_existing_student_numbers(preview),
-                    )
+                    "preview": preview_rows,
                 }
             ).data
         )
@@ -1037,6 +1083,7 @@ class CourseStudentImportTemplateView(TeacherAccountManagementApiView):
             scope_label=(
                 f"{course.name}（{course.code} · {course.term}） / {class_group}"
             ),
+            allow_csv=True,
         )
         response = HttpResponse(
             content,

@@ -153,16 +153,17 @@ describe('TeacherClassManagement', () => {
       preview: [{
         student_number: 'S002', display_name: '新学生', class_id: 11,
         class_name: '2026 目标班', account_action: 'create',
+        enrollment_action: 'create', source_class_name: '',
       }],
     })
     mocks.api.confirmCourseImport.mockResolvedValue({
       job_id: 'job-1', status: 'queued', total_rows: 1, processed_rows: 0,
-      created_accounts: 0, enrollments: 0, progress_stage: 'queued',
+      created_accounts: 0, enrollments: 0, transferred: 0, skipped: 0, progress_stage: 'queued',
       error_code: '', error_message: '',
     })
     mocks.api.courseImportJob.mockResolvedValue({
       job_id: 'job-1', status: 'succeeded', total_rows: 1, processed_rows: 1,
-      created_accounts: 1, enrollments: 1, progress_stage: 'completed',
+      created_accounts: 1, enrollments: 1, transferred: 0, skipped: 0, progress_stage: 'completed',
       error_code: '', error_message: '',
     })
     vi.useFakeTimers()
@@ -187,8 +188,39 @@ describe('TeacherClassManagement', () => {
     await vi.advanceTimersByTimeAsync(1500)
     await flushPromises()
     expect(mocks.api.courseImportJob).toHaveBeenCalledWith(7, 11, 'job-1')
-    expect(wrapper.text()).toContain('已建立 1 条课程选课，其中新建 1 个全局学生账号。')
+    expect(wrapper.text()).toContain('已新增 1 条课程选课、转班 0 人、跳过 0 人；其中新建 1 个全局学生账号。')
     vi.useRealTimers()
+  })
+
+  it('accepts CSV and clearly previews source class transfers and same-class skips', async () => {
+    route.meta = { workflow: 'import' }
+    mocks.api.previewCourseImport.mockResolvedValue({
+      preview_id: 'preview-transfer', class_state_token: 'class-state-1',
+      preview: [
+        { student_number: 'S002', display_name: '转班学生', class_id: 11,
+          class_name: '2026 目标班', account_action: 'reuse',
+          enrollment_action: 'transfer', source_class_name: '2026 来源班' },
+        { student_number: 'S003', display_name: '本班学生', class_id: 11,
+          class_name: '2026 目标班', account_action: 'reuse',
+          enrollment_action: 'skip', source_class_name: '2026 目标班' },
+      ],
+    })
+    const wrapper = mount(TeacherClassManagement)
+    await flushPromises()
+    const fileInput = wrapper.get('input[type="file"]')
+    expect(fileInput.attributes('accept')).toContain('.csv')
+    Object.defineProperty(fileInput.element, 'files', {
+      configurable: true,
+      value: [new File(['学号,姓名,班级'], 'students.csv', { type: 'text/csv' })],
+    })
+    await fileInput.trigger('change')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.api.previewCourseImport).toHaveBeenCalledWith(7, 11, expect.any(FormData))
+    expect(wrapper.text()).toContain('从 2026 来源班 转入')
+    expect(wrapper.text()).toContain('已在本班，将跳过')
+    expect(wrapper.get('[data-confirm-course-import]').text()).toContain('确认处理 2 名学生')
   })
 
   it('edits only student identity fields with the enrollment state token and refreshes management', async () => {

@@ -1,5 +1,6 @@
+import csv
 from dataclasses import dataclass
-from io import BytesIO
+from io import BytesIO, StringIO
 
 from django.db.models import Q
 from openpyxl import Workbook, load_workbook
@@ -20,9 +21,10 @@ class ParsedStudent:
     display_name: str
     class_id: int
     class_name: str
+    source_class_id: int | None = None
 
 
-def build_student_import_workbook(classes, scope_label=None):
+def build_student_import_workbook(classes, scope_label=None, *, allow_csv=False):
     classes = list(classes)
     workbook = Workbook()
     import_sheet = workbook.active
@@ -36,7 +38,8 @@ def build_student_import_workbook(classes, scope_label=None):
     instructions.append(["填写规则"])
     if scope_label:
         instructions.append([f"适用范围：{scope_label}"])
-    instructions.append(["仅支持 .xlsx；学号、姓名、班级均为必填字段。"])
+    formats = ".xlsx 或 .csv" if allow_csv else ".xlsx"
+    instructions.append([f"支持 {formats}；学号、姓名、班级均为必填字段。"])
     if len(classes) == 1:
         instructions.append(
             [
@@ -61,15 +64,34 @@ def build_student_import_workbook(classes, scope_label=None):
     return stream.getvalue()
 
 
-def parse_student_workbook(uploaded_file, classes, *, allow_existing=False):
-    if not uploaded_file.name.lower().endswith(".xlsx"):
-        raise StudentImportError("仅支持 .xlsx 文件")
-    try:
-        workbook = load_workbook(BytesIO(uploaded_file.read()), read_only=True, data_only=True)
-    except Exception as exc:
-        raise StudentImportError("无法读取 Excel 文件，请使用下载的参考模板") from exc
+def parse_student_workbook(uploaded_file, classes, *, allow_existing=False, allow_csv=False):
+    name = uploaded_file.name.lower()
+    if name.endswith(".csv") and allow_csv:
+        content = uploaded_file.read()
+        try:
+            decoded = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            try:
+                decoded = content.decode("gb18030")
+            except UnicodeDecodeError as exc:
+                raise StudentImportError("无法读取 CSV 文件，请使用 UTF-8 或 GB18030 编码") from exc
+        rows = csv.reader(StringIO(decoded, newline=""), strict=True)
+    elif name.endswith(".xlsx"):
+        try:
+            workbook = load_workbook(BytesIO(uploaded_file.read()), read_only=True, data_only=True)
+        except Exception as exc:
+            raise StudentImportError("无法读取 Excel 文件，请使用下载的参考模板") from exc
+        rows = workbook.active.iter_rows(values_only=True)
+    else:
+        raise StudentImportError("仅支持 .xlsx 或 .csv 文件" if allow_csv else "仅支持 .xlsx 文件")
 
-    rows = workbook.active.iter_rows(values_only=True)
+    try:
+        return _parse_student_rows(rows, classes, allow_existing=allow_existing)
+    except csv.Error as exc:
+        raise StudentImportError("CSV 文件格式无效，请检查引号和分隔符") from exc
+
+
+def _parse_student_rows(rows, classes, *, allow_existing):
     header_row = next(rows, None)
     headers = [str(value or "").strip() for value in (header_row or ())]
     if set(headers) != set(EXPECTED_HEADERS) or len(headers) != len(EXPECTED_HEADERS):

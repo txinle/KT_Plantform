@@ -8,6 +8,7 @@ from django.utils import timezone
 from apps.audit.models import AuditLog
 
 from .class_lifecycle import lock_active_class_groups
+from .enrollment_services import transfer_course_enrollment
 from .forms import class_group_state_token_matches
 from .models import ClassGroup, CourseEnrollment, StudentImportJob, User
 from .student_import import ParsedStudent
@@ -84,17 +85,37 @@ def _existing_students(numbers):
     }
 
 
-def _validate_existing_students(course, rows, existing):
+def _validate_existing_students(course, rows, existing, *, lock_enrollments=False):
+    enrollment_query = CourseEnrollment.objects.filter(
+        course=course,
+        student_id__in=[user.pk for user in existing.values()],
+    ).order_by("pk")
+    if lock_enrollments:
+        enrollment_query = enrollment_query.select_for_update()
+    enrollments = {
+        enrollment.student_id: enrollment for enrollment in enrollment_query
+    }
     for row in rows:
         user = existing.get(row.student_number)
         if user is None:
+            if row.source_class_id is not None:
+                raise StudentImportJobError(
+                    IMPORT_PREVIEW_STALE_ERROR, code="IMPORT_PREVIEW_STALE"
+                )
             continue
         if user.role != User.Role.STUDENT:
             raise StudentImportJobError(f"学号与非学生账号冲突：{row.student_number}")
         if user.shown_name != row.display_name:
             raise StudentImportJobError(f"学号对应姓名不一致：{row.student_number}")
-        if CourseEnrollment.objects.filter(course=course, student=user).exists():
-            raise StudentImportJobError(f"学生已加入当前课程：{row.student_number}")
+        enrollment = enrollments.get(user.pk)
+        if (
+            (enrollment.class_group_id if enrollment else None) != row.source_class_id
+            or (enrollment is not None and not enrollment.is_active)
+        ):
+            raise StudentImportJobError(
+                IMPORT_PREVIEW_STALE_ERROR, code="IMPORT_PREVIEW_STALE"
+            )
+    return enrollments
 
 
 def _renew_progress(job, *, worker_id, processed_rows):
@@ -163,12 +184,40 @@ def run_student_import_job(job, *, worker_id):
                     code="IMPORT_PREVIEW_STALE",
                 )
             existing = _existing_students(numbers)
-            _validate_existing_students(locked_job.course, rows, existing)
+            existing_enrollments = _validate_existing_students(
+                locked_job.course, rows, existing, lock_enrollments=True
+            )
             created_accounts = 0
             enrollments = 0
+            transferred = 0
+            skipped = 0
             now = timezone.now()
             for row in rows:
                 student = existing.get(row.student_number)
+                current_enrollment = (
+                    existing_enrollments.get(student.pk) if student else None
+                )
+                if current_enrollment is not None:
+                    if current_enrollment.class_group_id == current_class.pk:
+                        skipped += 1
+                    else:
+                        source_class_id = current_enrollment.class_group_id
+                        transfer_course_enrollment(current_enrollment, current_class)
+                        transferred += 1
+                        AuditLog.objects.create(
+                            actor=locked_job.created_by,
+                            action="student.class_transfer",
+                            object_type="CourseEnrollment",
+                            object_id=str(current_enrollment.pk),
+                            details={
+                                "course_id": locked_job.course_id,
+                                "from_class_id": source_class_id,
+                                "to_class_id": current_class.pk,
+                                "job_id": str(locked_job.job_id),
+                            },
+                            ip_address=locked_job.request_ip,
+                        )
+                    continue
                 if student is None:
                     encoded_password = password_hashes.get(row.student_number)
                     if encoded_password is None:
@@ -197,6 +246,8 @@ def run_student_import_job(job, *, worker_id):
             locked_job.processed_rows = locked_job.total_rows
             locked_job.created_accounts = created_accounts
             locked_job.enrollments = enrollments
+            locked_job.transferred = transferred
+            locked_job.skipped = skipped
             locked_job.progress_stage = "completed"
             locked_job.error_code = ""
             locked_job.error_message = ""
@@ -211,6 +262,8 @@ def run_student_import_job(job, *, worker_id):
                     "processed_rows",
                     "created_accounts",
                     "enrollments",
+                    "transferred",
+                    "skipped",
                     "progress_stage",
                     "error_code",
                     "error_message",
@@ -231,6 +284,8 @@ def run_student_import_job(job, *, worker_id):
                     "class_id": current_class.pk,
                     "job_id": str(locked_job.job_id),
                     "enrollments": enrollments,
+                    "transferred": transferred,
+                    "skipped": skipped,
                     "created_accounts": created_accounts,
                 },
                 ip_address=locked_job.request_ip,

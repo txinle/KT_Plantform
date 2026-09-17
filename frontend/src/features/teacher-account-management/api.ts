@@ -105,6 +105,10 @@ export interface StudentImportPreview {
 export interface CourseStudentImportPreview extends StudentImportPreview {
   preview_id: string
   class_state_token: string
+  preview: Array<StudentImportPreview['preview'][number] & {
+    enrollment_action: 'create' | 'transfer' | 'skip'
+    source_class_name: string
+  }>
 }
 
 export interface StudentImportJob {
@@ -114,6 +118,8 @@ export interface StudentImportJob {
   processed_rows: number
   created_accounts: number
   enrollments: number
+  transferred: number
+  skipped: number
   progress_stage: string
   error_code: string
   error_message: string

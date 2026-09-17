@@ -317,7 +317,7 @@ async function applyImportJob(job: StudentImportJob) {
     importPreview.value = undefined
     importFile.value = undefined
     await load()
-    success.value = `已建立 ${job.enrollments} 条课程选课，其中新建 ${job.created_accounts} 个全局学生账号。`
+    success.value = `已新增 ${job.enrollments} 条课程选课、转班 ${job.transferred} 人、跳过 ${job.skipped} 人；其中新建 ${job.created_accounts} 个全局学生账号。`
     return
   }
   if (job.status === 'failed') {
@@ -349,7 +349,7 @@ async function pollImportJob() {
 
 async function previewImport() {
   if (!importFile.value) {
-    error.value = '请选择 Excel 文件。'
+    error.value = '请选择 Excel 或 CSV 文件。'
     return
   }
   submitting.value = true
@@ -526,10 +526,10 @@ onUnmounted(clearImportPoll)
 
       <section v-if="workflow === 'import'" class="kt-card kt-account-management-form" aria-labelledby="excel-import-title">
         <h2 id="excel-import-title">批量导入课程学生</h2>
-        <p>上传后先在服务器校验预览；确认时一次性建立选课，任一冲突都会使整批回滚。</p>
+        <p>名单“班级”列请填写当前目标班级。上传 Excel 或 CSV 后先在服务器校验预览；已在本课程其他班的学生将转入当前班，已在本班的学生将跳过。确认后整批处理，任一冲突都会使整批回滚。</p>
         <a class="kt-button kt-button--secondary" :href="management.actions.import_template_url">下载 Excel 参考模板</a>
         <form v-if="!importPreview && !importJob" @submit.prevent="previewImport">
-          <label>Excel 学生名单<input accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" type="file" required :disabled="submitting" @change="chooseImportFile"></label>
+          <label>Excel 或 CSV 学生名单<input accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" type="file" required :disabled="submitting" @change="chooseImportFile"></label>
           <button class="kt-button" type="submit" :disabled="submitting">校验并生成预览</button>
         </form>
         <template v-else-if="importJob">
@@ -537,14 +537,14 @@ onUnmounted(clearImportPoll)
         </template>
         <template v-else-if="importPreview">
           <p class="kt-account-management-notice">名单校验通过，尚未写入数据库。</p>
-          <div class="kt-table-scroll"><table class="kt-table"><thead><tr><th>学号</th><th>姓名</th><th>课程班级</th><th>账号处理</th></tr></thead><tbody><tr v-for="row in importPreview.preview" :key="row.student_number"><td>{{ row.student_number }}</td><td>{{ row.display_name }}</td><td>{{ row.class_name }}</td><td>{{ row.account_action === 'reuse' ? '复用已有账号' : '新建账号（S + 学号）' }}</td></tr></tbody></table></div>
-          <div class="kt-account-management-actions"><button class="kt-button" data-confirm-course-import type="button" :disabled="submitting" @click="confirmImport">确认建立 {{ importPreview.preview.length }} 条选课关系</button><button class="kt-button kt-button--secondary" type="button" :disabled="submitting" @click="importPreview = undefined">重新上传</button></div>
+          <div class="kt-table-scroll"><table class="kt-table"><thead><tr><th>学号</th><th>姓名</th><th>课程班级</th><th>账号处理</th><th>名单处理</th></tr></thead><tbody><tr v-for="row in importPreview.preview" :key="row.student_number"><td>{{ row.student_number }}</td><td>{{ row.display_name }}</td><td>{{ row.class_name }}</td><td>{{ row.account_action === 'reuse' ? '复用已有账号' : '新建账号（S + 学号）' }}</td><td>{{ row.enrollment_action === 'transfer' ? `从 ${row.source_class_name} 转入` : row.enrollment_action === 'skip' ? '已在本班，将跳过' : '新建选课' }}</td></tr></tbody></table></div>
+          <div class="kt-account-management-actions"><button class="kt-button" data-confirm-course-import type="button" :disabled="submitting" @click="confirmImport">确认处理 {{ importPreview.preview.length }} 名学生</button><button class="kt-button kt-button--secondary" type="button" :disabled="submitting" @click="importPreview = undefined">重新上传</button></div>
         </template>
       </section>
 
       <section v-if="workflow === 'manage'" class="kt-card kt-account-management-members" aria-labelledby="class-member-title">
         <div class="kt-section-heading"><h2 id="class-member-title">当前课程成员</h2><span>{{ management.enrollments.length }} 人</span></div>
-        <EmptyState v-if="!management.enrollments.length" title="当前班级没有学生"><p>可通过手动添加、Excel 导入或复制名单建立课程成员关系。</p></EmptyState>
+        <EmptyState v-if="!management.enrollments.length" title="当前班级没有学生"><p>可通过手动添加、Excel/CSV 导入或复制名单建立课程成员关系。</p></EmptyState>
         <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>学号</th><th>姓名</th><th>转入班级</th><th>账号操作</th><th>课程成员操作</th></tr></thead><tbody><tr v-for="enrollment in management.enrollments" :key="enrollment.enrollment_id"><td>{{ enrollment.student.student_number }}</td><td>{{ enrollment.student.display_name }}</td><td><div class="kt-account-management-inline"><select v-model="moveTargets[enrollment.student.id]" :disabled="submitting || !management.capabilities.can_move_students"><option value="">选择班级</option><option v-for="target in moveTargetClasses" :key="target.id" :value="target.id">{{ target.display_name }}</option></select><button class="kt-button kt-button--secondary" type="button" :disabled="submitting || !management.capabilities.can_move_students" @click="moveStudent(enrollment.student)">转班</button></div></td><td><div class="kt-account-management-inline"><button class="kt-button kt-button--secondary" data-edit-student-identity type="button" :disabled="submitting || !management.capabilities.can_edit_students" @click="beginIdentityEdit(enrollment)">编辑信息</button><button class="kt-button kt-button--secondary" data-course-reset-password type="button" :disabled="submitting || !management.capabilities.can_reset_passwords" @click="resetCandidate = enrollment.student">重置密码</button></div></td><td><button class="kt-button kt-button--danger" type="button" :disabled="submitting || !management.capabilities.can_remove_students" @click="removeCandidate = enrollment.student">移出课程</button></td></tr></tbody></table></div>
       </section>
 

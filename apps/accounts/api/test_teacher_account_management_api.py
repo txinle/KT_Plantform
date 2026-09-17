@@ -3,6 +3,7 @@ from io import BytesIO
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 from openpyxl import Workbook
 
@@ -89,6 +90,16 @@ class TeacherAccountManagementApiTests(TestCase):
             content_type=(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
+        )
+
+    @staticmethod
+    def csv_upload(rows, *, encoding="utf-8-sig"):
+        content = "学号,姓名,班级\r\n" + "".join(
+            f"{number},{name},{class_name}\r\n"
+            for number, name, class_name in rows
+        )
+        return SimpleUploadedFile(
+            "学生名单.csv", content.encode(encoding), content_type="text/csv"
         )
 
     def test_global_account_forms_preserve_existing_form_validation(self):
@@ -202,6 +213,82 @@ class TeacherAccountManagementApiTests(TestCase):
         self.assertEqual(status_response.status_code, 200)
         self.assertEqual(status_response.json()["status"], "queued")
         self.assertEqual(status_response.json()["total_rows"], 2)
+
+    def test_course_csv_preview_marks_transfer_and_same_class_skip(self):
+        moving = User.objects.create_user(
+            username="MOVE-001", student_number="MOVE-001",
+            display_name="转班学生", role=User.Role.STUDENT,
+        )
+        already_here = User.objects.create_user(
+            username="HERE-001", student_number="HERE-001",
+            display_name="本班学生", role=User.Role.STUDENT,
+        )
+        CourseEnrollment.objects.create(
+            course=self.course, class_group=self.other_class, student=moving
+        )
+        CourseEnrollment.objects.create(
+            course=self.course, class_group=self.class_group, student=already_here
+        )
+
+        preview = self.client.post(
+            f"{self.manage_base}students/import/preview/",
+            {"file": self.csv_upload([
+                ["MOVE-001", "转班学生", str(self.class_group)],
+                ["HERE-001", "本班学生", str(self.class_group)],
+                ["NEW-001", "新学生", str(self.class_group)],
+            ])},
+        )
+
+        self.assertEqual(preview.status_code, 200)
+        rows = preview.json()["preview"]
+        self.assertEqual(
+            [(row["account_action"], row["enrollment_action"]) for row in rows],
+            [("reuse", "transfer"), ("reuse", "skip"), ("create", "create")],
+        )
+        self.assertEqual(rows[0]["source_class_name"], str(self.other_class))
+        self.assertEqual(
+            self.client.session[
+                f"course_student_import:{self.course.pk}:{self.class_group.pk}"
+            ]["rows"][0]["source_class_id"],
+            self.other_class.pk,
+        )
+
+        confirmed = self.post_json(
+            f"{self.manage_base}students/import/confirm/",
+            {
+                "preview_id": preview.json()["preview_id"],
+                "class_state_token": preview.json()["class_state_token"],
+            },
+        )
+        self.assertEqual(confirmed.status_code, 202)
+        call_command("run_student_import_jobs", once=True)
+        status_response = self.client.get(
+            f"{self.manage_base}students/import/jobs/{confirmed.json()['job_id']}/"
+        )
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()["status"], "succeeded")
+        self.assertEqual(
+            (status_response.json()["enrollments"],
+             status_response.json()["transferred"],
+             status_response.json()["skipped"]),
+            (1, 1, 1),
+        )
+        self.assertEqual(
+            CourseEnrollment.objects.get(course=self.course, student=moving).class_group_id,
+            self.class_group.pk,
+        )
+
+    def test_course_import_accepts_excel_saved_chinese_csv(self):
+        preview = self.client.post(
+            f"{self.manage_base}students/import/preview/",
+            {"file": self.csv_upload(
+                [["GB-001", "中文学生", str(self.class_group)]],
+                encoding="gb18030",
+            )},
+        )
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.json()["preview"][0]["display_name"], "中文学生")
 
     def test_course_import_rejects_preview_after_class_changes(self):
         preview_url = f"{self.manage_base}students/import/preview/"

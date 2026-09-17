@@ -417,6 +417,8 @@ class StudentImportJob(models.Model):
     processed_rows = models.PositiveIntegerField(default=0)
     created_accounts = models.PositiveIntegerField(default=0)
     enrollments = models.PositiveIntegerField(default=0)
+    transferred = models.PositiveIntegerField(default=0)
+    skipped = models.PositiveIntegerField(default=0)
     progress_stage = models.CharField(max_length=32, default="queued")
     error_code = models.CharField(max_length=64, blank=True)
     error_message = models.CharField(max_length=255, blank=True)

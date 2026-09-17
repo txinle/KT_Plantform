@@ -401,6 +401,7 @@ def student_import_template(request, course_pk, class_pk):
     content = build_student_import_workbook(
         [class_group],
         scope_label=f"{course.name}（{course.code} · {course.term}） / {class_group}",
+        allow_csv=True,
     )
     response = HttpResponse(
         content,
@@ -532,6 +533,7 @@ def student_import(request, course_pk, class_pk):
                         form.cleaned_data["file"],
                         [class_group],
                         allow_existing=True,
+                        allow_csv=True,
                     )
                 except StudentImportError as exc:
                     form.add_error("file", str(exc))

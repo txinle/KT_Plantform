@@ -5322,7 +5322,7 @@ components:
         preview:
           type: array
           items:
-            $ref: '#/components/schemas/StudentImportPreviewRow'
+            $ref: '#/components/schemas/CourseStudentImportPreviewRow'
         preview_id:
           type: string
           format: uuid
@@ -5332,6 +5332,31 @@ components:
       - class_state_token
       - preview
       - preview_id
+    CourseStudentImportPreviewRow:
+      type: object
+      properties:
+        student_number:
+          type: string
+        display_name:
+          type: string
+        class_id:
+          type: integer
+        class_name:
+          type: string
+        account_action:
+          $ref: '#/components/schemas/AccountActionEnum'
+        enrollment_action:
+          $ref: '#/components/schemas/EnrollmentActionEnum'
+        source_class_name:
+          type: string
+      required:
+      - account_action
+      - class_id
+      - class_name
+      - display_name
+      - enrollment_action
+      - source_class_name
+      - student_number
     CourseStudentImportResult:
       type: object
       properties:
@@ -5352,6 +5377,12 @@ components:
         enrollments:
           type: integer
           minimum: 0
+        transferred:
+          type: integer
+          minimum: 0
+        skipped:
+          type: integer
+          minimum: 0
         progress_stage:
           type: string
         error_code:
@@ -5366,8 +5397,10 @@ components:
       - job_id
       - processed_rows
       - progress_stage
+      - skipped
       - status
       - total_rows
+      - transferred
     CourseStudentImportResultStatusEnum:
       enum:
       - queued
@@ -6099,6 +6132,16 @@ components:
       - count
       - key
       - label
+    EnrollmentActionEnum:
+      enum:
+      - create
+      - transfer
+      - skip
+      type: string
+      description: |-
+        * `create` - create
+        * `transfer` - transfer
+        * `skip` - skip
     ExpectedRevision:
       type: object
       properties:
