@@ -91,6 +91,8 @@ services:
       POSTGRES_HOST: pgbouncer
       DATABASE_APPLICATION_NAME: kt-scheduler
       DJANGO_DEBUG: 0
+    volumes:
+      - media_data:/app/media
     depends_on:
       migrate:
         condition: service_completed_successfully

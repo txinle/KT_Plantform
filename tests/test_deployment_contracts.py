@@ -21,6 +21,14 @@ class DeploymentContractTests(TestCase):
         self.assertEqual(compose.count("env_file: .env"), 5)
         self.assertIn('"${HTTP_PORT:-80}:80"', compose)
 
+    def test_scheduler_and_web_share_persistent_export_storage(self):
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        web = compose.split("  web:\n", 1)[1].split("\n  scheduler:", 1)[0]
+        scheduler = compose.split("  scheduler:\n", 1)[1].split("\n  analytics-worker:", 1)[0]
+
+        self.assertIn("      - media_data:/app/media", web)
+        self.assertIn("      - media_data:/app/media", scheduler)
+
     def test_example_environment_lists_all_production_rollout_controls(self):
         example = (ROOT / ".env.example").read_text(encoding="utf-8")
 
