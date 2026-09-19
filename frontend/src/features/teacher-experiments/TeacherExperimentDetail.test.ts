@@ -40,6 +40,7 @@ import TeacherExperimentDetail from './TeacherExperimentDetail.vue'
 describe('TeacherExperimentDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.api.collectionParticipants.mockReset()
     mocks.route.query = {}
     mocks.api.detail.mockResolvedValue({
       id: 11,
@@ -210,12 +211,12 @@ describe('TeacherExperimentDetail', () => {
       updated_at: '2026-08-30T00:00:00Z',
     })
     mocks.api.classTasks.mockResolvedValue({ items: [{
-      id: 31, class_id: 5, class_name: '实验班', participant_count: 5,
+      id: 31, class_id: 5, class_name: '实验班', participant_count: 15,
       opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-09-03T00:00:00Z', business_status: '采集中',
       grading: { enabled: false, short_answer_questions: 0, submitted: 0, pending: 0, graded: 0 }, available_actions: [],
     }] })
     mocks.api.progress.mockResolvedValue({
-      task_id: 31, total_participants: 5, not_started: 1, in_progress: 1, completed: 1, expired: 1, invalidated: 1,
+      task_id: 31, total_participants: 15, not_started: 1, in_progress: 2, completed: 3, expired: 4, invalidated: 5,
     })
     const participant = {
         participant_id: 101, student_id: 19, student_number: 'S019', display_name: '李小满', class_id: 5,
@@ -248,12 +249,12 @@ describe('TeacherExperimentDetail', () => {
       '班级', '状态', '参与者', '未开始', '进行中', '正常完成', '已超时', '已作废',
     ])
     const summaryCells = summary.get('tbody tr').findAll('td')
-    expect(summaryCells[2]?.text()).toBe('5')
+    expect(summaryCells[2]?.text()).toBe('15')
     expect(summaryCells[3]?.text()).toBe('1')
-    expect(summaryCells[4]?.text()).toBe('1')
-    expect(summaryCells[5]?.text()).toBe('1')
-    expect(summaryCells[6]?.text()).toBe('1')
-    expect(summaryCells[7]?.text()).toBe('1')
+    expect(summaryCells[4]?.text()).toBe('2')
+    expect(summaryCells[5]?.text()).toBe('3')
+    expect(summaryCells[6]?.text()).toBe('4')
+    expect(summaryCells[7]?.text()).toBe('5')
 
     const desktop = wrapper.get('.kt-desktop-only')
     const mobile = wrapper.get('.kt-mobile-only')
