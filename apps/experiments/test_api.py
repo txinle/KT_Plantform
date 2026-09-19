@@ -1131,6 +1131,38 @@ class TeacherPublishPlanApiTests(TestCase):
         )
         self.assertTrue(other_student_numbers.isdisjoint(student_numbers))
 
+    def test_collection_participants_ignores_session_from_another_class_task(self):
+        fixture = self.collection_fixture()
+        class_a_task = fixture["tasks"][self.class_a.pk]
+        class_b_task = fixture["tasks"][self.class_b.pk]
+        snapshot = next(
+            snapshot
+            for snapshot in fixture["snapshots"].values()
+            if snapshot.class_task_id == class_a_task.pk
+            and snapshot.student.student_number == "PUB-001"
+        )
+        ExperimentSession.objects.create(
+            version=fixture["version"],
+            class_task=class_b_task,
+            participant_snapshot=snapshot,
+            student=snapshot.student,
+            class_snapshot=snapshot.class_snapshot,
+            class_snapshot_name=snapshot.class_snapshot.name_snapshot,
+            status=ExperimentSession.Status.IN_PROGRESS,
+        )
+
+        response = self.client.get(
+            self.collection_url(), {"class_id": self.class_a.pk}
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        participant = next(
+            item
+            for item in response.json()["items"]
+            if item["participant_id"] == snapshot.pk
+        )
+        self.assertEqual(participant["status"], "not_started")
+
     def test_collection_participants_query_count_is_bounded_for_a_page_of_25(self):
         self.collection_fixture(extra_student_count=30, extra_session_count=30)
 

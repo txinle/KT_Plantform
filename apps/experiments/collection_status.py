@@ -37,6 +37,7 @@ def collection_participant_queryset(
 ):
     session = ExperimentSession.objects.filter(
         participant_snapshot_id=OuterRef("pk"),
+        class_task_id=OuterRef("class_task_id"),
     ).order_by("pk")
     snapshots = (
         ExperimentVersionParticipantSnapshot.objects.filter(
