@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
     cancel: vi.fn(),
     manualClose: vi.fn(),
     releaseFeedback: vi.fn(),
+    collectionParticipants: vi.fn(),
   },
   deletion: {
     previewExperiment: vi.fn(), deleteExperiment: vi.fn(),
@@ -19,11 +20,16 @@ const mocks = vi.hoisted(() => ({
     previewClass: vi.fn(), deleteClass: vi.fn(), cleanup: vi.fn(),
   },
   push: vi.fn(),
+  replace: vi.fn(),
+  route: {
+    params: { courseId: '7', experimentId: '11' },
+    query: {} as Record<string, string>,
+  },
 }))
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { courseId: '7', experimentId: '11' } }),
-  useRouter: () => ({ push: mocks.push }),
+  useRoute: () => mocks.route,
+  useRouter: () => ({ push: mocks.push, replace: mocks.replace }),
 }))
 
 vi.mock('./api', () => ({ getTeacherExperimentApi: () => mocks.api }))
@@ -34,6 +40,7 @@ import TeacherExperimentDetail from './TeacherExperimentDetail.vue'
 describe('TeacherExperimentDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.route.query = {}
     mocks.api.detail.mockResolvedValue({
       id: 11,
       name: '认知诊断实验',
@@ -59,6 +66,19 @@ describe('TeacherExperimentDetail', () => {
     mocks.api.readiness.mockResolvedValue({ ready: true, issues: [], candidate_count: 12, participant_count: 0 })
     mocks.api.classTasks.mockResolvedValue({ items: [] })
     mocks.api.progress.mockResolvedValue({ total_participants: 0, not_started: 0, in_progress: 0, completed: 0 })
+    mocks.api.collectionParticipants.mockResolvedValue({
+      items: [],
+      page: { number: 1, size: 25, total_items: 0, total_pages: 1, start: 0, end: 0 },
+      filters: { class_id: null, status: '', q: '' },
+      class_choices: [{ id: 5, name: '实验班' }],
+      status_choices: [
+        { value: 'not_started', label: '未开始' },
+        { value: 'in_progress', label: '进行中' },
+        { value: 'completed', label: '正常完成' },
+        { value: 'expired', label: '已超时' },
+        { value: 'invalidated', label: '已作废' },
+      ],
+    })
     mocks.api.startPlan.mockResolvedValue({ id: 23 })
     mocks.api.releaseFeedback.mockResolvedValue({ id: 31 })
     mocks.deletion.previewExperiment.mockResolvedValue({
@@ -179,5 +199,186 @@ describe('TeacherExperimentDetail', () => {
     expect(mocks.api.releaseFeedback).toHaveBeenCalledWith(31)
     expect(mocks.api.detail).toHaveBeenCalledTimes(2)
     expect(mocks.api.classTasks).toHaveBeenCalledTimes(2)
+  })
+
+  it('loads collection participants only after opening the collection tab and renders all status details', async () => {
+    mocks.api.detail.mockResolvedValue({
+      id: 11, name: '认知诊断实验', description: '比较两种反馈策略', question_bank: { id: 3, name: '代数题库' },
+      status: 'published', status_label: '已发布', selection_mode_label: '全量题池', ordering_mode_label: '固定顺序',
+      feedback_mode_label: '仅显示已提交', feedback_release_policy_label: '教师人工发布', time_mode_label: '无时限',
+      resume_mode_label: '允许断点续答', confidence_mode_label: '不采集', can_edit: false, can_manage: true,
+      updated_at: '2026-08-30T00:00:00Z',
+    })
+    mocks.api.classTasks.mockResolvedValue({ items: [{
+      id: 31, class_id: 5, class_name: '实验班', participant_count: 5,
+      opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-09-03T00:00:00Z', business_status: '采集中',
+      grading: { enabled: false, short_answer_questions: 0, submitted: 0, pending: 0, graded: 0 }, available_actions: [],
+    }] })
+    mocks.api.progress.mockResolvedValue({
+      task_id: 31, total_participants: 5, not_started: 1, in_progress: 1, completed: 1, expired: 1, invalidated: 1,
+    })
+    mocks.api.collectionParticipants.mockResolvedValue({
+      items: [{
+        participant_id: 101, student_id: 19, student_number: 'S019', display_name: '李小满', class_id: 5,
+        class_name: '实验班', status: 'expired', status_label: '已超时',
+        started_at: '2026-09-01T01:00:00Z', ended_at: '2026-09-01T01:30:00Z', submission_count: 2,
+      }],
+      page: { number: 1, size: 25, total_items: 1, total_pages: 1, start: 1, end: 1 },
+      filters: { class_id: null, status: '', q: '' },
+      class_choices: [{ id: 5, name: '实验班' }],
+      status_choices: [
+        { value: 'not_started', label: '未开始' }, { value: 'in_progress', label: '进行中' },
+        { value: 'completed', label: '正常完成' }, { value: 'expired', label: '已超时' },
+        { value: 'invalidated', label: '已作废' },
+      ],
+    })
+
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+
+    expect(mocks.api.collectionParticipants).not.toHaveBeenCalled()
+    await wrapper.get('#experiment-tab-collection').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.collectionParticipants).toHaveBeenCalledTimes(1)
+    expect(mocks.api.collectionParticipants).toHaveBeenCalledWith(11, { page: 1 })
+    const collectionText = wrapper.get('#experiment-panel-collection').text()
+    expect(collectionText).toContain('正常完成')
+    expect(collectionText).toContain('已超时')
+    expect(collectionText).toContain('已作废')
+    expect(collectionText).toContain('5')
+    expect(wrapper.get('.kt-desktop-only').text()).toContain('李小满')
+    expect(wrapper.get('.kt-desktop-only').text()).toContain('S019')
+    expect(wrapper.get('.kt-desktop-only').text()).toContain('实验班')
+    expect(wrapper.get('.kt-desktop-only').text()).toContain('已超时')
+    expect(wrapper.get('.kt-desktop-only').text()).toContain('提交 2 题')
+    expect(wrapper.get('.kt-desktop-only').text()).toContain('2026')
+    expect(wrapper.get('.kt-mobile-only').text()).toContain('李小满')
+    expect(wrapper.get('.kt-mobile-only').text()).toContain('S019')
+    expect(wrapper.get('.kt-mobile-only').text()).toContain('实验班')
+    expect(wrapper.get('.kt-mobile-only').text()).toContain('已超时')
+    expect(wrapper.get('.kt-mobile-only').text()).toContain('提交 2 题')
+    expect(wrapper.get('.kt-mobile-only').text()).toContain('2026')
+  })
+
+  it('persists collection filters in the URL and requests the corresponding participants', async () => {
+    mocks.api.detail.mockResolvedValue({
+      id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
+      selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
+      feedback_release_policy_label: '教师人工发布', time_mode_label: '无时限', resume_mode_label: '允许断点续答',
+      confidence_mode_label: '不采集', can_edit: false, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+    })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+    await wrapper.get('#experiment-tab-collection').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('#collection-filter-class').setValue('5')
+    await wrapper.get('#collection-filter-status').setValue('expired')
+    await wrapper.get('#collection-filter-query').setValue('S019')
+    await wrapper.get('[data-collection-filter]').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.replace).toHaveBeenCalledWith({ query: { tab: 'collection', class_id: '5', status: 'expired', q: 'S019' } })
+    expect(mocks.api.collectionParticipants).toHaveBeenLastCalledWith(11, {
+      classId: 5, status: 'expired', query: 'S019', page: 1,
+    })
+  })
+
+  it('restores collection filters and page from the URL on initial load', async () => {
+    mocks.route.query = { tab: 'collection', class_id: '5', status: 'expired', q: 'S019', page: '2' }
+    mocks.api.detail.mockResolvedValue({
+      id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
+      selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
+      feedback_release_policy_label: '教师人工发布', time_mode_label: '无时限', resume_mode_label: '允许断点续答',
+      confidence_mode_label: '不采集', can_edit: false, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+    })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+
+    expect(wrapper.get('#experiment-tab-collection').attributes('aria-selected')).toBe('true')
+    expect(mocks.api.collectionParticipants).toHaveBeenCalledWith(11, {
+      classId: 5, status: 'expired', query: 'S019', page: 2,
+    })
+  })
+
+  it('shows a clearable empty state and resets filters to the collection tab', async () => {
+    mocks.route.query = { tab: 'collection', class_id: '5', status: 'expired', q: 'S019' }
+    mocks.api.detail.mockResolvedValue({
+      id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
+      selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
+      feedback_release_policy_label: '教师人工发布', time_mode_label: '无时限', resume_mode_label: '允许断点续答',
+      confidence_mode_label: '不采集', can_edit: false, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+    })
+    mocks.api.collectionParticipants.mockResolvedValueOnce({
+      items: [], page: { number: 1, size: 25, total_items: 0, total_pages: 1, start: 0, end: 0 },
+      filters: { class_id: 5, status: 'expired', q: 'S019' }, class_choices: [{ id: 5, name: '实验班' }],
+      status_choices: [{ value: 'expired', label: '已超时' }],
+    })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前筛选条件下没有学生')
+    expect(wrapper.find('[data-collection-clear]').exists()).toBe(true)
+    await wrapper.get('[data-collection-clear]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.replace).toHaveBeenCalledWith({ query: { tab: 'collection' } })
+    expect(mocks.api.collectionParticipants).toHaveBeenLastCalledWith(11, { page: 1 })
+  })
+
+  it('clears stale participant rows when a subsequent collection request fails', async () => {
+    mocks.route.query = { tab: 'collection' }
+    mocks.api.detail.mockResolvedValue({
+      id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
+      selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
+      feedback_release_policy_label: '教师人工发布', time_mode_label: '无时限', resume_mode_label: '允许断点续答',
+      confidence_mode_label: '不采集', can_edit: false, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+    })
+    mocks.api.collectionParticipants.mockResolvedValueOnce({
+      items: [{
+        participant_id: 101, student_id: 19, student_number: 'S019', display_name: '超时学生', class_id: 5,
+        class_name: '实验班', status: 'expired', status_label: '已超时', started_at: '2026-09-01T01:00:00Z',
+        ended_at: '2026-09-01T01:30:00Z', submission_count: 2,
+      }],
+      page: { number: 1, size: 25, total_items: 1, total_pages: 1, start: 1, end: 1 }, filters: { class_id: null, status: '', q: '' },
+      class_choices: [{ id: 5, name: '实验班' }], status_choices: [{ value: 'expired', label: '已超时' }],
+    })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+    expect(wrapper.text()).toContain('超时学生')
+
+    mocks.api.collectionParticipants.mockRejectedValueOnce(new Error('学生采集状态加载失败'))
+    await wrapper.get('[data-collection-filter]').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('学生采集状态加载失败')
+    expect(wrapper.text()).not.toContain('超时学生')
+  })
+
+  it('keeps active collection filters when navigating to the next participant page', async () => {
+    mocks.route.query = { tab: 'collection', class_id: '5', status: 'expired', q: 'S019' }
+    mocks.api.detail.mockResolvedValue({
+      id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
+      selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
+      feedback_release_policy_label: '教师人工发布', time_mode_label: '无时限', resume_mode_label: '允许断点续答',
+      confidence_mode_label: '不采集', can_edit: false, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+    })
+    mocks.api.collectionParticipants.mockResolvedValue({
+      items: [], page: { number: 1, size: 25, total_items: 26, total_pages: 2, start: 1, end: 25 },
+      filters: { class_id: 5, status: 'expired', q: 'S019' }, class_choices: [{ id: 5, name: '实验班' }],
+      status_choices: [{ value: 'expired', label: '已超时' }],
+    })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+    await wrapper.get('[data-next]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.replace).toHaveBeenCalledWith({
+      query: { tab: 'collection', class_id: '5', status: 'expired', q: 'S019', page: '2' },
+    })
+    expect(mocks.api.collectionParticipants).toHaveBeenLastCalledWith(11, {
+      classId: 5, status: 'expired', query: 'S019', page: 2,
+    })
   })
 })
