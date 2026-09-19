@@ -66,6 +66,18 @@ class DeploymentContractTests(TestCase):
         self.assertIn("PUBLICATION_WORKER_CPUS", compose)
         self.assertIn("PUBLICATION_WORKER_MEMORY", compose)
 
+    def test_analytics_worker_has_configurable_resource_limits(self):
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        analytics_worker = compose.split("  analytics-worker:\n", 1)[1].split(
+            "\n  publication-worker:", 1
+        )[0]
+
+        self.assertIn("ANALYTICS_WORKER_CPUS", analytics_worker)
+        self.assertIn("ANALYTICS_WORKER_MEMORY", analytics_worker)
+        self.assertIn("ANALYTICS_WORKER_CPUS=0.75", example)
+        self.assertIn("ANALYTICS_WORKER_MEMORY=512M", example)
+
     @patch.dict(
         os.environ,
         {

@@ -15,6 +15,19 @@ describe('TeacherDataQuality', () => {
     course: { id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' },
     scope: { values: {}, query: '', display: '数据实验 · 实验班', is_single_version: false, is_complete: true },
     counts: { '可用': 2, '需要核查': 1 },
+    preparation: {
+      state: 'preparing',
+      message: '2 名已结束学生的数据正在后台整理，完成后将自动显示。',
+      updated_at: null,
+      result_version: null,
+      projection_version: 'research-session-v3',
+      stale: false,
+      ready_count: 3,
+      pending_count: 2,
+      failed_count: 0,
+      updating_count: 0,
+      oldest_pending_seconds: 17,
+    },
     items: [{
       student_number: 'DATA-001', student_name: '张同学', session_ref: 'S-001', question_code: 'Q-01',
       state: 'warning', state_label: '需要核查', problem: '行为事件时间不完整', impact: '无法可靠比较步骤间隔',
@@ -33,5 +46,13 @@ describe('TeacherDataQuality', () => {
     expect(wrapper.text()).toContain('行为事件时间不完整')
     expect(wrapper.text()).toContain('无法可靠比较步骤间隔')
     expect(wrapper.text()).not.toContain('warning')
+  })
+
+  it('shows only the aggregate preparation message for unfinished projections', async () => {
+    const wrapper = mount(TeacherDataQuality)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('2 名已结束学生的数据正在后台整理')
+    expect(wrapper.text()).not.toContain('DATA-002')
   })
 })

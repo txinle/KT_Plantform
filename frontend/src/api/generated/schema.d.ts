@@ -2646,6 +2646,11 @@ export interface components {
             result_version: string | null;
             projection_version: string;
             stale: boolean;
+            ready_count: number;
+            pending_count: number;
+            failed_count: number;
+            updating_count: number;
+            oldest_pending_seconds: number | null;
         };
         DataCenterPreviewColumn: {
             name: string;
@@ -2659,6 +2664,7 @@ export interface components {
             counts: {
                 [key: string]: number;
             };
+            preparation?: components["schemas"]["DataCenterPreparation"];
         };
         DataCenterQualityRow: {
             student_number: string;

@@ -5,12 +5,15 @@ import { getBootstrapContext } from '@/app/bootstrap'
 type GeneratedDataCenterScope = components['schemas']['DataCenterScope']
 type GeneratedDataCenterAdvanced = components['schemas']['DataCenterAdvanced']
 type GeneratedDataCenterExportCatalog = components['schemas']['DataCenterExportCatalog']
+type GeneratedDataCenterQualityCollection = components['schemas']['DataCenterQualityCollection']
 
 export type DataCenterScope = Omit<GeneratedDataCenterScope, 'current'> & {
   current: GeneratedDataCenterScope['current'] & { experiment_ids: number[] }
 }
 export type DataCenterOverview = components['schemas']['DataCenterOverview']
-export type DataCenterQualityCollection = components['schemas']['DataCenterQualityCollection']
+export type DataCenterQualityCollection = GeneratedDataCenterQualityCollection & {
+  preparation?: ResearchPreparation
+}
 export type DataCenterExportHistoryCollection = components['schemas']['DataCenterExportHistoryCollection']
 
 export interface ResearchStudent {
@@ -82,12 +85,17 @@ export interface ResearchBehavior {
 }
 
 export interface ResearchPreparation {
-  state: 'ready' | 'preparing' | 'updating' | 'failed' | 'in_progress' | 'invalidated'
+  state: 'ready' | 'preparing' | 'updating' | 'failed'
   message: string
   updated_at: string | null
   result_version: string | null
   projection_version: string
   stale: boolean
+  ready_count: number
+  pending_count: number
+  failed_count: number
+  updating_count: number
+  oldest_pending_seconds: number | null
 }
 
 export interface ResearchBehaviorCursor {

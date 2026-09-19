@@ -47,6 +47,70 @@ class AdvancedMaterializedApiTests(TestCase):
         self.assertTrue(item.is_current, item.error)
         return item
 
+    def _mark_ready(self, session):
+        from .advanced_materialized import (
+            _fallback_session_row,
+            _fallback_session_summary,
+        )
+
+        summary = _fallback_session_summary(session)
+        now = timezone.now()
+        return ResearchSessionMaterialization.objects.create(
+            session=session,
+            status=ResearchSessionMaterialization.Status.SUCCEEDED,
+            is_current=True,
+            finished_at=now,
+            activated_at=now,
+            session_summary=summary,
+            session_row=_fallback_session_row(summary),
+        )
+
+    def test_in_progress_session_is_not_exposed(self):
+        self.session.status = ExperimentSession.Status.IN_PROGRESS
+        self.session.completed_at = None
+        self.session.terminal_at = None
+        self.session.save(update_fields=["status", "completed_at", "terminal_at"])
+
+        response = self.client.get(self.api("advanced/"), self._query(table="sessions"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["selected_table"]["total_items"], 0)
+        self.assertEqual(payload["preview"]["page"]["total_items"], 0)
+        self.assertEqual(payload["preview"]["rows"], [])
+        self.assertEqual(payload["workspace"]["sessions"], [])
+        self.assertEqual(payload["preparation"]["pending_count"], 0)
+
+        quality = self.client.get(self.api("quality/"), self._query()).json()
+        self.assertEqual(quality["page"]["total_items"], 0)
+        self.assertEqual(quality["preparation"]["pending_count"], 0)
+
+    def test_terminal_session_waiting_for_projection_is_anonymous(self):
+        response = self.client.get(self.api("advanced/"), self._query(table="sessions"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["selected_table"]["total_items"], 0)
+        self.assertEqual(payload["preview"]["page"]["total_items"], 0)
+        self.assertEqual(payload["preview"]["rows"], [])
+        self.assertEqual(payload["workspace"]["sessions"], [])
+        self.assertIsNone(payload["workspace"]["session"])
+        self.assertEqual(payload["preparation"]["state"], "preparing")
+        self.assertEqual(payload["preparation"]["pending_count"], 1)
+        self.assertGreaterEqual(payload["preparation"]["oldest_pending_seconds"], 0)
+        self.assertNotIn(self.student.student_number, payload["preparation"]["message"])
+
+        quality = self.client.get(self.api("quality/"), self._query()).json()
+        self.assertEqual(quality["page"]["total_items"], 0)
+        self.assertEqual(quality["items"], [])
+        self.assertEqual(quality["preparation"]["pending_count"], 1)
+
+        student_view = self.client.get(
+            self.api("advanced/"),
+            self._query(view="student", student_id=self.student.pk),
+        ).json()
+        self.assertIsNone(student_view["workspace"]["student"])
+
     def test_selected_table_reads_materialized_rows_without_live_bundle(self):
         item = self._materialize()
 
@@ -68,6 +132,44 @@ class AdvancedMaterializedApiTests(TestCase):
         self.assertLess(len(queries), 40)
         self.assertNotIn('"analytics_researchsessionvisit"', sql)
         self.assertNotIn('"analytics_researchsessionbehavior"', sql)
+
+    def test_quality_reads_materialized_rows_without_live_research_scans(self):
+        self._materialize()
+
+        with patch(
+            "apps.analytics.api.views.build_quality_report",
+            side_effect=AssertionError("live quality builder called"),
+        ), patch(
+            "apps.analytics.api.views.read_research_dataset",
+            side_effect=AssertionError("live research dataset called"),
+        ):
+            response = self.client.get(self.api("quality/"), self._query())
+
+        self.assertEqual(response.status_code, 200, response.content[:300])
+        payload = response.json()
+        self.assertEqual(payload["page"]["total_items"], 5)
+        self.assertEqual(payload["preparation"]["state"], "ready")
+        self.assertEqual(payload["preparation"]["ready_count"], 1)
+        self.assertEqual({item["question_code"] for item in payload["items"]}, {"Q001"})
+
+    def test_failed_refresh_keeps_current_rows_and_reports_anonymous_failure(self):
+        current = self._materialize()
+        ResearchSessionMaterialization.objects.create(
+            session=self.session,
+            status=ResearchSessionMaterialization.Status.FAILED,
+            finished_at=timezone.now(),
+            error="refresh failed",
+        )
+
+        response = self.client.get(self.api("advanced/"), self._query(table="sessions"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["preview"]["page"]["total_items"], 1)
+        self.assertEqual(payload["preparation"]["state"], "failed")
+        self.assertEqual(payload["preparation"]["ready_count"], 1)
+        self.assertEqual(payload["preparation"]["failed_count"], 1)
+        self.assertEqual(payload["preparation"]["result_version"], str(current.pk))
 
     def test_question_table_does_not_load_behavior_child_rows(self):
         self._materialize()
@@ -254,6 +356,7 @@ class AdvancedMaterializedApiTests(TestCase):
         self.assertEqual(second["preview"]["page"]["number"], 2)
 
     def test_student_search_is_server_limited_and_session_options_are_scoped(self):
+        self._materialize()
         for index in range(25):
             student = User.objects.create_user(
                 username=f"search-student-{index:02d}",
@@ -264,13 +367,14 @@ class AdvancedMaterializedApiTests(TestCase):
             CourseEnrollment.objects.create(
                 course=self.course, class_group=self.class_group, student=student
             )
-            ExperimentSession.objects.create(
+            session = ExperimentSession.objects.create(
                 version=self.version,
                 student=student,
                 class_snapshot=self.class_snapshot,
                 class_snapshot_name=self.class_snapshot.display_name,
                 status=ExperimentSession.Status.COMPLETED,
             )
+            self._mark_ready(session)
 
         search = self.client.get(
             self.api("advanced/students/"), self._query(q="检索学生")
@@ -293,6 +397,8 @@ class AdvancedMaterializedApiTests(TestCase):
     def test_student_view_keeps_all_student_sessions_when_one_session_is_selected(self):
         from .advanced_materialized import _session_reference
 
+        self._materialize()
+
         version = ExperimentVersion.objects.create(
             experiment=self.experiment,
             version_number=self.version.version_number + 1,
@@ -312,6 +418,7 @@ class AdvancedMaterializedApiTests(TestCase):
             class_snapshot_name=class_snapshot.display_name,
             status=ExperimentSession.Status.COMPLETED,
         )
+        self._mark_ready(other)
 
         response = self.client.get(
             self.api("advanced/"),
@@ -330,6 +437,8 @@ class AdvancedMaterializedApiTests(TestCase):
 
     def test_student_view_keeps_an_explicit_session_older_than_display_limit(self):
         from .advanced_materialized import _session_reference
+
+        self._materialize()
 
         terminal_at = timezone.now()
         versions = ExperimentVersion.objects.bulk_create(
@@ -354,7 +463,7 @@ class AdvancedMaterializedApiTests(TestCase):
                 for version in versions
             ]
         )
-        ExperimentSession.objects.bulk_create(
+        sessions = ExperimentSession.objects.bulk_create(
             [
                 ExperimentSession(
                     version=version,
@@ -368,6 +477,8 @@ class AdvancedMaterializedApiTests(TestCase):
                 for version, class_snapshot in zip(versions, snapshots)
             ]
         )
+        for session in sessions:
+            self._mark_ready(session)
 
         response = self.client.get(
             self.api("advanced/"),

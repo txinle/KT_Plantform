@@ -39,6 +39,7 @@ from ..research_dataset import read_research_dataset, read_research_bundle, work
 from ..research_contract import file_catalog
 from ..research_materialization_jobs import materialization_enabled_for_course
 from ..quality_reports import EvaluationState, QualityReport, build_quality_report
+from ..quality_materialized import materialized_quality_payload
 from ..services import (
     ExportContractError,
     create_export_job,
@@ -432,6 +433,20 @@ class TeacherDataCenterQualityView(APIView):
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
         scope = _scope_from_request(request, course)
+        if materialization_enabled_for_course(course.pk):
+            payload = materialized_quality_payload(scope)
+            paginator = FixedPageNumberPagination()
+            page = paginator.paginate_queryset(payload["items"], request, view=self)
+            response = paginator.get_paginated_response(page)
+            response.data.update(
+                {
+                    "course": _course_payload(course),
+                    "scope": _research_scope_payload(scope),
+                    "counts": payload["counts"],
+                    "preparation": payload["preparation"],
+                }
+            )
+            return response
         report = build_quality_report(scope) if scope.is_complete else None
         state_labels = {"PASS": "记录正常", "WARN": "需要注意", "FAIL": "记录不一致", "NOT_EVALUABLE": "无法评估", "NOT_APPLICABLE": "不适用"}
         explanations = {

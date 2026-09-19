@@ -114,6 +114,11 @@ services:
         condition: service_completed_successfully
       pgbouncer:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: ${ANALYTICS_WORKER_CPUS:-0.75}
+          memory: ${ANALYTICS_WORKER_MEMORY:-512M}
 
   publication-worker:
     build:

@@ -5845,13 +5845,34 @@ components:
           type: string
         stale:
           type: boolean
+        ready_count:
+          type: integer
+          minimum: 0
+        pending_count:
+          type: integer
+          minimum: 0
+        failed_count:
+          type: integer
+          minimum: 0
+        updating_count:
+          type: integer
+          minimum: 0
+        oldest_pending_seconds:
+          type: integer
+          minimum: 0
+          nullable: true
       required:
+      - failed_count
       - message
+      - oldest_pending_seconds
+      - pending_count
       - projection_version
+      - ready_count
       - result_version
       - stale
       - state
       - updated_at
+      - updating_count
     DataCenterPreviewColumn:
       type: object
       properties:
@@ -5880,6 +5901,8 @@ components:
           additionalProperties:
             type: integer
             minimum: 0
+        preparation:
+          $ref: '#/components/schemas/DataCenterPreparation'
       required:
       - counts
       - course

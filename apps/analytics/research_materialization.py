@@ -36,10 +36,11 @@ from .models import (
     ResearchSessionResponse,
     ResearchSessionVisit,
 )
+from .quality_reports import build_quality_report
 from .research_dataset import read_research_bundle
 
 
-PROJECTION_VERSION = "research-session-v2"
+PROJECTION_VERSION = "research-session-v3"
 MAX_RETRIES = 3
 MAX_SOURCE_READ_ATTEMPTS = 3
 
@@ -389,6 +390,34 @@ def _payload_without_row(item):
     return {key: value for key, value in item.items() if key != "row"}
 
 
+def _quality_rows_for_session(session, bundle):
+    question_refs = {
+        int(row["assigned_order"]): row.get("question_ref", "")
+        for row in bundle.get("responses", [])
+        if row.get("assigned_order") is not None
+    }
+    attempt_orders = dict(
+        Attempt.objects.filter(session_id=session.pk).values_list(
+            "pk", "assignment__assigned_sequence_index"
+        )
+    )
+    report = build_quality_report(_scope_for_session(session))
+    return [
+        {
+            "attempt_id": row.attempt_id,
+            "question_code": question_refs.get(attempt_orders.get(row.attempt_id), ""),
+            "rule": row.rule,
+            "state": str(row.state),
+            "detail": row.detail,
+            "rule_version": row.rule_version,
+            "entity_type": row.entity_type,
+            "reason_code": row.reason_code,
+            "source_mode": row.source_mode,
+        }
+        for row in report.rows
+    ]
+
+
 def _mark_invalidated_locked(item, *, now):
     ResearchSessionMaterialization.objects.filter(
         session_id=item.session_id, is_current=True
@@ -435,7 +464,9 @@ def _lock_session_sources(session_id):
 
 
 @transaction.atomic
-def _store_success(item_id, *, worker_id, bundle, cutoff, watermarks, now=None):
+def _store_success(
+    item_id, *, worker_id, bundle, cutoff, watermarks, quality_rows=(), now=None
+):
     requested_now = now
     lease_checked_at = now or timezone.now()
     item = ResearchSessionMaterialization.objects.select_for_update().get(pk=item_id)
@@ -531,6 +562,7 @@ def _store_success(item_id, *, worker_id, bundle, cutoff, watermarks, now=None):
     item.error = ""
     item.session_summary = sessions[0]
     item.session_row = session_rows[0]
+    item.quality_rows = list(quality_rows)
     item.row_counts = {
         "responses": len(responses), "visits": len(visits), "behavior": len(behavior)
     }
@@ -573,10 +605,11 @@ def run_session_materialization(item, *, worker_id):
             raise ValueError("research materialization lease is not owned by this worker")
         for _attempt in range(MAX_SOURCE_READ_ATTEMPTS):
             bundle, cutoff, watermarks = _read_consistent_bundle(current.session)
+            quality_rows = _quality_rows_for_session(current.session, bundle)
             try:
                 return _store_success(
                     current.pk, worker_id=worker_id, bundle=bundle,
-                    cutoff=cutoff, watermarks=watermarks,
+                    cutoff=cutoff, watermarks=watermarks, quality_rows=quality_rows,
                 )
             except SourceChanged:
                 continue

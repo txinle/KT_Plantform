@@ -314,6 +314,7 @@ class ResearchSessionMaterialization(models.Model):
     error = models.TextField(blank=True, default="")
     session_summary = models.JSONField(default=dict)
     session_row = models.JSONField(default=list)
+    quality_rows = models.JSONField(default=list)
     row_counts = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
 

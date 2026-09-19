@@ -56,6 +56,13 @@ onMounted(() => load())
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <p v-if="!data && !error" role="status">正在加载数据质量报告…</p>
   <template v-else-if="data">
+    <Alert
+      v-if="data.preparation && data.preparation.state !== 'ready'"
+      :tone="data.preparation.state === 'failed' ? 'danger' : data.preparation.state === 'updating' ? 'info' : 'warning'"
+      data-testid="preparation-state"
+    >
+      <strong>研究数据状态：</strong>{{ data.preparation.message }}
+    </Alert>
     <section class="kt-quality-counts" aria-label="质量状态汇总">
       <article v-for="(count, label) in data.counts" :key="label" class="kt-card"><StatusBadge :label="label" :tone="tone(label)" /><strong>{{ count }}</strong></article>
     </section>

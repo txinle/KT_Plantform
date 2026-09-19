@@ -325,6 +325,15 @@ class ResearchMaterializationServiceTests(TestCase):
         self.assertEqual(first.response_rows.get().payload, bundle["responses"][0])
         self.assertEqual(first.visit_rows.get().row, ["visit-row"])
         self.assertEqual(first.behavior_rows.get().row, ["behavior-row"])
+        self.assertEqual(len(first.quality_rows), 5)
+        self.assertEqual(
+            {row["question_code"] for row in first.quality_rows},
+            {"Q001"},
+        )
+        self.assertEqual(
+            {row["state"] for row in first.quality_rows},
+            {"NOT_EVALUABLE", "NOT_APPLICABLE"},
+        )
         second = enqueue(self.session)
         claim(worker_id="worker")
         with patch("apps.analytics.research_materialization.read_research_bundle", return_value=(bundle, cutoff)):

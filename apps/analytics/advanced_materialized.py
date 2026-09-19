@@ -11,7 +11,8 @@ from urllib.parse import urlencode
 
 from django.core import signing
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Min, OuterRef, Q, Subquery
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -156,7 +157,12 @@ def _fallback_session_row(summary):
 def _session_queryset(scope):
     return (
         scope.sessions()
-        .exclude(status=ExperimentSession.Status.INVALIDATED)
+        .filter(
+            status__in=(
+                ExperimentSession.Status.COMPLETED,
+                ExperimentSession.Status.EXPIRED,
+            )
+        )
         .select_related("student", "version__experiment__course", "class_snapshot")
         .order_by("pk")
     )
@@ -185,7 +191,7 @@ def _table_catalog(course, session_queryset, current):
     counts = _row_counts(current)
     question_count = Question.objects.filter(bank__course=course).count()
     totals = {
-        "sessions": session_queryset.count(),
+        "sessions": len(current),
         "questions": question_count,
         "knowledge_points": Concept.objects.filter(course=course).count(),
         "question_kc_mapping": question_count,
@@ -273,9 +279,7 @@ def _standard_preview(course, scope, session_queryset, current, key, params):
         sessions = list(session_queryset[start : start + PAGE_SIZE])
         rows = []
         for session in sessions:
-            item = current_by_session.get(session.pk)
-            summary = item.session_summary if item else _fallback_session_summary(session)
-            rows.append(item.session_row if item else _fallback_session_row(summary))
+            rows.append(current_by_session[session.pk].session_row)
         headers = SESSION_HEADERS
     elif key in {"questions", "knowledge_points", "question_kc_mapping"}:
         headers, rows, total, page = _library_page(course, key, page)
@@ -444,39 +448,85 @@ def _selected_session(session_queryset, scope):
     return (sessions[0] if sessions else None), sessions
 
 
-def _preparation(session, current=None):
-    if session is None:
-        return {
-            "state": "ready",
-            "message": "当前范围没有会话。",
-            "updated_at": None,
-            "result_version": None,
-            "projection_version": PROJECTION_VERSION,
-            "stale": False,
-        }
-    if session.status == ExperimentSession.Status.IN_PROGRESS:
-        state, message = "in_progress", "学生正在作答，结束后开始整理研究数据。"
-    elif session.status == ExperimentSession.Status.INVALIDATED:
-        state, message = "invalidated", "该会话已作废，不进入研究数据派生结果。"
-    elif current is None:
-        latest = session.research_materializations.order_by("-created_at").first()
-        if latest and latest.status == latest.Status.FAILED:
-            state, message = "failed", "研究数据整理失败，系统将保留错误信息供重试。"
-        else:
-            state, message = "preparing", "会话已结束，研究数据正在后台整理。"
+def _preparation(session_queryset, current):
+    current_ids = {item.session_id for item in current}
+    total = session_queryset.count()
+    latest_status = ResearchSessionMaterialization.objects.filter(
+        session_id=OuterRef("pk")
+    ).order_by("-created_at", "-pk").values("status")[:1]
+    with_latest_status = session_queryset.annotate(
+        latest_materialization_status=Subquery(latest_status)
+    )
+    failed_count = with_latest_status.filter(
+        latest_materialization_status=ResearchSessionMaterialization.Status.FAILED
+    ).count()
+    pending_sessions = with_latest_status.exclude(pk__in=current_ids).filter(
+        Q(latest_materialization_status__isnull=True)
+        | ~Q(
+            latest_materialization_status=ResearchSessionMaterialization.Status.FAILED
+        )
+    )
+    pending_count = pending_sessions.count()
+    oldest_pending_at = pending_sessions.aggregate(
+        value=Min(Coalesce("terminal_at", "completed_at"))
+    )["value"]
+    oldest_pending_seconds = (
+        max(0, int((timezone.now() - oldest_pending_at).total_seconds()))
+        if oldest_pending_at
+        else None
+    )
+    updating_count = (
+        ResearchSessionMaterialization.objects.filter(
+            session_id__in=current_ids,
+            status__in=(
+                ResearchSessionMaterialization.Status.QUEUED,
+                ResearchSessionMaterialization.Status.RUNNING,
+            ),
+        )
+        .values("session_id")
+        .distinct()
+        .count()
+    )
+    if failed_count:
+        state = "failed"
+        message = f"{failed_count} 名已结束学生的数据整理失败，个人数据暂不显示。"
+    elif pending_count:
+        state = "preparing"
+        wait_note = (
+            f"最早已等待 {oldest_pending_seconds} 秒。"
+            if oldest_pending_seconds is not None
+            else ""
+        )
+        message = (
+            f"{pending_count} 名已结束学生的数据正在后台整理，完成后将自动显示。"
+            f"{wait_note}"
+        )
+    elif updating_count:
+        state = "updating"
+        message = f"{updating_count} 名学生已有数据可查看，更新版本正在后台整理。"
+    elif total:
+        state, message = "ready", "研究数据已整理完成。"
     else:
-        active = session.research_materializations.filter(
-            status__in=(current.Status.QUEUED, current.Status.RUNNING)
-        ).exists()
-        state = "updating" if active else "ready"
-        message = "已有结果可用，更新版本正在后台整理。" if active else "研究数据已整理完成。"
+        state, message = "ready", "当前范围暂无已完成学生数据。"
+    latest_current = max(
+        current,
+        key=lambda item: (item.finished_at or item.created_at, item.pk),
+        default=None,
+    )
     return {
         "state": state,
         "message": message,
-        "updated_at": current.finished_at if current else None,
-        "result_version": str(current.pk) if current else None,
-        "projection_version": current.projection_version if current else PROJECTION_VERSION,
-        "stale": state == "updating",
+        "updated_at": latest_current.finished_at if latest_current else None,
+        "result_version": str(latest_current.pk) if latest_current else None,
+        "projection_version": (
+            latest_current.projection_version if latest_current else PROJECTION_VERSION
+        ),
+        "stale": updating_count > 0,
+        "ready_count": len(current_ids),
+        "pending_count": pending_count,
+        "failed_count": failed_count,
+        "updating_count": updating_count,
+        "oldest_pending_seconds": oldest_pending_seconds,
     }
 
 
@@ -518,13 +568,18 @@ def materialized_advanced_payload(course, scope, params):
         if view == "student"
         else scope
     )
-    session_queryset = (
+    terminal_session_queryset = (
         _session_queryset(read_scope)
         if scope.is_complete
         else ExperimentSession.objects.none()
     )
-    current = _current_materializations(session_queryset) if scope.is_complete else []
+    current = (
+        _current_materializations(terminal_session_queryset)
+        if scope.is_complete
+        else []
+    )
     current_by_session = {item.session_id: item for item in current}
+    session_queryset = terminal_session_queryset.filter(pk__in=current_by_session)
     tables = _table_catalog(course, session_queryset, current)
     selected = next((item for item in tables if item["key"] == selected_key), tables[0])
     selected_key = selected["key"]
@@ -540,16 +595,9 @@ def materialized_advanced_payload(course, scope, params):
 
     selected_session, visible_sessions = _selected_session(session_queryset, scope)
     selected_current = current_by_session.get(selected_session.pk) if selected_session else None
-    session_summaries = [
-        (
-            current_by_session[item.pk].session_summary
-            if item.pk in current_by_session
-            else _fallback_session_summary(item)
-        )
-        for item in visible_sessions
-    ]
+    session_summaries = [current_by_session[item.pk].session_summary for item in visible_sessions]
     student = None
-    if scope.student_id:
+    if scope.student_id and visible_sessions:
         selected_student = User.objects.filter(pk=scope.student_id).first()
         if selected_student:
             student = _student_summary(course, selected_student, visible_sessions)
@@ -599,8 +647,8 @@ def materialized_advanced_payload(course, scope, params):
         ),
         "session": (
             current_by_session[selected_session.pk].session_summary
-            if selected_session and selected_session.pk in current_by_session
-            else (_fallback_session_summary(selected_session) if selected_session else None)
+            if selected_session
+            else None
         ),
         "responses": responses,
         "visits": visits,
@@ -651,7 +699,7 @@ def materialized_advanced_payload(course, scope, params):
         "preview": preview,
         "view": view,
         "workspace": workspace,
-        "preparation": _preparation(selected_session, selected_current),
+        "preparation": _preparation(terminal_session_queryset, current),
     }
 
 
@@ -664,6 +712,10 @@ def materialized_student_search(course, scope, query):
         search=None,
     )
     sessions = _session_queryset(base)
+    sessions = sessions.filter(
+        research_materializations__status=ResearchSessionMaterialization.Status.SUCCEEDED,
+        research_materializations__is_current=True,
+    )
     students = User.objects.filter(
         role=User.Role.STUDENT, assessment_sessions__in=sessions
     )

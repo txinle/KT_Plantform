@@ -374,12 +374,27 @@ class DataCenterQualityRowSerializer(serializers.Serializer):
     impact = serializers.CharField()
 
 
+class DataCenterPreparationSerializer(serializers.Serializer):
+    state = serializers.CharField()
+    message = serializers.CharField()
+    updated_at = serializers.DateTimeField(allow_null=True)
+    result_version = serializers.CharField(allow_null=True)
+    projection_version = serializers.CharField()
+    stale = serializers.BooleanField()
+    ready_count = serializers.IntegerField(min_value=0)
+    pending_count = serializers.IntegerField(min_value=0)
+    failed_count = serializers.IntegerField(min_value=0)
+    updating_count = serializers.IntegerField(min_value=0)
+    oldest_pending_seconds = serializers.IntegerField(min_value=0, allow_null=True)
+
+
 class DataCenterQualityCollectionSerializer(serializers.Serializer):
     items = DataCenterQualityRowSerializer(many=True)
     page = TeacherClassPageMetadataSerializer()
     course = CourseReferenceSerializer()
     scope = DataCenterResearchScopeSerializer()
     counts = serializers.DictField(child=serializers.IntegerField(min_value=0))
+    preparation = DataCenterPreparationSerializer(required=False)
 
 
 class DataCenterExportHistoryRowSerializer(serializers.Serializer):
@@ -418,15 +433,6 @@ class DataCenterAdvancedPreviewSerializer(serializers.Serializer):
     page = TeacherClassPageMetadataSerializer()
     cursor = serializers.DictField(required=False)
     data_status = serializers.CharField()
-
-
-class DataCenterPreparationSerializer(serializers.Serializer):
-    state = serializers.CharField()
-    message = serializers.CharField()
-    updated_at = serializers.DateTimeField(allow_null=True)
-    result_version = serializers.CharField(allow_null=True)
-    projection_version = serializers.CharField()
-    stale = serializers.BooleanField()
 
 
 class DataCenterStudentSearchItemSerializer(serializers.Serializer):
