@@ -1,7 +1,10 @@
 import json
+from collections import Counter
 from datetime import timedelta
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
@@ -11,6 +14,7 @@ from apps.question_bank.models import (
     QuestionBank,
     QuestionConcept,
 )
+from apps.assessment.models import ExperimentSession
 
 from .models import (
     ClassExperimentTask,
@@ -822,6 +826,202 @@ class TeacherPublishPlanApiTests(TestCase):
 
     def plan_url(self, plan, suffix=""):
         return f"/api/v1/teacher/publish-plans/{plan.pk}/{suffix}"
+
+    def collection_url(self):
+        return (
+            f"/api/v1/teacher/experiments/{self.experiment.pk}/"
+            "collection-participants/"
+        )
+
+    def collection_fixture(self, extra_student_count=0):
+        status_students = []
+        status_definitions = (
+            ("PUB-STATE-IN", "状态-进行中", ExperimentSession.Status.IN_PROGRESS, 0),
+            ("PUB-STATE-COM", "状态-已完成", ExperimentSession.Status.COMPLETED, 3),
+            ("PUB-STATE-EXP", "状态-已超时", ExperimentSession.Status.EXPIRED, 1),
+            ("PUB-STATE-INV", "状态-已作废", ExperimentSession.Status.INVALIDATED, 2),
+        )
+        for student_number, display_name, status, submission_count in status_definitions:
+            student = User.objects.create_user(
+                username=student_number,
+                student_number=student_number,
+                display_name=display_name,
+                role=User.Role.STUDENT,
+            )
+            CourseEnrollment.objects.create(
+                course=self.course,
+                class_group=self.class_a,
+                student=student,
+            )
+            status_students.append((student, status, submission_count))
+        for index in range(extra_student_count):
+            student_number = f"PUB-EXTRA-{index + 1:03d}"
+            student = User.objects.create_user(
+                username=student_number,
+                student_number=student_number,
+                display_name=f"分页学生-{index + 1:03d}",
+                role=User.Role.STUDENT,
+            )
+            CourseEnrollment.objects.create(
+                course=self.course,
+                class_group=self.class_a,
+                student=student,
+            )
+
+        plan, _opens_at = self.preview_two_classes()
+        commit = self.client.post(
+            self.plan_url(plan, "commit/"),
+            data=json.dumps({"expected_revision": plan.plan_revision}),
+            content_type="application/json",
+        )
+        self.complete_operation(commit)
+
+        version = self.experiment.versions.get()
+        tasks = {
+            task.class_group_id: task
+            for task in ClassExperimentTask.objects.filter(experiment=self.experiment)
+        }
+        snapshots = {
+            snapshot.student_id: snapshot
+            for snapshot in version.participant_snapshots.select_related(
+                "student", "class_task", "class_snapshot"
+            )
+        }
+        for student, status, submission_count in status_students:
+            snapshot = snapshots[student.pk]
+            task = tasks[self.class_a.pk]
+            ExperimentSession.objects.create(
+                version=version,
+                class_task=task,
+                participant_snapshot=snapshot,
+                student=student,
+                class_snapshot=snapshot.class_snapshot,
+                class_snapshot_name=snapshot.class_snapshot.name_snapshot,
+                status=status,
+                submission_count=submission_count,
+            )
+        return {
+            "version": version,
+            "tasks": tasks,
+            "snapshots": snapshots,
+            "status_students": status_students,
+        }
+
+    def test_collection_participants_exposes_all_server_derived_statuses_and_choices(self):
+        fixture = self.collection_fixture()
+
+        response = self.client.get(self.collection_url())
+
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertEqual(
+            Counter(item["status"] for item in payload["items"]),
+            Counter(
+                {
+                    "not_started": 2,
+                    "in_progress": 1,
+                    "completed": 1,
+                    "expired": 1,
+                    "invalidated": 1,
+                }
+            ),
+        )
+        choices = {choice["value"] for choice in payload["status_choices"]}
+        self.assertEqual(
+            choices,
+            {"not_started", "in_progress", "completed", "expired", "invalidated"},
+        )
+        not_started = next(
+            item for item in payload["items"] if item["status"] == "not_started"
+        )
+        self.assertIsNone(not_started["started_at"])
+        self.assertEqual(not_started["submission_count"], 0)
+        self.assertEqual(
+            {item["class_id"] for item in payload["items"]},
+            {self.class_a.pk, self.class_b.pk},
+        )
+        self.assertEqual(fixture["version"].participant_snapshots.count(), 6)
+
+    def test_collection_participants_filters_by_class_status_and_student_number(self):
+        fixture = self.collection_fixture()
+        student, _status, _submission_count = fixture["status_students"][0]
+
+        response = self.client.get(
+            self.collection_url(),
+            {
+                "class_id": self.class_a.pk,
+                "status": "in_progress",
+                "q": student.student_number,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["page"]["total_items"], 1)
+        self.assertEqual(response.json()["items"][0]["student_number"], student.student_number)
+
+    def test_collection_participants_searches_student_name(self):
+        fixture = self.collection_fixture()
+        student, _status, _submission_count = fixture["status_students"][1]
+
+        response = self.client.get(self.collection_url(), {"q": student.display_name})
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["page"]["total_items"], 1)
+        self.assertEqual(response.json()["items"][0]["student_name"], student.display_name)
+
+    def test_collection_participants_rejects_invalid_filters_and_unauthorized_access(self):
+        self.collection_fixture()
+        unpublished_class = ClassGroup.objects.create(
+            course=self.course,
+            name="未发布班",
+            academic_year="2026",
+        )
+
+        invalid_status = self.client.get(self.collection_url(), {"status": "unknown"})
+        self.assertEqual(invalid_status.status_code, 400, invalid_status.content)
+        invalid_class = self.client.get(
+            self.collection_url(), {"class_id": unpublished_class.pk}
+        )
+        self.assertEqual(invalid_class.status_code, 400, invalid_class.content)
+        invalid_page = self.client.get(self.collection_url(), {"page": 0})
+        self.assertEqual(invalid_page.status_code, 400, invalid_page.content)
+
+        other_teacher = User.objects.create_user(
+            username="publish-api-other-teacher",
+            password="test-password",
+            role=User.Role.TEACHER,
+        )
+        self.client.force_login(other_teacher)
+        forbidden = self.client.get(self.collection_url())
+        self.assertEqual(forbidden.status_code, 404, forbidden.content)
+
+    def test_collection_participants_query_count_is_bounded_for_a_page_of_25(self):
+        self.collection_fixture(extra_student_count=30)
+
+        with CaptureQueriesContext(connection) as context:
+            response = self.client.get(self.collection_url(), {"page": 1})
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(len(response.json()["items"]), 25)
+        self.assertLessEqual(len(context), 12)
+
+    def test_collection_participants_pagination_is_stable_and_non_overlapping(self):
+        self.collection_fixture(extra_student_count=30)
+
+        first = self.client.get(self.collection_url(), {"page": 1})
+        second = self.client.get(self.collection_url(), {"page": 2})
+        repeated_first = self.client.get(self.collection_url(), {"page": 1})
+
+        self.assertEqual(first.status_code, 200, first.content)
+        self.assertEqual(second.status_code, 200, second.content)
+        self.assertEqual(repeated_first.status_code, 200, repeated_first.content)
+        first_ids = [item["id"] for item in first.json()["items"]]
+        second_ids = [item["id"] for item in second.json()["items"]]
+        repeated_first_ids = [item["id"] for item in repeated_first.json()["items"]]
+        self.assertEqual(len(first_ids), 25)
+        self.assertTrue(second_ids)
+        self.assertTrue(set(first_ids).isdisjoint(second_ids))
+        self.assertEqual(first_ids, repeated_first_ids)
 
     def start_plan(self):
         response = self.client.post(self.start_url())
