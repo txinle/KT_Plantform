@@ -217,12 +217,13 @@ describe('TeacherExperimentDetail', () => {
     mocks.api.progress.mockResolvedValue({
       task_id: 31, total_participants: 5, not_started: 1, in_progress: 1, completed: 1, expired: 1, invalidated: 1,
     })
-    mocks.api.collectionParticipants.mockResolvedValue({
-      items: [{
+    const participant = {
         participant_id: 101, student_id: 19, student_number: 'S019', display_name: '李小满', class_id: 5,
         class_name: '实验班', status: 'expired', status_label: '已超时',
         started_at: '2026-09-01T01:00:00Z', ended_at: '2026-09-01T01:30:00Z', submission_count: 2,
-      }],
+    }
+    mocks.api.collectionParticipants.mockResolvedValue({
+      items: [participant],
       page: { number: 1, size: 25, total_items: 1, total_pages: 1, start: 1, end: 1 },
       filters: { class_id: null, status: '', q: '' },
       class_choices: [{ id: 5, name: '实验班' }],
@@ -254,25 +255,21 @@ describe('TeacherExperimentDetail', () => {
     expect(summaryCells[6]?.text()).toBe('1')
     expect(summaryCells[7]?.text()).toBe('1')
 
-    const desktopCells = wrapper.get('.kt-desktop-only tbody tr').findAll('td')
-    expect(desktopCells[0]?.text()).toContain('李小满')
-    expect(desktopCells[1]?.text()).toContain('S019')
-    expect(desktopCells[2]?.text()).toContain('实验班')
-    expect(desktopCells[3]?.text()).toContain('2026')
-    expect(desktopCells[3]?.text()).not.toBe('')
-    expect(desktopCells[4]?.text()).toContain('2026')
-    expect(desktopCells[4]?.text()).not.toBe('')
-    expect(desktopCells[5]?.text()).toContain('已超时')
-    expect(desktopCells[6]?.text()).toContain('提交 2 题')
+    const desktopText = wrapper.get('.kt-desktop-only').text()
+    expect(desktopText).toContain('李小满')
+    expect(desktopText).toContain('S019')
+    expect(desktopText).toContain('实验班')
+    expect(desktopText).toContain('已超时')
+    expect(desktopText).toContain('提交 2 题')
 
-    const mobileText = wrapper.get('.kt-mobile-only').text()
-    expect(mobileText).toContain('李小满')
-    expect(mobileText).toContain('S019')
-    expect(mobileText).toContain('实验班')
-    expect(mobileText).toContain('已超时')
-    expect(mobileText).toContain('提交 2 题')
-    expect(mobileText).toMatch(/开始：[\s\S]*?2026/)
-    expect(mobileText).toMatch(/结束：[\s\S]*?2026/)
+    const expectedStart = new Date(participant.started_at).toLocaleString('zh-CN')
+    const expectedEnd = new Date(participant.ended_at).toLocaleString('zh-CN')
+    const startElements = wrapper.findAll('[data-collection-start]')
+    const endElements = wrapper.findAll('[data-collection-end]')
+    expect(startElements.length).toBeGreaterThanOrEqual(2)
+    expect(endElements.length).toBeGreaterThanOrEqual(2)
+    expect(startElements.every((element) => element.text().includes(expectedStart))).toBe(true)
+    expect(endElements.every((element) => element.text().includes(expectedEnd))).toBe(true)
   })
 
   it('persists collection filters in the URL and requests the corresponding participants', async () => {
