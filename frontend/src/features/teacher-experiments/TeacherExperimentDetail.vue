@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, reactive, ref, type Ref } from 'vue'
+import { computed, inject, onMounted, reactive, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import type { components } from '@/api/generated/schema'
 import Alert from '@/design-system/components/Alert.vue'
 import Button from '@/design-system/components/Button.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
+import MobileCardList from '@/design-system/components/MobileCardList.vue'
+import Paginator from '@/design-system/components/Paginator.vue'
 import SidebarSection from '@/design-system/components/SidebarSection.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 import Icon from '@/design-system/Icon.vue'
@@ -16,6 +18,7 @@ import {
   getTeacherExperimentApi,
   type ClassTask,
   type ClassTaskProgress,
+  type CollectionParticipantCollection,
   type TeacherExperiment,
   type TeacherExperimentReadiness,
 } from './api'
@@ -41,6 +44,14 @@ const scheduleForm = reactive({ opens_at: '', closes_at: '', reason: '' })
 const confirmation = reactive({ taskId: 0, action: '' as '' | 'cancel' | 'manual_close', reason: '' })
 const activeTab = ref<'definition' | 'tasks' | 'collection'>('definition')
 const deletionTarget = ref<DeletionTarget>()
+const collection = ref<CollectionParticipantCollection>()
+const collectionLoading = ref(false)
+const collectionError = ref('')
+const collectionClassId = ref(queryText(route.query.class_id))
+const collectionStatus = ref(queryText(route.query.status))
+const collectionQuery = ref(queryText(route.query.q))
+const collectionPage = ref(queryPage(route.query.page))
+let replacingCollectionRoute = ''
 
 const readinessTone = computed(() => readiness.value?.ready ? 'success' : 'warning')
 const courseName = computed(() => course?.value?.name || '课程')
@@ -52,6 +63,120 @@ function displayDate(value: string | null | undefined) {
 
 function displayLimit(value: number | null | undefined, unit: string) {
   return value === null || value === undefined ? '未设置' : `${value} ${unit}`
+}
+
+function queryText(value: unknown) {
+  return typeof value === 'string' ? value : ''
+}
+
+function queryPage(value: unknown) {
+  const page = Number(queryText(value))
+  return Number.isInteger(page) && page > 0 ? page : 1
+}
+
+function collectionDate(value: string | null) {
+  return value ? new Date(value).toLocaleString('zh-CN') : '—'
+}
+
+function collectionTone(status: string) {
+  if (status === 'completed') return 'success'
+  if (status === 'in_progress') return 'warning'
+  if (status === 'expired') return 'danger'
+  return 'neutral'
+}
+
+function collectionFilters(page = 1) {
+  const filters: { classId?: number; status?: string; query?: string; page: number } = { page }
+  const classId = collectionClassId.value.trim()
+  const status = collectionStatus.value.trim()
+  const query = collectionQuery.value.trim()
+  if (classId) filters.classId = Number(classId)
+  if (status) filters.status = status
+  if (query) filters.query = query
+  return filters
+}
+
+function collectionRouteQuery(page = 1) {
+  const query: Record<string, string> = { tab: 'collection' }
+  const classId = collectionClassId.value.trim()
+  const status = collectionStatus.value.trim()
+  const search = collectionQuery.value.trim()
+  if (classId) query.class_id = classId
+  if (status) query.status = status
+  if (search) query.q = search
+  if (page > 1) query.page = String(page)
+  return query
+}
+
+function collectionRouteKey(query: Record<string, unknown>) {
+  return JSON.stringify({
+    tab: queryText(query.tab),
+    class_id: queryText(query.class_id).trim(),
+    status: queryText(query.status).trim(),
+    q: queryText(query.q).trim(),
+    page: queryPage(query.page),
+  })
+}
+
+function syncCollectionRoute(query: Record<string, unknown>) {
+  collectionClassId.value = queryText(query.class_id)
+  collectionStatus.value = queryText(query.status)
+  collectionQuery.value = queryText(query.q)
+  collectionPage.value = queryPage(query.page)
+}
+
+async function loadCollection(page = 1) {
+  collectionLoading.value = true
+  collectionError.value = ''
+  collection.value = undefined
+  collectionPage.value = page
+  try {
+    collection.value = await api.collectionParticipants(experimentId, collectionFilters(page))
+  } catch (caught) {
+    collectionError.value = caught instanceof Error ? caught.message : '学生采集状态加载失败。'
+  } finally {
+    collectionLoading.value = false
+  }
+}
+
+async function replaceCollectionRoute(page = 1) {
+  const query = collectionRouteQuery(page)
+  replacingCollectionRoute = collectionRouteKey(query)
+  await router.replace({ query })
+  if (replacingCollectionRoute === collectionRouteKey(query)) replacingCollectionRoute = ''
+}
+
+async function applyCollectionFilters() {
+  collectionPage.value = 1
+  await replaceCollectionRoute(1)
+  await loadCollection(1)
+}
+
+async function clearCollectionFilters() {
+  collectionClassId.value = ''
+  collectionStatus.value = ''
+  collectionQuery.value = ''
+  collectionPage.value = 1
+  await replaceCollectionRoute(1)
+  await loadCollection(1)
+}
+
+async function navigateCollection(page: number) {
+  collectionPage.value = page
+  await replaceCollectionRoute(page)
+  await loadCollection(page)
+}
+
+async function selectTab(tab: 'definition' | 'tasks' | 'collection') {
+  activeTab.value = tab
+  if (tab === 'collection') {
+    await replaceCollectionRoute(collectionPage.value)
+    await loadCollection(collectionPage.value)
+    return
+  }
+  replacingCollectionRoute = collectionRouteKey({})
+  await router.replace({ query: {} })
+  if (replacingCollectionRoute === collectionRouteKey({})) replacingCollectionRoute = ''
 }
 
 function dateTimeLocal(value: string | null) {
@@ -75,17 +200,41 @@ async function load() {
       api.classTasks(experimentId),
     ])
     experiment.value = definition
-    activeTab.value = definition.status === 'draft' ? 'definition' : 'tasks'
+    const defaultTab = definition.status === 'draft' ? 'definition' : 'tasks'
+    activeTab.value = queryText(route.query.tab) === 'collection' ? 'collection' : defaultTab
     readiness.value = ready
     tasks.value = taskCollection.items
     const rows = await Promise.all(tasks.value.map(async (task) => [task.id, await api.progress(task.id)] as const))
     for (const [taskId, row] of rows) progress[taskId] = row
+    if (activeTab.value === 'collection') await loadCollection(collectionPage.value)
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '实验详情加载失败。'
   } finally {
     loading.value = false
   }
 }
+
+watch(
+  () => route.query,
+  async (query) => {
+    const key = collectionRouteKey(query)
+    if (key === replacingCollectionRoute) {
+      replacingCollectionRoute = ''
+      return
+    }
+    if (queryText(query.tab) === 'collection') {
+      syncCollectionRoute(query)
+      activeTab.value = 'collection'
+      if (!loading.value) await loadCollection(collectionPage.value)
+      return
+    }
+    if (!experiment.value) return
+    activeTab.value = queryText(query.tab) === 'definition' || queryText(query.tab) === 'tasks'
+      ? queryText(query.tab) as 'definition' | 'tasks'
+      : experiment.value.status === 'draft' ? 'definition' : 'tasks'
+  },
+  { deep: true },
+)
 
 async function startPublish() {
   working.value = true
@@ -189,9 +338,9 @@ onMounted(load)
 
     <SidebarSection>
       <nav class="kt-experiment-tabs kt-sidebar-secondary-nav" role="tablist" aria-label="实验详情导航" aria-orientation="vertical">
-        <button id="experiment-tab-definition" type="button" role="tab" :aria-selected="activeTab === 'definition'" aria-controls="experiment-panel-definition" :class="{ 'is-active': activeTab === 'definition' }" @click="activeTab = 'definition'">实验定义</button>
-        <button id="experiment-tab-tasks" type="button" role="tab" :aria-selected="activeTab === 'tasks'" aria-controls="experiment-panel-tasks" :class="{ 'is-active': activeTab === 'tasks' }" @click="activeTab = 'tasks'">班级发布</button>
-        <button id="experiment-tab-collection" type="button" role="tab" :aria-selected="activeTab === 'collection'" aria-controls="experiment-panel-collection" :class="{ 'is-active': activeTab === 'collection' }" @click="activeTab = 'collection'">采集状态</button>
+        <button id="experiment-tab-definition" type="button" role="tab" :aria-selected="activeTab === 'definition'" aria-controls="experiment-panel-definition" :class="{ 'is-active': activeTab === 'definition' }" @click="selectTab('definition')">实验定义</button>
+        <button id="experiment-tab-tasks" type="button" role="tab" :aria-selected="activeTab === 'tasks'" aria-controls="experiment-panel-tasks" :class="{ 'is-active': activeTab === 'tasks' }" @click="selectTab('tasks')">班级发布</button>
+        <button id="experiment-tab-collection" type="button" role="tab" :aria-selected="activeTab === 'collection'" aria-controls="experiment-panel-collection" :class="{ 'is-active': activeTab === 'collection' }" @click="selectTab('collection')">采集状态</button>
       </nav>
     </SidebarSection>
 
@@ -288,10 +437,42 @@ onMounted(load)
     </section>
 
     <section v-else id="experiment-panel-collection" role="tabpanel" aria-labelledby="experiment-tab-collection">
-      <section class="kt-card kt-published-task-table" aria-labelledby="collection-status-title">
+      <section class="kt-card kt-published-task-table" aria-labelledby="collection-status-title" data-collection-summary>
         <div class="kt-section-heading"><div><p class="kt-kicker">采集状态</p><h2 id="collection-status-title">班级任务进度</h2></div><span>{{ tasks.length }} 个</span></div>
         <EmptyState v-if="!tasks.length" title="暂无采集任务"><p>发布到班级后，服务端会在这里返回各任务的采集进度。</p></EmptyState>
-        <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>状态</th><th>参与者</th><th>未开始</th><th>进行中</th><th>已完成</th></tr></thead><tbody><tr v-for="task in tasks" :key="task.id"><td>{{ task.class_name }}</td><td>{{ task.business_status }}</td><td>{{ progress[task.id]?.total_participants ?? task.participant_count }}</td><td>{{ progress[task.id]?.not_started ?? '—' }}</td><td>{{ progress[task.id]?.in_progress ?? '—' }}</td><td>{{ progress[task.id]?.completed ?? '—' }}</td></tr></tbody></table></div>
+        <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>状态</th><th>参与者</th><th>未开始</th><th>进行中</th><th>正常完成</th><th>已超时</th><th>已作废</th></tr></thead><tbody><tr v-for="task in tasks" :key="task.id"><td>{{ task.class_name }}</td><td>{{ task.business_status }}</td><td>{{ progress[task.id]?.total_participants ?? '—' }}</td><td>{{ progress[task.id]?.not_started ?? '—' }}</td><td>{{ progress[task.id]?.in_progress ?? '—' }}</td><td>{{ progress[task.id]?.completed ?? '—' }}</td><td>{{ progress[task.id]?.expired ?? '—' }}</td><td>{{ progress[task.id]?.invalidated ?? '—' }}</td></tr></tbody></table></div>
+      </section>
+
+      <section class="kt-card kt-published-task-table" aria-labelledby="collection-participants-title" data-collection-participants>
+        <div class="kt-section-heading"><div><p class="kt-kicker">学生状态明细</p><h2 id="collection-participants-title">学生采集状态</h2></div><span>{{ collection?.page.total_items ?? '—' }} 人</span></div>
+        <form class="kt-inline-form-grid" data-collection-filter @submit.prevent="applyCollectionFilters">
+          <label for="collection-filter-class">班级</label>
+          <select id="collection-filter-class" v-model="collectionClassId"><option value="">全部班级</option><option v-for="choice in collection?.class_choices || []" :key="choice.id" :value="String(choice.id)">{{ choice.name }}</option></select>
+          <label for="collection-filter-query">学生</label>
+          <input id="collection-filter-query" v-model="collectionQuery" type="search" placeholder="姓名或学号">
+          <label for="collection-filter-status">状态</label>
+          <select id="collection-filter-status" v-model="collectionStatus"><option value="">全部状态</option><option v-for="choice in collection?.status_choices || []" :key="choice.value" :value="choice.value">{{ choice.label }}</option></select>
+          <div class="kt-inline-actions"><Button type="submit" :disabled="collectionLoading">应用</Button><button class="kt-button kt-button--secondary" data-collection-clear type="button" :disabled="collectionLoading" @click="clearCollectionFilters">清除</button></div>
+        </form>
+
+        <Alert v-if="collectionError" tone="danger">{{ collectionError }}</Alert>
+        <p v-else-if="collectionLoading" role="status">正在加载学生采集状态…</p>
+        <EmptyState v-else-if="collection && !collection.items.length" title="当前筛选条件下没有学生"><button class="kt-button kt-button--secondary" data-collection-clear type="button" @click="clearCollectionFilters">清除筛选</button></EmptyState>
+        <template v-else-if="collection">
+          <div class="kt-table-scroll kt-desktop-only">
+            <table class="kt-table">
+              <thead><tr><th>学生</th><th>班级</th><th>状态</th><th>开始</th><th>结束</th><th>提交题数</th></tr></thead>
+              <tbody><tr v-for="participant in collection.items" :key="participant.participant_id"><td><strong>{{ participant.display_name }}</strong><span class="kt-cell-note kt-mono">{{ participant.student_number }}</span></td><td>{{ participant.class_name }}</td><td><StatusBadge :label="participant.status_label" :tone="collectionTone(participant.status)" /></td><td data-collection-start>{{ collectionDate(participant.started_at) }}</td><td data-collection-end>{{ collectionDate(participant.ended_at) }}</td><td>提交 {{ participant.submission_count }} 题</td></tr></tbody>
+            </table>
+          </div>
+          <MobileCardList class="kt-mobile-only">
+            <li v-for="participant in collection.items" :key="participant.participant_id">
+              <div class="kt-section-heading"><div><strong>{{ participant.display_name }}</strong><span class="kt-cell-note kt-mono">{{ participant.student_number }}</span></div><StatusBadge :label="participant.status_label" :tone="collectionTone(participant.status)" /></div>
+              <dl class="kt-description-list"><div><dt>班级</dt><dd>{{ participant.class_name }}</dd></div><div><dt>开始</dt><dd data-collection-start>{{ collectionDate(participant.started_at) }}</dd></div><div><dt>结束</dt><dd data-collection-end>{{ collectionDate(participant.ended_at) }}</dd></div><div><dt>提交题数</dt><dd>提交 {{ participant.submission_count }} 题</dd></div></dl>
+            </li>
+          </MobileCardList>
+          <Paginator :page="collection.page.number" :total-pages="collection.page.total_pages" @navigate="navigateCollection" />
+        </template>
       </section>
     </section>
     <DeletionDialog v-if="deletionTarget" :course-id="courseId" :target="deletionTarget" @cancelled="deletionTarget = undefined" @completed="afterDeletion" />

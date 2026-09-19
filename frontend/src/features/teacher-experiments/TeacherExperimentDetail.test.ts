@@ -391,7 +391,11 @@ describe('TeacherExperimentDetail', () => {
       confidence_mode_label: '不采集', can_edit: false, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
     })
     mocks.api.collectionParticipants.mockResolvedValue({
-      items: [], page: { number: 1, size: 25, total_items: 26, total_pages: 2, start: 1, end: 25 },
+      items: [{
+        participant_id: 101, student_id: 19, student_number: 'S019', display_name: '超时学生', class_id: 5,
+        class_name: '实验班', status: 'expired', status_label: '已超时', started_at: null, ended_at: null,
+        submission_count: 0,
+      }], page: { number: 1, size: 25, total_items: 26, total_pages: 2, start: 1, end: 25 },
       filters: { class_id: 5, status: 'expired', q: 'S019' }, class_choices: [{ id: 5, name: '实验班' }],
       status_choices: [{ value: 'expired', label: '已超时' }],
     })
