@@ -47,11 +47,13 @@ const deletionTarget = ref<DeletionTarget>()
 const collection = ref<CollectionParticipantCollection>()
 const collectionLoading = ref(false)
 const collectionError = ref('')
+const detailReady = ref(false)
 const collectionClassId = ref(queryText(route.query.class_id))
 const collectionStatus = ref(queryText(route.query.status))
 const collectionQuery = ref(queryText(route.query.q))
 const collectionPage = ref(queryPage(route.query.page))
 let replacingCollectionRoute = ''
+let collectionRequestId = 0
 
 const readinessTone = computed(() => readiness.value?.ready ? 'success' : 'warning')
 const courseName = computed(() => course?.value?.name || '课程')
@@ -126,16 +128,20 @@ function syncCollectionRoute(query: Record<string, unknown>) {
 }
 
 async function loadCollection(page = 1) {
+  const requestId = ++collectionRequestId
   collectionLoading.value = true
   collectionError.value = ''
   collection.value = undefined
   collectionPage.value = page
   try {
-    collection.value = await api.collectionParticipants(experimentId, collectionFilters(page))
+    const result = await api.collectionParticipants(experimentId, collectionFilters(page))
+    if (requestId === collectionRequestId) collection.value = result
   } catch (caught) {
-    collectionError.value = caught instanceof Error ? caught.message : '学生采集状态加载失败。'
+    if (requestId === collectionRequestId) {
+      collectionError.value = caught instanceof Error ? caught.message : '学生采集状态加载失败。'
+    }
   } finally {
-    collectionLoading.value = false
+    if (requestId === collectionRequestId) collectionLoading.value = false
   }
 }
 
@@ -192,6 +198,7 @@ function isoOrNull(value: string) {
 
 async function load() {
   loading.value = true
+  detailReady.value = false
   error.value = ''
   try {
     const [definition, ready, taskCollection] = await Promise.all([
@@ -206,6 +213,7 @@ async function load() {
     tasks.value = taskCollection.items
     const rows = await Promise.all(tasks.value.map(async (task) => [task.id, await api.progress(task.id)] as const))
     for (const [taskId, row] of rows) progress[taskId] = row
+    detailReady.value = true
     if (activeTab.value === 'collection') await loadCollection(collectionPage.value)
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '实验详情加载失败。'
@@ -225,7 +233,7 @@ watch(
     if (queryText(query.tab) === 'collection') {
       syncCollectionRoute(query)
       activeTab.value = 'collection'
-      if (!loading.value) await loadCollection(collectionPage.value)
+      if (detailReady.value) await loadCollection(collectionPage.value)
       return
     }
     if (!experiment.value) return

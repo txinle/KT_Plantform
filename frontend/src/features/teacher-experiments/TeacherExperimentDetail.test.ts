@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { nextTick, reactive } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -37,11 +38,43 @@ vi.mock('@/features/teacher-deletion/api', () => ({ getTeacherDeletionApi: () =>
 
 import TeacherExperimentDetail from './TeacherExperimentDetail.vue'
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function collectionResult(displayName: string, query: string) {
+  return {
+    items: [{
+      participant_id: query === 'old' ? 101 : 102,
+      student_id: query === 'old' ? 19 : 20,
+      student_number: query === 'old' ? 'S019' : 'S020',
+      display_name: displayName,
+      class_id: 5,
+      class_name: '实验班',
+      status: 'expired',
+      status_label: '已超时',
+      started_at: null,
+      ended_at: null,
+      submission_count: 0,
+    }],
+    page: { number: 1, size: 25, total_items: 1, total_pages: 1, start: 1, end: 1 },
+    filters: { class_id: null, status: 'expired', q: query },
+    class_choices: [{ id: 5, name: '实验班' }],
+    status_choices: [{ value: 'expired', label: '已超时' }],
+  }
+}
+
 describe('TeacherExperimentDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.api.collectionParticipants.mockReset()
-    mocks.route.query = {}
+    mocks.route.query = reactive({})
     mocks.api.detail.mockResolvedValue({
       id: 11,
       name: '认知诊断实验',
@@ -312,7 +345,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('restores collection filters and page from the URL on initial load', async () => {
-    mocks.route.query = { tab: 'collection', class_id: '5', status: 'expired', q: 'S019', page: '2' }
+    mocks.route.query = reactive({ tab: 'collection', class_id: '5', status: 'expired', q: 'S019', page: '2' })
     mocks.api.detail.mockResolvedValue({
       id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
       selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
@@ -329,7 +362,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('shows a clearable empty state and resets filters to the collection tab', async () => {
-    mocks.route.query = { tab: 'collection', class_id: '5', status: 'expired', q: 'S019' }
+    mocks.route.query = reactive({ tab: 'collection', class_id: '5', status: 'expired', q: 'S019' })
     mocks.api.detail.mockResolvedValue({
       id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
       selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
@@ -354,7 +387,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('clears stale participant rows when a subsequent collection request fails', async () => {
-    mocks.route.query = { tab: 'collection' }
+    mocks.route.query = reactive({ tab: 'collection' })
     mocks.api.detail.mockResolvedValue({
       id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
       selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
@@ -383,7 +416,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('keeps active collection filters when navigating to the next participant page', async () => {
-    mocks.route.query = { tab: 'collection', class_id: '5', status: 'expired', q: 'S019' }
+    mocks.route.query = reactive({ tab: 'collection', class_id: '5', status: 'expired', q: 'S019' })
     mocks.api.detail.mockResolvedValue({
       id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
       selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
@@ -410,5 +443,55 @@ describe('TeacherExperimentDetail', () => {
     expect(mocks.api.collectionParticipants).toHaveBeenLastCalledWith(11, {
       classId: 5, status: 'expired', query: 'S019', page: 2,
     })
+  })
+
+  it('ignores a stale collection failure after a newer route request succeeds', async () => {
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+    const oldRequest = deferred<ReturnType<typeof collectionResult>>()
+    const newRequest = deferred<ReturnType<typeof collectionResult>>()
+    mocks.api.collectionParticipants.mockImplementation(
+      (_experimentId: number, filters: { query?: string }) => filters.query === 'old' ? oldRequest.promise : newRequest.promise,
+    )
+
+    mocks.route.query.tab = 'collection'
+    mocks.route.query.q = 'old'
+    await nextTick()
+    await vi.waitFor(() => expect(mocks.api.collectionParticipants).toHaveBeenCalledTimes(1))
+    mocks.route.query.q = 'new'
+    await nextTick()
+    await vi.waitFor(() => expect(mocks.api.collectionParticipants).toHaveBeenCalledTimes(2))
+
+    newRequest.resolve(collectionResult('新学生', 'new'))
+    await flushPromises()
+    oldRequest.reject(new Error('旧请求失败'))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('新学生')
+    expect(wrapper.text()).not.toContain('旧请求失败')
+    expect(wrapper.text()).not.toContain('正在加载学生采集状态')
+  })
+
+  it('requests the latest route filters while the initial collection request is pending', async () => {
+    mocks.route.query = reactive({ tab: 'collection', q: 'old' })
+    const oldRequest = deferred<ReturnType<typeof collectionResult>>()
+    const newRequest = deferred<ReturnType<typeof collectionResult>>()
+    mocks.api.collectionParticipants.mockImplementation(
+      (_experimentId: number, filters: { query?: string }) => filters.query === 'old' ? oldRequest.promise : newRequest.promise,
+    )
+
+    const wrapper = mount(TeacherExperimentDetail)
+    await vi.waitFor(() => expect(mocks.api.collectionParticipants).toHaveBeenCalledWith(11, { query: 'old', page: 1 }))
+    mocks.route.query.q = 'new'
+    await nextTick()
+    expect(mocks.api.collectionParticipants).toHaveBeenCalledWith(11, { query: 'new', page: 1 })
+
+    newRequest.resolve(collectionResult('新学生', 'new'))
+    await flushPromises()
+    oldRequest.resolve(collectionResult('旧学生', 'old'))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('新学生')
+    expect(wrapper.text()).not.toContain('旧学生')
   })
 })
