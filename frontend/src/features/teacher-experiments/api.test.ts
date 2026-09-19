@@ -3,6 +3,34 @@ import { describe, expect, it, vi } from 'vitest'
 import { createTeacherExperimentApi } from './api'
 
 describe('teacher experiment API paths', () => {
+  it('builds collection participant filters with the typed client', async () => {
+    const client = {
+      get: vi.fn().mockResolvedValue({}),
+      mutate: vi.fn().mockResolvedValue({}),
+    }
+    const api = createTeacherExperimentApi(client as never)
+
+    await api.collectionParticipants(11, { classId: 5, status: 'expired', query: ' S019 ', page: 2 })
+
+    expect(client.get).toHaveBeenCalledWith(
+      '/api/v1/teacher/experiments/11/collection-participants/?class_id=5&status=expired&q=S019&page=2',
+    )
+  })
+
+  it('omits query parameters for empty collection participant filters on page one', async () => {
+    const client = {
+      get: vi.fn().mockResolvedValue({}),
+      mutate: vi.fn().mockResolvedValue({}),
+    }
+    const api = createTeacherExperimentApi(client as never)
+
+    await api.collectionParticipants(11, { page: 1 })
+
+    expect(client.get).toHaveBeenCalledWith(
+      '/api/v1/teacher/experiments/11/collection-participants/',
+    )
+  })
+
   it('uses the frozen same-origin experiment and publishing endpoints', async () => {
     const client = {
       get: vi.fn().mockResolvedValue({}),

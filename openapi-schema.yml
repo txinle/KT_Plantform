@@ -4155,6 +4155,61 @@ paths:
               schema:
                 $ref: '#/components/schemas/ClassTaskCollection'
           description: ''
+  /api/v1/teacher/experiments/{experiment_id}/collection-participants/:
+    get:
+      operationId: teacher_experiment_collection_participant_list
+      parameters:
+      - in: query
+        name: class_id
+        schema:
+          type: integer
+          minimum: 1
+          nullable: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: page
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+      - in: query
+        name: q
+        schema:
+          type: string
+          default: ''
+      - in: query
+        name: status
+        schema:
+          enum:
+          - not_started
+          - in_progress
+          - completed
+          - expired
+          - invalidated
+          - ''
+          type: string
+          default: ''
+        description: |-
+          * `not_started` - 未开始
+          * `in_progress` - 进行中
+          * `completed` - 正常完成
+          * `expired` - 已超时
+          * `invalidated` - 已作废
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionParticipantCollection'
+          description: ''
   /api/v1/teacher/publish-operation-jobs/{job_id}/:
     get:
       operationId: teacher_publish_operation_job_retrieve
@@ -4822,6 +4877,9 @@ components:
       - name
       - question_count
       - questions
+    BlankEnum:
+      enum:
+      - ''
     ClassAnalysisScope:
       type: object
       properties:
@@ -5017,6 +5075,109 @@ components:
         * `draft` - draft
         * `duplicate` - duplicate
         * `invalid` - invalid
+    CollectionParticipantChoice:
+      type: object
+      properties:
+        value:
+          type: string
+        label:
+          type: string
+      required:
+      - label
+      - value
+    CollectionParticipantClassChoice:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+      required:
+      - id
+      - name
+    CollectionParticipantCollection:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CollectionParticipantRow'
+        page:
+          $ref: '#/components/schemas/PageMetadata'
+        filters:
+          $ref: '#/components/schemas/CollectionParticipantFilter'
+        class_choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/CollectionParticipantClassChoice'
+        status_choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/CollectionParticipantChoice'
+      required:
+      - class_choices
+      - filters
+      - items
+      - page
+      - status_choices
+    CollectionParticipantFilter:
+      type: object
+      properties:
+        class_id:
+          type: integer
+          nullable: true
+        status:
+          oneOf:
+          - $ref: '#/components/schemas/Status525Enum'
+          - $ref: '#/components/schemas/BlankEnum'
+        q:
+          type: string
+      required:
+      - class_id
+      - q
+      - status
+    CollectionParticipantRow:
+      type: object
+      properties:
+        participant_id:
+          type: integer
+        student_id:
+          type: integer
+        student_number:
+          type: string
+        display_name:
+          type: string
+        class_id:
+          type: integer
+        class_name:
+          type: string
+        status:
+          $ref: '#/components/schemas/Status525Enum'
+        status_label:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+        submission_count:
+          type: integer
+          minimum: 0
+      required:
+      - class_id
+      - class_name
+      - display_name
+      - ended_at
+      - participant_id
+      - started_at
+      - status
+      - status_label
+      - student_id
+      - student_number
+      - submission_count
     CompletenessEnum:
       enum:
       - complete
@@ -10027,6 +10188,20 @@ components:
         * `no_data` - no_data
         * `partial` - partial
         * `conflict` - conflict
+    Status525Enum:
+      enum:
+      - not_started
+      - in_progress
+      - completed
+      - expired
+      - invalidated
+      type: string
+      description: |-
+        * `not_started` - 未开始
+        * `in_progress` - 进行中
+        * `completed` - 正常完成
+        * `expired` - 已超时
+        * `invalidated` - 已作废
     Status558Enum:
       enum:
       - active

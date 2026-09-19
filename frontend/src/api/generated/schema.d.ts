@@ -1931,6 +1931,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/experiments/{experiment_id}/collection-participants/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_experiment_collection_participant_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/publish-operation-jobs/{job_id}/": {
         parameters: {
             query?: never;
@@ -2263,6 +2279,8 @@ export interface components {
             question_count: number;
             questions: components["schemas"]["BankConceptQuestion"][];
         };
+        /** @enum {unknown} */
+        BlankEnum: "";
         ClassAnalysisScope: {
             course_id: number;
             class_group_id: number;
@@ -2334,6 +2352,41 @@ export interface components {
          * @enum {string}
          */
         ClassificationEnum: "ready" | "draft" | "duplicate" | "invalid";
+        CollectionParticipantChoice: {
+            value: string;
+            label: string;
+        };
+        CollectionParticipantClassChoice: {
+            id: number;
+            name: string;
+        };
+        CollectionParticipantCollection: {
+            items: components["schemas"]["CollectionParticipantRow"][];
+            page: components["schemas"]["PageMetadata"];
+            filters: components["schemas"]["CollectionParticipantFilter"];
+            class_choices: components["schemas"]["CollectionParticipantClassChoice"][];
+            status_choices: components["schemas"]["CollectionParticipantChoice"][];
+        };
+        CollectionParticipantFilter: {
+            class_id: number | null;
+            status: components["schemas"]["Status525Enum"] | components["schemas"]["BlankEnum"];
+            q: string;
+        };
+        CollectionParticipantRow: {
+            participant_id: number;
+            student_id: number;
+            student_number: string;
+            display_name: string;
+            class_id: number;
+            class_name: string;
+            status: components["schemas"]["Status525Enum"];
+            status_label: string;
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            ended_at: string | null;
+            submission_count: number;
+        };
         /**
          * @description * `complete` - complete
          *     * `incomplete` - incomplete
@@ -4231,6 +4284,15 @@ export interface components {
          * @enum {string}
          */
         StateEnum: "available" | "no_data" | "partial" | "conflict";
+        /**
+         * @description * `not_started` - 未开始
+         *     * `in_progress` - 进行中
+         *     * `completed` - 正常完成
+         *     * `expired` - 已超时
+         *     * `invalidated` - 已作废
+         * @enum {string}
+         */
+        Status525Enum: "not_started" | "in_progress" | "completed" | "expired" | "invalidated";
         /**
          * @description * `active` - 进行中
          *     * `archived` - 已归档
@@ -8992,6 +9054,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClassTaskCollection"];
+                };
+            };
+        };
+    };
+    teacher_experiment_collection_participant_list: {
+        parameters: {
+            query?: {
+                class_id?: number | null;
+                page?: number;
+                q?: string;
+                /**
+                 * @description * `not_started` - 未开始
+                 *     * `in_progress` - 进行中
+                 *     * `completed` - 正常完成
+                 *     * `expired` - 已超时
+                 *     * `invalidated` - 已作废
+                 */
+                status?: "not_started" | "in_progress" | "completed" | "expired" | "invalidated" | "";
+            };
+            header?: never;
+            path: {
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionParticipantCollection"];
                 };
             };
         };

@@ -49,6 +49,13 @@ export type PublishPlanReview = components['schemas']['PublishPlanReview']
 export type PublishOperationJob = components['schemas']['PublishOperationJob']
 export type PublishParticipantCollection = components['schemas']['PublishParticipantCollection']
 export type PublishParticipantDetail = components['schemas']['PublishParticipantDetail']
+export type CollectionParticipantCollection = components['schemas']['CollectionParticipantCollection']
+export type CollectionParticipantFilters = {
+  classId?: number
+  status?: string
+  query?: string
+  page?: number
+}
 export type ClassTaskCollection = components['schemas']['ClassTaskCollection']
 export type ClassTask = components['schemas']['ClassTask']
 export type ClassTaskProgress = components['schemas']['ClassTaskProgress']
@@ -207,6 +214,18 @@ export function createTeacherExperimentApi(client: ApiClient) {
     },
     participantExportUrl(planId: number) {
       return `/api/v1/teacher/publish-plans/${planId}/participants/export/`
+    },
+    collectionParticipants(experimentId: number, filters: CollectionParticipantFilters = {}) {
+      const params = new URLSearchParams()
+      if (filters.classId !== undefined) params.set('class_id', String(filters.classId))
+      if (filters.status) params.set('status', filters.status)
+      const query = filters.query?.trim()
+      if (query) params.set('q', query)
+      if (filters.page !== undefined && filters.page > 1) params.set('page', String(filters.page))
+      const queryString = params.toString()
+      return client.get<CollectionParticipantCollection>(
+        `/api/v1/teacher/experiments/${experimentId}/collection-participants/${queryString ? `?${queryString}` : ''}`,
+      )
     },
     classTasks(experimentId: number) {
       return client.get<ClassTaskCollection>(
