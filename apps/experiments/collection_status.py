@@ -7,7 +7,7 @@ from django.db.models import (
     Subquery,
     Value,
 )
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Concat, Trim
 
 from apps.assessment.models import ExperimentSession
 
@@ -64,6 +64,13 @@ def collection_participant_queryset(
                 Value(0),
                 output_field=IntegerField(),
             ),
+            collection_full_name=Trim(
+                Concat(
+                    "student__first_name",
+                    Value(" "),
+                    "student__last_name",
+                )
+            ),
         )
     )
     if class_id is not None:
@@ -77,6 +84,7 @@ def collection_participant_queryset(
             | Q(student__first_name__icontains=query)
             | Q(student__last_name__icontains=query)
             | Q(student__username__icontains=query)
+            | Q(collection_full_name__icontains=query)
         )
     return snapshots.order_by(
         "class_task__class_group__academic_year",

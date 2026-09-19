@@ -1078,6 +1078,28 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertEqual(response.json()["page"]["total_items"], 1)
         self.assertEqual(response.json()["items"][0]["display_name"], student.display_name)
 
+    def test_collection_participants_searches_composed_full_name(self):
+        student = User.objects.create_user(
+            username="PUB-FULL-NAME",
+            student_number="PUB-FULL-NAME",
+            display_name="",
+            first_name="Jane",
+            last_name="Doe",
+            role=User.Role.STUDENT,
+        )
+        CourseEnrollment.objects.create(
+            course=self.course,
+            class_group=self.class_a,
+            student=student,
+        )
+        self.collection_fixture()
+
+        response = self.client.get(self.collection_url(), {"q": "Jane Doe"})
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["page"]["total_items"], 1)
+        self.assertEqual(response.json()["items"][0]["display_name"], student.shown_name)
+
     def test_collection_participants_rejects_invalid_filters_and_unauthorized_access(self):
         self.collection_fixture()
         unpublished_class = ClassGroup.objects.create(
