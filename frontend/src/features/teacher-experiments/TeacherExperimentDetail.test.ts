@@ -344,6 +344,21 @@ describe('TeacherExperimentDetail', () => {
     })
   })
 
+  it('groups each collection filter label with its control', async () => {
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+    await wrapper.get('#experiment-tab-collection').trigger('click')
+    await flushPromises()
+
+    const children = Array.from(wrapper.get('[data-collection-filter]').element.children)
+    expect(children).toHaveLength(4)
+    expect(children.slice(0, 3).every((element) => element.tagName === 'LABEL')).toBe(true)
+    expect(children[0]?.querySelector('#collection-filter-class')).not.toBeNull()
+    expect(children[1]?.querySelector('#collection-filter-query')).not.toBeNull()
+    expect(children[2]?.querySelector('#collection-filter-status')).not.toBeNull()
+    expect(children[3]?.classList.contains('kt-inline-actions')).toBe(true)
+  })
+
   it('restores collection filters and page from the URL on initial load', async () => {
     mocks.route.query = reactive({ tab: 'collection', class_id: '5', status: 'expired', q: 'S019', page: '2' })
     mocks.api.detail.mockResolvedValue({
@@ -488,6 +503,10 @@ describe('TeacherExperimentDetail', () => {
 
     newRequest.resolve(collectionResult('新学生', 'new'))
     await flushPromises()
+    expect(wrapper.find('[data-collection-participants]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('新学生')
+    expect(wrapper.text()).not.toContain('正在加载实验详情')
+
     oldRequest.resolve(collectionResult('旧学生', 'old'))
     await flushPromises()
 

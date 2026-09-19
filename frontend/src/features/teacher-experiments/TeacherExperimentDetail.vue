@@ -214,6 +214,7 @@ async function load() {
     const rows = await Promise.all(tasks.value.map(async (task) => [task.id, await api.progress(task.id)] as const))
     for (const [taskId, row] of rows) progress[taskId] = row
     detailReady.value = true
+    loading.value = false
     if (activeTab.value === 'collection') await loadCollection(collectionPage.value)
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '实验详情加载失败。'
@@ -454,12 +455,9 @@ onMounted(load)
       <section class="kt-card kt-published-task-table" aria-labelledby="collection-participants-title" data-collection-participants>
         <div class="kt-section-heading"><div><p class="kt-kicker">学生状态明细</p><h2 id="collection-participants-title">学生采集状态</h2></div><span>{{ collection?.page.total_items ?? '—' }} 人</span></div>
         <form class="kt-inline-form-grid" data-collection-filter @submit.prevent="applyCollectionFilters">
-          <label for="collection-filter-class">班级</label>
-          <select id="collection-filter-class" v-model="collectionClassId"><option value="">全部班级</option><option v-for="choice in collection?.class_choices || []" :key="choice.id" :value="String(choice.id)">{{ choice.name }}</option></select>
-          <label for="collection-filter-query">学生</label>
-          <input id="collection-filter-query" v-model="collectionQuery" type="search" placeholder="姓名或学号">
-          <label for="collection-filter-status">状态</label>
-          <select id="collection-filter-status" v-model="collectionStatus"><option value="">全部状态</option><option v-for="choice in collection?.status_choices || []" :key="choice.value" :value="choice.value">{{ choice.label }}</option></select>
+          <label for="collection-filter-class"><span>班级</span><select id="collection-filter-class" v-model="collectionClassId"><option value="">全部班级</option><option v-for="choice in collection?.class_choices || []" :key="choice.id" :value="String(choice.id)">{{ choice.name }}</option></select></label>
+          <label for="collection-filter-query"><span>学生</span><input id="collection-filter-query" v-model="collectionQuery" type="search" placeholder="姓名或学号"></label>
+          <label for="collection-filter-status"><span>状态</span><select id="collection-filter-status" v-model="collectionStatus"><option value="">全部状态</option><option v-for="choice in collection?.status_choices || []" :key="choice.value" :value="choice.value">{{ choice.label }}</option></select></label>
           <div class="kt-inline-actions"><Button type="submit" :disabled="collectionLoading">应用</Button><button class="kt-button kt-button--secondary" data-collection-clear type="button" :disabled="collectionLoading" @click="clearCollectionFilters">清除</button></div>
         </form>
 
