@@ -1076,7 +1076,7 @@ class TeacherPublishPlanApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(response.json()["page"]["total_items"], 1)
-        self.assertEqual(response.json()["items"][0]["student_name"], student.display_name)
+        self.assertEqual(response.json()["items"][0]["display_name"], student.display_name)
 
     def test_collection_participants_rejects_invalid_filters_and_unauthorized_access(self):
         self.collection_fixture()
@@ -1112,7 +1112,7 @@ class TeacherPublishPlanApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200, response.content)
         payload = response.json()
-        participant_ids = {item["id"] for item in payload["items"]}
+        participant_ids = {item["participant_id"] for item in payload["items"]}
         student_numbers = {item["student_number"] for item in payload["items"]}
         self.assertTrue(primary_fixture["snapshots"])
         self.assertTrue(
@@ -1157,9 +1157,11 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertEqual(first.status_code, 200, first.content)
         self.assertEqual(second.status_code, 200, second.content)
         self.assertEqual(repeated_first.status_code, 200, repeated_first.content)
-        first_ids = [item["id"] for item in first.json()["items"]]
-        second_ids = [item["id"] for item in second.json()["items"]]
-        repeated_first_ids = [item["id"] for item in repeated_first.json()["items"]]
+        first_ids = [item["participant_id"] for item in first.json()["items"]]
+        second_ids = [item["participant_id"] for item in second.json()["items"]]
+        repeated_first_ids = [
+            item["participant_id"] for item in repeated_first.json()["items"]
+        ]
         all_ids = first_ids + second_ids
         expected_ids = [snapshot.pk for snapshot in fixture["snapshots"].values()]
         self.assertEqual(len(first_ids), 25)

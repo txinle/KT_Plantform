@@ -4,6 +4,7 @@ from rest_framework import serializers
 from apps.api.exceptions import ApiConflict
 from apps.question_bank.models import Concept, Question, QuestionBank
 
+from ..collection_status import COLLECTION_STATUS_CHOICES
 from ..models import Experiment, ExperimentSamplingKC
 from ..sampling import SamplingService, SamplingValidationError
 from ..services import lock_experiment_question_bank, sync_experiment_questions
@@ -813,6 +814,65 @@ class PublishParticipantSerializer(serializers.Serializer):
 class PublishParticipantCollectionSerializer(serializers.Serializer):
     items = PublishParticipantSerializer(many=True)
     page = PageMetadataSerializer()
+
+
+class CollectionParticipantQuerySerializer(serializers.Serializer):
+    class_id = serializers.IntegerField(
+        min_value=1, allow_null=True, required=False, default=None
+    )
+    status = serializers.ChoiceField(
+        choices=COLLECTION_STATUS_CHOICES,
+        allow_blank=True,
+        required=False,
+        default="",
+    )
+    q = serializers.CharField(
+        allow_blank=True,
+        required=False,
+        default="",
+        trim_whitespace=True,
+    )
+    page = serializers.IntegerField(min_value=1, required=False, default=1)
+
+
+class CollectionParticipantChoiceSerializer(serializers.Serializer):
+    value = serializers.CharField()
+    label = serializers.CharField()
+
+
+class CollectionParticipantClassChoiceSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+
+
+class CollectionParticipantRowSerializer(serializers.Serializer):
+    participant_id = serializers.IntegerField()
+    student_id = serializers.IntegerField()
+    student_number = serializers.CharField()
+    display_name = serializers.CharField()
+    class_id = serializers.IntegerField()
+    class_name = serializers.CharField()
+    status = serializers.ChoiceField(choices=COLLECTION_STATUS_CHOICES)
+    status_label = serializers.CharField()
+    started_at = serializers.DateTimeField(allow_null=True)
+    ended_at = serializers.DateTimeField(allow_null=True)
+    submission_count = serializers.IntegerField(min_value=0)
+
+
+class CollectionParticipantFilterSerializer(serializers.Serializer):
+    class_id = serializers.IntegerField(allow_null=True)
+    status = serializers.ChoiceField(
+        choices=COLLECTION_STATUS_CHOICES, allow_blank=True
+    )
+    q = serializers.CharField(allow_blank=True)
+
+
+class CollectionParticipantCollectionSerializer(serializers.Serializer):
+    items = CollectionParticipantRowSerializer(many=True)
+    page = PageMetadataSerializer()
+    filters = CollectionParticipantFilterSerializer()
+    class_choices = CollectionParticipantClassChoiceSerializer(many=True)
+    status_choices = CollectionParticipantChoiceSerializer(many=True)
 
 
 class PublishParticipantItemSerializer(serializers.Serializer):

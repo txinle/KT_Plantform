@@ -14,6 +14,7 @@ from .views import (
     TeacherClassTaskProgressView,
     TeacherClassTaskScheduleRevisionView,
     TeacherExperimentCollectionView,
+    TeacherExperimentCollectionParticipantView,
     TeacherExperimentDetailView,
     TeacherExperimentClassTaskListView,
     TeacherExperimentReadinessView,
@@ -155,6 +156,11 @@ urlpatterns = [
         "experiments/<int:experiment_id>/class-tasks/",
         TeacherExperimentClassTaskListView.as_view(),
         name="teacher-experiment-class-task-list",
+    ),
+    path(
+        "experiments/<int:experiment_id>/collection-participants/",
+        TeacherExperimentCollectionParticipantView.as_view(),
+        name="teacher-experiment-collection-participant-list",
     ),
     path(
         "class-tasks/<int:task_id>/",

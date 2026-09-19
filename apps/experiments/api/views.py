@@ -6,7 +6,7 @@ from django.db.models import Count, Exists, OuterRef, Q, Sum
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -22,6 +22,13 @@ from apps.assessment.models import ExperimentSession
 from apps.audit.services import log_action
 from apps.question_bank.models import Concept, Question, QuestionBank
 
+from ..collection_status import (
+    COLLECTION_STATUS_CHOICES,
+    collection_class_choice_projection,
+    collection_class_tasks,
+    collection_participant_projection,
+    collection_participant_queryset,
+)
 from ..models import (
     ClassExperimentTask,
     Experiment,
@@ -50,6 +57,8 @@ from ..publication_services import (
 from ..services import validate_for_publish
 from ..sampling import SamplingService, SamplingValidationError
 from .serializers import (
+    CollectionParticipantCollectionSerializer,
+    CollectionParticipantQuerySerializer,
     ClassTaskCollectionSerializer,
     ClassTaskProgressSerializer,
     ClassTaskSerializer,
@@ -69,6 +78,10 @@ from .serializers import (
     TeacherSamplingInventoryRequestSerializer,
     TeacherSamplingInventoryResponseSerializer,
 )
+
+
+class CollectionParticipantPagination(FixedPageNumberPagination):
+    page_size = 25
 
 
 def _raise_api_domain_error(exc):
@@ -937,6 +950,70 @@ class TeacherExperimentClassTaskListView(TeacherClassTaskMixin, APIView):
             "class_group__academic_year", "class_group__name", "pk"
         )
         return Response({"items": [_task_projection(task) for task in tasks]})
+
+
+class TeacherExperimentCollectionParticipantView(APIView):
+    permission_classes = (RolePermission,)
+    allowed_roles = (User.Role.TEACHER,)
+
+    @extend_schema(
+        operation_id="teacher_experiment_collection_participant_list",
+        parameters=[CollectionParticipantQuerySerializer],
+        responses=CollectionParticipantCollectionSerializer,
+    )
+    def get(self, request, experiment_id):
+        experiment = get_object_or_404(
+            Experiment.objects.select_related("course"), pk=experiment_id
+        )
+        if experiment.course_id is None or not experiment.course.can_manage(
+            request.user
+        ):
+            raise Http404
+
+        query_serializer = CollectionParticipantQuerySerializer(
+            data=request.query_params
+        )
+        query_serializer.is_valid(raise_exception=True)
+        filters = query_serializer.validated_data
+
+        class_tasks = collection_class_tasks(experiment)
+        class_ids = {task.class_group_id for task in class_tasks}
+        if filters["class_id"] is not None and filters["class_id"] not in class_ids:
+            raise ValidationError(
+                {"class_id": "班级不属于当前实验的已发布任务。"}
+            )
+
+        queryset = collection_participant_queryset(
+            experiment,
+            class_id=filters["class_id"],
+            status=filters["status"],
+            query=filters["q"],
+        )
+        paginator = CollectionParticipantPagination()
+        try:
+            page = paginator.paginate_queryset(queryset, request, view=self)
+        except NotFound as exc:
+            raise ValidationError({"page": "页码超出范围。"}) from exc
+        payload = paginator.get_paginated_response(
+            [collection_participant_projection(snapshot) for snapshot in page]
+        ).data
+        payload.update(
+            {
+                "filters": {
+                    "class_id": filters["class_id"],
+                    "status": filters["status"],
+                    "q": filters["q"],
+                },
+                "class_choices": [
+                    collection_class_choice_projection(task) for task in class_tasks
+                ],
+                "status_choices": [
+                    {"value": value, "label": label}
+                    for value, label in COLLECTION_STATUS_CHOICES
+                ],
+            }
+        )
+        return Response(payload)
 
 
 class TeacherClassTaskDetailView(TeacherClassTaskMixin, APIView):
