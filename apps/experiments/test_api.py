@@ -833,7 +833,7 @@ class TeacherPublishPlanApiTests(TestCase):
             "collection-participants/"
         )
 
-    def collection_fixture(self, extra_student_count=0):
+    def collection_fixture(self, extra_student_count=0, extra_session_count=0):
         status_students = []
         status_definitions = (
             ("PUB-STATE-IN", "状态-进行中", ExperimentSession.Status.IN_PROGRESS, 0),
@@ -900,12 +900,98 @@ class TeacherPublishPlanApiTests(TestCase):
                 status=status,
                 submission_count=submission_count,
             )
+        extra_statuses = (
+            ExperimentSession.Status.IN_PROGRESS,
+            ExperimentSession.Status.COMPLETED,
+            ExperimentSession.Status.EXPIRED,
+            ExperimentSession.Status.INVALIDATED,
+        )
+        extra_students = [
+            snapshot.student
+            for snapshot in version.participant_snapshots.select_related("student")
+            if snapshot.student.student_number.startswith("PUB-EXTRA-")
+        ]
+        for index, student in enumerate(extra_students[:extra_session_count]):
+            snapshot = snapshots[student.pk]
+            ExperimentSession.objects.create(
+                version=version,
+                class_task=tasks[self.class_a.pk],
+                participant_snapshot=snapshot,
+                student=student,
+                class_snapshot=snapshot.class_snapshot,
+                class_snapshot_name=snapshot.class_snapshot.name_snapshot,
+                status=extra_statuses[index % len(extra_statuses)],
+                submission_count=index % 4,
+            )
         return {
             "version": version,
             "tasks": tasks,
             "snapshots": snapshots,
             "status_students": status_students,
         }
+
+    def publish_other_experiment_for_collection_boundary(self):
+        primary_experiment = self.experiment
+        concept = primary_experiment.sampling_kcs.get().concept
+        other_experiment = Experiment.objects.create(
+            name="同课程另一实验",
+            course=self.course,
+            question_bank=primary_experiment.question_bank,
+            owner=self.teacher,
+            created_by=self.teacher,
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=1,
+        )
+        ExperimentSamplingKC.objects.create(
+            experiment=other_experiment,
+            concept=concept,
+        )
+        other_class_a = ClassGroup.objects.create(
+            course=self.course,
+            name="另一实验一班",
+            academic_year="2026",
+        )
+        other_class_b = ClassGroup.objects.create(
+            course=self.course,
+            name="另一实验二班",
+            academic_year="2026",
+        )
+        for index, class_group in enumerate((other_class_a, other_class_b), start=1):
+            student_number = f"PUB-OTHER-{index:03d}"
+            student = User.objects.create_user(
+                username=student_number,
+                student_number=student_number,
+                display_name=f"另一实验学生-{index}",
+                role=User.Role.STUDENT,
+            )
+            CourseEnrollment.objects.create(
+                course=self.course,
+                class_group=class_group,
+                student=student,
+            )
+        self.experiment = other_experiment
+        primary_class_a = self.class_a
+        primary_class_b = self.class_b
+        self.class_a = other_class_a
+        self.class_b = other_class_b
+        try:
+            plan, _opens_at = self.preview_two_classes()
+            commit = self.client.post(
+                self.plan_url(plan, "commit/"),
+                data=json.dumps({"expected_revision": plan.plan_revision}),
+                content_type="application/json",
+            )
+            self.complete_operation(commit)
+            snapshots = list(
+                other_experiment.versions.get().participant_snapshots.values_list(
+                    "pk", "student_id"
+                )
+            )
+        finally:
+            self.experiment = primary_experiment
+            self.class_a = primary_class_a
+            self.class_b = primary_class_b
+        return snapshots
 
     def test_collection_participants_exposes_all_server_derived_statuses_and_choices(self):
         fixture = self.collection_fixture()
@@ -946,18 +1032,41 @@ class TeacherPublishPlanApiTests(TestCase):
         fixture = self.collection_fixture()
         student, _status, _submission_count = fixture["status_students"][0]
 
+        class_filtered = self.client.get(
+            self.collection_url(), {"class_id": self.class_b.pk}
+        )
+        status_filtered = self.client.get(
+            self.collection_url(), {"status": "in_progress"}
+        )
         response = self.client.get(
             self.collection_url(),
-            {
-                "class_id": self.class_a.pk,
-                "status": "in_progress",
-                "q": student.student_number,
-            },
+            {"class_id": self.class_a.pk, "status": "in_progress", "q": student.student_number},
+        )
+        wrong_class = self.client.get(
+            self.collection_url(),
+            {"class_id": self.class_b.pk, "q": student.student_number},
+        )
+        wrong_status = self.client.get(
+            self.collection_url(),
+            {"status": "completed", "q": student.student_number},
         )
 
+        self.assertEqual(class_filtered.status_code, 200, class_filtered.content)
+        self.assertEqual(status_filtered.status_code, 200, status_filtered.content)
         self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(wrong_class.status_code, 200, wrong_class.content)
+        self.assertEqual(wrong_status.status_code, 200, wrong_status.content)
+        self.assertEqual(
+            {item["class_id"] for item in class_filtered.json()["items"]},
+            {self.class_b.pk},
+        )
+        self.assertTrue(
+            all(item["status"] == "in_progress" for item in status_filtered.json()["items"])
+        )
         self.assertEqual(response.json()["page"]["total_items"], 1)
         self.assertEqual(response.json()["items"][0]["student_number"], student.student_number)
+        self.assertEqual(wrong_class.json()["page"]["total_items"], 0)
+        self.assertEqual(wrong_status.json()["page"]["total_items"], 0)
 
     def test_collection_participants_searches_student_name(self):
         fixture = self.collection_fixture()
@@ -995,18 +1104,51 @@ class TeacherPublishPlanApiTests(TestCase):
         forbidden = self.client.get(self.collection_url())
         self.assertEqual(forbidden.status_code, 404, forbidden.content)
 
-    def test_collection_participants_query_count_is_bounded_for_a_page_of_25(self):
-        self.collection_fixture(extra_student_count=30)
+    def test_collection_participants_does_not_leak_another_experiments_snapshots(self):
+        primary_fixture = self.collection_fixture()
+        other_snapshots = self.publish_other_experiment_for_collection_boundary()
 
-        with CaptureQueriesContext(connection) as context:
-            response = self.client.get(self.collection_url(), {"page": 1})
+        response = self.client.get(self.collection_url())
 
         self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        participant_ids = {item["id"] for item in payload["items"]}
+        student_numbers = {item["student_number"] for item in payload["items"]}
+        self.assertTrue(primary_fixture["snapshots"])
+        self.assertTrue(
+            {snapshot.pk for snapshot in primary_fixture["snapshots"].values()}
+            & participant_ids
+        )
+        self.assertTrue(
+            set(snapshot_id for snapshot_id, _student_id in other_snapshots).isdisjoint(
+                participant_ids
+            )
+        )
+        other_student_numbers = set(
+            User.objects.filter(
+                pk__in=[student_id for _snapshot_id, student_id in other_snapshots]
+            ).values_list("student_number", flat=True)
+        )
+        self.assertTrue(other_student_numbers.isdisjoint(student_numbers))
+
+    def test_collection_participants_query_count_is_bounded_for_a_page_of_25(self):
+        self.collection_fixture(extra_student_count=30, extra_session_count=30)
+
+        with CaptureQueriesContext(connection) as small_context:
+            small_response = self.client.get(
+                self.collection_url(), {"class_id": self.class_b.pk}
+            )
+        with CaptureQueriesContext(connection) as large_context:
+            response = self.client.get(self.collection_url(), {"page": 1})
+
+        self.assertEqual(small_response.status_code, 200, small_response.content)
+        self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(len(response.json()["items"]), 25)
-        self.assertLessEqual(len(context), 12)
+        self.assertEqual(len(small_context), len(large_context))
+        self.assertLessEqual(len(large_context), 12)
 
     def test_collection_participants_pagination_is_stable_and_non_overlapping(self):
-        self.collection_fixture(extra_student_count=30)
+        fixture = self.collection_fixture(extra_student_count=30)
 
         first = self.client.get(self.collection_url(), {"page": 1})
         second = self.client.get(self.collection_url(), {"page": 2})
@@ -1018,9 +1160,13 @@ class TeacherPublishPlanApiTests(TestCase):
         first_ids = [item["id"] for item in first.json()["items"]]
         second_ids = [item["id"] for item in second.json()["items"]]
         repeated_first_ids = [item["id"] for item in repeated_first.json()["items"]]
+        all_ids = first_ids + second_ids
+        expected_ids = [snapshot.pk for snapshot in fixture["snapshots"].values()]
         self.assertEqual(len(first_ids), 25)
-        self.assertTrue(second_ids)
-        self.assertTrue(set(first_ids).isdisjoint(second_ids))
+        self.assertEqual(first.json()["page"]["total_items"], 36)
+        self.assertEqual(len(second_ids), 11)
+        self.assertEqual(set(all_ids), set(expected_ids))
+        self.assertEqual(len(all_ids), len(set(all_ids)))
         self.assertEqual(first_ids, repeated_first_ids)
 
     def start_plan(self):
