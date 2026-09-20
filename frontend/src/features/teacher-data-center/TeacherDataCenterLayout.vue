@@ -208,7 +208,7 @@ onMounted(async () => {
       </details>
     </section>
     <p v-if="contextError" class="kt-alert kt-alert--danger" role="alert">{{ contextError }}</p>
-    <div v-else-if="scope" class="kt-data-page" :data-scope-revision="scopeRevision"><RouterView :key="scopeRevision" /></div>
+    <div v-else-if="scope || !isExportScopePage" class="kt-data-page" :data-scope-revision="scopeRevision"><RouterView :key="scopeRevision" /></div>
     <p v-else role="status">正在加载数据范围…</p>
   </WorkspaceShell>
 </template>

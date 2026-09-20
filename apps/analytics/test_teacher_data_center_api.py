@@ -6,7 +6,8 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
-from apps.analytics.models import ExportJob, ExportSnapshot
+from apps.analytics.models import ExportJob, ExportSnapshot, ResearchSessionMaterialization
+from apps.analytics.research_materialization import PROJECTION_VERSION
 from apps.assessment.models import Attempt, ExperimentSession, StudentQuestionAssignment
 from apps.experiments.models import (
     Experiment,
@@ -92,6 +93,7 @@ class TeacherDataCenterApiTests(TestCase):
             class_snapshot_name=self.class_snapshot.display_name,
             status=ExperimentSession.Status.COMPLETED,
         )
+        self.session = session
         assignment = StudentQuestionAssignment.objects.create(
             session=session,
             snapshot=snapshot,
@@ -140,6 +142,39 @@ class TeacherDataCenterApiTests(TestCase):
                 self.assertEqual(response.json()["facts"]["participants"], 1)
                 if "," in ids:
                     self.assertIn("另一实验", response.json()["scope"]["display"])
+
+    @override_settings(
+        ADVANCED_DATA_MATERIALIZED_ENABLED=True,
+        ADVANCED_DATA_MATERIALIZED_COURSE_IDS=("*",),
+    )
+    @patch("apps.analytics.api.views.build_quality_report")
+    def test_overview_uses_materialized_process_and_quality_counts(self, build_quality_report):
+        build_quality_report.side_effect = AssertionError(
+            "materialized overview must not build the legacy quality report"
+        )
+        ResearchSessionMaterialization.objects.create(
+            session=self.session,
+            status=ResearchSessionMaterialization.Status.SUCCEEDED,
+            is_current=True,
+            projection_version=PROJECTION_VERSION,
+            row_counts={"responses": 1, "visits": 2, "behavior": 17},
+            quality_rows=[
+                {"attempt_id": self.attempt.pk, "state": "WARN"},
+                {"attempt_id": self.attempt.pk, "state": "FAIL"},
+                {"attempt_id": self.attempt.pk, "state": "NOT_EVALUABLE"},
+            ],
+        )
+
+        response = self.client.get(
+            self.api("overview/"),
+            {"experiment_id": self.experiment.pk, "class_id": self.class_group.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        build_quality_report.assert_not_called()
+        self.assertEqual(response.json()["facts"]["process_records"], 17)
+        self.assertEqual(response.json()["facts"]["quality_warnings"], 1)
+        self.assertEqual(response.json()["facts"]["not_evaluable"], 1)
 
     def test_scope_update_is_json_and_persists_the_authoritative_selection(self):
         url = self.api("scope/")

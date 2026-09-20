@@ -44,6 +44,7 @@ from ..research_export_v2 import (
     ResearchExportNotReady,
     create_research_export_snapshot,
 )
+from ..research_materialization import PROJECTION_VERSION
 from ..research_materialization_jobs import materialization_enabled_for_course
 from ..quality_reports import EvaluationState, QualityReport, build_quality_report
 from ..quality_materialized import materialized_quality_payload
@@ -401,13 +402,41 @@ class TeacherDataCenterOverviewView(APIView):
         scope = TeachingScope(course=course, experiment_id=research_scope.experiment_id, class_id=class_id)
         sessions = research_scope.sessions() if research_scope.is_complete else scope.sessions().none()
         attempts = research_scope.attempts() if research_scope.is_complete else scope.attempts().none()
-        report = build_quality_report(research_scope) if research_scope.is_complete else QualityReport(())
-        warning_attempt_ids = {
-            row.attempt_id
-            for row in report.rows
-            if row.attempt_id is not None
-            and row.state in {EvaluationState.WARN, EvaluationState.FAIL}
-        }
+        if research_scope.is_complete and materialization_enabled_for_course(course.pk):
+            current_materializations = ResearchSessionMaterialization.objects.filter(
+                session__in=sessions.filter(
+                    status__in=(
+                        ExperimentSession.Status.COMPLETED,
+                        ExperimentSession.Status.EXPIRED,
+                    )
+                ),
+                status=ResearchSessionMaterialization.Status.SUCCEEDED,
+                is_current=True,
+                projection_version=PROJECTION_VERSION,
+            ).values_list("row_counts", "quality_rows")
+            warning_attempt_ids = set()
+            process_records = 0
+            not_evaluable = 0
+            for row_counts, quality_rows in current_materializations.iterator():
+                process_records += int(row_counts.get("behavior", 0))
+                for row in quality_rows:
+                    if row.get("state") in {
+                        str(EvaluationState.WARN),
+                        str(EvaluationState.FAIL),
+                    } and row.get("attempt_id") is not None:
+                        warning_attempt_ids.add(row["attempt_id"])
+                    if row.get("state") == str(EvaluationState.NOT_EVALUABLE):
+                        not_evaluable += 1
+        else:
+            report = build_quality_report(research_scope) if research_scope.is_complete else QualityReport(())
+            warning_attempt_ids = {
+                row.attempt_id
+                for row in report.rows
+                if row.attempt_id is not None
+                and row.state in {EvaluationState.WARN, EvaluationState.FAIL}
+            }
+            process_records = AssessmentEvent.objects.filter(session__in=sessions).count()
+            not_evaluable = report.counts.get(EvaluationState.NOT_EVALUABLE, 0)
         recent_jobs = list(_scoped_export_jobs(course, research_scope)[:5]) if research_scope.is_complete else []
         recent_class_names = _history_class_names(recent_jobs)
         return Response(
@@ -428,10 +457,8 @@ class TeacherDataCenterOverviewView(APIView):
                         attempt__in=attempts
                     ).count(),
                     "quality_warnings": len(warning_attempt_ids),
-                    "process_records": AssessmentEvent.objects.filter(session__in=sessions).count(),
-                    "not_evaluable": report.counts.get(
-                        EvaluationState.NOT_EVALUABLE, 0
-                    ),
+                    "process_records": process_records,
+                    "not_evaluable": not_evaluable,
                 },
                 "recent_exports": [
                     _recent_export_payload(job, recent_class_names) for job in recent_jobs

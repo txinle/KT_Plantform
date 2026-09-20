@@ -91,6 +91,15 @@ describe('TeacherDataCenterLayout', () => {
     expect(wrapper.get('a[href="/teacher/courses/7/data/teaching/"]')).toBeTruthy()
   })
 
+  it('does not serialize overview loading behind the shared scope request', () => {
+    mocks.get.mockReturnValue(new Promise(() => undefined))
+    mocks.scope.mockReturnValue(new Promise(() => undefined))
+
+    const wrapper = mount(TeacherDataCenterLayout)
+
+    expect(wrapper.find('[data-router-view]').exists()).toBe(true)
+  })
+
   it('supports multiple native checkbox choices without losing class selection', async () => {
     mocks.get.mockResolvedValue({ id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' })
     mocks.scope.mockResolvedValue({
