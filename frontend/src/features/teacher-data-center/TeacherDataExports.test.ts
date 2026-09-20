@@ -65,6 +65,7 @@ describe('TeacherDataExports', () => {
     expect(wrapper.text()).toContain('课程题目固定库.json')
     expect(wrapper.text()).toContain('表2覆盖当前实验全部已发布班级')
     expect(wrapper.text()).toContain('数据包包含学生姓名')
+    expect(wrapper.find('.kt-export-scope').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Version')
     expect(wrapper.get('.kt-export-confirm button').text()).toBe('导出实验数据包')
 
@@ -83,11 +84,12 @@ describe('TeacherDataExports', () => {
       job_id: 'job-all', package: 'experiment', status: 'queued', status_label: '排队中',
       download_url: null, history_url: '/teacher/courses/7/data/exports/history/',
     })
-    const wrapper = mount(TeacherDataExports)
+    const firstWrapper = mount(TeacherDataExports)
     await flushPromises()
-
     const initialCatalog = await mocks.api.exports.mock.results[0]?.value
-    mocks.api.exports.mockResolvedValueOnce({
+    firstWrapper.unmount()
+    mocks.api.exports.mockReset()
+    mocks.api.exports.mockResolvedValue({
       ...initialCatalog,
       scope: {
         ...initialCatalog.scope,
@@ -96,11 +98,8 @@ describe('TeacherDataExports', () => {
         display: '数据实验 · 全部已发布班级',
       },
     })
-    await wrapper.get('[data-testid="class-mode"]').setValue('all')
+    const wrapper = mount(TeacherDataExports)
     await flushPromises()
-    expect(mocks.api.exports).toHaveBeenLastCalledWith(7, {
-      scope_version: 2, experiment_id: 3, class_mode: 'all',
-    })
     await wrapper.get('.kt-export-confirm form').trigger('submit')
     await flushPromises()
 

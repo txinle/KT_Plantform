@@ -41,6 +41,7 @@ enableAutoUnmount(afterEach)
 describe('TeacherDataCenterLayout', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.route.path = '/teacher/courses/7/data/'
     mocks.applyRouteQuery({ version_mode: 'single', status: 'completed', search: '张同学', session_ref: 'S-001', table: 'sessions', page: '2', package: 'experiment' })
   })
 
@@ -187,5 +188,54 @@ describe('TeacherDataCenterLayout', () => {
       )
       expect(query).toEqual({ scope_version: '2', experiment_id: '3', class_mode: 'all' })
     }
+  })
+
+  it('uses the top scope bar as the only export-v2 experiment and class selector', async () => {
+    mocks.applyRouteQuery({ scope_version: '2', experiment_id: '3', class_mode: 'all' })
+    mocks.route.path = '/teacher/courses/7/data/exports/'
+    mocks.get.mockResolvedValue({ id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' })
+    mocks.scope.mockResolvedValue({
+      course: { id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' },
+      current: { experiment_id: 3, experiment_ids: [3], class_id: null, is_complete: false, display: '数据实验' },
+      experiments: [{ id: 3, name: '数据实验', versions: [] }, { id: 5, name: '追踪实验', versions: [] }],
+      classes: [{ id: 4, name: '实验班', academic_year: '2026' }],
+      scope_update_url: '/api/v1/teacher/courses/7/data/scope/',
+    })
+
+    const wrapper = mount(TeacherDataCenterLayout)
+    await flushPromises()
+
+    expect(wrapper.findAll('input[name="experiment_id"]')).toHaveLength(2)
+    expect(wrapper.find('input[name="experiment_ids"]').exists()).toBe(false)
+    const classRange = wrapper.get('select[name="export_class_range"]')
+    expect((classRange.element as HTMLSelectElement).value).toBe('all')
+    expect(classRange.text()).toContain('全部已发布班级')
+
+    await wrapper.get('.kt-scope-bar form').trigger('submit')
+    await flushPromises()
+    expect(mocks.updateScope).not.toHaveBeenCalled()
+    expect(mocks.replace).toHaveBeenCalledWith({
+      query: { scope_version: '2', experiment_id: 3, class_mode: 'all' },
+    })
+  })
+
+  it('uses the same top export-v2 selector on export history', async () => {
+    mocks.applyRouteQuery({ scope_version: '2', experiment_id: '3', class_mode: 'single', class_id: '4' })
+    mocks.route.path = '/teacher/courses/7/data/exports/history/'
+    mocks.get.mockResolvedValue({ id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' })
+    mocks.scope.mockResolvedValue({
+      course: { id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' },
+      current: { experiment_id: 3, experiment_ids: [3], class_id: 4, is_complete: true, display: '数据实验 · 实验班' },
+      experiments: [{ id: 3, name: '数据实验', versions: [] }],
+      classes: [{ id: 4, name: '实验班', academic_year: '2026' }],
+      scope_update_url: '/api/v1/teacher/courses/7/data/scope/',
+    })
+
+    const wrapper = mount(TeacherDataCenterLayout)
+    await flushPromises()
+
+    expect(wrapper.find('input[name="experiment_id"]').exists()).toBe(true)
+    expect((wrapper.get('select[name="export_class_range"]').element as HTMLSelectElement).value).toBe('4')
+    expect(wrapper.find('input[name="experiment_ids"]').exists()).toBe(false)
   })
 })

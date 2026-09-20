@@ -5,7 +5,7 @@ import { useRoute } from 'vue-router'
 import Alert from '@/design-system/components/Alert.vue'
 import PageHeader from '@/design-system/components/PageHeader.vue'
 
-import { getTeacherDataCenterApi, routeQuery, type DataCenterExportCatalog, type DataCenterExportJobMutation, type DataQuery } from './api'
+import { getTeacherDataCenterApi, routeQuery, type DataCenterExportCatalog, type DataCenterExportJobMutation } from './api'
 
 const route = useRoute()
 const courseId = Number(route.params.courseId)
@@ -14,9 +14,6 @@ const data = ref<DataCenterExportCatalog>()
 const error = ref('')
 const creating = ref(false)
 const createdJob = ref<DataCenterExportJobMutation>()
-const selectedExperimentId = ref<number | null>(null)
-const classMode = ref<'single' | 'all'>('single')
-const selectedClassId = ref<number | null>(null)
 let pollTimer: number | undefined
 let pollAttempts = 0
 let pollingActive = true
@@ -29,17 +26,10 @@ const groups = computed(() => [
   { key: 'dictionary', title: '事件说明', note: '固定事件字段说明', tables: data.value?.tables.filter(table => table.level === 'dictionary') || [] },
 ])
 const exportScope = computed<Record<string, unknown>>(() => {
-  const scope: Record<string, unknown> = {
-    scope_version: 2,
-    experiment_id: selectedExperimentId.value,
-    class_mode: classMode.value,
-  }
-  if (classMode.value === 'single') scope.class_id = selectedClassId.value
-  return scope
+  return (data.value?.scope.values as Record<string, unknown>) || {}
 })
 const canCreate = computed(() => Boolean(
-  selectedExperimentId.value
-  && (classMode.value === 'all' || selectedClassId.value)
+  data.value?.scope.is_complete
   && data.value?.preparation.pending_count === 0
   && !activePackage.value?.blocked,
 ))
@@ -101,67 +91,12 @@ async function pollJob() {
 
 function applyCatalog(result: DataCenterExportCatalog) {
   data.value = result
-  const values = result.scope.values as Record<string, unknown>
-  selectedExperimentId.value = Number(values.experiment_id || result.experiments[0]?.id || 0) || null
-  classMode.value = values.class_mode === 'all' ? 'all' : 'single'
-  selectedClassId.value = Number(values.class_id || result.class_choices[0]?.id || 0) || null
-}
-
-async function changeExperiment() {
-  if (!selectedExperimentId.value) return
-  const requestedMode = classMode.value
-  error.value = ''
-  try {
-    const result = await api.exports(courseId, {
-      scope_version: 2,
-      experiment_id: selectedExperimentId.value,
-      class_mode: 'all',
-    })
-    applyCatalog(result)
-    selectedClassId.value = result.class_choices[0]?.id || null
-    if (requestedMode === 'single' && selectedClassId.value) {
-      const single = await api.exports(courseId, {
-        scope_version: 2,
-        experiment_id: selectedExperimentId.value,
-        class_mode: 'single',
-        class_id: selectedClassId.value,
-      })
-      applyCatalog(single)
-    }
-  } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '实验导出范围加载失败。'
-  }
-}
-
-async function changeClassMode() {
-  if (!selectedExperimentId.value) return
-  error.value = ''
-  try {
-    const query: DataQuery = {
-      scope_version: 2,
-      experiment_id: selectedExperimentId.value,
-      class_mode: classMode.value,
-    }
-    if (classMode.value === 'single') {
-      selectedClassId.value ||= data.value?.class_choices[0]?.id || null
-      if (!selectedClassId.value) return
-      query.class_id = selectedClassId.value
-    }
-    applyCatalog(await api.exports(courseId, query))
-  } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '班级导出范围加载失败。'
-  }
-}
-
-async function changeClass() {
-  if (classMode.value === 'single') await changeClassMode()
 }
 
 onMounted(async () => {
   try {
     const result = await api.exports(courseId, routeQuery(route.query))
     applyCatalog(result)
-    if (!result.scope.is_complete && selectedExperimentId.value) await changeExperiment()
   }
   catch (caught) { error.value = caught instanceof Error ? caught.message : '导出数据加载失败。' }
 })
@@ -180,29 +115,7 @@ onBeforeUnmount(() => {
   <p v-if="!data && !error" role="status">正在加载研究数据导出…</p>
   <template v-else-if="data">
     <Alert tone="warning"><strong>实名数据确认：</strong>{{ data.identified_data_notice }}</Alert>
-
-    <section class="kt-card kt-export-scope" aria-labelledby="export-scope-title">
-      <div class="kt-section-heading"><div><p class="kt-kicker">导出范围</p><h2 id="export-scope-title">选择一个实验及班级范围</h2></div></div>
-      <div class="kt-filter-grid">
-        <label>实验
-          <select v-model.number="selectedExperimentId" data-testid="experiment" @change="changeExperiment">
-            <option v-for="experiment in data.experiments" :key="experiment.id" :value="experiment.id">{{ experiment.name }}</option>
-          </select>
-        </label>
-        <label>班级范围
-          <select v-model="classMode" data-testid="class-mode" @change="changeClassMode">
-            <option value="single">单个已发布班级</option>
-            <option value="all">全部已发布班级</option>
-          </select>
-        </label>
-        <label v-if="classMode === 'single'">班级
-          <select v-model.number="selectedClassId" data-testid="class" @change="changeClass">
-            <option v-for="item in data.class_choices" :key="item.id" :value="item.id">{{ item.academic_year }} {{ item.name }}</option>
-          </select>
-        </label>
-      </div>
-      <p v-if="data.preparation.pending_count" class="kt-warning-text">{{ data.preparation.pending_count }} 名已结束学生的数据正在后台整理，暂不能导出。</p>
-    </section>
+    <p v-if="data.preparation.pending_count" class="kt-warning-text">{{ data.preparation.pending_count }} 名已结束学生的数据正在后台整理，暂不能导出。</p>
 
     <section class="kt-card kt-export-package">
       <div class="kt-section-heading">
