@@ -1615,7 +1615,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["teacher_data_center_export_job_retrieve"];
         put?: never;
         post?: never;
         delete: operations["teacher_data_center_export_job_destroy"];
@@ -2617,8 +2617,15 @@ export interface components {
             identified_data_notice: string;
             actions: components["schemas"]["DataCenterExportActions"];
             tables: components["schemas"]["DataCenterAdvancedTable"][];
+            experiments: components["schemas"]["DataCenterExportExperiment"][];
+            class_choices: components["schemas"]["DataCenterClassOption"][];
+            preparation: components["schemas"]["DataCenterExportPreparation"];
             /** Format: date-time */
             generated_at: string;
+        };
+        DataCenterExportExperiment: {
+            id: number;
+            name: string;
         };
         DataCenterExportHistoryCollection: {
             scope: components["schemas"]["DataCenterResearchScope"];
@@ -2664,6 +2671,11 @@ export interface components {
             label: string;
             description: string;
             blocked: boolean;
+        };
+        DataCenterExportPreparation: {
+            state: string;
+            ready_count: number;
+            pending_count: number;
         };
         DataCenterFacts: {
             participants: number;
@@ -3555,6 +3567,7 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label?: string;
@@ -3565,7 +3578,9 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -5148,6 +5163,7 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label: string;
@@ -5158,7 +5174,9 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -8444,6 +8462,28 @@ export interface operations {
         };
         responses: {
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataCenterExportJobMutation"];
+                };
+            };
+        };
+    };
+    teacher_data_center_export_job_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

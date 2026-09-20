@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from django.apps import apps
 from django.db import IntegrityError, close_old_connections, connection, transaction
+from django.db.models import F
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
@@ -416,22 +417,30 @@ class ResearchMaterializationServiceTests(TestCase):
             return item
 
         first = materialize()
-        append_assessment_event(
-            event_type="window_blurred", event_version=1, event_domain="telemetry",
-            actor_source="server", session=self.session, payload={},
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            append_assessment_event(
+                event_type="window_blurred", event_version=1, event_domain="telemetry",
+                actor_source="server", session=self.session, payload={},
+            )
         self.assertTrue(stale(first))
         second = materialize()
         submission = SubmissionEvent.objects.create(
             attempt=self.attempt, submission_token=uuid4(),
             final_answer="答案", server_received_at=timezone.now(), committed_at=timezone.now(),
         )
+        type(self.session).objects.filter(pk=self.session.pk).update(
+            research_source_revision=F("research_source_revision") + 1
+        )
         self.assertTrue(stale(second))
         third = materialize()
         grade = GradeRecord.objects.create(submission=submission, version=1)
+        type(self.session).objects.filter(pk=self.session.pk).update(
+            research_source_revision=F("research_source_revision") + 1
+        )
         self.assertTrue(stale(third))
         fourth = materialize()
-        void_grade_record(grade.pk, reason="研究物化水位测试")
+        with self.captureOnCommitCallbacks(execute=True):
+            void_grade_record(grade.pk, reason="研究物化水位测试")
         self.assertTrue(stale(fourth))
 
     def test_source_change_during_projection_retries_before_switch(self):
@@ -471,34 +480,37 @@ class ResearchMaterializationServiceTests(TestCase):
         self.assertEqual(item.row_counts["behavior"], 1)
 
     def test_source_change_at_final_store_check_rolls_back_and_rereads(self):
+        from .research_materialization import _lock_session_sources
+
         enqueue, claim, run, _stale = self._services()
         item = enqueue(self.session)
         claim(worker_id="worker")
-        stable = {"revision": "stable", "event": 0, "grade": {}}
-        changed = {"revision": "changed", "event": 0, "grade": {}}
-        revision_calls = 0
+        lock_calls = 0
 
-        def revision_sequence(_session, *, cutoff=None):
-            nonlocal revision_calls
-            revision_calls += 1
-            return stable if revision_calls <= 3 else changed
+        def lock_sequence(session_id):
+            nonlocal lock_calls
+            lock_calls += 1
+            session = _lock_session_sources(session_id)
+            if lock_calls == 1:
+                session.research_source_revision += 1
+            return session
 
         reader = patch(
             "apps.analytics.research_materialization.read_research_bundle",
             return_value=(self._bundle(), timezone.now()),
         )
-        revisions = patch(
-            "apps.analytics.research_materialization.source_watermarks_for_session",
-            side_effect=revision_sequence,
+        locks = patch(
+            "apps.analytics.research_materialization._lock_session_sources",
+            side_effect=lock_sequence,
         )
-        with reader as read_mock, revisions:
+        with reader as read_mock, locks:
             run(item, worker_id="worker")
 
         item.refresh_from_db()
         self.assertEqual(read_mock.call_count, 2)
-        self.assertEqual(revision_calls, 8)
+        self.assertEqual(lock_calls, 2)
         self.assertTrue(item.is_current)
-        self.assertEqual(item.source_high_watermarks, changed)
+        self.assertEqual(item.source_revision, self.session.research_source_revision)
         self.assertEqual(item.response_rows.count(), 1)
 
     def test_mutating_each_per_session_source_family_makes_current_stale(self):
@@ -525,6 +537,9 @@ class ResearchMaterializationServiceTests(TestCase):
             item.refresh_from_db()
             self.assertFalse(stale(item))
             mutation()
+            type(self.session).objects.filter(pk=self.session.pk).update(
+                research_source_revision=F("research_source_revision") + 1
+            )
             self.assertTrue(stale(item))
 
         mutations = (
@@ -765,7 +780,7 @@ class ResearchMaterializationConcurrencyTests(TransactionTestCase):
         self.assertTrue(item.is_current)
         self.assertFalse(previous.is_current)
 
-    def test_postgresql_final_switch_locks_identity_revision_until_commit(self):
+    def test_postgresql_final_switch_does_not_lock_export_only_identity(self):
         from apps.accounts.models import User
         from .models import ResearchSessionResponse
         from .research_materialization import (
@@ -817,7 +832,7 @@ class ResearchMaterializationConcurrencyTests(TransactionTestCase):
             self.assertTrue(store_paused.wait(timeout=10))
             identity_future = pool.submit(self._in_thread, None, update_identity)
             self.assertTrue(update_started.wait(timeout=10))
-            self.assertFalse(update_finished.wait(timeout=0.5))
+            self.assertTrue(update_finished.wait(timeout=2))
             release_store.set()
             self.assertEqual(publish_future.result(timeout=20), item.pk)
             identity_future.result(timeout=20)
@@ -825,9 +840,9 @@ class ResearchMaterializationConcurrencyTests(TransactionTestCase):
 
         item.refresh_from_db()
         self.assertTrue(item.is_current)
-        self.assertTrue(materialization_is_stale(item))
+        self.assertFalse(materialization_is_stale(item))
 
-    def test_postgresql_final_switch_locks_visit_revision_until_commit(self):
+    def test_postgresql_final_switch_locks_session_source_revision_until_commit(self):
         from .models import ResearchSessionResponse
         from .research_materialization import (
             _store_success,
@@ -837,12 +852,6 @@ class ResearchMaterializationConcurrencyTests(TransactionTestCase):
             source_watermarks_for_session,
         )
 
-        visit = QuestionVisitEvent.objects.create(
-            session=self.session,
-            attempt=self.attempt,
-            visit_index=1,
-            event_sequence=1,
-        )
         item = enqueue_session_materialization(self.session)
         claim_session_materialization(worker_id="worker", lease_seconds=60)
         marks = source_watermarks_for_session(self.session)
@@ -869,10 +878,10 @@ class ResearchMaterializationConcurrencyTests(TransactionTestCase):
                 watermarks=marks,
             ).pk
 
-        def update_visit():
+        def update_revision():
             update_started.set()
-            QuestionVisitEvent.objects.filter(pk=visit.pk).update(
-                entry_reason="concurrent_update"
+            type(self.session).objects.filter(pk=self.session.pk).update(
+                research_source_revision=F("research_source_revision") + 1
             )
             update_finished.set()
 
@@ -884,7 +893,7 @@ class ResearchMaterializationConcurrencyTests(TransactionTestCase):
         ), ThreadPoolExecutor(max_workers=2) as pool:
             publish_future = pool.submit(self._in_thread, None, publish)
             self.assertTrue(store_paused.wait(timeout=10))
-            visit_future = pool.submit(self._in_thread, None, update_visit)
+            visit_future = pool.submit(self._in_thread, None, update_revision)
             self.assertTrue(update_started.wait(timeout=10))
             self.assertFalse(update_finished.wait(timeout=0.5))
             release_store.set()

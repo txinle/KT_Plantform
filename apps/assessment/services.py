@@ -1050,6 +1050,7 @@ def _submit_attempt_transaction(
                 probability=confidence_response['probability'],
                 request_received_at=request_received_at,
             )
+    _schedule_research_materialization(session.pk)
     return attempt, None
 
 

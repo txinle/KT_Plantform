@@ -399,4 +399,17 @@ def append_assessment_event(
             if replay is not None:
                 return replay
             raise
+        terminal_statuses = {
+            ExperimentSession.Status.COMPLETED,
+            ExperimentSession.Status.EXPIRED,
+        }
+        effective_status = (
+            locked_session.status if locked_session is not None else session.status
+        )
+        if effective_status in terminal_statuses:
+            from apps.analytics.research_materialization_jobs import (
+                schedule_session_materialization,
+            )
+
+            schedule_session_materialization(session.pk)
         return event

@@ -19,6 +19,10 @@ from .course_revision import course_revision_value
 from .models import Course, User
 from apps.assessment.models import Attempt, ExperimentSession
 from apps.analytics.data_scope import DataScope, ScopeNotFound, ScopeValidationError
+from apps.analytics.export_scope import (
+    ExperimentExportScope,
+    ExportScopeValidationError,
+)
 from apps.analytics.teaching_data import (
     attempt_timeline,
     build_teaching_roster,
@@ -347,7 +351,13 @@ def course_data_teaching(request, course_pk):
 @role_required(User.Role.TEACHER, User.Role.ADMIN)
 def course_data_exports(request, course_pk):
     course = get_accessible_course(request.user, course_pk)
-    _scope_from_request(request, course)
+    if request.GET.get("scope_version") == str(ExperimentExportScope.SCOPE_VERSION):
+        try:
+            ExperimentExportScope.from_mapping(course, request.GET)
+        except ExportScopeValidationError as error:
+            raise SuspiciousOperation(str(error)) from error
+    else:
+        _scope_from_request(request, course)
     return frontend_response()
 
 

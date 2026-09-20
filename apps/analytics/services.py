@@ -1029,6 +1029,20 @@ def _materialize_export_job(job):
         raise ExportContractError(f"{job.package.upper()} 导出必须选择单一实验版本")
     if job.selected_fields:
         raise ExportContractError("固定研究数据包不支持字段级选择，以免破坏冻结表的引用和回放契约。")
+    raw_source_bundle = getattr(snapshot, "source_bundle", None)
+    if (
+        job.package == "experiment"
+        and isinstance(raw_source_bundle, dict)
+        and raw_source_bundle.get("version") == 2
+        and isinstance(raw_source_bundle.get("research_export_v2"), dict)
+    ):
+        if _source_bundle_hash(raw_source_bundle) != snapshot.source_bundle_hash:
+            raise ExportContractError("导出源包校验失败，不能声明精确重跑。")
+        from .research_export_v2 import materialize_research_export
+
+        return _finalize_export_job(
+            job, materialize_research_export(job), {}
+        )
     source_bundle = _load_source_bundle(snapshot)
     if job.package == "experiment":
         files = source_bundle.get("research_files")

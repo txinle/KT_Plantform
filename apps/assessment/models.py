@@ -213,6 +213,9 @@ class ExperimentSession(models.Model):
     first_open_count = models.PositiveIntegerField(default=0)
     visit_event_count = models.PositiveIntegerField(default=0)
     next_ingest_sequence_no = models.PositiveBigIntegerField(default=1)
+    research_source_revision = models.PositiveBigIntegerField(
+        default=0, db_index=True
+    )
     sampling_seed = models.CharField(max_length=64, blank=True, default="")
     ordering_seed = models.CharField(max_length=64, blank=True, default="")
     sampling_algorithm_version = models.CharField(max_length=32, blank=True, default="")

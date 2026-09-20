@@ -325,7 +325,7 @@ def parse_question_rows(
         accepted_answers = _split_accepted_answers(
             _first(row, "可接受答案", "其他可接受答案", "accepted_answers", "accepted_answer")
         )
-        explanation = str(_first(row, "解析", "explanation") or "").strip()
+        explanation = str(_first(row, "解析", "explanation") or "").replace("\r\n", "\n").replace("\r", "\n").strip()
         teacher_difficulty = _parse_teacher_difficulty(
             _first(row, "难度", "difficulty", "teacher_difficulty"),
             row_number,

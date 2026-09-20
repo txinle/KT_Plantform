@@ -164,4 +164,28 @@ describe('TeacherDataCenterLayout', () => {
     const advancedQuery = JSON.parse(wrapper.get('a[href="/teacher/courses/7/data/advanced/"]').attributes('data-query') || '{}')
     expect(advancedQuery).toEqual({ experiment_ids: '3,5', class_id: '4' })
   })
+
+  it('does not send export-v2-only query fields to the shared data scope endpoint', async () => {
+    mocks.applyRouteQuery({ scope_version: '2', experiment_id: '3', class_mode: 'all' })
+    mocks.route.path = '/teacher/courses/7/data/exports/'
+    mocks.get.mockResolvedValue({ id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' })
+    mocks.scope.mockResolvedValue({
+      course: { id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' },
+      current: { experiment_id: 3, experiment_ids: [3], class_id: null, is_complete: false, display: '数据实验' },
+      experiments: [{ id: 3, name: '数据实验', versions: [] }],
+      classes: [{ id: 4, name: '实验班', academic_year: '2026' }],
+      scope_update_url: '/api/v1/teacher/courses/7/data/scope/',
+    })
+
+    const wrapper = mount(TeacherDataCenterLayout)
+    await flushPromises()
+
+    expect(mocks.scope).toHaveBeenCalledWith(7, { experiment_id: '3' })
+    for (const path of ['exports/', 'exports/history/']) {
+      const query = JSON.parse(
+        wrapper.get(`a[href="/teacher/courses/7/data/${path}"]`).attributes('data-query') || '{}',
+      )
+      expect(query).toEqual({ scope_version: '2', experiment_id: '3', class_mode: 'all' })
+    }
+  })
 })

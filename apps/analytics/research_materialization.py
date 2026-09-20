@@ -275,16 +275,27 @@ def _scope_for_session(session):
 def _read_consistent_bundle(session):
     scope = _scope_for_session(session)
     for _attempt in range(MAX_SOURCE_READ_ATTEMPTS):
-        before = source_watermarks_for_session(session)
+        before = _revision_marker(session.pk)
         bundle, cutoff = read_research_bundle(
             scope,
             include_course_catalog=False,
         )
-        covered = source_watermarks_for_session(session, cutoff=cutoff)
-        after = source_watermarks_for_session(session)
-        if before == covered == after:
-            return bundle, cutoff, covered
+        after = _revision_marker(session.pk)
+        if before == after:
+            return bundle, cutoff, after
     raise RuntimeError("research source changed during materialization")
+
+
+def _revision_marker(session_id):
+    values = ExperimentSession.objects.filter(pk=session_id).values(
+        "research_source_revision", "next_ingest_sequence_no"
+    ).get()
+    return {
+        "revision": values["research_source_revision"],
+        "sources": {},
+        "event": max(0, values["next_ingest_sequence_no"] - 1),
+        "grade": {},
+    }
 
 
 @transaction.atomic
@@ -305,9 +316,10 @@ def enqueue_session_materialization(
     ).first()
     if active:
         return (active, False) if return_created else active
-    marks = source_watermarks or source_watermarks_for_session(session)
+    marks = source_watermarks or _revision_marker(session.pk)
     item = ResearchSessionMaterialization.objects.create(
         session=session,
+        source_revision=session.research_source_revision,
         source_cutoff_at=timezone.now(),
         event_high_watermark=marks["event"],
         grade_high_watermark=marks["grade"],
@@ -357,6 +369,7 @@ def claim_session_materialization(*, worker_id, now=None, lease_seconds=90):
                 ])
                 continue
         item.status = ResearchSessionMaterialization.Status.RUNNING
+        item.source_revision = item.session.research_source_revision
         item.locked_by = worker_id
         item.heartbeat_at = now
         item.lease_expires_at = now + timedelta(seconds=lease_seconds)
@@ -364,7 +377,7 @@ def claim_session_materialization(*, worker_id, now=None, lease_seconds=90):
         item.error = ""
         item.save(update_fields=[
             "status", "locked_by", "heartbeat_at", "lease_expires_at",
-            "started_at", "retry_count", "error",
+            "started_at", "retry_count", "error", "source_revision",
         ])
         return item
 
@@ -445,22 +458,9 @@ def _mark_invalidated(item_id, *, now=None):
 
 
 def _lock_session_sources(session_id):
-    ExperimentSession.objects.select_for_update(of=("self",)).only("pk").get(
-        pk=session_id
-    )
-    session = ExperimentSession.objects.select_related(
+    return ExperimentSession.objects.select_for_update(of=("self",)).select_related(
         "version__experiment__course", "class_snapshot"
     ).get(pk=session_id)
-    for name, queryset in _source_querysets_for_session(session).items():
-        if name == "session":
-            continue
-        primary_key = queryset.model._meta.pk.attname
-        list(
-            queryset.select_for_update(of=("self",))
-            .order_by(primary_key)
-            .values_list(primary_key, flat=True)
-        )
-    return session
 
 
 @transaction.atomic
@@ -485,8 +485,7 @@ def _store_success(
         or item.lease_expires_at <= lease_checked_at
     ):
         raise ValueError("research materialization lease is not owned by this worker")
-    final_watermarks = source_watermarks_for_session(session)
-    if final_watermarks != watermarks:
+    if session.research_source_revision != item.source_revision:
         raise SourceChanged("research source changed before materialization publish")
     sessions = bundle.get("sessions", [])
     session_rows = bundle.get("tables", {}).get("sessions", ((), []))[1]
@@ -552,6 +551,7 @@ def _store_success(
     item.event_high_watermark = watermarks["event"]
     item.grade_high_watermark = watermarks["grade"]
     item.source_high_watermarks = watermarks
+    item.source_revision = session.research_source_revision
     item.projection_version = PROJECTION_VERSION
     item.locked_by = ""
     item.lease_expires_at = None
@@ -612,6 +612,15 @@ def run_session_materialization(item, *, worker_id):
                     cutoff=cutoff, watermarks=watermarks, quality_rows=quality_rows,
                 )
             except SourceChanged:
+                latest_revision = ExperimentSession.objects.values_list(
+                    "research_source_revision", flat=True
+                ).get(pk=current.session_id)
+                ResearchSessionMaterialization.objects.filter(
+                    pk=current.pk,
+                    status=ResearchSessionMaterialization.Status.RUNNING,
+                    locked_by=worker_id,
+                ).update(source_revision=latest_revision)
+                current.source_revision = latest_revision
                 continue
         raise RuntimeError("research source changed before materialization publish")
     except Exception as error:
@@ -625,5 +634,7 @@ def materialization_is_stale(item):
         return True
     if item.projection_version != PROJECTION_VERSION:
         return True
-    marks = source_watermarks_for_session(item.session)
-    return item.source_high_watermarks != marks
+    return ExperimentSession.objects.filter(
+        pk=item.session_id,
+        research_source_revision__gt=item.source_revision,
+    ).exists()

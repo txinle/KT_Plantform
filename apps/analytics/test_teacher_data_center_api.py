@@ -270,7 +270,7 @@ class TeacherDataCenterApiTests(TestCase):
     def test_export_job_create_queues_background_work_and_artifact_removal_uses_json(self):
         create_url = self.api("export-jobs/")
         payload = {
-            "package": "complete",
+            "package": "teaching",
             "confirm_identified": True,
             "scope": {
                 "experiment_id": self.experiment.pk,
@@ -305,7 +305,7 @@ class TeacherDataCenterApiTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(job.artifact_removal_reason, "user_requested_removal")
 
-    def test_export_catalog_preserves_legacy_scope_but_offers_standard_research_package(self):
+    def test_export_catalog_uses_single_experiment_v2_scope(self):
         response = self.client.get(
             self.api("exports/"),
             {
@@ -322,7 +322,15 @@ class TeacherDataCenterApiTests(TestCase):
         self.assertEqual(payload["selected_package"]["key"], "experiment")
         self.assertFalse(payload["selected_package"]["blocked"])
         self.assertIsNone(payload["selected_export_version"])
-        self.assertEqual(payload["scope"]["values"]["version_id"], self.version.pk)
+        self.assertEqual(
+            payload["scope"]["values"],
+            {
+                "scope_version": 2,
+                "experiment_id": self.experiment.pk,
+                "class_mode": "single",
+                "class_id": self.class_group.pk,
+            },
+        )
         self.assertEqual(
             payload["actions"]["create_url"],
             reverse("teacher-data-center-export-job-create", args=[self.course.pk]),

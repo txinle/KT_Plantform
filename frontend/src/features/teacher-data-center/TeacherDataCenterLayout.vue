@@ -36,6 +36,11 @@ function dataLocation(suffix = '') {
   delete query.view
   delete query.question_ref
   delete query.visit
+  const keepsExportScope = suffix === 'exports/' || suffix === 'exports/history/'
+  if (!keepsExportScope) {
+    delete query.scope_version
+    delete query.class_mode
+  }
   const keepsIndividualScope = suffix === 'exports/' || suffix === 'quality/' || suffix === 'exports/history/'
   if (!keepsIndividualScope) {
     delete query.student_id
@@ -43,16 +48,29 @@ function dataLocation(suffix = '') {
   } else if (query.student_id === undefined || query.student_id === null || query.student_id === '') {
     delete query.session_ref
   }
-  if (query.experiment_ids === undefined || query.experiment_ids === null || query.experiment_ids === '') {
-    query.experiment_ids = scope.value?.current.experiment_ids?.join(',')
-  }
-  if (query.class_id === undefined || query.class_id === null || query.class_id === '') {
-    query.class_id = scope.value?.current.class_id
+  const isExportV2 = keepsExportScope && String(query.scope_version || '') === '2'
+  if (isExportV2) {
+    delete query.experiment_ids
+    if (query.class_mode === 'all') delete query.class_id
+  } else {
+    if (query.experiment_ids === undefined || query.experiment_ids === null || query.experiment_ids === '') {
+      query.experiment_ids = scope.value?.current.experiment_ids?.join(',')
+    }
+    if (query.class_id === undefined || query.class_id === null || query.class_id === '') {
+      query.class_id = scope.value?.current.class_id
+    }
   }
   return {
     path: dataPath(suffix),
     query,
   }
+}
+
+function sharedScopeQuery() {
+  const query = routeQuery(route.query)
+  delete query.scope_version
+  delete query.class_mode
+  return query
 }
 
 const contextError = ref('')
@@ -98,7 +116,7 @@ onMounted(async () => {
     const [courseContext, scopeContext] = await Promise.all([
       createApiClient({ getCsrfToken: () => bootstrap.csrf_token })
         .get<components['schemas']['CourseContext']>(`/api/v1/courses/${courseId}/context/`),
-      api.scope(courseId, routeQuery(route.query)),
+      api.scope(courseId, sharedScopeQuery()),
     ])
     course.value = courseContext
     scope.value = scopeContext

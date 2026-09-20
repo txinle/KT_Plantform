@@ -345,6 +345,17 @@ class DataCenterAdvancedTableSerializer(serializers.Serializer):
     format = serializers.CharField(required=False)
 
 
+class DataCenterExportExperimentSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+
+
+class DataCenterExportPreparationSerializer(serializers.Serializer):
+    state = serializers.CharField()
+    ready_count = serializers.IntegerField(min_value=0)
+    pending_count = serializers.IntegerField(min_value=0)
+
+
 class DataCenterSessionOptionSerializer(serializers.Serializer):
     value = serializers.CharField()
     label = serializers.CharField()
@@ -360,6 +371,9 @@ class DataCenterExportCatalogSerializer(serializers.Serializer):
     identified_data_notice = serializers.CharField()
     actions = DataCenterExportActionsSerializer()
     tables = DataCenterAdvancedTableSerializer(many=True)
+    experiments = DataCenterExportExperimentSerializer(many=True)
+    class_choices = DataCenterClassOptionSerializer(many=True)
+    preparation = DataCenterExportPreparationSerializer()
     generated_at = serializers.DateTimeField()
 
 

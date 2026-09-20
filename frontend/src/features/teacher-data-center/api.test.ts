@@ -23,6 +23,7 @@ describe('teacher data-center API paths', () => {
     await api.advancedStudents(7, { ...scope, q: '张' }, signal)
     await api.updateScope(7, { experiment_ids: [3, 5], class_id: 4 })
     await api.createExport(7, { package: 'experiment', confirm_identified: true, scope })
+    await api.exportJob(7, 'job-1')
     await api.removeExport('/api/v1/teacher/courses/7/data/export-jobs/abc/')
 
     expect(client.get).toHaveBeenNthCalledWith(1, '/api/v1/teacher/courses/7/data/scope/')
@@ -32,6 +33,7 @@ describe('teacher data-center API paths', () => {
     expect(client.get).toHaveBeenNthCalledWith(5, '/api/v1/teacher/courses/7/data/exports/history/?experiment_ids=3%2C5&class_id=4&search=%E5%BC%A0%E5%90%8C%E5%AD%A6&session_ref=S-20260909-001&page=3')
     expect(client.get).toHaveBeenNthCalledWith(6, '/api/v1/teacher/courses/7/data/advanced/?experiment_ids=3%2C5&class_id=4&search=%E5%BC%A0%E5%90%8C%E5%AD%A6&session_ref=S-20260909-001&view=timeline&table=behavior_events&page=4', { signal })
     expect(client.get).toHaveBeenNthCalledWith(7, '/api/v1/teacher/courses/7/data/advanced/students/?experiment_ids=3%2C5&class_id=4&search=%E5%BC%A0%E5%90%8C%E5%AD%A6&session_ref=S-20260909-001&q=%E5%BC%A0', { signal })
+    expect(client.get).toHaveBeenNthCalledWith(8, '/api/v1/teacher/courses/7/data/export-jobs/job-1/')
     expect(client.mutate).toHaveBeenNthCalledWith(1, '/api/v1/teacher/courses/7/data/scope/', { method: 'POST', body: { experiment_ids: [3, 5], class_id: 4 } })
     expect(client.mutate).toHaveBeenNthCalledWith(2, '/api/v1/teacher/courses/7/data/export-jobs/', { method: 'POST', body: { package: 'experiment', confirm_identified: true, scope } })
     expect(client.mutate).toHaveBeenNthCalledWith(3, '/api/v1/teacher/courses/7/data/export-jobs/abc/', { method: 'DELETE' })

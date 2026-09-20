@@ -76,6 +76,19 @@ class AssessmentFlowTests(TestCase):
             1,
         )
 
+    def test_formal_submission_advances_research_source_revision(self):
+        session = get_or_create_session(self.experiment, self.student)
+        assignment = session.assignments.get()
+        attempt = record_visit(session.id, assignment.id)
+        save_draft(attempt.id, "B")
+
+        with self.captureOnCommitCallbacks(execute=True):
+            submit_attempt(attempt.id, uuid.uuid4())
+
+        session.refresh_from_db()
+        self.assertEqual(session.research_source_revision, 1)
+        self.assertFalse(session.research_materializations.exists())
+
     def test_committed_event_failure_rolls_back_the_business_submission(self):
         session = get_or_create_session(self.experiment, self.student)
         assignment = session.assignments.get()

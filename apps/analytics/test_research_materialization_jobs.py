@@ -1,4 +1,5 @@
 import json
+import time
 from uuid import uuid4
 from unittest.mock import patch
 
@@ -7,13 +8,15 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from apps.analytics import test_teacher_data_center_api as fixtures
+from apps.analytics.models import ResearchSessionMaterialization
 from apps.assessment.models import (
     ExperimentSession,
     GradeRecord,
     QuestionVisitEvent,
     SubmissionEvent,
 )
-from apps.accounts.models import CourseEnrollment, User
+from apps.accounts.models import ClassGroup, CourseEnrollment, User
+from apps.experiments.models import ExperimentClassSnapshot
 
 
 @override_settings(
@@ -49,6 +52,38 @@ class ResearchMaterializationJobTests(TestCase):
             schedule_session_materialization(self.session.pk)
 
         self.assertEqual(self.session.research_materializations.count(), 1)
+
+        self.session.refresh_from_db()
+        queued = self.session.research_materializations.get()
+        self.assertEqual(self.session.research_source_revision, 1)
+        self.assertEqual(queued.source_revision, 1)
+
+    def test_reconcile_uses_revision_index_without_full_source_fingerprint(self):
+        from .research_materialization import enqueue_session_materialization
+        from .research_materialization_jobs import reconcile_session_materializations
+
+        self.session.research_source_revision = 3
+        self.session.save(update_fields=["research_source_revision"])
+        current = enqueue_session_materialization(self.session)
+        current.status = current.Status.SUCCEEDED
+        current.is_current = True
+        current.source_revision = 2
+        current.finished_at = timezone.now()
+        current.save(
+            update_fields=[
+                "status", "is_current", "source_revision", "finished_at"
+            ]
+        )
+
+        with patch(
+            "apps.analytics.research_materialization.source_watermarks_for_session",
+            side_effect=AssertionError("reconcile must not hash source tables"),
+        ):
+            result = reconcile_session_materializations(limit=10)
+
+        self.assertEqual(result, {"scanned": 1, "enqueued": 1})
+        queued = self.session.research_materializations.get(status="queued")
+        self.assertEqual(queued.source_revision, 3)
 
     def test_lifecycle_callback_does_not_turn_a_committed_write_into_an_error(self):
         from .research_materialization_jobs import schedule_session_materialization
@@ -145,7 +180,7 @@ class ResearchMaterializationJobTests(TestCase):
         self.assertIn("oldest_wait_seconds", payload)
         self.assertIn("failed_count", payload)
 
-    def test_reconcile_checks_fresh_sessions_with_complete_fingerprint(self):
+    def test_reconcile_skips_fresh_sessions_without_source_fingerprint(self):
         from .research_materialization import (
             enqueue_session_materialization,
             source_watermarks_for_session,
@@ -164,8 +199,8 @@ class ResearchMaterializationJobTests(TestCase):
         ) as fingerprint:
             result = reconcile_session_materializations(limit=10)
 
-        self.assertEqual(result, {"scanned": 1, "enqueued": 0})
-        fingerprint.assert_called_once()
+        self.assertEqual(result, {"scanned": 0, "enqueued": 0})
+        fingerprint.assert_not_called()
 
     def test_reconcile_detects_late_visit_outside_quick_event_markers(self):
         from .research_materialization import enqueue_session_materialization
@@ -182,12 +217,14 @@ class ResearchMaterializationJobTests(TestCase):
             visit_index=1,
             event_sequence=1,
         )
+        self.session.research_source_revision += 1
+        self.session.save(update_fields=["research_source_revision"])
 
         result = reconcile_session_materializations(limit=10)
 
         self.assertEqual(result, {"scanned": 1, "enqueued": 1})
 
-    def test_reconcile_limit_bounds_complete_fingerprint_scans(self):
+    def test_reconcile_limit_bounds_revision_candidates_without_fingerprints(self):
         from .research_materialization import (
             enqueue_session_materialization,
             source_watermarks_for_session,
@@ -201,6 +238,8 @@ class ResearchMaterializationJobTests(TestCase):
             current.is_current = True
             current.finished_at = timezone.now()
             current.save(update_fields=["status", "is_current", "finished_at"])
+            session.research_source_revision += 1
+            session.save(update_fields=["research_source_revision"])
 
         with patch(
             "apps.analytics.research_materialization.source_watermarks_for_session",
@@ -208,8 +247,8 @@ class ResearchMaterializationJobTests(TestCase):
         ) as fingerprint:
             result = reconcile_session_materializations(limit=2)
 
-        self.assertEqual(result, {"scanned": 2, "enqueued": 0})
-        self.assertEqual(fingerprint.call_count, 2)
+        self.assertEqual(result, {"scanned": 2, "enqueued": 2})
+        fingerprint.assert_not_called()
 
     def test_reconcile_detects_late_grade_with_same_timestamp_and_higher_pk(self):
         from .research_materialization import enqueue_session_materialization
@@ -242,6 +281,8 @@ class ResearchMaterializationJobTests(TestCase):
         GradeRecord.objects.filter(pk=second_grade.pk).update(
             created_at=first_grade.created_at
         )
+        self.session.research_source_revision += 1
+        self.session.save(update_fields=["research_source_revision"])
 
         result = reconcile_session_materializations(limit=10)
 
@@ -268,3 +309,86 @@ class ResearchMaterializationJobTests(TestCase):
             self.session.research_materializations.filter(status="queued").get().pk,
             queued.pk,
         )
+
+    def test_174_terminal_sessions_become_current_within_one_minute(self):
+        from .research_materialization import (
+            claim_session_materialization,
+            run_session_materialization,
+        )
+        from .research_materialization_jobs import _mark_dirty_and_enqueue
+
+        now = timezone.now()
+        classes = [self.class_group]
+        snapshots = [self.class_snapshot]
+        for index in range(2, 5):
+            class_group = ClassGroup.objects.create(
+                course=self.course,
+                name=f"物化性能班{index}",
+                academic_year="2026",
+            )
+            classes.append(class_group)
+            snapshots.append(
+                ExperimentClassSnapshot.objects.create(
+                    version=self.version,
+                    source_class_group=class_group,
+                    name_snapshot=class_group.name,
+                    academic_year_snapshot=class_group.academic_year,
+                    capture_mode=ExperimentClassSnapshot.CaptureMode.NATIVE,
+                )
+            )
+        students = User.objects.bulk_create(
+            [
+                User(
+                    username=f"materialization-scale-{index}",
+                    role=User.Role.STUDENT,
+                    student_number=f"MAT-SCALE-{index:03d}",
+                )
+                for index in range(1, 174)
+            ]
+        )
+        CourseEnrollment.objects.bulk_create(
+            [
+                CourseEnrollment(
+                    course=self.course,
+                    class_group=classes[index % 4],
+                    student=student,
+                )
+                for index, student in enumerate(students)
+            ]
+        )
+        sessions = ExperimentSession.objects.bulk_create(
+            [
+                ExperimentSession(
+                    version=self.version,
+                    student=student,
+                    class_snapshot=snapshots[index % 4],
+                    class_snapshot_name=snapshots[index % 4].display_name,
+                    status=ExperimentSession.Status.COMPLETED,
+                    completed_at=now,
+                    terminal_at=now,
+                )
+                for index, student in enumerate(students)
+            ]
+        )
+        session_ids = [self.session.pk, *(session.pk for session in sessions)]
+
+        started = time.monotonic()
+        _mark_dirty_and_enqueue(session_ids)
+        processed = 0
+        while item := claim_session_materialization(
+            worker_id="scale-worker", lease_seconds=90
+        ):
+            run_session_materialization(item, worker_id="scale-worker")
+            processed += 1
+        elapsed = time.monotonic() - started
+
+        self.assertEqual(processed, 174)
+        self.assertEqual(
+            ResearchSessionMaterialization.objects.filter(
+                session_id__in=session_ids,
+                status=ResearchSessionMaterialization.Status.SUCCEEDED,
+                is_current=True,
+            ).count(),
+            174,
+        )
+        self.assertLess(elapsed, 60)

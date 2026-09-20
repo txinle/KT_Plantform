@@ -22,9 +22,10 @@ from apps.accounts.course_views import (
     _teaching_scope_from_request,
 )
 from apps.accounts.forms import ClassGroupForm
-from apps.accounts.models import ClassGroup, Course, User
+from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.api.pagination import FixedPageNumberPagination
 from apps.assessment.models import AssessmentEvent, ExperimentSession, SubmissionEvent
+from apps.question_bank.models import Concept, Question
 from apps.audit.services import log_action
 
 from ..advanced_catalog import enabled_extension_tables
@@ -34,9 +35,15 @@ from ..advanced_materialized import (
 )
 from ..data_scope import DataScope, ScopeNotFound, ScopeValidationError
 from ..export_catalog import PACKAGE_TABLES
-from ..models import ExportJob
+from ..export_scope import ExperimentExportScope, ExportScopeValidationError
+from ..models import ExportJob, ResearchSessionMaterialization
 from ..research_dataset import read_research_dataset, read_research_bundle, workspace_payload, context_tables, scope_label, session_options, table_catalog
-from ..research_contract import file_catalog
+from ..research_contract import event_dictionary, file_catalog
+from ..research_export_v2 import (
+    ResearchExportAssetError,
+    ResearchExportNotReady,
+    create_research_export_snapshot,
+)
 from ..research_materialization_jobs import materialization_enabled_for_course
 from ..quality_reports import EvaluationState, QualityReport, build_quality_report
 from ..quality_materialized import materialized_quality_payload
@@ -93,6 +100,14 @@ def _teaching_scope_payload(scope):
 
 def _research_scope_payload(scope):
     values = scope.serialize()
+    if isinstance(scope, ExperimentExportScope):
+        return {
+            "values": values,
+            "query": urlencode(values),
+            "display": scope.display(),
+            "is_single_version": True,
+            "is_complete": True,
+        }
     return {
         "values": values,
         "query": urlencode({key: ",".join(map(str, value)) if isinstance(value, list) else value for key, value in values.items()}),
@@ -114,9 +129,15 @@ def _experiment_payload(experiment):
     }
 
 
-def _recent_export_payload(job):
+def _recent_export_payload(job, class_names=None):
     filters = job.snapshot.filter_definition or {}
-    class_name = ClassGroup.objects.filter(pk=filters.get("class_id")).values_list("name", flat=True).first() if filters.get("class_id") else None
+    class_id = filters.get("class_id")
+    if filters.get("class_mode") == "all":
+        class_name = "全部已发布班级"
+    elif class_id and class_names is not None:
+        class_name = class_names.get(int(class_id))
+    else:
+        class_name = ClassGroup.objects.filter(pk=class_id).values_list("name", flat=True).first() if class_id else None
     experiment_name = job.experiment.name if job.experiment else None
     if not experiment_name and filters.get("experiment_ids"):
         experiment_name = "、".join(job.course.experiments.filter(pk__in=filters["experiment_ids"]).order_by("pk").values_list("name", flat=True))
@@ -133,14 +154,32 @@ def _recent_export_payload(job):
 
 
 def _scoped_export_jobs(course, scope):
-    jobs = course.export_jobs.select_related("experiment", "created_by", "snapshot")
+    jobs = course.export_jobs.select_related(
+        "experiment", "created_by", "snapshot"
+    ).defer("snapshot__source_bundle")
     if scope.experiment_id:
         jobs = jobs.filter(experiment_id=scope.experiment_id)
+    class_mode = getattr(scope, "class_mode", None)
+    if class_mode:
+        jobs = jobs.filter(
+            snapshot__filter_definition__class_mode=class_mode
+        )
     for key in ("class_id", "class_snapshot_id", "student_id", "session_id", "search", "session_ref"):
         value = getattr(scope, key, None)
         if value is not None:
             jobs = jobs.filter(**{f"snapshot__filter_definition__{key}": str(value) if key == "class_snapshot_id" else value})
     return jobs.order_by("-created_at", "-job_id")
+
+
+def _history_class_names(jobs):
+    class_ids = {
+        int(job.snapshot.filter_definition["class_id"])
+        for job in jobs
+        if job.snapshot.filter_definition.get("class_id")
+    }
+    return dict(
+        ClassGroup.objects.filter(pk__in=class_ids).values_list("pk", "name")
+    )
 
 
 class TeacherDataCenterScopeView(APIView):
@@ -242,11 +281,22 @@ class TeacherDataCenterExportJobCreateView(APIView):
         package = "experiment" if values["package"] == "complete" else values["package"]
         if package not in {*PACKAGE_TABLES, "experiment"} or package == "identity":
             raise ValidationError({"package": ["不支持的数据包类型。"]})
+        is_research_v2 = package == "experiment" and values["scope"].get(
+            "scope_version"
+        ) in (2, "2")
+        if package == "experiment" and not is_research_v2:
+            raise ValidationError(
+                {"scope": ["新的实验导出必须使用 scope_version=2 范围契约。"]}
+            )
         try:
-            scope = DataScope.from_mapping(course, values["scope"])
+            scope = (
+                ExperimentExportScope.from_mapping(course, values["scope"])
+                if is_research_v2
+                else DataScope.from_mapping(course, values["scope"])
+            )
         except ScopeNotFound as error:
             raise NotFound("导出范围不属于当前课程") from error
-        except ScopeValidationError as error:
+        except (ScopeValidationError, ExportScopeValidationError) as error:
             raise ValidationError({"scope": [str(error)]}) from error
         experiment = (
             get_object_or_404(course.experiments, pk=scope.experiment_id)
@@ -259,12 +309,21 @@ class TeacherDataCenterExportJobCreateView(APIView):
         if package == "simulation" and "simulation_events" not in extensions:
             raise ValidationError({"package": ["当前实验未启用 Simulation 采集。"]})
         try:
-            snapshot = create_export_snapshot(
-                course=course,
-                experiment=experiment,
-                created_by=request.user,
-                scope=scope,
-                package=package,
+            snapshot = (
+                create_research_export_snapshot(
+                    course=course,
+                    experiment=experiment,
+                    created_by=request.user,
+                    scope=scope,
+                )
+                if is_research_v2
+                else create_export_snapshot(
+                    course=course,
+                    experiment=experiment,
+                    created_by=request.user,
+                    scope=scope,
+                    package=package,
+                )
             )
             job = create_export_job(
                 course=course,
@@ -275,7 +334,7 @@ class TeacherDataCenterExportJobCreateView(APIView):
                 selected_tables=values["tables"],
                 selected_fields=values["fields"],
             )
-        except ExportContractError as error:
+        except (ExportContractError, ResearchExportAssetError, ResearchExportNotReady) as error:
             if "job" in locals():
                 ExportJob.objects.filter(pk=job.pk, status__in=[ExportJob.Status.RUNNING, ExportJob.Status.QUEUED]).update(
                     status=ExportJob.Status.FAILED, progress_stage="contract_error", finished_at=timezone.now())
@@ -294,6 +353,15 @@ class TeacherDataCenterExportJobCreateView(APIView):
 
 
 class TeacherDataCenterExportJobDetailView(APIView):
+    @extend_schema(
+        operation_id="teacher_data_center_export_job_retrieve",
+        responses=DataCenterExportJobMutationSerializer,
+    )
+    def get(self, request, course_id, job_id):
+        course = _course_for_teacher(request.user, course_id)
+        job = get_object_or_404(ExportJob, course=course, job_id=job_id)
+        return Response(_export_job_payload(job))
+
     @extend_schema(
         operation_id="teacher_data_center_export_job_destroy",
         responses=DataCenterExportJobMutationSerializer,
@@ -340,7 +408,8 @@ class TeacherDataCenterOverviewView(APIView):
             if row.attempt_id is not None
             and row.state in {EvaluationState.WARN, EvaluationState.FAIL}
         }
-        recent_jobs = _scoped_export_jobs(course, research_scope)[:5] if research_scope.is_complete else ()
+        recent_jobs = list(_scoped_export_jobs(course, research_scope)[:5]) if research_scope.is_complete else []
+        recent_class_names = _history_class_names(recent_jobs)
         return Response(
             {
                 "course": _course_payload(course),
@@ -365,7 +434,7 @@ class TeacherDataCenterOverviewView(APIView):
                     ),
                 },
                 "recent_exports": [
-                    _recent_export_payload(job) for job in recent_jobs
+                    _recent_export_payload(job, recent_class_names) for job in recent_jobs
                 ],
                 "actions": {
                     "preview_url": f"{reverse('courses:data_advanced', args=[course.pk])}?{_research_scope_payload(research_scope)["query"]}",
@@ -391,27 +460,99 @@ class TeacherDataCenterExportCatalogView(APIView):
     )
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
-        scope = _scope_from_request(request, course)
-        selected_experiment = (
-            course.experiments.prefetch_related("versions")
-            .filter(pk=scope.experiment_id)
-            .first()
-            if scope.experiment_id
-            else None
-        )
-        package_rows = [{"key": "experiment", "label": "实验数据包", "description": "七张 CSV 与课程题目固定库 JSON", "blocked": not scope.is_complete}]
+        values = request.query_params.dict()
+        selected_experiment = None
+        scope = None
+        if values.get("experiment_id") or values.get("experiment_ids"):
+            try:
+                scope = ExperimentExportScope.from_mapping(course, values)
+            except ExportScopeValidationError as error:
+                raise ValidationError({"scope": [str(error)]}) from error
+            selected_experiment = course.experiments.filter(pk=scope.experiment_id).first()
+        published_classes = []
+        if selected_experiment and scope is not None:
+            published_classes = list(
+                course.classes.filter(pk__in=scope.published_class_ids())
+                .order_by("academic_year", "name", "pk")
+            )
+        package_rows = [{"key": "experiment", "label": "实验数据包", "description": "七张 CSV 与课程题目固定库 JSON", "blocked": scope is None}]
         selected_package = package_rows[0]
-        bundle, generated_at = read_research_bundle(scope) if scope.is_complete else (None, timezone.now())
+        counts = {
+            "course_students": CourseEnrollment.objects.filter(course=course).count(),
+            "course_knowledge": Concept.objects.filter(course=course).count(),
+            "course_mapping": Question.objects.filter(bank__course=course).count(),
+            "question_library": Question.objects.filter(bank__course=course).count(),
+            "event_dictionary": len(event_dictionary()),
+            "session_bindings": 0,
+            "responses": 0,
+            "behavior_events": 0,
+        }
+        preparation = {
+            "state": "incomplete" if scope is None else "ready",
+            "ready_count": 0,
+            "pending_count": 0,
+        }
+        if scope is not None:
+            terminal = ExperimentSession.objects.filter(
+                version__experiment_id=scope.experiment_id,
+                class_snapshot__source_class_group_id__in=scope.published_class_ids(),
+                status__in=(
+                    ExperimentSession.Status.COMPLETED,
+                    ExperimentSession.Status.EXPIRED,
+                ),
+            )
+            current = ResearchSessionMaterialization.objects.filter(
+                session__in=terminal,
+                status=ResearchSessionMaterialization.Status.SUCCEEDED,
+                is_current=True,
+            )
+            ready_ids = current.values_list("session_id", flat=True)
+            fact_rows = current.filter(
+                session__class_snapshot__source_class_group_id__in=scope.selected_class_ids()
+            ).values_list("row_counts", flat=True)
+            fact_counts = list(fact_rows)
+            counts["session_bindings"] = current.count()
+            counts["responses"] = sum(int(item.get("responses", 0)) for item in fact_counts)
+            counts["behavior_events"] = sum(int(item.get("behavior", 0)) for item in fact_counts)
+            pending_count = terminal.exclude(pk__in=ready_ids).count()
+            preparation = {
+                "state": "preparing" if pending_count else "ready",
+                "ready_count": current.count(),
+                "pending_count": pending_count,
+            }
+        tables = file_catalog()
+        for table in tables:
+            table["total_items"] = counts[table["key"]]
+        scope_payload = {
+            "values": scope.serialize() if scope else {},
+            "query": scope.query() if scope else "",
+            "display": scope.display() if scope else "请选择一个实验和班级范围",
+            "is_single_version": False,
+            "is_complete": scope is not None,
+        }
         return Response(
             {
                 "course": _course_payload(course),
-                "scope": _research_scope_payload(scope),
+                "scope": scope_payload,
+                "experiments": [
+                    {"id": item.pk, "name": item.name}
+                    for item in course.experiments.order_by("name", "pk")
+                ],
+                "class_choices": [
+                    {
+                        "id": item.pk,
+                        "name": item.name,
+                        "academic_year": item.academic_year,
+                    }
+                    for item in published_classes
+                ],
+                "preparation": preparation,
                 "packages": package_rows,
                 "selected_package": selected_package,
                 "export_versions": [],
                 "selected_export_version": None,
-                "tables": file_catalog(bundle["files"] if bundle else None),
-                "generated_at": generated_at,
+                "tables": tables,
+                "generated_at": timezone.now(),
                 "identified_data_notice": (
                     "所有数据包均含实名身份数据；对外共享前必须在平台外完成合规去标识化。"
                 ),
@@ -495,16 +636,25 @@ class TeacherDataCenterExportHistoryView(APIView):
     )
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
-        scope = _scope_from_request(request, course)
+        if request.query_params.get("scope_version") == "2":
+            try:
+                scope = ExperimentExportScope.from_mapping(
+                    course, request.query_params
+                )
+            except ExportScopeValidationError as error:
+                raise ValidationError({"scope": [str(error)]}) from error
+        else:
+            scope = _scope_from_request(request, course)
         jobs = _scoped_export_jobs(course, scope)
         paginator = FixedPageNumberPagination()
         page = paginator.paginate_queryset(jobs, request, view=self)
+        class_names = _history_class_names(page)
         items = []
         for job in page:
             can_manage_artifact = job.status == ExportJob.Status.SUCCEEDED
             items.append(
                 {
-                    **_recent_export_payload(job),
+                    **_recent_export_payload(job, class_names),
                     "artifact_removal_reason": job.artifact_removal_reason,
                     "artifact_removal_label": {"user_requested_removal": "已由用户移除文件", "retention_expired": "已超过保留期限"}.get(job.artifact_removal_reason, "文件已移除" if job.artifact_removal_reason else ""),
                     "created_by_name": job.created_by.shown_name,

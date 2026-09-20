@@ -16,7 +16,7 @@ from apps.question_bank.models import Question
 
 
 FILENAMES = [
-    "01_课程学生表.csv", "02_学生Session全局绑定表.csv", "03_课程知识点表.csv",
+    "01_课程学生表.csv", "02_学生Session实验绑定表.csv", "03_课程知识点表.csv",
     "04_题目KC映射表.csv", "05_单次实验_逐题作答表.csv", "06_单次实验_行为过程表.csv",
     "07_表6事件字典.csv", "课程题目固定库.json",
 ]

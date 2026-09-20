@@ -113,6 +113,64 @@ class ExportJob(models.Model):
         return remove_export_artifact(self, reason=reason)
 
 
+class ResearchExportAssetQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValueError("ResearchExportAsset rows are immutable")
+
+    def delete(self):
+        raise ValueError("ResearchExportAsset rows are immutable")
+
+
+class ResearchExportAsset(models.Model):
+    class Kind(models.TextChoices):
+        COURSE = "course", "课程研究资产"
+        EXPERIMENT_SESSIONS = "experiment_sessions", "实验 Session 资产"
+
+    asset_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    kind = models.CharField(max_length=32, choices=Kind.choices)
+    course = models.ForeignKey(
+        "accounts.Course", on_delete=models.PROTECT, related_name="research_export_assets"
+    )
+    experiment = models.ForeignKey(
+        "experiments.Experiment",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="research_export_assets",
+    )
+    contract_version = models.CharField(max_length=32, default="research-export-v2")
+    content_hash = models.CharField(max_length=64)
+    artifact_path = models.CharField(max_length=512)
+    artifact_sha256 = models.CharField(max_length=64)
+    row_counts = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    objects = ResearchExportAssetQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["created_at", "asset_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "kind",
+                    "course",
+                    "experiment",
+                    "contract_version",
+                    "content_hash",
+                ],
+                name="analytics_unique_research_export_asset",
+                nulls_distinct=False,
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError("ResearchExportAsset rows are immutable")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("ResearchExportAsset rows are immutable")
+
+
 class RecordingCoverageImmutableQuerySet(models.QuerySet):
     def update(self, **kwargs):
         raise ValueError("RecordingCoverage rows are immutable")
@@ -301,6 +359,7 @@ class ResearchSessionMaterialization(models.Model):
     event_high_watermark = models.PositiveBigIntegerField(default=0)
     grade_high_watermark = models.JSONField(default=dict)
     source_high_watermarks = models.JSONField(default=dict)
+    source_revision = models.PositiveBigIntegerField(default=0, db_index=True)
     projection_version = models.CharField(max_length=64, default="research-session-v1")
     locked_by = models.CharField(max_length=128, blank=True, default="")
     lease_expires_at = models.DateTimeField(null=True, blank=True)

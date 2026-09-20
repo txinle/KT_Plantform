@@ -3457,6 +3457,31 @@ paths:
                 $ref: '#/components/schemas/DataCenterExportJobMutation'
           description: ''
   /api/v1/teacher/courses/{course_id}/data/export-jobs/{job_id}/:
+    get:
+      operationId: teacher_data_center_export_job_retrieve
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: job_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataCenterExportJobMutation'
+          description: ''
     delete:
       operationId: teacher_data_center_export_job_destroy
       parameters:
@@ -5766,20 +5791,43 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DataCenterAdvancedTable'
+        experiments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataCenterExportExperiment'
+        class_choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataCenterClassOption'
+        preparation:
+          $ref: '#/components/schemas/DataCenterExportPreparation'
         generated_at:
           type: string
           format: date-time
       required:
       - actions
+      - class_choices
       - course
+      - experiments
       - export_versions
       - generated_at
       - identified_data_notice
       - packages
+      - preparation
       - scope
       - selected_export_version
       - selected_package
       - tables
+    DataCenterExportExperiment:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+      required:
+      - id
+      - name
     DataCenterExportHistoryCollection:
       type: object
       properties:
@@ -5906,6 +5954,21 @@ components:
       - description
       - key
       - label
+    DataCenterExportPreparation:
+      type: object
+      properties:
+        state:
+          type: string
+        ready_count:
+          type: integer
+          minimum: 0
+        pending_count:
+          type: integer
+          minimum: 0
+      required:
+      - pending_count
+      - ready_count
+      - state
     DataCenterFacts:
       type: object
       properties:
@@ -8246,8 +8309,9 @@ components:
           default: exclude_previous
         review_count:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -8271,13 +8335,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -12408,8 +12474,9 @@ components:
           default: exclude_previous
         review_count:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -12433,13 +12500,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'

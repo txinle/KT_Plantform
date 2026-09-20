@@ -129,12 +129,15 @@ export type DataCenterAdvanced = GeneratedDataCenterAdvanced & {
 }
 
 export type DataCenterExportTable = GeneratedDataCenterAdvanced['tables'][number] & {
-  level: 'course' | 'experiment' | 'dictionary'
+  level: 'course' | 'experiment_binding' | 'experiment' | 'dictionary'
   format: 'csv' | 'json'
 }
 
 export type DataCenterExportCatalog = Omit<GeneratedDataCenterExportCatalog, 'tables'> & {
   tables: DataCenterExportTable[]
+  experiments: { id: number; name: string }[]
+  class_choices: { id: number; name: string; academic_year: string }[]
+  preparation: { state: string; ready_count: number; pending_count: number }
 }
 
 export interface DataCenterExportJobMutation {
@@ -203,6 +206,9 @@ export function createTeacherDataCenterApi(client: ApiClient) {
         method: 'POST',
         body: input,
       })
+    },
+    exportJob(courseId: number, jobId: string) {
+      return client.get<DataCenterExportJobMutation>(`/api/v1/teacher/courses/${courseId}/data/export-jobs/${jobId}/`)
     },
     removeExport(url: string) {
       return client.mutate<DataCenterExportJobMutation>(url, { method: 'DELETE' })
