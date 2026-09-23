@@ -310,6 +310,7 @@ class DataCenterContractTests(TransactionTestCase):
             rows = list(csv.reader(StringIO(archive.read("02_core/attempts.csv").decode("utf-8-sig"))))
         self.assertEqual(len(rows), 2)
         headers, values = rows
+        self.assertEqual(len(values), len(headers))
         self.assertEqual(headers[:3], ["student_number", "student_name", "question_code"])
         self.assertEqual(values[:3], ["U001", "未完成学生", "Q1"])
         self.assertNotIn("subject_id", headers)
@@ -317,6 +318,8 @@ class DataCenterContractTests(TransactionTestCase):
         self.assertEqual(values[headers.index("status")], "submitted")
         self.assertEqual(values[headers.index("is_correct")], "True")
         self.assertEqual(values[headers.index("score")], "1.00")
+        self.assertEqual(values[headers.index("active_seconds")], "0")
+        self.assertEqual(values[headers.index("active_seconds_at_recovery")], "0")
 
     def test_class_snapshot_and_student_number_scope_export(self):
         version = ExperimentVersion.objects.create(experiment=self.experiment, version_number=1, published_by=self.teacher)

@@ -37,6 +37,7 @@ from .models import (
     QuestionSnapshot,
     ReleaseSnapshotQuestionMapping,
     ScheduleRevision,
+    TaskManualClosure,
 )
 from .services import (
     _candidate_inventory,
@@ -1986,23 +1987,77 @@ def commit_publish_plan(plan, actor, *, expected_revision, progress=None):
 
 
 @transaction.atomic
-def append_schedule_revision(task, actor, *, opens_at, closes_at, reason):
+def append_schedule_revision(
+    task, actor, *, opens_at=None, closes_at=None, reason="",
+    expected_revision=None, extend_minutes=None, reopen=False,
+    total_time_limit_minutes=None, per_question_time_limit_seconds=None,
+):
     task = ClassExperimentTask.objects.select_for_update().get(pk=task.pk)
     now = database_now()
     current = task.schedule_revisions.select_for_update().order_by("-revision_no").first()
-    if task.cancelled_at or task.manual_closed_at or task.invalidated_at:
-        raise PublicationConflict("已终止任务不能修改开放排期。", code="SCHEDULE_LOCKED")
-    if current is None or current.opens_at is None or now >= current.opens_at:
-        raise PublicationConflict("仅在开放前允许修正排期。", code="SCHEDULE_LOCKED")
-    if task.sessions.exists():
-        raise PublicationConflict("已有学生会话，不能修改开放排期。", code="SCHEDULE_LOCKED")
+    if current is None:
+        raise PublicationConflict("任务缺少发布排期。", code="SCHEDULE_LOCKED")
+    if expected_revision is not None and expected_revision != current.revision_no:
+        raise PublicationConflict("排期已被其他教师修改，请刷新后重试。", code="SCHEDULE_STALE")
+    started = task.sessions.exists()
+    if (started or (current.opens_at is not None and now >= current.opens_at) or reopen) and expected_revision is None:
+        raise PublicationConflict("请刷新任务并使用当前排期版本提交。", code="SCHEDULE_STALE")
+    if task.cancelled_at or task.invalidated_at:
+        raise PublicationConflict("已取消或作废任务不能重新开放。", code="SCHEDULE_LOCKED")
+    from apps.assessment.deadline_services import DeadlineDecisionService
+
+    state = DeadlineDecisionService.get_task_state(task, at=now)
+    if state != "scheduled" and not str(reason or "").strip():
+        raise ValidationError("请填写时间调整原因。")
+    if state == "manual_closed" and not reopen:
+        raise PublicationConflict("提前结束的任务需要明确选择重新开放。", code="SCHEDULE_LOCKED")
+    if reopen and state not in {"closed", "manual_closed"}:
+        raise PublicationConflict("当前任务尚未结束，无需重新开放。", code="SCHEDULE_LOCKED")
+    if extend_minutes is not None:
+        if closes_at is not None:
+            raise ValidationError("延长分钟数与新截止时间只能选择一种。")
+        if current.closes_at is None:
+            raise ValidationError("当前任务没有截止时间，请填写新的截止时间。")
+        closes_at = max(current.closes_at, now) + timedelta(minutes=extend_minutes)
+    if closes_at is None:
+        closes_at = current.closes_at
+    if reopen:
+        opens_at = now
+    elif opens_at is None:
+        opens_at = current.opens_at
+    elif started or current.opens_at is None or now >= current.opens_at:
+        if opens_at != current.opens_at:
+            raise PublicationConflict("学生开始后不能修改既有开放起点。", code="SCHEDULE_LOCKED")
+    if closes_at is not None and closes_at <= now and state != "scheduled":
+        raise ValidationError("新截止时间必须晚于当前时间。")
     if closes_at and opens_at and closes_at <= opens_at:
         raise ValidationError("截止时间必须晚于开始时间。")
+    configuration = task.release_snapshot.configuration
+    mode = configuration.get("time_mode")
+    total_seconds = current.total_time_limit_seconds
+    item_seconds = current.per_question_time_limit_seconds
+    if mode == "total":
+        old_seconds = total_seconds or int(configuration.get("total_time_limit_minutes") or 0) * 60
+        total_seconds = int(total_time_limit_minutes) * 60 if total_time_limit_minutes is not None else old_seconds
+        if started and total_seconds < old_seconds:
+            raise PublicationConflict("已有学生开始，实验总时限只能延长。", code="SCHEDULE_LOCKED")
+    elif total_time_limit_minutes is not None:
+        raise ValidationError("当前任务不是实验总时限模式。")
+    if mode == "per_question":
+        old_seconds = item_seconds or int(configuration.get("per_question_time_limit_seconds") or 0)
+        item_seconds = int(per_question_time_limit_seconds) if per_question_time_limit_seconds is not None else old_seconds
+        if started and item_seconds < old_seconds:
+            raise PublicationConflict("已有学生开始，单题时限只能延长。", code="SCHEDULE_LOCKED")
+    elif per_question_time_limit_seconds is not None:
+        raise ValidationError("当前任务不是单题时限模式。")
     return ScheduleRevision.objects.create(
         class_task=task,
         revision_no=current.revision_no + 1,
         opens_at=opens_at,
         closes_at=closes_at,
+        total_time_limit_seconds=total_seconds,
+        per_question_time_limit_seconds=item_seconds,
+        reopens_manual_close=current.reopens_manual_close or (reopen and state == "manual_closed"),
         created_by=actor,
         reason=str(reason or "").strip(),
     )
@@ -2029,10 +2084,20 @@ def manual_close_task(task, actor, *, reason):
     """Record the authoritative close boundary in one short transaction."""
     task = ClassExperimentTask.objects.select_for_update().get(pk=task.pk)
     now = database_now()
-    if task.cancelled_at or task.manual_closed_at or task.invalidated_at:
+    if task.cancelled_at or task.invalidated_at:
         return task
-    task.manual_closed_at = now
-    task.terminal_reason = str(reason or "manual_closed").strip() or "manual_closed"
-    with _class_experiment_task_terminal_update_scope():
-        task.save(update_fields=["manual_closed_at", "terminal_reason"])
+    from apps.assessment.deadline_services import DeadlineDecisionService
+
+    if DeadlineDecisionService.get_task_state(task, at=now) == "manual_closed":
+        return task
+    closure_reason = str(reason or "manual_closed").strip() or "manual_closed"
+    TaskManualClosure.objects.create(
+        class_task=task, closed_at=now, created_by=actor, reason=closure_reason,
+        schedule_revision_no=task.schedule_revisions.order_by("-revision_no").values_list("revision_no", flat=True).first() or 1,
+    )
+    if task.manual_closed_at is None:
+        task.manual_closed_at = now
+        task.terminal_reason = closure_reason
+        with _class_experiment_task_terminal_update_scope():
+            task.save(update_fields=["manual_closed_at", "terminal_reason"])
     return task

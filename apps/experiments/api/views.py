@@ -19,6 +19,7 @@ from apps.assessment.deadline_services import DeadlineDecisionService
 from apps.assessment.feedback_services import FeedbackReleaseError, release_task_feedback
 from apps.assessment.manual_grading_services import task_grading_summary
 from apps.assessment.models import ExperimentSession
+from apps.assessment.services import can_recover_session
 from apps.audit.services import log_action
 from apps.question_bank.models import Concept, Question, QuestionBank
 
@@ -227,11 +228,14 @@ def _task_available_actions(task, *, now=None):
         if grading["enabled"] and grading["short_answer_questions"] > 0
         else []
     )
-    if task.cancelled_at or task.manual_closed_at or task.invalidated_at:
+    if task.cancelled_at or task.invalidated_at:
         return grading_actions
     now = now or database_now()
     schedule = task.schedule_revisions.order_by("-revision_no").first()
     actions = list(grading_actions)
+    actions.append("adjust_time")
+    if DeadlineDecisionService.get_task_state(task, at=now) == "manual_closed":
+        return actions
     if (
         schedule is not None
         and schedule.opens_at is not None
@@ -265,6 +269,8 @@ def _task_projection(task):
     schedule = task.schedule_revisions.order_by("-revision_no").first()
     now = database_now()
     grading = task_grading_summary(task)
+    configuration = task.release_snapshot.configuration
+    time_mode = configuration.get("time_mode")
     return {
         "id": task.pk,
         "experiment_id": task.experiment_id,
@@ -276,6 +282,20 @@ def _task_projection(task):
         "opens_at": schedule.opens_at if schedule else None,
         "closes_at": schedule.closes_at if schedule else None,
         "schedule_revision": schedule.revision_no if schedule else 1,
+        "total_time_limit_minutes": (
+            (schedule.total_time_limit_seconds or int(configuration.get("total_time_limit_minutes") or 0) * 60) // 60
+            if time_mode == "total" else None
+        ),
+        "per_question_time_limit_seconds": (
+            schedule.per_question_time_limit_seconds or int(configuration.get("per_question_time_limit_seconds") or 0)
+            if time_mode == "per_question" else None
+        ),
+        "recoverable_count": sum(
+            can_recover_session(task, session, at=now)
+            for session in task.sessions.filter(status=ExperimentSession.Status.EXPIRED)
+            .select_related("version")
+            .prefetch_related("attempts")
+        ),
         "participant_count": task.participant_snapshots.count(),
         "grading": grading,
         "available_actions": _task_available_actions(task, now=now),
@@ -1067,9 +1087,14 @@ class TeacherClassTaskScheduleRevisionView(TeacherClassTaskMixin, APIView):
             revision = append_schedule_revision(
                 task,
                 request.user,
-                opens_at=serializer.validated_data["opens_at"],
-                closes_at=serializer.validated_data["closes_at"],
+                opens_at=serializer.validated_data.get("opens_at"),
+                closes_at=serializer.validated_data.get("closes_at"),
                 reason=serializer.validated_data.get("reason", ""),
+                expected_revision=serializer.validated_data.get("expected_revision"),
+                extend_minutes=serializer.validated_data.get("extend_minutes"),
+                reopen=serializer.validated_data.get("reopen", False),
+                total_time_limit_minutes=serializer.validated_data.get("total_time_limit_minutes"),
+                per_question_time_limit_seconds=serializer.validated_data.get("per_question_time_limit_seconds"),
             )
         except (PublicationConflict, DjangoValidationError) as exc:
             _raise_api_domain_error(exc)

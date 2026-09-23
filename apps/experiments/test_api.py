@@ -1,8 +1,11 @@
 import json
+import uuid
+from io import StringIO
 from collections import Counter
 from datetime import timedelta
 
 from django.db import connection
+from django.core.management import call_command
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -14,7 +17,12 @@ from apps.question_bank.models import (
     QuestionBank,
     QuestionConcept,
 )
-from apps.assessment.models import ExperimentSession
+from apps.assessment.models import AssessmentEvent, Attempt, ExperimentSession
+from apps.assessment.deadline_services import DeadlineDecisionService
+from apps.assessment.services import get_or_create_session, record_visit, resume_task_session, save_draft, submit_attempt, _terminate_for_deadline
+from apps.assessment.test_support import accept_research_consent
+from apps.analytics.recording_coverage import generate_session_coverage
+from .publication_services import append_schedule_revision, manual_close_task
 
 from .models import (
     ClassExperimentTask,
@@ -1650,7 +1658,7 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertEqual(detail.json()["business_status"], "scheduled")
         self.assertEqual(
             detail.json()["available_actions"],
-            ["grade_short_answers", "revise_schedule", "cancel", "manual_close"],
+            ["grade_short_answers", "adjust_time", "revise_schedule", "cancel", "manual_close"],
         )
 
         progress = self.client.get(
@@ -1696,3 +1704,314 @@ class TeacherPublishPlanApiTests(TestCase):
         )
         self.assertEqual(closed.status_code, 200)
         self.assertEqual(closed.json()["business_status"], "manual_closed")
+
+    def test_closed_task_can_extend_then_reopen_after_manual_close_without_erasing_history(self):
+        plan, _ = self.preview_two_classes()
+        commit = self.client.post(
+            self.plan_url(plan, "commit/"),
+            data=json.dumps({"expected_revision": plan.plan_revision}),
+            content_type="application/json",
+        )
+        self.complete_operation(commit)
+        task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
+        original = task.schedule_revisions.get(revision_no=1)
+        now = timezone.now()
+        task.schedule_revisions.filter(pk=original.pk).update(
+            opens_at=now - timedelta(hours=1), closes_at=now - timedelta(minutes=1)
+        )
+        url = f"/api/v1/teacher/class-tasks/{task.pk}/schedule-revisions/"
+
+        extended = self.client.post(
+            url,
+            data=json.dumps({"expected_revision": 1, "extend_minutes": 5, "reason": "课堂补时"}),
+            content_type="application/json",
+        )
+        self.assertEqual(extended.status_code, 201, extended.content)
+        self.assertEqual(extended.json()["schedule_revision"], 2)
+        self.assertEqual(extended.json()["business_status"], "open")
+        self.assertGreater(task.schedule_revisions.get(revision_no=2).closes_at, now + timedelta(minutes=4))
+
+        stale = self.client.post(
+            url,
+            data=json.dumps({"expected_revision": 1, "extend_minutes": 5, "reason": "旧页面"}),
+            content_type="application/json",
+        )
+        self.assertEqual(stale.status_code, 409, stale.content)
+        self.assertEqual(task.schedule_revisions.count(), 2)
+
+        closed = self.client.post(
+            f"/api/v1/teacher/class-tasks/{task.pk}/manual-close/",
+            data=json.dumps({"reason": "课堂暂停"}),
+            content_type="application/json",
+        )
+        self.assertEqual(closed.status_code, 200, closed.content)
+        manual_closed_at = ClassExperimentTask.objects.get(pk=task.pk).manual_closed_at
+        reopened = self.client.post(
+            url,
+            data=json.dumps({
+                "expected_revision": 2,
+                "reopen": True,
+                "opens_at": timezone.now().isoformat(),
+                "closes_at": (timezone.now() + timedelta(minutes=10)).isoformat(),
+                "reason": "恢复课堂",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(reopened.status_code, 201, reopened.content)
+        self.assertEqual(reopened.json()["business_status"], "open")
+        task.refresh_from_db()
+        self.assertEqual(task.manual_closed_at, manual_closed_at)
+        self.assertEqual(task.schedule_revisions.count(), 3)
+        closed_again = self.client.post(
+            f"/api/v1/teacher/class-tasks/{task.pk}/manual-close/",
+            data=json.dumps({"reason": "第二次暂停"}), content_type="application/json",
+        )
+        self.assertEqual(closed_again.status_code, 200, closed_again.content)
+        self.assertEqual(closed_again.json()["business_status"], "manual_closed")
+        self.assertEqual(task.manual_closures.count(), 2)
+        self.assertEqual(ClassExperimentTask.objects.get(pk=task.pk).manual_closed_at, manual_closed_at)
+
+    def test_legacy_manual_close_without_history_can_reopen(self):
+        plan, _ = self.preview_two_classes()
+        commit = self.client.post(
+            self.plan_url(plan, "commit/"),
+            data=json.dumps({"expected_revision": plan.plan_revision}),
+            content_type="application/json",
+        )
+        self.complete_operation(commit)
+        task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
+        task.schedule_revisions.filter(revision_no=1).update(
+            opens_at=timezone.now() - timedelta(hours=1),
+            closes_at=timezone.now() + timedelta(hours=1),
+        )
+        manual_close_task(task, self.teacher, reason="旧记录的提前结束")
+        task.manual_closures.all().delete()  # Model a pre-migration task with no closure-history row.
+        task.refresh_from_db()
+        self.assertFalse(task.manual_closures.exists())
+        self.assertEqual(DeadlineDecisionService.get_task_state(task), "manual_closed")
+
+        revision = append_schedule_revision(
+            task, self.teacher, expected_revision=1, reopen=True,
+            closes_at=timezone.now() + timedelta(hours=1), reason="恢复旧任务",
+        )
+
+        self.assertTrue(revision.reopens_manual_close)
+        self.assertEqual(DeadlineDecisionService.get_task_state(task), "open")
+        self.assertFalse(task.manual_closures.exists())
+
+    def test_expired_student_resumes_once_with_same_session_and_preserved_timeout_event(self):
+        plan, _ = self.preview_two_classes()
+        commit = self.client.post(
+            self.plan_url(plan, "commit/"),
+            data=json.dumps({"expected_revision": plan.plan_revision}),
+            content_type="application/json",
+        )
+        self.complete_operation(commit)
+        task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
+        task.schedule_revisions.filter(revision_no=1).update(
+            opens_at=timezone.now() - timedelta(hours=1),
+            closes_at=timezone.now() + timedelta(minutes=1),
+        )
+        student = User.objects.get(student_number="PUB-001")
+        session = get_or_create_session(self.experiment, student, class_task=task)
+        attempt = session.attempts.get()
+        _terminate_for_deadline(session, now=timezone.now(), reason="deadline_expired")
+        self.assertEqual(attempt.assessment_events.filter(event_type="attempt_closed").count(), 1)
+        task.schedule_revisions.filter(revision_no=1).update(closes_at=timezone.now() - timedelta(seconds=1))
+        received_while_closed = timezone.now()
+        append_schedule_revision(
+            task, self.teacher, expected_revision=1, extend_minutes=5, reason="恢复作答"
+        )
+        self.assertEqual(DeadlineDecisionService.get_task_state(task, at=received_while_closed), "closed")
+        self.assertFalse(DeadlineDecisionService.can_enter_item(task, session, received_while_closed).allowed)
+        accept_research_consent(student)
+        self.client.force_login(student)
+        student_list = self.client.get(f"/api/v1/student/courses/{self.course.pk}/tasks/")
+        self.assertEqual(student_list.status_code, 200, student_list.content)
+        self.assertEqual(student_list.json()["items"][0]["primary_action"], "resume")
+        direct_refresh = self.client.get(
+            f"/api/v1/student/sessions/{session.pk}/questions/{session.assignments.get().pk}/"
+        )
+        self.assertEqual(direct_refresh.status_code, 200, direct_refresh.content)
+        self.assertGreater(direct_refresh.json()["remaining_seconds"], 0)
+        resume_response = self.client.post(f"/api/v1/student/tasks/{task.pk}/resume/")
+        self.assertEqual(resume_response.status_code, 200, resume_response.content)
+        resumed = ExperimentSession.objects.get(pk=session.pk)
+        repeated = resume_task_session(task, student)
+        self.assertEqual(resumed.pk, session.pk)
+        self.assertEqual(repeated.recovery_round, 1)
+        self.assertEqual(resumed.status, ExperimentSession.Status.IN_PROGRESS)
+        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type="session_expired").count(), 1)
+        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type="session_reopened").count(), 1)
+        attempt.refresh_from_db()
+        self.assertNotEqual(attempt.status, Attempt.Status.UNANSWERED)
+        _terminate_for_deadline(resumed, now=timezone.now(), reason="deadline_expired")
+        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type="session_expired").count(), 2)
+        self.assertEqual(AssessmentEvent.objects.filter(attempt=attempt, event_type="attempt_closed").count(), 2)
+        coverage_run = generate_session_coverage(resumed)
+        self.assertEqual(
+            coverage_run.session_results.get(session=session).analysis_eligibility["supplemental_time"]["recovery_rounds"],
+            1,
+        )
+        self.assertEqual(
+            coverage_run.attempt_results.get(attempt=attempt).derived_features["supplemental_recovery_rounds"],
+            [1],
+        )
+
+    def test_total_limit_extension_grants_only_added_time_from_first_resume(self):
+        self.experiment.time_mode = Experiment.TimeMode.TOTAL
+        self.experiment.total_time_limit_minutes = 1
+        self.experiment.save()
+        plan, _ = self.preview_two_classes()
+        commit = self.client.post(self.plan_url(plan, "commit/"), data=json.dumps({"expected_revision": plan.plan_revision}), content_type="application/json")
+        self.complete_operation(commit)
+        task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
+        task.schedule_revisions.filter(revision_no=1).update(opens_at=timezone.now() - timedelta(hours=1))
+        student = User.objects.get(student_number="PUB-001")
+        session = get_or_create_session(self.experiment, student, class_task=task)
+        old_deadline = timezone.now() - timedelta(seconds=1)
+        ExperimentSession.objects.filter(pk=session.pk).update(
+            started_at=timezone.now() - timedelta(minutes=2), deadline_at=old_deadline,
+            personal_deadline_at=old_deadline,
+        )
+        session.refresh_from_db()
+        _terminate_for_deadline(session, now=old_deadline, reason="total_time_limit")
+        append_schedule_revision(task, self.teacher, expected_revision=1, total_time_limit_minutes=3, reason="增加总时限")
+
+        resumed_at = timezone.now()
+        resumed = resume_task_session(task, student, request_received_at=resumed_at)
+        self.assertEqual(resumed.total_time_limit_seconds, 180)
+        self.assertGreater(resumed.deadline_at, resumed_at + timedelta(seconds=119))
+        self.assertLess(resumed.deadline_at, resumed_at + timedelta(seconds=121))
+        self.assertEqual(resume_task_session(task, student).deadline_at, resumed.deadline_at)
+
+    def test_per_question_extension_restores_timed_out_attempt_without_replacing_close_event(self):
+        self.experiment.time_mode = Experiment.TimeMode.PER_QUESTION
+        self.experiment.per_question_time_limit_seconds = 30
+        self.experiment.save()
+        plan, _ = self.preview_two_classes()
+        commit = self.client.post(self.plan_url(plan, "commit/"), data=json.dumps({"expected_revision": plan.plan_revision}), content_type="application/json")
+        self.complete_operation(commit)
+        task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
+        task.schedule_revisions.filter(revision_no=1).update(opens_at=timezone.now() - timedelta(hours=1))
+        student = User.objects.get(student_number="PUB-001")
+        session = get_or_create_session(self.experiment, student, class_task=task)
+        attempt = record_visit(session.pk, session.assignments.get().pk)
+        old_deadline = timezone.now() - timedelta(seconds=1)
+        Attempt.objects.filter(pk=attempt.pk).update(item_deadline_at=old_deadline, initial_effective_deadline_at=old_deadline, active_seconds=30)
+        attempt.refresh_from_db()
+        _terminate_for_deadline(session, attempt=attempt, now=old_deadline, reason="item_time_limit")
+        append_schedule_revision(task, self.teacher, expected_revision=1, per_question_time_limit_seconds=90, reason="增加单题时限")
+
+        resumed_at = timezone.now()
+        resumed = resume_task_session(task, student, request_received_at=resumed_at)
+        attempt.refresh_from_db()
+        self.assertEqual(resumed.recovery_round, 1)
+        self.assertEqual(attempt.status, Attempt.Status.VISITED)
+        self.assertEqual(attempt.active_seconds, 30)
+        self.assertEqual(attempt.active_seconds_at_recovery, 30)
+        self.assertEqual(attempt.initial_effective_deadline_at, old_deadline)
+        self.assertGreater(attempt.current_effective_deadline_at, resumed_at + timedelta(seconds=59))
+        self.assertEqual(AssessmentEvent.objects.filter(attempt=attempt, event_type="attempt_closed").count(), 1)
+        self.assertEqual(AssessmentEvent.objects.filter(attempt=attempt, event_type="attempt_reopened").count(), 1)
+
+    def test_active_question_gets_extended_deadline_but_retains_original_deadline_fact(self):
+        self.experiment.time_mode = Experiment.TimeMode.PER_QUESTION
+        self.experiment.per_question_time_limit_seconds = 30
+        self.experiment.save()
+        plan, _ = self.preview_two_classes()
+        commit = self.client.post(self.plan_url(plan, "commit/"), data=json.dumps({"expected_revision": plan.plan_revision}), content_type="application/json")
+        self.complete_operation(commit)
+        task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
+        task.schedule_revisions.filter(revision_no=1).update(opens_at=timezone.now() - timedelta(hours=1))
+        student = User.objects.get(student_number="PUB-001")
+        session = get_or_create_session(self.experiment, student, class_task=task)
+        attempt = record_visit(session.pk, session.assignments.get().pk)
+        original = attempt.initial_effective_deadline_at
+        append_schedule_revision(task, self.teacher, expected_revision=1, per_question_time_limit_seconds=90, reason="单题补时")
+
+        resumed = resume_task_session(task, student)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, Attempt.Status.VISITED)
+        self.assertEqual(attempt.initial_effective_deadline_at, original)
+        self.assertEqual(attempt.current_effective_deadline_at, original + timedelta(seconds=60))
+        self.assertTrue(DeadlineDecisionService.can_write_response(
+            task, resumed, attempt, original + timedelta(seconds=1)
+        ).allowed)
+
+    def test_reopen_preserves_submitted_answer_and_only_restores_unsubmitted_item(self):
+        question = Question.objects.create(
+            bank=self.experiment.question_bank, sequence=2, code="PUB-Q2",
+            question_type=Question.Type.SHORT, text="第二题", correct_answer="答案二",
+        )
+        QuestionConcept.objects.create(
+            question=question, concept=Concept.objects.get(course=self.course), is_primary=True,
+        )
+        self.experiment.sampling_total_count = 2
+        self.experiment.save()
+        plan, _ = self.preview_two_classes()
+        commit = self.client.post(self.plan_url(plan, "commit/"), data=json.dumps({"expected_revision": plan.plan_revision}), content_type="application/json")
+        self.complete_operation(commit)
+        task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
+        task.schedule_revisions.filter(revision_no=1).update(
+            opens_at=timezone.now() - timedelta(hours=1), closes_at=timezone.now() + timedelta(minutes=1)
+        )
+        student = User.objects.get(student_number="PUB-001")
+        session = get_or_create_session(self.experiment, student, class_task=task)
+        assignments = list(session.assignments.order_by("assigned_sequence_index"))
+        submitted = record_visit(session.pk, assignments[0].pk)
+        save_draft(submitted.pk, "答案")
+        submit_attempt(submitted.pk, uuid.uuid4())
+        submitted.refresh_from_db()
+        prior_answer = submitted.final_answer
+        _terminate_for_deadline(session, now=timezone.now(), reason="deadline_expired")
+        task.schedule_revisions.filter(revision_no=1).update(closes_at=timezone.now() - timedelta(seconds=1))
+        append_schedule_revision(task, self.teacher, expected_revision=1, extend_minutes=5, reason="恢复未交题目")
+
+        resume_task_session(task, student)
+        submitted.refresh_from_db()
+        pending = Attempt.objects.get(assignment=assignments[1])
+        self.assertEqual(submitted.status, Attempt.Status.SUBMITTED)
+        self.assertEqual(submitted.final_answer, prior_answer)
+        self.assertEqual(AssessmentEvent.objects.filter(attempt=submitted, event_type="response_committed").count(), 1)
+        self.assertFalse(AssessmentEvent.objects.filter(attempt=submitted, event_type="attempt_reopened").exists())
+        self.assertEqual(pending.status, Attempt.Status.UNVISITED)
+
+    def test_new_class_cutoff_caps_an_existing_unlimited_session_at_the_exact_instant(self):
+        plan, _ = self.preview_two_classes()
+        commit = self.client.post(self.plan_url(plan, "commit/"), data=json.dumps({"expected_revision": plan.plan_revision}), content_type="application/json")
+        self.complete_operation(commit)
+        task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
+        task.schedule_revisions.filter(revision_no=1).update(opens_at=timezone.now() - timedelta(hours=1))
+        session = get_or_create_session(
+            self.experiment, User.objects.get(student_number="PUB-001"), class_task=task
+        )
+        cutoff = timezone.now() + timedelta(minutes=5)
+        append_schedule_revision(task, self.teacher, expected_revision=1, closes_at=cutoff, reason="设置本班截止")
+        self.assertTrue(DeadlineDecisionService.can_enter_item(task, session, cutoff - timedelta(microseconds=1)).allowed)
+        self.assertFalse(DeadlineDecisionService.can_enter_item(task, session, cutoff).allowed)
+
+    def test_manual_close_pause_does_not_consume_personal_time_before_resume(self):
+        self.experiment.time_mode = Experiment.TimeMode.TOTAL
+        self.experiment.total_time_limit_minutes = 2
+        self.experiment.save()
+        plan, _ = self.preview_two_classes()
+        commit = self.client.post(self.plan_url(plan, "commit/"), data=json.dumps({"expected_revision": plan.plan_revision}), content_type="application/json")
+        self.complete_operation(commit)
+        task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
+        task.schedule_revisions.filter(revision_no=1).update(opens_at=timezone.now() - timedelta(hours=1))
+        student = User.objects.get(student_number="PUB-001")
+        session = get_or_create_session(self.experiment, student, class_task=task)
+        manual_close_task(task, self.teacher, reason="课堂暂停")
+        revision = append_schedule_revision(
+            task, self.teacher, expected_revision=1, reopen=True,
+            closes_at=timezone.now() + timedelta(minutes=10), reason="课堂恢复",
+        )
+        resumed_at = revision.created_at + timedelta(minutes=1)
+
+        resumed = resume_task_session(task, student, request_received_at=resumed_at)
+        self.assertGreater(resumed.deadline_at, resumed_at + timedelta(seconds=119))
+        self.assertLess(resumed.deadline_at, resumed_at + timedelta(seconds=121))
+        call_command("expire_due_sessions", stdout=StringIO())
+        resumed.refresh_from_db()
+        self.assertEqual(resumed.status, ExperimentSession.Status.IN_PROGRESS)

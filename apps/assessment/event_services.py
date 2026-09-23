@@ -318,6 +318,7 @@ def append_assessment_event(
         "event_domain": event_domain,
         "event_type": event_type,
         "event_version": event_version,
+        "recovery_round": session.recovery_round,
         "envelope_version": envelope_version,
         "actor_source": actor_source,
         "session_id": session.pk,

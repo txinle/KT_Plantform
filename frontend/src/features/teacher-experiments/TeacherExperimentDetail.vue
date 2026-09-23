@@ -40,7 +40,8 @@ const loading = ref(true)
 const working = ref(false)
 const error = ref('')
 const scheduleTaskId = ref<number>()
-const scheduleForm = reactive({ opens_at: '', closes_at: '', reason: '' })
+const selectedScheduleTask = computed(() => tasks.value.find(task => task.id === scheduleTaskId.value))
+const scheduleForm = reactive({ opens_at: '', closes_at: '', reason: '', total_minutes: '', item_seconds: '' })
 const confirmation = reactive({ taskId: 0, action: '' as '' | 'cancel' | 'manual_close', reason: '' })
 const activeTab = ref<'definition' | 'tasks' | 'collection'>('definition')
 const deletionTarget = ref<DeletionTarget>()
@@ -263,15 +264,44 @@ function editSchedule(task: ClassTask) {
   scheduleForm.opens_at = dateTimeLocal(task.opens_at)
   scheduleForm.closes_at = dateTimeLocal(task.closes_at)
   scheduleForm.reason = ''
+  scheduleForm.total_minutes = task.total_time_limit_minutes == null ? '' : String(task.total_time_limit_minutes)
+  scheduleForm.item_seconds = task.per_question_time_limit_seconds == null ? '' : String(task.per_question_time_limit_seconds)
 }
 
-async function reviseSchedule(taskId: number) {
+function timingInput(task: ClassTask) {
+  return {
+    expected_revision: task.schedule_revision,
+    reopen: task.business_status === 'manual_closed' || task.business_status === 'closed',
+    reason: scheduleForm.reason.trim(),
+    ...(task.total_time_limit_minutes == null ? {} : { total_time_limit_minutes: Number(scheduleForm.total_minutes) }),
+    ...(task.per_question_time_limit_seconds == null ? {} : { per_question_time_limit_seconds: Number(scheduleForm.item_seconds) }),
+  }
+}
+
+async function extendFiveMinutes(task: ClassTask) {
   working.value = true
+  error.value = ''
   try {
-    await api.reviseSchedule(taskId, {
-      opens_at: isoOrNull(scheduleForm.opens_at),
+    await api.reviseSchedule(task.id, {
+      ...timingInput(task), extend_minutes: 5, reason: scheduleForm.reason.trim() || '教师快捷延长 5 分钟',
+    })
+    scheduleTaskId.value = undefined
+    await load()
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '延长时间失败。'
+  } finally {
+    working.value = false
+  }
+}
+
+async function reviseSchedule(task: ClassTask) {
+  working.value = true
+  error.value = ''
+  try {
+    await api.reviseSchedule(task.id, {
+      ...timingInput(task),
+      ...(task.available_actions.includes('revise_schedule') ? { opens_at: isoOrNull(scheduleForm.opens_at) } : {}),
       closes_at: isoOrNull(scheduleForm.closes_at),
-      reason: scheduleForm.reason,
     })
     scheduleTaskId.value = undefined
     await load()
@@ -414,7 +444,7 @@ onMounted(load)
                 <template v-for="task in tasks" :key="task.id">
                   <tr>
                     <td><strong>{{ task.class_name }}</strong></td><td><StatusBadge :label="task.business_status" tone="neutral" /></td>
-                    <td>{{ progress[task.id]?.total_participants ?? task.participant_count }}</td><td>{{ displayDate(task.opens_at) }} — {{ displayDate(task.closes_at) }}</td>
+                    <td>{{ progress[task.id]?.total_participants ?? task.participant_count }}</td><td>{{ displayDate(task.opens_at) }} — {{ displayDate(task.closes_at) }}<span v-if="task.total_time_limit_minutes != null"> · 总时限 {{ task.total_time_limit_minutes }} 分钟</span><span v-if="task.per_question_time_limit_seconds != null"> · 单题 {{ task.per_question_time_limit_seconds }} 秒</span><span v-if="task.recoverable_count"> · 可恢复 {{ task.recoverable_count }} 人</span></td>
                     <td>{{ progress[task.id]?.not_started ?? '—' }}</td><td>{{ progress[task.id]?.in_progress ?? '—' }}</td><td>{{ progress[task.id]?.completed ?? '—' }}</td>
                     <td>
                       <div class="kt-table-actions">
@@ -425,18 +455,30 @@ onMounted(load)
                           :href="`/teacher/courses/${courseId}/experiments/${experimentId}/class-tasks/${task.id}/grading/`"
                         >批改简答题 · 待批改 {{ task.grading?.pending ?? 0 }}</a>
                         <button v-if="task.available_actions.includes('revise_schedule')" data-action="revise-schedule" class="kt-text-button" type="button" @click="editSchedule(task)">修订排期</button>
+                        <button v-else-if="task.available_actions.includes('adjust_time')" data-action="adjust-time" class="kt-text-button" type="button" @click="editSchedule(task)">调整时间</button>
                         <button v-if="task.available_actions.includes('cancel')" data-action="cancel-task" class="kt-text-button kt-text-button--danger" type="button" @click="requestTerminalAction(task.id, 'cancel')">取消任务</button>
                         <button v-if="task.available_actions.includes('manual_close')" data-action="manual-close" class="kt-text-button kt-text-button--danger" type="button" @click="requestTerminalAction(task.id, 'manual_close')">提前结束</button>
                         <button v-if="task.available_actions.includes('release_feedback')" data-action="release-feedback" class="kt-text-button" type="button" :disabled="working" @click="releaseFeedback(task.id)">发布反馈</button>
                       </div>
                     </td>
                   </tr>
-                  <tr v-if="scheduleTaskId === task.id"><td colspan="8"><form class="kt-inline-panel" @submit.prevent="reviseSchedule(task.id)"><h3>修订排期</h3><div class="kt-inline-form-grid"><label>开放时间<input v-model="scheduleForm.opens_at" type="datetime-local"></label><label>截止时间<input v-model="scheduleForm.closes_at" type="datetime-local"></label><label>原因<input v-model="scheduleForm.reason" maxlength="500"></label></div><div class="kt-inline-actions"><Button type="submit" :disabled="working">保存修订</Button><button type="button" class="kt-text-button" @click="scheduleTaskId = undefined">取消</button></div></form></td></tr>
                   <tr v-if="confirmation.taskId === task.id && confirmation.action"><td colspan="8"><form class="kt-inline-panel kt-inline-panel--danger" @submit.prevent="applyTerminalAction"><h3>{{ confirmation.action === 'cancel' ? '确认取消该班任务' : '确认提前结束该班任务' }}</h3><p>此操作会立即改变学生端可用状态，请填写可审计原因后确认。</p><label>原因<input v-model="confirmation.reason" maxlength="500" required></label><div class="kt-inline-actions"><button class="kt-button kt-button--danger" type="submit" :disabled="working">确认执行</button><button type="button" class="kt-text-button" @click="confirmation.action = ''">返回</button></div></form></td></tr>
                 </template>
               </tbody>
             </table>
           </div>
+          <form v-if="selectedScheduleTask" class="kt-inline-panel kt-time-adjust-panel" @submit.prevent="reviseSchedule(selectedScheduleTask)">
+            <h3>调整该班时间：{{ selectedScheduleTask.class_name }} · 第 {{ selectedScheduleTask.schedule_revision }} 版</h3>
+            <p v-if="selectedScheduleTask.business_status === 'manual_closed' || selectedScheduleTask.business_status === 'closed'">保存后重新开放；已提交答案不会解锁。</p>
+            <div class="kt-inline-form-grid">
+              <label v-if="selectedScheduleTask.available_actions.includes('revise_schedule')">开放时间<input v-model="scheduleForm.opens_at" type="datetime-local"></label>
+              <label>新截止时间<input v-model="scheduleForm.closes_at" type="datetime-local" :required="selectedScheduleTask.business_status === 'closed' || selectedScheduleTask.business_status === 'manual_closed' || (selectedScheduleTask.total_time_limit_minutes == null && selectedScheduleTask.per_question_time_limit_seconds == null)"></label>
+              <label v-if="selectedScheduleTask.total_time_limit_minutes != null">实验总时限（分钟）<input v-model="scheduleForm.total_minutes" type="number" min="1" required></label>
+              <label v-if="selectedScheduleTask.per_question_time_limit_seconds != null">单题时限（秒）<input v-model="scheduleForm.item_seconds" type="number" min="1" required></label>
+              <label>调整原因<input v-model="scheduleForm.reason" maxlength="500" required></label>
+            </div>
+            <div class="kt-inline-actions"><Button type="submit" :disabled="working">保存调整</Button><button v-if="selectedScheduleTask.closes_at" data-action="extend-five-minutes" type="button" class="kt-button kt-button--secondary" :disabled="working" @click="extendFiveMinutes(selectedScheduleTask)">延长 5 分钟</button><button type="button" class="kt-text-button" @click="scheduleTaskId = undefined">取消</button></div>
+          </form>
         </section>
         <aside class="kt-experiment-side-stack">
           <section class="kt-card kt-publish-ready-card"><h2>继续发布</h2><p>使用当前实验定义发布到尚未覆盖的班级。</p><Button data-action="continue-publish" :disabled="working" @click="startPublish">继续发布</Button></section>

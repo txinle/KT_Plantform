@@ -1871,7 +1871,6 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/ScheduleRevisionInput'
-        required: true
       security:
       - SessionAuth: []
       responses:
@@ -5024,6 +5023,15 @@ components:
         schedule_revision:
           type: integer
           minimum: 1
+        total_time_limit_minutes:
+          type: integer
+          nullable: true
+        per_question_time_limit_seconds:
+          type: integer
+          nullable: true
+        recoverable_count:
+          type: integer
+          minimum: 0
         participant_count:
           type: integer
           minimum: 0
@@ -5046,8 +5054,11 @@ components:
       - id
       - opens_at
       - participant_count
+      - per_question_time_limit_seconds
       - published_at
+      - recoverable_count
       - schedule_revision
+      - total_time_limit_minutes
     ClassTaskCollection:
       type: object
       properties:
@@ -9828,12 +9839,25 @@ components:
           type: string
           format: date-time
           nullable: true
+        expected_revision:
+          type: integer
+          minimum: 1
+        extend_minutes:
+          type: integer
+          maximum: 10080
+          minimum: 1
+        reopen:
+          type: boolean
+          default: false
+        total_time_limit_minutes:
+          type: integer
+          minimum: 1
+        per_question_time_limit_seconds:
+          type: integer
+          minimum: 1
         reason:
           type: string
           maxLength: 500
-      required:
-      - closes_at
-      - opens_at
     SelectionModeEnum:
       enum:
       - all

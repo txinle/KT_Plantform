@@ -150,6 +150,9 @@
 .kt-teacher-experiments .kt-table-actions .kt-text-button { padding: 0.1rem; font-size: 0.84rem; }
 .kt-teacher-experiments .kt-inline-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }
 .kt-teacher-experiments .kt-inline-panel { margin: 0.25rem 0; }
+.kt-teacher-experiments .kt-time-adjust-panel { margin-top: 1rem; }
+.kt-teacher-experiments .kt-time-adjust-panel .kt-inline-form-grid > label { display: grid; min-width: 0; gap: 0.35rem; }
+.kt-teacher-experiments .kt-time-adjust-panel input { box-sizing: border-box; width: 100%; min-width: 0; }
 
 .kt-teacher-experiments .kt-form-stack { gap: 0.55rem; }
 .kt-teacher-experiments .kt-numbered-form-section { display: grid; grid-template-columns: 15.5rem minmax(0, 1fr); gap: 1rem; padding: 0.65rem 1.15rem; border-radius: 0.55rem; }

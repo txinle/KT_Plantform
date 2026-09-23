@@ -901,6 +901,9 @@ class ClassTaskSerializer(serializers.Serializer):
     opens_at = serializers.DateTimeField(allow_null=True)
     closes_at = serializers.DateTimeField(allow_null=True)
     schedule_revision = serializers.IntegerField(min_value=1)
+    total_time_limit_minutes = serializers.IntegerField(allow_null=True)
+    per_question_time_limit_seconds = serializers.IntegerField(allow_null=True)
+    recoverable_count = serializers.IntegerField(min_value=0)
     participant_count = serializers.IntegerField(min_value=0)
     grading = serializers.DictField()
     available_actions = serializers.ListField(child=serializers.CharField())
@@ -921,14 +924,19 @@ class ClassTaskProgressSerializer(serializers.Serializer):
 
 
 class ScheduleRevisionInputSerializer(serializers.Serializer):
-    opens_at = serializers.DateTimeField(allow_null=True)
-    closes_at = serializers.DateTimeField(allow_null=True)
+    opens_at = serializers.DateTimeField(allow_null=True, required=False)
+    closes_at = serializers.DateTimeField(allow_null=True, required=False)
+    expected_revision = serializers.IntegerField(min_value=1, required=False)
+    extend_minutes = serializers.IntegerField(min_value=1, max_value=10080, required=False)
+    reopen = serializers.BooleanField(required=False, default=False)
+    total_time_limit_minutes = serializers.IntegerField(min_value=1, required=False)
+    per_question_time_limit_seconds = serializers.IntegerField(min_value=1, required=False)
     reason = serializers.CharField(max_length=500, allow_blank=True, required=False)
 
     def validate(self, attrs):
         if (
-            attrs["opens_at"] is not None
-            and attrs["closes_at"] is not None
+            attrs.get("opens_at") is not None
+            and attrs.get("closes_at") is not None
             and attrs["closes_at"] <= attrs["opens_at"]
         ):
             raise serializers.ValidationError("截止时间必须晚于开始时间。")

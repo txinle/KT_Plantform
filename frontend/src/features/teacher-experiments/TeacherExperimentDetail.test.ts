@@ -235,6 +235,32 @@ describe('TeacherExperimentDetail', () => {
     expect(mocks.api.classTasks).toHaveBeenCalledTimes(2)
   })
 
+  it('extends a closed class by five minutes using its current revision', async () => {
+    mocks.api.detail.mockResolvedValue({
+      id: 11, name: '认知诊断实验', status: 'published', can_edit: false, can_manage: true,
+      time_mode_label: '实验总时限', total_time_limit_minutes: 45,
+    })
+    mocks.api.classTasks.mockResolvedValue({ items: [{
+      id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
+      opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-09-03T00:00:00Z',
+      business_status: 'closed', schedule_revision: 2,
+      total_time_limit_minutes: 45, per_question_time_limit_seconds: null,
+      recoverable_count: 3, grading: {}, available_actions: ['adjust_time'],
+    }] })
+    mocks.api.reviseSchedule.mockResolvedValue({ schedule_revision: 3 })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('可恢复 3 人')
+    await wrapper.get('[data-action="adjust-time"]').trigger('click')
+    await wrapper.get('[data-action="extend-five-minutes"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.reviseSchedule).toHaveBeenCalledWith(31, expect.objectContaining({
+      expected_revision: 2, extend_minutes: 5,
+    }))
+  })
+
   it('loads collection participants only after opening the collection tab and renders all status details', async () => {
     mocks.api.detail.mockResolvedValue({
       id: 11, name: '认知诊断实验', description: '比较两种反馈策略', question_bank: { id: 3, name: '代数题库' },

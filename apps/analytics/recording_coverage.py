@@ -905,6 +905,12 @@ def _attempt_result(*, run, attempt, events, session_reasons, gap_count, syncs):
         missing_reasons=reasons,
         syncs=syncs,
     )
+    features["supplemental_recovery_rounds"] = sorted({
+        event.recovery_round for event in events if event.event_type == "attempt_reopened"
+    })
+    features["submission_recovery_round"] = next((
+        event.recovery_round for event in events if event.event_type == "response_committed"
+    ), None)
     eligibility = {
         "outcome": _eligibility(
             usable=outcome_usable,
@@ -1254,6 +1260,10 @@ def _materialize_session_result(
 
     time_quality = _event_time_quality(events, syncs)
     session_eligibility = {
+        "supplemental_time": {
+            "recovery_rounds": session.recovery_round,
+            "reopened_event_count": sum(event.event_type == "session_reopened" for event in events),
+        },
         "response_replay": _eligibility(
             usable=overall == "complete",
             missing_reasons=reasons,

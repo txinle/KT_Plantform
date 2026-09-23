@@ -953,6 +953,9 @@ class ScheduleRevision(models.Model):
     revision_no = models.PositiveIntegerField()
     opens_at = models.DateTimeField(null=True, blank=True)
     closes_at = models.DateTimeField(null=True, blank=True)
+    total_time_limit_seconds = models.PositiveIntegerField(null=True, blank=True)
+    per_question_time_limit_seconds = models.PositiveIntegerField(null=True, blank=True)
+    reopens_manual_close = models.BooleanField(default=False)
     timezone_name = models.CharField(max_length=64, default="Asia/Shanghai")
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -984,6 +987,26 @@ class ScheduleRevision(models.Model):
         if self.pk and not self._state.adding:
             raise ValidationError("开放排期历史版本不可修改。")
         return super().save(*args, **kwargs)
+
+
+class TaskManualClosure(models.Model):
+    class_task = models.ForeignKey(
+        ClassExperimentTask, on_delete=models.PROTECT, related_name="manual_closures"
+    )
+    closed_at = models.DateTimeField()
+    schedule_revision_no = models.PositiveIntegerField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="task_manual_closures"
+    )
+    reason = models.CharField(max_length=500)
+
+    def save(self, *args, **kwargs):
+        if self.pk and not self._state.adding:
+            raise ValidationError("班级任务结束记录不可修改。")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("班级任务结束记录不可删除。")
 
 
 class ExperimentClassSnapshotQuerySet(models.QuerySet):

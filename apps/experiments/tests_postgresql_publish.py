@@ -1,9 +1,11 @@
 from queue import Queue
+from datetime import timedelta
 from threading import Event, Thread, current_thread
 from unittest.mock import patch
 
 from django.db import close_old_connections
 from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
+from django.utils import timezone
 
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
@@ -20,9 +22,11 @@ from .models import (
     PublishPlan,
     PublishPlanClass,
     QuestionSnapshot,
+    ScheduleRevision,
 )
 from .publication_services import (
     PublicationConflict,
+    append_schedule_revision,
     commit_publish_plan,
     generate_preview,
     get_or_create_publish_plan,
@@ -232,6 +236,50 @@ class PostgreSQLConcurrentPublishRegressionTests(TransactionTestCase):
             ).count(),
             1,
         )
+
+    def test_concurrent_time_edits_accept_only_one_expected_revision(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        plan = save_plan_selection(
+            plan, self.teacher, expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk], exclusions_by_class={},
+        )
+        generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
+        plan.refresh_from_db()
+        task = commit_publish_plan(plan, self.teacher, expected_revision=plan.plan_revision)[0]
+        start = Event()
+        outcomes = Queue()
+
+        def adjust_as_contender():
+            close_old_connections()
+            try:
+                if not start.wait(timeout=10):
+                    raise AssertionError("concurrent adjustments were not released")
+                revision = append_schedule_revision(
+                    ClassExperimentTask.objects.get(pk=task.pk),
+                    User.objects.get(pk=self.teacher.pk),
+                    expected_revision=1,
+                    closes_at=timezone.now() + timedelta(minutes=10),
+                    reason="并发调整",
+                )
+                outcomes.put(("saved", revision.revision_no))
+            except Exception as exc:
+                outcomes.put(("failed", exc))
+            finally:
+                close_old_connections()
+
+        workers = [Thread(target=adjust_as_contender) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        start.set()
+        for worker in workers:
+            worker.join(timeout=20)
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        results = [outcomes.get_nowait(), outcomes.get_nowait()]
+        self.assertEqual([value for status, value in results if status == "saved"], [2])
+        failures = [value for status, value in results if status == "failed"]
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], PublicationConflict)
+        self.assertEqual(ScheduleRevision.objects.filter(class_task=task).count(), 2)
 
     def test_resume_plan_and_preview_share_course_experiment_plan_lock_order(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)

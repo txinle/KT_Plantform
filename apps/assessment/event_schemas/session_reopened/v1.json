@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "recovery_round": {"type": "integer", "minimum": 1},
+    "schedule_revision": {"type": "integer", "minimum": 1},
+    "previous_status": {"type": "string"},
+    "previous_terminal_at": {"type": ["string", "null"], "format": "date-time"},
+    "previous_deadline_at": {"type": ["string", "null"], "format": "date-time"},
+    "resumed_at": {"type": "string", "format": "date-time"},
+    "new_deadline_at": {"type": ["string", "null"], "format": "date-time"}
+  },
+  "required": ["recovery_round", "schedule_revision", "previous_status", "previous_terminal_at", "previous_deadline_at", "resumed_at", "new_deadline_at"],
+  "additionalProperties": false
+}

@@ -199,10 +199,12 @@ class ExperimentSession(models.Model):
     )
     class_snapshot_name = models.CharField(max_length=160, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.IN_PROGRESS)
+    recovery_round = models.PositiveIntegerField(default=0)
     started_at = models.DateTimeField(auto_now_add=True)
     last_activity_at = models.DateTimeField(auto_now=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     deadline_at = models.DateTimeField(null=True, blank=True)
+    personal_deadline_at = models.DateTimeField(null=True, blank=True)
     task_opens_at = models.DateTimeField(null=True, blank=True)
     task_closes_at = models.DateTimeField(null=True, blank=True)
     total_time_limit_seconds = models.PositiveIntegerField(null=True, blank=True)
@@ -311,10 +313,12 @@ class Attempt(models.Model):
     last_opened_at = models.DateTimeField(null=True, blank=True)
     visit_count = models.PositiveIntegerField(default=0)
     active_seconds = models.PositiveIntegerField(default=0)
+    active_seconds_at_recovery = models.PositiveIntegerField(default=0)
     item_started_at = models.DateTimeField(null=True, blank=True)
     per_item_time_limit_seconds = models.PositiveIntegerField(null=True, blank=True)
     item_deadline_at = models.DateTimeField(null=True, blank=True)
     initial_effective_deadline_at = models.DateTimeField(null=True, blank=True)
+    current_effective_deadline_at = models.DateTimeField(null=True, blank=True)
     close_reason = models.CharField(max_length=64, blank=True, default="")
     authoritative_terminal_at = models.DateTimeField(null=True, blank=True)
     terminal_recorded_at = models.DateTimeField(null=True, blank=True)
@@ -1050,6 +1054,7 @@ class AssessmentEvent(models.Model):
     event_domain = models.CharField(max_length=16, choices=EventDomain.choices)
     event_type = models.CharField(max_length=64)
     event_version = models.PositiveSmallIntegerField(default=1)
+    recovery_round = models.PositiveIntegerField(default=0)
     envelope_version = models.PositiveSmallIntegerField(default=1)
     actor_source = models.CharField(max_length=12, choices=ActorSource.choices)
 
@@ -1190,7 +1195,7 @@ class AssessmentEvent(models.Model):
                 name="unique_session_started_event",
             ),
             models.UniqueConstraint(
-                fields=["session"],
+                fields=["session", "recovery_round"],
                 condition=Q(
                     event_type__in=(
                         "session_completed",
@@ -1201,7 +1206,7 @@ class AssessmentEvent(models.Model):
                 name="unique_session_terminal_event",
             ),
             models.UniqueConstraint(
-                fields=["attempt"],
+                fields=["attempt", "recovery_round"],
                 condition=Q(attempt__isnull=False, event_type="attempt_closed"),
                 name="unique_attempt_closed_event",
             ),

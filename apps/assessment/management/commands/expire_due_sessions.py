@@ -4,6 +4,7 @@ from django.utils import timezone
 from datetime import timedelta
 
 from apps.assessment.models import ExperimentSession
+from apps.assessment.deadline_services import DeadlineDecisionService
 from apps.assessment.services import _terminate_for_deadline, _validate_session_time
 
 
@@ -29,11 +30,15 @@ class Command(BaseCommand):
                     .get(pk=session_id)
                 )
                 task = session.class_task
-                terminal_at = (
-                    task.manual_closed_at or task.cancelled_at or task.invalidated_at
-                    if task is not None
-                    else None
-                )
+                terminal_at = None
+                if task is not None:
+                    state = DeadlineDecisionService.get_task_state(task, at=now)
+                    if state == "manual_closed":
+                        terminal_at = DeadlineDecisionService.manual_close_at(task, now)
+                    elif state == "cancelled":
+                        terminal_at = task.cancelled_at
+                    elif state == "invalidated":
+                        terminal_at = task.invalidated_at
                 if terminal_at is not None and now >= terminal_at + TERMINAL_PROJECTION_GRACE:
                     _terminate_for_deadline(
                         session,

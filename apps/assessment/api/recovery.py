@@ -40,7 +40,7 @@ def recovery_permission(session, attempt=None):
     if session.class_task_id:
         decision = DeadlineDecisionService.can_write_response(session.class_task, session, attempt, timezone.now())
         return decision.allowed, decision.code
-    deadline = (attempt.initial_effective_deadline_at if attempt else None) or session.deadline_at
+    deadline = ((attempt.current_effective_deadline_at or attempt.initial_effective_deadline_at) if attempt else None) or session.deadline_at
     if deadline and timezone.now() >= deadline:
         return False, 'DEADLINE_EXPIRED'
     return True, ''

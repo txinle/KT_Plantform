@@ -29,7 +29,7 @@ from ..models import (
     StudentQuestionAssignment,
 )
 from ..response_snapshot_services import canonical_response_state
-from ..services import get_or_create_session, resume_task_session
+from ..services import can_recover_session, get_or_create_session, resume_task_session
 from ..services import record_visit_entry
 from ..student_results import build_student_task_result
 from .serializers import (
@@ -158,9 +158,14 @@ def _task_projection(task, *, course):
             available_actions = ["start"]
     elif session.status == ExperimentSession.Status.IN_PROGRESS:
         decision = DeadlineDecisionService.can_enter_item(task, session, now)
-        if course.status == Course.Status.ACTIVE and decision.allowed:
+        if course.status == Course.Status.ACTIVE and (
+            decision.allowed or can_recover_session(task, session, at=now)
+        ):
             primary_action = "resume"
             available_actions = ["resume"]
+    elif course.status == Course.Status.ACTIVE and can_recover_session(task, session, at=now):
+        primary_action = "resume"
+        available_actions = ["resume", "view_result"]
     else:
         primary_action = "view_result"
         available_actions = ["view_result"]
@@ -281,17 +286,26 @@ class StudentTaskResumeView(StudentApiMixin, APIView):
 
 
 def _runtime_remaining_seconds(session, attempt, at):
-    if attempt.initial_effective_deadline_at:
+    item_deadline = attempt.current_effective_deadline_at or attempt.initial_effective_deadline_at
+    task_close = None
+    if session.class_task_id:
+        schedule = DeadlineDecisionService.schedule_at(session.class_task, at)
+        task_close = schedule.closes_at if schedule is not None else None
+    deadline = min(
+        (value for value in (item_deadline, session.deadline_at, task_close) if value is not None),
+        default=None,
+    )
+    if deadline:
         return max(
             0,
-            int((attempt.initial_effective_deadline_at - at).total_seconds()),
+            int((deadline - at).total_seconds()),
         )
     config = session.version.configuration
     if config.get("time_mode") == "per_question":
         return max(
             0,
-            int(config.get("per_question_time_limit_seconds") or 0)
-            - attempt.active_seconds,
+            int(attempt.per_item_time_limit_seconds or config.get("per_question_time_limit_seconds") or 0)
+            - (attempt.active_seconds - attempt.active_seconds_at_recovery),
         )
     if config.get("time_mode") == "total" and session.deadline_at:
         return max(0, int((session.deadline_at - at).total_seconds()))

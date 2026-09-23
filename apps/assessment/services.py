@@ -58,12 +58,16 @@ def _append_session_event(session, *, event_type, payload):
     existing = AssessmentEvent.objects.filter(
         session=session,
         event_type=event_type,
+        recovery_round=session.recovery_round,
     ).first()
     if existing is not None:
         return existing
     return append_assessment_event(
         event_type=event_type,
-        event_version=2 if session.capture_contract_id else 1,
+        event_version=(
+            1 if event_type == "session_reopened" else
+            2 if session.capture_contract_id else 1
+        ),
         event_domain="assessment",
         actor_source="server",
         session=session,
@@ -85,6 +89,7 @@ def _append_attempt_closed(attempt, *, close_reason):
     existing = AssessmentEvent.objects.filter(
         attempt=attempt,
         event_type="attempt_closed",
+        recovery_round=attempt.session.recovery_round,
     ).first()
     if existing is not None:
         return existing
@@ -253,6 +258,8 @@ def get_or_create_session(
     total_seconds = None
     if version.configuration.get("total_time_limit_minutes"):
         total_seconds = int(version.configuration["total_time_limit_minutes"]) * 60
+    if schedule is not None and schedule.total_time_limit_seconds is not None:
+        total_seconds = schedule.total_time_limit_seconds
     total_deadline = now + timedelta(seconds=total_seconds) if total_seconds else None
     task_close = schedule.closes_at if schedule is not None else None
     initial_deadline = DeadlineDecisionService.initial_session_deadline(
@@ -283,6 +290,7 @@ def get_or_create_session(
             "task_closes_at": task_close,
             "total_time_limit_seconds": total_seconds,
             "deadline_at": initial_deadline,
+            "personal_deadline_at": total_deadline,
             "initial_effective_deadline_at": initial_deadline,
             "timer_semantics_version": version.timer_semantics_version,
         }
@@ -386,6 +394,14 @@ def resume_task_session(task, student, *, request_received_at=None):
     )
     if session is None:
         raise ExperimentSession.DoesNotExist
+    _validate_course_access(session, request_received_at=request_received_at)
+    if session.status in (ExperimentSession.Status.COMPLETED, ExperimentSession.Status.INVALIDATED):
+        raise ValidationError("该实验会话已结束，不能继续作答")
+    schedule = DeadlineDecisionService.schedule_at(task, request_received_at)
+    if schedule is None or DeadlineDecisionService.get_task_state(task, at=request_received_at) != "open":
+        raise ValidationError("当前班级任务已结束，不能继续作答")
+    if session.schedule_revision_id != schedule.pk:
+        _apply_recovery_revision(session, schedule, request_received_at)
     if session.status != ExperimentSession.Status.IN_PROGRESS:
         raise ValidationError("该实验会话已结束，不能继续作答")
     decision = DeadlineDecisionService.can_enter_item(
@@ -398,6 +414,194 @@ def resume_task_session(task, student, *, request_received_at=None):
     materialize_confidence_assignments(session)
     return session
 
+
+def can_recover_session(task, session, *, at=None):
+    at = at or timezone.now()
+    if session.status in (ExperimentSession.Status.COMPLETED, ExperimentSession.Status.INVALIDATED):
+        return False
+    if DeadlineDecisionService.get_task_state(task, at=at) != "open":
+        return False
+    schedule = DeadlineDecisionService.schedule_at(task, at)
+    if schedule is None or schedule.pk == session.schedule_revision_id:
+        return False
+    if session.status == ExperimentSession.Status.IN_PROGRESS:
+        return True
+    pending = [attempt for attempt in session.attempts.all() if attempt.status in (
+        Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED
+    )]
+    if not pending:
+        return False
+    mode = session.version.configuration.get("time_mode")
+    if mode == "total":
+        old_limit = session.total_time_limit_seconds or 0
+        new_limit = schedule.total_time_limit_seconds or old_limit
+        old_personal_deadline = session.personal_deadline_at or session.started_at + timedelta(seconds=old_limit)
+        return new_limit > old_limit or bool(
+            session.terminal_at and old_personal_deadline > session.terminal_at
+        )
+    if mode == "per_question":
+        new_limit = schedule.per_question_time_limit_seconds or int(
+            session.version.configuration.get("per_question_time_limit_seconds") or 0
+        )
+        return any(
+            attempt.first_opened_at is None
+            or new_limit > (attempt.per_item_time_limit_seconds or 0)
+            or bool(attempt.item_deadline_at and session.terminal_at and attempt.item_deadline_at > session.terminal_at)
+            for attempt in pending
+        )
+    return True
+
+
+def _apply_recovery_revision(session, schedule, resumed_at):
+    """Apply one published revision at first entry, preserving old terminal events."""
+    old_status = session.status
+    old_terminal_at = session.terminal_at
+    old_deadline = session.deadline_at
+    old_total = session.total_time_limit_seconds or 0
+    pause_boundary = (
+        session.task_closes_at
+        if session.task_closes_at is not None and session.task_closes_at <= resumed_at
+        else None
+    )
+    if session.class_task_id:
+        prior_revision_no = session.schedule_revision.revision_no if session.schedule_revision_id else 0
+        prior_revision_created_at = session.schedule_revision.created_at if session.schedule_revision_id else session.started_at
+        closure = session.class_task.manual_closures.order_by("-closed_at").first()
+        if closure is not None and closure.schedule_revision_no >= prior_revision_no:
+            pause_boundary = min(pause_boundary, closure.closed_at) if pause_boundary else closure.closed_at
+        elif closure is None and session.class_task.manual_closed_at and session.class_task.manual_closed_at >= prior_revision_created_at:
+            pause_boundary = min(pause_boundary, session.class_task.manual_closed_at) if pause_boundary else session.class_task.manual_closed_at
+    config = session.version.configuration
+    mode = config.get("time_mode")
+    new_total = schedule.total_time_limit_seconds or old_total
+    personal_deadline = None
+    if mode == "total" and new_total:
+        old_personal_deadline = session.personal_deadline_at or (
+            session.started_at + timedelta(seconds=old_total)
+        )
+        delta = max(0, new_total - old_total)
+        if old_status == ExperimentSession.Status.EXPIRED or pause_boundary is not None or (
+            old_deadline is not None and resumed_at >= old_deadline
+        ):
+            boundary = old_terminal_at or pause_boundary or old_deadline or resumed_at
+            remaining = max(0, (old_personal_deadline - boundary).total_seconds())
+            personal_deadline = resumed_at + timedelta(seconds=remaining + delta)
+        else:
+            personal_deadline = old_personal_deadline + timedelta(seconds=delta)
+    new_deadline = DeadlineDecisionService.initial_session_deadline(
+        schedule.closes_at, personal_deadline
+    )
+    if new_deadline is not None and resumed_at >= new_deadline:
+        raise ValidationError("新排期未提供可用的作答时间")
+    attempts = list(session.attempts.select_for_update().select_related(
+        "assignment__snapshot", "assignment__item_instance"
+    ))
+    restorable = [attempt for attempt in attempts if attempt.status in (
+        Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED
+    )]
+    if old_status == ExperimentSession.Status.EXPIRED and not restorable:
+        raise ValidationError("该会话没有可恢复的未提交题目")
+    session.recovery_round += 1
+    session.research_source_revision += 1
+    session.schedule_revision = schedule
+    session.task_closes_at = schedule.closes_at
+    session.total_time_limit_seconds = new_total or None
+    session.deadline_at = new_deadline
+    session.personal_deadline_at = personal_deadline
+    session.status = ExperimentSession.Status.IN_PROGRESS
+    session.completed_at = None
+    session.terminal_at = None
+    session.terminal_reason = ""
+    session.authoritative_terminal_at = None
+    session.terminal_recorded_at = None
+    session.save(update_fields=[
+        "recovery_round", "research_source_revision", "schedule_revision", "task_closes_at",
+        "total_time_limit_seconds", "deadline_at", "personal_deadline_at", "status", "completed_at",
+        "terminal_at", "terminal_reason", "authoritative_terminal_at", "terminal_recorded_at",
+    ])
+    _append_session_event(
+        session, event_type="session_reopened", payload={
+            "recovery_round": session.recovery_round,
+            "schedule_revision": schedule.revision_no,
+            "previous_status": old_status,
+            "previous_terminal_at": old_terminal_at.isoformat() if old_terminal_at else None,
+            "previous_deadline_at": old_deadline.isoformat() if old_deadline else None,
+            "resumed_at": resumed_at.isoformat(),
+            "new_deadline_at": new_deadline.isoformat() if new_deadline else None,
+        }
+    )
+    for attempt in attempts:
+        if attempt.status == Attempt.Status.SUBMITTED:
+            continue
+        previous_status = attempt.status
+        previous_terminal_at = attempt.authoritative_terminal_at
+        previous_deadline = attempt.current_effective_deadline_at or attempt.initial_effective_deadline_at
+        previous_active_seconds = attempt.active_seconds
+        item_deadline = attempt.item_deadline_at
+        was_closed = attempt in restorable
+        if mode == "per_question" and attempt.first_opened_at:
+            old_item_limit = attempt.per_item_time_limit_seconds or int(config.get("per_question_time_limit_seconds") or 0)
+            new_item_limit = schedule.per_question_time_limit_seconds or old_item_limit
+            delta = max(0, new_item_limit - old_item_limit)
+            if was_closed:
+                boundary = previous_terminal_at or old_terminal_at or pause_boundary or previous_deadline or resumed_at
+                remaining = max(0, (item_deadline - boundary).total_seconds()) if item_deadline else 0
+                grant = remaining + delta
+                if grant <= 0:
+                    continue
+                item_deadline = resumed_at + timedelta(seconds=grant)
+                attempt.item_started_at = resumed_at
+                attempt.active_seconds_at_recovery = attempt.active_seconds
+            elif item_deadline is not None and pause_boundary is not None:
+                remaining = max(0, (item_deadline - pause_boundary).total_seconds())
+                item_deadline = resumed_at + timedelta(seconds=remaining + delta)
+                attempt.item_started_at = resumed_at
+                attempt.active_seconds_at_recovery = attempt.active_seconds
+                attempt.last_opened_at = None
+            elif item_deadline is not None:
+                item_deadline += timedelta(seconds=delta)
+            attempt.per_item_time_limit_seconds = new_item_limit
+            attempt.item_deadline_at = item_deadline
+        elif mode == "per_question":
+            attempt.per_item_time_limit_seconds = schedule.per_question_time_limit_seconds or int(config.get("per_question_time_limit_seconds") or 0)
+        if was_closed:
+            attempt.status = (
+                Attempt.Status.DRAFT if attempt.draft_answer is not None
+                else Attempt.Status.VISITED if attempt.first_opened_at
+                else Attempt.Status.UNVISITED
+            )
+        attempt.current_effective_deadline_at = DeadlineDecisionService.initial_item_deadline(
+            schedule.closes_at, new_deadline, item_deadline
+        )
+        if was_closed:
+            attempt.close_reason = ""
+            attempt.authoritative_terminal_at = None
+            attempt.terminal_recorded_at = None
+            attempt.last_opened_at = None
+        attempt.save()
+        if was_closed or previous_deadline != attempt.current_effective_deadline_at:
+            append_assessment_event(
+                event_type="attempt_reopened", event_version=1,
+                event_domain="assessment", actor_source="server",
+                session=session, assignment=attempt.assignment, attempt=attempt,
+                question_snapshot=attempt.assignment.snapshot,
+                item_instance=attempt.assignment.item_instance,
+                payload={
+                    "recovery_round": session.recovery_round,
+                    "previous_status": previous_status,
+                    "previous_terminal_at": previous_terminal_at.isoformat() if previous_terminal_at else None,
+                    "previous_deadline_at": previous_deadline.isoformat() if previous_deadline else None,
+                    "new_deadline_at": attempt.current_effective_deadline_at.isoformat() if attempt.current_effective_deadline_at else None,
+                    "previous_active_seconds": previous_active_seconds,
+                    "active_seconds_at_recovery": attempt.active_seconds_at_recovery,
+                }, capture_mode="native", app_version="server",
+            )
+    if old_status == ExperimentSession.Status.EXPIRED and not any(
+        attempt.status not in (Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED)
+        for attempt in attempts
+    ):
+        raise ValidationError("新时限未提供可恢复的未提交题目")
+
 def _close_previous(session, now):
     previous = session.current_assignment
     if not previous: return
@@ -408,8 +612,8 @@ def _close_previous(session, now):
     if attempt.last_opened_at:
         elapsed = max(0, int((now - attempt.last_opened_at).total_seconds()))
         attempt.active_seconds += elapsed
-        limit = session.version.configuration.get("per_question_time_limit_seconds")
-        if session.version.configuration.get("time_mode") == "per_question" and limit and attempt.active_seconds >= int(limit):
+        limit = attempt.per_item_time_limit_seconds or session.version.configuration.get("per_question_time_limit_seconds")
+        if session.version.configuration.get("time_mode") == "per_question" and limit and attempt.active_seconds - attempt.active_seconds_at_recovery >= int(limit):
             attempt.status = Attempt.Status.TIMED_OUT
             attempt.is_correct = None
         attempt.save(update_fields=["active_seconds", "status", "is_correct"])
@@ -518,12 +722,16 @@ def _validate_session_time(session, attempt=None, *, request_received_at=None):
     if session.deadline_at and now >= session.deadline_at:
         _terminate_for_deadline(session, now=now, reason="total_time_limit")
         return "实验总时间已结束"
-    if attempt and attempt.initial_effective_deadline_at and now >= attempt.initial_effective_deadline_at:
-        _terminate_for_deadline(session, now=attempt.initial_effective_deadline_at, reason="item_time_limit", attempt=attempt)
+    item_deadline = (
+        (attempt.current_effective_deadline_at or attempt.initial_effective_deadline_at)
+        if attempt else None
+    )
+    if item_deadline and now >= item_deadline:
+        _terminate_for_deadline(session, now=item_deadline, reason="item_time_limit", attempt=attempt)
         return "本题作答时间已结束"
     if attempt and session.version.configuration.get("time_mode") == "per_question":
-        limit = session.version.configuration.get("per_question_time_limit_seconds")
-        elapsed = attempt.active_seconds
+        limit = attempt.per_item_time_limit_seconds or session.version.configuration.get("per_question_time_limit_seconds")
+        elapsed = attempt.active_seconds - attempt.active_seconds_at_recovery
         if attempt.last_opened_at: elapsed += max(0, int((now - attempt.last_opened_at).total_seconds()))
         if limit and elapsed >= int(limit):
             attempt.status = Attempt.Status.TIMED_OUT; attempt.is_correct = None
@@ -548,7 +756,11 @@ def _validate_process_event_time(session, attempt=None, *, request_received_at=N
             )
     if session.deadline_at and now >= session.deadline_at:
         return "实验总时间已结束"
-    if attempt and attempt.initial_effective_deadline_at and now >= attempt.initial_effective_deadline_at:
+    item_deadline = (
+        (attempt.current_effective_deadline_at or attempt.initial_effective_deadline_at)
+        if attempt else None
+    )
+    if item_deadline and now >= item_deadline:
         return "本题作答时间已结束"
     return None
 
@@ -620,6 +832,18 @@ def _record_visit_transaction(
         "version__experiment"
     ).get(pk=session_id)
     request_received_at = request_received_at or timezone.now()
+    if session.class_task_id and session.status in (
+        ExperimentSession.Status.IN_PROGRESS, ExperimentSession.Status.EXPIRED
+    ):
+        task = session.class_task
+        schedule = DeadlineDecisionService.schedule_at(task, request_received_at)
+        if (
+            schedule is not None
+            and schedule.pk != session.schedule_revision_id
+            and DeadlineDecisionService.get_task_state(task, at=request_received_at) == "open"
+        ):
+            _validate_course_access(session, request_received_at=request_received_at)
+            _apply_recovery_revision(session, schedule, request_received_at)
     time_error = _validate_session_time(session, request_received_at=request_received_at)
     if time_error:
         return None, time_error
@@ -640,7 +864,10 @@ def _record_visit_transaction(
             attempt.first_open_sequence_index = session.first_open_count
             attempt.first_opened_at = now
             if session.class_task_id:
-                limit = session.version.configuration.get("per_question_time_limit_seconds")
+                limit = (
+                    session.schedule_revision.per_question_time_limit_seconds
+                    if session.schedule_revision_id else None
+                ) or session.version.configuration.get("per_question_time_limit_seconds")
                 attempt.item_started_at = now
                 attempt.per_item_time_limit_seconds = int(limit) if limit else None
                 attempt.item_deadline_at = DeadlineDecisionService.item_deadline_from_start(
@@ -654,6 +881,7 @@ def _record_visit_transaction(
                         attempt.item_deadline_at,
                     )
                 )
+                attempt.current_effective_deadline_at = attempt.initial_effective_deadline_at
         attempt.last_opened_at = now
         if attempt.status in {Attempt.Status.UNVISITED, Attempt.Status.SKIPPED}: attempt.status = Attempt.Status.VISITED
     attempt.save()

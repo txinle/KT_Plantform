@@ -1520,7 +1520,7 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
     }
 
     event_headers = (
-        *identity_headers, "student_id", "question_code", "event_id", "event_type", "event_version", "session_id", "attempt_id",
+        *identity_headers, "student_id", "question_code", "event_id", "event_type", "event_version", "recovery_round", "session_id", "attempt_id",
         "client_instance_id", "client_sequence_no", "server_ingest_sequence_no", "correlation_id",
         "server_received_at", "capture_mode", "quality_flags", "payload", "event_domain",
         "actor_source", "envelope_version", "assignment_id", "question_snapshot_id", "item_instance_id",
@@ -1533,7 +1533,7 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
         return [
             *identity_for_session(event.session_id), event.student_id,
             question_code_for_snapshot(event.question_snapshot_id),
-            event.event_id, event.event_type, event.event_version, event.session_id, event.attempt_id,
+            event.event_id, event.event_type, event.event_version, event.recovery_round, event.session_id, event.attempt_id,
             event.client_instance_id, event.client_sequence_no, event.server_ingest_sequence_no,
             event.correlation_id, event.server_received_at.isoformat(), event.capture_mode,
             json.dumps(event.quality_flags, ensure_ascii=False), json.dumps(event.payload, ensure_ascii=False),
@@ -1878,6 +1878,7 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
             "randomization_identity",
             "preview_class_result__preview_run",
         )
+        .prefetch_related("manual_closures")
         .order_by("pk")
     )
     schedule_revisions = [] if session_projection else list(
@@ -2037,10 +2038,10 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
 
     rows = {
         "subjects": (identity_headers, subject_values),
-        "sessions": ((*identity_headers, "session_id", "experiment_id", "version", "class_task_id", "participant_snapshot_id", "schedule_revision_id", "status", "started_at", "completed_at", "task_opens_at", "task_closes_at", "total_time_limit_seconds", "initial_effective_deadline_at", "timer_semantics_version", "terminal_reason", "authoritative_terminal_at", "terminal_recorded_at"), [[*identity_for_session(session.pk), session.pk, session.version.experiment_id, session.version.version_number, session.class_task_id or "", session.participant_snapshot_id or "", session.schedule_revision_id or "", session.status, session.started_at.isoformat(), session.completed_at.isoformat() if session.completed_at else "", export_time(session.task_opens_at), export_time(session.task_closes_at), session.total_time_limit_seconds or "", export_time(session.initial_effective_deadline_at), session.timer_semantics_version, session.terminal_reason, export_time(session.authoritative_terminal_at), export_time(session.terminal_recorded_at)] for session in sessions]),
+        "sessions": ((*identity_headers, "session_id", "experiment_id", "version", "class_task_id", "participant_snapshot_id", "schedule_revision_id", "status", "started_at", "completed_at", "task_opens_at", "task_closes_at", "total_time_limit_seconds", "initial_effective_deadline_at", "timer_semantics_version", "terminal_reason", "authoritative_terminal_at", "terminal_recorded_at", "recovery_round", "current_deadline_at", "personal_deadline_at"), [[*identity_for_session(session.pk), session.pk, session.version.experiment_id, session.version.version_number, session.class_task_id or "", session.participant_snapshot_id or "", session.schedule_revision_id or "", session.status, session.started_at.isoformat(), session.completed_at.isoformat() if session.completed_at else "", export_time(session.task_opens_at), export_time(session.task_closes_at), session.total_time_limit_seconds or "", export_time(session.initial_effective_deadline_at), session.timer_semantics_version, session.terminal_reason, export_time(session.authoritative_terminal_at), export_time(session.terminal_recorded_at), session.recovery_round, export_time(session.deadline_at), export_time(session.personal_deadline_at)] for session in sessions]),
         "assignments": ((*identity_headers, "question_code", "assignment_id", "session_id", "question_snapshot_id", "item_instance_id", "assigned_sequence_index"), [[*identity_for_session(assignment.session_id), assignment.snapshot.code, assignment.pk, assignment.session_id, assignment.snapshot_id, assignment.item_instance_id, assignment.assigned_sequence_index] for assignment in assignments]),
         "item_instances": (("question_code", "item_instance_id", "question_snapshot_id", "presentation_variant", "option_order", "parameter_values", "random_seed", "presentation_hash"), [[assignment.snapshot.code, assignment.item_instance_id, assignment.snapshot_id, assignment.item_instance.presentation_variant, json.dumps(assignment.item_instance.option_order), json.dumps(assignment.item_instance.parameter_values), assignment.item_instance.random_seed, assignment.item_instance.presentation_hash] for assignment in _unique_assignments(assignments, "item_instance_id")]),
-        "attempts": ((*identity_headers, "question_code", "attempt_id", "session_id", "question_snapshot_id", "item_instance_id", "status", "first_opened_at", "last_opened_at", "visit_count", "draft_answer", "draft_saved_at", "final_answer", "submitted_at", "first_to_submit_duration_ms", "last_visit_to_submission_ms", "is_correct", "score", "first_open_sequence_index", "submission_sequence_index", "active_response_event_id", "response_version", "final_response_event_id", "formal_capture_boundary", "current_response_snapshot_id", "final_response_snapshot_id", "submission_event_id", "submission_grade_status", "grade_version", "grade_is_correct", "grade_score", "grade_max_score", "normalized_response", "grading_method", "grading_version", "grader_version", "graded_at", "item_started_at", "per_item_time_limit_seconds", "item_deadline_at", "initial_effective_deadline_at", "close_reason", "authoritative_terminal_at", "terminal_recorded_at"), [_attempt_export_row(assignment, attempt_by_assignment.get(assignment.pk), session_by_id, grade_by_attempt) for assignment in assignments if assignment.session_id in session_by_id]),
+        "attempts": ((*identity_headers, "question_code", "attempt_id", "session_id", "question_snapshot_id", "item_instance_id", "status", "first_opened_at", "last_opened_at", "visit_count", "draft_answer", "draft_saved_at", "final_answer", "submitted_at", "first_to_submit_duration_ms", "last_visit_to_submission_ms", "is_correct", "score", "first_open_sequence_index", "submission_sequence_index", "active_response_event_id", "response_version", "final_response_event_id", "formal_capture_boundary", "current_response_snapshot_id", "final_response_snapshot_id", "submission_event_id", "submission_grade_status", "grade_version", "grade_is_correct", "grade_score", "grade_max_score", "normalized_response", "grading_method", "grading_version", "grader_version", "graded_at", "item_started_at", "per_item_time_limit_seconds", "item_deadline_at", "initial_effective_deadline_at", "current_effective_deadline_at", "active_seconds", "active_seconds_at_recovery", "close_reason", "authoritative_terminal_at", "terminal_recorded_at"), [_attempt_export_row(assignment, attempt_by_assignment.get(assignment.pk), session_by_id, grade_by_attempt) for assignment in assignments if assignment.session_id in session_by_id]),
         "assessment_events": (event_headers, event_rows),
         "response_events": (response_headers, response_rows),
         "exposure_events": (projection_headers, exposure_rows),
@@ -2366,7 +2367,7 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                     "root_seed_fingerprint", "preview_class_result_id",
                     "cancelled_at", "manual_closed_at", "invalidated_at",
                     "feedback_released_at", "feedback_released_by_id",
-                    "terminal_reason", "provenance",
+                    "terminal_reason", "provenance", "manual_closure_history",
                 ),
                 [
                     [
@@ -2382,6 +2383,10 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
                         export_time(task.feedback_released_at),
                         task.feedback_released_by_id or "",
                         task.terminal_reason or "", task.provenance or "",
+                        json.dumps([
+                            {"closed_at": export_time(closure.closed_at), "schedule_revision_no": closure.schedule_revision_no, "created_by_id": closure.created_by_id, "reason": closure.reason}
+                            for closure in task.manual_closures.all()
+                        ], ensure_ascii=False),
                     ]
                     for task in class_tasks
                 ],
@@ -2389,14 +2394,14 @@ def _table_rows(job, sessions, assignments, attempts, events, confidence_assignm
             "schedule_revisions": (
                 (
                     "class_task_id", "revision_no", "opens_at", "closes_at",
-                    "timezone", "reason", "provenance", "created_at",
+                    "timezone", "reason", "provenance", "created_at", "total_time_limit_seconds", "per_question_time_limit_seconds", "reopens_manual_close", "created_by_id",
                 ),
                 [
                     [
                         revision.class_task_id, revision.revision_no,
                         export_time(revision.opens_at), export_time(revision.closes_at),
                         revision.timezone_name, revision.reason, revision.provenance,
-                        export_time(revision.created_at),
+                        export_time(revision.created_at), revision.total_time_limit_seconds or "", revision.per_question_time_limit_seconds or "", revision.reopens_manual_close, revision.created_by_id or "",
                     ]
                     for revision in schedule_revisions
                 ],
@@ -2541,7 +2546,7 @@ def _attempt_export_row(assignment, attempt, session_by_id, grade_by_attempt=Non
     identity = [session.student.student_number or "", session.student.shown_name, assignment.snapshot.code]
     linkage = [assignment.session_id, assignment.snapshot.pk, assignment.item_instance_id]
     if attempt is None:
-        return [*identity, "", *linkage] + [""] * 38
+        return [*identity, "", *linkage] + [""] * 41
     grade = (grade_by_attempt or {}).get(attempt.pk)
     submission = getattr(attempt, "submission_event", None)
     return [
@@ -2584,6 +2589,10 @@ def _attempt_export_row(assignment, attempt, session_by_id, grade_by_attempt=Non
         attempt.item_deadline_at.isoformat() if attempt.item_deadline_at else "",
         attempt.initial_effective_deadline_at.isoformat()
         if attempt.initial_effective_deadline_at else "",
+        attempt.current_effective_deadline_at.isoformat()
+        if attempt.current_effective_deadline_at else "",
+        attempt.active_seconds,
+        attempt.active_seconds_at_recovery,
         attempt.close_reason,
         attempt.authoritative_terminal_at.isoformat()
         if attempt.authoritative_terminal_at else "",

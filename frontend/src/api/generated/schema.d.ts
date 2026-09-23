@@ -2326,6 +2326,9 @@ export interface components {
             /** Format: date-time */
             closes_at: string | null;
             schedule_revision: number;
+            total_time_limit_minutes: number | null;
+            per_question_time_limit_seconds: number | null;
+            recoverable_count: number;
             participant_count: number;
             grading: {
                 [key: string]: unknown;
@@ -4125,9 +4128,15 @@ export interface components {
         ScheduleModeEnum: "default" | "custom";
         ScheduleRevisionInput: {
             /** Format: date-time */
-            opens_at: string | null;
+            opens_at?: string | null;
             /** Format: date-time */
-            closes_at: string | null;
+            closes_at?: string | null;
+            expected_revision?: number;
+            extend_minutes?: number;
+            /** @default false */
+            reopen: boolean;
+            total_time_limit_minutes?: number;
+            per_question_time_limit_seconds?: number;
             reason?: string;
         };
         /**
@@ -7145,7 +7154,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "application/json": components["schemas"]["ScheduleRevisionInput"];
                 "application/x-www-form-urlencoded": components["schemas"]["ScheduleRevisionInput"];
