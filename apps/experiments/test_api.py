@@ -1705,6 +1705,136 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertEqual(closed.status_code, 200)
         self.assertEqual(closed.json()["business_status"], "manual_closed")
 
+    def test_unstarted_class_can_shorten_its_schedule_and_total_limit(self):
+        self.experiment.time_mode = Experiment.TimeMode.TOTAL
+        self.experiment.total_time_limit_minutes = 15
+        self.experiment.save()
+        plan, _ = self.preview_two_classes()
+        commit = self.client.post(
+            self.plan_url(plan, "commit/"),
+            data=json.dumps({"expected_revision": plan.plan_revision}),
+            content_type="application/json",
+        )
+        self.complete_operation(commit)
+        task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
+        now = timezone.now()
+        task.schedule_revisions.filter(revision_no=1).update(
+            opens_at=now + timedelta(minutes=30), closes_at=now + timedelta(hours=2)
+        )
+
+        response = self.client.post(
+            f"/api/v1/teacher/class-tasks/{task.pk}/schedule-revisions/",
+            data=json.dumps({
+                "expected_revision": 1,
+                "closes_at": (now + timedelta(hours=1)).isoformat(),
+                "total_time_limit_minutes": 10,
+            }),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        revision = task.schedule_revisions.get(revision_no=2)
+        self.assertEqual(revision.closes_at, now + timedelta(hours=1))
+        self.assertEqual(revision.total_time_limit_seconds, 600)
+
+    def test_started_class_rejects_earlier_cutoff_without_losing_other_adjustments(self):
+        self.experiment.time_mode = Experiment.TimeMode.TOTAL
+        self.experiment.total_time_limit_minutes = 15
+        self.experiment.save()
+        plan, _ = self.preview_two_classes()
+        commit = self.client.post(
+            self.plan_url(plan, "commit/"),
+            data=json.dumps({"expected_revision": plan.plan_revision}),
+            content_type="application/json",
+        )
+        self.complete_operation(commit)
+        task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
+        now = timezone.now()
+        old_cutoff = now + timedelta(hours=2)
+        task.schedule_revisions.filter(revision_no=1).update(
+            opens_at=now - timedelta(minutes=1), closes_at=old_cutoff
+        )
+        url = f"/api/v1/teacher/class-tasks/{task.pk}/schedule-revisions/"
+
+        rejected = self.client.post(
+            url,
+            data=json.dumps({
+                "expected_revision": 1,
+                "closes_at": (now + timedelta(hours=1)).isoformat(),
+                "total_time_limit_minutes": 25,
+                "reason": "补充作答时间",
+            }),
+            content_type="application/json",
+        )
+
+        self.assertEqual(rejected.status_code, 409, rejected.content)
+        self.assertEqual(task.schedule_revisions.count(), 1)
+
+        shorter_personal = self.client.post(
+            url,
+            data=json.dumps({
+                "expected_revision": 1,
+                "closes_at": old_cutoff.isoformat(),
+                "total_time_limit_minutes": 10,
+                "reason": "旧页面缩短作答时间",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(shorter_personal.status_code, 409, shorter_personal.content)
+        self.assertEqual(task.schedule_revisions.count(), 1)
+
+        extended = self.client.post(
+            url,
+            data=json.dumps({
+                "expected_revision": 1,
+                "closes_at": old_cutoff.isoformat(),
+                "total_time_limit_minutes": 25,
+                "reason": "补充作答时间",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(extended.status_code, 201, extended.content)
+        self.assertEqual(task.schedule_revisions.get(revision_no=2).total_time_limit_seconds, 1500)
+
+    def test_open_class_without_sessions_cannot_shorten_per_question_limit(self):
+        self.experiment.time_mode = Experiment.TimeMode.PER_QUESTION
+        self.experiment.per_question_time_limit_seconds = 60
+        self.experiment.save()
+        plan, _ = self.preview_two_classes()
+        commit = self.client.post(
+            self.plan_url(plan, "commit/"),
+            data=json.dumps({"expected_revision": plan.plan_revision}),
+            content_type="application/json",
+        )
+        self.complete_operation(commit)
+        task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
+        task.schedule_revisions.filter(revision_no=1).update(opens_at=timezone.now() - timedelta(minutes=1))
+        url = f"/api/v1/teacher/class-tasks/{task.pk}/schedule-revisions/"
+
+        rejected = self.client.post(
+            url,
+            data=json.dumps({
+                "expected_revision": 1,
+                "per_question_time_limit_seconds": 30,
+                "reason": "旧页面缩短单题时间",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(rejected.status_code, 409, rejected.content)
+        self.assertEqual(task.schedule_revisions.count(), 1)
+
+        extended = self.client.post(
+            url,
+            data=json.dumps({
+                "expected_revision": 1,
+                "per_question_time_limit_seconds": 90,
+                "reason": "延长单题时间",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(extended.status_code, 201, extended.content)
+        self.assertEqual(task.schedule_revisions.get(revision_no=2).per_question_time_limit_seconds, 90)
+
     def test_closed_task_can_extend_then_reopen_after_manual_close_without_erasing_history(self):
         plan, _ = self.preview_two_classes()
         commit = self.client.post(

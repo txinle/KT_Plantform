@@ -2000,6 +2000,7 @@ def append_schedule_revision(
     if expected_revision is not None and expected_revision != current.revision_no:
         raise PublicationConflict("排期已被其他教师修改，请刷新后重试。", code="SCHEDULE_STALE")
     started = task.sessions.exists()
+    can_shorten = not started and current.opens_at is not None and now < current.opens_at
     if (started or (current.opens_at is not None and now >= current.opens_at) or reopen) and expected_revision is None:
         raise PublicationConflict("请刷新任务并使用当前排期版本提交。", code="SCHEDULE_STALE")
     if task.cancelled_at or task.invalidated_at:
@@ -2021,6 +2022,16 @@ def append_schedule_revision(
         closes_at = max(current.closes_at, now) + timedelta(minutes=extend_minutes)
     if closes_at is None:
         closes_at = current.closes_at
+    if (
+        not can_shorten
+        and current.closes_at is not None
+        and closes_at is not None
+        and closes_at < current.closes_at
+    ):
+        raise PublicationConflict(
+            "任务开始后只能延长本班截止时间；需要立即结束请使用提前结束。",
+            code="SCHEDULE_LOCKED",
+        )
     if reopen:
         opens_at = now
     elif opens_at is None:
@@ -2039,15 +2050,15 @@ def append_schedule_revision(
     if mode == "total":
         old_seconds = total_seconds or int(configuration.get("total_time_limit_minutes") or 0) * 60
         total_seconds = int(total_time_limit_minutes) * 60 if total_time_limit_minutes is not None else old_seconds
-        if started and total_seconds < old_seconds:
-            raise PublicationConflict("已有学生开始，实验总时限只能延长。", code="SCHEDULE_LOCKED")
+        if not can_shorten and total_seconds < old_seconds:
+            raise PublicationConflict("任务开始后实验总时限只能延长。", code="SCHEDULE_LOCKED")
     elif total_time_limit_minutes is not None:
         raise ValidationError("当前任务不是实验总时限模式。")
     if mode == "per_question":
         old_seconds = item_seconds or int(configuration.get("per_question_time_limit_seconds") or 0)
         item_seconds = int(per_question_time_limit_seconds) if per_question_time_limit_seconds is not None else old_seconds
-        if started and item_seconds < old_seconds:
-            raise PublicationConflict("已有学生开始，单题时限只能延长。", code="SCHEDULE_LOCKED")
+        if not can_shorten and item_seconds < old_seconds:
+            raise PublicationConflict("任务开始后单题时限只能延长。", code="SCHEDULE_LOCKED")
     elif per_question_time_limit_seconds is not None:
         raise ValidationError("当前任务不是单题时限模式。")
     return ScheduleRevision.objects.create(

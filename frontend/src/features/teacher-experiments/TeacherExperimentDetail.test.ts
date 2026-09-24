@@ -235,16 +235,16 @@ describe('TeacherExperimentDetail', () => {
     expect(mocks.api.classTasks).toHaveBeenCalledTimes(2)
   })
 
-  it('extends a closed class by five minutes using its current revision', async () => {
+  it('adds student minutes without changing the class cutoff after the task starts', async () => {
     mocks.api.detail.mockResolvedValue({
-      id: 11, name: '认知诊断实验', status: 'published', can_edit: false, can_manage: true,
-      time_mode_label: '实验总时限', total_time_limit_minutes: 45,
+      id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_edit: false, can_manage: true,
+      time_mode_label: '实验总时限', total_time_limit_minutes: 15,
     })
     mocks.api.classTasks.mockResolvedValue({ items: [{
       id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
-      opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-09-03T00:00:00Z',
-      business_status: 'closed', schedule_revision: 2,
-      total_time_limit_minutes: 45, per_question_time_limit_seconds: null,
+      opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-10-03T00:00:00Z',
+      business_status: 'open', schedule_revision: 2,
+      total_time_limit_minutes: 15, per_question_time_limit_seconds: null,
       recoverable_count: 3, grading: {}, available_actions: ['adjust_time'],
     }] })
     mocks.api.reviseSchedule.mockResolvedValue({ schedule_revision: 3 })
@@ -253,11 +253,129 @@ describe('TeacherExperimentDetail', () => {
 
     expect(wrapper.text()).toContain('可恢复 3 人')
     await wrapper.get('[data-action="adjust-time"]').trigger('click')
-    await wrapper.get('[data-action="extend-five-minutes"]').trigger('click')
+    expect(wrapper.text()).toContain('学生作答时间延长（当前时长：15 分钟）')
+    expect(wrapper.text()).toContain('延长本班实验截止时间')
+    expect(wrapper.text()).toContain('实际可答至个人时限与本班截止时间中较早者')
+    expect(wrapper.find('[data-action="extend-five-minutes"]').exists()).toBe(false)
+    expect((wrapper.get('[data-action="total-time-extension"]').element as HTMLInputElement).value).toBe('')
+    await wrapper.get('[data-action="total-time-extension"]').setValue('10')
+    expect(wrapper.text()).toContain('调整后：25 分钟')
+    await wrapper.get('.kt-time-adjust-panel input[maxlength="500"]').setValue('课堂补时')
+    await wrapper.get('form.kt-time-adjust-panel').trigger('submit')
     await flushPromises()
 
     expect(mocks.api.reviseSchedule).toHaveBeenCalledWith(31, expect.objectContaining({
-      expected_revision: 2, extend_minutes: 5,
+      expected_revision: 2, total_time_limit_minutes: 25,
+      reason: '课堂补时',
+    }))
+    expect(mocks.api.reviseSchedule.mock.calls[0]?.[1]).not.toHaveProperty('extend_minutes')
+    expect(mocks.api.reviseSchedule.mock.calls[0]?.[1]).not.toHaveProperty('closes_at')
+  })
+
+  it('uses the latest total limit when adding student minutes again', async () => {
+    mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true })
+    mocks.api.classTasks.mockResolvedValue({ items: [{
+      id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
+      opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-10-03T00:00:00Z',
+      business_status: 'open', schedule_revision: 3,
+      total_time_limit_minutes: 25, per_question_time_limit_seconds: null,
+      grading: {}, available_actions: ['adjust_time'],
+    }] })
+    mocks.api.reviseSchedule.mockResolvedValue({ schedule_revision: 4 })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+
+    await wrapper.get('[data-action="adjust-time"]').trigger('click')
+    await wrapper.get('[data-action="total-time-extension"]').setValue('5')
+    expect(wrapper.text()).toContain('调整后：30 分钟')
+    await wrapper.get('.kt-time-adjust-panel input[maxlength="500"]').setValue('再次补时')
+    await wrapper.get('form.kt-time-adjust-panel').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.api.reviseSchedule).toHaveBeenCalledWith(31, expect.objectContaining({
+      expected_revision: 3, total_time_limit_minutes: 30,
+    }))
+  })
+
+  it('adds seconds in per-question mode and allows a later class cutoff together', async () => {
+    mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true })
+    mocks.api.classTasks.mockResolvedValue({ items: [{
+      id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
+      opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-10-03T00:00:00Z',
+      business_status: 'open', schedule_revision: 2,
+      total_time_limit_minutes: null, per_question_time_limit_seconds: 30,
+      grading: {}, available_actions: ['adjust_time'],
+    }] })
+    mocks.api.reviseSchedule.mockResolvedValue({ schedule_revision: 3 })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+
+    await wrapper.get('[data-action="adjust-time"]').trigger('click')
+    expect(wrapper.text()).toContain('每题作答时间延长（当前时长：30 秒）')
+    await wrapper.get('[data-action="item-time-extension"]').setValue('15')
+    await wrapper.get('[data-action="class-cutoff"]').setValue('2026-10-04T00:00')
+    expect(wrapper.text()).toContain('调整后：45 秒')
+    await wrapper.get('.kt-time-adjust-panel input[maxlength="500"]').setValue('单题补时')
+    await wrapper.get('form.kt-time-adjust-panel').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.api.reviseSchedule).toHaveBeenCalledWith(31, expect.objectContaining({
+      expected_revision: 2, per_question_time_limit_seconds: 45,
+      closes_at: new Date('2026-10-04T00:00').toISOString(),
+    }))
+  })
+
+  it('keeps absolute time editing before a task starts', async () => {
+    mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true })
+    mocks.api.classTasks.mockResolvedValue({ items: [{
+      id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
+      opens_at: '2026-10-02T00:00:00Z', closes_at: '2026-10-03T00:00:00Z',
+      business_status: 'scheduled', schedule_revision: 1,
+      total_time_limit_minutes: 15, per_question_time_limit_seconds: null,
+      grading: {}, available_actions: ['revise_schedule', 'adjust_time'],
+    }] })
+    mocks.api.reviseSchedule.mockResolvedValue({ schedule_revision: 2 })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+
+    await wrapper.get('[data-action="revise-schedule"]').trigger('click')
+    expect(wrapper.find('[data-action="total-time-extension"]').exists()).toBe(false)
+    await wrapper.get('[data-action="total-time-limit"]').setValue('10')
+    await wrapper.get('[data-action="class-cutoff"]').setValue('2026-10-02T12:00')
+    await wrapper.get('form.kt-time-adjust-panel').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.api.reviseSchedule).toHaveBeenCalledWith(31, expect.objectContaining({
+      expected_revision: 1, total_time_limit_minutes: 10,
+      closes_at: new Date('2026-10-02T12:00').toISOString(),
+    }))
+    expect(mocks.api.reviseSchedule.mock.calls[0]?.[1]).not.toHaveProperty('opens_at')
+  })
+
+  it('reopens a naturally closed class with a later cutoff and no personal limit field', async () => {
+    mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true })
+    mocks.api.classTasks.mockResolvedValue({ items: [{
+      id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
+      opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-09-03T00:00:00Z',
+      business_status: 'closed', schedule_revision: 2,
+      total_time_limit_minutes: null, per_question_time_limit_seconds: null,
+      grading: {}, available_actions: ['adjust_time'],
+    }] })
+    mocks.api.reviseSchedule.mockResolvedValue({ schedule_revision: 3 })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+
+    await wrapper.get('[data-action="adjust-time"]').trigger('click')
+    expect(wrapper.text()).toContain('保存后重新开放；已提交答案不会解锁')
+    expect(wrapper.find('[data-action="total-time-extension"]').exists()).toBe(false)
+    expect(wrapper.find('[data-action="item-time-extension"]').exists()).toBe(false)
+    await wrapper.get('[data-action="class-cutoff"]').setValue('2026-10-03T00:00')
+    await wrapper.get('.kt-time-adjust-panel input[maxlength="500"]').setValue('课堂恢复')
+    await wrapper.get('form.kt-time-adjust-panel').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.api.reviseSchedule).toHaveBeenCalledWith(31, expect.objectContaining({
+      expected_revision: 2, reopen: true, closes_at: new Date('2026-10-03T00:00').toISOString(),
     }))
   })
 
