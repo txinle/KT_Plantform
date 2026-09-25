@@ -3682,6 +3682,9 @@ export interface components {
             setup_status: components["schemas"]["SetupStatusEnum"];
             missing_requirements: string[];
             blocking_issues: components["schemas"]["PublishPlanBlockingIssue"][];
+            can_preview: boolean;
+            global_inventory: components["schemas"]["PublishPlanGlobalInventory"];
+            student_inventory: components["schemas"]["PublishPlanStudentInventory"];
             field_errors: {
                 [key: string]: unknown;
             };
@@ -3697,9 +3700,13 @@ export interface components {
         PublishPlanBlockingIssue: {
             code: string;
             message: string;
+            scope?: string;
             class_id: number | null;
             kc_id: number | null;
             field: string | null;
+            question_type?: string;
+            requested?: number;
+            available?: number;
             ancestor_kc_id?: number;
             ancestor_kc_path?: string;
             descendant_kc_id?: number;
@@ -3729,6 +3736,17 @@ export interface components {
             /** Format: date-time */
             closes_at: string | null;
         };
+        PublishPlanGlobalInventory: {
+            scope: string;
+            candidate_count: number;
+            requested_count: number;
+            question_types: components["schemas"]["PublishPlanGlobalQuestionType"][];
+        };
+        PublishPlanGlobalQuestionType: {
+            question_type: string;
+            requested: number;
+            available: number;
+        };
         PublishPlanReview: {
             plan: components["schemas"]["PublishPlan"];
             preview: components["schemas"]["PublishPreviewSummary"];
@@ -3747,6 +3765,20 @@ export interface components {
             classes: components["schemas"]["PublishPlanClassSelection"][];
             default_schedule: components["schemas"]["PublishPlanDefaultSchedule"];
             schedules: components["schemas"]["PublishPlanSchedule"][];
+        };
+        PublishPlanStudentInventory: {
+            scope: string;
+            checked: boolean;
+            participant_count: number;
+            minimum_candidate_count: number;
+            question_types: components["schemas"]["PublishPlanStudentQuestionType"][];
+            blocking_issue_count: number;
+        };
+        PublishPlanStudentQuestionType: {
+            question_type: string;
+            requested: number;
+            minimum_available: number;
+            insufficient_student_count: number;
         };
         PublishPreviewSummary: {
             id: number;
@@ -5336,6 +5368,7 @@ export interface components {
             match_scope: components["schemas"]["MatchScopeEnum"];
         };
         TeacherSamplingInventoryResponse: {
+            scope: string;
             candidate_count: number;
             question_types: components["schemas"]["TeacherSamplingInventoryQuestionType"][];
             kc_counts: components["schemas"]["TeacherSamplingInventoryKC"][];

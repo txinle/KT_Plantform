@@ -419,7 +419,7 @@ onMounted(load)
         <p v-if="fieldErrors.sampling_kcs" class="kt-field__error" role="alert">{{ fieldErrors.sampling_kcs }}</p>
         <Alert v-if="samplingChanged && !legacySampling" tone="warning">抽题配置尚未保存。保存后将按当前题库、匹配层级和配额重新进行发布预检。</Alert>
         <div v-if="readiness && !legacySampling && !samplingChanged" aria-label="已保存抽题配置库存预检">
-          <Alert :tone="readiness.ready ? 'success' : 'danger'">已保存配置：计划抽取 {{ readiness.requested_count ?? '—' }} 题，当前候选 {{ readiness.candidate_count }} 题。<span v-if="readiness.issues.length"> {{ readiness.issues.join('；') }}</span></Alert>
+          <Alert :tone="readiness.ready ? 'success' : 'danger'">已保存配置：计划抽取 {{ readiness.requested_count ?? '—' }} 题，题库全局候选 {{ readiness.candidate_count }} 题，尚未按学生历史过滤。<span v-if="readiness.issues.length"> {{ readiness.issues.join('；') }}</span></Alert>
           <table v-if="readiness.inventory_buckets.length" class="kt-table"><thead><tr><th>KC</th><th>匹配层级</th><th>计划题数</th><th>可用题数</th></tr></thead><tbody><tr v-for="bucket in readiness.inventory_buckets" :key="bucket.kc_code"><td><span class="kt-mono">{{ bucket.kc_code }}</span> {{ bucket.kc_name }}</td><td>{{ bucket.match_scope === 'primary' ? '仅根 KC' : '任意层级' }}</td><td>{{ bucket.requested ?? '范围' }}</td><td>{{ bucket.available }}</td></tr></tbody></table>
           <small class="kt-muted">库存数据对应当前已保存版本；保存本页更改后会重新计算。</small>
         </div>
@@ -432,7 +432,7 @@ onMounted(load)
         <fieldset class="kt-history-policy-fieldset">
           <legend>历史题目策略</legend>
           <div class="kt-history-policy-grid">
-            <label data-history-policy :class="{ 'is-selected': form.cross_experiment_item_policy === 'exclude_previous' }"><input v-model="form.cross_experiment_item_policy" name="cross_experiment_item_policy" type="radio" value="exclude_previous"><span><strong>排除已正式作答题目</strong><small>推荐</small><em>排除该学生同课程中已正式提交的原题，并避开其他有效任务已冻结分配的原题。</em></span></label>
+            <label data-history-policy :class="{ 'is-selected': form.cross_experiment_item_policy === 'exclude_previous' }"><input v-model="form.cross_experiment_item_policy" name="cross_experiment_item_policy" type="radio" value="exclude_previous"><span><strong>排除已提交或已分配题目</strong><small>推荐</small><em>排除该学生同课程已正式提交或其他正式任务曾分配的原题，包括已结束任务。</em></span></label>
             <label data-history-policy :class="{ 'is-selected': form.cross_experiment_item_policy === 'mixed_review' }"><input v-model="form.cross_experiment_item_policy" name="cross_experiment_item_policy" type="radio" value="mixed_review"><span><strong>混合复测</strong><em>精确抽取指定数量的历史正式作答题，其余使用未正式作答题。</em></span></label>
             <label data-history-policy :class="{ 'is-selected': form.cross_experiment_item_policy === 'unrestricted' }"><input v-model="form.cross_experiment_item_policy" name="cross_experiment_item_policy" type="radio" value="unrestricted"><span><strong>不限制历史题目</strong><em>不依据历史作答或其他任务题单排除原题。</em></span></label>
           </div>
@@ -441,10 +441,10 @@ onMounted(load)
           <FormField for-id="experiment-review-count" label="复测题数" :error="fieldErrors.review_count || reviewCountError"><input id="experiment-review-count" v-model.number="form.review_count" type="number" min="1" :max="Math.max(1, assignmentTotal - 1)"></FormField>
           <p data-review-summary>本次共 <strong>{{ assignmentTotal }}</strong> 题，其中复测 <strong>{{ Number(form.review_count || 0) }}</strong> 题，新题 <strong>{{ Math.max(0, assignmentTotal - Number(form.review_count || 0)) }}</strong> 题。</p>
         </div>
-        <p class="kt-history-policy-note">排除已正式作答题目和混合复测都会避开其他有效任务已经冻结分配的原题；复测只创建当前实验的新题单项与新作答记录。</p>
+        <p class="kt-history-policy-note">排除已提交或已分配题目会检查其他正式任务的历史题单；混合复测允许已提交题进入复测题组，复测会创建新的作答记录。</p>
         <div class="kt-history-resource-strip" role="status">
           <div class="kt-history-resource-strip__heading"><strong>个体题目资源检查</strong><small>选择班级后执行逐人检查</small></div>
-          <span>当前范围候选 <b>{{ samplingInventory?.candidate_count ?? '—' }}</b> 题</span>
+          <span>题库全局候选 <b>{{ samplingInventory?.candidate_count ?? '—' }}</b> 题，尚未按学生历史过滤</span>
           <span>本次需要 <b>{{ assignmentTotal || '—' }}</b> 题</span>
           <span>选择参与班级后，将检查每名学生的历史题、新题和有效任务占用。</span>
         </div>

@@ -8641,6 +8641,12 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PublishPlanBlockingIssue'
+        can_preview:
+          type: boolean
+        global_inventory:
+          $ref: '#/components/schemas/PublishPlanGlobalInventory'
+        student_inventory:
+          $ref: '#/components/schemas/PublishPlanStudentInventory'
         field_errors:
           type: object
           additionalProperties: {}
@@ -8664,6 +8670,7 @@ components:
             $ref: '#/components/schemas/PublishPlanClass'
       required:
       - blocking_issues
+      - can_preview
       - classes
       - current_step
       - default_closes_at
@@ -8671,17 +8678,21 @@ components:
       - experiment_id
       - expires_at
       - field_errors
+      - global_inventory
       - id
       - missing_requirements
       - plan_revision
       - setup_status
       - status
+      - student_inventory
     PublishPlanBlockingIssue:
       type: object
       properties:
         code:
           type: string
         message:
+          type: string
+        scope:
           type: string
         class_id:
           type: integer
@@ -8692,6 +8703,12 @@ components:
         field:
           type: string
           nullable: true
+        question_type:
+          type: string
+        requested:
+          type: integer
+        available:
+          type: integer
         ancestor_kc_id:
           type: integer
         ancestor_kc_path:
@@ -8772,6 +8789,41 @@ components:
       required:
       - closes_at
       - opens_at
+    PublishPlanGlobalInventory:
+      type: object
+      properties:
+        scope:
+          type: string
+        candidate_count:
+          type: integer
+          minimum: 0
+        requested_count:
+          type: integer
+          minimum: 0
+        question_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublishPlanGlobalQuestionType'
+      required:
+      - candidate_count
+      - question_types
+      - requested_count
+      - scope
+    PublishPlanGlobalQuestionType:
+      type: object
+      properties:
+        question_type:
+          type: string
+        requested:
+          type: integer
+          minimum: 0
+        available:
+          type: integer
+          minimum: 0
+      required:
+      - available
+      - question_type
+      - requested
     PublishPlanReview:
       type: object
       properties:
@@ -8827,6 +8879,52 @@ components:
       - default_schedule
       - expected_revision
       - schedules
+    PublishPlanStudentInventory:
+      type: object
+      properties:
+        scope:
+          type: string
+        checked:
+          type: boolean
+        participant_count:
+          type: integer
+          minimum: 0
+        minimum_candidate_count:
+          type: integer
+          minimum: 0
+        question_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublishPlanStudentQuestionType'
+        blocking_issue_count:
+          type: integer
+          minimum: 0
+      required:
+      - blocking_issue_count
+      - checked
+      - minimum_candidate_count
+      - participant_count
+      - question_types
+      - scope
+    PublishPlanStudentQuestionType:
+      type: object
+      properties:
+        question_type:
+          type: string
+        requested:
+          type: integer
+          minimum: 0
+        minimum_available:
+          type: integer
+          minimum: 0
+        insufficient_student_count:
+          type: integer
+          minimum: 0
+      required:
+      - insufficient_student_count
+      - minimum_available
+      - question_type
+      - requested
     PublishPreviewSummary:
       type: object
       properties:
@@ -12962,6 +13060,8 @@ components:
     TeacherSamplingInventoryResponse:
       type: object
       properties:
+        scope:
+          type: string
         candidate_count:
           type: integer
           minimum: 0
@@ -12977,6 +13077,7 @@ components:
       - candidate_count
       - kc_counts
       - question_types
+      - scope
     TeacherSessionReport:
       type: object
       properties:

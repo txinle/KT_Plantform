@@ -633,6 +633,7 @@ class TeacherSamplingInventoryKCSerializer(serializers.Serializer):
 
 
 class TeacherSamplingInventoryResponseSerializer(serializers.Serializer):
+    scope = serializers.CharField()
     candidate_count = serializers.IntegerField(min_value=0)
     question_types = TeacherSamplingInventoryQuestionTypeSerializer(many=True)
     kc_counts = TeacherSamplingInventoryKCSerializer(many=True)
@@ -652,15 +653,48 @@ class PublishPlanClassSerializer(serializers.Serializer):
 class PublishPlanBlockingIssueSerializer(serializers.Serializer):
     code = serializers.CharField()
     message = serializers.CharField()
+    scope = serializers.CharField(required=False)
     class_id = serializers.IntegerField(allow_null=True)
     kc_id = serializers.IntegerField(allow_null=True)
     field = serializers.CharField(allow_null=True)
+    question_type = serializers.CharField(required=False)
+    requested = serializers.IntegerField(required=False)
+    available = serializers.IntegerField(required=False)
     ancestor_kc_id = serializers.IntegerField(required=False)
     ancestor_kc_path = serializers.CharField(required=False)
     descendant_kc_id = serializers.IntegerField(required=False)
     descendant_kc_path = serializers.CharField(required=False)
     student_id = serializers.IntegerField(required=False)
     student_number = serializers.CharField(required=False, allow_blank=True)
+
+
+class PublishPlanGlobalQuestionTypeSerializer(serializers.Serializer):
+    question_type = serializers.CharField()
+    requested = serializers.IntegerField(min_value=0)
+    available = serializers.IntegerField(min_value=0)
+
+
+class PublishPlanStudentQuestionTypeSerializer(serializers.Serializer):
+    question_type = serializers.CharField()
+    requested = serializers.IntegerField(min_value=0)
+    minimum_available = serializers.IntegerField(min_value=0)
+    insufficient_student_count = serializers.IntegerField(min_value=0)
+
+
+class PublishPlanGlobalInventorySerializer(serializers.Serializer):
+    scope = serializers.CharField()
+    candidate_count = serializers.IntegerField(min_value=0)
+    requested_count = serializers.IntegerField(min_value=0)
+    question_types = PublishPlanGlobalQuestionTypeSerializer(many=True)
+
+
+class PublishPlanStudentInventorySerializer(serializers.Serializer):
+    scope = serializers.CharField()
+    checked = serializers.BooleanField()
+    participant_count = serializers.IntegerField(min_value=0)
+    minimum_candidate_count = serializers.IntegerField(min_value=0)
+    question_types = PublishPlanStudentQuestionTypeSerializer(many=True)
+    blocking_issue_count = serializers.IntegerField(min_value=0)
 
 
 class PublishPlanSerializer(serializers.Serializer):
@@ -671,6 +705,9 @@ class PublishPlanSerializer(serializers.Serializer):
     setup_status = serializers.ChoiceField(choices=("empty", "incomplete", "complete"))
     missing_requirements = serializers.ListField(child=serializers.CharField())
     blocking_issues = PublishPlanBlockingIssueSerializer(many=True)
+    can_preview = serializers.BooleanField()
+    global_inventory = PublishPlanGlobalInventorySerializer()
+    student_inventory = PublishPlanStudentInventorySerializer()
     field_errors = serializers.DictField()
     plan_revision = serializers.IntegerField(min_value=1)
     expires_at = serializers.DateTimeField()

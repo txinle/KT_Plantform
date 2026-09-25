@@ -5,6 +5,48 @@ import { resolve } from 'node:path'
 const origin = 'http://127.0.0.1:8000'
 const requestedOutputDir = process.env.KT_VISUAL_OUTPUT_DIR
 
+test('publish setup shows student shortage without a stale success state', async ({ page }, testInfo) => {
+  await login(page)
+  await page.goto(`${origin}/teacher/courses/1/experiments/create/`)
+  await page.getByLabel('实验名称', { exact: true }).fill(`学生题量阻断 ${Date.now()}`)
+  await page.getByLabel('题库', { exact: true }).selectOption({ index: 1 })
+  await page.getByLabel('每位参与者题目数', { exact: true }).fill('1')
+  await page.locator('input[name="cross_experiment_item_policy"][value="unrestricted"]').check()
+  await page.getByRole('button', { name: '保存草稿', exact: true }).click()
+  await page.getByRole('button', { name: '发布到班级', exact: true }).click()
+  await page.locator('[id^="publish-class-"]').first().check()
+  await page.getByRole('button', { name: '保存草稿', exact: true }).click()
+  await expect(page.getByText('设置完整，可以执行发布检查。')).toBeVisible()
+
+  await page.route(/\/api\/v1\/teacher\/publish-plans\/\d+\/$/, async (route) => {
+    const response = await route.fetch()
+    const plan = await response.json()
+    plan.setup_status = 'complete'
+    plan.can_preview = false
+    plan.blocking_issues = [
+      { code: 'QUESTION_TYPE_QUOTA_INSUFFICIENT', scope: 'student', class_id: plan.classes[0].class_id, kc_id: null, field: 'sampling_type_quotas', student_id: 3, student_number: 'S001', question_type: 'numeric', requested: 3, available: 1, message: '学生 S001 的数值题需要 3 题，排除历史题后可用 1 题。' },
+      { code: 'QUESTION_TYPE_QUOTA_INSUFFICIENT', scope: 'student', class_id: plan.classes[0].class_id, kc_id: null, field: 'sampling_type_quotas', student_id: 4, student_number: 'S002', question_type: 'numeric', requested: 3, available: 2, message: '学生 S002 的数值题需要 3 题，排除历史题后可用 2 题。' },
+    ]
+    plan.global_inventory = { scope: 'question_bank', candidate_count: 129, requested_count: 52, question_types: [{ question_type: 'numeric', requested: 3, available: 3 }] }
+    plan.student_inventory = { scope: 'selected_participants', checked: true, participant_count: 2, minimum_candidate_count: 41, question_types: [{ question_type: 'numeric', requested: 3, minimum_available: 1, insufficient_student_count: 2 }], blocking_issue_count: 2 }
+    await route.fulfill({ response, json: plan })
+  })
+  await page.reload()
+  await expect(page.getByText('设置完整，可以执行发布检查。')).toHaveCount(0)
+  await expect(page.getByText('当前设置无法发布', { exact: false })).toBeVisible()
+  await expect(page.getByText('题库全局候选')).toBeVisible()
+  await page.locator('details summary').first().focus()
+  await page.keyboard.press('Enter')
+  await expect(page.getByText('学生 S002 的数值题需要 3 题', { exact: false })).toBeVisible()
+  for (const [name, width, height] of [
+    ['desktop', 1440, 900], ['mobile', 390, 844], ['zoom-equivalent', 720, 450],
+  ] as const) {
+    await page.setViewportSize({ width, height })
+    await capture(page, testInfo, `student-shortage-${name}.png`)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1)
+  }
+})
+
 test('KC quota inventory agrees with saved preflight and permits publication', async ({ page }, testInfo) => {
   test.setTimeout(90_000)
   await login(page)

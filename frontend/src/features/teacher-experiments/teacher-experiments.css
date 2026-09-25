@@ -186,6 +186,14 @@
 .kt-teacher-experiments .kt-publish-stepper li.is-current span { border-color: var(--kt-action-600); background: var(--kt-action-600); color: var(--kt-surface); }
 .kt-teacher-experiments .kt-publish-stepper li.is-complete { color: var(--kt-success); }
 .kt-teacher-experiments .kt-publish-plan-panel { padding: 1.05rem 0.4rem 1.15rem; }
+.kt-teacher-experiments .kt-publish-inventory { padding: 1rem 1.05rem 1.1rem; }
+.kt-teacher-experiments .kt-publish-inventory__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin: 0.8rem 0; }
+.kt-teacher-experiments .kt-publish-inventory__grid > div { display: grid; gap: 0.2rem; padding: 0.75rem; border: 1px solid var(--kt-surface-subtle); background: var(--kt-surface-muted); }
+.kt-teacher-experiments .kt-publish-inventory__grid span { color: var(--kt-muted); font-size: 0.88rem; }
+.kt-teacher-experiments .kt-publish-inventory__table { min-width: 29rem; margin-top: 0.65rem; }
+@media (max-width: 720px) {
+  .kt-teacher-experiments .kt-publish-inventory__grid { grid-template-columns: 1fr; }
+}
 .kt-teacher-experiments .kt-publish-plan-panel > .kt-section-heading,
 .kt-teacher-experiments .kt-publish-plan-panel > .kt-publish-roster { margin-inline: 1rem; }
 .kt-teacher-experiments .kt-publish-batch-schedule { display: grid; grid-template-columns: minmax(12rem, 1fr) minmax(12rem, 1fr) minmax(13rem, 1.25fr); gap: 0.9rem; align-items: end; padding: 0 1rem 1rem; border-bottom: 1px solid var(--kt-surface-subtle); }

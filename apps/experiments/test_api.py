@@ -17,7 +17,7 @@ from apps.question_bank.models import (
     QuestionBank,
     QuestionConcept,
 )
-from apps.assessment.models import AssessmentEvent, Attempt, ExperimentSession
+from apps.assessment.models import AssessmentEvent, Attempt, ExperimentSession, StudentQuestionAssignment
 from apps.assessment.deadline_services import DeadlineDecisionService
 from apps.assessment.services import get_or_create_session, record_visit, resume_task_session, save_draft, submit_attempt, _terminate_for_deadline
 from apps.assessment.test_support import accept_research_consent
@@ -28,9 +28,12 @@ from .models import (
     ClassExperimentTask,
     Experiment,
     ExperimentSamplingKC,
+    ExperimentVersion,
     PublishPlan,
     PublishOperationJob,
+    QuestionSnapshot,
 )
+from .presentation_instances import get_or_create_default_item_instance
 from .publication_jobs import run_publish_operation
 
 
@@ -1288,6 +1291,10 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(response.json()["setup_status"], "complete")
         self.assertEqual(response.json()["missing_requirements"], [])
+        self.assertTrue(response.json()["can_preview"])
+        self.assertEqual(response.json()["global_inventory"]["scope"], "question_bank")
+        self.assertEqual(response.json()["global_inventory"]["candidate_count"], 1)
+        self.assertEqual(response.json()["student_inventory"]["participant_count"], 2)
         self.assertEqual(
             [row["schedule_mode"] for row in response.json()["classes"]],
             ["default", "default"],
@@ -1298,6 +1305,47 @@ class TeacherPublishPlanApiTests(TestCase):
                 for row in response.json()["classes"]
             )
         )
+
+    def test_saved_setup_returns_student_history_shortage_when_global_stock_is_sufficient(self):
+        self.experiment.cross_experiment_item_policy = Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS
+        self.experiment.save(update_fields=["cross_experiment_item_policy"])
+        prior = Experiment.objects.create(
+            name="历史任务", course=self.course, question_bank=self.experiment.question_bank,
+            owner=self.teacher, created_by=self.teacher,
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT, sampling_total_count=1,
+        )
+        version = ExperimentVersion.objects.create(
+            experiment=prior, version_number=1, published_by=self.teacher,
+        )
+        question = self.experiment.question_bank.questions.get()
+        snapshot = QuestionSnapshot.objects.create(
+            version=version, source_question=question,
+            source_sequence=question.sequence, code=question.code,
+            question_type=question.question_type, text=question.text,
+            correct_answer=question.correct_answer,
+        )
+        student = CourseEnrollment.objects.get(class_group=self.class_a).student
+        session = ExperimentSession.objects.create(version=version, student=student)
+        StudentQuestionAssignment.objects.create(
+            session=session, snapshot=snapshot,
+            item_instance=get_or_create_default_item_instance(snapshot),
+            assigned_sequence_index=1,
+        )
+        plan, _ = self.start_plan()
+        response = self.put_setup(plan, {
+            "expected_revision": plan.plan_revision,
+            "classes": [{"class_id": self.class_a.pk, "excluded_student_ids": []}],
+            "default_schedule": {"opens_at": None, "closes_at": None},
+            "schedules": [],
+        })
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertEqual(payload["setup_status"], "complete")
+        self.assertFalse(payload["can_preview"])
+        self.assertEqual(payload["global_inventory"]["candidate_count"], 1)
+        self.assertEqual(payload["student_inventory"]["minimum_candidate_count"], 0)
+        self.assertEqual(payload["blocking_issues"][0]["student_id"], student.pk)
+        self.assertEqual(payload["blocking_issues"][0]["available"], 0)
 
     def test_plan_projects_a_specific_blocker_for_an_empty_selected_class(self):
         empty_class = ClassGroup.objects.create(

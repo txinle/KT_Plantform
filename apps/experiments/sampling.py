@@ -14,6 +14,29 @@ class SamplingValidationError(ValidationError):
         super().__init__([issue["message"] for issue in issues])
 
 
+def question_allowed_by_history(
+    question_id,
+    policy,
+    *,
+    completed_question_ids,
+    assigned_question_ids,
+    active_frozen_question_ids,
+):
+    if policy == Experiment.CrossExperimentItemPolicy.UNRESTRICTED:
+        return True
+    if question_id in active_frozen_question_ids:
+        return False
+    if policy == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW:
+        return (
+            question_id not in assigned_question_ids
+            or question_id in completed_question_ids
+        )
+    return (
+        question_id not in completed_question_ids
+        and question_id not in assigned_question_ids
+    )
+
+
 @dataclass(frozen=True)
 class SamplingResolution:
     candidates: list
@@ -138,6 +161,7 @@ class SamplingService:
         experiment,
         *,
         completed_question_ids=None,
+        assigned_question_ids=None,
         active_frozen_question_ids=None,
         prepared_candidates=None,
         prepared_rules=None,
@@ -145,6 +169,7 @@ class SamplingService:
     ):
         self.experiment = experiment
         self.completed_question_ids = frozenset(completed_question_ids or ())
+        self.assigned_question_ids = frozenset(assigned_question_ids or ())
         self.active_frozen_question_ids = frozenset(active_frozen_question_ids or ())
         self.prepared_candidates = prepared_candidates
         self.prepared_rules = prepared_rules
@@ -167,14 +192,14 @@ class SamplingService:
         return sum(self.experiment.sampling_kcs.values_list("quota", flat=True))
 
     def _filter_candidates(self, candidates):
-        if self.policy == Experiment.CrossExperimentItemPolicy.UNRESTRICTED:
-            return list(candidates)
         return [
             question for question in candidates
-            if question.pk not in self.active_frozen_question_ids
-            and (
-                self.policy == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
-                or question.pk not in self.completed_question_ids
+            if question_allowed_by_history(
+                question.pk,
+                self.policy,
+                completed_question_ids=self.completed_question_ids,
+                assigned_question_ids=self.assigned_question_ids,
+                active_frozen_question_ids=self.active_frozen_question_ids,
             )
         ]
 

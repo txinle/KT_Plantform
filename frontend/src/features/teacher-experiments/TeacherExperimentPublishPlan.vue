@@ -50,6 +50,7 @@ const notice = ref('')
 const confirmCommit = ref(false)
 const scheduleEditClassId = ref<number>()
 const rosterExpanded = ref(false)
+const savedSetupFingerprint = ref('')
 const activeJob = ref<PublishOperationJob>()
 const courseName = computed(() => course?.value?.name || '课程')
 const configuredScheduleCount = computed(() => review.value?.plan.classes.length ?? 0)
@@ -190,6 +191,7 @@ async function load() {
     hydratePlan(nextPlan)
     if (step.value === 2) review.value = await api.review(planId)
     await loadParticipants()
+    savedSetupFingerprint.value = setupFingerprint.value
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '发布计划加载失败。'
   } finally {
@@ -228,6 +230,20 @@ function setupInput(): PublishPlanSetupInput {
   }
 }
 
+const setupFingerprint = computed(() => {
+  const input = setupInput()
+  return JSON.stringify({
+    classes: input.classes,
+    default_schedule: input.default_schedule,
+    schedules: input.schedules,
+  })
+})
+const hasUnsavedChanges = computed(() => !!savedSetupFingerprint.value && setupFingerprint.value !== savedSetupFingerprint.value)
+const questionTypeLabels: Record<string, string> = {
+  single_choice: '单选题', multiple_choice: '多选题', numeric: '数值题',
+  short_answer: '简答题', fill_blank: '填空题', true_false: '判断题',
+}
+
 async function recover(caught: unknown, fallback: string) {
   if (caught instanceof ApiError && caught.code === 'PUBLISH_PLAN_STALE') {
     notice.value = '计划已在其他页面更新，已重新载入最新版本。'
@@ -257,7 +273,8 @@ async function saveDraft(showNotice = true) {
     const saved = await api.saveSetup(planId, setupInput())
     hydratePlan(saved)
     await loadParticipants()
-    if (showNotice) notice.value = '草稿已保存。你可以退出后继续。'
+    savedSetupFingerprint.value = setupFingerprint.value
+    if (showNotice && !saved.blocking_issues.length) notice.value = '草稿已保存。你可以退出后继续。'
     return saved
   } catch (caught) {
     await recover(caught, '发布设置保存失败。')
@@ -271,7 +288,6 @@ async function runPreview() {
   const saved = await saveDraft(false)
   if (!saved) return
   if (saved.blocking_issues.length) {
-    error.value = saved.blocking_issues.map((issue) => issue.message).join('；')
     return
   }
   working.value = true
@@ -395,15 +411,34 @@ onMounted(async () => {
 
   <p v-if="loading" role="status">正在加载发布计划…</p>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
-  <Alert v-if="notice" tone="success">{{ notice }}</Alert>
+  <Alert v-if="notice && !hasUnsavedChanges" tone="success">{{ notice }}</Alert>
   <Alert v-if="activeJob" tone="info" role="status">
     {{ jobStageLabels[activeJob.stage] || '后台处理中' }}：
     {{ activeJob.processed }}/{{ activeJob.total }}
   </Alert>
 
   <template v-if="!loading && plan && step === 1">
-    <Alert v-if="plan.blocking_issues.length" tone="danger">{{ plan.blocking_issues.map((issue) => issue.message).join('；') }}</Alert>
-    <Alert v-else :tone="plan.setup_status === 'complete' ? 'success' : 'warning'">{{ plan.setup_status === 'complete' ? '设置完整，可以执行发布检查。' : '当前草稿尚不完整，仍可保存并稍后继续。' }}<span v-if="plan.missing_requirements.length">缺少：{{ plan.missing_requirements.join('、') }}</span></Alert>
+    <Alert v-if="hasUnsavedChanges" tone="warning">班级、排除名单或排期有未保存的修改。保存草稿后会重新检查学生可用题量。</Alert>
+    <Alert v-else-if="plan.blocking_issues.length" tone="danger">
+      当前设置无法发布，共 {{ plan.blocking_issues.length }} 项问题。{{ plan.blocking_issues[0]?.message }}
+      <details v-if="plan.blocking_issues.length > 1"><summary>查看全部学生与题型明细</summary><ul><li v-for="(issue, index) in plan.blocking_issues" :key="`${issue.code}-${issue.student_id || 0}-${index}`">{{ issue.message }}</li></ul></details>
+    </Alert>
+    <Alert v-else-if="!error && plan.can_preview === true" tone="success">设置完整，可以执行发布检查。</Alert>
+    <Alert v-else-if="!error" tone="warning">当前草稿尚不完整，仍可保存并稍后继续。<span v-if="plan.missing_requirements.length">缺少：{{ plan.missing_requirements.join('、') }}</span></Alert>
+
+    <section v-if="plan.global_inventory?.candidate_count || plan.student_inventory?.checked" class="kt-card kt-publish-inventory" aria-labelledby="publish-inventory-title">
+      <div class="kt-section-heading"><div><h2 id="publish-inventory-title">抽题库存检查</h2><p>全局候选未按学生历史过滤；学生级库存用于本次发布资格判断。</p></div></div>
+      <div class="kt-publish-inventory__grid">
+        <div><strong>题库全局候选</strong><span>{{ plan.global_inventory?.candidate_count ?? 0 }} 道，计划 {{ plan.global_inventory?.requested_count ?? 0 }} 道</span></div>
+        <div><strong>本次学生过滤后</strong><span v-if="plan.student_inventory?.checked">{{ plan.student_inventory.minimum_candidate_count }} 道（参与者 {{ plan.student_inventory.participant_count }} 人）</span><span v-else>选择班级后检查</span></div>
+      </div>
+      <div v-if="plan.student_inventory?.checked && plan.student_inventory.question_types.length" class="kt-table-scroll">
+        <table class="kt-table kt-publish-inventory__table">
+          <thead><tr><th>题型</th><th>全局可用</th><th>本次最低可用</th><th>不足学生</th></tr></thead>
+          <tbody><tr v-for="row in plan.student_inventory?.question_types || []" :key="String(row.question_type)"><td>{{ questionTypeLabels[String(row.question_type)] || row.question_type }}</td><td>{{ plan.global_inventory?.question_types.find((item) => item.question_type === row.question_type)?.available ?? 0 }}</td><td>{{ row.minimum_available }}</td><td>{{ row.insufficient_student_count }}</td></tr></tbody>
+        </table>
+      </div>
+    </section>
 
     <section class="kt-card kt-publish-plan-panel" aria-labelledby="publish-classes">
       <div class="kt-publish-batch-schedule">
@@ -437,7 +472,7 @@ onMounted(async () => {
       <div class="kt-publish-precheck__metrics"><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="classes" :size="19" /></span><strong>{{ review.preview.class_count }}</strong><span>参与班级</span></div><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="data" :size="19" /></span><strong>{{ review.preview.participant_count }}</strong><span>参与者</span></div><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="definition" :size="19" /></span><strong>{{ review.preview.item_count }}</strong><span>分配题目</span></div><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="publish" :size="19" /></span><strong>{{ configuredScheduleCount }}</strong><span>已配置排期</span></div><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="status" :size="19" /></span><strong>{{ review.preview.randomization_validation }}</strong><span>随机化校验</span></div></div>
       <h2 id="precheck-title">发布前检查结果</h2>
       <section class="kt-card kt-precheck-results"><div class="kt-section-heading"><h3>系统检查结果</h3><StatusBadge label="检查完成" tone="success" /></div><ul class="kt-precheck-effects"><li v-for="effect in review.effects" :key="effect">{{ effect }}</li><li v-if="!review.effects.length">{{ review.preview.randomization_validation }}</li></ul><details class="kt-randomization-details"><summary>查看随机化详情</summary><p>{{ review.preview.randomization_validation }}</p><p>预览版本：{{ review.preview.plan_revision }}</p></details></section>
-      <section class="kt-card kt-precheck-participants"><div class="kt-section-heading"><div><h3>参与者检查结果</h3><p>{{ experiment?.cross_experiment_item_policy === 'mixed_review' ? `混合复测：每人复测 ${experiment.review_count} 题` : (experiment?.cross_experiment_item_policy === 'exclude_previous' ? '排除已正式作答题目及其他有效任务题单' : '不限制历史题目') }}</p></div><a :href="api.participantExportUrl(planId)">导出 CSV</a></div><div class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>学号</th><th>姓名</th><th>题数</th><th>复测题</th><th>新题</th><th>校验</th></tr></thead><tbody><tr v-for="participant in participants" :key="participant.id"><td>{{ participant.class_name }}</td><td>{{ participant.student_number }}</td><td>{{ participant.display_name }}</td><td>{{ participant.item_count }}</td><td>{{ participant.review_item_count }}</td><td>{{ participant.new_item_count }}</td><td>{{ participant.is_valid ? '有效' : '需处理' }}</td></tr></tbody></table></div></section>
+      <section class="kt-card kt-precheck-participants"><div class="kt-section-heading"><div><h3>参与者检查结果</h3><p>{{ experiment?.cross_experiment_item_policy === 'mixed_review' ? `混合复测：每人复测 ${experiment.review_count} 题` : (experiment?.cross_experiment_item_policy === 'exclude_previous' ? '排除已提交或其他正式任务曾分配的题目' : '不限制历史题目') }}</p></div><a :href="api.participantExportUrl(planId)">导出 CSV</a></div><div class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>学号</th><th>姓名</th><th>题数</th><th>复测题</th><th>新题</th><th>校验</th></tr></thead><tbody><tr v-for="participant in participants" :key="participant.id"><td>{{ participant.class_name }}</td><td>{{ participant.student_number }}</td><td>{{ participant.display_name }}</td><td>{{ participant.item_count }}</td><td>{{ participant.review_item_count }}</td><td>{{ participant.new_item_count }}</td><td>{{ participant.is_valid ? '有效' : '需处理' }}</td></tr></tbody></table></div></section>
       <Alert tone="info">本次预览使用服务端返回的发布计划和检查结果；正式提交会使用同一计划版本。</Alert>
       <div class="kt-publish-actions kt-publish-actions--center"><a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/1/`">返回班级与排期</a><Button data-action="enter-confirmation" @click="confirmCommit = true">进入发布确认</Button></div>
     </section>
@@ -446,7 +481,7 @@ onMounted(async () => {
       <h2 id="confirmation-title">发布确认</h2>
       <p>请确认本次将创建的班级任务；提交后将跳转回实验详情。</p>
       <div class="kt-publish-confirmation-grid">
-        <section class="kt-card"><h3>实验定义</h3><dl v-if="experiment" class="kt-description-list kt-definition-summary__list"><div><dt>题库</dt><dd>{{ experiment.question_bank?.name || '未选择题库' }}</dd></div><div><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}<span v-if="experiment.sampling_mode === 'total_count'"> · {{ experiment.sampling_total_count }} 题</span></dd></div><div><dt>跨实验题目</dt><dd>{{ experiment.cross_experiment_item_policy === 'mixed_review' ? `混合复测 · ${experiment.review_count} 题` : (experiment.cross_experiment_item_policy === 'exclude_previous' ? '排除已正式作答题目' : '不限制历史题目') }}</dd></div><div><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div><div><dt>反馈</dt><dd>{{ experiment.feedback_mode_label }}</dd></div><div><dt>总限时</dt><dd>{{ displayLimit(experiment.total_time_limit_minutes, '分钟') }}</dd></div><div><dt>单题限时</dt><dd>{{ displayLimit(experiment.per_question_time_limit_seconds, '秒') }}</dd></div><div><dt>中断续答</dt><dd>{{ experiment.resume_mode_label }}</dd></div><div><dt>作答信心</dt><dd>{{ experiment.confidence_mode_label }}</dd></div></dl></section>
+        <section class="kt-card"><h3>实验定义</h3><dl v-if="experiment" class="kt-description-list kt-definition-summary__list"><div><dt>题库</dt><dd>{{ experiment.question_bank?.name || '未选择题库' }}</dd></div><div><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}<span v-if="experiment.sampling_mode === 'total_count'"> · {{ experiment.sampling_total_count }} 题</span></dd></div><div><dt>跨实验题目</dt><dd>{{ experiment.cross_experiment_item_policy === 'mixed_review' ? `混合复测 · ${experiment.review_count} 题` : (experiment.cross_experiment_item_policy === 'exclude_previous' ? '排除已提交或已分配题目' : '不限制历史题目') }}</dd></div><div><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div><div><dt>反馈</dt><dd>{{ experiment.feedback_mode_label }}</dd></div><div><dt>总限时</dt><dd>{{ displayLimit(experiment.total_time_limit_minutes, '分钟') }}</dd></div><div><dt>单题限时</dt><dd>{{ displayLimit(experiment.per_question_time_limit_seconds, '秒') }}</dd></div><div><dt>中断续答</dt><dd>{{ experiment.resume_mode_label }}</dd></div><div><dt>作答信心</dt><dd>{{ experiment.confidence_mode_label }}</dd></div></dl></section>
         <section class="kt-card"><h3>本次班级任务</h3><table class="kt-confirm-task-table"><thead><tr><th>班级</th><th>参与者</th><th>开放时段</th></tr></thead><tbody><tr v-for="row in review.plan.classes" :key="row.class_id"><td>{{ row.academic_year }} {{ row.class_name }}</td><td>{{ row.participant_count }}</td><td>{{ displayDate(row.opens_at) }} — {{ displayDate(row.closes_at) }}</td></tr></tbody></table></section>
       </div>
       <Alert tone="info">确认后将按本次检查过的发布计划创建正式班级任务和参与者快照。</Alert>

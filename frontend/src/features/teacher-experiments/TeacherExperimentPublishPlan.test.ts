@@ -76,6 +76,7 @@ describe('TeacherExperimentPublishPlan', () => {
       status: 'draft',
       current_step: 1,
       setup_status: 'complete',
+      can_preview: true,
       missing_requirements: [],
       blocking_issues: [],
       field_errors: {},
@@ -125,6 +126,58 @@ describe('TeacherExperimentPublishPlan', () => {
     expect(wrapper.get('.kt-publish-class-table').text()).toContain('36')
     expect(wrapper.get('.kt-publish-class-table').text()).toContain('开始')
     expect(wrapper.get('.kt-publish-class-table').text()).toContain('截止')
+  })
+
+  it('shows student-filtered inventory and never shows success with a blocking issue', async () => {
+    mocks.api.plan.mockResolvedValue({
+      id: 23, experiment_id: 11, status: 'draft', current_step: 1,
+      setup_status: 'complete', missing_requirements: [], can_preview: false,
+      blocking_issues: [{
+        code: 'QUESTION_TYPE_QUOTA_INSUFFICIENT', scope: 'student', class_id: 5, kc_id: null,
+        field: 'sampling_type_quotas', question_type: 'numeric', requested: 3, available: 1,
+        student_id: 9, student_number: 'A-001', message: '学生 A-001 的数值题需要 3 题，排除历史题后可用 1 题。',
+      }],
+      global_inventory: {
+        scope: 'question_bank', candidate_count: 129, requested_count: 52,
+        question_types: [{ question_type: 'numeric', requested: 3, available: 3 }],
+      },
+      student_inventory: {
+        scope: 'selected_participants', checked: true, participant_count: 1,
+        minimum_candidate_count: 41,
+        question_types: [{ question_type: 'numeric', requested: 3, minimum_available: 1, insufficient_student_count: 1 }],
+        blocking_issue_count: 1,
+      },
+      field_errors: {}, plan_revision: 2, expires_at: '2026-08-31T00:00:00Z',
+      default_opens_at: null, default_closes_at: null,
+      classes: [{ class_id: 5, class_name: '一班', academic_year: '2026', excluded_count: 0, participant_count: 1, schedule_mode: 'default', opens_at: null, closes_at: null }],
+    })
+    const wrapper = mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('学生 A-001 的数值题需要 3 题')
+    expect(wrapper.text()).toContain('题库全局候选')
+    expect(wrapper.text()).toContain('本次学生过滤后')
+    expect(wrapper.text()).not.toContain('设置完整，可以执行发布检查。')
+  })
+
+  it('hides a saved success result after a local class change or preview failure', async () => {
+    const wrapper = mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+    await wrapper.get('#publish-class-5').setValue(true)
+    await wrapper.get('[data-action="save-draft"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('设置完整，可以执行发布检查。')
+
+    await wrapper.get('#publish-class-5').setValue(false)
+    expect(wrapper.text()).not.toContain('设置完整，可以执行发布检查。')
+    expect(wrapper.text()).toContain('未保存的修改')
+
+    await wrapper.get('#publish-class-5').setValue(true)
+    mocks.api.preview.mockRejectedValueOnce(new Error('历史题量发生变化'))
+    await wrapper.get('[data-action="run-preview"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('历史题量发生变化')
+    expect(wrapper.text()).not.toContain('设置完整，可以执行发布检查。')
   })
 
   it('renders a draft with a deleted bank without crashing', async () => {

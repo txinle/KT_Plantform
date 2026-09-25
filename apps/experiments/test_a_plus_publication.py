@@ -45,12 +45,14 @@ from apps.experiments.models import (
     PublishOperationJob,
     PublishPlan,
     PublishPlanClass,
+    PublishPlanExclusion,
     PublishPreviewRun,
     QuestionSnapshot,
     ReleaseSnapshotQuestionMapping,
     ScheduleRevision,
 )
 from apps.experiments.publication_jobs import claim_publish_operation, run_publish_operation
+from apps.experiments.cross_experiment_items import student_item_context, student_item_contexts
 from apps.experiments.publication_services import (
     PublicationConflict,
     commit_publish_plan,
@@ -263,6 +265,252 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
         self.assertEqual(complete["setup_status"], "complete")
         self.assertEqual(complete["missing_requirements"], [])
         self.assertEqual(complete["field_errors"], {})
+
+    def test_setup_projection_blocks_when_student_history_consumes_required_question(self):
+        self.experiment.cross_experiment_item_policy = (
+            Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS
+        )
+        self.experiment.save(update_fields=["cross_experiment_item_policy"])
+        numeric_question = Question.objects.create(
+            bank=self.experiment.question_bank, sequence=2, code="Q02",
+            question_type=Question.Type.NUMERIC, text="历史数值题", correct_answer=3,
+        )
+        QuestionConcept.objects.create(
+            question=numeric_question,
+            concept=self.experiment.sampling_kcs.get().concept,
+            is_primary=True,
+        )
+        ExperimentQuestionQuota.objects.update_or_create(
+            experiment=self.experiment, question_type=Question.Type.NUMERIC,
+            defaults={"amount": 1},
+        )
+        prior = Experiment.objects.create(
+            course=self.course,
+            owner=self.teacher,
+            created_by=self.teacher,
+            question_bank=self.experiment.question_bank,
+            name="历史分配实验",
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=1,
+            cross_experiment_item_policy=Experiment.CrossExperimentItemPolicy.UNRESTRICTED,
+        )
+        prior_version = ExperimentVersion.objects.create(
+            experiment=prior,
+            version_number=1,
+            published_by=self.teacher,
+        )
+        source_question = numeric_question
+        snapshot = QuestionSnapshot.objects.create(
+            version=prior_version,
+            source_question=source_question,
+            source_sequence=source_question.sequence,
+            code=source_question.code,
+            question_type=source_question.question_type,
+            text=source_question.text,
+            correct_answer=source_question.correct_answer,
+            primary_kc="KC-A",
+        )
+        session = ExperimentSession.objects.create(
+            version=prior_version,
+            student=self.student,
+            status=ExperimentSession.Status.COMPLETED,
+        )
+        assignment = StudentQuestionAssignment.objects.create(
+            session=session,
+            snapshot=snapshot,
+            item_instance=get_or_create_default_item_instance(snapshot),
+            assigned_sequence_index=1,
+        )
+        Attempt.objects.create(session=session, assignment=assignment)
+
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        PublishPlanClass.objects.create(
+            publish_plan=plan,
+            class_group=self.class_group,
+        )
+
+        projection = publish_plan_setup_projection(plan)
+
+        self.assertFalse(projection["can_preview"])
+        issue = projection["blocking_issues"][0]
+        self.assertEqual(issue["scope"], "student")
+        self.assertEqual(issue["code"], "QUESTION_TYPE_QUOTA_INSUFFICIENT")
+        self.assertEqual(issue["student_id"], self.student.pk)
+        self.assertEqual(issue["question_type"], Question.Type.NUMERIC)
+        self.assertEqual(issue["requested"], 1)
+        self.assertEqual(issue["available"], 0)
+        self.assertEqual(projection["global_inventory"]["candidate_count"], 2)
+
+        self.experiment.cross_experiment_item_policy = (
+            Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+        )
+        self.experiment.review_count = 1
+        self.experiment.save(update_fields=["cross_experiment_item_policy", "review_count"])
+        plan.refresh_from_db()
+        mixed_projection = publish_plan_setup_projection(plan)
+        self.assertFalse(mixed_projection["can_preview"])
+        self.assertIn(
+            "REVIEW_POOL_INSUFFICIENT",
+            [row["code"] for row in mixed_projection["blocking_issues"]],
+        )
+
+        eligible_student = User.objects.create_user(
+            username="A-003", student_number="A-003", role=User.Role.STUDENT,
+        )
+        CourseEnrollment.objects.create(
+            course=self.course, class_group=self.class_group, student=eligible_student,
+        )
+        PublishPlanExclusion.objects.create(
+            publish_plan_class=plan.class_plans.get(), student=self.student,
+        )
+        self.experiment.cross_experiment_item_policy = (
+            Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS
+        )
+        self.experiment.review_count = 0
+        self.experiment.save(update_fields=["cross_experiment_item_policy", "review_count"])
+        plan.refresh_from_db()
+        excluded_projection = publish_plan_setup_projection(plan)
+        self.assertTrue(excluded_projection["can_preview"])
+        self.assertEqual(excluded_projection["student_inventory"]["participant_count"], 1)
+
+    def test_closed_task_snapshot_is_history_without_a_session_and_unresolved_blocks(self):
+        prior_plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        PublishPlanClass.objects.create(
+            publish_plan=prior_plan, class_group=self.class_group,
+        )
+        generate_preview(prior_plan, self.teacher, expected_revision=prior_plan.plan_revision)
+        prior_plan.refresh_from_db()
+        task = commit_publish_plan(
+            prior_plan, self.teacher, expected_revision=prior_plan.plan_revision,
+        )[0]
+        participant = task.participant_snapshots.get(student=self.student)
+        source_id = participant.assignment_snapshot[0]["source_question_id"]
+        self.assertFalse(ExperimentSession.objects.filter(class_task=task).exists())
+        manual_close_task(task, self.teacher, reason="teacher_ended")
+
+        later = Experiment.objects.create(
+            course=self.course, owner=self.teacher, created_by=self.teacher,
+            question_bank=self.experiment.question_bank, name="关闭任务后排重",
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=1,
+            cross_experiment_item_policy=Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS,
+        )
+        context = student_item_context(later, self.student)
+        self.assertIn(source_id, context.assigned_question_ids)
+        self.assertNotIn(source_id, context.active_frozen_question_ids)
+        self.assertEqual(context.unresolved_task_ids, ())
+
+        ExperimentVersionParticipantSnapshot.objects.filter(pk=participant.pk).update(
+            assignment_snapshot=[{"source_question_id": None}],
+        )
+        context = student_item_context(later, self.student)
+        self.assertEqual(context.unresolved_task_ids, (task.pk,))
+        later_plan = get_or_create_publish_plan(later, self.teacher)
+        PublishPlanClass.objects.create(
+            publish_plan=later_plan, class_group=self.class_group,
+        )
+        projection = publish_plan_setup_projection(later_plan)
+        self.assertFalse(projection["can_preview"])
+        self.assertEqual(projection["blocking_issues"][0]["code"], "ACTIVE_ASSIGNMENT_UNRESOLVED")
+
+        ExperimentVersionParticipantSnapshot.objects.filter(pk=participant.pk).update(
+            assignment_snapshot=[{"source_question_id": source_id}],
+        )
+        session = ExperimentSession.objects.create(
+            version=participant.version, class_task=task,
+            participant_snapshot=participant, student=self.student,
+        )
+        snapshot = QuestionSnapshot.objects.get(
+            version=participant.version, source_question_id=source_id,
+        )
+        StudentQuestionAssignment.objects.create(
+            session=session, snapshot=snapshot,
+            item_instance=get_or_create_default_item_instance(snapshot),
+            assigned_sequence_index=1,
+        )
+        ExperimentVersionParticipantSnapshot.objects.filter(pk=participant.pk).update(
+            assignment_snapshot=[{"source_question_id": None}],
+        )
+        context = student_item_context(later, self.student)
+        self.assertEqual(context.unresolved_task_ids, ())
+        self.assertIn(source_id, context.assigned_question_ids)
+
+    def test_commit_rejects_assignment_added_after_preview(self):
+        self.experiment.cross_experiment_item_policy = (
+            Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS
+        )
+        self.experiment.save(update_fields=["cross_experiment_item_policy"])
+        question = Question.objects.create(
+            bank=self.experiment.question_bank, sequence=2, code="Q02",
+            question_type=Question.Type.SHORT, text="备选题", correct_answer="答案",
+        )
+        QuestionConcept.objects.create(
+            question=question, concept=self.experiment.sampling_kcs.get().concept,
+            is_primary=True,
+        )
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        PublishPlanClass.objects.create(
+            publish_plan=plan, class_group=self.class_group,
+        )
+        preview = generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
+        selected_id = preview.class_results.get().participants.get().items.get().source_question_id
+        prior = Experiment.objects.create(
+            course=self.course, owner=self.teacher, created_by=self.teacher,
+            question_bank=self.experiment.question_bank, name="预览后新增历史",
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT, sampling_total_count=1,
+        )
+        version = ExperimentVersion.objects.create(
+            experiment=prior, version_number=1, published_by=self.teacher,
+        )
+        source = Question.objects.get(pk=selected_id)
+        snapshot = QuestionSnapshot.objects.create(
+            version=version, source_question=source, source_sequence=source.sequence,
+            code=source.code, question_type=source.question_type,
+            text=source.text, correct_answer=source.correct_answer,
+        )
+        session = ExperimentSession.objects.create(version=version, student=self.student)
+        StudentQuestionAssignment.objects.create(
+            session=session, snapshot=snapshot,
+            item_instance=get_or_create_default_item_instance(snapshot),
+            assigned_sequence_index=1,
+        )
+        plan.refresh_from_db()
+        with self.assertRaises(PublicationConflict) as raised:
+            commit_publish_plan(plan, self.teacher, expected_revision=plan.plan_revision)
+        self.assertEqual(raised.exception.code, "PREVIEW_ELIGIBILITY_CHANGED")
+
+    def test_history_context_queries_remain_bounded_for_three_hundred_students(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        PublishPlanClass.objects.create(publish_plan=plan, class_group=self.class_group)
+        generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
+        plan.refresh_from_db()
+        task = commit_publish_plan(
+            plan, self.teacher, expected_revision=plan.plan_revision,
+        )[0]
+        original = task.participant_snapshots.get(student=self.student)
+        students = [
+            User(username=f"A-HISTORY-{index:03d}", student_number=f"A-HISTORY-{index:03d}", role=User.Role.STUDENT)
+            for index in range(1, 300)
+        ]
+        User.objects.bulk_create(students)
+        ExperimentVersionParticipantSnapshot.objects.bulk_create([
+            ExperimentVersionParticipantSnapshot(
+                version=original.version, class_task=task, student=student,
+                assignment_snapshot=original.assignment_snapshot,
+            )
+            for student in students
+        ])
+        later = Experiment.objects.create(
+            course=self.course, owner=self.teacher, created_by=self.teacher,
+            question_bank=self.experiment.question_bank, name="批量历史读取",
+            sampling_mode=Experiment.SamplingMode.TOTAL_COUNT,
+            sampling_total_count=1,
+            cross_experiment_item_policy=Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS,
+        )
+        with CaptureQueriesContext(connection) as queries:
+            contexts = student_item_contexts(later, [self.student, *students])
+        self.assertEqual(len(contexts), 300)
+        self.assertLess(len(queries), 30)
 
     def test_preview_accepts_the_default_open_ended_schedule(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)

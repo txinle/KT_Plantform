@@ -368,6 +368,7 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
         }
         return Response(
             {
+                "scope": "question_bank",
                 "candidate_count": len(candidates),
                 "kc_counts": [
                     {

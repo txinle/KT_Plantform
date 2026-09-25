@@ -52,7 +52,13 @@ from .cross_experiment_items import (
     student_item_context,
     student_item_contexts,
 )
-from .sampling import SamplingService, SamplingValidationError, _grouped_quota_flow
+from .sampling import (
+    SamplingService,
+    SamplingValidationError,
+    _grouped_quota_flow,
+    _maximum_matching,
+    question_allowed_by_history,
+)
 from .presentation_instances import get_or_create_default_item_instance
 
 
@@ -167,6 +173,297 @@ def _touch_publish_plan(plan, now, *, current_step=None):
     return plan
 
 
+def _global_sampling_inventory(experiment, candidates):
+    frozen_configuration = (
+        candidates[0].release_snapshot.configuration
+        if candidates and isinstance(candidates[0], ReleaseSnapshotQuestionMapping)
+        else None
+    )
+    type_quotas = {
+        row.question_type: row.amount
+        for row in experiment.question_quotas.filter(amount__gt=0)
+    }
+    if frozen_configuration is not None:
+        type_quotas = {
+            row["question_type"]: row["amount"]
+            for row in frozen_configuration.get("sampling_type_quotas", [])
+        }
+    question_types = [
+        {
+            "question_type": question_type,
+            "requested": type_quotas.get(question_type, 0),
+            "available": sum(
+                _candidate_question_type(candidate) == question_type
+                for candidate in candidates
+            ),
+        }
+        for question_type in Question.Type.values
+    ] if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT else []
+    requested_count = (
+        int((frozen_configuration or {}).get("sampling_total_count", experiment.sampling_total_count) or 0)
+        if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+        else (
+            sum(row["quota"] for row in frozen_configuration["sampling_kcs"])
+            if frozen_configuration is not None
+            else sum(rule.quota or 0 for rule in experiment.sampling_kcs.all())
+        )
+    )
+    return {
+        "scope": "question_bank",
+        "candidate_count": len(candidates),
+        "requested_count": requested_count,
+        "question_types": question_types,
+    }
+
+
+def _student_inventory_check(experiment, candidates, students, contexts, class_by_student):
+    frozen_configuration = (
+        candidates[0].release_snapshot.configuration
+        if candidates and isinstance(candidates[0], ReleaseSnapshotQuestionMapping)
+        else None
+    )
+    frozen_evidence = {
+        row["question_id"]: set(row.get("matched_kc_codes", []))
+        for row in (frozen_configuration or {}).get("candidate_resolution", [])
+    }
+    type_quotas = {
+        row.question_type: row.amount
+        for row in experiment.question_quotas.filter(amount__gt=0)
+    }
+    if frozen_configuration is not None:
+        type_quotas = {
+            row["question_type"]: row["amount"]
+            for row in frozen_configuration.get("sampling_type_quotas", [])
+        }
+    rules = list(
+        experiment.sampling_kcs.select_related("concept").order_by("concept_id")
+    )
+    minimum_candidate_count = None
+    minimum_type_available = {
+        question_type: None for question_type in Question.Type.values
+    }
+    insufficient_type_students = {
+        question_type: 0 for question_type in Question.Type.values
+    }
+    blocking_issues = []
+    for student in students:
+        context = contexts[student.pk]
+        class_id = class_by_student[student.pk]
+        if (
+            experiment.cross_experiment_item_policy
+            != Experiment.CrossExperimentItemPolicy.UNRESTRICTED
+            and context.unresolved_task_ids
+        ):
+            blocking_issues.append({
+                "scope": "student",
+                "code": "ACTIVE_ASSIGNMENT_UNRESOLVED",
+                "message": (
+                    f"学生 {student.student_number or student.username} 的历史任务题单无法解析，"
+                    "不能确认排除范围。"
+                ),
+                "class_id": class_id,
+                "kc_id": None,
+                "field": "cross_experiment_item_policy",
+                "student_id": student.pk,
+                "student_number": student.student_number or "",
+            })
+            continue
+        filtered = [
+            candidate for candidate in candidates
+            if question_allowed_by_history(
+                _candidate_id(candidate),
+                experiment.cross_experiment_item_policy,
+                completed_question_ids=context.completed_question_ids,
+                assigned_question_ids=context.assigned_question_ids,
+                active_frozen_question_ids=context.active_frozen_question_ids,
+            )
+        ]
+        minimum_candidate_count = (
+            len(filtered)
+            if minimum_candidate_count is None
+            else min(minimum_candidate_count, len(filtered))
+        )
+        if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT:
+            for question_type in Question.Type.values:
+                requested = type_quotas.get(question_type, 0)
+                available = sum(
+                    _candidate_question_type(candidate) == question_type
+                    for candidate in filtered
+                )
+                previous = minimum_type_available[question_type]
+                minimum_type_available[question_type] = (
+                    available if previous is None else min(previous, available)
+                )
+                if requested and available < requested:
+                    insufficient_type_students[question_type] += 1
+                    blocking_issues.append({
+                        "scope": "student",
+                        "code": "QUESTION_TYPE_QUOTA_INSUFFICIENT",
+                        "message": (
+                            f"学生 {student.student_number or student.username} 的"
+                            f"{Question.Type(question_type).label}需要 {requested} 题，"
+                            f"排除已提交或已分配题目后可用 {available} 题。"
+                        ),
+                        "class_id": class_id,
+                        "kc_id": None,
+                        "field": "sampling_type_quotas",
+                        "student_id": student.pk,
+                        "student_number": student.student_number or "",
+                        "question_type": question_type,
+                        "requested": requested,
+                        "available": available,
+                    })
+            if not type_quotas and len(filtered) < int(experiment.sampling_total_count or 0):
+                requested = int(experiment.sampling_total_count or 0)
+                blocking_issues.append({
+                    "scope": "student",
+                    "code": (
+                        "NEW_POOL_INSUFFICIENT"
+                        if experiment.cross_experiment_item_policy
+                        == Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS
+                        else "TOTAL_COUNT_INSUFFICIENT"
+                    ),
+                    "message": (
+                        f"学生 {student.student_number or student.username} 需要 {requested} 题，"
+                        f"排除已提交或已分配题目后可用 {len(filtered)} 题。"
+                    ),
+                    "class_id": class_id,
+                    "kc_id": None,
+                    "field": "sampling_total_count",
+                    "student_id": student.pk,
+                    "student_number": student.student_number or "",
+                    "requested": requested,
+                    "available": len(filtered),
+                })
+        elif experiment.sampling_mode == Experiment.SamplingMode.KC_QUOTA:
+            buckets = {
+                rule.concept_id: [
+                    candidate for candidate in filtered
+                    if (
+                        rule.concept.code in frozen_evidence.get(_candidate_id(candidate), set())
+                        if frozen_configuration is not None
+                        else SamplingService._question_matches(
+                            _candidate_source_question(candidate),
+                            rule.concept_id,
+                            rule.match_scope,
+                        )
+                    )
+                ]
+                for rule in rules
+            }
+            for rule in rules:
+                available = len(buckets[rule.concept_id])
+                if available < rule.quota:
+                    blocking_issues.append({
+                        "scope": "student",
+                        "code": "KC_QUOTA_INSUFFICIENT",
+                        "message": (
+                            f"学生 {student.student_number or student.username} 的知识点"
+                            f"“{rule.concept.name}”需要 {rule.quota} 题，"
+                            f"排除已提交或已分配题目后可用 {available} 题。"
+                        ),
+                        "class_id": class_id,
+                        "kc_id": rule.concept_id,
+                        "field": "sampling_kcs",
+                        "student_id": student.pk,
+                        "student_number": student.student_number or "",
+                        "requested": rule.quota,
+                        "available": available,
+                    })
+            matching = _maximum_matching(rules, buckets)
+            requested = sum(rule.quota or 0 for rule in rules)
+            if len(matching) < requested:
+                blocking_issues.append({
+                    "scope": "student",
+                    "code": "KC_QUOTA_GLOBAL_INSUFFICIENT",
+                    "message": (
+                        f"学生 {student.student_number or student.username} 的知识点配额需要"
+                        f" {requested} 题，但排除历史题后最多可分配 {len(matching)} 题。"
+                    ),
+                    "class_id": class_id,
+                    "kc_id": None,
+                    "field": "sampling_kcs",
+                    "student_id": student.pk,
+                    "student_number": student.student_number or "",
+                    "requested": requested,
+                    "available": len(matching),
+                })
+        if experiment.cross_experiment_item_policy == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW:
+            requested = (
+                int(experiment.sampling_total_count or 0)
+                if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
+                else sum(rule.quota or 0 for rule in rules)
+            )
+            review_count = int(
+                (frozen_configuration or {}).get("review_count", experiment.review_count) or 0
+            )
+            review_available = sum(
+                _candidate_id(candidate) in context.completed_question_ids
+                for candidate in filtered
+            )
+            new_available = len(filtered) - review_available
+            for code, needed, available, label in (
+                ("REVIEW_POOL_INSUFFICIENT", review_count, review_available, "复测题"),
+                ("NEW_POOL_INSUFFICIENT", requested - review_count, new_available, "新题"),
+            ):
+                if available < needed:
+                    blocking_issues.append({
+                        "scope": "student", "code": code,
+                        "message": f"学生 {student.student_number or student.username} 的{label}需要 {needed} 题，可用 {available} 题。",
+                        "class_id": class_id, "kc_id": None, "field": "review_count",
+                        "student_id": student.pk,
+                        "student_number": student.student_number or "",
+                        "requested": needed, "available": available,
+                    })
+            if experiment.sampling_mode == Experiment.SamplingMode.KC_QUOTA:
+                capacities = {str(rule.concept_id): rule.quota for rule in rules}
+                def bucket_ids(candidate):
+                    return [
+                        str(rule.concept_id) for rule in rules
+                        if candidate in buckets[rule.concept_id]
+                    ]
+            else:
+                capacities = (
+                    {str(key): amount for key, amount in type_quotas.items()}
+                    if type_quotas else {"all": requested}
+                )
+                def bucket_ids(candidate):
+                    return [str(_candidate_question_type(candidate))] if type_quotas else ["all"]
+            maximum, _ = _grouped_quota_flow(
+                candidates=filtered,
+                completed_ids=context.completed_question_ids,
+                review_count=review_count,
+                bucket_capacities=capacities,
+                bucket_ids_for_question=bucket_ids,
+                candidate_id=_candidate_id,
+            )
+            if maximum < requested:
+                blocking_issues.append({
+                    "scope": "student", "code": "GLOBAL_MATCHING_INSUFFICIENT",
+                    "message": f"学生 {student.student_number or student.username} 的题型、历史与复测配额需要 {requested} 题，最多可分配 {maximum} 题。",
+                    "class_id": class_id, "kc_id": None, "field": "review_count",
+                    "student_id": student.pk,
+                    "student_number": student.student_number or "",
+                    "requested": requested, "available": maximum,
+                })
+    return {
+        "scope": "selected_participants",
+        "checked": bool(students),
+        "participant_count": len(students),
+        "minimum_candidate_count": minimum_candidate_count or 0,
+        "question_types": [
+            {
+                "question_type": question_type,
+                "requested": type_quotas.get(question_type, 0),
+                "minimum_available": minimum_type_available[question_type] or 0,
+                "insufficient_student_count": insufficient_type_students[question_type],
+            }
+            for question_type in Question.Type.values
+        ] if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT else [],
+        "blocking_issue_count": len({issue["student_id"] for issue in blocking_issues}),
+    }, blocking_issues
+
+
 @transaction.atomic
 def revise_publish_plan(plan, actor, *, expected_revision, current_step=None):
     plan, now = _lock_editable_publish_plan(
@@ -207,6 +504,9 @@ def publish_plan_setup_projection(plan):
     else:
         missing_requirements = []
         setup_status = "complete"
+    class_enrollments = [
+        (plan_class, _plan_participants(plan_class)) for plan_class in class_plans
+    ]
     blocking_issues = [
         {
             "code": "CLASS_NO_PARTICIPANTS",
@@ -215,23 +515,71 @@ def publish_plan_setup_projection(plan):
             "kc_id": None,
             "field": "classes",
         }
-        for plan_class in class_plans
-        if not _plan_participants(plan_class)
+        for plan_class, enrollments in class_enrollments
+        if not enrollments
     ]
-    if plan.experiment.sampling_mode and not plan.experiment.frozen_release_snapshot_id:
+    global_inventory = {
+        "scope": "question_bank",
+        "candidate_count": 0,
+        "requested_count": 0,
+        "question_types": [],
+    }
+    student_inventory = {
+        "scope": "selected_participants",
+        "checked": False,
+        "participant_count": 0,
+        "minimum_candidate_count": 0,
+        "question_types": [],
+        "blocking_issue_count": 0,
+    }
+    if plan.experiment.sampling_mode:
         try:
-            SamplingService(plan.experiment).resolve(
-                validate_inventory=(
-                    plan.experiment.cross_experiment_item_policy
-                    != Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+            if plan.experiment.frozen_release_snapshot_id:
+                candidates = list(_preview_candidates(plan.experiment))
+            else:
+                resolution = SamplingService(plan.experiment).resolve(
+                    validate_inventory=(
+                        plan.experiment.cross_experiment_item_policy
+                        != Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+                    )
                 )
+                candidates = list(resolution.candidates)
+            global_inventory = _global_sampling_inventory(plan.experiment, candidates)
+            class_by_student = {}
+            students = []
+            for plan_class, enrollments in class_enrollments:
+                for enrollment in enrollments:
+                    if enrollment.student_id in class_by_student:
+                        blocking_issues.append({
+                            "code": "PARTICIPANT_ALREADY_ASSIGNED",
+                            "message": f"学生 {enrollment.student.student_number} 同时属于多个已选班级，本实验只能纳入一次。",
+                            "class_id": plan_class.class_group_id,
+                            "kc_id": None,
+                            "field": "classes",
+                            "student_id": enrollment.student_id,
+                            "student_number": enrollment.student.student_number or "",
+                        })
+                        continue
+                    class_by_student[enrollment.student_id] = plan_class.class_group_id
+                    students.append(enrollment.student)
+            contexts = student_item_contexts(plan.experiment, students)
+            student_inventory, student_issues = _student_inventory_check(
+                plan.experiment,
+                candidates,
+                students,
+                contexts,
+                class_by_student,
             )
+            blocking_issues.extend(student_issues)
         except SamplingValidationError as exc:
             blocking_issues.extend(exc.issues)
     return {
         "setup_status": setup_status,
         "missing_requirements": missing_requirements,
         "blocking_issues": blocking_issues,
+        "can_preview": setup_status == "complete" and not blocking_issues,
+        "global_inventory": global_inventory,
+        "student_inventory": student_inventory,
         "field_errors": {},
         "plan_revision": plan.plan_revision,
         "expires_at": plan.expires_at,
@@ -775,7 +1123,12 @@ def _select_questions(
     sampling_rules=None,
     sampling_type_quotas=None,
 ):
-    item_context = item_context or StudentItemContext(frozenset(), frozenset(), ())
+    item_context = item_context or StudentItemContext(
+        completed_question_ids=frozenset(),
+        assigned_question_ids=frozenset(),
+        active_frozen_question_ids=frozenset(),
+        unresolved_task_ids=(),
+    )
     items = sorted(
         candidates,
         key=lambda item: (_candidate_sequence(item), _candidate_id(item)),
@@ -801,12 +1154,12 @@ def _select_questions(
     if policy != Experiment.CrossExperimentItemPolicy.UNRESTRICTED:
         items = [
             item for item in items
-            if _candidate_source_question(item).pk
-            not in item_context.active_frozen_question_ids
-            and (
-                policy == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
-                or _candidate_source_question(item).pk
-                not in item_context.completed_question_ids
+            if question_allowed_by_history(
+                _candidate_source_question(item).pk,
+                policy,
+                completed_question_ids=item_context.completed_question_ids,
+                assigned_question_ids=item_context.assigned_question_ids,
+                active_frozen_question_ids=item_context.active_frozen_question_ids,
             )
         ]
     if sampling_mode:
@@ -937,6 +1290,7 @@ def _select_questions(
                 for row in SamplingService(
                     experiment,
                     completed_question_ids=item_context.completed_question_ids,
+                    assigned_question_ids=item_context.assigned_question_ids,
                     active_frozen_question_ids=item_context.active_frozen_question_ids,
                     prepared_candidates=candidates,
                     prepared_rules=sampling_rules,
@@ -1149,9 +1503,7 @@ def generate_preview(plan, actor, *, expected_revision, progress=None):
     if setup["setup_status"] != "complete":
         raise ValidationError("请先为所有已选班级确认开放排期。")
     if setup["blocking_issues"]:
-        raise ValidationError(
-            [issue["message"] for issue in setup["blocking_issues"]]
-        )
+        raise SamplingValidationError(setup["blocking_issues"])
     candidates = _preview_candidates(experiment)
     definition_fingerprint = _preview_definition_fingerprint(experiment, candidates)
     students_by_class = {}
@@ -1266,7 +1618,7 @@ def generate_preview(plan, actor, *, expected_revision, progress=None):
                 participant_issues.append({
                     "code": "ACTIVE_ASSIGNMENT_UNRESOLVED",
                     "message": (
-                        f"学生 {student.student_number or student.username} 的有效任务缺少可验证冻结题单："
+                        f"学生 {student.student_number or student.username} 的历史任务缺少可验证题单："
                         + "、".join(str(task_id) for task_id in item_context.unresolved_task_ids)
                         + "。"
                     ),
@@ -1931,7 +2283,7 @@ def commit_publish_plan(plan, actor, *, expected_revision, progress=None):
                 and item_context.unresolved_task_ids
             ):
                 raise PublicationConflict(
-                    "有效任务题单发生变化，请重新运行发布前检查。",
+                    "历史任务题单发生变化，请重新运行发布前检查。",
                     code="PREVIEW_ELIGIBILITY_CHANGED",
                 )
             try:

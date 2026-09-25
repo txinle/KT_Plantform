@@ -146,7 +146,7 @@ describe('TeacherExperimentDetail', () => {
     expect(wrapper.find('.kt-experiment-draft-grid').exists()).toBe(true)
     expect(tabs[0]?.attributes('aria-selected')).toBe('true')
     expect(wrapper.findAll('[data-summary-icon]')).toHaveLength(10)
-    expect(wrapper.get('.kt-definition-summary').text()).toContain('排除已正式作答题目')
+    expect(wrapper.get('.kt-definition-summary').text()).toContain('排除已提交或已分配题目')
     expect(wrapper.get('.kt-definition-summary').text()).not.toContain('时限模式')
     expect(wrapper.get('.kt-definition-summary').text()).toContain('总限时')
     expect(wrapper.get('.kt-definition-summary').text()).toContain('45 分钟')

@@ -223,7 +223,8 @@ class SamplingV2Tests(TestCase):
     def test_exclude_previous_filters_submitted_and_active_assignment_items(self):
         submitted = self.question(1, self.a)
         active = self.question(2, self.a)
-        available = self.question(3, self.a)
+        assigned_only = self.question(3, self.a)
+        available = self.question(4, self.a)
         experiment = self.experiment(Experiment.SamplingMode.TOTAL_COUNT, total_count=1)
         experiment.cross_experiment_item_policy = Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS
         experiment.save(update_fields=["cross_experiment_item_policy"])
@@ -232,12 +233,38 @@ class SamplingV2Tests(TestCase):
         selected = SamplingService(
             experiment,
             completed_question_ids={submitted.pk},
+            assigned_question_ids={assigned_only.pk},
             active_frozen_question_ids={active.pk},
         ).select_with_attribution("c" * 64)
 
         self.assertEqual([row["question"].pk for row in selected], [available.pk])
         self.assertEqual(selected[0]["history_role"], "new")
         self.assertEqual(selected[0]["cross_experiment_item_policy"], "exclude_previous")
+
+    def test_mixed_review_does_not_treat_assigned_only_question_as_new(self):
+        submitted = self.question(1, self.a)
+        assigned_only = self.question(2, self.a)
+        available = self.question(3, self.a)
+        experiment = self.experiment(Experiment.SamplingMode.TOTAL_COUNT, total_count=2)
+        experiment.cross_experiment_item_policy = Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
+        experiment.review_count = 1
+        experiment.save(update_fields=["cross_experiment_item_policy", "review_count"])
+        ExperimentSamplingKC.objects.create(experiment=experiment, concept=self.a)
+
+        selected = SamplingService(
+            experiment,
+            completed_question_ids={submitted.pk},
+            assigned_question_ids={assigned_only.pk},
+        ).select_with_attribution("c" * 64)
+
+        self.assertEqual(
+            {row["question"].pk for row in selected},
+            {submitted.pk, available.pk},
+        )
+        self.assertEqual(
+            {row["history_role"] for row in selected},
+            {"review", "new"},
+        )
 
     def test_mixed_review_selects_exact_review_count_with_type_quotas(self):
         review_single = self.question(1, self.a, question_type=Question.Type.SINGLE)
@@ -393,5 +420,6 @@ class SamplingV2Tests(TestCase):
         context = student_item_context(current, student)
 
         self.assertEqual(context.completed_question_ids, frozenset({prior_question.pk}))
+        self.assertEqual(context.assigned_question_ids, frozenset({prior_question.pk}))
         self.assertEqual(context.active_frozen_question_ids, frozenset())
         self.assertEqual(context.unresolved_task_ids, ())

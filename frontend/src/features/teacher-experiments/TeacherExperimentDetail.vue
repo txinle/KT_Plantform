@@ -394,7 +394,7 @@ onMounted(load)
           <dl class="kt-description-list kt-definition-summary__list">
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="bank" :size="17" /></span><dt>题库</dt><dd>{{ experiment.question_bank?.name || '未选择题库' }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="definition" :size="17" /></span><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}<span v-if="experiment.sampling_mode === 'total_count'"> · {{ experiment.sampling_total_count }} 题</span></dd></div>
-            <div><span class="kt-summary-icon" data-summary-icon><Icon name="summary" :size="17" /></span><dt>跨实验题目</dt><dd>{{ experiment.cross_experiment_item_policy === 'mixed_review' ? `混合复测 · ${experiment.review_count} 题` : (experiment.cross_experiment_item_policy === 'exclude_previous' ? '排除已正式作答题目' : '不限制历史题目') }}</dd></div>
+            <div><span class="kt-summary-icon" data-summary-icon><Icon name="summary" :size="17" /></span><dt>跨实验题目</dt><dd>{{ experiment.cross_experiment_item_policy === 'mixed_review' ? `混合复测 · ${experiment.review_count} 题` : (experiment.cross_experiment_item_policy === 'exclude_previous' ? '排除已提交或已分配题目' : '不限制历史题目') }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="summary" :size="17" /></span><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>反馈</dt><dd>{{ experiment.feedback_mode_label }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>反馈发布</dt><dd>{{ experiment.feedback_release_policy_label || '未设置' }}</dd></div>
@@ -418,12 +418,12 @@ onMounted(load)
           <section class="kt-card kt-readiness-card" aria-labelledby="readiness-summary">
             <div class="kt-section-heading"><h2 id="readiness-summary">发布前检查</h2><StatusBadge :label="readiness?.ready ? '定义就绪' : '需要处理'" :tone="readinessTone" /></div>
             <dl class="kt-readiness-facts">
-              <div><dt>可用资源</dt><dd>{{ readiness?.candidate_count ?? 0 }} 道可用题目</dd></div>
+              <div><dt>题库全局候选</dt><dd>{{ readiness?.candidate_count ?? 0 }} 道可用题目</dd></div>
               <div><dt>已关联参与者</dt><dd>{{ readiness?.participant_count ?? 0 }}</dd></div>
             </dl>
             <ul class="kt-readiness-checklist">
               <li><Icon :name="readiness?.ready ? 'check' : 'warning'" :size="17" /><span>{{ readiness?.ready ? '实验定义已通过基础检查' : '实验定义仍需完成基础检查' }}</span></li>
-              <li><Icon name="bank" :size="17" /><span>可用题目：{{ readiness?.candidate_count ?? 0 }} 道</span></li>
+              <li><Icon name="bank" :size="17" /><span>题库全局候选：{{ readiness?.candidate_count ?? 0 }} 道，尚未按学生历史过滤</span></li>
               <li><Icon name="classes" :size="17" /><span>已关联参与者：{{ readiness?.participant_count ?? 0 }}</span></li>
               <li v-for="issue in readiness?.issues || []" :key="issue"><Icon name="warning" :size="17" /><span>{{ issue }}</span></li>
             </ul>
