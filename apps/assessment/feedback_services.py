@@ -12,7 +12,7 @@ from apps.audit.models import AuditLog
 from apps.experiments.models import ClassExperimentTask, Experiment
 
 from .deadline_services import DeadlineDecisionService
-from .models import GradeRecord, SubmissionEvent
+from .models import ExperimentSession, GradeRecord, SubmissionEvent
 
 
 LEGACY_FEEDBACK_RELEASE_POLICY = "legacy"
@@ -122,7 +122,10 @@ def feedback_availability(
     if release_policy == LEGACY_FEEDBACK_RELEASE_POLICY:
         released, reason = True, "legacy_frozen_policy"
     elif release_policy == Experiment.FeedbackReleasePolicy.AFTER_PERSONAL_SUBMISSION:
-        released = session_status == "completed"
+        released = session_status in {
+            ExperimentSession.Status.COMPLETED,
+            ExperimentSession.Status.EXPIRED,
+        }
         reason = "personal_submission_required" if not released else "personal_submission"
     elif release_policy == Experiment.FeedbackReleasePolicy.AFTER_ASSIGNMENT_DEADLINE:
         released = DeadlineDecisionService.get_task_state(task, at=at) == "closed"

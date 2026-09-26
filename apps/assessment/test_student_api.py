@@ -1128,6 +1128,69 @@ class StudentAssessmentApiTests(StudentApiTestCase):
     STUDENT_LEARNING_ANALYTICS_ENABLED=True,
 )
 class StudentLearningApiTests(StudentApiFixtureMixin, TransactionTestCase):
+    def test_personal_feedback_is_available_after_timeout_for_entered_students(self):
+        started = self.start()
+        session = ExperimentSession.objects.get(pk=started.json()["session_id"])
+        attempt = self.submit_attempt_without_finishing(session)
+
+        while_active = self.client.get(
+            f"/api/v1/student/courses/{self.course.pk}/learning/"
+            f"experiments/{self.experiment.pk}/"
+        )
+        self.assertEqual(while_active.status_code, 403)
+
+        now = timezone.now()
+        session.status = ExperimentSession.Status.EXPIRED
+        session.completed_at = now
+        session.terminal_at = now
+        session.terminal_reason = "deadline_expired"
+        session.save(update_fields=["status", "completed_at", "terminal_at", "terminal_reason"])
+
+        summary = self.client.get(f"/api/v1/student/courses/{self.course.pk}/learning/")
+        detail = self.client.get(
+            f"/api/v1/student/courses/{self.course.pk}/learning/"
+            f"experiments/{self.experiment.pk}/"
+        )
+        question = self.client.get(
+            f"/api/v1/student/courses/{self.course.pk}/learning/"
+            f"experiments/{self.experiment.pk}/questions/{attempt.assignment.snapshot_id}/"
+        )
+        task_result = self.client.get(f"/api/v1/student/tasks/{self.task.pk}/results/")
+
+        self.assertEqual(summary.status_code, 200, summary.content)
+        experiment_row = next(
+            row for row in summary.json()["experiments"]
+            if row["experiment_id"] == self.experiment.pk
+        )
+        self.assertTrue(experiment_row["results_available"])
+        self.assertEqual(detail.status_code, 200, detail.content)
+        self.assertEqual(detail.json()["status"], "expired")
+        self.assertEqual(len(detail.json()["item_results"]), 1)
+        self.assertEqual(question.status_code, 200, question.content)
+        self.assertEqual(question.json()["correct_answer"], "B：4")
+        self.assertEqual(task_result.status_code, 200, task_result.content)
+        self.assertEqual(len(task_result.json()["items"]), 1)
+
+        peer_started = self.start(student=self.peer)
+        peer_session = ExperimentSession.objects.get(pk=peer_started.json()["session_id"])
+        peer_session.status = ExperimentSession.Status.EXPIRED
+        peer_session.completed_at = now
+        peer_session.terminal_at = now
+        peer_session.terminal_reason = "deadline_expired"
+        peer_session.save(update_fields=["status", "completed_at", "terminal_at", "terminal_reason"])
+        peer_summary = self.client.get(f"/api/v1/student/courses/{self.course.pk}/learning/")
+        peer_detail = self.client.get(
+            f"/api/v1/student/courses/{self.course.pk}/learning/"
+            f"experiments/{self.experiment.pk}/"
+        )
+        peer_row = next(
+            row for row in peer_summary.json()["experiments"]
+            if row["experiment_id"] == self.experiment.pk
+        )
+        self.assertTrue(peer_row["results_available"])
+        self.assertEqual(peer_detail.status_code, 200, peer_detail.content)
+        self.assertEqual(peer_detail.json()["item_results"], [])
+
     def test_learning_summary_detail_and_question_are_own_student_allow_lists(self):
         response = self.start()
         session = ExperimentSession.objects.get(pk=response.json()["session_id"])

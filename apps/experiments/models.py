@@ -185,7 +185,7 @@ class Experiment(models.Model):
         CORRECTNESS = "correctness", "显示正误"
         FULL = "full", "显示正误、答案与解析"
     class FeedbackReleasePolicy(models.TextChoices):
-        AFTER_PERSONAL_SUBMISSION = "after_personal_submission", "学生完成后"
+        AFTER_PERSONAL_SUBMISSION = "after_personal_submission", "学生作答结束后（完成或超时）"
         AFTER_ASSIGNMENT_DEADLINE = "after_assignment_deadline", "班级任务截止后"
         MANUAL_RELEASE = "manual_release", "教师人工发布"
     class TimeMode(models.TextChoices):

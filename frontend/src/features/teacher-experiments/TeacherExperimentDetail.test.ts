@@ -157,6 +157,24 @@ describe('TeacherExperimentDetail', () => {
     expect(wrapper.findAll('.kt-readiness-checklist li').length).toBeGreaterThanOrEqual(3)
   })
 
+  it('shows the current shared class time beside the frozen definition time', async () => {
+    mocks.api.detail.mockResolvedValue({
+      id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布',
+      total_time_limit_minutes: 30, can_edit: false, can_manage: true,
+    })
+    mocks.api.classTasks.mockResolvedValue({ items: [
+      { id: 31, class_id: 5, class_name: '一班', business_status: 'open', total_time_limit_minutes: 35, available_actions: [], grading: {} },
+      { id: 32, class_id: 6, class_name: '二班', business_status: 'open', total_time_limit_minutes: 35, available_actions: [], grading: {} },
+    ] })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+    await wrapper.get('#experiment-tab-definition').trigger('click')
+
+    const definition = wrapper.get('.kt-definition-summary').text()
+    expect(definition).toContain('当前各班总限时35 分钟')
+    expect(definition).toContain('发布时 30 分钟')
+  })
+
   it('deletes an experiment after preview and returns to the experiment list', async () => {
     const wrapper = mount(TeacherExperimentDetail)
     await flushPromises()

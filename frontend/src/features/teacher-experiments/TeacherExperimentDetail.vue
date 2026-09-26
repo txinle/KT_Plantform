@@ -62,6 +62,14 @@ let collectionRequestId = 0
 const readinessTone = computed(() => readiness.value?.ready ? 'success' : 'warning')
 const courseName = computed(() => course?.value?.name || '课程')
 const isPublished = computed(() => experiment.value?.status !== 'draft')
+const sharedClassTotalLimit = computed(() => {
+  const limits = tasks.value.map(task => task.total_time_limit_minutes)
+  return limits.length && limits[0] != null && limits.every(limit => limit === limits[0]) ? limits[0] : null
+})
+const revisedTotalLimit = computed(() =>
+  isPublished.value && sharedClassTotalLimit.value != null
+  && sharedClassTotalLimit.value !== experiment.value?.total_time_limit_minutes,
+)
 
 function displayDate(value: string | null | undefined) {
   return value ? new Date(value).toLocaleString('zh-CN') : '未设置'
@@ -398,7 +406,7 @@ onMounted(load)
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="summary" :size="17" /></span><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>反馈</dt><dd>{{ experiment.feedback_mode_label }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>反馈发布</dt><dd>{{ experiment.feedback_release_policy_label || '未设置' }}</dd></div>
-            <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>总限时</dt><dd>{{ displayLimit(experiment.total_time_limit_minutes, '分钟') }}</dd></div>
+            <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>{{ revisedTotalLimit ? '当前各班总限时' : '总限时' }}</dt><dd>{{ displayLimit(revisedTotalLimit ? sharedClassTotalLimit : experiment.total_time_limit_minutes, '分钟') }}<small v-if="revisedTotalLimit">（发布时 {{ displayLimit(experiment.total_time_limit_minutes, '分钟') }}）</small><small v-else-if="isPublished && experiment.total_time_limit_minutes != null && tasks.length > 1 && sharedClassTotalLimit == null">（各班当前限时见“班级发布”）</small></dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>单题限时</dt><dd>{{ displayLimit(experiment.per_question_time_limit_seconds, '秒') }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="data" :size="17" /></span><dt>中断续答</dt><dd>{{ experiment.resume_mode_label }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="data" :size="17" /></span><dt>作答信心</dt><dd>{{ experiment.confidence_mode_label }}</dd></div>

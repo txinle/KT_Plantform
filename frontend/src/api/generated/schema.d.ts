@@ -2874,7 +2874,7 @@ export interface components {
          */
         FeedbackMode433Enum: "none" | "correctness" | "full";
         /**
-         * @description * `after_personal_submission` - 学生完成后
+         * @description * `after_personal_submission` - 学生作答结束后（完成或超时）
          *     * `after_assignment_deadline` - 班级任务截止后
          *     * `manual_release` - 教师人工发布
          * @enum {string}
@@ -3570,7 +3570,6 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
-            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label?: string;
@@ -3581,9 +3580,7 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
-            /** Format: int64 */
             total_time_limit_minutes?: number | null;
-            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -5204,7 +5201,6 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
-            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label: string;
@@ -5215,9 +5211,7 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
-            /** Format: int64 */
             total_time_limit_minutes?: number | null;
-            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
