@@ -468,6 +468,8 @@ class ExperimentQuestionQuotaMigrationTests(TransactionTestCase):
             if target[0] == "experiments"
             else ("assessment", "0002_experimentsession_sampling_seeds")
             if target[0] == "assessment"
+            else ("analytics", "0013_researchsessionmaterialization_source_revision")
+            if target[0] == "analytics"
             else target
             for target in executor.loader.graph.leaf_nodes()
         ]
@@ -477,6 +479,8 @@ class ExperimentQuestionQuotaMigrationTests(TransactionTestCase):
         super().setUpClass()
         cls.executor = MigrationExecutor(connection)
         cls.current_targets = cls.executor.loader.graph.leaf_nodes()
+        # Class cleanup also runs if historical fixture creation fails in setUpClass.
+        cls.addClassCleanup(cls._restore_schema)
         cls.old_targets = cls._targets_with_experiments_at(cls.executor, cls.migrate_from)
         cls.executor.migrate(cls.old_targets)
         old_apps = cls.executor.loader.project_state(cls.old_targets).apps
@@ -499,11 +503,8 @@ class ExperimentQuestionQuotaMigrationTests(TransactionTestCase):
         cls.apps = cls.executor.loader.project_state(cls.new_targets).apps
 
     @classmethod
-    def tearDownClass(cls):
-        try:
-            MigrationExecutor(connection).migrate(cls.current_targets)
-        finally:
-            super().tearDownClass()
+    def _restore_schema(cls):
+        MigrationExecutor(connection).migrate(cls.current_targets)
 
     def test_existing_experiments_receive_all_mode_and_six_zero_quota_rows(self):
         Experiment = self.apps.get_model("experiments", "Experiment")

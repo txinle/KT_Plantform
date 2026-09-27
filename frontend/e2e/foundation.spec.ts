@@ -70,6 +70,8 @@ test('teacher creates an experiment and saves a resumable publish draft', async 
   await page.getByLabel('实验名称').fill(`渐进式发布验证-${browserName}`)
   await page.getByLabel('题库', { exact: true }).selectOption({ label: '演示题库' })
   await selectFirstKnowledgeComponent(page)
+  // This journey checks resumable drafts, independently of earlier student submissions.
+  await page.locator('input[name="cross_experiment_item_policy"][value="unrestricted"]').check()
   await page.getByRole('button', { name: '保存草稿', exact: true }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/)
   await expect(page.getByRole('heading', { name: `渐进式发布验证-${browserName}` })).toBeVisible()
@@ -79,6 +81,9 @@ test('teacher creates an experiment and saves a resumable publish draft', async 
   await page.getByRole('checkbox', { name: '选择 认知追踪实验班', exact: true }).check()
   await page.getByRole('button', { name: '保存草稿' }).click()
   await expect(page.getByText('草稿已保存。你可以退出后继续。')).toBeVisible()
+  await expect(page.getByText('设置完整，可以执行发布检查。')).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('checkbox', { name: '选择 认知追踪实验班', exact: true })).toBeChecked()
   await expect(page.getByText('设置完整，可以执行发布检查。')).toBeVisible()
 })
 

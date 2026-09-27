@@ -20,6 +20,8 @@ class CourseQuestionIdentityMigrationTests(TransactionTestCase):
             if target[0] == "experiments"
             else ("assessment", "0002_experimentsession_sampling_seeds")
             if target[0] == "assessment"
+            else ("analytics", "0013_researchsessionmaterialization_source_revision")
+            if target[0] == "analytics"
             else target
             for target in executor.loader.graph.leaf_nodes()
         ]
@@ -29,6 +31,8 @@ class CourseQuestionIdentityMigrationTests(TransactionTestCase):
         super().setUpClass()
         cls.executor = MigrationExecutor(connection)
         cls.current_targets = cls.executor.loader.graph.leaf_nodes()
+        # Class cleanup also runs if historical fixture creation fails in setUpClass.
+        cls.addClassCleanup(cls._restore_schema)
         cls.old_targets = cls.targets_with_question_bank_at(cls.executor, cls.migrate_from)
         cls.executor.migrate(cls.old_targets)
         old_apps = cls.executor.loader.project_state(cls.old_targets).apps
@@ -123,11 +127,8 @@ class CourseQuestionIdentityMigrationTests(TransactionTestCase):
         cls.apps = cls.executor.loader.project_state(cls.new_targets).apps
 
     @classmethod
-    def tearDownClass(cls):
-        try:
-            MigrationExecutor(connection).migrate(cls.current_targets)
-        finally:
-            super().tearDownClass()
+    def _restore_schema(cls):
+        MigrationExecutor(connection).migrate(cls.current_targets)
 
     def test_backfill_is_course_isolated_and_uses_the_documented_deterministic_order(self):
         Identity = self.apps.get_model("question_bank", "CourseQuestionIdentity")

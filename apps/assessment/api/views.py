@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db.models import F, Prefetch
@@ -5,6 +8,7 @@ from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import parse_etags
 from drf_spectacular.utils import extend_schema
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -569,22 +573,31 @@ class StudentLearningView(StudentApiMixin, APIView):
 class StudentLearningExperimentView(StudentApiMixin, APIView):
     @extend_schema(responses=StudentLearningExperimentSerializer)
     def get(self, request, course_id, experiment_id):
-        from apps.analytics.teaching.student_projection import (
-            build_student_experiment_projection,
-            student_projection_to_api,
-        )
-
         enrollment = _learning_enrollment(request.user, course_id)
         try:
-            projection = build_student_experiment_projection(
+            from apps.analytics.student_result_snapshots import (
+                get_student_experiment_result_payload,
+            )
+
+            payload = get_student_experiment_result_payload(
                 enrollment,
                 experiment_id=experiment_id,
-                require_results=True,
             )
         except LookupError as error:
             raise Http404 from error
-        payload = student_projection_to_api(projection)
-        return Response(StudentLearningExperimentSerializer(instance=payload).data)
+        # PostgreSQL jsonb may reorder object keys without changing the result.
+        payload_hash = hashlib.sha256(json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode()).hexdigest()
+        etag = f'W/"student-result-{payload_hash}"'
+        response_headers = {
+            "ETag": etag,
+            "Cache-Control": "private, no-cache",
+        }
+        requested_etags = parse_etags(request.headers.get("If-None-Match", ""))
+        if "*" in requested_etags or etag.removeprefix("W/") in [tag.removeprefix("W/") for tag in requested_etags]:
+            return Response(status=304, headers=response_headers)
+        return Response(payload, headers=response_headers)
 
 
 class StudentLearningQuestionView(StudentApiMixin, APIView):

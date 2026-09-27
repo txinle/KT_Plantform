@@ -81,6 +81,21 @@ interface StudentApiClient {
 }
 
 export function createStudentCourseApi(client: StudentApiClient) {
+  const learningExperimentRequests = new Map<string, Promise<StudentLearningExperiment>>()
+
+  function learningExperiment(courseId: number, experimentId: number) {
+    const key = `${courseId}:${experimentId}`
+    const existing = learningExperimentRequests.get(key)
+    if (existing) return existing
+    const request = client.get<StudentLearningExperiment>(`/api/v1/student/courses/${courseId}/learning/experiments/${experimentId}/`)
+    learningExperimentRequests.set(key, request)
+    const clear = () => {
+      if (learningExperimentRequests.get(key) === request) learningExperimentRequests.delete(key)
+    }
+    request.then(clear, clear)
+    return request
+  }
+
   async function enterTask(taskId: number, action: 'start' | 'resume'): Promise<StudentSessionEntry> {
     try { return await client.mutate<StudentSessionEntry>(`/api/v1/student/tasks/${taskId}/${action}/`, { method: 'POST' }) }
     catch (error) {
@@ -96,7 +111,7 @@ export function createStudentCourseApi(client: StudentApiClient) {
     courses: () => client.get<StudentCourseCollection>('/api/v1/student/courses/'),
     tasks: (courseId: number) => client.get<StudentTaskCollection>(`/api/v1/student/courses/${courseId}/tasks/`),
     learning: (courseId: number) => client.get<StudentLearningSummary>(`/api/v1/student/courses/${courseId}/learning/`),
-    learningExperiment: (courseId: number, experimentId: number) => client.get<StudentLearningExperiment>(`/api/v1/student/courses/${courseId}/learning/experiments/${experimentId}/`),
+    learningExperiment,
     learningQuestion: (courseId: number, experimentId: number, questionId: number) => client.get<StudentLearningQuestion>(`/api/v1/student/courses/${courseId}/learning/experiments/${experimentId}/questions/${questionId}/`),
     result: (taskId: number) => client.get<StudentResult>(`/api/v1/student/tasks/${taskId}/results/`),
     start: (taskId: number) => enterTask(taskId, 'start'),

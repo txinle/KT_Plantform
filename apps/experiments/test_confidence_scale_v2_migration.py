@@ -14,6 +14,8 @@ class ConfidenceScaleV2MigrationTests(TransactionTestCase):
             experiments_target if target[0] == "experiments"
             else ("assessment", "0025_experimentsession_research_source_revision")
             if target[0] == "assessment"
+            else ("analytics", "0013_researchsessionmaterialization_source_revision")
+            if target[0] == "analytics"
             else target
             for target in executor.loader.graph.leaf_nodes()
         ]
@@ -23,6 +25,8 @@ class ConfidenceScaleV2MigrationTests(TransactionTestCase):
         super().setUpClass()
         cls.executor = MigrationExecutor(connection)
         cls.current_targets = cls.executor.loader.graph.leaf_nodes()
+        # Class cleanup also runs if historical fixture creation fails in setUpClass.
+        cls.addClassCleanup(cls._restore_schema)
         cls.old_targets = cls.targets_with_experiments_at(cls.executor, cls.migrate_from)
         cls.executor.migrate(cls.old_targets)
         old_apps = cls.executor.loader.project_state(cls.old_targets).apps
@@ -60,11 +64,8 @@ class ConfidenceScaleV2MigrationTests(TransactionTestCase):
         cls.apps = cls.executor.loader.project_state(cls.new_targets).apps
 
     @classmethod
-    def tearDownClass(cls):
-        try:
-            MigrationExecutor(connection).migrate(cls.current_targets)
-        finally:
-            super().tearDownClass()
+    def _restore_schema(cls):
+        MigrationExecutor(connection).migrate(cls.current_targets)
 
     def test_only_drafts_move_to_v2_and_frozen_configuration_is_untouched(self):
         Experiment = self.apps.get_model("experiments", "Experiment")

@@ -40,4 +40,38 @@ describe('student course API', () => {
       ['/api/v1/student/tasks/19/resume/', { method: 'POST' }],
     ])
   })
+
+  it('reuses an in-flight experiment result request', async () => {
+    let resolveRequest!: (value: object) => void
+    const response = new Promise<object>((resolve) => { resolveRequest = resolve })
+    const client = {
+      get: vi.fn().mockReturnValue(response),
+      mutate: vi.fn(),
+    }
+    const api = createStudentCourseApi(client as never)
+
+    const first = api.learningExperiment(7, 11)
+    const second = api.learningExperiment(7, 11)
+    expect(client.get).toHaveBeenCalledOnce()
+    expect(first).toBe(second)
+
+    resolveRequest({ experiment_id: 11 })
+    await expect(first).resolves.toEqual({ experiment_id: 11 })
+    await api.learningExperiment(7, 11)
+    expect(client.get).toHaveBeenCalledTimes(2)
+  })
+
+  it('allows retry after a failed shared request and isolates experiment keys', async () => {
+    const client = {
+      get: vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue({}),
+      mutate: vi.fn(),
+    }
+    const api = createStudentCourseApi(client as never)
+    const first = api.learningExperiment(7, 11)
+    expect(api.learningExperiment(7, 11)).toBe(first)
+    await expect(first).rejects.toThrow('offline')
+    await api.learningExperiment(7, 11)
+    await Promise.all([api.learningExperiment(8, 11), api.learningExperiment(7, 12)])
+    expect(client.get).toHaveBeenCalledTimes(4)
+  })
 })

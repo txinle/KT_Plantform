@@ -63,6 +63,40 @@ class ExportSnapshot(models.Model):
         return super().save(*args, **kwargs)
 
 
+class StudentExperimentResultSnapshot(models.Model):
+    """Permission-trimmed student result projection cache."""
+
+    class_task = models.ForeignKey(
+        "experiments.ClassExperimentTask",
+        on_delete=models.CASCADE,
+        related_name="student_result_snapshots",
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="student_experiment_result_snapshots",
+    )
+    source_signature = models.CharField(max_length=64)
+    projection_version = models.CharField(max_length=64, default="student-result-v1")
+    payload = models.JSONField()
+    generated_at = models.DateTimeField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["class_task", "student"],
+                name="unique_student_experiment_result_snapshot",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["class_task", "source_signature"],
+                name="student_result_snap_sig_idx",
+            ),
+        ]
+
+
 class ExportJob(models.Model):
     class Status(models.TextChoices):
         QUEUED = "queued", "排队中"

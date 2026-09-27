@@ -26,6 +26,9 @@ class ClassExperimentTaskBackfillMigrationTests(TransactionTestCase):
                 # assessment at its last compatible leaf while it deliberately
                 # rewinds experiments to 0013/0014.
                 targets.append(("assessment", "0021_session_terminal_constraint"))
+            elif target[0] == "analytics":
+                # Result snapshots depend on the current experiment schema.
+                targets.append(("analytics", "0013_researchsessionmaterialization_source_revision"))
             else:
                 targets.append(target)
         return targets
@@ -35,6 +38,8 @@ class ClassExperimentTaskBackfillMigrationTests(TransactionTestCase):
         super().setUpClass()
         cls.executor = MigrationExecutor(connection)
         cls.current_targets = cls.executor.loader.graph.leaf_nodes()
+        # Class cleanup also runs if historical fixture creation fails in setUpClass.
+        cls.addClassCleanup(cls._restore_schema)
         cls.old_targets = cls._targets_with_experiments_at(
             cls.executor,
             cls.migrate_from,
@@ -231,11 +236,8 @@ class ClassExperimentTaskBackfillMigrationTests(TransactionTestCase):
         cls.apps = cls.executor.loader.project_state(cls.new_targets).apps
 
     @classmethod
-    def tearDownClass(cls):
-        try:
-            MigrationExecutor(connection).migrate(cls.current_targets)
-        finally:
-            super().tearDownClass()
+    def _restore_schema(cls):
+        MigrationExecutor(connection).migrate(cls.current_targets)
 
     def test_backfill_creates_only_the_unique_eligible_task_and_reverse_keeps_it(self):
         ClassExperimentTask = self.apps.get_model(

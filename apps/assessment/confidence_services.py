@@ -230,13 +230,19 @@ def confidence_prompt_contract(assignment):
 def _append_confidence_event(assignment, *, event_type, payload):
     attempt = assignment.attempt
     scale_version = _configuration(attempt).get("confidence_scale_version", "v1")
+    event_version = (
+        2
+        if (
+            event_type == "confidence_skipped"
+            and payload.get("reason_code") == "deadline_expired"
+        )
+        else 2
+        if event_type == "confidence_committed" and scale_version == "v2"
+        else 1
+    )
     return append_assessment_event(
         event_type=event_type,
-        event_version=(
-            2
-            if event_type == "confidence_committed" and scale_version == "v2"
-            else 1
-        ),
+        event_version=event_version,
         event_domain="assessment",
         actor_source="server",
         session=attempt.session,

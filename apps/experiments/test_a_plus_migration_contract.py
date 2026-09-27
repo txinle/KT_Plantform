@@ -19,7 +19,7 @@ class APlusMigrationContractTests(SimpleTestCase):
 
         self.assertEqual(
             loader.graph.leaf_nodes("experiments"),
-            [("experiments", "0029_task_time_revisions")],
+            [("experiments", "0030_clarify_personal_feedback_release")],
         )
         self.assertIn(
             ("experiments", "0022_participant_snapshot_assignment_provenance"),

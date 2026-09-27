@@ -863,52 +863,61 @@ def build_student_experiment_projection(
     require_results=False,
 ):
     with analytics_read_transaction() as generated_at:
-        bundle = _load_bundle(enrollment, generated_at)
-        task = _resolve_task(bundle, experiment_id)
-        result_allowed = _feedback_allows_results(bundle, task)
-        if require_results and not result_allowed:
-            raise PermissionDenied("该实验未开放结果反馈。")
-        status, status_label, completed, participated = _status(bundle, task)
-        values = {
-            "generated_at": generated_at,
-            "course_id": bundle.enrollment.course_id,
-            "course_name": bundle.enrollment.course.name,
-            "class_group_name": bundle.enrollment.class_group.name,
-            "experiment_id": task.experiment_id,
-            "experiment_name": task.experiment.name,
-            "status": status,
-            "status_label": status_label,
-            "completed": completed,
-            "participated": participated,
-        }
-        if not result_allowed:
-            return StudentAllowListDTO(**values)
-        if bundle.policy.show_correct_rate:
-            metric = _correct_rate(bundle, task, bundle.context.student_id)
-            values["correct_rate"] = metric
-            comparison = _comparison(bundle, task, metric, kind="correct")
-            if comparison is not None:
-                values["correct_rate_comparison"] = comparison
-        if bundle.policy.show_scores:
-            metric = _score_rate(bundle, task, bundle.context.student_id)
-            values["score_rate"] = metric
-            coverage = _grading_coverage(
-                bundle,
-                (task,),
-                bundle.context.student_id,
-            )
-            if coverage is not None:
-                values["grading_coverage"] = coverage
-            comparison = _comparison(bundle, task, metric, kind="score")
-            if comparison is not None:
-                values["score_rate_comparison"] = comparison
-            if bundle.policy.rank_mode == ClassStudentAnalyticsPolicy.RankMode.SELF:
-                rank = _rank(bundle, task)
-                if rank is not None:
-                    values["rank"] = rank
-        if bundle.policy.show_item_results:
-            values["item_results"] = _item_rows(bundle, task)
+        return _build_student_experiment_projection(
+            enrollment, experiment_id=experiment_id,
+            require_results=require_results, generated_at=generated_at,
+        )
+
+
+def _build_student_experiment_projection(
+    enrollment, *, experiment_id, require_results, generated_at,
+):
+    bundle = _load_bundle(enrollment, generated_at)
+    task = _resolve_task(bundle, experiment_id)
+    result_allowed = _feedback_allows_results(bundle, task)
+    if require_results and not result_allowed:
+        raise PermissionDenied("该实验未开放结果反馈。")
+    status, status_label, completed, participated = _status(bundle, task)
+    values = {
+        "generated_at": generated_at,
+        "course_id": bundle.enrollment.course_id,
+        "course_name": bundle.enrollment.course.name,
+        "class_group_name": bundle.enrollment.class_group.name,
+        "experiment_id": task.experiment_id,
+        "experiment_name": task.experiment.name,
+        "status": status,
+        "status_label": status_label,
+        "completed": completed,
+        "participated": participated,
+    }
+    if not result_allowed:
         return StudentAllowListDTO(**values)
+    if bundle.policy.show_correct_rate:
+        metric = _correct_rate(bundle, task, bundle.context.student_id)
+        values["correct_rate"] = metric
+        comparison = _comparison(bundle, task, metric, kind="correct")
+        if comparison is not None:
+            values["correct_rate_comparison"] = comparison
+    if bundle.policy.show_scores:
+        metric = _score_rate(bundle, task, bundle.context.student_id)
+        values["score_rate"] = metric
+        coverage = _grading_coverage(
+            bundle,
+            (task,),
+            bundle.context.student_id,
+        )
+        if coverage is not None:
+            values["grading_coverage"] = coverage
+        comparison = _comparison(bundle, task, metric, kind="score")
+        if comparison is not None:
+            values["score_rate_comparison"] = comparison
+        if bundle.policy.rank_mode == ClassStudentAnalyticsPolicy.RankMode.SELF:
+            rank = _rank(bundle, task)
+            if rank is not None:
+                values["rank"] = rank
+    if bundle.policy.show_item_results:
+        values["item_results"] = _item_rows(bundle, task)
+    return StudentAllowListDTO(**values)
 
 
 def build_student_question_projection(

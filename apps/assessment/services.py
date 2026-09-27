@@ -150,6 +150,240 @@ def _close_open_attempts(
         )
     return attempts
 
+
+def _commit_attempt_submission(
+    session,
+    attempt,
+    *,
+    token_value,
+    grading,
+    correct,
+    score,
+    now,
+    client_time=None,
+    terminal_at=None,
+    close_reason=None,
+):
+    """Persist the shared authoritative submission and audit projections."""
+    session.submission_count += 1
+    attempt.status = Attempt.Status.SUBMITTED
+    attempt.final_answer = attempt.draft_answer
+    if attempt.current_response_snapshot is None:
+        question_type = attempt.assignment.snapshot.question_type
+        if question_type in CHOICE_QUESTION_TYPES:
+            canonical_state = canonical_choice_response_state(
+                question_type,
+                attempt.draft_answer,
+            )
+            attempt.current_response_snapshot = create_response_snapshot(
+                attempt=attempt,
+                content=response_snapshot_content(canonical_state),
+                response_state=ResponseState(question_type, canonical_state),
+            )
+        elif question_type in TEXT_LIKE_QUESTION_TYPES:
+            attempt.current_response_snapshot = create_response_snapshot(
+                attempt=attempt, content=response_snapshot_content(attempt.draft_answer),
+            )
+    attempt.final_response_snapshot = attempt.current_response_snapshot
+    attempt.final_response_event = attempt.active_response_event
+    attempt.formal_capture_boundary = {
+        "capture_contract_id": str(session.capture_contract_id) if session.capture_contract_id else None,
+        "active_response_event_id": str(attempt.active_response_event_id) if attempt.active_response_event_id else None,
+        "response_version": attempt.response_version,
+        "server_ingest_sequence_no": session.assessment_events.aggregate(
+            maximum=Max("server_ingest_sequence_no")
+        )["maximum"] or 0,
+        "student_id": session.student_id,
+    }
+    attempt.submitted_at = now
+    attempt.submission_sequence_index = session.submission_count
+    attempt.is_correct = correct
+    attempt.score = score
+    attempt.submission_token = token_value
+    if close_reason is not None:
+        attempt.close_reason = close_reason
+        attempt.authoritative_terminal_at = terminal_at
+        attempt.terminal_recorded_at = now
+    duration_end = terminal_at or now
+    if attempt.first_opened_at:
+        attempt.first_to_submit_duration_ms = int(
+            max(0, (duration_end - attempt.first_opened_at).total_seconds() * 1000)
+        )
+    if attempt.last_opened_at:
+        attempt.last_visit_to_submission_ms = int(
+            max(0, (duration_end - attempt.last_opened_at).total_seconds() * 1000)
+        )
+    attempt.save()
+    session.save(update_fields=["submission_count", "last_activity_at"])
+    submission = SubmissionEvent.objects.create(
+        attempt=attempt,
+        submission_token=token_value,
+        final_answer=attempt.final_answer,
+        final_response_snapshot=attempt.final_response_snapshot,
+        grading_status=grading.status,
+        is_correct=correct,
+        score=score,
+        client_clicked_at=client_time,
+        server_received_at=now,
+        committed_at=now,
+    )
+    GradeRecord.objects.create(
+        submission=submission,
+        version=1,
+        status=grading.status,
+        validity_status=(
+            GradeRecord.ValidityStatus.EFFECTIVE
+            if grading.status == GradeRecord.Status.COMPLETED
+            else GradeRecord.ValidityStatus.CANDIDATE
+        ),
+        is_correct=correct,
+        score=score,
+        max_score=grading.max_score,
+        graded_at=now if grading.status == GradeRecord.Status.COMPLETED else None,
+        grading_method=grading.method,
+        grading_version=grading.method,
+    )
+    append_assessment_event(
+        event_type="response_committed",
+        event_version=1,
+        event_domain="assessment",
+        actor_source="server",
+        session=session,
+        assignment=attempt.assignment,
+        attempt=attempt,
+        question_snapshot=attempt.assignment.snapshot,
+        item_instance=attempt.assignment.item_instance,
+        correlation_id=token_value,
+        payload={
+            "submission_token": str(token_value),
+            "submission_id": submission.pk,
+            "grading_status": submission.grading_status,
+            "final_response_snapshot_id": (
+                str(submission.final_response_snapshot_id)
+                if submission.final_response_snapshot_id is not None
+                else None
+            ),
+            "committed_at": now.isoformat(),
+        },
+        capture_mode="native",
+        app_version="server",
+    )
+    append_assessment_event(
+        event_type="attempt_closed",
+        event_version=1,
+        event_domain="assessment",
+        actor_source="server",
+        session=session,
+        assignment=attempt.assignment,
+        attempt=attempt,
+        question_snapshot=attempt.assignment.snapshot,
+        item_instance=attempt.assignment.item_instance,
+        correlation_id=token_value,
+        payload={"close_reason": "submitted"},
+        capture_mode="native",
+        app_version="server",
+    )
+    return submission
+
+
+def _auto_submit_saved_attempt_for_deadline(session, attempt, *, terminal_at):
+    """Commit the last server-persisted answer when the session expires."""
+    if attempt.status not in {
+        Attempt.Status.UNVISITED,
+        Attempt.Status.VISITED,
+        Attempt.Status.DRAFT,
+        Attempt.Status.SKIPPED,
+    }:
+        return False
+    answer = attempt.draft_answer
+    if attempt.current_response_snapshot_id is not None:
+        snapshot = attempt.current_response_snapshot
+        answer = snapshot.state_json.get("value", snapshot.content)
+    has_answer = answer not in (None, "", [], {})
+    if isinstance(answer, str):
+        has_answer = bool(answer.strip())
+    if not has_answer:
+        return False
+    attempt.draft_answer = answer
+
+    from .feedback_services import initial_grading_result
+
+    snapshot = attempt.assignment.snapshot
+    now = timezone.now()
+    grading = None
+    correct = None
+    score = None
+    if has_answer:
+        answer_valid = True
+        if snapshot.question_type == "numeric":
+            try:
+                normalize_finite_decimal(attempt.draft_answer)
+            except ValueError:
+                answer_valid = False
+        if answer_valid:
+            try:
+                correct, score = score_payload(
+                    snapshot.question_type,
+                    snapshot.correct_answer,
+                    attempt.draft_answer,
+                    accepted_answers=snapshot.accepted_answers,
+                    absolute_tolerance=snapshot.absolute_tolerance,
+                    relative_tolerance=snapshot.relative_tolerance,
+                )
+            except (TypeError, ValueError, ValidationError):
+                answer_valid = False
+        if answer_valid:
+            grading = initial_grading_result(attempt, correct, score)
+            correct, score = grading.is_correct, grading.score
+    if grading is None:
+        # A capture-v2 snapshot is authoritative even if its compatibility
+        # answer projection is empty or malformed.  Keep grading pending.
+        from .feedback_services import InitialGradingResult
+
+        grading = InitialGradingResult(
+            status=SubmissionEvent.GradingStatus.PENDING,
+            is_correct=None,
+            score=None,
+            max_score=None,
+            method="deadline_unvalidated_answer_v1",
+        )
+    _commit_attempt_submission(
+        session,
+        attempt,
+        token_value=uuid.uuid4(),
+        grading=grading,
+        correct=correct,
+        score=score,
+        now=now,
+        terminal_at=terminal_at,
+        close_reason="deadline_auto_submitted",
+    )
+    from .models import ConfidenceAssignment
+    from .confidence_services import _append_confidence_event
+
+    confidence = (
+        ConfidenceAssignment.objects.select_for_update()
+        .filter(attempt=attempt)
+        .first()
+    )
+    if confidence is not None and confidence.condition == ConfidenceAssignment.Condition.PROMPT:
+        if confidence.response_status in {
+            ConfidenceAssignment.ResponseStatus.ASSIGNED,
+            ConfidenceAssignment.ResponseStatus.PROMPT_SHOWN,
+            ConfidenceAssignment.ResponseStatus.UPLOAD_FAILED,
+        }:
+            confidence.response_status = ConfidenceAssignment.ResponseStatus.SKIPPED
+            confidence.save(update_fields=["response_status"])
+            _append_confidence_event(
+                confidence,
+                event_type="confidence_skipped",
+                payload={
+                    "confidence_assignment_id": str(confidence.pk),
+                    "reason_code": "deadline_expired",
+                },
+            )
+    return True
+
 @transaction.atomic
 def get_or_create_session(
     experiment,
@@ -640,8 +874,24 @@ def _validate_course_access(session, *, request_received_at=None):
         raise ValidationError("你已不在该实验所属课程中")
 
 
+@transaction.atomic
 def _terminate_for_deadline(session, *, now, reason, attempt=None):
+    session = (
+        ExperimentSession.objects.select_for_update()
+        .select_related("version__experiment")
+        .get(pk=session.pk)
+    )
+    if session.status != ExperimentSession.Status.IN_PROGRESS:
+        return
     if attempt is not None:
+        attempt = (
+            Attempt.objects.select_for_update()
+            .select_related("assignment__snapshot", "assignment__item_instance")
+            .get(pk=attempt.pk, session=session)
+        )
+    if attempt is not None:
+        if attempt.status in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
+            return
         attempt.status = Attempt.Status.TIMED_OUT
         attempt.is_correct = None
         attempt.close_reason = reason
@@ -658,13 +908,40 @@ def _terminate_for_deadline(session, *, now, reason, attempt=None):
         )
         _append_attempt_closed(attempt, close_reason="timed_out")
         return
-    _close_open_attempts(
-        session,
-        status=Attempt.Status.UNANSWERED,
-        close_reason=reason,
-        event_close_reason="unanswered",
-        authoritative_terminal_at=now,
+    attempts = list(
+        session.attempts.select_for_update()
+        .filter(
+            status__in=[
+                Attempt.Status.UNVISITED,
+                Attempt.Status.VISITED,
+                Attempt.Status.DRAFT,
+                Attempt.Status.SKIPPED,
+            ]
+        )
+        .select_related("assignment__snapshot", "assignment__item_instance")
     )
+    for attempt in attempts:
+        if reason != "task_terminated" and _auto_submit_saved_attempt_for_deadline(
+            session,
+            attempt,
+            terminal_at=now,
+        ):
+            continue
+        attempt.status = Attempt.Status.UNANSWERED
+        attempt.is_correct = None
+        attempt.close_reason = reason
+        attempt.authoritative_terminal_at = now
+        attempt.terminal_recorded_at = timezone.now()
+        attempt.save(
+            update_fields=[
+                "status",
+                "is_correct",
+                "close_reason",
+                "authoritative_terminal_at",
+                "terminal_recorded_at",
+            ]
+        )
+        _append_attempt_closed(attempt, close_reason="unanswered")
     session.status = ExperimentSession.Status.EXPIRED
     session.completed_at = now
     session.terminal_at = now
@@ -709,11 +986,13 @@ def _validate_session_time(session, attempt=None, *, request_received_at=None):
         )
         if not decision.allowed:
             if decision.code == "DEADLINE_EXPIRED":
+                session_decision = DeadlineDecisionService.can_enter_item(task, session, now)
+                session_expired = session_decision.code == "DEADLINE_EXPIRED"
                 _terminate_for_deadline(
                     session,
-                    now=decision.deadline or now,
+                    now=(session_decision.deadline if session_expired else decision.deadline) or now,
                     reason="deadline_expired",
-                    attempt=attempt,
+                    attempt=None if session_expired else attempt,
                 )
                 return "作答时间已结束"
             if decision.code == "TASK_TERMINATED":
@@ -1175,93 +1454,16 @@ def _submit_attempt_transaction(
     from .feedback_services import initial_grading_result
     grading = initial_grading_result(attempt, correct, score)
     correct, score = grading.is_correct, grading.score
-    now = timezone.now(); session.submission_count += 1
-    attempt.status = Attempt.Status.SUBMITTED; attempt.final_answer = attempt.draft_answer
-    if attempt.current_response_snapshot is None:
-        question_type = snapshot.question_type
-        if question_type in CHOICE_QUESTION_TYPES:
-            canonical_state = canonical_choice_response_state(
-                question_type,
-                attempt.draft_answer,
-            )
-            attempt.current_response_snapshot = create_response_snapshot(
-                attempt=attempt,
-                content=response_snapshot_content(canonical_state),
-                response_state=ResponseState(question_type, canonical_state),
-            )
-    attempt.final_response_snapshot = attempt.current_response_snapshot
-    attempt.final_response_event = attempt.active_response_event
-    attempt.formal_capture_boundary = {
-        'capture_contract_id': str(session.capture_contract_id) if session.capture_contract_id else None,
-        'active_response_event_id': str(attempt.active_response_event_id) if attempt.active_response_event_id else None,
-        'response_version': attempt.response_version,
-        'server_ingest_sequence_no': session.assessment_events.aggregate(maximum=Max('server_ingest_sequence_no'))['maximum'] or 0,
-        'student_id': session.student_id,
-    }
-    attempt.submitted_at = now; attempt.submission_sequence_index = session.submission_count
-    attempt.is_correct = correct; attempt.score = score; attempt.submission_token = token_value
-    if attempt.first_opened_at: attempt.first_to_submit_duration_ms = int((now - attempt.first_opened_at).total_seconds() * 1000)
-    if attempt.last_opened_at: attempt.last_visit_to_submission_ms = int((now - attempt.last_opened_at).total_seconds() * 1000)
-    attempt.save()
-    session.save(update_fields=["submission_count", "last_activity_at"])
-    submission = SubmissionEvent.objects.create(
-        attempt=attempt, submission_token=token_value, final_answer=attempt.final_answer,
-        final_response_snapshot=attempt.final_response_snapshot,
-        grading_status=grading.status,
-        is_correct=correct, score=score, client_clicked_at=client_time,
-        server_received_at=now, committed_at=now,
-    )
-    GradeRecord.objects.create(
-        submission=submission,
-        version=1,
-        status=grading.status,
-        validity_status=GradeRecord.ValidityStatus.EFFECTIVE if grading.status == GradeRecord.Status.COMPLETED else GradeRecord.ValidityStatus.CANDIDATE,
-        is_correct=correct,
+    now = timezone.now()
+    submission = _commit_attempt_submission(
+        session,
+        attempt,
+        token_value=token_value,
+        grading=grading,
+        correct=correct,
         score=score,
-        max_score=grading.max_score,
-        graded_at=now if grading.status == GradeRecord.Status.COMPLETED else None,
-        grading_method=grading.method,
-        grading_version=grading.method,
-    )
-    append_assessment_event(
-        event_type="response_committed",
-        event_version=1,
-        event_domain="assessment",
-        actor_source="server",
-        session=session,
-        assignment=attempt.assignment,
-        attempt=attempt,
-        question_snapshot=attempt.assignment.snapshot,
-        item_instance=attempt.assignment.item_instance,
-        correlation_id=token_value,
-        payload={
-            "submission_token": str(token_value),
-            "submission_id": submission.pk,
-            "grading_status": submission.grading_status,
-            "final_response_snapshot_id": (
-                str(submission.final_response_snapshot_id)
-                if submission.final_response_snapshot_id is not None
-                else None
-            ),
-            "committed_at": now.isoformat(),
-        },
-        capture_mode="native",
-        app_version="server",
-    )
-    append_assessment_event(
-        event_type="attempt_closed",
-        event_version=1,
-        event_domain="assessment",
-        actor_source="server",
-        session=session,
-        assignment=attempt.assignment,
-        attempt=attempt,
-        question_snapshot=attempt.assignment.snapshot,
-        item_instance=attempt.assignment.item_instance,
-        correlation_id=token_value,
-        payload={"close_reason": "submitted"},
-        capture_mode="native",
-        app_version="server",
+        now=now,
+        client_time=client_time,
     )
     if confidence is not None:
         from .confidence_services import commit_confidence, skip_confidence
