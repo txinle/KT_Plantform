@@ -9,7 +9,7 @@ test('publish setup shows student shortage without a stale success state', async
   await login(page)
   await page.goto(`${origin}/teacher/courses/1/experiments/create/`)
   await page.getByLabel('实验名称', { exact: true }).fill(`学生题量阻断 ${Date.now()}`)
-  await page.getByLabel('题库', { exact: true }).selectOption({ label: '演示题库' })
+  await selectBank(page, '演示题库')
   await page.getByLabel('每位参与者题目数', { exact: true }).fill('1')
   await page.locator('input[name="cross_experiment_item_policy"][value="unrestricted"]').check()
   await page.getByRole('button', { name: '保存草稿', exact: true }).click()
@@ -52,7 +52,7 @@ test('KC quota inventory agrees with saved preflight and permits publication', a
   await login(page)
   await page.goto(`${origin}/teacher/courses/1/experiments/create/`)
   await page.getByLabel('实验名称', { exact: true }).fill(`KC 库存回归 ${Date.now()}`)
-  await page.getByLabel('题库', { exact: true }).selectOption({ label: '演示题库' })
+  await selectBank(page, '演示题库')
   await page.locator('input[name="sampling_mode"][value="kc_quota"]').check()
   await page.getByText('＋ 添加 KC', { exact: true }).click()
   await page.locator('.kt-quota-panel input[type="checkbox"]').first().check()
@@ -104,8 +104,8 @@ test('total-count mode uses the whole bank and keeps type allocation usable', as
   await login(page)
   await page.goto(origin + '/teacher/courses/1/experiments/create/')
   await page.getByLabel('实验名称', { exact: true }).fill('全题库题型回归 ' + Date.now())
-  await page.getByLabel('题库', { exact: true }).selectOption({ label: '演示题库' })
-  await expect(page.getByText('当前使用整个题库', { exact: true })).toBeVisible()
+  await selectBank(page, '演示题库')
+  await expect(page.getByText('当前使用所选题库', { exact: true })).toBeVisible()
   await expect(page.locator('.kt-match-scope')).toHaveCount(0)
 
   await page.getByLabel('每位参与者题目数', { exact: true }).fill('1')
@@ -186,7 +186,7 @@ test('captures the six real experiment workflow states', async ({ browserName, p
 
   await page.goto(`${origin}/teacher/courses/1/experiments/create/`)
   const experimentName = `UI 视觉验收 ${Date.now()}`
-  await page.getByLabel('题库', { exact: true }).selectOption({ index: 1 })
+  await selectBank(page, '演示题库')
   await page.locator('input[name="sampling_mode"][value="kc_quota"]').check()
   await page.getByText('＋ 添加 KC', { exact: true }).click()
   const kcOptions = page.locator('.kt-quota-panel .kt-kc-tree-selector input[type="checkbox"]')
@@ -255,4 +255,73 @@ test('captures the six real experiment workflow states', async ({ browserName, p
     scrollWidth: document.documentElement.scrollWidth,
   }))
   expect(zoomOverflow.scrollWidth).toBeLessThanOrEqual(zoomOverflow.clientWidth + 1)
+})
+
+
+async function selectBank(page: Page, name: string) {
+  await page.locator('#experiment-bank').click()
+  const choices = page.locator('input[name="question_bank_choice"]')
+  for (const choice of await choices.all()) await choice.uncheck()
+  await page.getByRole('checkbox', { name, exact: true }).check()
+  await page.locator('#experiment-bank').click()
+}
+
+test('multiple banks can be searched, saved and restored across responsive layouts', async ({ page }, testInfo) => {
+  await login(page)
+  await page.route(/\/api\/v1\/teacher\/courses\/1\/experiments\/\?/, async (route) => {
+    const response = await route.fetch()
+    const collection = await response.json()
+    collection.summary.question_banks = collection.summary.question_banks.map((bank: { id: number; name: string }) => ({
+      ...bank,
+      name: `${bank.name} — 跨章节联合题库与长名称显示验证 ${'LongBankName'.repeat(5)}`,
+    }))
+    await route.fulfill({ response, json: collection })
+  })
+  await page.goto(`${origin}/teacher/courses/1/experiments/create/`)
+  await page.getByLabel('实验名称', { exact: true }).fill(`多题库验收 ${Date.now()}`)
+  const picker = page.locator('#experiment-bank')
+  const basic = page.locator('[aria-labelledby="definition-basic"]')
+  const closedHeight = (await basic.boundingBox())!.height
+  await picker.focus()
+  await page.keyboard.press('Enter')
+  await expect(page.getByLabel('搜索题库')).toBeVisible()
+  const choices = page.locator('input[name="question_bank_choice"]')
+  expect(await choices.count()).toBeGreaterThanOrEqual(3)
+  const ids = await choices.evaluateAll(inputs => inputs.map(input => (input as HTMLInputElement).value))
+  for (const choice of await choices.all()) await choice.check()
+  expect((await basic.boundingBox())!.height).toBeCloseTo(closedHeight, 0)
+  await expect(picker).toContainText(`已选择 ${ids.length} 个题库`)
+  await page.getByLabel('搜索题库').fill('演示')
+  await expect(choices).toHaveCount(1)
+  await page.getByLabel('搜索题库').fill('')
+  await picker.click()
+  await expect(page.getByLabel('各题库候选库存')).toBeVisible()
+  for (const [name, width, height] of [
+    ['reference', 2201, 900], ['desktop', 1440, 900], ['mobile', 390, 844], ['zoom-equivalent', 720, 450],
+  ] as const) {
+    await page.setViewportSize({ width, height })
+    await picker.scrollIntoViewIfNeeded()
+    await capture(page, testInfo, `multi-bank-${name}.png`)
+    const heightBefore = (await basic.boundingBox())!.height
+    await picker.click()
+    await expect(page.getByLabel('搜索题库')).toBeVisible()
+    expect((await basic.boundingBox())!.height).toBeCloseTo(heightBefore, 0)
+    await capture(page, testInfo, `multi-bank-open-${name}.png`)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1)
+    await page.keyboard.press('Escape')
+    await expect(page.getByLabel('搜索题库')).toBeHidden()
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.locator('input[name="cross_experiment_item_policy"][value="unrestricted"]').check()
+  await page.getByRole('button', { name: '保存草稿', exact: true }).click()
+  await expect(page).toHaveURL(/\/experiments\/\d+\/$/)
+  await page.goto(`${page.url()}edit/`)
+  await expect(page.locator('#experiment-bank')).toContainText(`已选择 ${ids.length} 个题库`)
+  await page.locator('#experiment-bank').click()
+  for (const id of ids) await expect(page.locator(`input[name="question_bank_choice"][value="${id}"]`)).toBeChecked()
+  await choices.last().uncheck()
+  await expect(page.getByText('抽题配置尚未保存。', { exact: false })).toBeVisible()
+  for (const choice of await choices.all()) await choice.uncheck()
+  await page.getByRole('button', { name: '保存草稿', exact: true }).click()
+  await expect(page.getByRole('alert').filter({ hasText: '至少选择一个题库。' })).toBeVisible()
 })

@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 
 from apps.api.exceptions import ApiConflict
 from apps.question_bank.models import Concept, Question, QuestionBank
@@ -7,7 +8,8 @@ from apps.question_bank.models import Concept, Question, QuestionBank
 from ..collection_status import COLLECTION_STATUS_CHOICES
 from ..models import Experiment, ExperimentSamplingKC
 from ..sampling import SamplingService, SamplingValidationError
-from ..services import lock_experiment_question_bank, sync_experiment_questions
+from ..services import sync_experiment_questions
+from ..question_bank_selection import validate_question_banks, replace_question_banks
 
 
 class QuestionBankReferenceSerializer(serializers.ModelSerializer):
@@ -89,7 +91,12 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         source="question_bank",
         queryset=QuestionBank.objects.all(),
         write_only=True,
+        required=False,
     )
+    question_bank_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1), required=False, source="selected_question_bank_ids"
+    )
+    question_banks = serializers.SerializerMethodField()
     question_quotas = QuestionQuotaSerializer(many=True, read_only=True)
     sampling_kcs = SamplingKCSerializer(many=True, read_only=True)
     sampling = SamplingDefinitionSerializer(source="*", required=False)
@@ -134,6 +141,8 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "description",
             "question_bank",
             "question_bank_id",
+            "question_bank_ids",
+            "question_banks",
             "status",
             "status_label",
             "selection_mode",
@@ -190,11 +199,20 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         return bool(request and experiment.course and experiment.course.can_manage(request.user)
                     and experiment.course.status == experiment.course.Status.ACTIVE)
 
+    @extend_schema_field(QuestionBankReferenceSerializer(many=True))
+    def get_question_banks(self, experiment):
+        return QuestionBankReferenceSerializer(experiment.selected_question_banks, many=True).data
+
     def to_representation(self, instance):
         representation = super().to_representation(instance)
+        representation["question_bank_ids"] = instance.selected_question_bank_ids
         if not instance.frozen_release_snapshot_id:
             return representation
         configuration = instance.frozen_release_snapshot.configuration
+        if "question_banks" in configuration:
+            representation["question_banks"] = configuration["question_banks"]
+            representation["question_bank_ids"] = configuration["question_bank_ids"]
+            representation["question_bank"] = next(iter(configuration["question_banks"]), None)
         frozen_fields = (
             "research_tools",
             "selection_mode",
@@ -290,6 +308,18 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        ids = attrs.pop("selected_question_bank_ids", None)
+        legacy_bank = attrs.pop("question_bank", None)
+        if ids is not None and legacy_bank is not None and ids != [legacy_bank.pk]:
+            raise serializers.ValidationError({"question_bank_ids": "请勿同时提交不一致的单题库和多题库选择。"})
+        if ids is None and legacy_bank is not None:
+            ids = [legacy_bank.pk]
+        if ids is not None or self.instance is None:
+            try:
+                banks = validate_question_banks(self.context["course"], ids or [])
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError(exc.message_dict) from exc
+            attrs["selected_banks"] = banks
         legacy_fields = {
             field_name
             for field_name in ("selection_mode", "question_quotas")
@@ -493,15 +523,15 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         quotas = validated_data.pop("type_quotas", None)
         validated_data.pop("question_quotas", None)
         sampling_kcs = validated_data.pop("sampling_kcs", None)
-        validated_data["question_bank"] = lock_experiment_question_bank(
-            validated_data["question_bank"], validated_data["course"]
-        )
+        banks = validated_data.pop("selected_banks")
+        validated_data["question_bank"] = banks[0]
         experiment = Experiment(**validated_data)
         try:
             experiment.full_clean()
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc.message_dict) from exc
         experiment.save()
+        replace_question_banks(experiment, [bank.pk for bank in banks])
         self._save_quotas(experiment, quotas)
         self._save_sampling_kcs(experiment, sampling_kcs)
         try:
@@ -517,14 +547,16 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         quotas = validated_data.pop("type_quotas", None)
         validated_data.pop("question_quotas", None)
         sampling_kcs = validated_data.pop("sampling_kcs", None)
-        original_bank_id = instance.question_bank_id
-        if "question_bank" in validated_data:
-            validated_data["question_bank"] = lock_experiment_question_bank(
-                validated_data["question_bank"], instance.course
-            )
+        original_bank_ids = instance.selected_question_bank_ids
+        banks = validated_data.pop("selected_banks", None)
         for field_name, value in validated_data.items():
             setattr(instance, field_name, value)
         instance.save()
+        if banks is not None:
+            replace_question_banks(instance, [bank.pk for bank in banks])
+            instance.question_bank = banks[0]
+            if hasattr(instance, "_prefetched_objects_cache"):
+                instance._prefetched_objects_cache.pop("question_bank_links", None)
         self._save_quotas(instance, quotas)
         self._save_sampling_kcs(instance, sampling_kcs)
         try:
@@ -538,7 +570,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {issue["field"] or "sampling_kcs": issue["message"] for issue in exc.issues}
                 ) from exc
-        if instance.question_bank_id != original_bank_id:
+        if instance.selected_question_bank_ids != original_bank_ids:
             sync_experiment_questions(instance)
         return instance
 
@@ -607,12 +639,26 @@ class TeacherExperimentReadinessSerializer(serializers.Serializer):
 
 
 class TeacherSamplingInventoryRequestSerializer(serializers.Serializer):
-    question_bank_id = serializers.IntegerField(min_value=1)
+    question_bank_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1), required=False
+    )
+    question_bank_id = serializers.IntegerField(min_value=1, required=False)
     kc_codes = serializers.ListField(
         child=serializers.CharField(max_length=32),
         allow_empty=True,
     )
     match_scope = serializers.ChoiceField(choices=Experiment.MatchScope.choices)
+
+    def validate(self, attrs):
+        ids = attrs.get("question_bank_ids")
+        if ids is None and attrs.get("question_bank_id"):
+            ids = [attrs["question_bank_id"]]
+        if not ids:
+            raise serializers.ValidationError({"question_bank_ids": "至少选择一个题库。"})
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError({"question_bank_ids": "题库不能重复选择。"})
+        attrs["question_bank_ids"] = ids
+        return attrs
 
     def validate_kc_codes(self, codes):
         if len(codes) != len(set(codes)):
@@ -637,6 +683,7 @@ class TeacherSamplingInventoryResponseSerializer(serializers.Serializer):
     candidate_count = serializers.IntegerField(min_value=0)
     question_types = TeacherSamplingInventoryQuestionTypeSerializer(many=True)
     kc_counts = TeacherSamplingInventoryKCSerializer(many=True)
+    bank_counts = serializers.ListField(child=serializers.DictField(), required=False)
 
 
 class PublishPlanClassSerializer(serializers.Serializer):

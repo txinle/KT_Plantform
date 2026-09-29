@@ -294,14 +294,15 @@ class SamplingService:
             )])
 
     @classmethod
-    def total_count_candidates(cls, *, question_bank_id, concept_ids, match_scope):
+    def total_count_candidates(cls, *, question_bank_ids=None, question_bank_id=None, concept_ids, match_scope):
+        bank_ids = list(question_bank_ids or ([question_bank_id] if question_bank_id else []))
         questions = list(
             Question.objects.filter(
-                bank_id=question_bank_id,
+                bank_id__in=bank_ids,
                 status=Question.Status.ACTIVE,
             )
             .prefetch_related("concept_links")
-            .order_by("sequence", "pk")
+            .order_by("bank_id", "sequence", "pk")
         )
         if not concept_ids:
             return questions
@@ -356,7 +357,7 @@ class SamplingService:
                 list(self.prepared_candidates)
                 if self.prepared_candidates is not None
                 else self.total_count_candidates(
-                    question_bank_id=self.experiment.question_bank_id,
+                    question_bank_ids=self.experiment.selected_question_bank_ids,
                     concept_ids=[rule.concept_id for rule in rules],
                     match_scope=scope,
                 )
@@ -412,11 +413,11 @@ class SamplingService:
             if self.prepared_candidates is not None
             else list(
                 Question.objects.filter(
-                    bank_id=self.experiment.question_bank_id,
+                    bank_id__in=self.experiment.selected_question_bank_ids,
                     status=Question.Status.ACTIVE,
                 )
                 .prefetch_related("concept_links")
-                .order_by("sequence", "pk")
+                .order_by("bank_id", "sequence", "pk")
             )
         )
         questions = self._filter_candidates(questions)
@@ -456,7 +457,7 @@ class SamplingService:
                 ])
         candidates = sorted(
             {question.pk: question for bucket in buckets.values() for question in bucket}.values(),
-            key=lambda question: (question.sequence, question.pk),
+            key=lambda question: (question.bank_id, question.sequence, question.pk),
         )
         resolution = SamplingResolution(
             candidates, buckets, {}, resolved,
@@ -517,7 +518,7 @@ class SamplingService:
                     ),
                     "cross_experiment_item_policy": self.policy,
                 })
-            return sorted(selected, key=lambda item: (item["question"].sequence, item["question"].pk))
+            return sorted(selected, key=lambda item: (item["question"].bank_id, item["question"].sequence, item["question"].pk))
         if self.experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT:
             type_quotas = self._type_quota_map()
             if type_quotas:
@@ -544,7 +545,7 @@ class SamplingService:
                     ),
                     "cross_experiment_item_policy": self.policy,
                 }
-                for question in sorted(selected, key=lambda item: (item.sequence, item.pk))
+                for question in sorted(selected, key=lambda item: (item.bank_id, item.sequence, item.pk))
             ]
         rules = self._rules()
         matching = _maximum_matching(rules, resolution.buckets, rng=rng)
@@ -565,7 +566,7 @@ class SamplingService:
             }
             for (concept_id, _slot), question_id in matching.items()
         ]
-        return sorted(selected, key=lambda item: (item["question"].sequence, item["question"].pk))
+        return sorted(selected, key=lambda item: (item["question"].bank_id, item["question"].sequence, item["question"].pk))
 
     def select(self, sampling_seed):
         return [item["question"] for item in self.select_with_attribution(sampling_seed)]

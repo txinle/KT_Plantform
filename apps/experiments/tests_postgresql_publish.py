@@ -4,6 +4,7 @@ from threading import Event, Thread, current_thread
 from unittest.mock import patch
 
 from django.db import close_old_connections
+from django.core.exceptions import ValidationError
 from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
 from django.utils import timezone
 
@@ -33,6 +34,7 @@ from .publication_services import (
     save_plan_selection,
 )
 from .services import publish_experiment, save_participant_rules
+from .question_bank_selection import replace_question_banks
 
 
 @skipUnlessDBFeature("has_select_for_update_of")
@@ -236,6 +238,55 @@ class PostgreSQLConcurrentPublishRegressionTests(TransactionTestCase):
             ).count(),
             1,
         )
+
+    def test_bank_set_edit_and_commit_cannot_both_succeed(self):
+        second_bank = QuestionBank.objects.create(course=self.course, name="第二个题库")
+        selected_ids = [self.experiment.question_bank_id, second_bank.pk]
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        plan = save_plan_selection(
+            plan, self.teacher, expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk], exclusions_by_class={},
+        )
+        generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
+        plan.refresh_from_db()
+        start = Event()
+        outcomes = Queue()
+
+        def contender(action):
+            close_old_connections()
+            try:
+                if not start.wait(timeout=10):
+                    raise AssertionError("concurrent operations were not released")
+                if action == "edit":
+                    replace_question_banks(self.experiment, selected_ids)
+                else:
+                    commit_publish_plan(plan, self.teacher, expected_revision=plan.plan_revision)
+                outcomes.put((action, None))
+            except Exception as exc:
+                outcomes.put((action, exc))
+            finally:
+                close_old_connections()
+
+        workers = [Thread(target=contender, args=(action,)) for action in ("edit", "commit")]
+        for worker in workers:
+            worker.start()
+        start.set()
+        for worker in workers:
+            worker.join(timeout=20)
+            self.assertFalse(worker.is_alive(), "bank edit/publication deadlocked")
+        results = dict(outcomes.get_nowait() for _ in workers)
+        self.assertEqual(sum(error is None for error in results.values()), 1, results)
+        self.experiment.refresh_from_db()
+        if results["commit"] is None:
+            self.assertIsInstance(results["edit"], ValidationError)
+            self.assertEqual(self.experiment.selected_question_bank_ids, selected_ids[:1])
+            self.assertEqual(self.experiment.class_tasks.count(), 1)
+            self.assertEqual(self.experiment.frozen_release_snapshot.configuration["question_bank_ids"], selected_ids[:1])
+        else:
+            self.assertIsInstance(results["commit"], PublicationConflict)
+            self.assertEqual(self.experiment.selected_question_bank_ids, selected_ids)
+            self.assertFalse(self.experiment.class_tasks.exists())
+            self.assertFalse(self.experiment.versions.exists())
 
     def test_concurrent_time_edits_accept_only_one_expected_revision(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)

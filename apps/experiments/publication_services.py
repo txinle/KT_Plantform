@@ -16,7 +16,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from apps.accounts.models import Course, CourseEnrollment, CourseSubject, User
-from apps.question_bank.models import Concept, Question
+from apps.question_bank.models import Concept, Question, QuestionBank
 
 from .models import (
     ClassExperimentTask,
@@ -43,7 +43,7 @@ from .services import (
     _candidate_inventory,
     _class_experiment_task_publication_scope,
     _class_experiment_task_terminal_update_scope,
-    _publish_candidates,
+    _publish_candidates_from_banks,
     _quota_map,
     validate_for_publish,
 )
@@ -1129,15 +1129,18 @@ def _select_questions(
         active_frozen_question_ids=frozenset(),
         unresolved_task_ids=(),
     )
-    items = sorted(
-        candidates,
-        key=lambda item: (_candidate_sequence(item), _candidate_id(item)),
-    )
     configuration = (
-        items[0].release_snapshot.configuration
-        if items and isinstance(items[0], ReleaseSnapshotQuestionMapping)
+        candidates[0].release_snapshot.configuration
+        if candidates and isinstance(candidates[0], ReleaseSnapshotQuestionMapping)
         else None
     )
+    bank_ordering = configuration is None or configuration.get("sampling", {}).get("candidate_ordering") == "source_bank_then_sequence_then_pk"
+
+    def candidate_sort_key(item):
+        bank_id = item.question_snapshot.source_bank_id if isinstance(item, ReleaseSnapshotQuestionMapping) else item.bank_id
+        return ((bank_id or 0) if bank_ordering else 0, _candidate_sequence(item), _candidate_id(item))
+
+    items = sorted(candidates, key=candidate_sort_key)
     sampling_mode = (
         configuration.get("sampling_mode")
         if configuration is not None
@@ -1324,11 +1327,14 @@ def _select_questions(
         items = [{"candidate": item, "sampling_source": {}} for item in items]
     items = sorted(
         items,
-        key=lambda row: (
-            _candidate_sequence(row["candidate"]),
-            _candidate_id(row["candidate"]),
-        ),
+        key=lambda row: candidate_sort_key(row["candidate"]),
     )
+    for row in items:
+        candidate = row["candidate"]
+        row["sampling_source"]["source_bank_id"] = (
+            candidate.question_snapshot.source_bank_id
+            if isinstance(candidate, ReleaseSnapshotQuestionMapping) else candidate.bank_id
+        )
     rng = random.Random(int(ordering_seed[:16], 16))
     ordering_mode = (
         configuration.get("ordering_mode")
@@ -1365,7 +1371,7 @@ def _current_release(experiment):
 def _preview_candidates(experiment):
     release = _current_release(experiment)
     if release is None:
-        validate_for_publish(experiment, experiment.question_bank, participant_count=1)
+        validate_for_publish(experiment, participant_count=1)
         if experiment.sampling_mode:
             candidates = SamplingService(experiment).resolve(
                 validate_inventory=(
@@ -1374,7 +1380,7 @@ def _preview_candidates(experiment):
                 )
             ).candidates
         else:
-            candidates = _publish_candidates(experiment.question_bank)
+            candidates = _publish_candidates_from_banks(experiment.selected_question_bank_ids)
             _candidate_inventory(candidates, experiment.selection_mode, _quota_map(experiment))
         return candidates
     mappings = list(
@@ -1420,7 +1426,10 @@ def _preview_definition_fingerprint(experiment, candidates):
             "canonicalization_version": "canonical-json-v1",
             "experiment": experiment.pk,
             "status": experiment.status,
-            "question_bank": experiment.question_bank_id,
+            "question_bank_ids": sorted(
+                frozen.get("question_bank_ids", experiment.selected_question_bank_ids)
+                if frozen else experiment.selected_question_bank_ids
+            ),
             "questions": [
                 {
                     "id": _candidate_id(candidate),
@@ -1755,6 +1764,17 @@ def _release_configuration(experiment, candidates):
         "confidence_scale_version": experiment.confidence_scale_version,
         "heartbeat_interval_seconds": experiment.heartbeat_interval_seconds,
         "timezone": settings.TIME_ZONE,
+        "question_bank_ids": sorted(experiment.selected_question_bank_ids),
+        "bank_counts": [
+            {"question_bank_id": bank_id, "candidate_count": sum(q.bank_id == bank_id for q in candidates)}
+            for bank_id in sorted(experiment.selected_question_bank_ids)
+        ],
+        "question_banks": [
+            {"id": bank.pk, "name": bank.name}
+            for bank in QuestionBank.objects.filter(
+                pk__in=experiment.selected_question_bank_ids
+            ).order_by("pk")
+        ],
     }
     if experiment.sampling_mode:
         from apps.question_bank.services.question_kc_mapping import (
@@ -1823,6 +1843,7 @@ def _release_configuration(experiment, candidates):
             candidate_resolution.append(
                 {
                     "question_id": question.pk,
+                    "source_bank_id": question.bank_id,
                     "stable_question_code": (
                         question.course_identity.stable_code
                         if getattr(question, "course_identity", None) is not None
@@ -1912,7 +1933,7 @@ def _release_configuration(experiment, candidates):
                     )
                 )
             ),
-            "candidate_ordering": "source_sequence_then_pk",
+            "candidate_ordering": "source_bank_then_sequence_then_pk",
             "seed_derivation_version": "task_root_hmac_v2",
         }
     return configuration

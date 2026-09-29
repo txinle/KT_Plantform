@@ -1351,3 +1351,20 @@
   .kt-teacher-experiments .kt-grading-questions { position: static; }
   .kt-teacher-experiments .kt-grading-row > header { flex-direction: column; }
 }
+.kt-experiment-bank-control { min-width: 0; }
+.kt-experiment-bank-picker { position: relative; min-width: 0; border: 1px solid var(--kt-border, #d7dde5); border-radius: 8px; background: #fff; }
+.kt-experiment-bank-picker summary { display: flex; align-items: center; gap: 6px; padding: 5px 10px; cursor: pointer; height: 32px; box-sizing: border-box; }
+.kt-experiment-bank-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kt-experiment-bank-count { flex: 0 0 auto; color: #64748b; font-size: 12px; }
+.kt-experiment-bank-picker #experiment-bank-count { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.kt-experiment-bank-picker summary:focus-visible { outline: 2px solid #5145ff; outline-offset: 2px; }
+.kt-experiment-bank-options { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; width: max(100%, 300px); max-width: calc(100vw - 64px); box-sizing: border-box; padding: 12px; border: 1px solid #d7dde5; border-radius: 8px; background: #fff; box-shadow: 0 6px 18px #15294520; }
+.kt-experiment-bank-list { max-height: 240px; overflow-y: auto; margin-top: 8px; }
+.kt-experiment-bank-list label { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 0; overflow-wrap: anywhere; }
+.kt-experiment-bank-list input[type="checkbox"] { flex: 0 0 auto; }
+.kt-experiment-bank-options .kt-text-button { min-height: 44px; width: 100%; }
+@media (max-width: 48rem) {
+  .kt-experiment-bank-picker summary { height: 44px; }
+  .kt-experiment-bank-options { width: 100%; }
+}
+.kt-experiment-bank-inventory { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 12px 0; overflow-wrap: anywhere; }

@@ -1,5 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
+import { ApiError } from '@/api/client'
 
 const mocks = vi.hoisted(() => ({ login: vi.fn(), loginDestination: vi.fn() }))
 
@@ -36,5 +37,23 @@ describe('LoginPage', () => {
 
     expect(mocks.login).toHaveBeenCalledWith('teacher', 'incorrect')
     expect(wrapper.get('[role="alert"]').text()).toContain('账号或密码不正确。')
+  })
+
+  it('shows the credential error returned by the login API', async () => {
+    mocks.login.mockRejectedValueOnce(new ApiError(400, {
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: '请求数据无效。',
+        fields: { non_field_errors: ['账号或密码不正确。'] },
+      },
+    }))
+    const wrapper = mount(LoginPage)
+
+    await wrapper.get('input[name="username"]').setValue('teacher@example.com')
+    await wrapper.get('input[name="password"]').setValue('incorrect')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('[role="alert"]').text()).toBe('账号或密码不正确。')
   })
 })

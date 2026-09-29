@@ -346,6 +346,16 @@ class Experiment(models.Model):
     def __str__(self): return self.name
 
     @property
+    def selected_question_banks(self):
+        if self.course_id:
+            return [link.question_bank for link in self.question_bank_links.all()]
+        return [self.question_bank] if self.question_bank_id else []
+
+    @property
+    def selected_question_bank_ids(self):
+        return [bank.pk for bank in self.selected_question_banks]
+
+    @property
     def is_definition_frozen(self):
         return self.status in {
             self.Status.FROZEN,
@@ -407,6 +417,11 @@ class Experiment(models.Model):
             self.owner_id = self.created_by_id
         super().save(*args, **kwargs)
         if created:
+            if self.course_id and self.question_bank_id:
+                # Initialize the legacy single-bank projection on first creation.
+                models.QuerySet(model=ExperimentQuestionBank, using=self._state.db).bulk_create([
+                    ExperimentQuestionBank(experiment=self, question_bank_id=self.question_bank_id, selection_order=0)
+                ])
             ExperimentQuestionQuota.objects.bulk_create(
                 [
                     ExperimentQuestionQuota(experiment=self, question_type=question_type, amount=0)
@@ -482,6 +497,77 @@ class ExperimentQuestion(models.Model):
             models.UniqueConstraint(fields=["experiment", "question"], name="unique_experiment_question"),
             models.UniqueConstraint(fields=["experiment", "display_order"], name="unique_experiment_display_order"),
         ]
+
+
+class ExperimentQuestionBankQuerySet(models.QuerySet):
+    def _lock_editable(self, experiment_ids):
+        for experiment in Experiment.objects.select_for_update().filter(pk__in=experiment_ids).order_by("pk"):
+            if experiment.status != Experiment.Status.DRAFT or experiment.frozen_release_snapshot_id or experiment.class_tasks.exists():
+                raise ValidationError("实验定义已冻结，不能再修改题库。")
+
+    def delete(self):
+        with transaction.atomic():
+            self._lock_editable(self.values_list("experiment_id", flat=True))
+            return super().delete()
+
+    def update(self, **kwargs):
+        raise ValidationError("请通过题库选择服务替换实验题库。")
+
+    def bulk_create(self, objs, **kwargs):
+        objs = list(objs)
+        with transaction.atomic():
+            self._lock_editable({obj.experiment_id for obj in objs})
+            for obj in objs:
+                obj.clean()
+            return super().bulk_create(objs, **kwargs)
+
+
+class ExperimentQuestionBank(models.Model):
+    """Question banks selected by a course experiment definition."""
+
+    experiment = models.ForeignKey(
+        Experiment, on_delete=models.CASCADE, related_name="question_bank_links"
+    )
+    question_bank = models.ForeignKey(
+        "question_bank.QuestionBank",
+        on_delete=models.PROTECT,
+        related_name="experiment_links",
+    )
+    selection_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    objects = ExperimentQuestionBankQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["selection_order", "question_bank_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["experiment", "question_bank"],
+                name="unique_experiment_question_bank",
+            ),
+            models.UniqueConstraint(
+                fields=["experiment", "selection_order"],
+                name="unique_experiment_question_bank_order",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if not self.experiment.course_id or self.question_bank.course_id != self.experiment.course_id:
+            raise ValidationError("实验题库必须属于同一课程。")
+        if self.question_bank.visibility == "archived":
+            raise ValidationError("归档题库不能用于实验。")
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            ids = {self.experiment_id}
+            if self.pk:
+                ids.update(type(self).objects.filter(pk=self.pk).values_list("experiment_id", flat=True))
+            type(self).objects.all()._lock_editable(ids)
+            self.clean()
+            return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        return type(self).objects.filter(pk=self.pk).delete()
 
 
 class ExperimentQuestionQuota(models.Model):

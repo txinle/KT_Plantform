@@ -526,12 +526,16 @@ def _save_participant_rules_locked(
 
 
 def _publish_candidates(question_bank):
+    return _publish_candidates_from_banks([question_bank.pk])
+
+
+def _publish_candidates_from_banks(bank_ids):
     return list(
         Question.objects.select_for_update(of=("self",))
-        .filter(bank=question_bank, status=Question.Status.ACTIVE)
+        .filter(bank_id__in=bank_ids, status=Question.Status.ACTIVE)
         .select_related("bank", "course_identity")
         .prefetch_related("options", "concept_links__concept")
-        .order_by("sequence", "pk")
+        .order_by("bank_id", "sequence", "pk")
     )
 
 
@@ -570,11 +574,16 @@ def _lock_experiment_question_bank(experiment):
 
 
 def validate_for_publish(experiment, question_bank=None, participant_count=None):
-    question_bank = question_bank or experiment.question_bank
-    if question_bank is None:
-        raise ValidationError("原题库已删除，请重新选择题库。")
-    if question_bank.course_id != experiment.course_id:
-        raise ValidationError("实验与题库必须属于同一课程")
+    if experiment.course_id:
+        from .question_bank_selection import validate_question_banks
+        banks = validate_question_banks(experiment.course, experiment.selected_question_bank_ids, lock=True)
+    else:
+        bank = question_bank or experiment.question_bank
+        if bank is None:
+            raise ValidationError("原题库已删除，请重新选择题库。")
+        if bank.course_id != experiment.course_id:
+            raise ValidationError("实验与题库必须属于同一课程")
+        banks = [bank]
 
     # Candidate discovery is deliberately fresh from the active bank.  Retain
     # the legacy link integrity check first, however, so a stale cross-course
@@ -588,7 +597,7 @@ def validate_for_publish(experiment, question_bank=None, participant_count=None)
     ]
     _raise_for_invalid_identities(linked_questions)
 
-    questions = _publish_candidates(question_bank)
+    questions = _publish_candidates_from_banks([bank.pk for bank in banks])
     if not questions:
         raise ValidationError("题库中至少需要一道可用题目")
     _raise_for_invalid_identities(questions)
@@ -665,7 +674,7 @@ def selection_display_context(experiment):
         for question_type in Question.Type.values
     ]
     active_counts = {question_type: 0 for question_type in Question.Type.values}
-    for question_type in Question.objects.filter(bank_id=experiment.question_bank_id).filter(
+    for question_type in Question.objects.filter(bank_id__in=experiment.selected_question_bank_ids).filter(
         status=Question.Status.ACTIVE
     ).values_list("question_type", flat=True):
         if question_type in active_counts:
@@ -960,10 +969,15 @@ def ordered_snapshots(version, student_id, snapshots=None, ordering_seed=None):
 @transaction.atomic
 def sync_experiment_questions(experiment):
     experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
-    question_bank = _lock_experiment_question_bank(experiment)
+    if experiment.course_id:
+        from .question_bank_selection import validate_question_banks
+        banks = validate_question_banks(experiment.course, experiment.selected_question_bank_ids, lock=True)
+    else:
+        banks = [_lock_experiment_question_bank(experiment)]
     if experiment.status != Experiment.Status.DRAFT: raise ValidationError("发布后不能修改题目")
     experiment.question_links.all().delete()
-    for idx, question in enumerate(question_bank.questions.filter(status="active"), start=1):
+    questions = _publish_candidates_from_banks([bank.pk for bank in banks])
+    for idx, question in enumerate(questions, start=1):
         ExperimentQuestion.objects.create(experiment=experiment, question=question, display_order=idx)
 
 @transaction.atomic

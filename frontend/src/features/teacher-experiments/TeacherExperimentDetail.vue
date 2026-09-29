@@ -400,7 +400,7 @@ onMounted(load)
         <section class="kt-card kt-definition-summary" aria-labelledby="definition-summary">
           <div class="kt-section-heading"><h2 id="definition-summary">实验设置摘要</h2></div>
           <dl class="kt-description-list kt-definition-summary__list">
-            <div><span class="kt-summary-icon" data-summary-icon><Icon name="bank" :size="17" /></span><dt>题库</dt><dd>{{ experiment.question_bank?.name || '未选择题库' }}</dd></div>
+            <div><span class="kt-summary-icon" data-summary-icon><Icon name="bank" :size="17" /></span><dt>题库</dt><dd>{{ experiment.question_banks?.map((bank) => bank.name).join('、') || experiment.question_bank?.name || '未选择题库' }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="definition" :size="17" /></span><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}<span v-if="experiment.sampling_mode === 'total_count'"> · {{ experiment.sampling_total_count }} 题</span></dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="summary" :size="17" /></span><dt>跨实验题目</dt><dd>{{ experiment.cross_experiment_item_policy === 'mixed_review' ? `混合复测 · ${experiment.review_count} 题` : (experiment.cross_experiment_item_policy === 'exclude_previous' ? '排除已提交或已分配题目' : '不限制历史题目') }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="summary" :size="17" /></span><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div>

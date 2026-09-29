@@ -1,10 +1,6 @@
 import { defineConfig } from '@playwright/test'
-import { join } from 'node:path'
-
 import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
 
-const repositoryDir = join(import.meta.dirname, '..', '..')
-const python = join(repositoryDir, '.venv', 'Scripts', 'python.exe')
 const vitePort = Number(process.env.E2E_VITE_PORT || '5173')
 const viteUrl = `http://127.0.0.1:${vitePort}`
 const environment = {
@@ -32,8 +28,7 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: `"${python}" manage.py runserver 127.0.0.1:8000 --noreload`,
-      cwd: repositoryDir,
+      command: 'node ../scripts/run-e2e-backend.mjs',
       url: 'http://127.0.0.1:8000/health/',
       env: environment,
       reuseExistingServer: false,

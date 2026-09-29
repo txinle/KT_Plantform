@@ -18,6 +18,7 @@ from .models import Experiment
 OWNED_SCOPES = {
     'experiments.Experiment': 'pk',
     'experiments.ExperimentQuestion': 'experiment_id',
+    'experiments.ExperimentQuestionBank': 'experiment_id',
     'experiments.ExperimentQuestionQuota': 'experiment_id',
     'experiments.ExperimentSamplingKC': 'experiment_id',
     'experiments.ExperimentStudent': 'experiment_id',

@@ -77,7 +77,7 @@ describe('TeacherExperimentForm', () => {
     const wrapper = mount(TeacherExperimentForm)
     await flushPromises()
     expect(mocks.api.samplingInventory).toHaveBeenCalledWith(7, {
-      question_bank_id: 3, kc_codes: [], match_scope: 'any_level',
+      question_bank_ids: [3], kc_codes: [], match_scope: 'any_level',
     })
     expect(wrapper.get('.kt-kc-config-panel .kt-kc-tree-selector').text()).toContain('3 道可用')
     expect(wrapper.get('.kt-kc-config-panel .kt-kc-tree-selector').text()).not.toContain('12 道可用')
@@ -90,17 +90,57 @@ describe('TeacherExperimentForm', () => {
     expect(wrapper.get('.kt-quota-table tbody tr').findAll('td')[2]?.text()).toBe('3')
   })
 
+  it('searches and selects multiple banks without losing hidden selections', async () => {
+    mocks.api.list.mockResolvedValue({ summary: { question_banks: [{ id: 3, name: '第一章' }, { id: 4, name: '第二章' }, { id: 5, name: '第三章' }] } })
+    mocks.api.samplingInventory.mockResolvedValue({ candidate_count: 8, kc_counts: [], question_types: [], bank_counts: [
+      { question_bank_id: 3, name: '第一章', candidate_count: 4 },
+      { question_bank_id: 4, name: '第二章', candidate_count: 4 },
+    ] })
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+    await wrapper.get('input[name="question_bank_choice"][value="3"]').setValue(true)
+    await wrapper.get('#experiment-bank-search').setValue('第二')
+    await wrapper.get('input[name="question_bank_choice"][value="4"]').setValue(true)
+    await flushPromises()
+    expect(wrapper.text()).toContain('已选择 2 个题库')
+    expect(wrapper.get('[aria-label="各题库候选库存"]').text()).toContain('第一章')
+    await wrapper.get('#experiment-name').setValue('跨章节实验')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.api.create).toHaveBeenCalledWith(7, expect.objectContaining({ question_bank_ids: [3, 4] }))
+    await wrapper.get('#experiment-bank-search').setValue('')
+    await wrapper.get('input[name="question_bank_choice"][value="3"]').setValue(false)
+    await flushPromises()
+    expect(mocks.api.samplingInventory).toHaveBeenLastCalledWith(7, expect.objectContaining({ question_bank_ids: [4] }))
+  })
+
+  it('keeps selected banks in a compact dropdown that closes outside or with Escape', async () => {
+    const wrapper = mount(TeacherExperimentForm, { attachTo: document.body })
+    await flushPromises()
+    const picker = wrapper.get('.kt-experiment-bank-picker').element as HTMLDetailsElement
+    expect(wrapper.find('.kt-experiment-selected-banks').exists()).toBe(false)
+    expect(wrapper.get('#experiment-bank').text()).toContain('认知诊断题库')
+    picker.open = true
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    expect(picker.open).toBe(false)
+    picker.open = true
+    await wrapper.get('#experiment-bank-search').trigger('keydown', { key: 'Escape' })
+    expect(picker.open).toBe(false)
+    expect(document.activeElement).toBe(wrapper.get('#experiment-bank').element)
+    wrapper.unmount()
+  })
+
   it('clears stale bank inventory while loading and on failure', async () => {
     mocks.api.list.mockResolvedValue({ summary: { question_banks: [{ id: 3, name: '题库一' }, { id: 4, name: '题库二' }] } })
     const wrapper = mount(TeacherExperimentForm)
     await flushPromises()
-    await wrapper.get('#experiment-bank').setValue('3')
+    await wrapper.get('input[name="question_bank_choice"][value="3"]').setValue(true)
     await flushPromises()
     let rejectInventory!: (error: Error) => void
     mocks.api.samplingInventory.mockReturnValueOnce(new Promise((_, reject) => { rejectInventory = reject }))
-    await wrapper.get('#experiment-bank').setValue('4')
+    await wrapper.get('input[name="question_bank_choice"][value="4"]').setValue(true)
     expect(wrapper.get('.kt-kc-config-panel').text()).not.toContain('3 道可用')
-    expect(wrapper.text()).toContain('正在加载当前题库库存')
+    expect(wrapper.text()).toContain('正在加载所选题库库存')
     rejectInventory(new Error('库存查询失败'))
     await flushPromises()
     expect(wrapper.text()).toContain('库存查询失败')
@@ -130,7 +170,7 @@ describe('TeacherExperimentForm', () => {
     expect(wrapper.get('.kt-runtime-summary').text()).toContain('当前配置：')
 
     await wrapper.get('#experiment-name').setValue('分数比较实验')
-    await wrapper.get('#experiment-bank').setValue('3')
+    await wrapper.get('input[name="question_bank_choice"][value="3"]').setValue(true)
     await wrapper.get('input[type="checkbox"][value="11"]').setValue(true)
     await wrapper.get('input[name="time_mode"][value="total"]').setValue(true)
     await wrapper.get('#experiment-total-time').setValue('25')
@@ -141,7 +181,7 @@ describe('TeacherExperimentForm', () => {
       7,
       expect.objectContaining({
         name: '分数比较实验',
-        question_bank_id: 3,
+        question_bank_ids: [3],
         sampling: {
           mode: 'total_count',
           total_count: 1,
@@ -244,12 +284,12 @@ describe('TeacherExperimentForm', () => {
     await flushPromises()
 
     expect((wrapper.get('#experiment-name').element as HTMLInputElement).value).toBe('待修复实验')
-    expect((wrapper.get('#experiment-bank').element as HTMLSelectElement).value).toBe('0')
+    expect(wrapper.get('#experiment-bank').text()).toContain('请选择题库')
     expect(wrapper.text()).toContain('请选择题库')
-    await wrapper.get('#experiment-bank').setValue('3')
+    await wrapper.get('input[name="question_bank_choice"][value="3"]').setValue(true)
     await wrapper.get('form').trigger('submit')
     await flushPromises()
-    expect(mocks.api.update).toHaveBeenCalledWith(7, 19, expect.objectContaining({ question_bank_id: 3 }))
+    expect(mocks.api.update).toHaveBeenCalledWith(7, 19, expect.objectContaining({ question_bank_ids: [3] }))
   })
 
   it('configures an exact mixed-review count and submits the policy', async () => {
@@ -285,7 +325,7 @@ describe('TeacherExperimentForm', () => {
     await flushPromises()
 
     expect(mocks.api.samplingInventory).toHaveBeenCalledWith(7, {
-      question_bank_id: 3,
+      question_bank_ids: [3],
       kc_codes: ['KC000002'],
       match_scope: 'any_level',
     })
@@ -318,7 +358,7 @@ describe('TeacherExperimentForm', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('知识点范围（可选）')
-    expect(wrapper.text()).toContain('当前使用整个题库')
+    expect(wrapper.text()).toContain('当前使用所选题库')
     expect(wrapper.find('.kt-match-scope').exists()).toBe(false)
 
     await wrapper.get('#experiment-name').setValue('全题库题型构成实验')

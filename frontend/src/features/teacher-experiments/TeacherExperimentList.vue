@@ -91,7 +91,7 @@ onMounted(() => load())
               </RouterLink>
               <span class="kt-cell-note">{{ experiment.description || '无说明' }}</span>
             </td>
-            <td>{{ experiment.question_bank?.name || '未选择题库' }}</td>
+            <td>{{ experiment.question_banks?.map((bank) => bank.name).join('、') || experiment.question_bank?.name || '未选择题库' }}</td>
             <td>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}</td>
             <td><StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" /></td>
             <td>{{ new Date(experiment.updated_at).toLocaleString('zh-CN') }}</td>
@@ -110,7 +110,7 @@ onMounted(() => load())
         </div>
         <p>{{ experiment.description || '无说明' }}</p>
         <dl>
-          <div><dt>题库</dt><dd>{{ experiment.question_bank?.name || '未选择题库' }}</dd></div>
+          <div><dt>题库</dt><dd>{{ experiment.question_banks?.map((bank) => bank.name).join('、') || experiment.question_bank?.name || '未选择题库' }}</dd></div>
           <div><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}</dd></div>
         </dl>
         <button v-if="canManage" class="kt-text-button kt-text-button--danger" type="button" :data-delete-experiment="experiment.id" @click="deletionTarget = { kind: 'experiment', experimentId: experiment.id }">删除实验</button>

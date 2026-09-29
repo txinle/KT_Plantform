@@ -1,8 +1,9 @@
 from django.db import transaction
+from django.db.models import Q
 from django.db.models.deletion import ProtectedError
 
 from apps.accounts.course_access import lock_course
-from apps.experiments.models import Experiment, ExperimentQuestion
+from apps.experiments.models import Experiment, ExperimentQuestion, ExperimentQuestionBank
 
 from .course_question_identity import (
     CourseQuestionRenumberingBlocked,
@@ -37,7 +38,7 @@ def delete_question_bank(bank):
     questions = list(bank.questions.select_for_update().order_by("pk"))
     question_ids = [question.pk for question in questions]
     blocking_experiments = _experiment_names(
-        Experiment.objects.filter(question_bank=bank).exclude(status=Experiment.Status.DRAFT)
+        Experiment.objects.filter(Q(question_bank=bank) | Q(question_bank_links__question_bank=bank)).exclude(status=Experiment.Status.DRAFT)
     )
     blocking_link_experiments = _experiment_names(
         Experiment.objects.filter(question_links__question_id__in=question_ids)
@@ -63,7 +64,15 @@ def delete_question_bank(bank):
         question_id__in=question_ids,
         experiment__status=Experiment.Status.DRAFT,
     ).delete()
+    affected_ids = list(ExperimentQuestionBank.objects.filter(question_bank=bank).values_list("experiment_id", flat=True))
+    ExperimentQuestionBank.objects.filter(question_bank=bank).delete()
     draft_experiments.update(question_bank=None)
+    for experiment in Experiment.objects.filter(pk__in=affected_ids, question_bank__isnull=True):
+        remaining = experiment.question_bank_links.order_by("selection_order").first()
+        if remaining is not None:
+            experiment.question_bank_id = remaining.question_bank_id
+            experiment.save(update_fields=["question_bank"])
+
     details = {
         "bank_id": bank.pk,
         "course_id": bank.course_id,

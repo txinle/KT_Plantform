@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { ApiError } from '@/api/client'
@@ -40,6 +40,27 @@ const saving = ref(false)
 const error = ref('')
 const fieldErrors = ref<Record<string, string>>({})
 const questionBanks = ref<Array<{ id: number; name: string }>>([])
+const bankSearch = ref('')
+const filteredQuestionBanks = computed(() => questionBanks.value.filter((bank) =>
+  bank.name.toLocaleLowerCase().includes(bankSearch.value.trim().toLocaleLowerCase()),
+))
+const selectedQuestionBanks = computed(() => questionBanks.value.filter((bank) => form.question_bank_ids.includes(bank.id)))
+const bankPicker = ref<HTMLDetailsElement>()
+function onBankFocusOut(event: FocusEvent) {
+  if (event.relatedTarget instanceof Node && !bankPicker.value?.contains(event.relatedTarget)) {
+    if (bankPicker.value) bankPicker.value.open = false
+  }
+}
+function closeBankPicker(event: Event) {
+  if (event.type === 'keydown' && (event as KeyboardEvent).key === 'Escape') {
+    if (bankPicker.value?.open) {
+      bankPicker.value.open = false
+      bankPicker.value.querySelector('summary')?.focus()
+    }
+  } else if (event.target instanceof Node && !bankPicker.value?.contains(event.target)) {
+    if (bankPicker.value) bankPicker.value.open = false
+  }
+}
 const concepts = ref<components['schemas']['CourseConceptSummary'][]>([])
 const readiness = ref<TeacherExperimentReadiness>()
 const legacySampling = ref(false)
@@ -65,7 +86,7 @@ function convertLegacySampling() {
 const form = reactive({
   name: '',
   description: '',
-  question_bank_id: 0,
+  question_bank_ids: [] as number[],
   sampling_mode: 'total_count' as 'total_count' | 'kc_quota',
   sampling_total_count: 1 as number | null,
   sampling_match_scope: 'any_level' as 'primary' | 'any_level',
@@ -106,7 +127,7 @@ const selectedConcepts = computed(() => concepts.value.filter(
   (concept) => form.selected_kcs[concept.id],
 ))
 const samplingConfiguration = computed(() => JSON.stringify({
-  question_bank_id: Number(form.question_bank_id),
+  question_bank_ids: [...form.question_bank_ids].map(Number).sort((a, b) => a - b),
   sampling: definitionInput().sampling,
 }))
 const samplingChanged = computed(() => Boolean(savedSamplingConfiguration.value)
@@ -174,14 +195,14 @@ async function refreshSamplingInventory() {
   inventoryError.value = ''
   samplingInventory.value = undefined
   const kcCodes = selectedConcepts.value.map((concept) => concept.kc_code)
-  if (!form.question_bank_id) {
+  if (!form.question_bank_ids.length) {
     inventoryLoading.value = false
     return
   }
   inventoryLoading.value = true
   try {
     const result = await api.samplingInventory(courseId, {
-      question_bank_id: Number(form.question_bank_id),
+      question_bank_ids: [...form.question_bank_ids].map(Number).sort((a, b) => a - b),
       kc_codes: kcCodes,
       match_scope: form.sampling_match_scope,
     })
@@ -219,7 +240,7 @@ function definitionInput(): ExperimentDefinitionInput {
   const input: ExperimentDefinitionInput = {
     name: form.name.trim(),
     description: form.description.trim(),
-    question_bank_id: Number(form.question_bank_id),
+    question_bank_ids: [...form.question_bank_ids].map(Number).sort((a, b) => a - b),
     cross_experiment_item_policy: form.cross_experiment_item_policy,
     review_count: form.cross_experiment_item_policy === 'mixed_review'
       ? Number(form.review_count || 0)
@@ -281,13 +302,17 @@ async function load() {
     concepts.value = conceptCollection.items
     for (const concept of concepts.value) form.kc_match_scopes[concept.id] = 'primary'
     if (!editing.value && questionBanks.value.length === 1) {
-      form.question_bank_id = questionBanks.value[0]?.id || 0
+      form.question_bank_ids = questionBanks.value.length ? [questionBanks.value[0]!.id] : []
     }
     if (editing.value) {
       const experiment = await api.detail(courseId, experimentId.value)
       form.name = experiment.name
       form.description = experiment.description || ''
-      form.question_bank_id = experiment.question_bank?.id || 0
+      form.question_bank_ids = experiment.question_banks?.map((bank) => bank.id)
+        || (experiment.question_bank?.id ? [experiment.question_bank.id] : [])
+      for (const bank of experiment.question_banks || []) {
+        if (!questionBanks.value.some((option) => option.id === bank.id)) questionBanks.value.push(bank)
+      }
       legacySampling.value = !experiment.sampling_mode
       legacyQuotaTotal.value = (experiment.question_quotas || []).reduce(
         (total, quota) => total + Number(quota.amount || 0),
@@ -334,8 +359,9 @@ async function load() {
 }
 
 async function submit(destination: 'detail' | 'publish' = 'detail') {
-  if (typeQuotaInvalid.value || reviewCountError.value) {
+  if (!form.question_bank_ids.length || typeQuotaInvalid.value || reviewCountError.value) {
     fieldErrors.value = {
+      ...(!form.question_bank_ids.length ? { question_bank_ids: '至少选择一个题库。' } : {}),
       ...(typeQuotaInvalid.value ? { sampling_type_quotas: typeQuotaError.value } : {}),
       ...(reviewCountError.value ? { review_count: reviewCountError.value } : {}),
     }
@@ -368,7 +394,7 @@ async function submit(destination: 'detail' | 'publish' = 'detail') {
 
 watch(
   () => [
-    form.question_bank_id,
+    form.question_bank_ids.join('|'),
     form.sampling_mode,
     form.sampling_match_scope,
     selectedConcepts.value.map((concept) => concept.kc_code).join('|'),
@@ -377,6 +403,8 @@ watch(
 )
 
 onMounted(load)
+onMounted(() => document.addEventListener('pointerdown', closeBankPicker))
+onUnmounted(() => document.removeEventListener('pointerdown', closeBankPicker))
 </script>
 
 <template>
@@ -397,7 +425,25 @@ onMounted(load)
       <div class="kt-numbered-form-section__heading"><span aria-hidden="true">1</span><h2 id="definition-basic">基本信息</h2></div>
       <div class="kt-card kt-numbered-form-section__content kt-step-one-grid">
         <FormField class="kt-compact-form-row" for-id="experiment-name" label="实验名称" :error="fieldErrors.name"><input id="experiment-name" v-model="form.name" required maxlength="180"></FormField>
-        <FormField class="kt-compact-form-row" for-id="experiment-bank" label="题库" :error="fieldErrors.question_bank_id"><select id="experiment-bank" v-model.number="form.question_bank_id" required><option :value="0" disabled>请选择题库</option><option v-for="bank in questionBanks" :key="bank.id" :value="bank.id">{{ bank.name }}</option></select></FormField>
+        <div class="kt-field kt-compact-form-row kt-experiment-bank-field">
+          <strong id="experiment-bank-label">题库</strong>
+          <div class="kt-experiment-bank-control">
+            <details ref="bankPicker" class="kt-experiment-bank-picker" @keydown.esc.stop.prevent="closeBankPicker" @focusout="onBankFocusOut">
+              <summary id="experiment-bank" :title="selectedQuestionBanks.map(bank => bank.name).join('、')" aria-labelledby="experiment-bank-label experiment-bank-count"><span class="kt-experiment-bank-name">{{ selectedQuestionBanks[0]?.name || '请选择题库' }}</span><span v-if="form.question_bank_ids.length" class="kt-experiment-bank-count" aria-hidden="true">{{ form.question_bank_ids.length }} 个</span><span id="experiment-bank-count" class="kt-visually-hidden">{{ form.question_bank_ids.length ? `已选择 ${form.question_bank_ids.length} 个题库` : '请选择题库' }}</span><span aria-hidden="true">⌄</span></summary>
+              <div class="kt-experiment-bank-options">
+                <label for="experiment-bank-search">搜索题库</label>
+                <input id="experiment-bank-search" v-model="bankSearch" type="search" placeholder="输入题库名称">
+                <div class="kt-experiment-bank-list" role="group" aria-labelledby="experiment-bank-label">
+                  <label v-for="bank in filteredQuestionBanks" :key="bank.id"><input v-model="form.question_bank_ids" name="question_bank_choice" type="checkbox" :value="bank.id"><span>{{ bank.name }}</span></label>
+                  <p v-if="!filteredQuestionBanks.length" class="kt-muted">{{ questionBanks.length ? '没有匹配的题库' : '当前课程暂无可选题库' }}</p>
+                </div>
+                <p class="kt-muted">合并所选题库随机抽题，不保证每个题库都被抽中。</p>
+                <button type="button" class="kt-text-button" @click="bankPicker!.open = false">完成选择</button>
+              </div>
+            </details>
+            <p v-if="fieldErrors.question_bank_ids || fieldErrors.question_bank_id" class="kt-field__error" role="alert">{{ fieldErrors.question_bank_ids || fieldErrors.question_bank_id }}</p>
+          </div>
+        </div>
         <FormField class="kt-compact-form-row" for-id="experiment-description" label="实验描述（可选）" :error="fieldErrors.description"><textarea id="experiment-description" v-model="form.description" rows="3" placeholder="请输入实验描述" /></FormField>
       </div>
     </section>
@@ -406,18 +452,21 @@ onMounted(load)
       <div class="kt-numbered-form-section__heading"><span aria-hidden="true">2</span><h2 id="definition-selection">抽题设置</h2></div>
       <div class="kt-card kt-numbered-form-section__content">
         <Alert v-if="conversionWarning" tone="warning">{{ conversionWarning }}</Alert>
-        <fieldset v-else class="kt-radio-group kt-compact-form-row"><legend>抽题方式</legend><div class="kt-radio-options"><label><input v-model="form.sampling_mode" name="sampling_mode" type="radio" value="total_count"><span>设置总题数<small>从当前题库或所选知识点范围内抽取指定数量</small></span></label><label><input v-model="form.sampling_mode" name="sampling_mode" type="radio" value="kc_quota"><span>按知识点配额<small>每行可按根 KC 或任意层级匹配并设置题数</small></span></label></div><p v-if="fieldErrors.sampling_mode" class="kt-field__error" role="alert">{{ fieldErrors.sampling_mode }}</p></fieldset>
+        <fieldset v-else class="kt-radio-group kt-compact-form-row"><legend>抽题方式</legend><div class="kt-radio-options"><label><input v-model="form.sampling_mode" name="sampling_mode" type="radio" value="total_count"><span>设置总题数<small>从所选题库或所选知识点范围内抽取指定数量</small></span></label><label><input v-model="form.sampling_mode" name="sampling_mode" type="radio" value="kc_quota"><span>按知识点配额<small>每行可按根 KC 或任意层级匹配并设置题数</small></span></label></div><p v-if="fieldErrors.sampling_mode" class="kt-field__error" role="alert">{{ fieldErrors.sampling_mode }}</p></fieldset>
         <template v-if="!legacySampling && form.sampling_mode === 'total_count'">
           <FormField class="kt-compact-form-row kt-count-field" for-id="sampling-total-count" label="每位参与者题目数" :error="fieldErrors.sampling_total_count"><input id="sampling-total-count" v-model.number="form.sampling_total_count" type="number" min="1"></FormField>
           <div class="kt-type-config-panel kt-compact-form-row"><strong class="kt-config-label">题型构成</strong><div class="kt-kc-config-content"><div class="kt-kc-config-top"><div><span class="kt-muted">{{ selectedQuestionTypes.length ? '已选择的题型' : '不限题型' }}</span><div v-if="selectedQuestionTypes.length" class="kt-selected-kcs"><span v-for="questionType in selectedQuestionTypes" :key="questionType.value">{{ questionType.label }} {{ form.type_quotas[questionType.value] }}</span></div></div><div class="kt-selection-facts">已分配 {{ typeQuotaTotal }} / 总题数 {{ form.sampling_total_count || 0 }}</div><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary" data-type-picker>选择题型</summary><div class="kt-kc-tree-selector kt-type-tree-selector"><label v-for="questionType in QUESTION_TYPES" :key="questionType.value"><input name="question_type_choice" type="checkbox" :value="questionType.value" :checked="Boolean(form.selected_question_types[questionType.value])" @change="setQuestionTypeSelected(questionType.value, ($event.target as HTMLInputElement).checked)"><span>{{ questionType.label }}</span><small>{{ questionTypeAvailabilityLabel(questionType.value) }}</small><input v-model.number="form.type_quotas[questionType.value]" :aria-label="`${questionType.label}数量`" type="number" min="1" :max="questionTypeAvailable(questionType.value)" :disabled="!form.selected_question_types[questionType.value]" @click.stop></label></div></details></div><div class="kt-type-allocation-status" :class="{ 'is-error': typeQuotaError || fieldErrors.sampling_type_quotas }"><span v-if="!selectedQuestionTypes.length && !fieldErrors.sampling_type_quotas">不限制各题型数量，系统从去重后的候选题中抽取。</span><span v-else-if="typeQuotaError || fieldErrors.sampling_type_quotas" role="alert">{{ typeQuotaError || fieldErrors.sampling_type_quotas }}</span><span v-else>题型构成有效，按各题型候选桶确定性抽取。</span></div></div></div>
-          <div class="kt-kc-config-panel kt-compact-form-row"><strong class="kt-config-label">知识点范围（可选）</strong><div class="kt-kc-config-content"><div class="kt-kc-config-top"><div><span class="kt-muted">{{ selectedConcepts.length ? '已选择的 KC' : '当前使用整个题库' }}</span><div class="kt-selected-kcs"><span v-for="concept in selectedConcepts" :key="concept.id"><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><span v-if="!selectedConcepts.length" class="is-empty">将从当前题库全部可用题目中抽取</span></div></div><div class="kt-selection-facts">{{ selectedConcepts.length ? `已选择 ${selectedConcepts.length} 个 KC` : '全题库范围' }}</div><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary">选择知识点</summary><div class="kt-kc-tree-selector"><label v-for="concept in concepts" :key="concept.id"><input v-model="form.selected_kcs[concept.id]" type="checkbox" :value="concept.id" :disabled="concept.status !== 'active'"><span><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><small>{{ concept.status === 'active' ? `${availableCount(concept)} 道可用` : '已归档' }}</small></label></div></details></div><div v-if="selectedConcepts.length" class="kt-match-scope"><span>匹配层级</span><label><input v-model="form.sampling_match_scope" type="radio" value="primary">根 KC</label><small>仅匹配所选节点本身</small><label><input v-model="form.sampling_match_scope" type="radio" value="any_level">任意层级</label><small>包含其在题目树中任意层级的出现</small></div></div></div>
+          <div class="kt-kc-config-panel kt-compact-form-row"><strong class="kt-config-label">知识点范围（可选）</strong><div class="kt-kc-config-content"><div class="kt-kc-config-top"><div><span class="kt-muted">{{ selectedConcepts.length ? '已选择的 KC' : '当前使用所选题库' }}</span><div class="kt-selected-kcs"><span v-for="concept in selectedConcepts" :key="concept.id"><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><span v-if="!selectedConcepts.length" class="is-empty">将从所选题库全部可用题目中抽取</span></div></div><div class="kt-selection-facts">{{ selectedConcepts.length ? `已选择 ${selectedConcepts.length} 个 KC` : '全题库范围' }}</div><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary">选择知识点</summary><div class="kt-kc-tree-selector"><label v-for="concept in concepts" :key="concept.id"><input v-model="form.selected_kcs[concept.id]" type="checkbox" :value="concept.id" :disabled="concept.status !== 'active'"><span><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><small>{{ concept.status === 'active' ? `${availableCount(concept)} 道可用` : '已归档' }}</small></label></div></details></div><div v-if="selectedConcepts.length" class="kt-match-scope"><span>匹配层级</span><label><input v-model="form.sampling_match_scope" type="radio" value="primary">根 KC</label><small>仅匹配所选节点本身</small><label><input v-model="form.sampling_match_scope" type="radio" value="any_level">任意层级</label><small>包含其在题目树中任意层级的出现</small></div></div></div>
         </template>
         <div v-if="!legacySampling && form.sampling_mode === 'kc_quota'" class="kt-quota-panel kt-compact-form-row"><strong class="kt-config-label">知识点配额</strong><div class="kt-kc-config-content"><div class="kt-quota-toolbar"><p>按所选 KC 及匹配层级设置每位参与者题量。</p><details class="kt-kc-picker"><summary class="kt-button kt-button--secondary">＋ 添加 KC</summary><div class="kt-kc-tree-selector"><label v-for="concept in concepts" :key="concept.id"><input v-model="form.selected_kcs[concept.id]" type="checkbox" :value="concept.id" :disabled="concept.status !== 'active'"><span><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</span><small>{{ concept.status === 'active' ? `${availableCount(concept)} 道可用` : '已归档' }}</small></label></div></details></div><div class="kt-quota-table-wrap"><table class="kt-quota-table"><thead><tr><th>KC</th><th>匹配层级</th><th>可用题目</th><th>配额</th><th>操作</th></tr></thead><tbody><tr v-for="concept in selectedConcepts" :key="concept.id"><td><b class="kt-mono">{{ concept.kc_code }}</b> {{ concept.name }}</td><td><select v-model="form.kc_match_scopes[concept.id]" :aria-label="`${concept.name}匹配层级`"><option value="primary">根 KC</option><option value="any_level">任意层级</option></select></td><td>{{ availableCount(concept) }}</td><td><input v-model.number="form.kc_quotas[concept.id]" :aria-label="`${concept.name}配额`" type="number" min="1"></td><td><button class="kt-text-button kt-text-button--danger" type="button" @click="form.selected_kcs[concept.id] = false">删除</button></td></tr><tr v-if="!selectedConcepts.length"><td colspan="5" class="kt-empty-quota">请添加需要设置配额的 KC</td></tr></tbody><tfoot><tr><td colspan="5">每位参与者共抽 <strong>{{ quotaTotal }}</strong> 题</td></tr></tfoot></table></div></div></div>
-        <p v-if="!legacySampling && form.sampling_mode === 'total_count'" class="kt-muted">未选择知识点时使用当前题库全部“可用”题目；选择知识点后按所选范围过滤。同一道题可能匹配多个 KC，发布时会校验能否无重复地满足配额。</p>
-        <p v-if="inventoryLoading" role="status">正在加载当前题库库存…</p>
+        <p v-if="!legacySampling && form.sampling_mode === 'total_count'" class="kt-muted">未选择知识点时使用所选题库全部“可用”题目；选择知识点后按所选范围过滤。同一道题可能匹配多个 KC，发布时会校验能否无重复地满足配额。</p>
+        <p v-if="inventoryLoading" role="status">正在加载所选题库库存…</p>
+        <div v-if="samplingInventory?.bank_counts?.length" class="kt-experiment-bank-inventory" aria-label="各题库候选库存">
+          <span v-for="bank in samplingInventory.bank_counts" :key="bank.question_bank_id">{{ bank.name }}：{{ bank.candidate_count }} 题</span>
+        </div>
         <Alert v-if="inventoryError" tone="danger">{{ inventoryError }}</Alert>
         <p v-if="fieldErrors.sampling_kcs" class="kt-field__error" role="alert">{{ fieldErrors.sampling_kcs }}</p>
-        <Alert v-if="samplingChanged && !legacySampling" tone="warning">抽题配置尚未保存。保存后将按当前题库、匹配层级和配额重新进行发布预检。</Alert>
+        <Alert v-if="samplingChanged && !legacySampling" tone="warning">抽题配置尚未保存。保存后将按所选题库、匹配层级和配额重新进行发布预检。</Alert>
         <div v-if="readiness && !legacySampling && !samplingChanged" aria-label="已保存抽题配置库存预检">
           <Alert :tone="readiness.ready ? 'success' : 'danger'">已保存配置：计划抽取 {{ readiness.requested_count ?? '—' }} 题，题库全局候选 {{ readiness.candidate_count }} 题，尚未按学生历史过滤。<span v-if="readiness.issues.length"> {{ readiness.issues.join('；') }}</span></Alert>
           <table v-if="readiness.inventory_buckets.length" class="kt-table"><thead><tr><th>KC</th><th>匹配层级</th><th>计划题数</th><th>可用题数</th></tr></thead><tbody><tr v-for="bucket in readiness.inventory_buckets" :key="bucket.kc_code"><td><span class="kt-mono">{{ bucket.kc_code }}</span> {{ bucket.kc_name }}</td><td>{{ bucket.match_scope === 'primary' ? '仅根 KC' : '任意层级' }}</td><td>{{ bucket.requested ?? '范围' }}</td><td>{{ bucket.available }}</td></tr></tbody></table>

@@ -7,7 +7,7 @@ export type TeacherExperimentCollection = components['schemas']['TeacherExperime
 export type TeacherExperimentReadiness = components['schemas']['TeacherExperimentReadiness']
 export type ExperimentQuestionType = 'single_choice' | 'multiple_choice' | 'numeric' | 'short_answer' | 'fill_blank' | 'true_false'
 export type SamplingInventoryInput = {
-  question_bank_id: number
+  question_bank_ids: number[]
   kc_codes: string[]
   match_scope: 'primary' | 'any_level'
 }
@@ -23,10 +23,11 @@ export type SamplingInventory = {
     label: string
     available: number
   }>
+  bank_counts?: Array<{ question_bank_id: number; name: string; candidate_count: number }>
 }
 export type ExperimentDefinitionInput = Omit<components['schemas']['PatchedTeacherExperiment'], 'sampling'> & {
   name: string
-  question_bank_id: number
+  question_bank_ids: number[]
   sampling?: {
     mode: 'total_count' | 'kc_quota'
     total_count?: number | null

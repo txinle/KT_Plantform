@@ -3557,6 +3557,8 @@ export interface components {
             description?: string;
             readonly question_bank?: components["schemas"]["QuestionBankReference"] | null;
             question_bank_id?: number;
+            question_bank_ids?: number[];
+            readonly question_banks?: components["schemas"]["QuestionBankReference"][];
             readonly status?: components["schemas"]["TeacherExperimentStatusEnum"];
             readonly status_label?: string;
             readonly selection_mode?: components["schemas"]["SelectionModeEnum"];
@@ -3570,6 +3572,7 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label?: string;
@@ -3580,7 +3583,9 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -5187,7 +5192,9 @@ export interface components {
             name: string;
             description?: string;
             readonly question_bank: components["schemas"]["QuestionBankReference"] | null;
-            question_bank_id: number;
+            question_bank_id?: number;
+            question_bank_ids?: number[];
+            readonly question_banks: components["schemas"]["QuestionBankReference"][];
             readonly status: components["schemas"]["TeacherExperimentStatusEnum"];
             readonly status_label: string;
             readonly selection_mode: components["schemas"]["SelectionModeEnum"];
@@ -5201,6 +5208,7 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label: string;
@@ -5211,7 +5219,9 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -5357,7 +5367,8 @@ export interface components {
             available: number;
         };
         TeacherSamplingInventoryRequest: {
-            question_bank_id: number;
+            question_bank_ids?: number[];
+            question_bank_id?: number;
             kc_codes: string[];
             match_scope: components["schemas"]["MatchScopeEnum"];
         };
@@ -5366,6 +5377,9 @@ export interface components {
             candidate_count: number;
             question_types: components["schemas"]["TeacherSamplingInventoryQuestionType"][];
             kc_counts: components["schemas"]["TeacherSamplingInventoryKC"][];
+            bank_counts?: {
+                [key: string]: unknown;
+            }[];
         };
         TeacherSessionReport: {
             student_name: string;

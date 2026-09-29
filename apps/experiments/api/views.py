@@ -57,6 +57,7 @@ from ..publication_services import (
 )
 from ..services import validate_for_publish
 from ..sampling import SamplingService, SamplingValidationError
+from ..question_bank_selection import validate_question_banks
 from .serializers import (
     CollectionParticipantCollectionSerializer,
     CollectionParticipantQuerySerializer,
@@ -315,7 +316,7 @@ class TeacherExperimentApiMixin:
     def get_experiment(self, course, *, lock=False):
         queryset = course.experiments.select_related(
             "question_bank", "frozen_release_snapshot"
-        ).prefetch_related("question_quotas")
+        ).prefetch_related("question_quotas", "question_bank_links__question_bank")
         if lock:
             queryset = queryset.select_for_update(of=("self",))
         return get_object_or_404(queryset, pk=self.kwargs["experiment_id"])
@@ -332,10 +333,10 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
         serializer = TeacherSamplingInventoryRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        bank = get_object_or_404(
-            course.question_banks.exclude(visibility=QuestionBank.Visibility.ARCHIVED),
-            pk=data["question_bank_id"],
-        )
+        try:
+            banks = validate_question_banks(course, data["question_bank_ids"])
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.message_dict) from exc
         concepts = list(
             Concept.objects.filter(
                 course=course,
@@ -347,7 +348,7 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
                 {"kc_codes": "包含不存在、已归档或不属于当前课程的知识点。"}
             )
         bank_candidates = SamplingService.total_count_candidates(
-            question_bank_id=bank.pk,
+            question_bank_ids=[bank.pk for bank in banks],
             concept_ids=[],
             match_scope=Experiment.MatchScope.ANY_LEVEL,
         )
@@ -370,6 +371,11 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
             {
                 "scope": "question_bank",
                 "candidate_count": len(candidates),
+                "bank_counts": [
+                    {"question_bank_id": bank.pk, "name": bank.name,
+                     "candidate_count": sum(question.bank_id == bank.pk for question in candidates)}
+                    for bank in banks
+                ],
                 "kc_counts": [
                     {
                         "kc_code": concept.code,
@@ -405,7 +411,7 @@ class TeacherExperimentCollectionView(TeacherExperimentApiMixin, APIView):
         course = self.get_course()
         queryset = course.experiments.select_related(
             "question_bank", "frozen_release_snapshot"
-        ).prefetch_related("question_quotas")
+        ).prefetch_related("question_quotas", "question_bank_links__question_bank")
         paginator = FixedPageNumberPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         serializer = TeacherExperimentSerializer(
@@ -533,8 +539,30 @@ class TeacherExperimentReadinessView(TeacherExperimentApiMixin, APIView):
     def get(self, request, course_id, experiment_id):
         course = self.get_course()
         experiment = self.get_experiment(course)
+        if experiment.frozen_release_snapshot_id:
+            release = experiment.frozen_release_snapshot
+            configuration = release.configuration
+            inventory = configuration.get("sampling_inventory", [])
+            return Response({
+                "ready": True,
+                "issues": [],
+                "blocking_issues": [],
+                "candidate_count": release.question_snapshots.count(),
+                "requested_count": (
+                    configuration.get("sampling_total_count")
+                    if configuration.get("sampling_mode") != Experiment.SamplingMode.KC_QUOTA
+                    else sum(row.get("quota") or 0 for row in inventory)
+                ),
+                "inventory_buckets": [
+                    {"kc_code": row["kc_code"], "kc_name": row["kc_name"],
+                     "match_scope": row["match_scope"], "requested": row.get("quota"),
+                     "available": row["available"]}
+                    for row in inventory
+                ],
+                "participant_count": experiment.student_links.count(),
+            })
         candidate_count = Question.objects.filter(
-            bank=experiment.question_bank,
+            bank_id__in=experiment.selected_question_bank_ids,
             status=Question.Status.ACTIVE,
         ).count()
         participant_count = experiment.student_links.count()

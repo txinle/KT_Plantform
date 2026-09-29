@@ -18,8 +18,10 @@ async function submit() {
     const context = await login(credentials.username, credentials.password)
     window.location.assign(loginDestination(context.user, route.query.next))
   } catch (caught) {
+    const credentialError = caught instanceof ApiError ? caught.fields.non_field_errors : undefined
+    const message = Array.isArray(credentialError) ? credentialError[0] : credentialError
     error.value = caught instanceof ApiError || caught instanceof Error
-      ? caught.message
+      ? (typeof message === 'string' ? message : caught.message)
       : '登录失败，请稍后重试。'
   } finally {
     submitting.value = false
