@@ -8,7 +8,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
 from apps.accounts.models import Course, DataPurgeRequest
@@ -24,6 +24,18 @@ ARTIFACT_CLEANUP_SCOPE = "research_artifacts"
 def affected_export_snapshots(*, course_id, experiment_ids=None, class_id=None,
                               question_ids=None, coverage_run_ids=()):
     """Use the frozen selection, including multi-experiment exports without an FK."""
+    if question_ids is not None:
+        # Whole-course question libraries depend only on the snapshot's job kinds.
+        jobs = ExportJob.objects.filter(snapshot_id=OuterRef("pk"))
+        return (
+            ExportSnapshot.objects.filter(course_id=course_id)
+            .alias(
+                has_jobs=Exists(jobs),
+                has_research_jobs=Exists(jobs.filter(kind=ExportJob.Kind.RESEARCH)),
+            )
+            .filter(Q(has_jobs=False) | Q(has_research_jobs=True))
+            .defer("source_bundle")
+        )
     experiments = {int(value) for value in experiment_ids or ()}
     version_ids = set(ExperimentVersion.objects.filter(experiment_id__in=experiments)
                       .values_list("pk", flat=True))
@@ -37,11 +49,6 @@ def affected_export_snapshots(*, course_id, experiment_ids=None, class_id=None,
     candidates = ExportSnapshot.objects.filter(
         Q(course_id=course_id) | Q(research_study__isnull=False)).prefetch_related("jobs")
     for snapshot in candidates:
-        if question_ids is not None:
-            # Course question libraries are frozen whole, even for a single student.
-            if snapshot.course_id == course_id and (not snapshot.jobs.exists() or any(job.kind == ExportJob.Kind.RESEARCH for job in snapshot.jobs.all())):
-                selected.append(snapshot.pk)
-            continue
         if str(snapshot.coverage_run_id) in run_ids:
             selected.append(snapshot.pk)
             continue
@@ -157,7 +164,7 @@ def retire_research_exports(*, course_id, experiment_ids=None, class_id=None,
     files.extend(extra_files)
     cleanup_id = schedule_artifact_cleanup(course_id=course_id, files=files, reason=reason, actor=actor)
     ExportJob.objects.filter(pk__in=[job.pk for job in jobs]).delete()
-    ExportSnapshot.objects.filter(pk__in=snapshot_ids).delete()
+    ExportSnapshot.objects.filter(pk__in=snapshot_ids).defer("source_bundle").delete()
     return {"export_count": len(jobs), **cleanup_state(cleanup_id)}
 
 

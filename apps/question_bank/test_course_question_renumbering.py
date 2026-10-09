@@ -6,6 +6,7 @@ from unittest.mock import patch
 from django.core.management import call_command
 from django.db import close_old_connections, connections, transaction
 from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
+from django.test.utils import CaptureQueriesContext
 
 from apps.accounts.models import Course, User
 from apps.experiments.models import (
@@ -227,6 +228,7 @@ class CourseQuestionRenumberingTests(TestCase):
         affected_snapshot = ExportSnapshot.objects.create(
             course=self.course,
             created_by=self.teacher,
+            source_bundle={"tables": {"sessions": "frozen export payload"}},
         )
         research_job = ExportJob.objects.create(
             course=self.course,
@@ -251,7 +253,19 @@ class CourseQuestionRenumberingTests(TestCase):
             kind=ExportJob.Kind.IDENTITY,
         )
 
-        result = delete_question(first)
+        with CaptureQueriesContext(connections["default"]) as queries:
+            result = delete_question(first)
+
+        snapshot_reads = [
+            query["sql"] for query in queries
+            if query["sql"].lstrip().upper().startswith("SELECT")
+            and '"analytics_exportsnapshot"' in query["sql"]
+        ]
+        self.assertTrue(snapshot_reads)
+        self.assertFalse(
+            any('"source_bundle"' in sql for sql in snapshot_reads),
+            "Question deletion must not load frozen export data packages.",
+        )
 
         self.assertEqual(result["retired_export_count"], 2)
         self.assertFalse(ExportSnapshot.objects.filter(pk=affected_snapshot.pk).exists())
