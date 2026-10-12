@@ -187,6 +187,8 @@ def main():
         'metrics': {key: summary(values) for key, values in runner.metrics.items()},
         'errors': runner.errors, 'http_request_count': runner.request_count, 'http_error_count': runner.request_errors,
         'attempt_summary': runner.attempt_summary(), 'request_attempts_file': attempts_path.name,
+        'operation_measurements_file': Path(args.output).with_suffix('.operations.jsonl').name,
+        'progress_file': Path(args.output).with_suffix('.progress.json').name,
         'item_arrivals': runner.item_arrivals,
         'session_count': sum(state.session_id is not None for state in states),
         'unique_session_count': len({state.session_id for state in states if state.session_id}),
@@ -199,6 +201,7 @@ def main():
         result['checks'] = checks(result)
         result['passed'] = all(result['checks'].values())
         json.dump(result, files['result'], indent=2)
+        files['result_ready'] = True
         files['complete'] = not runner.errors
     print(json.dumps({'student_count': n, 'passed': result['passed'], 'checks': result['checks']}))
     raise SystemExit(0 if result['passed'] else 1)

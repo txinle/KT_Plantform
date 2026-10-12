@@ -3,7 +3,7 @@ import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
 import type { WriterLeaseCredentials } from './writer-lease'
 import { currentAssessmentOperationId } from './operation-timing'
-import { currentAdmissionCredentials } from './admission'
+import { currentAdmissionCredentials, readAdmissionCredentials } from './admission'
 import type { ToolRule } from '@/features/teacher-experiments/research-tools'
 import type { CaptureEvent, CaptureCheckpoint, CaptureBundle, CaptureBundleCapability, ProcessConfirmation } from './capture-contract'
 import type { SavedNavigationConfirmation } from './session-controller'
@@ -135,12 +135,17 @@ export function createStudentAssessmentApi(client: StudentAssessmentClient) {
     recoverQuestion: (sessionId: number, assignmentId: number) => client.get<RecoveryState>(`/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/recovery/`),
     recover: (attemptId: number, token: string) => client.get<RecoveryState>(`/api/v1/student/attempts/${attemptId}/recovery/?submission_token=${encodeURIComponent(token)}`),
     question: (sessionId: number, assignmentId: number) => client.get<StudentRuntimeQuestionEntry>(`/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/`),
-    enterQuestion: (sessionId: number, assignmentId: number, reason: string, navigation: NavigationClickContext, taskId?: number) => client.mutate<StudentRuntimeQuestionEntry & { entry_receipt: EntryReceipt }>(
+    enterQuestion: (sessionId: number, assignmentId: number, reason: string, navigation: NavigationClickContext, taskId?: number) => {
+      const saved = taskId ? readAdmissionCredentials(taskId) : currentAdmissionCredentials(sessionId)?.credentials
+      const admission = saved?.session_id === sessionId
+        ? { admission_token: saved.admission_token, admission_action: saved.admission_action } : {}
+      return client.mutate<StudentRuntimeQuestionEntry & { entry_receipt: EntryReceipt }>(
       `/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/`, { method: 'POST', body: {
         reason, navigation_id: navigation.navigationId, client_occurred_at: navigation.clientOccurredAt,
         client_monotonic_ms: navigation.clientMonotonicMs.toFixed(3), client_time_origin: navigation.clientTimeOrigin,
-        ...(taskId ? {} : currentAdmissionCredentials(navigation.sessionId)?.credentials || {}),
-      } }),
+        ...admission,
+      } })
+    },
     saveDraft: (url: string, answer: unknown, clientOccurredAt: string, target?: { target_event_id: string | null; expected_version: number; capture_bundle?: CaptureBundle; capture_operation_id?: string } & Partial<WriterLeaseCredentials>) => (
       client.mutate<DraftMutationResponse>(url, {
         method: 'POST',

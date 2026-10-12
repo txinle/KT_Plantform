@@ -31,6 +31,7 @@ DATABASE = 'kt_plantform-db-1'
 BASE_URL = 'http://127.0.0.1:18080'
 ROLES = ('web', 'student-read', 'teacher-read', 'scheduler', 'pgbouncer', 'nginx',
          'analytics-worker', 'student-comparison-worker', 'publication-worker', 'export-worker')
+REDIS_ROLE = 'redis-admission'
 WORKERS = {'web': 12, 'student-read': 2, 'teacher-read': 1}
 POOL_ALIASES = {'web': 'kt_core', 'student-read': 'kt_student', 'teacher-read': 'kt_teacher',
                 'analytics-worker': 'kt_background', 'student-comparison-worker': 'kt_background',
@@ -60,11 +61,12 @@ def read_evidence(path):
         return {}, {'error_type': type(error).__name__, 'file': path.name, 'size_bytes': path.stat().st_size}
 
 
-def owned_test_ids(items, images):
+def owned_test_ids(items, images, roles=None):
+    roles = tuple(roles or ROLES)
     return [item['Id'] for item in items if
             item['Config'].get('Labels', {}).get('com.docker.compose.project') == PROJECT
-            and item['Config'].get('Labels', {}).get('com.docker.compose.service') in ROLES
-            and item['Image'] == images[item['Config']['Labels']['com.docker.compose.service']]]
+            and item['Config'].get('Labels', {}).get('com.docker.compose.service') in roles
+            and item['Image'] == images.get(item['Config']['Labels']['com.docker.compose.service'])]
 
 
 class SafetyGuard:
@@ -215,14 +217,31 @@ class DiagnosticRuntime:
         for name in ('docker-compose.yml', 'docker-compose.school.yml', 'docker-compose.school-test.yml', 'docker-compose.school-test-external-db.yml'):
             self.compose += ['-f', str(self.candidate / name)]
         self.compose += ['-f', config['compose_overlay_path']]
-        if any(not re.fullmatch(r'sha256:[a-f0-9]{64}', config.get('images', {}).get(role, '')) for role in ROLES):
-            raise SafetyInterrupted('Ten immutable image IDs required')
+        if any(not re.fullmatch(r'sha256:[a-f0-9]{64}', config.get('images', {}).get(role, '')) for role in self.runtime_roles):
+            raise SafetyInterrupted('Immutable image IDs required for every frozen role')
         if config.get('database_container', DATABASE) != DATABASE:
             raise SafetyInterrupted('Only the designated existing PostgreSQL container is permitted')
 
     def source_value(self):
         value = self.config['source_config']
         return read(value) if isinstance(value, str) else value
+
+    @property
+    def runtime_roles(self):
+        source = self.source_value() if isinstance(self.config['source_config'], dict) or Path(self.config['source_config']).exists() else {}
+        admission = source.get('admission', {})
+        if REDIS_ROLE not in self.config['images'] and not admission.get('enabled'):
+            return ROLES
+        expected = source.get('roles', {}).get(REDIS_ROLE, {})
+        task_ids = admission.get('task_ids')
+        if (admission.get('enabled') is not True or not expected
+                or not re.fullmatch(r'sha256:[a-f0-9]{64}', self.config['images'].get(REDIS_ROLE, ''))
+                or not isinstance(task_ids, list)
+                or any(type(value) is not int or value <= 0 for value in task_ids)
+                or len(set(task_ids)) != len(task_ids) or admission.get('capacity') != 8
+                or expected.get('memory_bytes', 0) <= 0 or expected.get('cpus', 0) <= 0):
+            raise SafetyInterrupted('Redis admission requires a frozen image, resources and exact task allowlist at capacity 8')
+        return ROLES + (REDIS_ROLE,)
 
     def probe_binding(self):
         probe_config = self.config['native_probe']
@@ -236,7 +255,7 @@ class DiagnosticRuntime:
                 'docker_deadline_seconds': 1, 'native_deadline_seconds': 1}
 
     def start_command(self):
-        return self.compose + ['up', '-d', '--no-deps', '--no-build', '--pull', 'never', *ROLES]
+        return self.compose + ['up', '-d', '--no-deps', '--no-build', '--pull', 'never', *self.runtime_roles]
 
     def direct_command(self, attempt, args, *, mounts=()):
         operation = PROJECT + '-diagnostic-op-' + fingerprint({'attempt': str(attempt), 'args': args})[:16]
@@ -326,14 +345,22 @@ class DiagnosticRuntime:
             role = labels.get('com.docker.compose.service')
             if labels.get('com.docker.compose.oneoff', '').lower() == 'true' or role == 'load':
                 continue
-            if labels.get('com.docker.compose.project') != PROJECT or role not in ROLES or role in roles:
+            if labels.get('com.docker.compose.project') != PROJECT or role not in self.runtime_roles or role in roles:
                 raise SafetyInterrupted('Runtime role identity mismatch')
             if not item['State']['Running'] or item['Image'] != self.config['images'][role]:
                 raise SafetyInterrupted('Frozen runtime image or process changed')
             env = dict(value.split('=', 1) for value in item['Config'].get('Env', []) if '=' in value)
-            if role != 'nginx':
+            if role not in ('nginx', REDIS_ROLE):
                 if env.get('POSTGRES_DB') != 'kt_e2e' or env.get('POSTGRES_USER') != 'kt_e2e_user':
                     raise SafetyInterrupted('Isolated database identity mismatch')
+            if role == REDIS_ROLE:
+                expected_redis = source.get('roles', {}).get(REDIS_ROLE, {})
+                networks = item.get('NetworkSettings', {}).get('Networks', {})
+                if set(networks) != {PROJECT + '_default'} or item['HostConfig'].get('PortBindings'):
+                    raise SafetyInterrupted('Redis admission must use the isolated network without host ports')
+                if ('memory_bytes' not in expected_redis or item['HostConfig'].get('Memory') != expected_redis['memory_bytes']
+                        or 'cpus' not in expected_redis or item['HostConfig'].get('NanoCpus') != round(expected_redis['cpus'] * 1e9)):
+                    raise SafetyInterrupted('Frozen Redis admission resources changed')
             if role in POOL_ALIASES and (env.get('POSTGRES_HOST') != 'pgbouncer' or env.get('POSTGRES_POOL_ALIAS') != POOL_ALIASES[role]):
                 raise SafetyInterrupted('Isolated pooled database alias mismatch')
             if role == 'scheduler' and (env.get('POSTGRES_HOST') != 'school-test-postgres' or env.get('POSTGRES_POOL_ALIAS', '') != ''):
@@ -341,6 +368,16 @@ class DiagnosticRuntime:
             if role == 'pgbouncer' and env.get('PGBOUNCER_SERVER_HOST') != 'school-test-postgres':
                 raise SafetyInterrupted('PgBouncer must point to the designated shared PostgreSQL alias')
             expected = source.get('roles', {}).get(role, {})
+            if role in ('web', 'student-read') and source.get('admission', {}).get('enabled') is True:
+                admission = source['admission']
+                expected_env = {
+                    'ASSESSMENT_ADMISSION_ENABLED': '1',
+                    'ASSESSMENT_ADMISSION_TASK_IDS': ','.join(str(value) for value in admission.get('task_ids', [])),
+                    'ASSESSMENT_ADMISSION_CAPACITY': str(admission.get('capacity')),
+                    'ASSESSMENT_ADMISSION_REDIS_URL': 'redis://redis-admission:6379/0',
+                }
+                if any(env.get(key) != value for key, value in expected_env.items()):
+                    raise SafetyInterrupted('Admission environment binding differs on entry workers')
             if role in WORKERS and (env.get('GUNICORN_WORKERS') != str(expected.get('workers', WORKERS[role])) or
                     env.get('CAPTURE_V2_ENABLED') != '1' or env.get('CAPTURE_V2_COURSE_IDS') != '*'):
                 raise SafetyInterrupted('Frozen capture-enabled worker configuration required')
@@ -351,8 +388,8 @@ class DiagnosticRuntime:
             if role == 'nginx' and item['HostConfig'].get('PortBindings', {}).get('80/tcp') != [{'HostIp': '127.0.0.1', 'HostPort': '18080'}]:
                 raise SafetyInterrupted('Only loopback diagnostic port 18080 is permitted')
             roles[role] = item
-        if set(roles) != set(ROLES):
-            raise SafetyInterrupted('All ten fixed diagnostic services must be running')
+        if set(roles) != set(self.runtime_roles):
+            raise SafetyInterrupted('Frozen diagnostic service set is incomplete')
         return roles
 
     def verify_runtime(self):
@@ -441,7 +478,7 @@ class DiagnosticRuntime:
 
     def stop_owned(self):
         # A production container and the shared PostgreSQL can never enter this list.
-        ids = owned_test_ids(self.inspect_test(), self.config['images'])
+        ids = owned_test_ids(self.inspect_test(), self.config['images'], self.runtime_roles)
         if ids:
             subprocess.run(['docker', 'stop', '-t', '10', *ids], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=45, check=False)
 

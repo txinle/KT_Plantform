@@ -3,6 +3,27 @@ import assert from 'node:assert/strict'
 import { performance } from 'node:perf_hooks'
 import { probeAccounts, safeEndpoint, captureVisualLayouts, probeExpect } from './school-navigation-probe.mjs'
 import * as probe from './school-navigation-probe.mjs'
+import { chromium } from '@playwright/test'
+
+test('navigation waits for href restoration when a busy anchor has lost its link role', async () => {
+  const browser = await chromium.launch()
+  try {
+    const page = await browser.newPage()
+    await page.setContent('<nav class="kt-assessment-nav"><a data-nav-assignment="12" aria-disabled="true">Next</a></nav>')
+    assert.equal(await page.locator('a').isEnabled(), true)
+    const link = probe.navigableQuestionLink(page, '12')
+    await assert.rejects(probeExpect(link).toBeEnabled({ timeout: 100 }))
+    await page.evaluate(() => {
+      const anchor = globalThis.document.querySelector('a')
+      anchor.href = '/next/'
+      anchor.removeAttribute('aria-disabled')
+      anchor.addEventListener('click', event => { event.preventDefault(); anchor.dataset.clicked = 'true' })
+    })
+    await probeExpect(link).toBeEnabled({ timeout: 1000 })
+    await link.click({ timeout: 1000 })
+    assert.equal(await link.getAttribute('data-clicked'), 'true')
+  } finally { await browser.close() }
+})
 
 test('final readonly storage evidence precedes observer settlement and unknown storage cannot pass the probe', async () => {
   assert.equal(typeof probe.settleProbeEvidence, 'function')
@@ -29,7 +50,7 @@ test('the task action uses the real start button and waits for the first interac
   const page = {
     waitForResponse: async (predicate) => {
       assert.equal(predicate({ url: () => 'https://host/api/v1/student/courses/7/tasks/' }), true)
-      return { ok: () => true, json: async () => ({ data: { items: [{ task_id: 4, experiment_name: 'fixture' }] }, meta: { request_id: 'test' } }) }
+      return { ok: () => true, json: async () => ({ data: { items: [{ task_id: 4, experiment_name: 'fixture', primary_action: 'start' }] }, meta: { request_id: 'test' } }) }
     },
     goto: async (url) => { assert.equal(url, '/student/courses/7/'); order.push('task-list') },
     locator: () => ({ filter: () => ({ getByRole: () => button }) }),
@@ -40,6 +61,26 @@ test('the task action uses the real start button and waits for the first interac
   assert.deepEqual(order, ['task-list'])
   await operation()
   assert.deepEqual(order, ['task-list', 'click', 'ready'])
+})
+
+test('a previously started fixture follows the server resume action and labels the timing as resume', async () => {
+  let clicked = false
+  let ready = false
+  const page = {
+    waitForResponse: async () => ({ ok: () => true, json: async () => ({ data: { items: [{
+      task_id: 4, experiment_name: 'fixture', primary_action: 'resume',
+    }] } }) }),
+    goto: async () => {},
+    getByRole: () => 'fixture heading',
+    locator: () => ({ filter: () => ({ getByRole: (_role, options) => {
+      assert.equal(options.name, '继续作答')
+      return { click: async () => { clicked = true } }
+    } }) }),
+  }
+  const operation = await probe.startFixtureTask(page, { courseId: 7, taskId: 4 }, async () => { ready = true })
+  assert.equal(operation.entryAction, 'resume')
+  await operation()
+  assert.equal(clicked && ready, true)
 })
 
 test('completion readiness waits for the rendered summary and the authoritative completed state', async () => {

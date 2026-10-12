@@ -11,6 +11,10 @@ import { captureBrowserStorage } from './browser-storage-witness.mjs'
 export const probeExpect = baseExpect.configure({ timeout: 35000 })
 const expect = probeExpect
 
+export function navigableQuestionLink(page, assignment) {
+  return page.locator(`.kt-assessment-nav [data-nav-assignment="${assignment}"][href]:not([aria-disabled="true"])`)
+}
+
 export async function settleProbeEvidence(page, report, protocol, waterfall) {
   report.flow_completed = report.completed
   protocol.evidence.local_storage = await captureBrowserStorage(page, protocol.evidence)
@@ -265,11 +269,14 @@ export async function startFixtureTask(page, account, ready) {
   if (!tasks.ok()) throw new Error('Fixture task list failed')
   const task = (await tasks.json()).data.items.find((row) => row.task_id === account.taskId)
   if (!task) throw new Error('Fixture task was not authorized')
-  const button = page.locator('.kt-student-task-row').filter({ has: page.getByRole('heading', { name: task.experiment_name, exact: true }) }).getByRole('button', { name: '开始作业', exact: true })
-  return async () => {
+  if (!['start', 'resume'].includes(task.primary_action)) throw new Error('Fixture task has no answer entry action')
+  const button = page.locator('.kt-student-task-row').filter({ has: page.getByRole('heading', { name: task.experiment_name, exact: true }) }).getByRole('button', { name: task.primary_action === 'resume' ? '继续作答' : '开始作业', exact: true })
+  const operation = async () => {
     await button.click()
     await ready()
   }
+  operation.entryAction = task.primary_action
+  return operation
 }
 
 async function runAccount(browser, account, baseURL, index, itemLimit, visualOutput, candidate) {
@@ -312,7 +319,7 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
   }
   async function navigation(action, sequence, assignment, targetPath) {
     stage = action
-    const link = page.locator(`.kt-assessment-nav [data-nav-assignment="${assignment}"]`)
+    const link = navigableQuestionLink(page, assignment)
     await navigationProbeAction(report, origin, action, sequence, {
       enabled: timeout => expect(link).toBeEnabled({ timeout }),
       click: timeout => link.click({ timeout }),
@@ -337,7 +344,7 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
     }
     stage = 'task_list'
     const startTask = await startFixtureTask(page, account, ready)
-    await timed('start_first_ready', 0, startTask)
+    await timed(startTask.entryAction === 'resume' ? 'resume_first_ready' : 'start_first_ready', 0, startTask)
     if (visualOutput && index === 0) {
       stage = 'visual_layout_capture'
       const started = globalThis.performance.now()

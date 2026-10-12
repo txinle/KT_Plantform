@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import sys
 import threading
@@ -320,6 +321,123 @@ class SchoolSynchronized180Tests(unittest.TestCase):
         self.assertGreater(window['actual_send_window_seconds'], 1)
         self.assertFalse(window['concentrated'])
 
+    def test_admission_queued_poll_jitter_then_repeats_start_and_consumes_token_on_first_entry(self):
+        module = self.module()
+        runner = module.Synchronized180Runner('http://local', 1, 35, workload_version='browser-aligned-v2')
+        state = module.StudentState('private', 'private')
+        state.load_student_index = 0
+        runner.released_at = time.perf_counter()
+        calls = []
+        responses = iter([
+            FakeResponse({'status': 'queued', 'admission_token': 'secret', 'poll_url': '/api/v1/student/tasks/1/admission/status/', 'retry_after_seconds': 3}, 202),
+            FakeResponse({'status': 'admitted', 'admission_token': 'secret', 'poll_url': '/api/v1/student/tasks/1/admission/status/', 'retry_after_seconds': 3}, 200),
+            FakeResponse({'session_id': 7, 'question_url': '/question/11/'}, 201),
+            FakeResponse({'process': {'capture_version': 'capture-v2', 'response_version': 0, 'active_response_event_id': None}}, 200),
+        ])
+        def open_request(request, timeout):
+            calls.append((request.full_url, json.loads(request.data) if request.data else None))
+            return next(responses)
+        state.opener = SimpleNamespace(open=open_request)
+        runner.entry_material = lambda state: {'reason': 'direct_open'}
+        with patch.object(module.random, 'randrange', return_value=321) as jitter, patch.object(module.time, 'sleep') as sleep, patch.object(runner, 'browser_open_question') as opened:
+            runner.start_and_first_question(state)
+        sleep.assert_called_once_with(3.321)
+        opened.assert_called_once()
+        self.assertEqual(calls[3][1]['admission_token'], 'secret')
+        self.assertEqual(calls[3][1]['admission_action'], 'start')
+        self.assertEqual(calls[0][1], {})
+        self.assertEqual(calls[1][1], {'admission_token': 'secret', 'action': 'start'})
+        self.assertEqual(calls[2][1], {'admission_token': 'secret', 'admission_action': 'start'})
+        self.assertEqual(jitter.call_count, 1)
+        self.assertEqual(runner.metrics['admission_wait'].__len__(), 1)
+        self.assertEqual(runner.metrics['admitted_to_first_question_ready'].__len__(), 1)
+        self.assertNotIn('admission_token', state.browser_entry_material)
+        self.assertNotIn('admission_action', state.browser_entry_material)
+        self.assertIsNone(state.admission_credentials)
+        self.assertEqual(runner.request_errors, 0)
+        self.assertTrue(all(row['successful'] for row in runner.operation_measurements))
+        self.assertNotIn('secret', json.dumps(module.build_result(runner, [state], 1, 2)))
+
+    def test_admission_jitter_is_bounded(self):
+        module = self.module()
+        self.assertEqual(module.admission_poll_delay(3, lambda: 0), 3)
+        self.assertGreaterEqual(module.admission_poll_delay(3, lambda: 499), 3)
+        self.assertLess(module.admission_poll_delay(3, lambda: 499), 3.5)
+
+    def test_admission_failure_is_classified_without_token(self):
+        for status, code, expected in ((409, 'ADMISSION_TOKEN_INVALID', 'invalid_token'),
+                                       (503, 'ADMISSION_UNAVAILABLE', 'redis_failure'),
+                                       (None, None, 'timeout')):
+            with self.subTest(expected=expected):
+                self.admission_failure(status, code, expected)
+
+    def admission_failure(self, status, code, expected):
+        module = self.module()
+        runner = module.Synchronized180Runner('http://local', 1, 35, workload_version='browser-aligned-v2')
+        state = module.StudentState('private', 'private')
+        state.load_student_index = 0
+        runner.released_at = time.perf_counter()
+        def fail(request, timeout):
+            if status is None:
+                raise TimeoutError('secret')
+            raise urllib.error.HTTPError(request.full_url, status, 'failure', {}, io.BytesIO(json.dumps({'error': {'code': code, 'admission_token': 'secret'}}).encode()))
+        state.opener = SimpleNamespace(open=fail)
+        with self.assertRaises(RuntimeError):
+            runner.start_and_first_question(state)
+        row = [r for r in runner.operation_measurements if r['metric'] == 'start_to_first_question_ready'][0]
+        self.assertEqual(row['admission_error'], expected)
+        self.assertNotIn('secret', json.dumps(row))
+        result = module.full_operation_accounting(runner.operation_measurements, 1)
+        self.assertEqual(result['admission_wait']['attempted'], 1)
+
+    def test_immediate_admission_token_and_cold_first_entry_contract(self):
+        module = self.module()
+        for version in (0, 1):
+            with self.subTest(version=version):
+                runner = module.Synchronized180Runner('http://local', 1, 35, workload_version='browser-aligned-v2')
+                state = module.StudentState('private', 'private')
+                state.load_student_index = 0
+                runner.released_at = time.perf_counter()
+                calls = []
+                def open_request(request, timeout):
+                    calls.append(json.loads(request.data))
+                    if request.full_url.endswith('/start/'):
+                        return FakeResponse({'session_id': 7, 'question_url': '/question/11/',
+                            'admission_token': 'secret', 'admission_action': 'start'}, 201)
+                    return FakeResponse({'process': {'capture_version': 'capture-v2', 'response_version': version,
+                        'active_response_event_id': None}})
+                state.opener = SimpleNamespace(open=open_request)
+                with patch.object(runner, 'browser_open_question') as opened, patch.object(module.time, 'sleep') as sleep:
+                    if version:
+                        with self.assertRaisesRegex(RuntimeError, 'not cold'):
+                            runner.start_and_first_question(state)
+                        opened.assert_not_called()
+                    else:
+                        runner.start_and_first_question(state)
+                        opened.assert_called_once()
+                    sleep.assert_not_called()
+                self.assertEqual(calls[1]['admission_token'], 'secret')
+                self.assertNotIn('admission_token', state.browser_entry_material)
+                self.assertNotIn('admission_token', runner.entry_material(state))
+                self.assertEqual(len(runner.metrics['admission_wait']), 1)
+                self.assertEqual(len(runner.metrics['admitted_to_first_question_ready']), 1)
+
+    def test_observed_start_keeps_initial_retries_but_excludes_admitted_repeat(self):
+        module = self.module()
+        runner = module.Synchronized180Runner('http://local', 1, 35)
+        runner.phase_plans['start'] = {'wall': time.time(), 'perf': time.perf_counter()}
+        state = module.StudentState('private', 'private')
+        state.load_student_index, state.load_stage = 0, 'start'
+        import urllib.request
+        request = urllib.request.Request('http://local/api/v1/student/tasks/1/start/', data=b'{}', method='POST')
+        opener = module.ObservedOpener(SimpleNamespace(open=lambda request, timeout: FakeResponse({})), runner, state)
+        for operation, attempt in (('initial', 1), ('initial', 2), ('admitted', 1)):
+            runner.request_context.current = {'operation_id': operation, 'attempt': attempt}
+            with opener.open(request, 35):
+                pass
+        self.assertEqual(len(runner.synchronized_sends), 2)
+        self.assertEqual({row['operation_id'] for row in runner.synchronized_sends}, {'initial'})
+        self.assertEqual(module.synchronized_window(runner.synchronized_sends, 'start', 1)['first_attempt_count'], 1)
 
 if __name__ == '__main__':
     unittest.main()

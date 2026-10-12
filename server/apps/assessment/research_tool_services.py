@@ -47,12 +47,14 @@ def _assert_tool(attempt, tool, data):
         raise ValidationError('不支持的研究工具。')
 
 
-def available_tools(attempt):
+def available_tools(attempt, *, events=None):
     from .confidence_services import confidence_scale_contract
 
     config = tool_configuration(attempt)
     state = {'doubt': False, 'pending_check': False, 'checking': False, 'doubt_note': ''}
-    for row in AssessmentEvent.objects.filter(attempt=attempt, event_type='research_tool').order_by('server_ingest_sequence_no'):
+    if events is None:
+        events = AssessmentEvent.objects.filter(attempt=attempt, event_type='research_tool').order_by('server_ingest_sequence_no')
+    for row in events:
         tool, stage = row.payload['tool'], row.payload['stage']
         if tool in {'doubt', 'check'} and stage in {'mark_added', 'mark_changed', 'mark_removed'}:
             state['doubt' if tool == 'doubt' else 'pending_check'] = stage != 'mark_removed'
@@ -198,20 +200,31 @@ def eligible_rules(attempt):
     return result
 
 
-def due_rules(attempt):
+def due_rules(attempt, *, events=None):
     if attempt.status in {'submitted', 'timed_out', 'unanswered'} or attempt.session.status != 'in_progress':
         return []
+    rules = eligible_rules(attempt)
+    if not rules:
+        return []
+    if events is None:
+        events = AssessmentEvent.objects.filter(attempt=attempt, event_type='research_tool').order_by('server_ingest_sequence_no')
+    by_rule = {}
+    for event in events:
+        rule_id = event.payload['data'].get('rule_id')
+        if isinstance(rule_id, str):
+            by_rule.setdefault(rule_id, []).append(event)
     result = []
-    for rule in eligible_rules(attempt):
-        events = AssessmentEvent.objects.filter(attempt=attempt, event_type='research_tool', payload__data__rule_id=rule['id'])
-        latest_request = events.filter(payload__stage='requested').order_by('-server_ingest_sequence_no').first()
-        pending = latest_request and not events.filter(server_ingest_sequence_no__gt=latest_request.server_ingest_sequence_no,
-            payload__stage__in=['responded', 'finished']).exists()
+    for rule in rules:
+        rule_events = by_rule.get(rule['id'], [])
+        requests = [event for event in rule_events if event.payload['stage'] == 'requested']
+        latest_request = max(requests, key=lambda event: event.server_ingest_sequence_no, default=None)
+        later_events = [event for event in rule_events
+                        if latest_request and event.server_ingest_sequence_no > latest_request.server_ingest_sequence_no]
+        pending = latest_request and not any(event.payload['stage'] in {'responded', 'finished'} for event in later_events)
         if pending:
             result.append({**rule, 'pending_request': _tool_result(attempt, latest_request),
-                'already_presented': events.filter(server_ingest_sequence_no__gt=latest_request.server_ingest_sequence_no,
-                    payload__stage='presented').exists()})
-        elif events.filter(payload__stage='requested').count() < rule['max_exposures']:
+                'already_presented': any(event.payload['stage'] == 'presented' for event in later_events)})
+        elif len(requests) < rule['max_exposures']:
             result.append(rule)
     return result
 

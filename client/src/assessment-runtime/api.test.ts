@@ -1,8 +1,24 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createStudentAssessmentApi } from './api'
+import { writeAdmissionCredentials } from './admission'
 
 describe('student assessment API', () => {
+  afterEach(() => sessionStorage.clear())
+
+  it.each([undefined, 19])('sends only permit fields for the session, including task %s', async taskId => {
+    writeAdmissionCredentials(19, { admission_token: 'permit', admission_action: 'start', session_id: 7 })
+    const client = { get: vi.fn(), mutate: vi.fn().mockResolvedValue({}) }
+    await createStudentAssessmentApi(client as never).enterQuestion(7, 11, 'resume', {
+      navigationId: '00000000-0000-4000-8000-000000000010',
+      clientOccurredAt: '2026-10-12T08:00:00.000Z', clientMonotonicMs: 100,
+      clientTimeOrigin: '2026-10-12T07:59:58.765Z',
+    }, taskId)
+    const body = client.mutate.mock.calls[0][1].body
+    expect(body).toMatchObject({ admission_token: 'permit', admission_action: 'start' })
+    expect(body).not.toHaveProperty('session_id')
+  })
+
   it('sends a frozen atomic envelope on the existing submission URL', async () => {
     const client = { get: vi.fn(), mutate: vi.fn().mockResolvedValue({ committed: true }) }
     const envelope = { version: 1 as const, client_instance_id: 'client', event_boundary: 8,
