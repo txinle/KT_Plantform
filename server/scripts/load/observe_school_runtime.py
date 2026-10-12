@@ -11,6 +11,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from school_resource_budget import budget
 
 
+def probe_progress(path, now):
+    if path is None:
+        return {'state': 'not_configured'}
+    try:
+        sample = json.loads(Path(path).read_text(encoding='utf-8'))
+        age = now - sample['at']
+        return {'state': 'sampled' if 0 <= age <= 10 else 'stale', 'age_seconds': age,
+                **{key: sample.get(key) for key in
+                   ('postgres_guard', 'postgres_available', 'postgres_probe', 'native_postgres_probe')}}
+    except FileNotFoundError:
+        return {'state': 'missing'}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {'state': 'invalid'}
+
+
 def publish_progress(output, started, sample):
     journal = Path(output).with_suffix('.samples.jsonl')
     with journal.open('a', encoding='utf-8') as stream:
@@ -362,6 +377,8 @@ def observe(args, result):
                     'school-wal-observer', DATABASE_WAL_SQL], text=True)),
                 'host_swap_used_bytes': swap_used_bytes(), 'host_swap_cached_bytes': swap_cached_bytes(),
                 'postgres_cgroup': postgres_kernel, 'database_waits': waits, 'sampling_lifecycle': lifecycle,
+                'database_wait_measurement': 'instantaneous_blocking_sample_not_exact_lock_duration',
+                'database_probe': probe_progress(getattr(args, 'database_probe_progress', None), time.time()),
                 'pgbouncer': pool_metrics(args.project),
                 'resource_rows': resource_rows, 'memory_budget': budget(resource_rows, total, available)})
             publish_progress(args.output, started, system_samples[-1])
@@ -437,6 +454,7 @@ def main():
     parser.add_argument('--duration', type=int, default=2100)
     parser.add_argument('--output', required=True)
     parser.add_argument('--database-container')
+    parser.add_argument('--database-probe-progress')
     parser.add_argument('--abort-memory-below-mb', type=int, default=2048)
     parser.add_argument('--stop-file')
     parser.add_argument('--scope', choices=('short', 'formal'), default='formal')

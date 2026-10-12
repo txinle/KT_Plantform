@@ -86,15 +86,21 @@ def _response_reference(attempt, event_id):
 @transaction.atomic
 def record_tool_action(*, student, attempt_id, tool, stage, operation_id, data=None,
                        answer_event_id=None, initiation_type='self_initiated',
-                       request_received_at=None):
+                       request_received_at=None, _locked_attempt=None):
     data = data or {}
     request_received_at = request_received_at or timezone.now()
-    session_id = Attempt.objects.filter(pk=attempt_id, session__student=student).values_list('session_id', flat=True).first()
-    if session_id is None:
-        raise ValidationError('无权访问此作答。')
-    session = ExperimentSession.objects.select_for_update(of=('self',)).select_related('version').get(pk=session_id)
-    attempt = Attempt.objects.select_for_update(of=('self',)).select_related('assignment__snapshot').get(pk=attempt_id, session=session)
-    attempt.session = session
+    if _locked_attempt is None:
+        session_id = Attempt.objects.filter(pk=attempt_id, session__student=student).values_list('session_id', flat=True).first()
+        if session_id is None:
+            raise ValidationError('无权访问此作答。')
+        session = ExperimentSession.objects.select_for_update(of=('self',)).select_related('version').get(pk=session_id)
+        attempt = Attempt.objects.select_for_update(of=('self',)).select_related('assignment__snapshot').get(pk=attempt_id, session=session)
+        attempt.session = session
+    else:
+        attempt = _locked_attempt
+        session = attempt.session
+        if attempt.pk != attempt_id or session.student_id != student.pk:
+            raise ValidationError('无权访问此作答。')
     try:
         event_id = uuid.UUID(str(operation_id))
     except (ValueError, TypeError):
@@ -163,7 +169,8 @@ def record_tool_action(*, student, attempt_id, tool, stage, operation_id, data=N
                     request_received_at=request_received_at,
                 )
     event = append_assessment_event(event_type='research_tool', event_version=1, event_domain='assessment',
-        actor_source='server', session=session, attempt=attempt, payload=payload, event_id=event_id, app_version='capture-v2')
+        actor_source='server', session=session, attempt=attempt, payload=payload, event_id=event_id, app_version='capture-v2',
+        session_lock_held=_locked_attempt is not None)
     return _tool_result(attempt, event)
 
 

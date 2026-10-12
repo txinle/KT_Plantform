@@ -53,3 +53,19 @@ class ArchitectureRuntimeTests(unittest.TestCase):
         self.assertEqual(module.confirmed_fact_failure({**incomplete,
             'known_navigation_integrity_passed': False}), 'known_navigation_integrity_passed')
         self.assertIsNone(module.confirmed_fact_failure({}))
+
+    def test_protocol_only_acceptance_never_claims_browser_experience(self):
+        module = self.module()
+        checks = dict.fromkeys(('load_completed', 'operation_targets_passed', 'data_integrity_passed',
+            'grading_coverage_export_consistent', 'background_drained', 'observer_completed',
+            'no_oom', 'observer_covers_load'), True)
+        result = module.acceptance_fields('protocol_only', 'formal-1', checks)
+        self.assertTrue(result['formal_protocol_capacity_accepted'])
+        self.assertFalse(result['formal_capacity_accepted'])
+        self.assertEqual(result['browser_acceptance'], 'not_requested_by_user')
+        for stage, evidence in [('diagnostic-180', checks), ('smoke-10', checks), ('formal-1', {}),
+                                ('formal-2', {**checks, 'data_integrity_passed': False})]:
+            self.assertFalse(module.acceptance_fields('protocol_only', stage, evidence)['formal_protocol_capacity_accepted'])
+        self.assertFalse(module.acceptance_fields('protocol_and_browser', 'formal-1', checks)['formal_capacity_accepted'])
+        with self.assertRaises(ValueError):
+            module.acceptance_fields('skip_integrity', 'formal-1', checks)

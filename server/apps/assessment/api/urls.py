@@ -12,6 +12,7 @@ from .views import (
     StudentTaskResultView,
     StudentTaskStartView,
     StudentRuntimeQuestionEntryView,
+    StudentAdmissionStatusView,
 )
 
 
@@ -50,6 +51,11 @@ urlpatterns = [
         "tasks/<int:task_id>/resume/",
         StudentTaskResumeView.as_view(),
         name="student-task-resume",
+    ),
+    path(
+        "tasks/<int:task_id>/admission/status/",
+        StudentAdmissionStatusView.as_view(),
+        name="student-task-admission-status",
     ),
     path(
         "tasks/<int:task_id>/results/",

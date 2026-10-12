@@ -77,7 +77,7 @@ class SchoolBrowserAlignedTests(unittest.TestCase):
             stream.accept_acknowledgements([{'event_id': str(uuid.uuid4()), 'client_sequence_no': event['client_sequence_no']}])
         self.assertEqual(stream.checkpoint('resume')['highest_acked_sequence_no'], 0)
 
-    def workflow(self, atomic=False, failure_path=None, embedded_tools=False, saved_navigation=False):
+    def workflow(self, atomic=False, failure_path=None, embedded_tools=False, saved_navigation=False, capture_bundle=False):
         self.assertTrue(hasattr(protocol.CaptureProtocolMixin, 'browser_aligned_answer'), 'Opt-in browser-aligned workflow is missing')
         class Harness(protocol.CaptureProtocolMixin, Runner):
             workload_version = 'browser-aligned-v2'
@@ -132,6 +132,9 @@ class SchoolBrowserAlignedTests(unittest.TestCase):
                         dto['research_tools'].pop('rules')
                 if saved_navigation:
                     dto['process']['save_and_leave'] = {'version': 1}
+                if capture_bundle:
+                    dto['process']['capture_bundle'] = {'enabled': True, 'version': 1, 'mutation_receipts': True,
+                        'max_events': 100, 'max_checkpoints': 100, 'max_bytes': 8 * 1024 * 1024}
                 return 200, dto, .001
             if route.startswith('/student/sessions/'):
                 return 200, b'<html><head></head></html>', .001
@@ -140,6 +143,10 @@ class SchoolBrowserAlignedTests(unittest.TestCase):
             if route == '/api/v1/auth/session/':
                 return 200, {'user': {'id': 2}}, .001
             if route == '/events/':
+                if body.get('capture_bundle'):
+                    material = body['capture_bundle']
+                    return 200, {**ack(material), 'committed': True,
+                        'checkpoint_ids': [row['checkpoint_id'] for row in material['checkpoints']]}, .001
                 return 200, ack(body), .001
             if route == '/checkpoint/':
                 return 201, {'success': True, 'checkpoint_id': body['checkpoint_id']}, .001
@@ -163,10 +170,17 @@ class SchoolBrowserAlignedTests(unittest.TestCase):
                         'acknowledgements': ack(bundle)['acknowledgements'],
                         'checkpoint_ids': [row['checkpoint_id'] for row in bundle['checkpoints']]}
                     return 200, result, .001
+                if body.get('capture_bundle'):
+                    self.assertTrue(body.get('capture_operation_id'), 'Bundled draft must have an immutable operation identity')
+                    uuid.UUID(body['capture_operation_id'])
                 self.assertEqual(body['expected_version'], versions.get(attempt, 0))
                 saved[attempt] = copy.deepcopy(body)
                 versions[attempt] = versions.get(attempt, 0) + 1
-                return 200, {'success': True, 'active_response_event_id': body['target_event_id'], 'response_version': versions[attempt]}, .001
+                result = {'success': True, 'active_response_event_id': body['target_event_id'], 'response_version': versions[attempt]}
+                if body.get('capture_bundle'):
+                    result.update(committed=True, acknowledgements=ack(body['capture_bundle'])['acknowledgements'],
+                        checkpoint_ids=[row['checkpoint_id'] for row in body['capture_bundle']['checkpoints']])
+                return 200, result, .001
             if route.startswith('/submit/'):
                 attempt = int(route.strip('/').split('/')[-1])
                 index = attempt - 20
@@ -183,6 +197,9 @@ class SchoolBrowserAlignedTests(unittest.TestCase):
                 if not body:
                     return 200, tool_config(attempt), .001
                 result = {'success': True, 'event_id': body['operation_id'], 'content_version': 'a' * 64}
+                if body.get('capture_bundle'):
+                    result.update(committed=True, acknowledgements=ack(body['capture_bundle'])['acknowledgements'],
+                        checkpoint_ids=[row['checkpoint_id'] for row in body['capture_bundle']['checkpoints']])
                 if body['stage'] == 'requested' and body['tool'] == 'check': tools[attempt] = result
                 return 200, result, .001
             if route.endswith('/recovery/'):
@@ -236,6 +253,54 @@ class SchoolBrowserAlignedTests(unittest.TestCase):
                 schema_path = ROOT / 'apps/assessment/event_schemas' / event['event_type'] / f"v{event['event_version']}.json"
                 Draft202012Validator(json.loads(schema_path.read_text(encoding='utf-8')),
                     format_checker=FormatChecker()).validate(event['payload'])
+
+    def test_capture_bundle_keeps_facts_and_workload_while_reducing_requests(self):
+        from collections import Counter
+        baseline, _, old_calls = self.workflow(atomic=True, saved_navigation=True, embedded_tools=True)
+        candidate, _, calls = self.workflow(atomic=True, saved_navigation=True, embedded_tools=True, capture_bundle=True)
+        bundled = [body['capture_bundle'] for _, _, body in calls if body and body.get('capture_bundle')]
+        self.assertTrue(bundled, 'Protocol must use the declared capture bundle capability')
+        self.assertLess(len(calls), len(old_calls))
+        for runner in (baseline, candidate):
+            self.assertEqual(runner.protocol_summary()['completed_sessions'], 1)
+            self.assertTrue(runner.protocol_summary()['all_events_acknowledged'])
+            self.assertTrue(runner.protocol_summary()['all_checkpoints_acknowledged'])
+            self.assertEqual(len(runner.ledger['11']['visits']), 58)
+        def facts(runner):
+            row = runner.ledger['11']
+            return (Counter(event['event_type'] for event in row['events'].values()),
+                    Counter(item['trigger'] for item in row['checkpoints'].values()))
+        self.assertEqual(facts(baseline), facts(candidate))
+        self.assertEqual([(row['action'], row['item_index']) for row in baseline.protocol_summary()['logical_actions']],
+                         [(row['action'], row['item_index']) for row in candidate.protocol_summary()['logical_actions']])
+        self.assertTrue(all(bundle['version'] == 1 and len(bundle['events']) <= 100
+                            and len(bundle['checkpoints']) <= 100 for bundle in bundled))
+
+    def test_mutation_receipts_account_for_unknown_commits_and_exact_ack_ordinals(self):
+        from apps.experiments.management.commands.verify_school_protocol_load import capture_mutation_receipt_checks
+        token, event_id, checkpoint_id = (str(uuid.uuid4()) for _ in range(3))
+        receipt = {'committed': True, 'active_response_event_id': event_id,
+                   'acknowledgements': [{'event_id': event_id, 'client_sequence_no': 1, 'server_ingest_sequence_no': 7}],
+                   'checkpoint_ids': [checkpoint_id]}
+        planned = {'attempt_id': 21, 'kind': 'draft', 'material_fingerprint': 'a' * 64,
+                   'event_identities': {'1': event_id}, 'checkpoint_ids': [checkpoint_id],
+                   'target_event_id': event_id, 'acknowledged': True, 'receipt_sha256': protocol.digest(receipt)}
+        ledger = {'sessions': {'11': {'capture_mutation_receipts': {token: planned}}}}
+        stored = SimpleNamespace(token=token, attempt_id=21, kind='draft', material_fingerprint='a' * 64, receipt=receipt)
+        event = SimpleNamespace(pk=event_id, client_sequence_no=1, server_ingest_sequence_no=7)
+        result = capture_mutation_receipt_checks(ledger, [stored], [event])
+        self.assertTrue(result['all_capture_mutation_receipts_confirmed_and_matched'])
+        planned['acknowledged'] = False
+        planned['receipt_sha256'] = None
+        self.assertTrue(capture_mutation_receipt_checks(ledger, [stored], [event])['known_capture_mutation_integrity_passed'])
+        self.assertFalse(capture_mutation_receipt_checks(ledger, [stored], [event])['all_capture_mutation_receipts_confirmed_and_matched'])
+        stored.receipt = copy.deepcopy(receipt)
+        stored.receipt['acknowledgements'][0]['server_ingest_sequence_no'] = 99
+        self.assertFalse(capture_mutation_receipt_checks(ledger, [stored], [event])['known_capture_mutation_integrity_passed'])
+        stored.receipt = receipt
+        planned['acknowledged'] = True
+        self.assertFalse(capture_mutation_receipt_checks(ledger, [], [event])['known_capture_mutation_integrity_passed'])
+        self.assertFalse(capture_mutation_receipt_checks({'sessions': {}}, [stored], [event])['known_capture_mutation_integrity_passed'])
 
     def test_feedback_is_confirmed_in_the_submitted_attempt_close_boundary(self):
         _, _, calls = self.workflow(atomic=True, saved_navigation=True)

@@ -43,6 +43,20 @@ class StudentSessionEntrySerializer(serializers.Serializer):
     task_id = serializers.IntegerField()
     session_id = serializers.IntegerField()
     question_url = serializers.CharField()
+    admission_token = serializers.CharField(required=False, read_only=True)
+    admission_action = serializers.CharField(required=False, read_only=True)
+
+
+class StudentAdmissionStatusSerializer(serializers.Serializer):
+    admission_token = serializers.CharField()
+    action = serializers.ChoiceField(choices=('start', 'resume'))
+
+
+class StudentAdmissionStatusResponseSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=('queued', 'admitted'))
+    admission_token = serializers.CharField()
+    poll_url = serializers.CharField()
+    retry_after_seconds = serializers.IntegerField(min_value=1)
 
 
 class StudentRuntimeAssignmentSerializer(serializers.Serializer):
@@ -122,6 +136,8 @@ class StudentRuntimeQuestionEnterSerializer(StudentRuntimeQuestionEntryQuerySeri
     client_occurred_at = serializers.DateTimeField()
     client_monotonic_ms = serializers.DecimalField(max_digits=20, decimal_places=3, min_value=0)
     client_time_origin = serializers.DateTimeField()
+    admission_token = serializers.CharField(required=False, write_only=True, max_length=128)
+    admission_action = serializers.ChoiceField(choices=('start', 'resume'), required=False, write_only=True)
 
     def validate(self, attrs):
         if set(self.initial_data) - set(self.fields):
@@ -142,6 +158,7 @@ class StudentRuntimeEntryReceiptSerializer(serializers.Serializer):
 
 class AtomicSubmissionCapabilitySerializer(serializers.Serializer):
     enabled = serializers.BooleanField()
+    mutation_receipts = serializers.BooleanField(required=False)
     version = serializers.IntegerField()
     max_events = serializers.IntegerField()
     max_checkpoints = serializers.IntegerField()
@@ -149,6 +166,7 @@ class AtomicSubmissionCapabilitySerializer(serializers.Serializer):
 
 
 class StudentRuntimeProcessSerializer(serializers.Serializer):
+    capture_bundle = AtomicSubmissionCapabilitySerializer(required=False)
     atomic_submission = AtomicSubmissionCapabilitySerializer(required=False)
     save_and_leave = AtomicSubmissionCapabilitySerializer(required=False)
     writer_lease_acquire_url = serializers.CharField(required=False)

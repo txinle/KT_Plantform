@@ -93,37 +93,26 @@ def save_draft_api(request, attempt_id):
             _, receipt = save_and_leave_attempt(student=request.user, attempt_id=attempt_id,
                                                document=data, request_received_at=request_received_at)
             return JsonResponse(receipt)
-        attempt = save_draft(
-            attempt.id,
-            data.get("answer"),
-            _client_time(data.get("client_occurred_at")),
-            request_received_at=request_received_at,
-            target_event_id=data.get('target_event_id'),
-            expected_version=data.get('expected_version'),
-            writer_lease_token=data.get('writer_lease_token'),
-            writer_client_instance_id=data.get('writer_client_instance_id'),
-        )
-        response = {"success": True, "saved_at": attempt.draft_saved_at.isoformat(),
-                    "response_version": attempt.response_version,
-                    "active_response_event_id": str(attempt.active_response_event_id) if attempt.active_response_event_id else None}
-        if attempt.saved_response_snapshot is not None:
-            response.update(
-                {
-                    "response_snapshot_id": str(attempt.saved_response_snapshot.pk),
-                    "content_hash": attempt.saved_response_snapshot.content_hash,
-                    "content_length": attempt.saved_response_snapshot.content_length,
-                    "state_hash": attempt.saved_response_snapshot.state_hash,
-                }
+        if 'capture_bundle' in data:
+            from .capture_bundle_services import save_draft_capture_bundle
+            if len(request.body) > MAX_BYTES:
+                raise ProcessRequestError('request_too_large', status=413)
+            attempt, receipt = save_draft_capture_bundle(student=request.user, attempt_id=attempt_id,
+                document=data, request_received_at=request_received_at)
+            return JsonResponse(receipt)
+        else:
+            attempt = save_draft(
+                attempt.id,
+                data.get("answer"),
+                _client_time(data.get("client_occurred_at")),
+                request_received_at=request_received_at,
+                target_event_id=data.get('target_event_id'),
+                expected_version=data.get('expected_version'),
+                writer_lease_token=data.get('writer_lease_token'),
+                writer_client_instance_id=data.get('writer_client_instance_id'),
             )
-        elif attempt.saved_response_state is not None:
-            response["response_state_after"] = attempt.saved_response_state
-        elif attempt.assignment.snapshot.question_type in {
-            "single_choice",
-            "multiple_choice",
-            "true_false",
-        }:
-            response["response_state_after"] = None
-        return JsonResponse(response)
+        from .capture_bundle_services import draft_response
+        return JsonResponse(draft_response(attempt))
     except ProcessRequestError as error:
         fields = _navigation_rejection_fields(error)
         return JsonResponse({'success': False, 'error': {'code': error.code, 'fields': fields}}, status=error.status)

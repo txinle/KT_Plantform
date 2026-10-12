@@ -3,8 +3,9 @@ import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
 import type { WriterLeaseCredentials } from './writer-lease'
 import { currentAssessmentOperationId } from './operation-timing'
+import { currentAdmissionCredentials } from './admission'
 import type { ToolRule } from '@/features/teacher-experiments/research-tools'
-import type { CaptureEvent, CaptureCheckpoint } from './capture-contract'
+import type { CaptureEvent, CaptureCheckpoint, CaptureBundle, CaptureBundleCapability, ProcessConfirmation } from './capture-contract'
 import type { SavedNavigationConfirmation } from './session-controller'
 
 export interface StudentResearchToolConfiguration {
@@ -49,12 +50,14 @@ export type StudentRuntimeQuestionEntry = components['schemas']['StudentRuntimeQ
   offline_recovery?: boolean
   research_tools?: StudentResearchToolConfiguration
   process: components['schemas']['StudentRuntimeProcess'] & {
+    capture_bundle?: CaptureBundleCapability
     atomic_submission?: { version: 1; max_events: number; max_checkpoints: number; max_bytes: number }
     save_and_leave?: { version: 1; max_events: number; max_checkpoints: number; max_bytes: number }
   }
 }
 
 export interface NavigationClickContext {
+  sessionId?: number
   navigationId: string
   clientOccurredAt: string
   clientMonotonicMs: number
@@ -72,7 +75,7 @@ export interface EntryReceipt {
   entered_at: string
 }
 
-export interface DraftMutationResponse {
+export interface DraftMutationResponse extends ProcessConfirmation {
   response_version?: number
   active_response_event_id?: string | null
   success: boolean
@@ -132,12 +135,13 @@ export function createStudentAssessmentApi(client: StudentAssessmentClient) {
     recoverQuestion: (sessionId: number, assignmentId: number) => client.get<RecoveryState>(`/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/recovery/`),
     recover: (attemptId: number, token: string) => client.get<RecoveryState>(`/api/v1/student/attempts/${attemptId}/recovery/?submission_token=${encodeURIComponent(token)}`),
     question: (sessionId: number, assignmentId: number) => client.get<StudentRuntimeQuestionEntry>(`/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/`),
-    enterQuestion: (sessionId: number, assignmentId: number, reason: string, navigation: NavigationClickContext) => client.mutate<StudentRuntimeQuestionEntry & { entry_receipt: EntryReceipt }>(
+    enterQuestion: (sessionId: number, assignmentId: number, reason: string, navigation: NavigationClickContext, taskId?: number) => client.mutate<StudentRuntimeQuestionEntry & { entry_receipt: EntryReceipt }>(
       `/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/`, { method: 'POST', body: {
         reason, navigation_id: navigation.navigationId, client_occurred_at: navigation.clientOccurredAt,
         client_monotonic_ms: navigation.clientMonotonicMs.toFixed(3), client_time_origin: navigation.clientTimeOrigin,
+        ...(taskId ? {} : currentAdmissionCredentials(navigation.sessionId)?.credentials || {}),
       } }),
-    saveDraft: (url: string, answer: unknown, clientOccurredAt: string, target?: { target_event_id: string | null; expected_version: number } & Partial<WriterLeaseCredentials>) => (
+    saveDraft: (url: string, answer: unknown, clientOccurredAt: string, target?: { target_event_id: string | null; expected_version: number; capture_bundle?: CaptureBundle; capture_operation_id?: string } & Partial<WriterLeaseCredentials>) => (
       client.mutate<DraftMutationResponse>(url, {
         method: 'POST',
         body: { answer, client_occurred_at: clientOccurredAt, ...target },
@@ -165,7 +169,10 @@ export function createStudentAssessmentApi(client: StudentAssessmentClient) {
 
 let api: ReturnType<typeof createStudentAssessmentApi> | undefined
 
-export function getStudentAssessmentApi() {
+export function getStudentAssessmentApi(operationId?: string | null) {
+  if (operationId !== undefined) return createStudentAssessmentApi(
+    createApiClient({ getCsrfToken: () => getBootstrapContext().csrf_token, getOperationId: () => operationId || undefined }),
+  )
   if (api) return api
   api = createStudentAssessmentApi(
     createApiClient({ getCsrfToken: () => getBootstrapContext().csrf_token, getOperationId: currentAssessmentOperationId }),

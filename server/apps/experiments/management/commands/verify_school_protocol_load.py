@@ -8,7 +8,7 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
 
-from apps.assessment.models import (AssessmentEvent, Attempt, ClientCaptureCheckpoint, ClientTimeSync,
+from apps.assessment.models import (AssessmentEvent, Attempt, CaptureMutationReceipt, ClientCaptureCheckpoint, ClientTimeSync,
     ConfidenceAssignment, ExperimentSession, NavigationReceipt, QuestionVisitEvent, SubmissionEvent)
 from apps.assessment.response_snapshot_services import canonical_response_state
 from scripts.load.capture_protocol import BROWSER_ALIGNED_WORKLOAD, CONTRACT, digest, project_payload
@@ -175,6 +175,48 @@ def navigation_receipt_checks(ledger, receipts):
             'all_navigation_receipts_confirmed_and_matched': known and confirmed == set(expected) == set(actual),
             'navigation_receipt_count': len(actual), 'navigation_receipts_emitted': len(expected),
             'navigation_unknown_receipts_missing': len(set(expected) - confirmed - set(actual))}
+
+
+def capture_mutation_receipt_checks(ledger, receipts, events):
+    expected = {token: row for session in ledger['sessions'].values()
+                for token, row in session.get('capture_mutation_receipts', {}).items()}
+    actual = {str(row.token): row for row in receipts}
+    event_rows = {str(row.pk): row for row in events}
+    def matches(token):
+        try:
+            stored, planned = actual[token], expected[token]
+            receipt = stored.receipt
+            acks, checkpoint_ids = receipt.get('acknowledgements'), receipt.get('checkpoint_ids')
+            identities = planned['event_identities']
+            if (stored.attempt_id != planned['attempt_id'] or stored.kind != planned['kind']
+                    or stored.material_fingerprint != planned['material_fingerprint']
+                    or receipt.get('committed') is not True or not isinstance(acks, list)
+                    or len(acks) != len(identities)
+                    or {str(row['client_sequence_no']): row['event_id'] for row in acks} != identities
+                    or not isinstance(checkpoint_ids, list) or len(checkpoint_ids) != len(planned['checkpoint_ids'])
+                    or set(checkpoint_ids) != set(planned['checkpoint_ids'])):
+                return False
+            for ack in acks:
+                event = event_rows.get(ack['event_id'])
+                if (event is None or event.client_sequence_no != ack['client_sequence_no']
+                        or type(ack.get('server_ingest_sequence_no')) is not int
+                        or ack['server_ingest_sequence_no'] < 1
+                        or event.server_ingest_sequence_no != ack['server_ingest_sequence_no']):
+                    return False
+            if stored.kind == 'draft' and receipt.get('active_response_event_id') != planned['target_event_id']:
+                return False
+            if stored.kind == 'tool' and receipt.get('event_id') != token:
+                return False
+            return not planned.get('acknowledged') or digest(receipt) == planned['receipt_sha256']
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return False
+    confirmed = {token for token, row in expected.items() if row.get('acknowledged')}
+    known = (len(actual) == len(receipts) and set(actual) <= set(expected) and confirmed <= set(actual)
+             and all(matches(token) for token in actual))
+    return {'known_capture_mutation_integrity_passed': known,
+            'all_capture_mutation_receipts_confirmed_and_matched': known and confirmed == set(expected) == set(actual),
+            'capture_mutation_receipt_count': len(actual), 'capture_mutations_emitted': len(expected),
+            'capture_mutation_unknown_receipts_missing': len(set(expected) - confirmed - set(actual))}
 
 
 def browser_persistence_checks(fixture, ledger, sessions, events, attempts, checkpoints, syncs, visits, submissions, confidence):
@@ -438,6 +480,11 @@ class Command(BaseCommand):
             extra.update(navigation)
             extra['known_fact_integrity_passed'] &= navigation['known_navigation_integrity_passed']
             checks['all_navigation_receipts_confirmed_and_matched'] = navigation['all_navigation_receipts_confirmed_and_matched']
+            mutations = capture_mutation_receipt_checks(ledger,
+                list(CaptureMutationReceipt.objects.filter(attempt__session_id__in=ids)), events)
+            extra.update(mutations)
+            extra['known_fact_integrity_passed'] &= mutations['known_capture_mutation_integrity_passed']
+            checks['all_capture_mutation_receipts_confirmed_and_matched'] = mutations['all_capture_mutation_receipts_confirmed_and_matched']
             extra['full_workflow_passed'] = all(checks.values())
         return {'database': 'kt_e2e', 'read_only': True, 'evidence_kind': 'http_protocol_persistence', **extra,
             'browser_dom_ime_offline_verified': False, 'student_count': count, 'session_count': len(sessions),

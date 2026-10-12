@@ -149,7 +149,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Empty JSON object reads authorized tools/rules; action JSON records the existing research-tool operation. Frozen tool configuration validates stage and data. */
+        /** @description Empty JSON object reads authorized tools/rules; action JSON records the existing research-tool operation. Optional capture_bundle commits original evidence with the action. Frozen tool configuration validates stage and data. */
         post: operations["assessment_research_tools"];
         delete?: never;
         options?: never;
@@ -575,6 +575,22 @@ export interface paths {
         get: operations["student_sessions_summary_retrieve"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/student/tasks/{task_id}/admission/status/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["student_tasks_admission_status_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2743,10 +2759,22 @@ export interface components {
          */
         AccountActionEnum: "create" | "reuse";
         /**
+         * @description * `start` - start
+         *     * `resume` - resume
+         * @enum {string}
+         */
+        ActionA44Enum: "start" | "resume";
+        /**
          * @description * `confirm` - confirm
          * @enum {string}
          */
         ActionF00Enum: "confirm";
+        /**
+         * @description * `start` - start
+         *     * `resume` - resume
+         * @enum {string}
+         */
+        AdmissionActionEnum: "start" | "resume";
         ApiUser: {
             id: number;
             role: string;
@@ -2761,6 +2789,7 @@ export interface components {
         };
         AtomicSubmissionCapability: {
             enabled: boolean;
+            mutation_receipts?: boolean;
             version: number;
             max_events: number;
             max_checkpoints: number;
@@ -4139,6 +4168,7 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label?: string;
@@ -4149,7 +4179,9 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -4934,6 +4966,22 @@ export interface components {
          * @enum {string}
          */
         StatusB97Enum: "draft" | "active" | "archived";
+        StudentAdmissionStatus: {
+            admission_token: string;
+            action: components["schemas"]["ActionA44Enum"];
+        };
+        StudentAdmissionStatusResponse: {
+            status: components["schemas"]["StudentAdmissionStatusResponseStatusEnum"];
+            admission_token: string;
+            poll_url: string;
+            retry_after_seconds: number;
+        };
+        /**
+         * @description * `queued` - queued
+         *     * `admitted` - admitted
+         * @enum {string}
+         */
+        StudentAdmissionStatusResponseStatusEnum: "queued" | "admitted";
         StudentCollection: {
             items: components["schemas"]["StudentSummaryRow"][];
             page: components["schemas"]["TeacherClassPageMetadata"];
@@ -5405,6 +5453,7 @@ export interface components {
             text: string;
         };
         StudentRuntimeProcess: {
+            capture_bundle?: components["schemas"]["AtomicSubmissionCapability"];
             atomic_submission?: components["schemas"]["AtomicSubmissionCapability"];
             save_and_leave?: components["schemas"]["AtomicSubmissionCapability"];
             writer_lease_acquire_url?: string;
@@ -5452,6 +5501,8 @@ export interface components {
             client_monotonic_ms: string;
             /** Format: date-time */
             client_time_origin: string;
+            admission_token?: string;
+            admission_action?: components["schemas"]["AdmissionActionEnum"];
         };
         StudentRuntimeQuestionEntry: {
             offline_authorization: components["schemas"]["StudentRuntimeOfflineAuthorization"];
@@ -5480,6 +5531,8 @@ export interface components {
             task_id: number;
             session_id: number;
             question_url: string;
+            readonly admission_token: string;
+            readonly admission_action: string;
         };
         StudentSessionSummary: {
             session_id: number;
@@ -5856,6 +5909,7 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label: string;
@@ -5866,7 +5920,9 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -7374,6 +7430,77 @@ export interface operations {
                     /** Format: uuid */
                     answer_event_id?: string | null;
                     initiation_type?: string;
+                    /** @description Original bounded capture facts; maximum complete body 8388608 bytes. Batch facts share one owned session; draft/tool facts belong to the current attempt or session. */
+                    capture_bundle?: {
+                        /** @enum {integer} */
+                        version: 1;
+                        /** Format: uuid */
+                        client_instance_id: string;
+                        event_boundary: number;
+                        events: {
+                            /** Format: uuid */
+                            event_id?: string;
+                            /** @enum {string} */
+                            event_type: "activity_heartbeat" | "confidence_observed" | "document_hidden" | "document_visible" | "explanation_shown" | "feedback_exposure" | "feedback_shown" | "hint_closed" | "hint_opened" | "input_operation" | "item_left" | "item_rendered" | "legacy_session_end_observed" | "legacy_session_start_observed" | "network_offline" | "network_online" | "pagehide" | "pageshow" | "research_tool_observed" | "research_tool_requested" | "resource_closed" | "resource_opened" | "response_commit_requested" | "response_input_started" | "response_state_changed" | "response_transition" | "session_completed" | "session_expired" | "session_invalidated" | "session_reopened" | "session_started" | "simulation_error_returned" | "simulation_parameter_changed" | "simulation_run_completed" | "simulation_run_started" | "text_edit_observed" | "window_blurred" | "window_focused";
+                            event_version: number;
+                            session_id: number;
+                            attempt_id?: number | null;
+                            client_sequence_no: number;
+                            /** Format: uuid */
+                            correlation_id?: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_wall_time_utc: string;
+                            /** @description Finite nonnegative decimal, validated by the existing domain parser. */
+                            client_monotonic_ms: number | string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_time_origin: string;
+                            /** Format: uuid */
+                            time_sync_id?: string | null;
+                            quality_flags: string[];
+                            app_version: string;
+                            /** @description Versioned payload validated by apps.assessment.event_schema_registry; the authoritative JSON schemas are assessment/event_schemas/<event_type>/v<event_version>.json. */
+                            payload: {
+                                [key: string]: unknown;
+                            };
+                        }[];
+                        checkpoints: {
+                            /** Format: uuid */
+                            checkpoint_id: string;
+                            session_id: number;
+                            /** Format: uuid */
+                            client_instance_id: string;
+                            highest_emitted_sequence_no: number;
+                            highest_acked_sequence_no: number;
+                            highest_contiguous_acked_sequence_no: number;
+                            pending_event_count: number;
+                            failed_event_count: number;
+                            missing_local_sequence_ranges: number[][];
+                            /** @description Finite nonnegative decimal, validated by the existing domain parser. */
+                            client_monotonic_ms: number | string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_wall_time_utc: string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_time_origin: string;
+                            /** Format: uuid */
+                            time_sync_id: string | null;
+                            /** @enum {string} */
+                            trigger: "heartbeat" | "navigation" | "commit" | "pagehide" | "resume" | "session_end" | "ack_progress";
+                            quality_flags: string[];
+                            app_version: string;
+                        }[];
+                    };
                 };
             };
         };
@@ -7415,8 +7542,35 @@ export interface operations {
                             event_id: string;
                             content_version: string;
                             text?: string;
+                            /** @enum {boolean} */
+                            committed?: true;
+                            acknowledgements?: {
+                                client_sequence_no: number;
+                                /** Format: uuid */
+                                event_id: string;
+                                server_ingest_sequence_no: number;
+                            }[];
+                            checkpoint_ids?: string[];
                         };
                         meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            /** @description Rejected by the existing domain contract. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
                             request_id: string;
                         };
                     };
@@ -7512,6 +7666,42 @@ export interface operations {
                     };
                 };
             };
+            /** @description Rejected by the existing domain contract. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            /** @description Rejected by the existing domain contract. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
         };
     };
     assessment_capture_v2_batch: {
@@ -7563,6 +7753,78 @@ export interface operations {
                             [key: string]: unknown;
                         };
                     }[];
+                } | {
+                    /** @description Original bounded capture facts; maximum complete body 8388608 bytes. Batch facts share one owned session; draft/tool facts belong to the current attempt or session. */
+                    capture_bundle: {
+                        /** @enum {integer} */
+                        version: 1;
+                        /** Format: uuid */
+                        client_instance_id: string;
+                        event_boundary: number;
+                        events: {
+                            /** Format: uuid */
+                            event_id?: string;
+                            /** @enum {string} */
+                            event_type: "activity_heartbeat" | "confidence_observed" | "document_hidden" | "document_visible" | "explanation_shown" | "feedback_exposure" | "feedback_shown" | "hint_closed" | "hint_opened" | "input_operation" | "item_left" | "item_rendered" | "legacy_session_end_observed" | "legacy_session_start_observed" | "network_offline" | "network_online" | "pagehide" | "pageshow" | "research_tool_observed" | "research_tool_requested" | "resource_closed" | "resource_opened" | "response_commit_requested" | "response_input_started" | "response_state_changed" | "response_transition" | "session_completed" | "session_expired" | "session_invalidated" | "session_reopened" | "session_started" | "simulation_error_returned" | "simulation_parameter_changed" | "simulation_run_completed" | "simulation_run_started" | "text_edit_observed" | "window_blurred" | "window_focused";
+                            event_version: number;
+                            session_id: number;
+                            attempt_id?: number | null;
+                            client_sequence_no: number;
+                            /** Format: uuid */
+                            correlation_id?: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_wall_time_utc: string;
+                            /** @description Finite nonnegative decimal, validated by the existing domain parser. */
+                            client_monotonic_ms: number | string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_time_origin: string;
+                            /** Format: uuid */
+                            time_sync_id?: string | null;
+                            quality_flags: string[];
+                            app_version: string;
+                            /** @description Versioned payload validated by apps.assessment.event_schema_registry; the authoritative JSON schemas are assessment/event_schemas/<event_type>/v<event_version>.json. */
+                            payload: {
+                                [key: string]: unknown;
+                            };
+                        }[];
+                        checkpoints: {
+                            /** Format: uuid */
+                            checkpoint_id: string;
+                            session_id: number;
+                            /** Format: uuid */
+                            client_instance_id: string;
+                            highest_emitted_sequence_no: number;
+                            highest_acked_sequence_no: number;
+                            highest_contiguous_acked_sequence_no: number;
+                            pending_event_count: number;
+                            failed_event_count: number;
+                            missing_local_sequence_ranges: number[][];
+                            /** @description Finite nonnegative decimal, validated by the existing domain parser. */
+                            client_monotonic_ms: number | string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_wall_time_utc: string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_time_origin: string;
+                            /** Format: uuid */
+                            time_sync_id: string | null;
+                            /** @enum {string} */
+                            trigger: "heartbeat" | "navigation" | "commit" | "pagehide" | "resume" | "session_end" | "ack_progress";
+                            quality_flags: string[];
+                            app_version: string;
+                        }[];
+                    };
                 };
             };
         };
@@ -7589,6 +7851,9 @@ export interface operations {
                                 code: string;
                                 permanent: boolean;
                             }[];
+                            /** @enum {boolean} */
+                            committed?: true;
+                            checkpoint_ids?: string[];
                         };
                         meta: {
                             request_id: string;
@@ -8573,7 +8838,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": ({
+                "application/json": (({
                     /** @description Question-type response JSON; the frozen question domain validates its shape. */
                     answer?: unknown;
                     /**
@@ -8584,13 +8849,86 @@ export interface operations {
                     /** Format: uuid */
                     target_event_id?: string | null;
                     expected_version?: number;
+                    /** @description Original bounded capture facts; maximum complete body 8388608 bytes. Batch facts share one owned session; draft/tool facts belong to the current attempt or session. */
+                    capture_bundle?: {
+                        /** @enum {integer} */
+                        version: 1;
+                        /** Format: uuid */
+                        client_instance_id: string;
+                        event_boundary: number;
+                        events: {
+                            /** Format: uuid */
+                            event_id?: string;
+                            /** @enum {string} */
+                            event_type: "activity_heartbeat" | "confidence_observed" | "document_hidden" | "document_visible" | "explanation_shown" | "feedback_exposure" | "feedback_shown" | "hint_closed" | "hint_opened" | "input_operation" | "item_left" | "item_rendered" | "legacy_session_end_observed" | "legacy_session_start_observed" | "network_offline" | "network_online" | "pagehide" | "pageshow" | "research_tool_observed" | "research_tool_requested" | "resource_closed" | "resource_opened" | "response_commit_requested" | "response_input_started" | "response_state_changed" | "response_transition" | "session_completed" | "session_expired" | "session_invalidated" | "session_reopened" | "session_started" | "simulation_error_returned" | "simulation_parameter_changed" | "simulation_run_completed" | "simulation_run_started" | "text_edit_observed" | "window_blurred" | "window_focused";
+                            event_version: number;
+                            session_id: number;
+                            attempt_id?: number | null;
+                            client_sequence_no: number;
+                            /** Format: uuid */
+                            correlation_id?: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_wall_time_utc: string;
+                            /** @description Finite nonnegative decimal, validated by the existing domain parser. */
+                            client_monotonic_ms: number | string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_time_origin: string;
+                            /** Format: uuid */
+                            time_sync_id?: string | null;
+                            quality_flags: string[];
+                            app_version: string;
+                            /** @description Versioned payload validated by apps.assessment.event_schema_registry; the authoritative JSON schemas are assessment/event_schemas/<event_type>/v<event_version>.json. */
+                            payload: {
+                                [key: string]: unknown;
+                            };
+                        }[];
+                        checkpoints: {
+                            /** Format: uuid */
+                            checkpoint_id: string;
+                            session_id: number;
+                            /** Format: uuid */
+                            client_instance_id: string;
+                            highest_emitted_sequence_no: number;
+                            highest_acked_sequence_no: number;
+                            highest_contiguous_acked_sequence_no: number;
+                            pending_event_count: number;
+                            failed_event_count: number;
+                            missing_local_sequence_ranges: number[][];
+                            /** @description Finite nonnegative decimal, validated by the existing domain parser. */
+                            client_monotonic_ms: number | string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_wall_time_utc: string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_time_origin: string;
+                            /** Format: uuid */
+                            time_sync_id: string | null;
+                            /** @enum {string} */
+                            trigger: "heartbeat" | "navigation" | "commit" | "pagehide" | "resume" | "session_end" | "ack_progress";
+                            quality_flags: string[];
+                            app_version: string;
+                        }[];
+                    };
+                    /** Format: uuid */
+                    capture_operation_id?: string;
                     /** Format: uuid */
                     writer_lease_token?: string | null;
                     /** Format: uuid */
                     writer_client_instance_id?: string | null;
                 } & {
                     [key: string]: unknown;
-                }) | {
+                }) & (unknown | unknown)) | {
                     /** Format: uuid */
                     navigation_token: string;
                     /** Format: uuid */
@@ -8691,6 +9029,15 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: {
+                            /** @enum {boolean} */
+                            committed?: true;
+                            acknowledgements?: {
+                                client_sequence_no: number;
+                                /** Format: uuid */
+                                event_id: string;
+                                server_ingest_sequence_no: number;
+                            }[];
+                            checkpoint_ids?: string[];
                             /** @enum {boolean} */
                             success: true;
                             /**
@@ -9708,6 +10055,38 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["StudentSessionSummary"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    student_tasks_admission_status_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StudentAdmissionStatus"];
+                "application/x-www-form-urlencoded": components["schemas"]["StudentAdmissionStatus"];
+                "multipart/form-data": components["schemas"]["StudentAdmissionStatus"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["StudentAdmissionStatusResponse"];
                         meta: {
                             request_id: string;
                         };

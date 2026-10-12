@@ -1,6 +1,7 @@
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+from contextlib import contextmanager
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import OperationalError, connection, transaction
@@ -21,6 +22,56 @@ class CaptureDiagnosticGuardTests(SimpleTestCase):
     @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=True)
     def test_diagnostic_flag_fails_closed_for_production_database(self):
         with patch.dict(os.environ, {'POSTGRES_DB': 'kt_platform'}):
+            with self.assertRaises(ImproperlyConfigured):
+                RequestIdMiddleware(lambda request: HttpResponse('ok'))
+
+
+@override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=True)
+class CaptureDiagnosticLightTests(SimpleTestCase):
+    def test_light_mode_aggregates_driver_intervals_without_sql_details_or_extra_sql(self):
+        fake = Mock(vendor='postgresql', in_atomic_block=True)
+        fake.get_autocommit.return_value = False
+        active = []
+        @contextmanager
+        def wrapper(callback):
+            active.append(callback)
+            yield
+        fake.execute_wrapper.side_effect = wrapper
+        execute = Mock()
+        cursor = Mock()
+        cursor.fetchone.return_value = (123,)
+        def view(request):
+            fake.get_new_connection({'password': 'PRIVATE PASSWORD'})
+            for sql in ('SELECT PRIVATE', 'SAVEPOINT private_savepoint', 'RELEASE SAVEPOINT private_savepoint'):
+                active[0](execute, sql, ['PRIVATE ANSWER'], False, {'cursor': cursor})
+            fake.commit()
+            fake.run_and_clear_commit_hooks()
+            return HttpResponse('ok')
+        request = RequestFactory().post('/student/sessions/123/finish/', data={'answer': 'PRIVATE ANSWER'})
+        with patch.dict(os.environ, {'POSTGRES_DB': 'kt_e2e', 'SCHOOL_CAPTURE_DIAGNOSTICS_MODE': 'light'}), \
+                patch('apps.api.middleware.connection', fake), \
+                patch('apps.api.middleware.hashlib.md5') as fingerprint, \
+                self.assertLogs('kt.capture_diagnostics', level='WARNING') as logs:
+            fingerprint.return_value.hexdigest.return_value = 'c' * 32
+            response = RequestIdMiddleware(view)(request)
+        row = json.loads(logs.records[-1].getMessage())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(execute.call_count, 3)
+        fingerprint.assert_not_called()
+        self.assertEqual(row['diagnostics_mode'], 'light')
+        self.assertEqual(row['sql_count'], 3)
+        self.assertEqual(row['connection_count'], 1)
+        self.assertEqual(row['commit_count'], 1)
+        self.assertEqual(row['transactions']['savepoints'], 1)
+        for key in ('queries', 'connections', 'commits', 'commit_hooks'):
+            self.assertEqual(row[key], [])
+        for key in ('sql_seconds', 'connection_seconds', 'commit_seconds', 'application_excluding_measured_database_seconds'):
+            self.assertGreaterEqual(row[key], 0)
+        self.assertEqual(row['response_body_bytes'], 2)
+        self.assertNotIn('PRIVATE', json.dumps(row))
+
+    def test_invalid_mode_is_rejected_before_a_request(self):
+        with patch.dict(os.environ, {'POSTGRES_DB': 'kt_e2e', 'SCHOOL_CAPTURE_DIAGNOSTICS_MODE': 'unknown'}):
             with self.assertRaises(ImproperlyConfigured):
                 RequestIdMiddleware(lambda request: HttpResponse('ok'))
 

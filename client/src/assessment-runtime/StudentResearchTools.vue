@@ -4,10 +4,12 @@ import { getStudentAssessmentApi } from './api'
 import type { StudentResearchToolConfiguration } from './api'
 import type { StudentProcessRuntime } from './session-controller'
 import type { ToolRule } from '@/features/teacher-experiments/research-tools'
+import type { ProcessConfirmation } from './capture-contract'
+import { timedAssessmentStage } from './operation-timing'
 
 const props = defineProps<{
   endpoint: string
-  runtime: Pick<StudentProcessRuntime, 'record' | 'flushConfirmed' | 'serializePointerWrite'>
+  runtime: Pick<StudentProcessRuntime, 'record' | 'flushConfirmed' | 'serializePointerWrite' | 'captureMutation'>
   answerEventId: string | null
   waitForCapture: () => Promise<unknown>
   initialConfiguration?: StudentResearchToolConfiguration
@@ -42,7 +44,7 @@ const hint = shallowRef<{ text: string; source: ToolResponse; data: Record<strin
 const error = ref('')
 const contentVersion = ref('')
 let timer: ReturnType<typeof setInterval> | undefined
-interface ToolResponse { event_id: string; content_version: string; text?: string }
+interface ToolResponse extends ProcessConfirmation { event_id: string; content_version: string; text?: string }
 type DueRule = ToolRule & { pending_request?: ToolResponse; already_presented?: boolean }
 type QueuedHint = { id: string; rule?: DueRule }
 const queuedHints: QueuedHint[] = []
@@ -67,11 +69,14 @@ function action(tool: string, stage: string, data: Record<string, unknown> = {},
   const sending = props.runtime.serializePointerWrite(async () => {
     await recorded
     await props.waitForCapture()
-    if (await props.runtime.flushConfirmed() === false) throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。')
-    return getStudentAssessmentApi().post<ToolResponse>(props.endpoint, {
+    const body = {
       tool, stage, operation_id: operationId, data: effectiveData,
       answer_event_id: answerEventId, initiation_type: initiation,
-    })
+    };
+    const send = (frozen: Record<string, unknown>) => timedAssessmentStage('tools', () => getStudentAssessmentApi(operationId).post<ToolResponse>(props.endpoint, frozen), operationId);
+    if (props.runtime.captureMutation) return props.runtime.captureMutation(props.endpoint, body, send, operationId);
+    if (await props.runtime.flushConfirmed() === false) throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。')
+    return send(body);
   })
   changePending(1)
   return sending.finally(() => changePending(-1))

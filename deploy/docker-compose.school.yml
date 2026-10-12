@@ -10,6 +10,11 @@ x-school-environment: &school-environment
   DJANGO_DEBUG: "0"
   STUDENT_SHARED_RESULTS_ENABLED: "1"
   STUDENT_SHARED_RESULTS_COURSE_IDS: ${SCHOOL_STUDENT_SHARED_RESULTS_COURSE_IDS:-2}
+  ASSESSMENT_ADMISSION_ENABLED: ${ASSESSMENT_ADMISSION_ENABLED:-0}
+  ASSESSMENT_ADMISSION_TASK_IDS: ${ASSESSMENT_ADMISSION_TASK_IDS:-}
+  ASSESSMENT_ADMISSION_REDIS_URL: redis://redis-admission:6379/0
+  ASSESSMENT_ADMISSION_CAPACITY: ${ASSESSMENT_ADMISSION_CAPACITY:-8}
+  ASSESSMENT_ADMISSION_LEASE_SECONDS: ${ASSESSMENT_ADMISSION_LEASE_SECONDS:-180}
 
 x-school-web: &school-web
   build:
@@ -27,6 +32,8 @@ x-school-web: &school-web
     migrate:
       condition: service_completed_successfully
     pgbouncer:
+      condition: service_healthy
+    redis-admission:
       condition: service_healthy
   healthcheck:
     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=3)"]
@@ -55,6 +62,18 @@ services:
     mem_limit: 128M
     cpus: 0
     cpu_shares: 1024
+  redis-admission:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "allkeys-lru"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+    mem_limit: 256M
+    cpus: 0.25
+    cpu_shares: 256
   migrate:
     build:
       dockerfile: deploy/Dockerfile.school

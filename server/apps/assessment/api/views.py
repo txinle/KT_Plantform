@@ -38,6 +38,12 @@ from ..models import (
 from ..response_snapshot_services import canonical_response_state
 from ..services import can_recover_session, get_or_create_session, resume_task_session
 from ..services import RecordedVisitEntry, _validate_course_access, record_visit_entry
+from ..admission import (
+    AdmissionCoordinator,
+    AdmissionInvalid,
+    AdmissionUnavailable,
+    admission_result_payload,
+)
 from ..student_results import build_student_task_result
 from .serializers import (
     StudentCourseCollectionSerializer,
@@ -48,6 +54,8 @@ from .serializers import (
     StudentSessionEntrySerializer,
     StudentRuntimeQuestionEntrySerializer,
     StudentRuntimeQuestionEnterSerializer,
+    StudentAdmissionStatusSerializer,
+    StudentAdmissionStatusResponseSerializer,
     StudentResultResponseSerializer,
     StudentTaskCollectionSerializer,
     serialize_student_result,
@@ -203,11 +211,11 @@ def _student_task(student, task_id):
     )
 
 
-def _entry_projection(task, session):
+def _entry_projection(task, session, *, admission_token=None, admission_action=None):
     assignment = session.current_assignment or session.assignments.first()
     if assignment is None:
         raise ApiConflict("正式任务没有可作答题目。", code="TASK_EMPTY")
-    return {
+    payload = {
         "task_id": task.pk,
         "session_id": session.pk,
         "question_url": reverse(
@@ -215,11 +223,86 @@ def _entry_projection(task, session):
             args=[session.pk, assignment.pk],
         ),
     }
+    if admission_token:
+        payload["admission_token"] = admission_token
+        payload["admission_action"] = admission_action
+    return payload
+
+
+def _admission_poll_url(task_id):
+    return reverse("student-task-admission-status", args=[task_id])
+
+
+def _admission_gate(request, task, action):
+    if not AdmissionCoordinator.enabled_for(task.pk):
+        return None
+    coordinator = AdmissionCoordinator()
+    token = str(request.data.get("admission_token") or "")
+    try:
+        if token:
+            result = coordinator.status(
+                task_id=task.pk,
+                user_id=request.user.pk,
+                action=action,
+                token=token,
+            )
+        else:
+            result = coordinator.request(
+                task_id=task.pk,
+                user_id=request.user.pk,
+                action=action,
+            )
+    except AdmissionInvalid as error:
+        raise ApiConflict("准入许可无效或已过期，请重新申请。", code="ADMISSION_TOKEN_INVALID") from error
+    except AdmissionUnavailable as error:
+        raise ApiConflict(
+            "当前任务入口正在保护中，请稍后重试。",
+            code="ADMISSION_UNAVAILABLE",
+            status=503,
+        ) from error
+    if result.status == "queued":
+        return Response(
+            admission_result_payload(result, poll_url=_admission_poll_url(task.pk)),
+            status=202,
+            headers={"Retry-After": str(result.retry_after or 3)},
+        )
+    return result.token
 
 
 class StudentApiMixin:
     permission_classes = (RolePermission,)
     allowed_roles = (User.Role.STUDENT,)
+
+
+class StudentAdmissionStatusView(StudentApiMixin, APIView):
+    @extend_schema(request=StudentAdmissionStatusSerializer, responses=StudentAdmissionStatusResponseSerializer)
+    def post(self, request, task_id):
+        task = _student_task(request.user, task_id)
+        document = StudentAdmissionStatusSerializer(data=request.data)
+        document.is_valid(raise_exception=True)
+        action = request.data.get("action")
+        if action not in {"start", "resume"}:
+            raise ApiConflict("准入动作无效。", code="ADMISSION_ACTION_INVALID")
+        try:
+            result = AdmissionCoordinator().status(
+                task_id=task.pk,
+                user_id=request.user.pk,
+                action=action,
+                token=document.validated_data["admission_token"],
+            )
+        except AdmissionInvalid as error:
+            raise ApiConflict("准入许可无效或已过期，请重新申请。", code="ADMISSION_TOKEN_INVALID") from error
+        except AdmissionUnavailable as error:
+            raise ApiConflict(
+                "当前任务入口正在保护中，请稍后重试。",
+                code="ADMISSION_UNAVAILABLE",
+                status=503,
+            ) from error
+        return Response(
+            admission_result_payload(result, poll_url=_admission_poll_url(task.pk)),
+            status=202 if result.status == "queued" else 200,
+            headers={"Retry-After": str(result.retry_after or 3)} if result.status == "queued" else None,
+        )
 
 
 class StudentCourseCollectionView(StudentApiMixin, APIView):
@@ -260,6 +343,13 @@ class StudentTaskStartView(StudentApiMixin, APIView):
             class_task=task,
             participant_snapshot__student=request.user,
         ).first()
+        admission_token = None
+        if existing is None or not AssessmentEvent.objects.filter(
+            session=existing, event_type="item_entered"
+        ).exists():
+            admission_token = _admission_gate(request, task, "start")
+            if isinstance(admission_token, Response):
+                return admission_token
         try:
             session = get_or_create_session(
                 task.experiment,
@@ -270,7 +360,7 @@ class StudentTaskStartView(StudentApiMixin, APIView):
         except ValidationError as error:
             raise ApiConflict("; ".join(error.messages), code="TASK_NOT_OPEN") from error
         return Response(
-            _entry_projection(task, session),
+            _entry_projection(task, session, admission_token=admission_token, admission_action="start"),
             status=200 if existing is not None else 201,
         )
 
@@ -279,6 +369,17 @@ class StudentTaskResumeView(StudentApiMixin, APIView):
     @extend_schema(request=None, responses=StudentSessionEntrySerializer)
     def post(self, request, task_id):
         task = _student_task(request.user, task_id)
+        existing = ExperimentSession.objects.filter(
+            class_task=task,
+            participant_snapshot__student=request.user,
+        ).first()
+        admission_token = None
+        if existing is None or not AssessmentEvent.objects.filter(
+            session=existing, event_type="item_entered"
+        ).exists():
+            admission_token = _admission_gate(request, task, "resume")
+            if isinstance(admission_token, Response):
+                return admission_token
         try:
             session = resume_task_session(
                 task,
@@ -295,7 +396,7 @@ class StudentTaskResumeView(StudentApiMixin, APIView):
                 "; ".join(error.messages),
                 code="SESSION_NOT_RESUMABLE",
             ) from error
-        return Response(_entry_projection(task, session))
+        return Response(_entry_projection(task, session, admission_token=admission_token, admission_action="resume"))
 
 
 def _runtime_remaining_seconds(session, attempt, at):
@@ -432,9 +533,57 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
         document = StudentRuntimeQuestionEnterSerializer(data=request.data)
         document.is_valid(raise_exception=True)
         material = document.validated_data
+        admission_token = material.get('admission_token')
+        admission_action = material.get('admission_action')
+        admission = None
+        admission_enabled = False
+        preliminary_session = None
+        if getattr(settings, 'ASSESSMENT_ADMISSION_ENABLED', False):
+            preliminary_session = self.session(request, session_id)
+            admission_enabled = bool(
+                preliminary_session.class_task_id
+                and AdmissionCoordinator.enabled_for(preliminary_session.class_task_id)
+            )
+        if admission_enabled and preliminary_session is not None and not AssessmentEvent.objects.filter(
+            session=preliminary_session, event_type='item_entered'
+        ).exists():
+            if not admission_token or not admission_action:
+                raise ApiConflict('首次进入题目需要有效准入许可。', code='ADMISSION_TOKEN_REQUIRED')
+            admission = AdmissionCoordinator()
+            try:
+                admission.status(
+                    task_id=preliminary_session.class_task_id,
+                    user_id=request.user.pk,
+                    action=admission_action,
+                    token=admission_token,
+                )
+            except AdmissionInvalid as error:
+                raise ApiConflict('准入许可无效或已过期，请返回任务列表重试。', code='ADMISSION_TOKEN_INVALID') from error
+            except AdmissionUnavailable as error:
+                raise ApiConflict('当前任务入口正在保护中，请稍后重试。', code='ADMISSION_UNAVAILABLE', status=503) from error
+            try:
+                admission.consume(
+                    task_id=preliminary_session.class_task_id,
+                    user_id=request.user.pk,
+                    action=admission_action,
+                    token=admission_token,
+                )
+            except AdmissionInvalid as error:
+                raise ApiConflict('准入许可已失效，请核验后重试。', code='ADMISSION_TOKEN_INVALID') from error
+            except AdmissionUnavailable as error:
+                raise ApiConflict('当前任务入口正在保护中，请稍后重试。', code='ADMISSION_UNAVAILABLE', status=503) from error
+        first_entry = False
         with transaction.atomic():
             session = self.session(request, session_id, locked=True)
             self.assert_content_access(request, session, timezone.now())
+            first_entry = (
+                admission_enabled
+                and not AssessmentEvent.objects.filter(
+                    session=session, event_type='item_entered'
+                ).exists()
+            )
+            if admission_enabled and first_entry and not admission_token:
+                raise ApiConflict('首次进入题目需要有效准入许可。', code='ADMISSION_TOKEN_REQUIRED')
             assignment = get_object_or_404(
                 StudentQuestionAssignment.objects.select_related('snapshot', 'item_instance'),
                 pk=assignment_id, session=session,
@@ -474,7 +623,10 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                 decision = DeadlineDecision(False, 'ATTEMPT_CLOSED') if visit_entry.attempt.status in (
                     Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED,
                 ) else DeadlineDecision(True)
-            return self.runtime_response(visit_entry.attempt, visit_entry, request_received_at, decision=decision)
+            runtime_attempt = visit_entry.attempt
+            runtime_entry = visit_entry
+
+        return self.runtime_response(runtime_attempt, runtime_entry, request_received_at, decision=decision)
 
     def runtime_response(self, attempt, visit_entry, request_received_at, *, decision=None):
         assignment = attempt.assignment
@@ -592,6 +744,8 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
             for key in ('capture_version', 'active_response_event_id', 'response_version', 'writer_lease_acquire_url', 'writer_lease_renew_url', 'writer_lease_release_url'):
                 payload['process'].pop(key, None)
         else:
+            from ..capture_bundle_services import capture_bundle_capability
+            payload['process']['capture_bundle'] = capture_bundle_capability(session)
             from ..atomic_submission_services import atomic_submission_capability
             atomic_capability = atomic_submission_capability(attempt)
             if atomic_capability['enabled']:

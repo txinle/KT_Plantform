@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from config.capture_timing import (
-    TIMING_ENV_KEY, coarse_path, diagnostics_enabled, ingress_stamp,
+    TIMING_ENV_KEY, coarse_path, diagnostics_enabled, diagnostics_mode, ingress_stamp,
     mark, pending_timing, sanitized_id, timing_fields,
 )
 
@@ -76,7 +76,7 @@ logger = logging.getLogger('kt.capture_diagnostics')
 
 def pre_request(worker, req):
     if diagnostics_enabled():
-        state = {}
+        state = {'diagnostics_mode': diagnostics_mode()}
         mark(state, 'gunicorn_pre')
         req.capture_started_clock, req.capture_started_at = state['marks']['gunicorn_pre']
         req.capture_timing = state

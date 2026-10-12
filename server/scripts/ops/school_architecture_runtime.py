@@ -9,6 +9,9 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -16,6 +19,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'load'))
 from school_diagnostic_runtime import (BASE_URL, DATABASE, PROJECT, ROLES, DiagnosticRuntime,
                                        SafetyInterrupted, read, read_evidence, write_once)
 from school_architecture_load import validate_profile
+
+
+GATEWAY_ROUTES = (
+    ('web', '/api/v1/auth/csrf/', (200,)),
+    ('student-read', '/api/v1/student/courses/1/learning/', (401, 403)),
+    ('teacher-read', '/api/v1/teacher/courses/1/data/overview/', (401, 403)),
+)
+
+
+class NoGatewayRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        return None
 
 
 def stage_profile(stage):
@@ -48,7 +63,21 @@ def confirmed_fact_failure(persistence):
             return key
     if persistence.get('known_navigation_integrity_passed') is False:
         return 'known_navigation_integrity_passed'
+    if persistence.get('known_capture_mutation_integrity_passed') is False:
+        return 'known_capture_mutation_integrity_passed'
     return None
+
+
+def acceptance_fields(scope, stage, checks):
+    if scope not in ('protocol_only', 'protocol_and_browser'):
+        raise ValueError('Explicit supported acceptance scope required')
+    required = ('load_completed', 'operation_targets_passed', 'data_integrity_passed',
+                'grading_coverage_export_consistent', 'background_drained', 'observer_completed',
+                'no_oom', 'observer_covers_load')
+    protocol_passed = stage in ('formal-1', 'formal-2') and all(checks.get(key) is True for key in required)
+    return {'acceptance_scope': scope, 'formal_protocol_capacity_accepted': protocol_passed,
+            'browser_acceptance': 'not_requested_by_user' if scope == 'protocol_only' else 'pending_separate_three_browser_evidence',
+            'formal_capacity_accepted': False}
 
 
 class ArchitectureRuntime(DiagnosticRuntime):
@@ -61,10 +90,86 @@ class ArchitectureRuntime(DiagnosticRuntime):
         command[command.index('--memory') + 1] = '1g'
         return command[:2] + ['--cpus', '2'] + command[2:]
 
+    def verify_gateway_routing(self, attempt):
+        deadline = time.monotonic() + 18
+        since = str(int(time.time()) - 1)
+        requests = [{'request_id': uuid.uuid4().hex, 'expected_role': role, 'observed_roles': []}
+                    for role, _, _ in GATEWAY_ROUTES]
+        result = {'passed': False, 'requests': requests}
+
+        def remaining():
+            seconds = deadline - time.monotonic()
+            if seconds <= 0:
+                raise TimeoutError()
+            return min(3, seconds)
+
+        def docker(*args):
+            process = subprocess.run(['docker', *args], text=True, capture_output=True,
+                                     timeout=remaining(), check=False)
+            if process.returncode:
+                raise OSError()
+            return process
+
+        try:
+            identities = docker('ps', '-q', '--no-trunc', '--filter',
+                                'label=com.docker.compose.project=' + PROJECT).stdout.split()
+            if not identities:
+                raise ValueError()
+            roles = {}
+            for item in json.loads(docker('inspect', *identities).stdout):
+                labels = item['Config'].get('Labels', {})
+                role = labels.get('com.docker.compose.service')
+                if role not in {route[0] for route in GATEWAY_ROUTES} or labels.get('com.docker.compose.oneoff', '').lower() == 'true':
+                    continue
+                if (labels.get('com.docker.compose.project') != PROJECT or role in roles
+                        or not item['State']['Running'] or item['Image'] != self.config['images'][role]):
+                    raise ValueError()
+                roles[role] = item['Id']
+            if set(roles) != {route[0] for route in GATEWAY_ROUTES}:
+                raise ValueError()
+            opener = urllib.request.build_opener(NoGatewayRedirect())
+            statuses_valid = True
+            for row, (_, path, statuses) in zip(requests, GATEWAY_ROUTES):
+                request = urllib.request.Request(BASE_URL + path, method='GET',
+                                                 headers={'X-Request-ID': row['request_id']})
+                try:
+                    with opener.open(request, timeout=remaining()) as response:
+                        statuses_valid &= response.status in statuses
+                except urllib.error.HTTPError as error:
+                    statuses_valid &= error.code in statuses
+                    error.close()
+                except (OSError, TimeoutError):
+                    statuses_valid = False
+            by_identity = {row['request_id']: row for row in requests}
+            for role, identity in roles.items():
+                process = docker('logs', '--since', since, '--tail', '2000', identity)
+                for line in (process.stdout + '\n' + process.stderr).splitlines():
+                    beginning = line.find('{')
+                    if beginning < 0:
+                        continue
+                    try:
+                        timing = json.loads(line[beginning:])
+                    except ValueError:
+                        continue
+                    if not isinstance(timing, dict) or timing.get('phase') != 'gunicorn_request_complete':
+                        continue
+                    row = by_identity.get(timing.get('request_id'))
+                    if row is not None and role not in row['observed_roles']:
+                        row['observed_roles'].append(role)
+            result['passed'] = (statuses_valid and time.monotonic() <= deadline
+                                and all(row['observed_roles'] == [row['expected_role']] for row in requests))
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+            pass
+        write_once(attempt / 'gateway-routing.json', result)
+        if not result['passed']:
+            raise SafetyInterrupted('Gateway routing is mismatched or unwitnessed')
+        return result
+
     def seed(self, stage, attempt):
         mode, count = stage_profile(stage)
         self.verify_runtime()
         self.bind_attempt(attempt, create=True)
+        self.verify_gateway_routing(attempt)
         run = 'arch-' + hashlib.sha256((self.config['run_id'] + ':' + stage).encode()).hexdigest()[:18]
         script = '''import io,json,os,secrets
 from pathlib import Path
@@ -108,8 +213,17 @@ os.chmod('/attempt/fixture.json',0o600)
         return result
 
     def run_stage(self, stage, attempt, profile):
+        scope = self.config.get('acceptance_scope', 'protocol_and_browser')
+        acceptance_fields(scope, stage, {})
         self.verify_runtime()
         self.bind_attempt(attempt)
+        gateway, gateway_error = read_evidence(attempt / 'gateway-routing.json')
+        witnessed = gateway.get('requests', [])
+        if (gateway_error or gateway.get('passed') is not True or len(witnessed) != 3
+                or [row.get('expected_role') for row in witnessed] != [route[0] for route in GATEWAY_ROUTES]
+                or any(row.get('observed_roles') != [row.get('expected_role')] for row in witnessed)
+                or len({row.get('request_id') for row in witnessed if re.fullmatch('[a-f0-9]{32}', row.get('request_id', ''))}) != 3):
+            raise SafetyInterrupted('Gateway routing evidence is absent or failed before load')
         fixture = read(attempt / 'fixture.json')
         write_once(attempt / 'started.json', {'started_at': time.time(), 'profile': profile})
         write_once(attempt / 'backlog-before.json', {'global': self.backlog(), 'stage': self.backlog(fixture['task_id'])})
@@ -119,7 +233,9 @@ os.chmod('/attempt/fixture.json',0o600)
         self.observer = subprocess.Popen([sys.executable, str(self.observer_script), '--project', PROJECT,
             '--database-container', DATABASE, '--scope', 'short' if profile['mode'] == 'diagnostic' else 'formal',
             '--duration', str(profile['hard_timeout_seconds'] + 360), '--stop-file', str(stop),
-            '--output', str(attempt / 'observation.json')], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            '--output', str(attempt / 'observation.json'),
+            *(['--database-probe-progress', str(attempt / 'database-probe.progress.json')]
+              if self.native_probe is not None else [])], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         log.close()
         self.children.append(self.observer)
         try:
@@ -164,7 +280,7 @@ os.chmod('/attempt/fixture.json',0o600)
             'observer_covers_load': (bool(http) and observation.get('started_at', float('inf')) <= http.get('started', 0)
                 and observation.get('ended_at', 0) >= http.get('ended', float('inf')))}
         result = {'stage': stage, 'profile': profile, 'checks': checks, 'protocol_passed': all(checks.values()),
-                  'browser_acceptance': 'pending_separate_three_browser_evidence', 'formal_capacity_accepted': False,
+                  **acceptance_fields(scope, stage, checks),
                   'process_exit_code': code, 'source_config': self.source_value(),
                   'evidence_errors': {key: error for key, error in (('http', http_error), ('persistence', persistence_error),
                       ('architecture_results', results_error), ('observer', observer_error)) if error}}
@@ -203,6 +319,8 @@ def main():
         raise SystemExit(75)
     finally:
         runtime.stop_load()
+        if runtime.native_probe is not None:
+            runtime.native_probe.close()
         for child in runtime.children:
             runtime.terminate_child(child)
 

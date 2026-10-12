@@ -1806,8 +1806,8 @@ paths:
     post:
       operationId: assessment_research_tools
       description: Empty JSON object reads authorized tools/rules; action JSON records
-        the existing research-tool operation. Frozen tool configuration validates
-        stage and data.
+        the existing research-tool operation. Optional capture_bundle commits original
+        evidence with the action. Frozen tool configuration validates stage and data.
       parameters:
       - in: header
         name: X-CSRFToken
@@ -1854,6 +1854,232 @@ paths:
                     nullable: true
                   initiation_type:
                     type: string
+                  capture_bundle:
+                    type: object
+                    properties:
+                      version:
+                        type: integer
+                        enum:
+                        - 1
+                      client_instance_id:
+                        type: string
+                        format: uuid
+                      event_boundary:
+                        type: integer
+                        minimum: 0
+                      events:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            event_id:
+                              type: string
+                              format: uuid
+                            event_type:
+                              type: string
+                              enum:
+                              - activity_heartbeat
+                              - confidence_observed
+                              - document_hidden
+                              - document_visible
+                              - explanation_shown
+                              - feedback_exposure
+                              - feedback_shown
+                              - hint_closed
+                              - hint_opened
+                              - input_operation
+                              - item_left
+                              - item_rendered
+                              - legacy_session_end_observed
+                              - legacy_session_start_observed
+                              - network_offline
+                              - network_online
+                              - pagehide
+                              - pageshow
+                              - research_tool_observed
+                              - research_tool_requested
+                              - resource_closed
+                              - resource_opened
+                              - response_commit_requested
+                              - response_input_started
+                              - response_state_changed
+                              - response_transition
+                              - session_completed
+                              - session_expired
+                              - session_invalidated
+                              - session_reopened
+                              - session_started
+                              - simulation_error_returned
+                              - simulation_parameter_changed
+                              - simulation_run_completed
+                              - simulation_run_started
+                              - text_edit_observed
+                              - window_blurred
+                              - window_focused
+                            event_version:
+                              type: integer
+                              minimum: 1
+                            session_id:
+                              type: integer
+                              minimum: 1
+                            attempt_id:
+                              type: integer
+                              minimum: 1
+                              nullable: true
+                            client_sequence_no:
+                              type: integer
+                              minimum: 1
+                            correlation_id:
+                              type: string
+                              format: uuid
+                              nullable: true
+                            client_wall_time_utc:
+                              type: string
+                              format: date-time
+                              description: Timezone-aware timestamp.
+                            client_monotonic_ms:
+                              oneOf:
+                              - type: number
+                                minimum: 0
+                              - type: string
+                              description: Finite nonnegative decimal, validated by
+                                the existing domain parser.
+                            client_time_origin:
+                              type: string
+                              format: date-time
+                              description: Timezone-aware timestamp.
+                            time_sync_id:
+                              type: string
+                              format: uuid
+                              nullable: true
+                            quality_flags:
+                              type: array
+                              items:
+                                type: string
+                            app_version:
+                              type: string
+                              maxLength: 64
+                            payload:
+                              type: object
+                              additionalProperties: true
+                              description: Versioned payload validated by apps.assessment.event_schema_registry;
+                                the authoritative JSON schemas are assessment/event_schemas/<event_type>/v<event_version>.json.
+                          additionalProperties: false
+                          required:
+                          - app_version
+                          - client_monotonic_ms
+                          - client_sequence_no
+                          - client_time_origin
+                          - client_wall_time_utc
+                          - event_type
+                          - event_version
+                          - payload
+                          - quality_flags
+                          - session_id
+                        maxItems: 100
+                      checkpoints:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            checkpoint_id:
+                              type: string
+                              format: uuid
+                            session_id:
+                              type: integer
+                              minimum: 1
+                            client_instance_id:
+                              type: string
+                              format: uuid
+                            highest_emitted_sequence_no:
+                              type: integer
+                              minimum: 0
+                            highest_acked_sequence_no:
+                              type: integer
+                              minimum: 0
+                            highest_contiguous_acked_sequence_no:
+                              type: integer
+                              minimum: 0
+                            pending_event_count:
+                              type: integer
+                              minimum: 0
+                            failed_event_count:
+                              type: integer
+                              minimum: 0
+                            missing_local_sequence_ranges:
+                              type: array
+                              items:
+                                type: array
+                                items:
+                                  type: integer
+                                  minimum: 1
+                                minItems: 2
+                                maxItems: 2
+                            client_monotonic_ms:
+                              oneOf:
+                              - type: number
+                                minimum: 0
+                              - type: string
+                              description: Finite nonnegative decimal, validated by
+                                the existing domain parser.
+                            client_wall_time_utc:
+                              type: string
+                              format: date-time
+                              description: Timezone-aware timestamp.
+                            client_time_origin:
+                              type: string
+                              format: date-time
+                              description: Timezone-aware timestamp.
+                            time_sync_id:
+                              type: string
+                              format: uuid
+                              nullable: true
+                            trigger:
+                              type: string
+                              enum:
+                              - heartbeat
+                              - navigation
+                              - commit
+                              - pagehide
+                              - resume
+                              - session_end
+                              - ack_progress
+                            quality_flags:
+                              type: array
+                              items:
+                                type: string
+                            app_version:
+                              type: string
+                              maxLength: 64
+                          additionalProperties: false
+                          required:
+                          - app_version
+                          - checkpoint_id
+                          - client_instance_id
+                          - client_monotonic_ms
+                          - client_time_origin
+                          - client_wall_time_utc
+                          - failed_event_count
+                          - highest_acked_sequence_no
+                          - highest_contiguous_acked_sequence_no
+                          - highest_emitted_sequence_no
+                          - missing_local_sequence_ranges
+                          - pending_event_count
+                          - quality_flags
+                          - session_id
+                          - time_sync_id
+                          - trigger
+                        maxItems: 100
+                    additionalProperties: false
+                    required:
+                    - checkpoints
+                    - client_instance_id
+                    - event_boundary
+                    - events
+                    - version
+                    description: Original bounded capture facts; maximum complete
+                      body 8388608 bytes. Batch facts share one owned session; draft/tool
+                      facts belong to the current attempt or session.
                 additionalProperties: false
                 required:
                 - operation_id
@@ -1941,6 +2167,32 @@ paths:
                       request_id:
                         type: string
           description: Only POST is allowed.
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: Rejected by the existing domain contract.
         '404':
           content:
             application/json:
@@ -1968,6 +2220,58 @@ paths:
                         type: string
           description: Rejected by the existing domain contract.
         '409':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: Rejected by the existing domain contract.
+        '413':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: Rejected by the existing domain contract.
+        '415':
           content:
             application/json:
               schema:
@@ -2082,6 +2386,34 @@ paths:
                           type: string
                         text:
                           type: string
+                        committed:
+                          type: boolean
+                          enum:
+                          - true
+                        acknowledgements:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              client_sequence_no:
+                                type: integer
+                                minimum: 1
+                              event_id:
+                                type: string
+                                format: uuid
+                              server_ingest_sequence_no:
+                                type: integer
+                                minimum: 1
+                            additionalProperties: false
+                            required:
+                            - client_sequence_no
+                            - event_id
+                            - server_ingest_sequence_no
+                        checkpoint_ids:
+                          type: array
+                          items:
+                            type: string
+                            format: uuid
                       additionalProperties: false
                       required:
                       - content_version
@@ -2118,126 +2450,358 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                client_instance_id:
-                  type: string
-                  format: uuid
-                events:
-                  type: array
-                  items:
+              oneOf:
+              - type: object
+                properties:
+                  client_instance_id:
+                    type: string
+                    format: uuid
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        event_id:
+                          type: string
+                          format: uuid
+                        event_type:
+                          type: string
+                          enum:
+                          - activity_heartbeat
+                          - confidence_observed
+                          - document_hidden
+                          - document_visible
+                          - explanation_shown
+                          - feedback_exposure
+                          - feedback_shown
+                          - hint_closed
+                          - hint_opened
+                          - input_operation
+                          - item_left
+                          - item_rendered
+                          - legacy_session_end_observed
+                          - legacy_session_start_observed
+                          - network_offline
+                          - network_online
+                          - pagehide
+                          - pageshow
+                          - research_tool_observed
+                          - research_tool_requested
+                          - resource_closed
+                          - resource_opened
+                          - response_commit_requested
+                          - response_input_started
+                          - response_state_changed
+                          - response_transition
+                          - session_completed
+                          - session_expired
+                          - session_invalidated
+                          - session_reopened
+                          - session_started
+                          - simulation_error_returned
+                          - simulation_parameter_changed
+                          - simulation_run_completed
+                          - simulation_run_started
+                          - text_edit_observed
+                          - window_blurred
+                          - window_focused
+                        event_version:
+                          type: integer
+                          minimum: 1
+                        session_id:
+                          type: integer
+                          minimum: 1
+                        attempt_id:
+                          type: integer
+                          minimum: 1
+                          nullable: true
+                        client_sequence_no:
+                          type: integer
+                          minimum: 1
+                        correlation_id:
+                          type: string
+                          format: uuid
+                          nullable: true
+                        client_wall_time_utc:
+                          type: string
+                          format: date-time
+                          description: Timezone-aware timestamp.
+                        client_monotonic_ms:
+                          oneOf:
+                          - type: number
+                            minimum: 0
+                          - type: string
+                          description: Finite nonnegative decimal, validated by the
+                            existing domain parser.
+                        client_time_origin:
+                          type: string
+                          format: date-time
+                          description: Timezone-aware timestamp.
+                        time_sync_id:
+                          type: string
+                          format: uuid
+                          nullable: true
+                        quality_flags:
+                          type: array
+                          items:
+                            type: string
+                        app_version:
+                          type: string
+                          maxLength: 64
+                        payload:
+                          type: object
+                          additionalProperties: true
+                          description: Versioned payload validated by apps.assessment.event_schema_registry;
+                            the authoritative JSON schemas are assessment/event_schemas/<event_type>/v<event_version>.json.
+                      additionalProperties: false
+                      required:
+                      - app_version
+                      - client_monotonic_ms
+                      - client_sequence_no
+                      - client_time_origin
+                      - client_wall_time_utc
+                      - event_type
+                      - event_version
+                      - payload
+                      - quality_flags
+                      - session_id
+                    minItems: 1
+                    maxItems: 100
+                additionalProperties: false
+                required:
+                - client_instance_id
+                - events
+              - type: object
+                properties:
+                  capture_bundle:
                     type: object
                     properties:
-                      event_id:
-                        type: string
-                        format: uuid
-                      event_type:
-                        type: string
+                      version:
+                        type: integer
                         enum:
-                        - activity_heartbeat
-                        - confidence_observed
-                        - document_hidden
-                        - document_visible
-                        - explanation_shown
-                        - feedback_exposure
-                        - feedback_shown
-                        - hint_closed
-                        - hint_opened
-                        - input_operation
-                        - item_left
-                        - item_rendered
-                        - legacy_session_end_observed
-                        - legacy_session_start_observed
-                        - network_offline
-                        - network_online
-                        - pagehide
-                        - pageshow
-                        - research_tool_observed
-                        - research_tool_requested
-                        - resource_closed
-                        - resource_opened
-                        - response_commit_requested
-                        - response_input_started
-                        - response_state_changed
-                        - response_transition
-                        - session_completed
-                        - session_expired
-                        - session_invalidated
-                        - session_reopened
-                        - session_started
-                        - simulation_error_returned
-                        - simulation_parameter_changed
-                        - simulation_run_completed
-                        - simulation_run_started
-                        - text_edit_observed
-                        - window_blurred
-                        - window_focused
-                      event_version:
-                        type: integer
-                        minimum: 1
-                      session_id:
-                        type: integer
-                        minimum: 1
-                      attempt_id:
-                        type: integer
-                        minimum: 1
-                        nullable: true
-                      client_sequence_no:
-                        type: integer
-                        minimum: 1
-                      correlation_id:
+                        - 1
+                      client_instance_id:
                         type: string
                         format: uuid
-                        nullable: true
-                      client_wall_time_utc:
-                        type: string
-                        format: date-time
-                        description: Timezone-aware timestamp.
-                      client_monotonic_ms:
-                        oneOf:
-                        - type: number
-                          minimum: 0
-                        - type: string
-                        description: Finite nonnegative decimal, validated by the
-                          existing domain parser.
-                      client_time_origin:
-                        type: string
-                        format: date-time
-                        description: Timezone-aware timestamp.
-                      time_sync_id:
-                        type: string
-                        format: uuid
-                        nullable: true
-                      quality_flags:
+                      event_boundary:
+                        type: integer
+                        minimum: 0
+                      events:
                         type: array
                         items:
-                          type: string
-                      app_version:
-                        type: string
-                        maxLength: 64
-                      payload:
-                        type: object
-                        additionalProperties: true
-                        description: Versioned payload validated by apps.assessment.event_schema_registry;
-                          the authoritative JSON schemas are assessment/event_schemas/<event_type>/v<event_version>.json.
+                          type: object
+                          properties:
+                            event_id:
+                              type: string
+                              format: uuid
+                            event_type:
+                              type: string
+                              enum:
+                              - activity_heartbeat
+                              - confidence_observed
+                              - document_hidden
+                              - document_visible
+                              - explanation_shown
+                              - feedback_exposure
+                              - feedback_shown
+                              - hint_closed
+                              - hint_opened
+                              - input_operation
+                              - item_left
+                              - item_rendered
+                              - legacy_session_end_observed
+                              - legacy_session_start_observed
+                              - network_offline
+                              - network_online
+                              - pagehide
+                              - pageshow
+                              - research_tool_observed
+                              - research_tool_requested
+                              - resource_closed
+                              - resource_opened
+                              - response_commit_requested
+                              - response_input_started
+                              - response_state_changed
+                              - response_transition
+                              - session_completed
+                              - session_expired
+                              - session_invalidated
+                              - session_reopened
+                              - session_started
+                              - simulation_error_returned
+                              - simulation_parameter_changed
+                              - simulation_run_completed
+                              - simulation_run_started
+                              - text_edit_observed
+                              - window_blurred
+                              - window_focused
+                            event_version:
+                              type: integer
+                              minimum: 1
+                            session_id:
+                              type: integer
+                              minimum: 1
+                            attempt_id:
+                              type: integer
+                              minimum: 1
+                              nullable: true
+                            client_sequence_no:
+                              type: integer
+                              minimum: 1
+                            correlation_id:
+                              type: string
+                              format: uuid
+                              nullable: true
+                            client_wall_time_utc:
+                              type: string
+                              format: date-time
+                              description: Timezone-aware timestamp.
+                            client_monotonic_ms:
+                              oneOf:
+                              - type: number
+                                minimum: 0
+                              - type: string
+                              description: Finite nonnegative decimal, validated by
+                                the existing domain parser.
+                            client_time_origin:
+                              type: string
+                              format: date-time
+                              description: Timezone-aware timestamp.
+                            time_sync_id:
+                              type: string
+                              format: uuid
+                              nullable: true
+                            quality_flags:
+                              type: array
+                              items:
+                                type: string
+                            app_version:
+                              type: string
+                              maxLength: 64
+                            payload:
+                              type: object
+                              additionalProperties: true
+                              description: Versioned payload validated by apps.assessment.event_schema_registry;
+                                the authoritative JSON schemas are assessment/event_schemas/<event_type>/v<event_version>.json.
+                          additionalProperties: false
+                          required:
+                          - app_version
+                          - client_monotonic_ms
+                          - client_sequence_no
+                          - client_time_origin
+                          - client_wall_time_utc
+                          - event_type
+                          - event_version
+                          - payload
+                          - quality_flags
+                          - session_id
+                        maxItems: 100
+                      checkpoints:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            checkpoint_id:
+                              type: string
+                              format: uuid
+                            session_id:
+                              type: integer
+                              minimum: 1
+                            client_instance_id:
+                              type: string
+                              format: uuid
+                            highest_emitted_sequence_no:
+                              type: integer
+                              minimum: 0
+                            highest_acked_sequence_no:
+                              type: integer
+                              minimum: 0
+                            highest_contiguous_acked_sequence_no:
+                              type: integer
+                              minimum: 0
+                            pending_event_count:
+                              type: integer
+                              minimum: 0
+                            failed_event_count:
+                              type: integer
+                              minimum: 0
+                            missing_local_sequence_ranges:
+                              type: array
+                              items:
+                                type: array
+                                items:
+                                  type: integer
+                                  minimum: 1
+                                minItems: 2
+                                maxItems: 2
+                            client_monotonic_ms:
+                              oneOf:
+                              - type: number
+                                minimum: 0
+                              - type: string
+                              description: Finite nonnegative decimal, validated by
+                                the existing domain parser.
+                            client_wall_time_utc:
+                              type: string
+                              format: date-time
+                              description: Timezone-aware timestamp.
+                            client_time_origin:
+                              type: string
+                              format: date-time
+                              description: Timezone-aware timestamp.
+                            time_sync_id:
+                              type: string
+                              format: uuid
+                              nullable: true
+                            trigger:
+                              type: string
+                              enum:
+                              - heartbeat
+                              - navigation
+                              - commit
+                              - pagehide
+                              - resume
+                              - session_end
+                              - ack_progress
+                            quality_flags:
+                              type: array
+                              items:
+                                type: string
+                            app_version:
+                              type: string
+                              maxLength: 64
+                          additionalProperties: false
+                          required:
+                          - app_version
+                          - checkpoint_id
+                          - client_instance_id
+                          - client_monotonic_ms
+                          - client_time_origin
+                          - client_wall_time_utc
+                          - failed_event_count
+                          - highest_acked_sequence_no
+                          - highest_contiguous_acked_sequence_no
+                          - highest_emitted_sequence_no
+                          - missing_local_sequence_ranges
+                          - pending_event_count
+                          - quality_flags
+                          - session_id
+                          - time_sync_id
+                          - trigger
+                        maxItems: 100
                     additionalProperties: false
                     required:
-                    - app_version
-                    - client_monotonic_ms
-                    - client_sequence_no
-                    - client_time_origin
-                    - client_wall_time_utc
-                    - event_type
-                    - event_version
-                    - payload
-                    - quality_flags
-                    - session_id
-                  minItems: 1
-                  maxItems: 100
-              additionalProperties: false
-              required:
-              - client_instance_id
-              - events
+                    - checkpoints
+                    - client_instance_id
+                    - event_boundary
+                    - events
+                    - version
+                    description: Original bounded capture facts; maximum complete
+                      body 8388608 bytes. Batch facts share one owned session; draft/tool
+                      facts belong to the current attempt or session.
+                additionalProperties: false
+                required:
+                - capture_bundle
         required: true
       security:
       - SessionAuth: []
@@ -2476,6 +3040,15 @@ paths:
                           - client_sequence_no
                           - code
                           - permanent
+                      committed:
+                        type: boolean
+                        enum:
+                        - true
+                      checkpoint_ids:
+                        type: array
+                        items:
+                          type: string
+                          format: uuid
                     additionalProperties: false
                     required:
                     - acknowledgements
@@ -3793,6 +4366,235 @@ paths:
                   expected_version:
                     type: integer
                     minimum: 0
+                  capture_bundle:
+                    type: object
+                    properties:
+                      version:
+                        type: integer
+                        enum:
+                        - 1
+                      client_instance_id:
+                        type: string
+                        format: uuid
+                      event_boundary:
+                        type: integer
+                        minimum: 0
+                      events:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            event_id:
+                              type: string
+                              format: uuid
+                            event_type:
+                              type: string
+                              enum:
+                              - activity_heartbeat
+                              - confidence_observed
+                              - document_hidden
+                              - document_visible
+                              - explanation_shown
+                              - feedback_exposure
+                              - feedback_shown
+                              - hint_closed
+                              - hint_opened
+                              - input_operation
+                              - item_left
+                              - item_rendered
+                              - legacy_session_end_observed
+                              - legacy_session_start_observed
+                              - network_offline
+                              - network_online
+                              - pagehide
+                              - pageshow
+                              - research_tool_observed
+                              - research_tool_requested
+                              - resource_closed
+                              - resource_opened
+                              - response_commit_requested
+                              - response_input_started
+                              - response_state_changed
+                              - response_transition
+                              - session_completed
+                              - session_expired
+                              - session_invalidated
+                              - session_reopened
+                              - session_started
+                              - simulation_error_returned
+                              - simulation_parameter_changed
+                              - simulation_run_completed
+                              - simulation_run_started
+                              - text_edit_observed
+                              - window_blurred
+                              - window_focused
+                            event_version:
+                              type: integer
+                              minimum: 1
+                            session_id:
+                              type: integer
+                              minimum: 1
+                            attempt_id:
+                              type: integer
+                              minimum: 1
+                              nullable: true
+                            client_sequence_no:
+                              type: integer
+                              minimum: 1
+                            correlation_id:
+                              type: string
+                              format: uuid
+                              nullable: true
+                            client_wall_time_utc:
+                              type: string
+                              format: date-time
+                              description: Timezone-aware timestamp.
+                            client_monotonic_ms:
+                              oneOf:
+                              - type: number
+                                minimum: 0
+                              - type: string
+                              description: Finite nonnegative decimal, validated by
+                                the existing domain parser.
+                            client_time_origin:
+                              type: string
+                              format: date-time
+                              description: Timezone-aware timestamp.
+                            time_sync_id:
+                              type: string
+                              format: uuid
+                              nullable: true
+                            quality_flags:
+                              type: array
+                              items:
+                                type: string
+                            app_version:
+                              type: string
+                              maxLength: 64
+                            payload:
+                              type: object
+                              additionalProperties: true
+                              description: Versioned payload validated by apps.assessment.event_schema_registry;
+                                the authoritative JSON schemas are assessment/event_schemas/<event_type>/v<event_version>.json.
+                          additionalProperties: false
+                          required:
+                          - app_version
+                          - client_monotonic_ms
+                          - client_sequence_no
+                          - client_time_origin
+                          - client_wall_time_utc
+                          - event_type
+                          - event_version
+                          - payload
+                          - quality_flags
+                          - session_id
+                        maxItems: 100
+                      checkpoints:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            checkpoint_id:
+                              type: string
+                              format: uuid
+                            session_id:
+                              type: integer
+                              minimum: 1
+                            client_instance_id:
+                              type: string
+                              format: uuid
+                            highest_emitted_sequence_no:
+                              type: integer
+                              minimum: 0
+                            highest_acked_sequence_no:
+                              type: integer
+                              minimum: 0
+                            highest_contiguous_acked_sequence_no:
+                              type: integer
+                              minimum: 0
+                            pending_event_count:
+                              type: integer
+                              minimum: 0
+                            failed_event_count:
+                              type: integer
+                              minimum: 0
+                            missing_local_sequence_ranges:
+                              type: array
+                              items:
+                                type: array
+                                items:
+                                  type: integer
+                                  minimum: 1
+                                minItems: 2
+                                maxItems: 2
+                            client_monotonic_ms:
+                              oneOf:
+                              - type: number
+                                minimum: 0
+                              - type: string
+                              description: Finite nonnegative decimal, validated by
+                                the existing domain parser.
+                            client_wall_time_utc:
+                              type: string
+                              format: date-time
+                              description: Timezone-aware timestamp.
+                            client_time_origin:
+                              type: string
+                              format: date-time
+                              description: Timezone-aware timestamp.
+                            time_sync_id:
+                              type: string
+                              format: uuid
+                              nullable: true
+                            trigger:
+                              type: string
+                              enum:
+                              - heartbeat
+                              - navigation
+                              - commit
+                              - pagehide
+                              - resume
+                              - session_end
+                              - ack_progress
+                            quality_flags:
+                              type: array
+                              items:
+                                type: string
+                            app_version:
+                              type: string
+                              maxLength: 64
+                          additionalProperties: false
+                          required:
+                          - app_version
+                          - checkpoint_id
+                          - client_instance_id
+                          - client_monotonic_ms
+                          - client_time_origin
+                          - client_wall_time_utc
+                          - failed_event_count
+                          - highest_acked_sequence_no
+                          - highest_contiguous_acked_sequence_no
+                          - highest_emitted_sequence_no
+                          - missing_local_sequence_ranges
+                          - pending_event_count
+                          - quality_flags
+                          - session_id
+                          - time_sync_id
+                          - trigger
+                        maxItems: 100
+                    additionalProperties: false
+                    required:
+                    - checkpoints
+                    - client_instance_id
+                    - event_boundary
+                    - events
+                    - version
+                    description: Original bounded capture facts; maximum complete
+                      body 8388608 bytes. Batch facts share one owned session; draft/tool
+                      facts belong to the current attempt or session.
+                  capture_operation_id:
+                    type: string
+                    format: uuid
                   writer_lease_token:
                     type: string
                     format: uuid
@@ -3802,9 +4604,18 @@ paths:
                     format: uuid
                     nullable: true
                 additionalProperties: true
+                description: capture_operation_id is required with capture_bundle;
+                  it binds the original durable draft receipt.
                 not:
                   required:
                   - save_and_leave
+                allOf:
+                - anyOf:
+                  - not:
+                      required:
+                      - capture_bundle
+                  - required:
+                    - capture_operation_id
               - type: object
                 properties:
                   navigation_token:
@@ -4268,6 +5079,34 @@ paths:
                     oneOf:
                     - type: object
                       properties:
+                        committed:
+                          type: boolean
+                          enum:
+                          - true
+                        acknowledgements:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              client_sequence_no:
+                                type: integer
+                                minimum: 1
+                              event_id:
+                                type: string
+                                format: uuid
+                              server_ingest_sequence_no:
+                                type: integer
+                                minimum: 1
+                            additionalProperties: false
+                            required:
+                            - client_sequence_no
+                            - event_id
+                            - server_ingest_sequence_no
+                        checkpoint_ids:
+                          type: array
+                          items:
+                            type: string
+                            format: uuid
                         success:
                           type: boolean
                           enum:
@@ -5811,6 +6650,51 @@ paths:
                 properties:
                   data:
                     $ref: '#/components/schemas/StudentSessionSummary'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+  /api/v1/student/tasks/{task_id}/admission/status/:
+    post:
+      operationId: student_tasks_admission_status_create
+      parameters:
+      - in: path
+        name: task_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - student
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentAdmissionStatus'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StudentAdmissionStatus'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StudentAdmissionStatus'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StudentAdmissionStatusResponse'
                   meta:
                     type: object
                     required:
@@ -14306,11 +15190,27 @@ components:
       description: |-
         * `create` - create
         * `reuse` - reuse
+    ActionA44Enum:
+      enum:
+      - start
+      - resume
+      type: string
+      description: |-
+        * `start` - start
+        * `resume` - resume
     ActionF00Enum:
       enum:
       - confirm
       type: string
       description: '* `confirm` - confirm'
+    AdmissionActionEnum:
+      enum:
+      - start
+      - resume
+      type: string
+      description: |-
+        * `start` - start
+        * `resume` - resume
     ApiUser:
       type: object
       properties:
@@ -14350,6 +15250,8 @@ components:
       type: object
       properties:
         enabled:
+          type: boolean
+        mutation_receipts:
           type: boolean
         version:
           type: integer
@@ -18024,8 +18926,9 @@ components:
           default: exclude_previous
         review_count:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -18049,13 +18952,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -20117,6 +21022,41 @@ components:
         * `draft` - draft
         * `active` - active
         * `archived` - archived
+    StudentAdmissionStatus:
+      type: object
+      properties:
+        admission_token:
+          type: string
+        action:
+          $ref: '#/components/schemas/ActionA44Enum'
+      required:
+      - action
+      - admission_token
+    StudentAdmissionStatusResponse:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/StudentAdmissionStatusResponseStatusEnum'
+        admission_token:
+          type: string
+        poll_url:
+          type: string
+        retry_after_seconds:
+          type: integer
+          minimum: 1
+      required:
+      - admission_token
+      - poll_url
+      - retry_after_seconds
+      - status
+    StudentAdmissionStatusResponseStatusEnum:
+      enum:
+      - queued
+      - admitted
+      type: string
+      description: |-
+        * `queued` - queued
+        * `admitted` - admitted
     StudentCollection:
       type: object
       properties:
@@ -21241,6 +22181,8 @@ components:
     StudentRuntimeProcess:
       type: object
       properties:
+        capture_bundle:
+          $ref: '#/components/schemas/AtomicSubmissionCapability'
         atomic_submission:
           $ref: '#/components/schemas/AtomicSubmissionCapability'
         save_and_leave:
@@ -21358,6 +22300,14 @@ components:
         client_time_origin:
           type: string
           format: date-time
+        admission_token:
+          type: string
+          writeOnly: true
+          maxLength: 128
+        admission_action:
+          allOf:
+          - $ref: '#/components/schemas/AdmissionActionEnum'
+          writeOnly: true
       required:
       - client_monotonic_ms
       - client_occurred_at
@@ -21437,7 +22387,15 @@ components:
           type: integer
         question_url:
           type: string
+        admission_token:
+          type: string
+          readOnly: true
+        admission_action:
+          type: string
+          readOnly: true
       required:
+      - admission_action
+      - admission_token
       - question_url
       - session_id
       - task_id
@@ -22493,8 +23451,9 @@ components:
           default: exclude_previous
         review_count:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -22518,13 +23477,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'

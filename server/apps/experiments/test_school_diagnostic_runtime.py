@@ -4,6 +4,8 @@ import json
 import subprocess
 import io
 import unittest
+import asyncio
+import sys
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -66,6 +68,22 @@ class SchoolDiagnosticRuntimeTests(unittest.TestCase):
         self.assertEqual(module.SafetyGuard().update({**good, 'production_healthy': True, 'postgres_available': False}), 'shared_postgres_unavailable')
         self.assertEqual(module.SafetyGuard().update({**good, 'production_healthy': True, 'memory_available_bytes': 1024**3}), 'host_memory_below_2_gib')
 
+    def test_native_guard_cannot_be_selected_without_bound_calibration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module, runtime = self.runtime(directory)
+            config = {**runtime.config, 'postgres_guard': 'native'}
+            with self.assertRaises(module.SafetyInterrupted):
+                module.DiagnosticRuntime(config)
+
+    def test_native_failures_never_pass_the_guard_even_with_successful_docker(self):
+        module = self.module()
+        for outcome in ('timeout', 'connect_error', 'query_error', 'identity_error', 'os_error', 'heartbeat_lost'):
+            guard = module.SafetyGuard()
+            sample = {'memory_available_bytes': 3 * 1024**3, 'production_healthy': True,
+                      'postgres_available': False, 'postgres_guard': 'native',
+                      'native_postgres_probe': {'outcome': outcome}, 'disk_error': False}
+            self.assertEqual(guard.update(sample), 'shared_postgres_unavailable')
+
     def test_safety_sample_records_database_probe_failure_without_weakening_stop(self):
         with tempfile.TemporaryDirectory() as directory:
             module, runtime = self.runtime(directory)
@@ -121,6 +139,10 @@ class SchoolDiagnosticRuntimeTests(unittest.TestCase):
                               'HostConfig': {'Memory': 1, 'NanoCpus': 0, 'PortBindings': {'80/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '18080'}]}},
                               'Config': {'Env': env, 'Labels': {'com.docker.compose.project': module.PROJECT,
                                                                'com.docker.compose.service': role}}})
+            runtime.validate_containers(items)
+            items.append({'Id': 'native-helper', 'Config': {'Labels': {
+                'com.docker.compose.project': module.PROJECT, 'com.docker.compose.service': 'native-db-probe',
+                'com.docker.compose.oneoff': 'true'}}})
             runtime.validate_containers(items)
             runtime.config['source_config'] = {'roles': {'web': {'workers': 16}}}
             items[0]['Config']['Env'] = [value.replace('GUNICORN_WORKERS=12', 'GUNICORN_WORKERS=16') for value in items[0]['Config']['Env']]
@@ -351,6 +373,348 @@ class SchoolDiagnosticRuntimeTests(unittest.TestCase):
         self.assertIn('previous service waits', result['generator']['item_arrival_delay_interpretation'])
         self.assertEqual(result['client_cpu_seconds'], 1.25)
         self.assertEqual(result['client_peak_rss_bytes'], 8192)
+
+
+class NativeSchoolProbeTests(unittest.IsolatedAsyncioTestCase):
+    def module(self):
+        path = ROOT / 'scripts/ops/school_native_db_probe.py'
+        self.assertTrue(path.exists(), 'long-lived native probe missing')
+        spec = importlib.util.spec_from_file_location('school_native_db_probe_test', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def config(self):
+        return {'host': '127.0.0.1', 'port': 5432, 'dbname': 'kt_e2e', 'user': 'kt_e2e_user',
+                'password': 'PRIVATE PASSWORD', 'expected_server_address': '127.0.0.1', 'expected_server_port': 5432}
+
+    def fake_connection(self, *, identity=None, query_error=None):
+        from unittest.mock import AsyncMock
+        cursor = AsyncMock()
+        cursor.__aenter__.return_value = cursor
+        cursor.fetchone.return_value = identity or ('kt_e2e', 'kt_e2e_user', 'kt_e2e_user', '127.0.0.1', 5432, 1)
+        cursor.execute.side_effect = query_error
+        connection = Mock()
+        connection.cursor.return_value = cursor
+        return connection, cursor
+
+    async def test_each_sample_authenticates_fresh_connection_and_identity_query(self):
+        module = self.module()
+        from unittest.mock import AsyncMock
+        connection, cursor = self.fake_connection()
+        connect = AsyncMock(return_value=connection)
+        with patch('psycopg.AsyncConnection.connect', connect):
+            first = await module.probe(self.config(), 'a' * 32)
+            second = await module.probe(self.config(), 'b' * 32)
+        self.assertEqual(connect.await_count, 2)
+        self.assertEqual(first['outcome'], 'ready')
+        self.assertEqual(second['request_id'], 'b' * 32)
+        self.assertEqual(cursor.execute.await_count, 2)
+        self.assertGreaterEqual(first['connect_seconds'], 0)
+        self.assertGreaterEqual(first['query_seconds'], 0)
+        self.assertLess(first['total_seconds'], 1)
+        self.assertNotIn('PRIVATE', json.dumps(first))
+        self.assertEqual(connection.pgconn.finish.call_count, 2)
+
+    async def test_identity_sql_canonicalizes_inet_address_and_preserves_exact_binding(self):
+        module = self.module()
+        self.assertIn('host(inet_server_addr())', module.IDENTITY_SQL)
+        self.assertNotIn('inet_server_addr()::text', module.IDENTITY_SQL)
+        from unittest.mock import AsyncMock
+        connection, _ = self.fake_connection(identity=(
+            'kt_e2e', 'kt_e2e_user', 'kt_e2e_user', '127.0.0.1/32', 5432, 1))
+        with patch('psycopg.AsyncConnection.connect', AsyncMock(return_value=connection)):
+            row = await module.probe(self.config(), 'a' * 32)
+        self.assertEqual(row['outcome'], 'identity_error')
+        self.assertNotIn('identity_sha256', row)
+
+    async def test_connect_query_identity_and_os_failures_are_explicit_and_sanitized(self):
+        module = self.module()
+        from unittest.mock import AsyncMock
+        for stage, expected in [('connect', 'connect_error'), ('query', 'query_error'),
+                                ('identity', 'identity_error'), ('os', 'os_error')]:
+            connection, _ = self.fake_connection(identity=('wrong',) if stage == 'identity' else None,
+                query_error=RuntimeError('PRIVATE SQL') if stage == 'query' else None)
+            error = OSError('PRIVATE ADDRESS') if stage == 'os' else RuntimeError('PRIVATE PASSWORD')
+            connect = AsyncMock(side_effect=error if stage in ('connect', 'os') else None, return_value=connection)
+            with patch('psycopg.AsyncConnection.connect', connect):
+                row = await module.probe(self.config(), 'a' * 32)
+            self.assertEqual(row['outcome'], expected)
+            self.assertNotIn('PRIVATE', json.dumps(row))
+
+    async def test_connect_and_query_share_one_total_deadline(self):
+        module = self.module()
+        connection, cursor = self.fake_connection()
+        async def connect(**kwargs):
+            await asyncio.sleep(.05)
+            return connection
+        async def query(*args):
+            await asyncio.sleep(.1)
+        cursor.execute.side_effect = query
+        with patch('psycopg.AsyncConnection.connect', side_effect=connect):
+            row = await module.probe(self.config(), 'a' * 32, timeout=.12)
+        self.assertEqual(row['outcome'], 'timeout')
+        self.assertEqual(row['timeout_phase'], 'query')
+        self.assertLess(row['total_seconds'], .3)
+        connection.pgconn.finish.assert_called_once()
+
+    async def test_driver_cancellation_cleanup_cannot_extend_the_total_deadline(self):
+        module = self.module()
+        from unittest.mock import AsyncMock
+        connection, cursor = self.fake_connection()
+        async def slow_query(*args):
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                await asyncio.sleep(.3)
+                raise
+        cursor.execute.side_effect = slow_query
+        with patch('psycopg.AsyncConnection.connect', AsyncMock(return_value=connection)):
+            row = await module.probe(self.config(), 'a' * 32, timeout=.05)
+        self.assertEqual(row['outcome'], 'timeout')
+        self.assertLess(row['total_seconds'], .15)
+        connection.pgconn.finish.assert_called_once()
+
+    async def test_wrong_database_config_is_rejected_before_connecting(self):
+        module = self.module()
+        with patch('psycopg.AsyncConnection.connect') as connect:
+            row = await module.probe({**self.config(), 'dbname': 'kt_platform'}, 'a' * 32)
+        self.assertEqual(row['outcome'], 'identity_error')
+        connect.assert_not_called()
+
+    async def test_missing_reply_and_stale_reply_are_lost_heartbeat(self):
+        module = self.module()
+        client = module.NativeProbeClient({})
+        ticket = {'request_id': 'a' * 32, 'deadline': 0}
+        self.assertEqual(client.finish(ticket)['outcome'], 'heartbeat_lost')
+        client.replies.put({'request_id': 'b' * 32, 'outcome': 'ready'})
+        self.assertEqual(client.finish(ticket)['outcome'], 'heartbeat_lost')
+
+    async def test_docker_helper_is_one_long_lived_owned_process_with_read_only_secret_mount(self):
+        module = self.module()
+        client = module.NativeProbeClient({'secret_file': '/root/private/probe.json',
+                                          'image': 'sha256:' + 'a' * 64})
+        self.assertTrue(hasattr(client, 'command'), 'owned Docker helper launch missing')
+        command = client.command()
+        self.assertEqual(command[:2], ['docker', 'run'])
+        self.assertIn('-i', command)
+        self.assertIn('128m', command)
+        self.assertIn('/root/private/probe.json:/probe-secret.json:ro', command)
+        self.assertNotIn('exec', command)
+        self.assertIn('com.docker.compose.service=native-db-probe', command)
+        self.assertIn('com.docker.compose.oneoff=true', command)
+        self.assertEqual(command[-2:], ['--config', '/probe-secret.json'])
+
+    async def test_coordinator_import_does_not_require_a_host_psycopg_install(self):
+        script = """import builtins,runpy,sys
+original=builtins.__import__
+def guarded(name,*args,**kwargs):
+    if name.startswith('psycopg'): raise ImportError('Host driver deliberately unavailable')
+    return original(name,*args,**kwargs)
+builtins.__import__=guarded
+runpy.run_path(sys.argv[1],run_name='import_only')
+"""
+        result = subprocess.run([sys.executable, '-c', script, str(ROOT / 'scripts/ops/school_diagnostic_runtime.py')],
+                                text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    async def test_observer_missing_and_stale_probe_evidence_are_explicit(self):
+        sys.path.insert(0, str(ROOT / 'scripts/load'))
+        import observe_school_runtime
+        self.assertTrue(hasattr(observe_school_runtime, 'probe_progress'), 'paired probe observation missing')
+        probe_progress = observe_school_runtime.probe_progress
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'probe.json'
+            self.assertEqual(probe_progress(path, 10)['state'], 'missing')
+            path.write_text(json.dumps({'at': 1, 'postgres_guard': 'docker', 'native_postgres_probe': {'outcome': 'ready'}}))
+            self.assertEqual(probe_progress(path, 20)['state'], 'stale')
+            fresh = probe_progress(path, 2)
+            self.assertEqual(fresh['state'], 'sampled')
+            self.assertEqual(fresh['age_seconds'], 1)
+            self.assertEqual(fresh['native_postgres_probe']['outcome'], 'ready')
+
+    async def test_helper_cleanup_refuses_a_foreign_container(self):
+        module = self.module()
+        client = module.NativeProbeClient({'secret_file': '/root/private/probe.json',
+                                          'image': 'sha256:' + 'a' * 64})
+        self.assertTrue(hasattr(client, 'command'), 'owned Docker helper cleanup missing')
+        client.command()
+        client.process = Mock(stdin=Mock(), stdout=Mock())
+        client.process.poll.return_value = 0
+        foreign = {'Id': 'shared-postgres', 'Image': 'sha256:' + 'a' * 64,
+                   'Config': {'Labels': {'com.docker.compose.project': 'kt_plantform'}}}
+        with patch.object(module.subprocess, 'run', return_value=Mock(returncode=0, stdout=json.dumps([foreign]))) as run:
+            with self.assertRaisesRegex(ValueError, 'unowned'):
+                client.close()
+        self.assertEqual(run.call_count, 1)
+
+    async def test_calibration_requires_two_distinct_overlapping_pairs_and_bound_fault_evidence(self):
+        module = self.module()
+        binding = {'source': 'same', 'probe_secret_sha256': 'a' * 64, 'native_identity_sha256': 'b' * 64,
+                   'helper_sha256': module.helper_hash()}
+        def pair(identity, *, start=10):
+            return {'postgres_probe': {'source': 'docker_exec_pg_isready', 'outcome': 'timeout',
+                        'started_monotonic': 10, 'ended_monotonic': 11},
+                    'native_postgres_probe': {'source': 'native_authenticated_sql', 'outcome': 'ready',
+                        'request_id': identity * 32, 'deadline_seconds': 1, 'total_seconds': .1, 'ipc_seconds': .2,
+                        'probe_secret_sha256': binding['probe_secret_sha256'],
+                        'identity_sha256': binding['native_identity_sha256'], 'helper_sha256': module.helper_hash(),
+                        'started_monotonic': start, 'ended_monotonic': start + .1}}
+        certificate = {'binding': binding, 'samples': [pair('a')],
+                       'fault_tests': {'passed': True, 'helper_sha256': module.helper_hash(),
+                                       'cases': sorted(module.FAULT_CASES)}}
+        self.assertFalse(module.validate_calibration(certificate, binding))
+        certificate['samples'].append(pair('a'))
+        self.assertFalse(module.validate_calibration(certificate, binding))
+        certificate['samples'][1] = pair('b', start=11)
+        self.assertFalse(module.validate_calibration(certificate, binding))
+        certificate['samples'][1] = pair('b')
+        self.assertTrue(module.validate_calibration(certificate, binding))
+        certificate['samples'][1]['native_postgres_probe']['identity_sha256'] = 'c' * 64
+        self.assertFalse(module.validate_calibration(certificate, binding))
+        certificate['samples'][1] = pair('b')
+        self.assertFalse(module.validate_calibration(certificate, {**binding, 'source': 'changed'}))
+        certificate['fault_tests']['cases'].remove('timeout')
+        self.assertFalse(module.validate_calibration(certificate, binding))
+
+
+
+class GatewayRoutingTests(unittest.TestCase):
+    def runtime(self, directory):
+        ops = ROOT / 'scripts/ops'
+        sys.path.insert(0, str(ops))
+        spec = importlib.util.spec_from_file_location('school_gateway_test', ops / 'school_architecture_runtime.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        runtime = module.ArchitectureRuntime({'run_id': 'gateway-test', 'candidate_dir': directory,
+            'private_dir': directory, 'source_config': {}, 'compose_overlay_path': 'overlay.json',
+            'images': {role: 'sha256:' + 'a' * 64 for role in module.ROLES}})
+        self.assertTrue(hasattr(runtime, 'verify_gateway_routing'), 'gateway role witness missing')
+        return module, runtime
+
+    def fixtures(self, module, runtime, *, misroute=False, missing=False, foreign=False):
+        seen = {}
+        containers = [{'Id': role + '-id', 'Image': runtime.config['images'][role], 'State': {'Running': True},
+                       'Config': {'Env': ['POSTGRES_PASSWORD=PRIVATE PASSWORD'], 'Labels': {
+                           'com.docker.compose.project': 'production' if foreign else module.PROJECT,
+                           'com.docker.compose.service': role}}}
+                      for role in ('web', 'student-read', 'teacher-read')]
+        def open_request(request, timeout):
+            self.assertLessEqual(timeout, 3)
+            identity = request.get_header('X-request-id')
+            self.assertRegex(identity, '^[a-f0-9]{32}$')
+            role = next(role for role, path, _ in module.GATEWAY_ROUTES if request.full_url.endswith(path))
+            seen[identity] = 'student-read' if misroute else role
+            if role != 'web':
+                raise module.urllib.error.HTTPError(request.full_url, 403, 'PRIVATE DETAIL', {}, None)
+            return nullcontext(SimpleNamespace(status=200))
+        def docker(command, **kwargs):
+            self.assertLessEqual(kwargs['timeout'], 3)
+            self.assertEqual(command[0], 'docker')
+            if command[1] == 'ps':
+                return SimpleNamespace(returncode=0, stdout='web-id\nstudent-read-id\nteacher-read-id', stderr='')
+            if command[1] == 'inspect':
+                return SimpleNamespace(returncode=0, stdout=json.dumps(containers), stderr='')
+            self.assertEqual(command[1], 'logs')
+            role = command[-1].removesuffix('-id')
+            rows = [] if missing else [{'phase': 'gunicorn_request_complete', 'request_id': identity,
+                'PRIVATE': 'PRIVATE ANSWER'} for identity, observed in seen.items() if observed == role]
+            return SimpleNamespace(returncode=0, stdout='', stderr='\n'.join('[WARNING] ' + json.dumps(row) for row in rows))
+        return seen, open_request, docker
+
+    def test_three_anonymous_requests_are_witnessed_in_the_correct_owned_roles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module, runtime = self.runtime(directory)
+            seen, open_request, docker = self.fixtures(module, runtime)
+            with patch.object(module.urllib.request, 'build_opener', return_value=SimpleNamespace(open=Mock(side_effect=open_request))) as opener, \
+                    patch.object(module.subprocess, 'run', side_effect=docker):
+                result = runtime.verify_gateway_routing(Path(directory))
+            self.assertTrue(result['passed'])
+            self.assertEqual(len(seen), 3)
+            self.assertEqual(opener.return_value.open.call_count, 3)
+            self.assertEqual(len(set(seen)), 3)
+            for row in result['requests']:
+                self.assertEqual(row['observed_roles'], [row['expected_role']])
+            public = (Path(directory) / 'gateway-routing.json').read_text()
+            self.assertNotIn('PRIVATE', public)
+            self.assertNotIn('/api/', public)
+            self.assertNotIn('password', public.lower())
+
+    def test_misroute_missing_witness_or_foreign_roles_stop_before_any_seed_write(self):
+        for failure in ('misroute', 'missing', 'foreign'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                module, runtime = self.runtime(directory)
+                _, open_request, docker = self.fixtures(module, runtime, **{failure: True})
+                runtime.verify_runtime = Mock()
+                runtime.bind_attempt = Mock()
+                runtime.run_private = Mock()
+                with patch.object(module.urllib.request, 'build_opener', return_value=SimpleNamespace(open=Mock(side_effect=open_request))), \
+                        patch.object(module.subprocess, 'run', side_effect=docker):
+                    with self.assertRaises(module.SafetyInterrupted):
+                        runtime.seed('diagnostic-3', Path(directory))
+                runtime.run_private.assert_not_called()
+                self.assertFalse(json.loads((Path(directory) / 'gateway-routing.json').read_text())['passed'])
+
+    def test_log_timeout_is_sanitized_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module, runtime = self.runtime(directory)
+            _, open_request, docker = self.fixtures(module, runtime)
+            def timed_out(command, **kwargs):
+                if command[1] == 'logs':
+                    raise subprocess.TimeoutExpired(['docker', 'PRIVATE COMMAND'], kwargs['timeout'])
+                return docker(command, **kwargs)
+            with patch.object(module.urllib.request, 'build_opener', return_value=SimpleNamespace(open=Mock(side_effect=open_request))), \
+                    patch.object(module.subprocess, 'run', side_effect=timed_out):
+                with self.assertRaises(module.SafetyInterrupted):
+                    runtime.verify_gateway_routing(Path(directory))
+            self.assertNotIn('PRIVATE', (Path(directory) / 'gateway-routing.json').read_text())
+
+    def test_unexpected_http_status_cannot_pass_even_when_roles_match(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module, runtime = self.runtime(directory)
+            seen, open_request, docker = self.fixtures(module, runtime)
+            def invalid_status(request, timeout):
+                response = open_request(request, timeout)
+                return nullcontext(SimpleNamespace(status=500))
+            with patch.object(module.urllib.request, 'build_opener', return_value=SimpleNamespace(open=Mock(side_effect=invalid_status))) as opener, \
+                    patch.object(module.subprocess, 'run', side_effect=docker):
+                with self.assertRaises(module.SafetyInterrupted):
+                    runtime.verify_gateway_routing(Path(directory))
+            self.assertEqual(opener.return_value.open.call_count, 3)
+            self.assertEqual(len(seen), 3)
+
+    def test_one_total_budget_bounds_http_and_docker_including_log_reads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module, runtime = self.runtime(directory)
+            _, open_request, docker = self.fixtures(module, runtime)
+            clock = [0]
+            def delayed_request(request, timeout):
+                try:
+                    return open_request(request, timeout)
+                finally:
+                    clock[0] += timeout
+            def delayed_docker(command, **kwargs):
+                try:
+                    return docker(command, **kwargs)
+                finally:
+                    clock[0] += kwargs['timeout']
+            with patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(module.urllib.request, 'build_opener', return_value=SimpleNamespace(open=Mock(side_effect=delayed_request))), \
+                    patch.object(module.subprocess, 'run', side_effect=delayed_docker):
+                with self.assertRaises(module.SafetyInterrupted):
+                    runtime.verify_gateway_routing(Path(directory))
+            self.assertLessEqual(clock[0], 18)
+            self.assertFalse(json.loads((Path(directory) / 'gateway-routing.json').read_text())['passed'])
+
+    def test_run_stage_requires_the_seed_gateway_witness_before_observer_or_load(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module, runtime = self.runtime(directory)
+            runtime.verify_runtime = Mock()
+            runtime.bind_attempt = Mock()
+            with patch.object(module.subprocess, 'Popen') as process:
+                with self.assertRaises(module.SafetyInterrupted):
+                    runtime.run_stage('diagnostic-3', Path(directory), {'mode': 'diagnostic'})
+            process.assert_not_called()
 
 
 if __name__ == '__main__':

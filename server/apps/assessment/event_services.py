@@ -144,17 +144,23 @@ def _event_matches(existing, values) -> bool:
     return all(getattr(existing, field) == values[field] for field in comparable_fields)
 
 
-def _resolve_idempotent_replay(*, client_instance_id, client_sequence_no, values, requested_event_id=None):
+def _resolve_idempotent_replay(*, client_instance_id, client_sequence_no, values, requested_event_id=None,
+                               identity_context=None):
     if client_instance_id is None:
         return None
-    existing = AssessmentEvent.objects.filter(
-        client_instance_id=client_instance_id,
-        client_sequence_no=client_sequence_no,
-    ).first()
-    if existing is None:
-        existing = AssessmentEvent.objects.filter(event_id=values['event_id']).first()
+    if identity_context is None:
+        existing = AssessmentEvent.objects.filter(
+            client_instance_id=client_instance_id,
+            client_sequence_no=client_sequence_no,
+        ).first()
         if existing is None:
-            return None
+            existing = AssessmentEvent.objects.filter(event_id=values['event_id']).first()
+    else:
+        existing = identity_context['by_sequence'].get((client_instance_id, client_sequence_no))
+        if existing is None:
+            existing = identity_context['by_event_id'].get(values['event_id'])
+    if existing is None:
+        return None
     if requested_event_id is not None and str(existing.event_id) != str(requested_event_id):
         raise EventIdempotencyConflict(existing.event_id)
     if _event_matches(existing, values):
@@ -191,6 +197,7 @@ def append_assessment_event(
     actor=None,
     server_ingest_sequence_no=None,
     session_lock_held=False,
+    identity_context=None,
 ) -> AssessmentEvent:
     # v2 envelope names are accepted alongside the historical names.
     if version is not None:
@@ -373,6 +380,7 @@ def append_assessment_event(
             client_sequence_no=client_sequence_no,
             values=values,
             requested_event_id=event_id,
+            identity_context=identity_context,
         )
         if replay is not None:
             return replay
@@ -405,6 +413,8 @@ def append_assessment_event(
                 with _assessment_event_append_scope():
                     event.save(force_insert=True)
         except IntegrityError:
+            # A different session can win a globally unique identity after prefetch.
+            # Recover outside the failed insert savepoint using a fresh database read.
             replay = _resolve_idempotent_replay(
                 client_instance_id=client_instance_id,
                 client_sequence_no=client_sequence_no,
@@ -412,8 +422,14 @@ def append_assessment_event(
                 requested_event_id=event_id,
             )
             if replay is not None:
+                if identity_context is not None:
+                    identity_context['by_sequence'][(replay.client_instance_id, replay.client_sequence_no)] = replay
+                    identity_context['by_event_id'][replay.event_id] = replay
                 return replay
             raise
+        if identity_context is not None:
+            identity_context['by_sequence'][(event.client_instance_id, event.client_sequence_no)] = event
+            identity_context['by_event_id'][event.event_id] = event
         terminal_statuses = {
             ExperimentSession.Status.COMPLETED,
             ExperimentSession.Status.EXPIRED,

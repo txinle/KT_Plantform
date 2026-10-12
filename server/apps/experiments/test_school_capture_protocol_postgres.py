@@ -58,6 +58,10 @@ class SchoolCaptureProtocolPostgresTests(TransactionTestCase):
         def request(state, path, *, method='GET', body=None):
             if browser_aligned and path == runner.browser_shell_url:
                 return 200, b'<html></html>', .001
+            if browser_aligned and method == 'GET' and path == f'/student/sessions/{state.session_id}/complete/':
+                # The registered completion shell belongs to the frontend gateway;
+                # its authoritative recovery and summary APIs still run below.
+                return 200, b'<html></html>', .001
             client = clients[state.username]
             response = client.generic(method, path, data=json.dumps(body).encode() if body is not None else b'',
                 content_type='application/json', HTTP_ACCEPT='application/json')

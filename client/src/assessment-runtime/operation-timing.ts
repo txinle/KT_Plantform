@@ -1,6 +1,7 @@
 type Action = 'entry' | 'navigation' | 'submit' | 'finish'
 type Stage = 'question_entry' | 'process_runtime' | 'offline_prepare' | 'local_intent'
   | 'draft_remote' | 'save_and_leave_remote' | 'checkpoint' | 'event_boundary' | 'submit_remote' | 'close' | 'lease' | 'ready'
+  | 'local_store' | 'pointer_queue' | 'record_queue' | 'ack' | 'tools'
 
 let operation: { id: string; action: Action; started: number } | undefined
 
@@ -19,15 +20,14 @@ function measure(stage: string, started: number, id: string | undefined, outcome
   })
 }
 
-export async function timedAssessmentStage<T>(stage: Stage, action: () => T | Promise<T>): Promise<T> {
-  const id = operation?.id
+export async function timedAssessmentStage<T>(stage: Stage, action: () => T | Promise<T>, id: string | null = operation?.id || null): Promise<T> {
   const started = performance.now()
   try {
     const result = await action()
-    measure(stage, started, id, 'success')
+    measure(stage, started, id || undefined, 'success')
     return result
   } catch (error) {
-    measure(stage, started, id, 'failure')
+    measure(stage, started, id || undefined, 'failure')
     throw error
   }
 }

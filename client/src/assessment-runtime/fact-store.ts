@@ -124,7 +124,8 @@ export class MemoryOutbox implements CaptureStore {
 
   peekBatch(limit = MAX_BATCH_SIZE, boundary: Record<string, number> | null = null) {
     return this._locked(() => {
-      const owned = submissionOwnership([...this.submissionIntents.values(), ...this.navigationIntents.values()]);
+      const owned = submissionOwnership([...this.submissionIntents.values(), ...this.navigationIntents.values(),
+        ...[...this.metadata].filter(([key]) => key.startsWith('capture-flush:') || key.startsWith('capture-mutation:')).map(([, intent]) => intent as DurableIntent)]);
       const ordered = this.records.filter((record) => !owned.events.has(`${record.client_instance_id}:${record.client_sequence_no}`)
         && (!boundary || record.client_sequence_no <= (boundary[record.client_instance_id] ?? -1))).sort((left, right) => (
         left.outbox_order - right.outbox_order
@@ -191,7 +192,8 @@ export class MemoryOutbox implements CaptureStore {
 
   pendingCheckpoints(includeOwned = true) {
     return this._locked(() => {
-      const owned = submissionOwnership([...this.submissionIntents.values(), ...this.navigationIntents.values()]);
+      const owned = submissionOwnership([...this.submissionIntents.values(), ...this.navigationIntents.values(),
+        ...[...this.metadata].filter(([key]) => key.startsWith('capture-flush:') || key.startsWith('capture-mutation:')).map(([, intent]) => intent as DurableIntent)]);
       return this.checkpoints.filter((checkpoint) => includeOwned || !owned.checkpoints.has(checkpoint.checkpoint_id)).map(clone);
     });
   }
@@ -380,7 +382,7 @@ export class IndexedDbOutbox implements CaptureStore {
       requestResult<Meta<DurableIntent>[]>(transaction.objectStore('meta').getAll()),
     ]);
     await completed;
-    const owned = submissionOwnership(metadata.filter((row) => row.key.startsWith('submission-intent:') || row.key.startsWith('navigation-intent:')).map((row) => row.value));
+    const owned = submissionOwnership(metadata.filter((row) => row.key.startsWith('submission-intent:') || row.key.startsWith('navigation-intent:') || row.key.startsWith('capture-flush:') || row.key.startsWith('capture-mutation:')).map((row) => row.value));
     const records = allRecords.filter((record) => !owned.events.has(`${record.client_instance_id}:${record.client_sequence_no}`)
       && (!boundary || record.client_sequence_no <= (boundary[record.client_instance_id] ?? -1)));
     if (!records.length) return null;
@@ -468,7 +470,7 @@ export class IndexedDbOutbox implements CaptureStore {
       requestResult<Meta<DurableIntent>[]>(transaction.objectStore('meta').getAll()),
     ]);
     await completed;
-    const owned = submissionOwnership(metadata.filter((row) => row.key.startsWith('submission-intent:') || row.key.startsWith('navigation-intent:')).map((row) => row.value));
+    const owned = submissionOwnership(metadata.filter((row) => row.key.startsWith('submission-intent:') || row.key.startsWith('navigation-intent:') || row.key.startsWith('capture-flush:') || row.key.startsWith('capture-mutation:')).map((row) => row.value));
     return rows.filter((checkpoint) => includeOwned || !owned.checkpoints.has(checkpoint.checkpoint_id)).map(clone);
   }
 

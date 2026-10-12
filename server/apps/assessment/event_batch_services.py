@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import uuid
 
 from django.db import transaction
+from django.db.models import Q
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -16,7 +17,7 @@ from .event_schema_registry import (
 )
 from .event_services import EventIdempotencyConflict, append_assessment_event
 from .response_input_services import record_stable_input_observation
-from .models import Attempt, ClientTimeSync, ExperimentSession
+from .models import AssessmentEvent, Attempt, ClientTimeSync, ExperimentSession
 
 
 MAX_BATCH_EVENTS = 100
@@ -158,7 +159,7 @@ class ParsedClientEvent:
     event_id: object = None
 
 
-def _parse_event(*, student, client_instance_id, document, prior_sequence):
+def _parse_event(*, student, client_instance_id, document, prior_sequence, contexts):
     require_exact_mapping(
         document,
         allowed=EVENT_FIELDS,
@@ -195,22 +196,10 @@ def _parse_event(*, student, client_instance_id, document, prior_sequence):
     else:
         if attempt_id is None:
             raise ProcessRequestError("invalid_event")
-        attempt = (
-        Attempt.objects.select_related(
-            "session",
-            "assignment__snapshot",
-            "assignment__item_instance",
-        )
-        .filter(
-            pk=attempt_id,
-            session_id=session_id,
-            session__student=student,
-        )
-        .first()
-    )
-        if attempt is None:
+        attempt = contexts['attempts'].get(attempt_id)
+        if attempt is None or attempt.session_id != session_id:
             raise ProcessRequestError("invalid_event_link")
-    session = attempt.session if attempt is not None else __import__("apps.assessment.models", fromlist=["ExperimentSession"]).ExperimentSession.objects.filter(pk=session_id, student=student).first()
+    session = contexts['sessions'].get(session_id)
     if session is None:
         raise ProcessRequestError("invalid_event_link")
 
@@ -223,13 +212,8 @@ def _parse_event(*, student, client_instance_id, document, prior_sequence):
     time_sync = None
     if document.get("time_sync_id") is not None:
         time_sync_id = parse_uuid(document["time_sync_id"], code="invalid_event")
-        time_sync = ClientTimeSync.objects.filter(
-            pk=time_sync_id,
-            client_instance_id=client_instance_id,
-            session_id=session_id,
-            session__student=student,
-        ).first()
-        if time_sync is None:
+        time_sync = contexts['time_syncs'].get(time_sync_id)
+        if time_sync is None or time_sync.session_id != session_id:
             raise ProcessRequestError("invalid_event_link")
 
     quality_flags = document["quality_flags"]
@@ -269,7 +253,36 @@ def _parse_event(*, student, client_instance_id, document, prior_sequence):
     )
 
 
-def parse_event_batch(*, student, document):
+def batch_session_contexts(*, student, event_documents, locked=False):
+    session_ids = sorted({row.get('session_id') for row in event_documents
+                          if isinstance(row, dict) and type(row.get('session_id')) is int})
+    sessions = ExperimentSession.objects.select_related(
+        'version__experiment__course', 'capture_contract', 'class_task',
+    ).filter(pk__in=session_ids, student=student).order_by('pk')
+    if locked:
+        sessions = sessions.select_for_update(of=('self',))
+    return {session.pk: session for session in sessions}
+
+
+def _batch_contexts(*, student, client_instance_id, event_documents, sessions=None, attempts=None):
+    sessions = sessions if sessions is not None else batch_session_contexts(
+        student=student, event_documents=event_documents)
+    attempt_ids = {row.get('attempt_id') for row in event_documents
+                   if isinstance(row, dict) and type(row.get('attempt_id')) is int}
+    attempts = attempts if attempts is not None else {attempt.pk: attempt for attempt in Attempt.objects.select_related(
+        'assignment__snapshot', 'assignment__item_instance',
+    ).filter(pk__in=attempt_ids, session_id__in=sessions)}
+    for attempt in attempts.values():
+        attempt.session = sessions[attempt.session_id]
+    sync_ids = {parse_uuid(row['time_sync_id'], code='invalid_event') for row in event_documents
+                if isinstance(row, dict) and row.get('time_sync_id') is not None}
+    time_syncs = {sample.pk: sample for sample in ClientTimeSync.objects.filter(
+        pk__in=sync_ids, client_instance_id=client_instance_id, session_id__in=sessions,
+    )}
+    return {'sessions': sessions, 'attempts': attempts, 'time_syncs': time_syncs}
+
+
+def parse_event_batch(*, student, document, sessions=None, attempts=None):
     require_exact_mapping(document, allowed=BATCH_FIELDS)
     client_instance_id = parse_uuid(document["client_instance_id"])
     event_documents = document["events"]
@@ -281,12 +294,15 @@ def parse_event_batch(*, student, document):
         raise ProcessRequestError("invalid_batch_size")
     parsed = []
     prior_sequence = None
+    contexts = _batch_contexts(student=student, client_instance_id=client_instance_id,
+                               event_documents=event_documents, sessions=sessions, attempts=attempts)
     for event_document in event_documents:
         event = _parse_event(
             student=student,
             client_instance_id=client_instance_id,
             document=event_document,
             prior_sequence=prior_sequence,
+            contexts=contexts,
         )
         parsed.append(event)
         prior_sequence = event.client_sequence_no
@@ -294,10 +310,17 @@ def parse_event_batch(*, student, document):
 
 
 @transaction.atomic
-def append_event_batch(*, student, document, request_received_at=None):
+def append_event_batch(*, student, document, request_received_at=None, locked_sessions=None, locked_attempts=None):
+    require_exact_mapping(document, allowed=BATCH_FIELDS)
+    if not isinstance(document['events'], list) or not 1 <= len(document['events']) <= MAX_BATCH_EVENTS:
+        raise ProcessRequestError('invalid_batch_size')
+    sessions = locked_sessions if locked_sessions is not None else batch_session_contexts(
+        student=student, event_documents=document['events'], locked=True)
     client_instance_id, events = parse_event_batch(
         student=student,
         document=document,
+        sessions=sessions,
+        attempts=locked_attempts,
     )
     from .services import _validate_process_event_time
 
@@ -327,12 +350,16 @@ def append_event_batch(*, student, document, request_received_at=None):
             raise ProcessConflictError(code)
         validated.add(validation_key)
     acknowledgements = []
-    sessions = {
-        session.pk: session
-        for session in ExperimentSession.objects.select_for_update()
-        .filter(pk__in=sorted({event.session.pk for event in events}))
-        .order_by("pk")
-    }
+    # Both identities are global uniqueness keys; keep foreign-session collisions
+    # visible to the original exact material comparison rather than filtering them out.
+    existing = AssessmentEvent.objects.filter(
+        Q(client_instance_id=client_instance_id, client_sequence_no__in=[event.client_sequence_no for event in events])
+        | Q(event_id__in=[event.event_id for event in events if event.event_id is not None])
+    )
+    identity_context = {'by_sequence': {}, 'by_event_id': {}}
+    for event in existing:
+        identity_context['by_sequence'][(event.client_instance_id, event.client_sequence_no)] = event
+        identity_context['by_event_id'][event.event_id] = event
     next_sequences = {
         session_id: session.next_ingest_sequence_no
         for session_id, session in sessions.items()
@@ -388,6 +415,7 @@ def append_event_batch(*, student, document, request_received_at=None):
                 envelope_version=2,
                 server_ingest_sequence_no=next_sequences[parsed.session.pk],
                 session_lock_held=True,
+                identity_context=identity_context,
             )
             if event.server_ingest_sequence_no == next_sequences[parsed.session.pk]:
                 next_sequences[parsed.session.pk] += 1

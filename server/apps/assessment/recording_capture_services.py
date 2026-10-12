@@ -140,22 +140,20 @@ def _nonnegative_integer(value):
     return result
 
 
-def _checkpoint_values(*, student, document):
+def _checkpoint_values(*, student, document, context=None):
     require_exact_mapping(document, allowed=CHECKPOINT_FIELDS)
-    session = ExperimentSession.objects.filter(
-        pk=parse_positive_integer(document["session_id"]), student=student
-    ).first()
-    if session is None:
+    session_id = parse_positive_integer(document["session_id"])
+    session = (context['sessions'].get(session_id) if context is not None else
+               ExperimentSession.objects.filter(pk=session_id, student=student).first())
+    if session is None or session.student_id != student.pk:
         raise ValidationError("checkpoint session is not owned by student")
     client_instance_id = parse_uuid(document["client_instance_id"])
     time_sync = None
     if document.get("time_sync_id") is not None:
-        time_sync = ClientTimeSync.objects.filter(
-            pk=parse_uuid(document["time_sync_id"]),
-            session=session,
-            client_instance_id=client_instance_id,
-        ).first()
-        if time_sync is None:
+        sync_id = parse_uuid(document["time_sync_id"])
+        time_sync = (context['time_syncs'].get(sync_id) if context is not None else
+                     ClientTimeSync.objects.filter(pk=sync_id, session=session, client_instance_id=client_instance_id).first())
+        if time_sync is None or time_sync.session_id != session.pk or time_sync.client_instance_id != client_instance_id:
             raise ValidationError("checkpoint time sync is invalid")
     flags = document["quality_flags"]
     validate_quality_flags(flags)
@@ -211,10 +209,11 @@ def _checkpoint_values(*, student, document):
 
 
 @transaction.atomic
-def record_client_capture_checkpoint(*, student, document):
-    values = _checkpoint_values(student=student, document=document)
+def record_client_capture_checkpoint(*, student, document, context=None):
+    values = _checkpoint_values(student=student, document=document, context=context)
     checkpoint_id = values["checkpoint_id"]
-    existing = ClientCaptureCheckpoint.objects.filter(pk=checkpoint_id).first()
+    existing = (context['checkpoints'].get(checkpoint_id) if context is not None else
+                ClientCaptureCheckpoint.objects.filter(pk=checkpoint_id).first())
     if existing is not None:
         comparable = {
             field: getattr(existing, field)
@@ -262,6 +261,10 @@ def record_client_capture_checkpoint(*, student, document):
         return existing
     try:
         with transaction.atomic():
-            return ClientCaptureCheckpoint.objects.create(**values)
+            checkpoint = ClientCaptureCheckpoint(**values)
+            checkpoint.save(force_insert=True, _validated_links=context is not None)
+            if context is not None:
+                context['checkpoints'][checkpoint_id] = checkpoint
+            return checkpoint
     except IntegrityError:
         return record_client_capture_checkpoint(student=student, document=document)

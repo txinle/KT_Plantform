@@ -102,7 +102,10 @@ class MutationOpenApiTests(SimpleTestCase):
     def test_capture_documents_event_clocks_and_versioned_payload_semantics(self):
         operation = self.operation('/api/v1/assessment/process/', 'capture-v2/batch/')
         body = operation['requestBody']['content']['application/json']['schema']
-        event = body['properties']['events']['items']
+        flat, bundled = body['oneOf']
+        event = flat['properties']['events']['items']
+        self.assertEqual(bundled['required'], ['capture_bundle'])
+        self.assertEqual(bundled['properties']['capture_bundle']['properties']['events']['items'], event)
         self.assertTrue({'event_type', 'event_version', 'payload', 'client_wall_time_utc',
                          'client_monotonic_ms', 'client_time_origin'} <= set(event['required']))
         self.assertIn('event_schema_registry', event['properties']['payload']['description'])

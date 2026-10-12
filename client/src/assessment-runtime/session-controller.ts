@@ -3,14 +3,15 @@ import { defaultOutbox } from './fact-store'
 import { ProcessEventCollector } from './process-sender'
 import { bindLifecycle } from './session-lifecycle'
 import { DEFAULT_SYNC_INTERVAL_MS } from './process-types'
-import type { CaptureStore, CaptureEvent, CaptureCheckpoint, RecordOptions } from './capture-contract'
+import type { CaptureStore, CaptureEvent, CaptureCheckpoint, CaptureMutation, ProcessConfirmation, RecordOptions } from './capture-contract'
 import { createWriterLease, type WriterLease } from './writer-lease'
 import { getStudentAssessmentApi } from './api'
-import { currentAssessmentOperationId } from './operation-timing'
+import { currentAssessmentOperationId, timedAssessmentStage } from './operation-timing'
 type RuntimeProcess = StudentRuntimeQuestionEntry['process']
 type VisitFields = 'visit_id' | 'visit_index' | 'entry_event_id' | 'navigation_id'
 type ProcessState = Omit<RuntimeProcess, VisitFields> & Partial<Pick<RuntimeProcess, VisitFields>>
 export interface StudentProcessRuntime {
+  captureMutation?<T extends ProcessConfirmation>(url: string, body: Record<string, unknown>, send: (body: Record<string, unknown>) => Promise<T>, operationId?: string | null, prepare?: () => Promise<Record<string, unknown> | undefined>): Promise<T>
   serializePointerWrite<T>(operation: () => Promise<T>): Promise<T>
   pointerWritesSettled(): Promise<unknown>
   restoredNavigation?: NavigationIntent | null
@@ -199,6 +200,7 @@ export class SessionController {
     sender.correlationId = process.navigation_id ?? null
     sender.endpoint = process.event_batch_url
     sender.checkpointEndpoint = process.checkpoint_url
+    sender.captureBundle = process.capture_bundle
     sender.setOperationId(currentAssessmentOperationId())
     const open = !['submitted', 'timed_out', 'unanswered'].includes(attemptStatus)
     if (!this.lifecycle) {
@@ -217,13 +219,65 @@ export class SessionController {
         renewUrl: process.writer_lease_renew_url, releaseUrl: process.writer_lease_release_url }) : undefined
     const restored = await this.store.restoreResponse(process.session_id, process.attempt_id)
     if (this.disposed) throw new Error('会话控制器已关闭。')
+    const prepareMutation = async (intent: CaptureMutation, prepare?: () => Promise<Record<string, unknown> | undefined>) => {
+      if (Object.hasOwn(intent.body, 'target_event_id') && !intent.body.writer_lease_token) {
+        const credentials = prepare ? await prepare() : await lease?.beforePointerWrite();
+        if (credentials) {
+          intent = { ...intent, body: { ...intent.body, ...credentials } };
+          await timedAssessmentStage('local_store', () => this.store.writeMetadata(`capture-mutation:${intent.sessionId}:${intent.attemptId}`, intent), intent.operationId ?? null);
+        }
+      }
+      return intent;
+    };
+    const confirmMutation = async <T extends ProcessConfirmation>(intent: CaptureMutation, send: (body: Record<string, unknown>) => Promise<T>) => {
+      intent = await prepareMutation(intent);
+      const result = await send({ ...intent.body, capture_bundle: intent.processSnapshot });
+      let responseVersion: number | undefined;
+      if (Object.hasOwn(intent.body, 'target_event_id')) {
+        const draft = result as ProcessConfirmation & { response_version?: number };
+        if (draft.active_response_event_id !== intent.body.target_event_id || !Number.isSafeInteger(draft.response_version)
+          || Number(draft.response_version) < Number(intent.body.expected_version)) throw new Error('草稿回执与本次答案不一致，请核验原操作。');
+        responseVersion = Number(draft.response_version);
+      }
+      await sender.acknowledgeCaptureMutation(intent, result);
+      if (responseVersion !== undefined) runtime.responseVersion = responseVersion;
+      return result;
+    };
     const runtime: StudentProcessRuntime = {
+      captureMutation: async (url, body, send, operationId = currentAssessmentOperationId(), prepare) => {
+        assertActive();
+        const pending = await this.store.readMetadata<CaptureMutation>(`capture-mutation:${process.session_id}:${process.attempt_id}`);
+        if (pending) {
+          const result = await confirmMutation(pending, frozen => getStudentAssessmentApi(pending.operationId ?? null).post<Awaited<ReturnType<typeof send>>>(pending.url, frozen));
+          if (pending.url === url && (JSON.stringify(pending.body) === JSON.stringify(body)
+            || (Object.hasOwn(body, 'target_event_id') && pending.body.target_event_id === body.target_event_id))) return result;
+          if (Object.hasOwn(body, 'expected_version')) body = { ...body, expected_version: runtime.responseVersion };
+        }
+        if (Object.hasOwn(body, 'target_event_id')) body = { ...body, capture_operation_id: crypto.randomUUID() };
+        let intent: CaptureMutation;
+        try { intent = await sender.freezeCaptureMutation(url, body, operationId); }
+        catch (error) {
+          if ((error as { code?: string }).code !== 'capture_bundle_too_large') throw error;
+          if (await sender.flushConfirmed({ ignoreVisibility: true, operationId: operationId || undefined }) === false) throw error;
+          intent = await sender.freezeCaptureMutation(url, body, operationId);
+        }
+        intent = await prepareMutation(intent, prepare);
+        return confirmMutation(intent, send);
+      },
       serializePointerWrite: operation => {
-        const pending = this.pointerQueue.then(() => { assertActive(); return operation() })
+        const operationId = currentAssessmentOperationId();
+        const pending = timedAssessmentStage('pointer_queue', async () => {
+          await this.pointerQueue;
+          assertActive();
+        }, operationId ?? null).then(operation);
         this.pointerQueue = pending.catch(() => undefined)
         return pending
       },
-      pointerWritesSettled: () => this.pointerQueue,
+      pointerWritesSettled: async () => {
+        await this.pointerQueue;
+        const intent = await this.store.readMetadata<CaptureMutation>(`capture-mutation:${process.session_id}:${process.attempt_id}`);
+        if (intent) await confirmMutation(intent, frozen => getStudentAssessmentApi(intent.operationId ?? null).post(intent.url, frozen));
+      },
       sender, responseVersion: process.response_version || 0, writerLease: lease, clientInstanceId: sender.clientInstanceId,
       restoredNavigation, restoredSubmission, restoredResponse: restored as RestoredResponse | null,
       saveNavigationIntent: intent => this.store.saveNavigationIntent(process.session_id, process.attempt_id, intent),
@@ -246,6 +300,7 @@ export class SessionController {
       closeAttempt: (reason, target = null) => { assertActive(); return lifecycle.closeAttempt(reason, target) },
       dispose: () => { if (generation === this.generation) this.generation++ },
     }
+    if (!process.capture_bundle?.enabled || process.capture_bundle.version !== 1 || process.capture_bundle.mutation_receipts !== true) runtime.captureMutation = undefined;
     if (!first && this.active?.writerLease) this.active.writerLease.invalidate()
     this.active = runtime
     return runtime

@@ -12,6 +12,66 @@ const process = { session_id: 7, attempt_id: 13, event_batch_url: '/api/v1/asses
   response_version: 0, writer_lease_acquire_url: '/api/v1/assessment/process/attempts/13/writer-lease/acquire/',
   writer_lease_renew_url: '/api/v1/assessment/process/attempts/13/writer-lease/renew/', writer_lease_release_url: '/api/v1/assessment/process/attempts/13/writer-lease/release/' }
 
+it('recovers an already dispatched bundled draft before a later navigation and promotes CAS only after complete ACK', async () => {
+  const store = new MemoryOutbox()
+  const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  const runtime = await controller.activate({ ...process, capture_bundle: { enabled: true, version: 1, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true } } as never, 'visited')
+  const event = await runtime.record('response_input_started', { question_type: 'single_choice' }, { eventId: crypto.randomUUID() })
+  const body = { answer: 'A', target_event_id: event.event_id, expected_version: 0, client_occurred_at: 'original-clock',
+    writer_lease_token: 'expired-after-commit', writer_client_instance_id: runtime.clientInstanceId }
+  await expect(runtime.captureMutation!('/draft/', body, async () => { throw new Error('unknown outcome') })).rejects.toThrow('unknown')
+  const saved = await store.readMetadata<import('./capture-contract').CaptureMutation>('capture-mutation:7:13')
+  runtime.writerLease?.invalidate()
+  expect(saved?.body).toMatchObject(body)
+  expect(saved?.body.capture_operation_id).toEqual(expect.any(String))
+  const post = vi.fn().mockImplementation(async (_url, frozen) => ({ success: true, committed: true, active_response_event_id: event.event_id, response_version: 1,
+    acknowledgements: [], checkpoint_ids: frozen.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id) }))
+  const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+  try {
+    await expect(runtime.pointerWritesSettled()).rejects.toThrow('confirmation')
+    expect(runtime.responseVersion).toBe(0)
+    expect(await store.readMetadata('capture-mutation:7:13')).toEqual(saved)
+    post.mockImplementation(async (_url, frozen) => ({ success: true, committed: true, active_response_event_id: event.event_id, response_version: 1,
+      acknowledgements: frozen.capture_bundle.events.map((row: { client_sequence_no: number; event_id?: string }) => ({ client_sequence_no: row.client_sequence_no, event_id: row.event_id || crypto.randomUUID(), server_ingest_sequence_no: row.client_sequence_no })),
+      checkpoint_ids: frozen.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id) }))
+    await runtime.pointerWritesSettled()
+    expect(post).toHaveBeenLastCalledWith('/draft/', { ...saved?.body, capture_bundle: saved?.processSnapshot })
+    expect(runtime.responseVersion).toBe(1)
+    expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+  } finally { spy.mockRestore(); controller.dispose() }
+})
+
+it('keeps the legacy sender path when the question has no bundle capability', async () => {
+  const controller = createSessionController({ store: new MemoryOutbox(), csrfToken: 'csrf', autoSchedule: false })
+  try { expect((await controller.activate(process as never, 'visited')).captureMutation).toBeUndefined() }
+  finally { controller.dispose() }
+})
+
+it('freezes original draft facts before waiting for a lease renewal', async () => {
+  const store = new MemoryOutbox()
+  const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  const runtime = await controller.activate({ ...process, capture_bundle: { enabled: true, version: 1, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true } } as never, 'visited')
+  const event = await runtime.record('response_input_started', { question_type: 'single_choice' }, { eventId: crypto.randomUUID() })
+  let renew!: (credentials: Record<string, unknown>) => void
+  const lease = new Promise<Record<string, unknown>>(resolve => { renew = resolve })
+  const send = vi.fn(async frozen => ({ success: true, committed: true, active_response_event_id: event.event_id, response_version: 1,
+    acknowledgements: frozen.capture_bundle.events.map((row: { client_sequence_no: number; event_id?: string }) => ({ client_sequence_no: row.client_sequence_no, event_id: row.event_id || crypto.randomUUID(), server_ingest_sequence_no: row.client_sequence_no })), checkpoint_ids: [] }))
+  try {
+    const saving = runtime.captureMutation!('/draft/', { answer: 'A', target_event_id: event.event_id, expected_version: 0 }, send, undefined, () => lease)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const intent = await store.readMetadata<import('./capture-contract').CaptureMutation>('capture-mutation:7:13')
+    expect(intent?.processSnapshot.event_boundary).toBe(event.client_sequence_no)
+    const later = await runtime.record('activity_heartbeat', {})
+    expect(send).not.toHaveBeenCalled()
+    renew({ writer_lease_token: 'renewed', writer_client_instance_id: runtime.clientInstanceId })
+    await saving
+    expect(send).toHaveBeenCalledOnce()
+    expect(send.mock.calls[0]?.[0]).toMatchObject({ writer_lease_token: 'renewed', capture_operation_id: intent?.body.capture_operation_id,
+      capture_bundle: { event_boundary: event.client_sequence_no } })
+    expect(await store.pendingEvents(runtime.clientInstanceId!, 99)).toEqual([later])
+  } finally { controller.dispose() }
+})
+
 describe('session controller ownership', () => {
   it('preserves one sender/store/client identity through A to B to A and isolates response versions', async () => {
     const store = new MemoryOutbox()
