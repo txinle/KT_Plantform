@@ -1,0 +1,20 @@
+# Existing shared PostgreSQL, with only kt_e2e and its dedicated role.
+# The already provisioned test-network alias is school-test-postgres.
+services:
+  db:
+    profiles: [school-test-new-postgres-disabled]
+  pgbouncer:
+    depends_on: !reset {}
+    environment:
+      PGBOUNCER_SERVER_HOST: school-test-postgres
+  migrate:
+    depends_on: !reset {}
+    environment:
+      POSTGRES_HOST: school-test-postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_POOL_ALIAS: ""
+  scheduler:
+    environment:
+      POSTGRES_HOST: school-test-postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_POOL_ALIAS: ""

@@ -13,9 +13,9 @@ htmlcov/
 .vscode/
 .worktrees/
 .superpowers/
-frontend/node_modules/
-frontend/dist/
-frontend/coverage/
-frontend/.e2e/
-frontend/.e2e-results/
-frontend/playwright-report/
+client/node_modules/
+client/dist/
+client/coverage/
+client/.e2e/
+client/.e2e-results/
+client/playwright-report/

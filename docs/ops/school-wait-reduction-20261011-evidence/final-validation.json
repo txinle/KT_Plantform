@@ -1,0 +1,78 @@
+{
+  "scope": "R7 application before documentation and removal of obsolete development artifacts",
+  "backend_targeted": {
+    "passed": 78,
+    "database": "PostgreSQL 17"
+  },
+  "collector_tests": {
+    "passed": 56
+  },
+  "frontend_unit": {
+    "passed": 436,
+    "files": 96
+  },
+  "load_and_verifier_tests": {
+    "passed": 42
+  },
+  "browser_aligned_driver_tests": {
+    "passed": 19
+  },
+  "typecheck": true,
+  "scoped_lint": true,
+  "api_contract": true,
+  "frontend_build": true,
+  "django_check": true,
+  "migration_drift_check": true,
+  "collectstatic": true,
+  "local_browser_response_loss_reload_replay": true,
+  "local_browser_both_protocols_five_types": {
+    "passed": true,
+    "atomic_submissions": 5,
+    "unique_emitted_stored_acknowledged_events": 129
+  },
+  "isolated_three_student_full_protocol": true,
+  "latest_full_backend_suite_scope": "R6 before saved navigation; not a full R7 suite",
+  "latest_full_backend_suite": {
+    "executed": 1846,
+    "passed": 1845,
+    "skipped": 1
+  },
+  "remote_cleanup": {
+    "owned_running_test_roles": 0,
+    "shared_postgres_running": true,
+    "shared_postgres_identity_unchanged": true,
+    "frozen_files_unchanged_before_stop": true,
+    "production_cutover_performed": false
+  },
+  "local_cleanup": {
+    "obsolete_stage_controller_tests_removed": 7,
+    "regression_tests_preserved": true,
+    "additional_legacy_cleanup_blocked": true,
+    "blocked_paths": [
+      "E:/ATOP/.tmp",
+      "E:/ATOP/artifacts/collection-status-uat-20260920",
+      "E:/ATOP/outputs/api-feature.yml",
+      "E:/ATOP/outputs/api-main.yml",
+      "E:/ATOP/outputs/schema-feature.d.ts",
+      "E:/ATOP/outputs/schema-main.d.ts",
+      "E:/ATOP/task_plan.md",
+      "E:/ATOP/findings.md",
+      "E:/ATOP/progress.md"
+    ],
+    "local_vite_restored_http_status": 200,
+    "pre_cleanup_logical_bytes": 1323654136,
+    "business_databases_preserved": true,
+    "verified_target_count": 85,
+    "block_reason": "Automatic approval returned blocked by policy without a detailed reason.",
+    "pre_cleanup_file_count": 27882,
+    "independent_documents_preserved": true,
+    "remaining_selected_main_targets": 0
+  },
+  "post_cleanup_checks": {
+    "django_system_check": true,
+    "duration_seconds": 4.154,
+    "git_diff_check": true,
+    "targeted_tests_passed": 84,
+    "deleted_stage_references_remaining": 0
+  }
+}

@@ -1,0 +1,82 @@
+name: kt_capture_uat
+
+x-test-environment: &test-environment
+  DJANGO_SETTINGS_MODULE: config.capture_uat_settings
+  DJANGO_DEBUG: '0'
+  DJANGO_SECRET_KEY: capture-uat-isolated-test-key
+  DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,web,nginx
+  DJANGO_CSRF_TRUSTED_ORIGINS: http://127.0.0.1:18080,http://localhost:18080,http://127.0.0.1:18081
+  POSTGRES_HOST: db
+  POSTGRES_PORT: '5432'
+  POSTGRES_DB: kt_e2e
+  POSTGRES_USER: kt_user
+  POSTGRES_PASSWORD: kt_password
+  CAPTURE_V2_ENABLED: '1'
+  CAPTURE_V2_COURSE_IDS: '*'
+  CLASS_CENTER_ENABLED: '1'
+  STUDENT_LEARNING_ANALYTICS_ENABLED: '1'
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: kt_e2e
+      POSTGRES_USER: kt_user
+      POSTGRES_PASSWORD: kt_password
+    ports:
+      - 127.0.0.1:55434:5432
+    volumes:
+      - test_database:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U kt_user -d kt_e2e']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+      target: web
+    environment: *test-environment
+    command: ['sh', '-c', 'python manage.py migrate --noinput && python manage.py collectstatic --noinput']
+    volumes:
+      - backend_static:/app/staticfiles
+    depends_on:
+      db:
+        condition: service_healthy
+  web:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+      target: web
+    environment: *test-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - test_media:/app/media
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=3)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  nginx:
+    build:
+      context: ..
+      dockerfile: client/Dockerfile
+      target: production
+    ports:
+      - 127.0.0.1:18080:80
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      - ./nginx/kt-platform.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/frontend-pages.conf:/etc/nginx/frontend-pages.conf:ro
+      - backend_static:/backend-static:ro
+      - test_media:/media:ro
+
+volumes:
+  backend_static:
+  test_database:
+  test_media:

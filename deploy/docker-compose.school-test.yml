@@ -1,0 +1,50 @@
+# Third overlay only, on an isolated test host / explicit maintenance window.
+# Always use a NEW project: -p kt-school-e2e. Never reuse the production project.
+x-test-env: &test-env
+  env_file: !override [school-test.env]
+  environment:
+    POSTGRES_DB: kt_e2e
+    DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+    DJANGO_CSRF_TRUSTED_ORIGINS: http://127.0.0.1:18080,http://localhost:18080
+    CANONICAL_PUBLIC_ORIGIN: ""
+    DJANGO_SECURE_SSL_REDIRECT: "0"
+    DJANGO_SESSION_COOKIE_SECURE: "0"
+    DJANGO_CSRF_COOKIE_SECURE: "0"
+    STUDENT_SHARED_RESULTS_ENABLED: "1"
+    STUDENT_SHARED_RESULTS_COURSE_IDS: "*"
+    CLASS_CENTER_ENABLED: "1"
+    STUDENT_LEARNING_ANALYTICS_ENABLED: "1"
+    ADVANCED_DATA_MATERIALIZED_ENABLED: "1"
+    ADVANCED_DATA_MATERIALIZED_COURSE_IDS: "*"
+
+services:
+  db:
+    environment:
+      POSTGRES_DB: kt_e2e
+      POSTGRES_USER: ${SCHOOL_TEST_POSTGRES_USER:-kt_user}
+      POSTGRES_PASSWORD: ${SCHOOL_TEST_POSTGRES_PASSWORD:?Set isolated test database password}
+  pgbouncer:
+    environment:
+      POSTGRES_DB: kt_e2e
+      POSTGRES_USER: ${SCHOOL_TEST_POSTGRES_USER:-kt_user}
+      POSTGRES_PASSWORD: ${SCHOOL_TEST_POSTGRES_PASSWORD:?Set isolated test database password}
+  migrate:
+    <<: *test-env
+  web:
+    <<: *test-env
+  student-read:
+    <<: *test-env
+  teacher-read:
+    <<: *test-env
+  analytics-worker:
+    <<: *test-env
+  student-comparison-worker:
+    <<: *test-env
+  publication-worker:
+    <<: *test-env
+  export-worker:
+    <<: *test-env
+  scheduler:
+    <<: *test-env
+  nginx:
+    ports: !override ["127.0.0.1:18080:80"]

@@ -1,0 +1,21 @@
+[databases]
+kt_core = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} pool_size=16 reserve_pool_size=2
+kt_student = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} pool_size=6 reserve_pool_size=1
+kt_teacher = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} pool_size=4 reserve_pool_size=1
+kt_background = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} pool_size=4 reserve_pool_size=1
+
+[pgbouncer]
+listen_addr = 0.0.0.0
+listen_port = 5432
+auth_type = scram-sha-256
+auth_file = /tmp/pgbouncer-school-users.txt
+stats_users = ${POSTGRES_USER}
+pool_mode = transaction
+max_client_conn = 200
+default_pool_size = 0
+reserve_pool_timeout = 3
+server_idle_timeout = 60
+server_reset_query = DISCARD ALL
+ignore_startup_parameters = extra_float_digits
+log_connections = 0
+log_disconnections = 0

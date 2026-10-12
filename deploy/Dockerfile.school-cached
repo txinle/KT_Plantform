@@ -1,0 +1,35 @@
+# Explicit offline alternative; verified immutable production bases only.
+ARG SCHOOL_CACHED_WEB_BASE
+FROM ${SCHOOL_CACHED_WEB_BASE} AS python-app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 DJANGO_DEBUG=0
+WORKDIR /app
+# Remove inherited application files while retaining installed Python packages.
+RUN find /app -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+COPY server/ /app/
+COPY contracts/frontend-routes.json /contracts/frontend-routes.json
+COPY deploy/docker/ /app/docker/
+RUN python manage.py collectstatic --noinput && sed -i 's/\r$//' docker/*.sh && chmod +x docker/*.sh
+
+FROM python-app AS web
+ENTRYPOINT ["docker/entrypoint.sh"]
+CMD ["gunicorn", "-c", "config/gunicorn.py", "config.wsgi:application"]
+
+FROM python-app AS scheduler
+ENTRYPOINT ["docker/entrypoint.sh"]
+CMD ["python", "manage.py", "run_scheduler"]
+
+FROM python-app AS analytics-worker
+ENTRYPOINT ["docker/entrypoint.sh"]
+CMD ["python", "manage.py", "run_research_materializations"]
+
+FROM python-app AS publication-worker
+ENTRYPOINT ["docker/entrypoint.sh"]
+CMD ["python", "manage.py", "run_publication_jobs"]
+
+FROM python-app AS student-comparison-worker
+ENTRYPOINT ["docker/school-entrypoint.sh"]
+CMD ["python", "manage.py", "run_student_comparisons"]
+
+FROM python-app AS export-worker
+ENTRYPOINT ["docker/school-entrypoint.sh"]
+CMD ["docker/export-worker.sh"]

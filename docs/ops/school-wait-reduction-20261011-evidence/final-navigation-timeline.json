@@ -1,0 +1,4068 @@
+{
+  "phase": "load",
+  "clock": "Probe action and request callbacks share one monotonic origin.",
+  "limits": [
+    "A shared operation ID does not prove a blocking dependency.",
+    "Counts include background requests; overlapping durations must not be added.",
+    "No next read within a failed observation is censored, not zero delay.",
+    "Runtime stage clocks have another origin and are preserved separately."
+  ],
+  "navigation_actions": [
+    {
+      "probe": 1,
+      "action": "navigation_next_ready",
+      "sequence": 1,
+      "completed": true,
+      "duration_seconds": 20.268015800000008,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.359412899999996,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.0493917999999976,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "6bd5eebb705d4ddf99ce860bbfa36be8",
+          "operation_id": "8057da29dee146f4b598556112e14ce4",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4303.349000000002,
+          "relative_start_seconds": 0.0493917999999976,
+          "relative_end_seconds": 4.352740799999999
+        }
+      ]
+    },
+    {
+      "probe": 1,
+      "action": "navigation_return_ready",
+      "sequence": 1,
+      "completed": true,
+      "duration_seconds": 17.6603502,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 3.5285795999999974,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.030119999999995345,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "01ed6abe52c64d59a5173fd6dfe5d694",
+          "operation_id": "7771631201764c5e8595753fa67f81ab",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3495.1831999999995,
+          "relative_start_seconds": 0.030119999999995345,
+          "relative_end_seconds": 3.525303199999995
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "13610d9f-a12c-41a8-8df3-4792c7c462f2",
+          "operation_id": "7771631201764c5e8595753fa67f81ab",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2765.2733000000007,
+          "relative_start_seconds": 2.7212727999999915,
+          "relative_end_seconds": 5.486546099999992
+        }
+      ]
+    },
+    {
+      "probe": 1,
+      "action": "submit_next_ready",
+      "sequence": 1,
+      "completed": true,
+      "duration_seconds": 47.6514197,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 18.766102899999996,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 8,
+      "endpoint_counts": {
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /assessment/process/capture-checkpoints/": 3,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-v2/batch/": 2,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 0,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "12febe574aec43b79e9b2ae4c37dee7d",
+          "operation_id": "c50adcf3ce304297912ba2aedb1d62ae",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3405.5264000000025,
+          "relative_start_seconds": 0.04508329999999842,
+          "relative_end_seconds": 3.4506097000000007
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "42afdc8e-5a92-4b60-9be2-178023724762",
+          "operation_id": "c50adcf3ce304297912ba2aedb1d62ae",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2998.087999999989,
+          "relative_start_seconds": 3.169904799999989,
+          "relative_end_seconds": 6.167992799999978
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "42c95337f8e54bd591f371915217bae7",
+          "operation_id": "c50adcf3ce304297912ba2aedb1d62ae",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4524.1565999999875,
+          "relative_start_seconds": 3.4513526999999886,
+          "relative_end_seconds": 7.975509299999976
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "3591f25b-f63d-4f3a-887d-2aa9dceb45bd",
+          "operation_id": "c50adcf3ce304297912ba2aedb1d62ae",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4358.744099999982,
+          "relative_start_seconds": 3.6742978,
+          "relative_end_seconds": 8.033041899999983
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "e6262458-0651-42ac-aa73-99d8b56b9b02",
+          "operation_id": "c50adcf3ce304297912ba2aedb1d62ae",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 5654.734999999986,
+          "relative_start_seconds": 7.980898300000001,
+          "relative_end_seconds": 13.635633299999986
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "d813367c-a1da-46d2-a450-7d6919993159",
+          "operation_id": "c50adcf3ce304297912ba2aedb1d62ae",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3561.464500000002,
+          "relative_start_seconds": 13.636683299999975,
+          "relative_end_seconds": 17.198147799999976
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "9053febc11d241d587562d952d067b03",
+          "operation_id": "c50adcf3ce304297912ba2aedb1d62ae",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3613.5357000000076,
+          "relative_start_seconds": 15.148168799999985,
+          "relative_end_seconds": 18.761704499999993
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "78ce2060-06de-41c3-8e5d-ad0a32199641",
+          "operation_id": "c50adcf3ce304297912ba2aedb1d62ae",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4636.959000000003,
+          "relative_start_seconds": 17.199668599999974,
+          "relative_end_seconds": 21.83662759999998
+        }
+      ]
+    },
+    {
+      "probe": 1,
+      "action": "navigation_next_ready",
+      "sequence": 2,
+      "completed": true,
+      "duration_seconds": 26.354221499999984,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 6.288433300000004,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.04962849999999162,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "7f7b3e18e8c1435a88a029bbece37cc5",
+          "operation_id": "dbe6a2c3ab664f348543bb005913c35e",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 6235.187900000019,
+          "relative_start_seconds": 0.04962849999999162,
+          "relative_end_seconds": 6.28481640000001
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "99bc789e-2c9a-48b2-8cc0-5bfa79cc9015",
+          "operation_id": "dbe6a2c3ab664f348543bb005913c35e",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4929.663700000005,
+          "relative_start_seconds": 5.227133299999987,
+          "relative_end_seconds": 10.156796999999992
+        }
+      ]
+    },
+    {
+      "probe": 1,
+      "action": "navigation_return_ready",
+      "sequence": 2,
+      "completed": false,
+      "duration_seconds": 35.02284360000002,
+      "next_read_dispatched": false,
+      "click_to_next_read_dispatch_seconds": null,
+      "click_to_read_censored_lower_bound_seconds": 35.02284360000002,
+      "next_read_completion_observed": false,
+      "requests_dispatched_before_next_read": 7,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 2,
+        "POST /assessment/process/capture-v2/attempts/:id/tools/": 3,
+        "POST /assessment/process/capture-v2/batch/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.027374299999995855,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "76f4ca3671d94287abee96409fa3f9bb",
+          "operation_id": "f7df2636789946d8a1a876d5eab0391f",
+          "status": 409,
+          "failed": null,
+          "duration_ms": 3871.6758000000264,
+          "relative_start_seconds": 0.027374299999995855,
+          "relative_end_seconds": 3.8990501000000224
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "249289a4-9f12-443e-998a-a2ef750f1e52",
+          "operation_id": "f7df2636789946d8a1a876d5eab0391f",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2837.8522999999986,
+          "relative_start_seconds": 2.9600368000000015,
+          "relative_end_seconds": 5.7978891
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/attempts/:id/tools/",
+          "method": "POST",
+          "request_id": null,
+          "operation_id": null,
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4424.819599999988,
+          "relative_start_seconds": 13.910139400000014,
+          "relative_end_seconds": 18.334959
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/attempts/:id/tools/",
+          "method": "POST",
+          "request_id": null,
+          "operation_id": null,
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3741.4549000000115,
+          "relative_start_seconds": 23.91425750000001,
+          "relative_end_seconds": 27.65571240000002
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/attempts/:id/tools/",
+          "method": "POST",
+          "request_id": null,
+          "operation_id": null,
+          "status": null,
+          "failed": null,
+          "duration_ms": null,
+          "relative_start_seconds": 33.9083633,
+          "relative_end_seconds": null
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "b2eb4a2d-ea0f-43c1-8f31-e1d88bfc728f",
+          "operation_id": "f7df2636789946d8a1a876d5eab0391f",
+          "status": null,
+          "failed": null,
+          "duration_ms": null,
+          "relative_start_seconds": 33.91028520000001,
+          "relative_end_seconds": null
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "22703965-3b5e-46a3-874a-42574d14e13c",
+          "operation_id": "f7df2636789946d8a1a876d5eab0391f",
+          "status": null,
+          "failed": null,
+          "duration_ms": null,
+          "relative_start_seconds": 34.41239380000002,
+          "relative_end_seconds": null
+        }
+      ]
+    },
+    {
+      "probe": 2,
+      "action": "navigation_next_ready",
+      "sequence": 1,
+      "completed": true,
+      "duration_seconds": 21.955227299999997,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 6.027936099999999,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.04914419999999518,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "a68628fc389c46d69f477a5de9a9d1d7",
+          "operation_id": "418bc7a8503e4aa0a711929fb15147c0",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5972.144500000017,
+          "relative_start_seconds": 0.04914419999999518,
+          "relative_end_seconds": 6.021288700000012
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "6b0f477b-8835-41f8-acae-49282b4543ca",
+          "operation_id": "418bc7a8503e4aa0a711929fb15147c0",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2965.211900000002,
+          "relative_start_seconds": 3.2402543000000006,
+          "relative_end_seconds": 6.205466200000003
+        }
+      ]
+    },
+    {
+      "probe": 2,
+      "action": "navigation_return_ready",
+      "sequence": 1,
+      "completed": false,
+      "duration_seconds": 35.0328259,
+      "next_read_dispatched": false,
+      "click_to_next_read_dispatch_seconds": null,
+      "click_to_read_censored_lower_bound_seconds": 35.0328259,
+      "next_read_completion_observed": false,
+      "requests_dispatched_before_next_read": 11,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-v2/batch/": 3,
+        "POST /assessment/process/capture-checkpoints/": 4,
+        "POST /assessment/process/capture-v2/attempts/:id/tools/": 3
+      },
+      "requests_already_inflight_at_click": 2,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.04193420000000333,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "cf566c21b9e446158079c7cb2177d5f3",
+          "operation_id": "a292918357d24859a2171952f04e0bc1",
+          "status": 409,
+          "failed": null,
+          "duration_ms": 3425.8285000000033,
+          "relative_start_seconds": 0.04193420000000333,
+          "relative_end_seconds": 3.4677627000000064
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "fc624609-2564-4511-836e-d449ca1e3407",
+          "operation_id": "a292918357d24859a2171952f04e0bc1",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3790.392300000007,
+          "relative_start_seconds": 0.14907450000000244,
+          "relative_end_seconds": 3.9394668000000093
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "8752c007-cc08-4527-aa20-2962d794c0d0",
+          "operation_id": "418bc7a8503e4aa0a711929fb15147c0",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2916.208400000003,
+          "relative_start_seconds": 1.5255722999999999,
+          "relative_end_seconds": 4.441780700000003
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "ec5881d3-fce8-4359-9cd1-1f839d835941",
+          "operation_id": "a292918357d24859a2171952f04e0bc1",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3057.1299,
+          "relative_start_seconds": 3.9408764999999986,
+          "relative_end_seconds": 6.998006399999999
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "4661f191-3ac9-438b-aadf-18d5a7c31441",
+          "operation_id": "a292918357d24859a2171952f04e0bc1",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2795.782999999996,
+          "relative_start_seconds": 7.0017068,
+          "relative_end_seconds": 9.797489799999996
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "83dca7c3-ac3d-4630-b0d1-c8e9701cbeb1",
+          "operation_id": "a292918357d24859a2171952f04e0bc1",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2675.4732000000076,
+          "relative_start_seconds": 9.798637799999996,
+          "relative_end_seconds": 12.474111000000004
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/attempts/:id/tools/",
+          "method": "POST",
+          "request_id": null,
+          "operation_id": null,
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5189.942900000009,
+          "relative_start_seconds": 13.479456399999995,
+          "relative_end_seconds": 18.669399300000006
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/attempts/:id/tools/",
+          "method": "POST",
+          "request_id": null,
+          "operation_id": null,
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4767.353600000002,
+          "relative_start_seconds": 23.486078999999997,
+          "relative_end_seconds": 28.2534326
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/attempts/:id/tools/",
+          "method": "POST",
+          "request_id": null,
+          "operation_id": null,
+          "status": null,
+          "failed": null,
+          "duration_ms": null,
+          "relative_start_seconds": 33.473558000000004,
+          "relative_end_seconds": null
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "279a7c7a-3246-4177-97f3-d14e5957c6e5",
+          "operation_id": "a292918357d24859a2171952f04e0bc1",
+          "status": null,
+          "failed": null,
+          "duration_ms": null,
+          "relative_start_seconds": 33.4751465,
+          "relative_end_seconds": null
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "e6c5dcd2-a4a4-4854-a309-e469a771fe52",
+          "operation_id": "a292918357d24859a2171952f04e0bc1",
+          "status": null,
+          "failed": null,
+          "duration_ms": null,
+          "relative_start_seconds": 33.97841530000001,
+          "relative_end_seconds": null
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 1,
+      "completed": true,
+      "duration_seconds": 20.30853330000001,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.4226540000000165,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.04956150000001071,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "61830945ceca45be90b2e293806e382d",
+          "operation_id": "2591d08c80344a08ae07595a59f1e72d",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4366.223300000005,
+          "relative_start_seconds": 0.04956150000001071,
+          "relative_end_seconds": 4.415784800000016
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 1,
+      "completed": true,
+      "duration_seconds": 17.85566829999999,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 3.552881799999988,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.03709439999998722,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "0a604bbcade44e20bab1c5a66259b661",
+          "operation_id": "12d72b031d7b4660b50dc65b431a14ae",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3512.1916000000056,
+          "relative_start_seconds": 0.03709439999998722,
+          "relative_end_seconds": 3.549285999999993
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "1e347919-aff5-4a07-9e77-aee8aaa2566b",
+          "operation_id": "12d72b031d7b4660b50dc65b431a14ae",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2755.554999999993,
+          "relative_start_seconds": 2.8254615999999952,
+          "relative_end_seconds": 5.581016599999988
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 1,
+      "completed": true,
+      "duration_seconds": 43.39456329999998,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 17.474886299999984,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 8,
+      "endpoint_counts": {
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /assessment/process/capture-checkpoints/": 3,
+        "POST /assessment/process/capture-v2/batch/": 2,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 0,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "2e11349610a649f5910fa56a62509c24",
+          "operation_id": "c9b8cc68f8a74dfc8feb415e45f8344c",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3197.896700000012,
+          "relative_start_seconds": 0.04314049999997951,
+          "relative_end_seconds": 3.2410371999999916
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "54769fe0-0835-43f5-ad64-0020a7d438e2",
+          "operation_id": "c9b8cc68f8a74dfc8feb415e45f8344c",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3069.5485000000044,
+          "relative_start_seconds": 2.6433979999999866,
+          "relative_end_seconds": 5.712946499999991
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "63f12d21-d659-42ac-8554-870b2e84a594",
+          "operation_id": "c9b8cc68f8a74dfc8feb415e45f8344c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3398.792600000015,
+          "relative_start_seconds": 3.1499458999999916,
+          "relative_end_seconds": 6.548738500000007
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "6230f9d0900e462cb68dd1e13eebb4c9",
+          "operation_id": "c9b8cc68f8a74dfc8feb415e45f8344c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3847.812099999981,
+          "relative_start_seconds": 3.2425170999999975,
+          "relative_end_seconds": 7.090329199999978
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "51c490f5-8cce-40c8-a36e-efba8c2e1f96",
+          "operation_id": "c9b8cc68f8a74dfc8feb415e45f8344c",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 5816.970299999986,
+          "relative_start_seconds": 7.095387099999993,
+          "relative_end_seconds": 12.912357399999978
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "ac313a22-1716-48ad-b670-acccaa168076",
+          "operation_id": "c9b8cc68f8a74dfc8feb415e45f8344c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5699.090700000001,
+          "relative_start_seconds": 7.596129099999991,
+          "relative_end_seconds": 13.295219799999991
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "7229bb04-ef50-40a1-b312-f998f1e32ceb",
+          "operation_id": "c9b8cc68f8a74dfc8feb415e45f8344c",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3280.9904999999853,
+          "relative_start_seconds": 13.2981115,
+          "relative_end_seconds": 16.579101999999985
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "bed965ccf2954b7698d68ce7432ae3b5",
+          "operation_id": "c9b8cc68f8a74dfc8feb415e45f8344c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3050.6919000000053,
+          "relative_start_seconds": 14.419094299999998,
+          "relative_end_seconds": 17.4697862
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 2,
+      "completed": true,
+      "duration_seconds": 24.83270079999999,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 6.731791300000012,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.04800589999998919,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "69eaf8c39b574a498b5d310b8aa5c74a",
+          "operation_id": "e7d31f95736445eb91532fc5b835fbfb",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 6678.588500000013,
+          "relative_start_seconds": 0.04800589999998919,
+          "relative_end_seconds": 6.7265944000000015
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 2,
+      "completed": true,
+      "duration_seconds": 17.669850200000017,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.626016300000018,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.03243869999999879,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "cd2664668d754670be49edb1da037d50",
+          "operation_id": "02e63ff2a3fc4a3085722b163b0f4770",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4589.253400000016,
+          "relative_start_seconds": 0.03243869999999879,
+          "relative_end_seconds": 4.621692100000015
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "98efe1bd-57f8-49e5-ac74-4ff0e00f86d4",
+          "operation_id": "02e63ff2a3fc4a3085722b163b0f4770",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2831.7435000000114,
+          "relative_start_seconds": 3.7387802000000083,
+          "relative_end_seconds": 6.570523700000019
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 2,
+      "completed": true,
+      "duration_seconds": 41.58177679999999,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 27.354795000000042,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 7,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-checkpoints/": 3,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 2,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "7384129a-652b-4ce6-ad5d-9104bc67bd46",
+          "operation_id": "d4a7bddebb0f4fca84a65d0ec7b1e121",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 7243.0495999999985,
+          "relative_start_seconds": 2.853698100000009,
+          "relative_end_seconds": 10.096747700000007
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "869605e262444a1a8928836b72c54a5b",
+          "operation_id": "d4a7bddebb0f4fca84a65d0ec7b1e121",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4372.53350000002,
+          "relative_start_seconds": 10.098927200000006,
+          "relative_end_seconds": 14.471460700000025
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "6e5f5081150549c9b2510169bcf4f158",
+          "operation_id": "d4a7bddebb0f4fca84a65d0ec7b1e121",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4428.662600000011,
+          "relative_start_seconds": 14.472072000000015,
+          "relative_end_seconds": 18.900734600000025
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "25653a6c-c06e-4de1-8453-b9faa831c09e",
+          "operation_id": "d4a7bddebb0f4fca84a65d0ec7b1e121",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3085.17849999998,
+          "relative_start_seconds": 18.905731600000028,
+          "relative_end_seconds": 21.990910100000008
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "681c42d8-f24a-4486-b229-836c2f4b9cd2",
+          "operation_id": "d4a7bddebb0f4fca84a65d0ec7b1e121",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3147.786400000012,
+          "relative_start_seconds": 19.406555500000017,
+          "relative_end_seconds": 22.55434190000003
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "532cca87-ca41-4bb5-a98c-a162755b5db0",
+          "operation_id": "d4a7bddebb0f4fca84a65d0ec7b1e121",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3141.7326000000176,
+          "relative_start_seconds": 22.55691320000001,
+          "relative_end_seconds": 25.698645800000026
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "531ac1ddbe874ed1be1889bae9855b3b",
+          "operation_id": "d4a7bddebb0f4fca84a65d0ec7b1e121",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3849.8529999999737,
+          "relative_start_seconds": 23.501936000000015,
+          "relative_end_seconds": 27.35178899999999
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 3,
+      "completed": true,
+      "duration_seconds": 18.1976091,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.287051399999997,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.050852699999988545,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "a380a871105c4c40a62f7abcacdd8b8e",
+          "operation_id": "a15632149309413e968f7789d6c6fc66",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4230.033200000005,
+          "relative_start_seconds": 0.050852699999988545,
+          "relative_end_seconds": 4.280885899999994
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 3,
+      "completed": true,
+      "duration_seconds": 17.564159600000014,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 5.089395000000018,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.03548149999999441,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "c42582f8d6c848bb992471b563c91da8",
+          "operation_id": "1933b4ba9cdd47f5b90436cd9abc93a0",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5050.178500000038,
+          "relative_start_seconds": 0.03548149999999441,
+          "relative_end_seconds": 5.085660000000033
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "169e1e82-1e7a-4e52-80a1-221ba79076e2",
+          "operation_id": "1933b4ba9cdd47f5b90436cd9abc93a0",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4040.708500000008,
+          "relative_start_seconds": 4.546188100000029,
+          "relative_end_seconds": 8.586896600000037
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 3,
+      "completed": true,
+      "duration_seconds": 38.03770919999998,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 25.277662699999986,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 8,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-v2/batch/": 2,
+        "POST /assessment/process/capture-checkpoints/": 3,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "9a2ec576-707b-447e-8fa7-a3011f41fe44",
+          "operation_id": "1933b4ba9cdd47f5b90436cd9abc93a0",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3056.5697999999975,
+          "relative_start_seconds": 0.01242200000002049,
+          "relative_end_seconds": 3.068991800000018
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "ea6fa121-77a3-4fc1-8822-9384feaca1ef",
+          "operation_id": "f4d3fbb659204cdb88a9165e3a1006a7",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2567.847400000028,
+          "relative_start_seconds": 3.071952400000009,
+          "relative_end_seconds": 5.639799800000037
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "ba76cf8648f44ccfb15a068ac923bf07",
+          "operation_id": "f4d3fbb659204cdb88a9165e3a1006a7",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3377.9189999999944,
+          "relative_start_seconds": 5.6426199999999955,
+          "relative_end_seconds": 9.02053899999999
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "9414fff91e694097867abe6d86f3c3e5",
+          "operation_id": "f4d3fbb659204cdb88a9165e3a1006a7",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5418.9911999999895,
+          "relative_start_seconds": 9.021163700000034,
+          "relative_end_seconds": 14.440154900000023
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "7e71627c-21d4-45f0-8cbd-2f421c401c5e",
+          "operation_id": "f4d3fbb659204cdb88a9165e3a1006a7",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 5304.479200000002,
+          "relative_start_seconds": 14.455459299999987,
+          "relative_end_seconds": 19.75993849999999
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "6aaddeed-fad4-4141-8eb1-fb40449c8dc2",
+          "operation_id": "f4d3fbb659204cdb88a9165e3a1006a7",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 6108.458600000013,
+          "relative_start_seconds": 14.962038100000004,
+          "relative_end_seconds": 21.070496700000017
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "bdf9aaf3-a543-42f9-8f44-ea5683939e52",
+          "operation_id": "f4d3fbb659204cdb88a9165e3a1006a7",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4147.258700000006,
+          "relative_start_seconds": 21.073795299999997,
+          "relative_end_seconds": 25.221054000000002
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "4236155d0a434fd3bba87bc49d5604b5",
+          "operation_id": "f4d3fbb659204cdb88a9165e3a1006a7",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3998.6000999999815,
+          "relative_start_seconds": 21.274585900000005,
+          "relative_end_seconds": 25.27318599999999
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 4,
+      "completed": true,
+      "duration_seconds": 17.369267299999947,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 5.067710599999991,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.052682999999960886,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "bc43b4dd2c564d87af94082741e45525",
+          "operation_id": "c58c5d7096104909aa49f0978bd66ac2",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5009.391100000008,
+          "relative_start_seconds": 0.052682999999960886,
+          "relative_end_seconds": 5.062074099999969
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 4,
+      "completed": true,
+      "duration_seconds": 18.144902899999988,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 3.672521400000027,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 3,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.03133850000001257,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "591e75c5-0eb6-474b-8080-d9e6a85d868f",
+          "operation_id": "c58c5d7096104909aa49f0978bd66ac2",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 2852.468200000003,
+          "relative_start_seconds": 0.00345329999999376,
+          "relative_end_seconds": 2.855921499999997
+        },
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "cac6e16f5fd74fd5a9d9f574a7d87763",
+          "operation_id": "8638dd07389e4599afa704b5f6c4ac4e",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3637.7197999999626,
+          "relative_start_seconds": 0.03133850000001257,
+          "relative_end_seconds": 3.6690582999999752
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "441d1297-d837-4a05-9abe-93daf9c148b3",
+          "operation_id": "8638dd07389e4599afa704b5f6c4ac4e",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2657.3451999999816,
+          "relative_start_seconds": 2.859348500000022,
+          "relative_end_seconds": 5.516693700000004
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 4,
+      "completed": true,
+      "duration_seconds": 38.53315139999997,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 21.79226939999999,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 10,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-checkpoints/": 4,
+        "POST /assessment/process/capture-v2/batch/": 2,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-v2/attempts/:id/tools/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 3,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "4c831a87-7adf-4cdd-9390-0930a5d3ad26",
+          "operation_id": "a554569034b1446d807236c6f5b87c61",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2874.1774999999907,
+          "relative_start_seconds": 1.9085822000000043,
+          "relative_end_seconds": 4.782759699999995
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "b8f7e496-373f-4cf5-99c0-1079fbb653db",
+          "operation_id": "a554569034b1446d807236c6f5b87c61",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3122.2641000000294,
+          "relative_start_seconds": 4.784281499999983,
+          "relative_end_seconds": 7.906545600000012
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "b7247a866c434b08a72580a3d65f705b",
+          "operation_id": "a554569034b1446d807236c6f5b87c61",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2638.8015000000014,
+          "relative_start_seconds": 4.786175400000007,
+          "relative_end_seconds": 7.424976900000009
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "e2af0b8ccf2a4ab0b9c39f4ca3a0ac38",
+          "operation_id": "a554569034b1446d807236c6f5b87c61",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5038.46259999997,
+          "relative_start_seconds": 7.425799100000003,
+          "relative_end_seconds": 12.464261699999973
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "7da01fee-c4db-4f1d-9340-c5493e7c98fe",
+          "operation_id": "a554569034b1446d807236c6f5b87c61",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4316.281999999948,
+          "relative_start_seconds": 7.911555500000016,
+          "relative_end_seconds": 12.227837499999966
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/attempts/:id/tools/",
+          "method": "POST",
+          "request_id": "ca61c3de6b1d4efb8b8bc779d16f7410",
+          "operation_id": "a554569034b1446d807236c6f5b87c61",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 2703.5140000000247,
+          "relative_start_seconds": 12.229135299999966,
+          "relative_end_seconds": 14.93264929999999
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "aa1e9c7f-8a4d-4747-a4a4-ffbd35a92b7c",
+          "operation_id": "a554569034b1446d807236c6f5b87c61",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3082.038500000024,
+          "relative_start_seconds": 12.470949199999973,
+          "relative_end_seconds": 15.552987699999997
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "89f389ad-be69-4fd5-81cd-8afa934f224b",
+          "operation_id": "a554569034b1446d807236c6f5b87c61",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4104.90830000001,
+          "relative_start_seconds": 12.981035099999978,
+          "relative_end_seconds": 17.08594339999999
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "8f642965e3d04848b25456c05d62e388",
+          "operation_id": "a554569034b1446d807236c6f5b87c61",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4723.080799999996,
+          "relative_start_seconds": 17.065794300000007,
+          "relative_end_seconds": 21.788875100000006
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "30c3dad7-0d6d-40ae-837e-54ce8f6fadfc",
+          "operation_id": "a554569034b1446d807236c6f5b87c61",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4809.719700000016,
+          "relative_start_seconds": 17.089211499999976,
+          "relative_end_seconds": 21.898931199999993
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 5,
+      "completed": true,
+      "duration_seconds": 19.21023139999999,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.7727518000000275,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.05804370000003837,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "bb166c18853249a2a019ec319a389492",
+          "operation_id": "057c11fd24f24d349f29d00957dcd7bc",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4708.482699999993,
+          "relative_start_seconds": 0.05804370000003837,
+          "relative_end_seconds": 4.766526400000031
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 5,
+      "completed": true,
+      "duration_seconds": 21.60357069999998,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.615497499999997,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.02925319999997737,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "c8b7e1a86bb04423b9e3d1e3e1b82951",
+          "operation_id": "e4f567e2efcf4676b41cfce52b689cfe",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4581.934300000023,
+          "relative_start_seconds": 0.02925319999997737,
+          "relative_end_seconds": 4.6111875
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "402970c9-2654-4afd-86b0-e647dbb8bc0b",
+          "operation_id": "e4f567e2efcf4676b41cfce52b689cfe",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3937.420299999998,
+          "relative_start_seconds": 3.913179400000023,
+          "relative_end_seconds": 7.8505997000000205
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 5,
+      "completed": true,
+      "duration_seconds": 36.480311199999996,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 24.606381399999954,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 10,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-v2/batch/": 3,
+        "POST /assessment/process/capture-checkpoints/": 4,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 2,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "7e2660ef-2c71-410f-a6db-c3cff7ef2211",
+          "operation_id": "e4f567e2efcf4676b41cfce52b689cfe",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3487.5091999999713,
+          "relative_start_seconds": 0.01118859999999404,
+          "relative_end_seconds": 3.4986977999999653
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "966d0e3d-e3ed-4b1b-9295-b5c9cc26be80",
+          "operation_id": "e4f567e2efcf4676b41cfce52b689cfe",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3260.5131999999867,
+          "relative_start_seconds": 0.40598459999996706,
+          "relative_end_seconds": 3.6664977999999535
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "34d3d7d9-e573-4ceb-b6d6-f864f4244d9e",
+          "operation_id": "dc8457ea42be4f98b8e1050e7d25ecac",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3209.632899999968,
+          "relative_start_seconds": 3.500246199999994,
+          "relative_end_seconds": 6.709879099999962
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "4f6867fd-a862-4f86-aad1-b692d98a0da2",
+          "operation_id": "dc8457ea42be4f98b8e1050e7d25ecac",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3192.2525000000023,
+          "relative_start_seconds": 6.713129399999977,
+          "relative_end_seconds": 9.905381899999979
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "8df166ae8f5e4bb6960afa8d10452cc4",
+          "operation_id": "dc8457ea42be4f98b8e1050e7d25ecac",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2997.8154000000213,
+          "relative_start_seconds": 9.90865989999997,
+          "relative_end_seconds": 12.906475299999991
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "2a1602d9f32842dfa67984c7a25b4462",
+          "operation_id": "dc8457ea42be4f98b8e1050e7d25ecac",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4349.207900000038,
+          "relative_start_seconds": 12.907165999999968,
+          "relative_end_seconds": 17.256373900000007
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "14c4208c-d616-4549-bc6c-aeb4d009975e",
+          "operation_id": "dc8457ea42be4f98b8e1050e7d25ecac",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3062.9824999999837,
+          "relative_start_seconds": 17.262168599999974,
+          "relative_end_seconds": 20.32515109999996
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "824272f8-b5b4-45ac-99be-f4cc2b33f1d2",
+          "operation_id": "dc8457ea42be4f98b8e1050e7d25ecac",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3147.1621999999625,
+          "relative_start_seconds": 17.778449499999986,
+          "relative_end_seconds": 20.92561169999995
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "5dd6ae9d-9f6f-4f88-bef4-7b04b116c33a",
+          "operation_id": "dc8457ea42be4f98b8e1050e7d25ecac",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2736.357799999998,
+          "relative_start_seconds": 20.929507400000002,
+          "relative_end_seconds": 23.6658652
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "43a2d40740e641a1963ed2bad610b422",
+          "operation_id": "dc8457ea42be4f98b8e1050e7d25ecac",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 2776.1135999999824,
+          "relative_start_seconds": 21.827459499999996,
+          "relative_end_seconds": 24.60357309999998
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 6,
+      "completed": true,
+      "duration_seconds": 23.28254229999997,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 5.132483600000036,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.051825899999996185,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "830b8bcdebfd4495a4cee8658a1df710",
+          "operation_id": "4ae9667dff5d44e3ad7b2e14e5dc861c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5075.543000000005,
+          "relative_start_seconds": 0.051825899999996185,
+          "relative_end_seconds": 5.127368900000001
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 6,
+      "completed": true,
+      "duration_seconds": 18.646512199999997,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 5.419549300000072,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.033067600000067615,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "a6413dff3bcf463aacb96ca10bf1c96f",
+          "operation_id": "00f86dc943534d4085561197a50980c5",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5381.977099999902,
+          "relative_start_seconds": 0.033067600000067615,
+          "relative_end_seconds": 5.415044699999969
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "17d2de48-425e-4607-8570-a96b796dcc04",
+          "operation_id": "00f86dc943534d4085561197a50980c5",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4138.440199999954,
+          "relative_start_seconds": 4.448188500000048,
+          "relative_end_seconds": 8.5866287
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 6,
+      "completed": true,
+      "duration_seconds": 34.52747169999999,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 17.79993649999995,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 6,
+      "endpoint_counts": {
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-checkpoints/": 2,
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "0edb52876c0c4defa218a3c1a78ac92b",
+          "operation_id": "ca7f51fb85eb4cb5a3344ec41a0bb643",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4005.9132999998983,
+          "relative_start_seconds": 0.04914370000001509,
+          "relative_end_seconds": 4.0550569999999135
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "c8896d42da3c447a96fbe6142351d9e9",
+          "operation_id": "ca7f51fb85eb4cb5a3344ec41a0bb643",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5060.800799999968,
+          "relative_start_seconds": 4.059608200000017,
+          "relative_end_seconds": 9.120408999999984
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "a19a33ea-1e6b-4c66-8f68-3425e1c723da",
+          "operation_id": "ca7f51fb85eb4cb5a3344ec41a0bb643",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3589.9821999999695,
+          "relative_start_seconds": 9.126119999999995,
+          "relative_end_seconds": 12.716102199999964
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "393560aa-5dc4-4785-80f4-2033dc757f54",
+          "operation_id": "ca7f51fb85eb4cb5a3344ec41a0bb643",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4297.353000000003,
+          "relative_start_seconds": 9.636630099999952,
+          "relative_end_seconds": 13.933983099999955
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "296f3a38-6754-4cd1-9881-358503e314b6",
+          "operation_id": "ca7f51fb85eb4cb5a3344ec41a0bb643",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3735.458400000003,
+          "relative_start_seconds": 13.938785700000007,
+          "relative_end_seconds": 17.67424410000001
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "6f772497fb8a447bba19659dc27711c0",
+          "operation_id": "ca7f51fb85eb4cb5a3344ec41a0bb643",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3567.2171999999555,
+          "relative_start_seconds": 14.229628499999992,
+          "relative_end_seconds": 17.796845699999945
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 7,
+      "completed": true,
+      "duration_seconds": 26.335931300000055,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.579209800000069,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.04905139999999665,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "ea86cd800e8c46ccb4d66ce841b7ad7e",
+          "operation_id": "89dea60d6a8d4d30a3b718d14ac3a552",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4520.199100000085,
+          "relative_start_seconds": 0.04905139999999665,
+          "relative_end_seconds": 4.569250500000082
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 7,
+      "completed": true,
+      "duration_seconds": 19.3480159,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.26486089999997,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.029197299999999815,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "06024df4db284ae6aac44267967899c8",
+          "operation_id": "8a60f318e4084f999a92cf207ed41c5f",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4231.126499999897,
+          "relative_start_seconds": 0.029197299999999815,
+          "relative_end_seconds": 4.260323799999896
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "2bf2372c-bc66-468c-94cc-b6ca0b282dba",
+          "operation_id": "8a60f318e4084f999a92cf207ed41c5f",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 5912.449900000007,
+          "relative_start_seconds": 3.5769101999999258,
+          "relative_end_seconds": 9.489360099999933
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 7,
+      "completed": true,
+      "duration_seconds": 38.393965499999936,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 23.040050300000004,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 7,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-checkpoints/": 3,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "b9523a2a-0997-4602-ab8f-4bbe1f379f99",
+          "operation_id": "56af6be26a8e43e98334127c5da80b80",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3967.248900000006,
+          "relative_start_seconds": 5.121627499999944,
+          "relative_end_seconds": 9.08887639999995
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "afd8d71038414ac59e5cb3f0a39d24df",
+          "operation_id": "56af6be26a8e43e98334127c5da80b80",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2889.5123999998905,
+          "relative_start_seconds": 9.092563800000004,
+          "relative_end_seconds": 11.982076199999893
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "91536de2a4334101bd99cffde69f753e",
+          "operation_id": "56af6be26a8e43e98334127c5da80b80",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4219.849200000055,
+          "relative_start_seconds": 11.98272419999994,
+          "relative_end_seconds": 16.202573399999995
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "3cba243a-8c4b-46c2-bdf4-0eef5409877e",
+          "operation_id": "56af6be26a8e43e98334127c5da80b80",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2715.7907000000123,
+          "relative_start_seconds": 16.2115628999999,
+          "relative_end_seconds": 18.927353599999915
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "d87fab9b-a80a-4d98-8e4b-9ad8df50e7b8",
+          "operation_id": "56af6be26a8e43e98334127c5da80b80",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3127.9480000000913,
+          "relative_start_seconds": 16.7128605999999,
+          "relative_end_seconds": 19.84080859999999
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "83905c9f-f75b-49ee-9090-46569a0839d7",
+          "operation_id": "56af6be26a8e43e98334127c5da80b80",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2753.3552999999374,
+          "relative_start_seconds": 19.84479449999996,
+          "relative_end_seconds": 22.5981497999999
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "7b0865a5720e44ff96dcc93855f40884",
+          "operation_id": "56af6be26a8e43e98334127c5da80b80",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 2599.8533000000753,
+          "relative_start_seconds": 20.437179799999925,
+          "relative_end_seconds": 23.037033100000002
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 8,
+      "completed": true,
+      "duration_seconds": 20.61787629999989,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.604497899999958,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.05133109999995213,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "b159506d9b15470089b32d1dd3e2635b",
+          "operation_id": "517be33267c44290b4e67dfe5e9b51fd",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4547.861999999965,
+          "relative_start_seconds": 0.05133109999995213,
+          "relative_end_seconds": 4.599193099999916
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 8,
+      "completed": true,
+      "duration_seconds": 16.191311199999998,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 3.550095500000054,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.03274820000003092,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "221f0cea2af84dc88e992e2fa5eb28c5",
+          "operation_id": "f3fab370d8aa4901b107638f0a0c8952",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3512.9253000000026,
+          "relative_start_seconds": 0.03274820000003092,
+          "relative_end_seconds": 3.5456735000000337
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "66914e13-dfab-4de7-b523-de814906af3b",
+          "operation_id": "f3fab370d8aa4901b107638f0a0c8952",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2836.794899999979,
+          "relative_start_seconds": 2.7230332000000637,
+          "relative_end_seconds": 5.5598281000000425
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 8,
+      "completed": true,
+      "duration_seconds": 37.9197328,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 22.878314300000085,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 7,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-checkpoints/": 3,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "f5c6b6b0-2460-4f8f-9fc3-7f5764eaff99",
+          "operation_id": "38f1fc239f27460e95090b53c4012fa8",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3496.921200000099,
+          "relative_start_seconds": 3.584843899999978,
+          "relative_end_seconds": 7.0817651000000765
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "2a7003fbf1c848729926e0fe225cce1c",
+          "operation_id": "38f1fc239f27460e95090b53c4012fa8",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3059.508299999987,
+          "relative_start_seconds": 7.084844500000006,
+          "relative_end_seconds": 10.144352799999993
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "8dcaab2e54bd446fbc9b283a3c5e6fc6",
+          "operation_id": "38f1fc239f27460e95090b53c4012fa8",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4331.331299999962,
+          "relative_start_seconds": 10.144854900000034,
+          "relative_end_seconds": 14.476186199999997
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "bb128746-d895-42f6-b80c-0e648dcab5d5",
+          "operation_id": "38f1fc239f27460e95090b53c4012fa8",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3584.758999999962,
+          "relative_start_seconds": 14.482055900000036,
+          "relative_end_seconds": 18.066814899999997
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "902fee31-a84b-4d01-9f56-afcd82754b26",
+          "operation_id": "38f1fc239f27460e95090b53c4012fa8",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3594.2009000000544,
+          "relative_start_seconds": 14.98557030000002,
+          "relative_end_seconds": 18.579771200000074
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "fe5c13cb-973c-423f-9a23-208bded5b745",
+          "operation_id": "38f1fc239f27460e95090b53c4012fa8",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3425.8413999999175,
+          "relative_start_seconds": 18.584193000000088,
+          "relative_end_seconds": 22.010034400000006
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "414ad1ced7204e4593f16819a6f5928a",
+          "operation_id": "38f1fc239f27460e95090b53c4012fa8",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3293.28609999991,
+          "relative_start_seconds": 19.580187600000063,
+          "relative_end_seconds": 22.873473699999973
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 9,
+      "completed": true,
+      "duration_seconds": 17.443757500000064,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.632574400000041,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.0541535000000149,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "0946a6990f2142ceabd4b748a4b661f9",
+          "operation_id": "335bb544d08f4301b7162ab3d31d39c4",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4573.5324000000255,
+          "relative_start_seconds": 0.0541535000000149,
+          "relative_end_seconds": 4.62768590000004
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 9,
+      "completed": true,
+      "duration_seconds": 20.54205530000001,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 5.120547600000049,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.0423363000000827,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "5e33e4afad134893acfde15b5e01c8a6",
+          "operation_id": "25ea8ca3a2454a54ae1c2bab431a3190",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5074.09580000001,
+          "relative_start_seconds": 0.0423363000000827,
+          "relative_end_seconds": 5.116432100000093
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "b7ed6714-3505-440b-b4f4-0bd77332d06e",
+          "operation_id": "25ea8ca3a2454a54ae1c2bab431a3190",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4295.507800000021,
+          "relative_start_seconds": 4.467944000000018,
+          "relative_end_seconds": 8.76345180000004
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 9,
+      "completed": true,
+      "duration_seconds": 36.2219155,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 20.537515999999947,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 10,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-checkpoints/": 4,
+        "POST /assessment/process/capture-v2/attempts/:id/tools/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /assessment/process/capture-v2/batch/": 2,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 2,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "c3cb83b7-8afa-46ff-bddc-f00d596a3661",
+          "operation_id": "d39e962b19ae41a09806bea69c225c9d",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3086.594999999972,
+          "relative_start_seconds": 3.3845193000000435,
+          "relative_end_seconds": 6.471114300000016
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/attempts/:id/tools/",
+          "method": "POST",
+          "request_id": "e441a95a9adb4a0187d8e98fc68ff28f",
+          "operation_id": "d39e962b19ae41a09806bea69c225c9d",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3198.174100000062,
+          "relative_start_seconds": 6.472287099999957,
+          "relative_end_seconds": 9.67046120000002
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "bdfa403387ae47f2abdf8962a2d18978",
+          "operation_id": "d39e962b19ae41a09806bea69c225c9d",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2929.246999999974,
+          "relative_start_seconds": 6.474999300000025,
+          "relative_end_seconds": 9.404246299999999
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "cd8a3ba4-eb90-41a2-a375-5e7df5c7ea14",
+          "operation_id": "d39e962b19ae41a09806bea69c225c9d",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2955.8360000000102,
+          "relative_start_seconds": 8.400933799999999,
+          "relative_end_seconds": 11.35676980000001
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "036eed22-811b-4076-8557-b8b7a82ea1e5",
+          "operation_id": "d39e962b19ae41a09806bea69c225c9d",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3152.808799999999,
+          "relative_start_seconds": 8.904793700000038,
+          "relative_end_seconds": 12.057602500000037
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "07ccac5d466e4eb7b9c4a80156aa38f9",
+          "operation_id": "d39e962b19ae41a09806bea69c225c9d",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4343.91949999996,
+          "relative_start_seconds": 9.404983699999983,
+          "relative_end_seconds": 13.748903199999942
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "55fe40e6-36df-404f-bf0f-b984ca69fe13",
+          "operation_id": "d39e962b19ae41a09806bea69c225c9d",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2684.690799999982,
+          "relative_start_seconds": 13.755258799999952,
+          "relative_end_seconds": 16.439949599999935
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "7263fc89-7169-4e84-ba37-1f95b540e0d0",
+          "operation_id": "d39e962b19ae41a09806bea69c225c9d",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 2748.7227999999886,
+          "relative_start_seconds": 14.267764199999975,
+          "relative_end_seconds": 17.016486999999966
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "0926fcae-a178-4cc8-bcb5-ccb752b2322e",
+          "operation_id": "d39e962b19ae41a09806bea69c225c9d",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2678.8991999999853,
+          "relative_start_seconds": 17.019641799999984,
+          "relative_end_seconds": 19.698540999999967
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "8fc4b9b3d70744e2b9b59dfd58e5cd0c",
+          "operation_id": "d39e962b19ae41a09806bea69c225c9d",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 2591.601800000062,
+          "relative_start_seconds": 17.94185349999997,
+          "relative_end_seconds": 20.533455300000032
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 10,
+      "completed": true,
+      "duration_seconds": 19.81224789999996,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.469305500000017,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.05251080000004731,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "b50d60860ff04426988aacf2c5747f36",
+          "operation_id": "0d5f3746aab940ffb5c3bcd1ad9ddca7",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4410.952499999898,
+          "relative_start_seconds": 0.05251080000004731,
+          "relative_end_seconds": 4.463463299999945
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 10,
+      "completed": true,
+      "duration_seconds": 16.494598099999944,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 3.7951198999999325,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.0394714999999851,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "d778af3db0f74044b6020aa6db590a43",
+          "operation_id": "cc7e9bd19562442aa1a2427d1dfc688d",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3750.093200000003,
+          "relative_start_seconds": 0.0394714999999851,
+          "relative_end_seconds": 3.789564699999988
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "99a8f81a-042c-4694-809d-47113bce7a47",
+          "operation_id": "cc7e9bd19562442aa1a2427d1dfc688d",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2797.585699999938,
+          "relative_start_seconds": 2.9356528999999862,
+          "relative_end_seconds": 5.7332385999999245
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 10,
+      "completed": true,
+      "duration_seconds": 36.75772719999996,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 23.248583300000057,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 7,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-checkpoints/": 3,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 2,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "524bc8e4-4686-4f28-a3b2-bb69d0caa8ff",
+          "operation_id": "ad25952d4ef74a95853e515a17fe1239",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4040.1646000000183,
+          "relative_start_seconds": 3.586908599999966,
+          "relative_end_seconds": 7.627073199999985
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "fbffc8f8b44741b684422fa735c50844",
+          "operation_id": "ad25952d4ef74a95853e515a17fe1239",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3571.1205999999074,
+          "relative_start_seconds": 7.630064800000051,
+          "relative_end_seconds": 11.201185399999959
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "b2e3885ddc954367b2471dd1ce427879",
+          "operation_id": "ad25952d4ef74a95853e515a17fe1239",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4508.694099999964,
+          "relative_start_seconds": 11.20200840000005,
+          "relative_end_seconds": 15.710702500000014
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "f9c54149-d364-44ec-9ea5-96f041ef9af4",
+          "operation_id": "ad25952d4ef74a95853e515a17fe1239",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3227.433600000106,
+          "relative_start_seconds": 15.718659299999942,
+          "relative_end_seconds": 18.946092900000046
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "865c26cc-63d8-47fe-81ff-d3f6ab04d2f5",
+          "operation_id": "ad25952d4ef74a95853e515a17fe1239",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3353.561699999962,
+          "relative_start_seconds": 16.225347799999987,
+          "relative_end_seconds": 19.578909499999952
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "8f86fb9d-651a-47bc-8765-193acc0b835d",
+          "operation_id": "ad25952d4ef74a95853e515a17fe1239",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2892.802400000044,
+          "relative_start_seconds": 19.583230499999946,
+          "relative_end_seconds": 22.476032899999993
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "e303ce8a47704b9f8f6ac416b68168db",
+          "operation_id": "ad25952d4ef74a95853e515a17fe1239",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 2790.0197000000626,
+          "relative_start_seconds": 20.455207199999947,
+          "relative_end_seconds": 23.24522690000001
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 11,
+      "completed": true,
+      "duration_seconds": 21.786235199999997,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 6.460854599999962,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.04948230000003241,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "2a131cb48caa4a0685b41b93aadf9a1a",
+          "operation_id": "205ec714e71d4596a1815f1c0b960ea6",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 6406.517200000002,
+          "relative_start_seconds": 0.04948230000003241,
+          "relative_end_seconds": 6.4559995000000345
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 11,
+      "completed": true,
+      "duration_seconds": 21.59393889999995,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.905759499999927,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.02879759999993257,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "aab0f4c50c4b4cbe9568094fb91982f6",
+          "operation_id": "c0bf55c55f074f16967332092aba9746",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4872.982100000023,
+          "relative_start_seconds": 0.02879759999993257,
+          "relative_end_seconds": 4.901779699999955
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "3bd64d48-1f90-478c-9ae2-a5b7f0604e47",
+          "operation_id": "c0bf55c55f074f16967332092aba9746",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4145.060199999949,
+          "relative_start_seconds": 4.184329700000002,
+          "relative_end_seconds": 8.329389899999951
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 11,
+      "completed": true,
+      "duration_seconds": 30.17306959999993,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 14.936813199999975,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 6,
+      "endpoint_counts": {
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-checkpoints/": 2,
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "0ed8cdf7a74548edb7cc2debf5cb1a7f",
+          "operation_id": "59bd10bf29c44b5ca3d2045fffb9b726",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3026.26939999999,
+          "relative_start_seconds": 0.04540789999999106,
+          "relative_end_seconds": 3.071677299999981
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "faf0552d1ac4420aae97ff02dcfa19a6",
+          "operation_id": "59bd10bf29c44b5ca3d2045fffb9b726",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3538.3743999999715,
+          "relative_start_seconds": 3.072313599999994,
+          "relative_end_seconds": 6.610687999999966
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "bf3537db-61ae-4fe1-9aa5-b2370b3b6236",
+          "operation_id": "59bd10bf29c44b5ca3d2045fffb9b726",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3331.396700000041,
+          "relative_start_seconds": 6.619350499999943,
+          "relative_end_seconds": 9.950747199999983
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "e2cb379a-6f37-4b96-997d-20156a316a18",
+          "operation_id": "59bd10bf29c44b5ca3d2045fffb9b726",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3315.752199999988,
+          "relative_start_seconds": 7.133371199999936,
+          "relative_end_seconds": 10.449123399999923
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "ec0763ff-6fa2-4ce2-a2e2-f9a6a1049486",
+          "operation_id": "59bd10bf29c44b5ca3d2045fffb9b726",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3394.2044999999925,
+          "relative_start_seconds": 10.453613000000011,
+          "relative_end_seconds": 13.847817500000005
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "917142f3b0cb41b99e3949ddef8474b3",
+          "operation_id": "59bd10bf29c44b5ca3d2045fffb9b726",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3465.742500000051,
+          "relative_start_seconds": 11.467959099999979,
+          "relative_end_seconds": 14.93370160000003
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 12,
+      "completed": true,
+      "duration_seconds": 17.624117500000168,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.878836899999995,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.05062260000011884,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "660cbf899a10442b8d067fb4c50d8495",
+          "operation_id": "0d0a5ba2394e42bf8d16068bb0a69d1f",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4823.928399999859,
+          "relative_start_seconds": 0.05062260000011884,
+          "relative_end_seconds": 4.874550999999977
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 12,
+      "completed": true,
+      "duration_seconds": 18.139750500000083,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 3.26271110000019,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.04529340000008233,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "0e956dc3a8db4072b08c508079ce3e0e",
+          "operation_id": "93d44861aff149d6ac7f788d4927613c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3213.6051000000443,
+          "relative_start_seconds": 0.04529340000008233,
+          "relative_end_seconds": 3.2588985000001265
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "bc5d1587-a004-4e7a-80f5-fd46a2a67743",
+          "operation_id": "93d44861aff149d6ac7f788d4927613c",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3448.1673000000883,
+          "relative_start_seconds": 2.4694503999999724,
+          "relative_end_seconds": 5.9176177000000605
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 12,
+      "completed": true,
+      "duration_seconds": 38.51489140000008,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 21.87192119999998,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 7,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-checkpoints/": 3,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "61936638-1054-410f-b963-d8755af603f3",
+          "operation_id": "9f4e47dc74044b638693f7b35a0165bd",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3424.973300000187,
+          "relative_start_seconds": 3.7117469999999737,
+          "relative_end_seconds": 7.136720300000161
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "94c6c658a44c4fe49405dada2e38c266",
+          "operation_id": "9f4e47dc74044b638693f7b35a0165bd",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2867.145799999824,
+          "relative_start_seconds": 7.14013630000013,
+          "relative_end_seconds": 10.007282099999953
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "24f0e07062d64d349bda3d187979baad",
+          "operation_id": "9f4e47dc74044b638693f7b35a0165bd",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4313.912299999967,
+          "relative_start_seconds": 10.007894000000087,
+          "relative_end_seconds": 14.321806300000056
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "9d1ebe80-c1a6-4269-9219-5406827b2ceb",
+          "operation_id": "9f4e47dc74044b638693f7b35a0165bd",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2744.8954000000376,
+          "relative_start_seconds": 14.331464799999958,
+          "relative_end_seconds": 17.076360199999996
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "01764848-3f29-4cdc-8dfe-529b2ff7cbfa",
+          "operation_id": "9f4e47dc74044b638693f7b35a0165bd",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3002.6128999998327,
+          "relative_start_seconds": 14.843838200000114,
+          "relative_end_seconds": 17.846451099999946
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "9e6d0c80-d104-4aee-9833-3de71c70a17b",
+          "operation_id": "9f4e47dc74044b638693f7b35a0165bd",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3572.1440999999177,
+          "relative_start_seconds": 17.850638500000116,
+          "relative_end_seconds": 21.422782600000033
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "0c6933391e604bbdab139628623a63f8",
+          "operation_id": "9f4e47dc74044b638693f7b35a0165bd",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3288.1338999997824,
+          "relative_start_seconds": 18.581342700000153,
+          "relative_end_seconds": 21.869476599999935
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 13,
+      "completed": true,
+      "duration_seconds": 18.06867200000002,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 5.033735600000014,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.04975029999995604,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "8f05da92f2184efa89d668e9c6902437",
+          "operation_id": "c79de330e5654f289cd82f94eebc291a",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4978.800800000085,
+          "relative_start_seconds": 0.04975029999995604,
+          "relative_end_seconds": 5.0285511000000405
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 13,
+      "completed": true,
+      "duration_seconds": 16.25574009999982,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 3.906343699999852,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 3,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.046811699999962,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "7f654965-d6b6-4b76-b905-6014780b8845",
+          "operation_id": "c79de330e5654f289cd82f94eebc291a",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3261.4865000001155,
+          "relative_start_seconds": 0.013803399999858811,
+          "relative_end_seconds": 3.2752898999999744
+        },
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "83fcd95615d744c6976f7f049f8e37b4",
+          "operation_id": "6374b83ceae242d993dbbe868d755145",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3856.1784999999218,
+          "relative_start_seconds": 0.046811699999962,
+          "relative_end_seconds": 3.9029901999998837
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "66524774-d970-4b79-bab1-ccec4cf12040",
+          "operation_id": "6374b83ceae242d993dbbe868d755145",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3205.4533999999985,
+          "relative_start_seconds": 3.2799403999999632,
+          "relative_end_seconds": 6.485393799999962
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 13,
+      "completed": true,
+      "duration_seconds": 36.954810599999966,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 21.262471600000048,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 7,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-checkpoints/": 3,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "92df62c7-c303-48b6-a72d-42d1b1717726",
+          "operation_id": "dcca5f23a4f242ad98ebf5e2383c8c6c",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3122.2931000001263,
+          "relative_start_seconds": 2.5640993999999484,
+          "relative_end_seconds": 5.686392500000075
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "fdb856d7d0c343f18acd525e2113783e",
+          "operation_id": "dcca5f23a4f242ad98ebf5e2383c8c6c",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2949.561500000069,
+          "relative_start_seconds": 5.6892844000000045,
+          "relative_end_seconds": 8.638845900000073
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "2ab30acdf05a4719bad164c54f5fea57",
+          "operation_id": "dcca5f23a4f242ad98ebf5e2383c8c6c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4415.464699999895,
+          "relative_start_seconds": 8.639473400000018,
+          "relative_end_seconds": 13.054938099999912
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "3bf0fb25-b1e3-47c6-a386-7a010fd3dacb",
+          "operation_id": "dcca5f23a4f242ad98ebf5e2383c8c6c",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3300.3799999998882,
+          "relative_start_seconds": 13.061325799999992,
+          "relative_end_seconds": 16.36170579999988
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "2ad60f7d-bca0-4760-81a1-f212613fd36a",
+          "operation_id": "dcca5f23a4f242ad98ebf5e2383c8c6c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3322.462099999888,
+          "relative_start_seconds": 13.562138000000035,
+          "relative_end_seconds": 16.884600099999922
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "e686cd10-e32d-4ccd-9579-7771115bbb66",
+          "operation_id": "dcca5f23a4f242ad98ebf5e2383c8c6c",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3351.089600000065,
+          "relative_start_seconds": 16.888739799999865,
+          "relative_end_seconds": 20.23982939999993
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "a6282d3d18914ed5a1e8d26fef33e04f",
+          "operation_id": "dcca5f23a4f242ad98ebf5e2383c8c6c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3385.5456000000704,
+          "relative_start_seconds": 17.872565799999983,
+          "relative_end_seconds": 21.258111400000054
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 14,
+      "completed": true,
+      "duration_seconds": 16.975137299999826,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.46522499999986,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.05363109999988228,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "fdaec390db934adea7dd912c419b1168",
+          "operation_id": "4532e66b3aee462399ce21f714fbfa21",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4407.0164000000805,
+          "relative_start_seconds": 0.05363109999988228,
+          "relative_end_seconds": 4.460647499999963
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 14,
+      "completed": true,
+      "duration_seconds": 18.93917610000004,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.202343499999959,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.04366849999991246,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "dd13e23bda464109a5f7b13dc3036570",
+          "operation_id": "2e3a0390d5984131aa79ac6183a37644",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4153.919400000013,
+          "relative_start_seconds": 0.04366849999991246,
+          "relative_end_seconds": 4.197587899999926
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "a3afa211-c18c-4e88-88cc-651e6d1176f6",
+          "operation_id": "2e3a0390d5984131aa79ac6183a37644",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3952.8574000000954,
+          "relative_start_seconds": 3.500402999999933,
+          "relative_end_seconds": 7.453260400000028
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 14,
+      "completed": true,
+      "duration_seconds": 39.39326410000003,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 25.438076400000135,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 10,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-checkpoints/": 4,
+        "POST /assessment/process/capture-v2/attempts/:id/tools/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /assessment/process/capture-v2/batch/": 2,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "c7519fbb-10a4-4f3a-b8cc-6c47c5a5e830",
+          "operation_id": "3832e0f2192d4584be4dd0bb9fc8e8be",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4178.762499999953,
+          "relative_start_seconds": 4.3318205000001475,
+          "relative_end_seconds": 8.5105830000001
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/attempts/:id/tools/",
+          "method": "POST",
+          "request_id": "284efb9701be49f6b74540f3c52307a3",
+          "operation_id": "3832e0f2192d4584be4dd0bb9fc8e8be",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4217.9845000000205,
+          "relative_start_seconds": 8.511814900000115,
+          "relative_end_seconds": 12.729799400000134
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "e0a36d558c9f4df3882efc495622ef99",
+          "operation_id": "3832e0f2192d4584be4dd0bb9fc8e8be",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4057.062099999981,
+          "relative_start_seconds": 8.515204499999992,
+          "relative_end_seconds": 12.572266599999974
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "914a580f-a1fc-4359-9d81-7989cf371c9d",
+          "operation_id": "3832e0f2192d4584be4dd0bb9fc8e8be",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4156.289100000169,
+          "relative_start_seconds": 8.518152699999977,
+          "relative_end_seconds": 12.674441800000146
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "a6afed8d-6149-4149-955e-adc9b4e6ab79",
+          "operation_id": "3832e0f2192d4584be4dd0bb9fc8e8be",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4132.913500000024,
+          "relative_start_seconds": 9.019725700000068,
+          "relative_end_seconds": 13.152639200000092
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "e7254fd401a44afabdac249a0051fe9e",
+          "operation_id": "3832e0f2192d4584be4dd0bb9fc8e8be",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4808.817700000014,
+          "relative_start_seconds": 12.573139800000005,
+          "relative_end_seconds": 17.38195750000002
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "0f7e87a5-89d1-47bc-9058-c52b0036e8cb",
+          "operation_id": "3832e0f2192d4584be4dd0bb9fc8e8be",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3358.434400000144,
+          "relative_start_seconds": 17.388063599999995,
+          "relative_end_seconds": 20.746498000000138
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "d78bf494-6101-45a1-8442-6c08957c44b7",
+          "operation_id": "3832e0f2192d4584be4dd0bb9fc8e8be",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3496.378700000001,
+          "relative_start_seconds": 17.90174310000008,
+          "relative_end_seconds": 21.39812180000008
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "1a798010-a368-4551-a5c6-cebca647afb3",
+          "operation_id": "3832e0f2192d4584be4dd0bb9fc8e8be",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3126.030700000003,
+          "relative_start_seconds": 21.403827300000003,
+          "relative_end_seconds": 24.529858000000008
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "928e8f0dd7c949a5ab4ba27b894d3994",
+          "operation_id": "3832e0f2192d4584be4dd0bb9fc8e8be",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3182.463800000027,
+          "relative_start_seconds": 22.252107000000077,
+          "relative_end_seconds": 25.434570800000103
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 15,
+      "completed": true,
+      "duration_seconds": 17.836800300000004,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.606377099999925,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.04527160000009462,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "7603f130d814431cb858e3b56658a412",
+          "operation_id": "d8b8a8c3965f4f5e821c1dedd76f488c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4556.19709999999,
+          "relative_start_seconds": 0.04527160000009462,
+          "relative_end_seconds": 4.601468700000085
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 15,
+      "completed": true,
+      "duration_seconds": 20.678872900000076,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 3.9552957000001334,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.04163199999998324,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "70fbb776f0094c7f8f3d6691aa865f50",
+          "operation_id": "e59ff9bc39fe44c6a8d297c1b2a1ed43",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3908.9481999999844,
+          "relative_start_seconds": 0.04163199999998324,
+          "relative_end_seconds": 3.9505801999999677
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "aed5aa6a-ba0c-4f55-887b-80c64b88a447",
+          "operation_id": "e59ff9bc39fe44c6a8d297c1b2a1ed43",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3996.1086999999825,
+          "relative_start_seconds": 3.462847300000023,
+          "relative_end_seconds": 7.458956000000006
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 15,
+      "completed": true,
+      "duration_seconds": 54.480169400000015,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 37.55108269999991,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 10,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-v2/batch/": 3,
+        "POST /assessment/process/capture-checkpoints/": 4,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 2,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "6a3d9fcc-a6cd-4562-aba4-f1950b26c066",
+          "operation_id": "dae06110fc234277b8e9d3097501c809",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5339.074699999997,
+          "relative_start_seconds": 4.495427099999971,
+          "relative_end_seconds": 9.83450179999997
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "f6653925-86dc-4604-ae40-40a5df64580a",
+          "operation_id": "dae06110fc234277b8e9d3097501c809",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 5317.820499999914,
+          "relative_start_seconds": 9.83944299999997,
+          "relative_end_seconds": 15.157263499999884
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "4d18843dbf07459db2e0a86fa6a8d785",
+          "operation_id": "dae06110fc234277b8e9d3097501c809",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 6089.364999999991,
+          "relative_start_seconds": 15.160453299999936,
+          "relative_end_seconds": 21.249818299999927
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "1de7666f-c3fb-43d2-b3e2-3d4d3858b2de",
+          "operation_id": "dae06110fc234277b8e9d3097501c809",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 5586.620700000087,
+          "relative_start_seconds": 17.308024299999932,
+          "relative_end_seconds": 22.89464500000002
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "18766e3c-3832-4804-9073-04cecf5daa47",
+          "operation_id": "dae06110fc234277b8e9d3097501c809",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5818.843599999789,
+          "relative_start_seconds": 17.810991200000046,
+          "relative_end_seconds": 23.629834799999838
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "ae2562bdef344ee98995f4c4b98e3fac",
+          "operation_id": "dae06110fc234277b8e9d3097501c809",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5539.400499999989,
+          "relative_start_seconds": 21.250130399999907,
+          "relative_end_seconds": 26.789530899999896
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "f5ca94d7-f05f-4391-930e-0a30478f6392",
+          "operation_id": "dae06110fc234277b8e9d3097501c809",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3724.3601000001654,
+          "relative_start_seconds": 26.79636589999986,
+          "relative_end_seconds": 30.520726000000025
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "f5dbb86a-d84b-4b11-be47-d80d68ed2443",
+          "operation_id": "dae06110fc234277b8e9d3097501c809",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4305.410900000017,
+          "relative_start_seconds": 27.309107300000033,
+          "relative_end_seconds": 31.61451820000005
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "2215fb78-8345-45f8-a958-6e7948403fd6",
+          "operation_id": "dae06110fc234277b8e9d3097501c809",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 6044.03460000013,
+          "relative_start_seconds": 31.619558599999873,
+          "relative_end_seconds": 37.6635932
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "a9f34005353c4f1d9ec5e0f3a91d9ce4",
+          "operation_id": "dae06110fc234277b8e9d3097501c809",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5509.571400000015,
+          "relative_start_seconds": 32.03817629999993,
+          "relative_end_seconds": 37.54774769999995
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 16,
+      "completed": true,
+      "duration_seconds": 18.313297800000058,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 5.84167510000011,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.05092830000002869,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "9b2d25a2280c4e358c677b00424e1d57",
+          "operation_id": "e59dc1f8a5be447c992c0e13ccc27de1",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 5782.7039000000805,
+          "relative_start_seconds": 0.05092830000002869,
+          "relative_end_seconds": 5.8336322000001095
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 16,
+      "completed": true,
+      "duration_seconds": 18.246343799999917,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.065247599999886,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.03600399999995716,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "851e602528ae42e29bcdf1e5128cdce4",
+          "operation_id": "35f35d25d2804c8c93a72d06d9855f54",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4024.6646999998484,
+          "relative_start_seconds": 0.03600399999995716,
+          "relative_end_seconds": 4.060668699999805
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "b8982f61-3643-40c9-8ab3-d4a8b7157fe8",
+          "operation_id": "35f35d25d2804c8c93a72d06d9855f54",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3137.8281000000425,
+          "relative_start_seconds": 3.082416699999943,
+          "relative_end_seconds": 6.2202447999999855
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 16,
+      "completed": true,
+      "duration_seconds": 27.35218619999988,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 15.404039899999974,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 6,
+      "endpoint_counts": {
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-checkpoints/": 2,
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "1c636d511aba44f0a5621e6a7331d7b3",
+          "operation_id": "23531e57fb454ca386046a9d603cf41c",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3218.3888000000734,
+          "relative_start_seconds": 0.046260000000009315,
+          "relative_end_seconds": 3.264648800000083
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "52a4d312c08f4fcc838d9eec80a3c7ed",
+          "operation_id": "23531e57fb454ca386046a9d603cf41c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4259.405299999984,
+          "relative_start_seconds": 3.2653891000000295,
+          "relative_end_seconds": 7.5247944000000135
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "d3252533-5695-46c1-a35c-fbf0e364fbb4",
+          "operation_id": "23531e57fb454ca386046a9d603cf41c",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3325.401399999857,
+          "relative_start_seconds": 7.532515300000086,
+          "relative_end_seconds": 10.857916699999944
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "23947ed2-9e96-42f3-9cb4-01bb1b04a3c6",
+          "operation_id": "23531e57fb454ca386046a9d603cf41c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3492.1015999999363,
+          "relative_start_seconds": 8.041489300000016,
+          "relative_end_seconds": 11.533590899999952
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "43fa1cfa-4988-4131-ba30-02626ec198cd",
+          "operation_id": "23531e57fb454ca386046a9d603cf41c",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3105.408499999903,
+          "relative_start_seconds": 11.53969750000001,
+          "relative_end_seconds": 14.645105999999913
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "d0627b0c56564bf69b9bccc20be5c336",
+          "operation_id": "23531e57fb454ca386046a9d603cf41c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3028.0439999999944,
+          "relative_start_seconds": 12.3728554,
+          "relative_end_seconds": 15.400899399999995
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 17,
+      "completed": true,
+      "duration_seconds": 18.589666299999923,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 3.806251699999906,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.05139889999991283,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "519b7abcd10c41238bd496f236263b87",
+          "operation_id": "0074cae1f82d4b73a641f93c802dd91c",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3749.593200000003,
+          "relative_start_seconds": 0.05139889999991283,
+          "relative_end_seconds": 3.800992099999916
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 17,
+      "completed": true,
+      "duration_seconds": 19.719103000000118,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.136834000000031,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.02766470000008121,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "c5406cd0b22e4b77a1a06c31b2ea9726",
+          "operation_id": "aa7f829967d143dd9664f97ff529bc5b",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4104.341500000097,
+          "relative_start_seconds": 0.02766470000008121,
+          "relative_end_seconds": 4.132006200000178
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "9566ad30-f408-4d5c-aa52-7ff5c6f7bdc3",
+          "operation_id": "aa7f829967d143dd9664f97ff529bc5b",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3892.0434000000823,
+          "relative_start_seconds": 3.486179699999979,
+          "relative_end_seconds": 7.378223100000061
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 17,
+      "completed": true,
+      "duration_seconds": 34.68225020000013,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 21.002513800000074,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 7,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-checkpoints/": 3,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "dd6a2555-f2ac-4fe6-a458-795670bdeb79",
+          "operation_id": "e98f7390dcc14d71bc12beae38b6ffdf",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3084.960299999919,
+          "relative_start_seconds": 3.212282200000016,
+          "relative_end_seconds": 6.297242499999935
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "9d251ae4ccb2491a90f220c29f15b875",
+          "operation_id": "e98f7390dcc14d71bc12beae38b6ffdf",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2854.8199000000022,
+          "relative_start_seconds": 6.301347999999998,
+          "relative_end_seconds": 9.1561679
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "d7cd37cbd53d46c08f3caa7c46bdb0a7",
+          "operation_id": "e98f7390dcc14d71bc12beae38b6ffdf",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3880.163200000068,
+          "relative_start_seconds": 9.156458600000013,
+          "relative_end_seconds": 13.03662180000008
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "0293e319-b922-418c-96a7-4844402c72d5",
+          "operation_id": "e98f7390dcc14d71bc12beae38b6ffdf",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3001.6953000000212,
+          "relative_start_seconds": 13.043351599999935,
+          "relative_end_seconds": 16.045046899999956
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "37a547a0-53c2-4786-b143-1ffb34415d44",
+          "operation_id": "e98f7390dcc14d71bc12beae38b6ffdf",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3346.995399999898,
+          "relative_start_seconds": 13.551492700000061,
+          "relative_end_seconds": 16.89848809999996
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "b172767c-3838-41e4-a165-666f38f4abb0",
+          "operation_id": "e98f7390dcc14d71bc12beae38b6ffdf",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3394.2645000000484,
+          "relative_start_seconds": 16.903840000000084,
+          "relative_end_seconds": 20.298104500000132
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "b030df6553a148b984e079a182ce8850",
+          "operation_id": "e98f7390dcc14d71bc12beae38b6ffdf",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3436.996899999911,
+          "relative_start_seconds": 17.562284500000068,
+          "relative_end_seconds": 20.99928139999998
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 18,
+      "completed": true,
+      "duration_seconds": 20.084212000000058,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.530898000000045,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.05187290000007488,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "7d85e950196d45d2a40e3d636f90dfcf",
+          "operation_id": "2257c1bdf0e5413284f1b4ba671abe3b",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4473.160200000042,
+          "relative_start_seconds": 0.05187290000007488,
+          "relative_end_seconds": 4.525033100000117
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 18,
+      "completed": true,
+      "duration_seconds": 16.92217019999982,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 3.920256599999964,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.032771399999968705,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "b405d61ec53d4cfabf9376ba703f59d8",
+          "operation_id": "26287b8f14b44cd48a522aab572d9051",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3883.748099999968,
+          "relative_start_seconds": 0.032771399999968705,
+          "relative_end_seconds": 3.9165194999999366
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "4bc209d1-ff2c-496c-b69a-1090d8f21bc8",
+          "operation_id": "26287b8f14b44cd48a522aab572d9051",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 2992.685200000182,
+          "relative_start_seconds": 2.89055849999981,
+          "relative_end_seconds": 5.8832436999999915
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 18,
+      "completed": true,
+      "duration_seconds": 38.38320559999999,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 24.699058599999873,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 7,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-checkpoints/": 3,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/capture-v2/batch/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "2cbc5880-f6cb-4222-9201-8dedb152cb1b",
+          "operation_id": "b2d6c4887c274daca3de0b0b2bd66050",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4017.561600000132,
+          "relative_start_seconds": 3.7825042999999132,
+          "relative_end_seconds": 7.800065900000045
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "869182115424433aadf074109a9003b3",
+          "operation_id": "b2d6c4887c274daca3de0b0b2bd66050",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4275.765700000105,
+          "relative_start_seconds": 7.804165099999867,
+          "relative_end_seconds": 12.079930799999973
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "99d7054f04e8461cb620e5b3b2102391",
+          "operation_id": "b2d6c4887c274daca3de0b0b2bd66050",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4386.429400000023,
+          "relative_start_seconds": 12.08082070000004,
+          "relative_end_seconds": 16.46725010000006
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "d5d5b51e-f575-4c09-9481-3b3f4d66639f",
+          "operation_id": "b2d6c4887c274daca3de0b0b2bd66050",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3452.0486999999266,
+          "relative_start_seconds": 16.475265600000043,
+          "relative_end_seconds": 19.92731429999997
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "27a96262-3627-4c53-91a0-556c34637169",
+          "operation_id": "b2d6c4887c274daca3de0b0b2bd66050",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3662.4609000000637,
+          "relative_start_seconds": 16.981909999999917,
+          "relative_end_seconds": 20.64437089999998
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "e0ebf409-e69f-48bc-948f-44e959ab620e",
+          "operation_id": "b2d6c4887c274daca3de0b0b2bd66050",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3318.6447000000626,
+          "relative_start_seconds": 20.64914500000002,
+          "relative_end_seconds": 23.967789700000083
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "6af5a11c2c8c469791e73344a4e0865a",
+          "operation_id": "b2d6c4887c274daca3de0b0b2bd66050",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3261.8600000001024,
+          "relative_start_seconds": 21.43434169999999,
+          "relative_end_seconds": 24.696201700000092
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_next_ready",
+      "sequence": 19,
+      "completed": true,
+      "duration_seconds": 16.69427919999999,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.650429899999872,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 1,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.057341199999907985,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "395f6c799d974b41be737d33b215e024",
+          "operation_id": "31ede8e83399428aac1520fa27a67112",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4588.226599999936,
+          "relative_start_seconds": 0.057341199999907985,
+          "relative_end_seconds": 4.645567799999844
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "navigation_return_ready",
+      "sequence": 19,
+      "completed": true,
+      "duration_seconds": 18.96829690000019,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 4.039854600000195,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 2,
+      "endpoint_counts": {
+        "POST /student/attempts/:id/draft/": 1,
+        "POST /assessment/process/capture-checkpoints/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 1,
+      "first_draft_dispatch_seconds": 0.029985300000058487,
+      "request_timeline": [
+        {
+          "endpoint": "/student/attempts/:id/draft/",
+          "method": "POST",
+          "request_id": "0a608000543641f0ae12dab0766097b8",
+          "operation_id": "e996f15266ef4497870a29be1db7e374",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4006.315600000089,
+          "relative_start_seconds": 0.029985300000058487,
+          "relative_end_seconds": 4.036300900000148
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "e8289f95-bea8-4102-8e8c-f5b998896003",
+          "operation_id": "e996f15266ef4497870a29be1db7e374",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3411.3290999999736,
+          "relative_start_seconds": 3.166443200000096,
+          "relative_end_seconds": 6.57777230000007
+        }
+      ]
+    },
+    {
+      "probe": 3,
+      "action": "submit_next_ready",
+      "sequence": 19,
+      "completed": true,
+      "duration_seconds": 37.6820793000001,
+      "next_read_dispatched": true,
+      "click_to_next_read_dispatch_seconds": 23.23478059999994,
+      "click_to_read_censored_lower_bound_seconds": null,
+      "next_read_completion_observed": true,
+      "requests_dispatched_before_next_read": 10,
+      "endpoint_counts": {
+        "POST /assessment/process/capture-checkpoints/": 4,
+        "POST /assessment/process/capture-v2/attempts/:id/tools/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/acquire/": 1,
+        "POST /assessment/process/capture-v2/batch/": 2,
+        "POST /student/attempts/:id/submit/": 1,
+        "POST /assessment/process/attempts/:id/writer-lease/release/": 1
+      },
+      "requests_already_inflight_at_click": 1,
+      "draft_requests": 0,
+      "first_draft_dispatch_seconds": null,
+      "request_timeline": [
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "22238414-7a97-4464-a3f9-248205bb4a44",
+          "operation_id": "8dce12a11f394f00a12a92be125bbea1",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3022.0123999998905,
+          "relative_start_seconds": 2.9243845999999905,
+          "relative_end_seconds": 5.946396999999881
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/attempts/:id/tools/",
+          "method": "POST",
+          "request_id": "cd1fe227332145cfb6f11a7639655090",
+          "operation_id": "8dce12a11f394f00a12a92be125bbea1",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3321.818100000033,
+          "relative_start_seconds": 5.947529099999927,
+          "relative_end_seconds": 9.26934719999996
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/acquire/",
+          "method": "POST",
+          "request_id": "2e94f817248e412fb1a18ad5e6cc8b8b",
+          "operation_id": "8dce12a11f394f00a12a92be125bbea1",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3201.471900000004,
+          "relative_start_seconds": 5.950488799999934,
+          "relative_end_seconds": 9.151960699999938
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "d6c87b76-5697-4f5d-8e37-524eac69a010",
+          "operation_id": "8dce12a11f394f00a12a92be125bbea1",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 3367.3283999999985,
+          "relative_start_seconds": 5.953815699999919,
+          "relative_end_seconds": 9.321144099999918
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "43cf25d4-f29d-41d5-a76e-7ee88aa0d221",
+          "operation_id": "8dce12a11f394f00a12a92be125bbea1",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 3427.7959000000264,
+          "relative_start_seconds": 6.45506520000007,
+          "relative_end_seconds": 9.882861100000097
+        },
+        {
+          "endpoint": "/student/attempts/:id/submit/",
+          "method": "POST",
+          "request_id": "7ee700e3ff774149b19d45246b33afd4",
+          "operation_id": "8dce12a11f394f00a12a92be125bbea1",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4237.399499999825,
+          "relative_start_seconds": 9.152566700000083,
+          "relative_end_seconds": 13.389966199999908
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "0f1154c0-40ec-4392-af61-7da8e09c72d4",
+          "operation_id": "8dce12a11f394f00a12a92be125bbea1",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4211.720300000161,
+          "relative_start_seconds": 13.397145899999886,
+          "relative_end_seconds": 17.608866200000048
+        },
+        {
+          "endpoint": "/assessment/process/capture-v2/batch/",
+          "method": "POST",
+          "request_id": "ecf1db48-dcec-4907-be26-968e9d943b19",
+          "operation_id": "8dce12a11f394f00a12a92be125bbea1",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4664.19430000009,
+          "relative_start_seconds": 13.90616969999997,
+          "relative_end_seconds": 18.57036400000006
+        },
+        {
+          "endpoint": "/assessment/process/capture-checkpoints/",
+          "method": "POST",
+          "request_id": "03f600f3-2bcc-45ac-bb40-be4fd817fa0e",
+          "operation_id": "8dce12a11f394f00a12a92be125bbea1",
+          "status": 201,
+          "failed": null,
+          "duration_ms": 4223.98769999994,
+          "relative_start_seconds": 18.57604230000009,
+          "relative_end_seconds": 22.800030000000028
+        },
+        {
+          "endpoint": "/assessment/process/attempts/:id/writer-lease/release/",
+          "method": "POST",
+          "request_id": "2502e14efb024a538c7bbd2dadf0b33e",
+          "operation_id": "8dce12a11f394f00a12a92be125bbea1",
+          "status": 200,
+          "failed": null,
+          "duration_ms": 4115.660300000105,
+          "relative_start_seconds": 19.11443219999992,
+          "relative_end_seconds": 23.230092500000026
+        }
+      ]
+    }
+  ]
+}

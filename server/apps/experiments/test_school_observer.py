@@ -1,0 +1,323 @@
+import importlib.util
+import json
+import tempfile
+from pathlib import Path
+from copy import deepcopy
+from unittest.mock import patch
+from types import SimpleNamespace
+
+from django.conf import settings
+from django.test import SimpleTestCase
+
+
+class SchoolObserverTests(SimpleTestCase):
+    def test_host_cpu_steal_and_role_listen_queues_are_raw_bounded_counters(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'stat').write_text('cpu  10 2 30 40 5 6 7 8 9 10\ncpu0 1 2\n')
+            network = root / '123/net'
+            network.mkdir(parents=True)
+            (network / 'tcp').write_text('header\n 0: 00000000:1F40 00000000:0000 0A 00000000:00000003 00:0 0 0\n 1: 00000000:1538 00000000:0000 0A 00000000:00000009 00:0 0 0\n')
+            counters = module.host_cpu_counters(root)
+            self.assertEqual(counters['steal_ticks'], 8)
+            self.assertEqual(counters['iowait_ticks'], 5)
+            queues = module.http_listen_queues(123, root)
+            self.assertEqual(queues, [{'port': 8000, 'tx_queue': 0, 'rx_queue': 3}])
+
+    def test_oom_events_include_removed_load_and_shared_database_before_cleanup(self):
+        module = self.module()
+        rows = [
+            {'Actor': {'ID': 'removed-load', 'Attributes': {'com.docker.compose.project': 'kt-school-e2e'}}},
+            {'Actor': {'ID': 'shared-db', 'Attributes': {'com.docker.compose.project': 'production'}}},
+            {'Actor': {'ID': 'other', 'Attributes': {'com.docker.compose.project': 'production'}}},
+        ]
+        with patch.object(module.subprocess, 'check_output', return_value='\n'.join(json.dumps(row) for row in rows)) as query:
+            found = module.recent_oom_events('kt-school-e2e', ['shared-db'], 100, 110)
+        self.assertEqual(found, rows[:2])
+        self.assertIn('100', query.call_args.args[0])
+        self.assertIn('110', query.call_args.args[0])
+
+    def test_sampling_stops_for_removed_load_oom_before_cgroup_inspection(self):
+        module = self.module()
+        from unittest.mock import Mock
+        events = Mock()
+        events.poll.return_value = 0
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'observation.json'
+            (output.parent / 'source-config.json').write_text('{}')
+            args = SimpleNamespace(project='kt-school-e2e', duration=1, output=str(output),
+                                   database_container='db', stop_file=None)
+            oom = {'Actor': {'ID': 'removed-load'}}
+            with patch.object(module.subprocess, 'check_output', side_effect=['web', 'full-db']), \
+                    patch.object(module.subprocess, 'Popen', return_value=events), \
+                    patch.object(module, 'swap_used_bytes', return_value=0), \
+                    patch.object(module, 'recent_oom_events', return_value=[oom]), \
+                    patch.object(module, 'stop_test_project') as stop, \
+                    patch.object(module.time, 'time', return_value=100):
+                result = {}
+                with self.assertRaisesMessage(SystemExit, 'OOM occurred'):
+                    module.observe(args, result)
+            stop.assert_called_once_with('kt-school-e2e', ['full-db'])
+            self.assertEqual(result['oom_events'], [oom])
+            self.assertEqual(result['emergency_stop_reason'], 'docker_oom_event')
+
+    def test_emergency_stop_includes_late_load_container_but_preserves_shared_database(self):
+        module = self.module()
+        from unittest.mock import Mock
+        items = {
+            'web': {'Id': 'web', 'Config': {'Labels': {'com.docker.compose.project': 'kt-school-e2e', 'com.docker.compose.service': 'web'}}},
+            'late-load': {'Id': 'late-load', 'Config': {'Labels': {'com.docker.compose.project': 'kt-school-e2e'}}},
+            'database': {'Id': 'database', 'Config': {'Labels': {'com.docker.compose.project': 'kt-school-e2e', 'com.docker.compose.service': 'db'}}},
+            'other': {'Id': 'other', 'Config': {'Labels': {'com.docker.compose.project': 'production', 'com.docker.compose.service': 'web'}}},
+        }
+        with patch.object(module.subprocess, 'check_output', return_value='web\nlate-load\ndatabase\nother'), \
+                patch.object(module, 'reinspect_container', side_effect=lambda identity: items[identity]), \
+                patch.object(module.subprocess, 'run') as stop:
+            module.stop_test_project('kt-school-e2e', ['database'])
+        self.assertEqual(stop.call_args.args[0], ['docker', 'stop', 'web', 'late-load'])
+
+    def test_oom_guard_uses_increment_and_never_attributes_other_production_oom_to_test(self):
+        module = self.module()
+        def item(project, role):
+            return {'Id': role, 'Config': {'Labels': {'com.docker.compose.project': project, 'com.docker.compose.service': role}}}
+        baseline = {'roles': {'web': {'cgroup': {'memory_events': {'oom_kill': 1}}}},
+                    'shared_postgres_cgroup': {'memory_events': {'oom_kill': 2}}}
+        self.assertFalse(module.new_oom(item('kt-school-e2e', 'web'), {'memory_events': {'oom_kill': 1}}, baseline, 'kt-school-e2e', ['db']))
+        self.assertTrue(module.new_oom(item('kt-school-e2e', 'web'), {'memory_events': {'oom_kill': 2}}, baseline, 'kt-school-e2e', ['db']))
+        self.assertTrue(module.new_oom(item('production', 'db'), {'memory_events': {'oom_kill': 3}}, baseline, 'kt-school-e2e', ['db']))
+        self.assertFalse(module.new_oom(item('production', 'web'), {'memory_events': {'oom_kill': 4}}, baseline, 'kt-school-e2e', ['db']))
+
+    def test_real_sampling_loop_uses_full_container_identities_and_finishes(self):
+        module = self.module()
+        for stopped, exit_code in ((False, 0), (True, 143), (False, 143)):
+            roles = ['web', 'student-read', 'teacher-read', 'scheduler', 'nginx', 'pgbouncer', 'db']
+            items = {str(i + 1) * 64: {'Id': str(i + 1) * 64, 'Name': '/' + role,
+                     'State': {'Running': True, 'Pid': i + 100},
+                     'Config': {'Labels': {'com.docker.compose.project': 'kt-school-e2e',
+                                          'com.docker.compose.service': role}}}
+                     for i, role in enumerate(roles)}
+            identities = list(items)
+
+            def docker(args, **kwargs):
+                if args[1] == 'ps':
+                    selected = identities[:-1] if '--filter' in args else identities
+                    return '\n'.join(selected if '--no-trunc' in args else [identity[:12] for identity in selected])
+                if args[1] == 'inspect':
+                    if '--format' in args:
+                        return identities[-1]
+                    identity = args[-1]
+                    return json.dumps([items[next(full for full in identities if full.startswith(identity))]])
+                if args[1] == 'exec':
+                    return '[]' if args[-1] == module.DATABASE_WAIT_SQL else '{}'
+                if args[1] == 'events':
+                    return ''
+                raise AssertionError(args)
+
+            kernel = {'working_set_bytes': 1024, 'memory_current_bytes': 1024, 'memory_max': '4096',
+                      'cpu': {'usage_usec': 10}}
+            from unittest.mock import Mock
+            events = Mock(returncode=exit_code)
+            events.communicate.return_value = ('', '')
+            events.poll.side_effect = [None, exit_code] if stopped else [exit_code]
+            ticks = [100]
+            with tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / 'observation.json'
+                (output.parent / 'source-config.json').write_text('{}')
+                meminfo = output.parent / 'meminfo'
+                meminfo.write_text('MemTotal: 1048576 kB\n')
+                stop = output.parent / 'stop'
+
+                def advance(_):
+                    ticks[0] = 102
+                    if stopped:
+                        stop.touch()
+
+                args = SimpleNamespace(project='kt-school-e2e', duration=1, output=str(output), scope='short',
+                                       database_container='db', abort_memory_below_mb=2, stop_file=str(stop) if stopped else None)
+                with patch.object(module.subprocess, 'check_output', side_effect=docker), \
+                        patch.object(module.subprocess, 'run', side_effect=lambda args, **kwargs: SimpleNamespace(returncode=0, stdout=docker(args), stderr='')), \
+                        patch.object(module.subprocess, 'Popen', return_value=events), \
+                        patch.object(module, 'cgroup_path', return_value=Path(directory)), \
+                        patch.object(module, 'cgroup_metrics', return_value=kernel), \
+                        patch.object(module, 'swap_used_bytes', return_value=0), \
+                        patch.object(module, 'memory_available_bytes', return_value=500 * 1024 ** 2), \
+                        patch.object(module, 'pool_metrics', return_value={}), \
+                        patch.object(module, 'host_cpu_counters', return_value={'steal_ticks': 0}), \
+                        patch.object(module, 'http_listen_queues', return_value=[]), \
+                        patch.object(module, 'budget', return_value={'combined_working_set_bytes': 7168, 'checks': {'host_headroom': True, 'combined_working_set_plus_margin': True}}), \
+                        patch.object(module, 'Path', side_effect=lambda path: meminfo if str(path) == '/proc/meminfo' else Path(path)), \
+                        patch.object(module.time, 'time', side_effect=lambda: ticks[0]), \
+                        patch.object(module.time, 'sleep', side_effect=advance):
+                    result = {}
+                    if exit_code and not stopped:
+                        with self.assertRaises(SystemExit):
+                            module.observe(args, result)
+                        self.assertEqual(result['oom_observer_exit_code'], exit_code)
+                        self.assertFalse(result['oom_observer_stopped_by_coordinator'])
+                        continue
+                    module.observe(args, result)
+                self.assertEqual(len(result['host_database_samples']), 1)
+                self.assertEqual(len(result['host_database_samples'][0]['resource_rows']), 7)
+                self.assertEqual(result['oom_kills'], 0)
+                self.assertEqual(result['stopped_by_coordinator'], stopped)
+                self.assertFalse(result['teacher_freshness']['measured'])
+
+    def test_main_preserves_normal_and_failed_lifecycle_and_refuses_replay(self):
+        for failure in (False, True):
+            module = self.module()
+            with tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / 'observation.json'
+                args = SimpleNamespace(project='kt-school-e2e', duration=1, output=str(output), scope='short')
+
+                def observed(options, result):
+                    result['host_database_samples'] = [{'at': 1}, {'at': 2}]
+                    for sample in result['host_database_samples']:
+                        module.publish_progress(options.output, 0, sample)
+                    if failure:
+                        raise RuntimeError('private final query failed')
+
+                with patch.object(module.argparse.ArgumentParser, 'parse_args', return_value=args), \
+                        patch.object(module, 'observe', side_effect=observed), patch('builtins.print'):
+                    if failure:
+                        with self.assertRaises(RuntimeError):
+                            module.main()
+                    else:
+                        module.main()
+                    original = output.read_bytes()
+                    with self.assertRaises(SystemExit):
+                        module.main()
+                    self.assertEqual(output.read_bytes(), original)
+                self.assertEqual(json.loads(original)['state'], 'failed' if failure else 'completed')
+                self.assertEqual(len(output.with_suffix('.samples.jsonl').read_text().splitlines()), 2)
+                self.assertNotIn('private', original.decode())
+
+    def module(self):
+        spec = importlib.util.spec_from_file_location('school_observer',
+            Path(settings.BASE_DIR) / 'scripts/load/observe_school_runtime.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_cgroup_metrics_keep_throttle_memory_and_io_without_identity(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as temporary:
+            group = Path(temporary)
+            (group / 'cpu.stat').write_text('usage_usec 10\nnr_periods 2\nnr_throttled 1\nthrottled_usec 5\n')
+            (group / 'memory.current').write_text('1024\n')
+            (group / 'memory.swap.current').write_text('512\n')
+            (group / 'memory.events').write_text('oom 0\noom_kill 0\n')
+            (group / 'io.stat').write_text('8:0 rbytes=123 wbytes=456 rios=1 wios=2\n')
+            row = module.cgroup_metrics(group)
+        self.assertEqual(row['cpu']['nr_throttled'], 1)
+        self.assertEqual(row['memory_current_bytes'], 1024)
+        self.assertEqual(row['memory_swap_current_bytes'], 512)
+        self.assertEqual(row['io'][0]['wbytes'], 456)
+        self.assertEqual(row['memory_events']['oom_kill'], 0)
+
+    def test_database_wait_sampling_excludes_queries_and_student_identifiers(self):
+        module = self.module()
+        self.assertIn('wait_event_type', module.DATABASE_WAIT_SQL)
+        self.assertIn("datname='kt_e2e'", module.DATABASE_WAIT_SQL)
+        self.assertNotIn('query,', module.DATABASE_WAIT_SQL)
+        self.assertNotIn('usename', module.DATABASE_WAIT_SQL)
+
+    def test_intermediate_diagnostics_survive_workload_failure_without_claiming_acceptance(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory)/'short-observation.json'
+            module.publish_progress(output, 10, {'at':20, 'database_waits':{'active':1}, 'pgbouncer':{}, 'memory_budget':{'checks':{'host_headroom':True}}})
+            import json
+            row=json.loads(output.with_suffix('.progress.json').read_text())
+            self.assertEqual(row['state'], 'observing')
+            self.assertFalse(row['formal_capacity_accepted'])
+            self.assertEqual(row['latest_sample']['database_waits']['active'], 1)
+
+    def test_every_periodic_sample_survives_later_failure(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'observation.json'
+            module.publish_progress(output, 10, {'at': 20, 'database_waits': []})
+            module.publish_progress(output, 10, {'at': 30, 'database_waits': []})
+            samples = [json.loads(line) for line in output.with_suffix('.samples.jsonl').read_text().splitlines()]
+            self.assertEqual([row['at'] for row in samples], [20, 30])
+            self.assertFalse(output.exists())
+
+    def test_cpu_and_memory_samples_use_kernel_deltas_without_docker_stats(self):
+        module = self.module()
+        kernel = {'cpu': {'usage_usec': 5000000}, 'memory_current_bytes': 1024, 'memory_max': '4096'}
+        first = module.kernel_summary('container', kernel, 10, {})
+        self.assertIsNone(first['cpu'])
+        second = module.kernel_summary('container', kernel, 12, {'container': (10, 1000000)})
+        self.assertEqual(second['cpu'], '200.000%')
+        self.assertEqual(second['memory'], '1024 / 4096')
+
+    def test_failed_observation_publishes_independent_failure_and_keeps_samples(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'observation.json'
+            result = {'state': 'observing', 'started_at': 10, 'host_database_samples': [{'at': 20}]}
+            module.finish_observation(output, result, RuntimeError('PRIVATE SQL AND PASSWORD'))
+            row = json.loads(output.read_text())
+            self.assertEqual(row['state'], 'failed')
+            self.assertEqual(row['error_type'], 'RuntimeError')
+            self.assertEqual(row['host_database_samples'], [{'at': 20}])
+            self.assertFalse(row['formal_capacity_accepted'])
+            self.assertNotIn('PRIVATE', output.read_text())
+            with self.assertRaises(FileExistsError):
+                module.finish_observation(output, result, None)
+
+    def test_blocking_chain_keeps_wait_type_and_relation_but_no_answers(self):
+        module = self.module()
+        self.assertIn('pg_blocking_pids', module.DATABASE_WAIT_SQL)
+        self.assertIn('wait_event', module.DATABASE_WAIT_SQL)
+        self.assertIn('xact_start', module.DATABASE_WAIT_SQL)
+        self.assertIn('query_fingerprint', module.DATABASE_WAIT_SQL)
+        self.assertNotIn('row_to_json(a)', module.DATABASE_WAIT_SQL)
+        self.assertNotIn('a.query AS query', module.DATABASE_WAIT_SQL)
+
+    def test_process_disappearance_reinspects_same_container_and_retries_changed_pid_once(self):
+        module = self.module()
+        item = {'Id': 'a' * 64, 'State': {'Running': True, 'Pid': 100}}
+        restarted = deepcopy(item); restarted['State']['Pid'] = 101
+        with patch.object(module, 'cgroup_path', side_effect=[FileNotFoundError(), Path('/fresh')]) as paths, \
+                patch.object(module, 'cgroup_metrics', return_value={'working_set_bytes': 123}), \
+                patch.object(module, 'reinspect_container', return_value=restarted) as inspect:
+            value = module.sample_container(item, required=True)
+        self.assertEqual(paths.call_count, 2)
+        inspect.assert_called_once_with(item['Id'])
+        self.assertEqual(value['container']['State']['Pid'], 101)
+        self.assertEqual(value['metrics']['working_set_bytes'], 123)
+        self.assertEqual(value['lifecycle']['status'], 'restarted_retried')
+
+    def test_required_stop_unchanged_missing_pid_and_second_race_fail_closed(self):
+        module = self.module()
+        item = {'Id': 'a' * 64, 'State': {'Running': True, 'Pid': 100}}
+        stopped = deepcopy(item); stopped['State'] = {'Running': False, 'Pid': 0}
+        restarted = deepcopy(item); restarted['State']['Pid'] = 101
+        for fresh in (stopped, item, restarted):
+            with patch.object(module, 'cgroup_path', side_effect=FileNotFoundError()) as paths, \
+                    patch.object(module, 'reinspect_container', return_value=fresh), self.assertRaises(ValueError):
+                module.sample_container(item, required=True)
+            self.assertLessEqual(paths.call_count, 2)
+
+    def test_stopped_optional_container_has_explicit_skip_without_zero_resources(self):
+        module = self.module()
+        item = {'Id': 'a' * 64, 'State': {'Running': True, 'Pid': 100}}
+        stopped = deepcopy(item); stopped['State'] = {'Running': False, 'Pid': 0}
+        with patch.object(module, 'cgroup_path', side_effect=FileNotFoundError()), \
+                patch.object(module, 'reinspect_container', return_value=stopped):
+            value = module.sample_container(item, required=False)
+        self.assertIsNone(value['metrics'])
+        self.assertEqual(value['lifecycle']['status'], 'skipped_stopped_optional')
+        self.assertNotIn('working_set_bytes', value['lifecycle'])
+
+    def test_oneoff_web_never_substitutes_for_required_main_web(self):
+        module = self.module()
+        main = {'Config': {'Labels': {'com.docker.compose.project': 'kt-school-e2e',
+                                     'com.docker.compose.service': 'web', 'com.docker.compose.oneoff': 'False'}}}
+        oneoff = deepcopy(main); oneoff['Config']['Labels']['com.docker.compose.oneoff'] = 'True'
+        self.assertTrue(module.required_service(main, 'kt-school-e2e', {'web'}))
+        self.assertFalse(module.required_service(oneoff, 'kt-school-e2e', {'web'}))
+        self.assertEqual(module.sampled_service_roles([oneoff], 'kt-school-e2e'), set())
+        self.assertEqual(module.sampled_service_roles([main, oneoff], 'kt-school-e2e'), {'web'})

@@ -1,0 +1,233 @@
+# Explicit school activation only; Compose >= 2.24.4 required for !override.
+# docker compose -f docker-compose.yml -f docker-compose.school.yml ...
+x-school-environment: &school-environment
+  SCHOOL_RUNTIME_ISOLATION_ENABLED: ${SCHOOL_RUNTIME_ISOLATION_ENABLED:?Set SCHOOL_RUNTIME_ISOLATION_ENABLED=1 for school only}
+  POSTGRES_HOST: pgbouncer
+  POSTGRES_PORT: 5432
+  DATABASE_CONN_MAX_AGE: 0
+  SCHOOL_RUNTIME_PRESSURE_FILE: ""
+  DATABASE_DISABLE_SERVER_SIDE_CURSORS: "1"
+  DJANGO_DEBUG: "0"
+  STUDENT_SHARED_RESULTS_ENABLED: "1"
+  STUDENT_SHARED_RESULTS_COURSE_IDS: ${SCHOOL_STUDENT_SHARED_RESULTS_COURSE_IDS:-2}
+
+x-school-web: &school-web
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.school
+    target: web
+  env_file: ../server/.env
+  entrypoint: ["docker/school-entrypoint.sh"]
+  command: ["gunicorn", "-c", "config/gunicorn.py", "config.wsgi:application"]
+  restart: unless-stopped
+  volumes:
+    - media_data:/app/media
+    - runtime_control:/runtime-control:ro
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    pgbouncer:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=3)"]
+    interval: 10s
+    timeout: 5s
+    retries: 10
+
+services:
+  db:
+    mem_limit: 0
+    cpus: 0
+    cpu_shares: 3122
+    command: !reset ["postgres"]
+  pgbouncer:
+    entrypoint: ["/bin/sh", "/school/pgbouncer-entrypoint.sh"]
+    environment:
+      SCHOOL_RUNTIME_ISOLATION_ENABLED: ${SCHOOL_RUNTIME_ISOLATION_ENABLED:?Set SCHOOL_RUNTIME_ISOLATION_ENABLED=1 for school only}
+      POSTGRES_DB: ${POSTGRES_DB:-kt_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-kt_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - ./docker/pgbouncer-school.ini.template:/school/pgbouncer.ini.template:ro
+      - ./docker/pgbouncer-entrypoint.sh:/school/pgbouncer-entrypoint.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-kt_user} -d kt_core"]
+    mem_limit: 128M
+    cpus: 0
+    cpu_shares: 1024
+  migrate:
+    build:
+      dockerfile: deploy/Dockerfile.school
+    environment:
+      POSTGRES_PORT: 5432
+      POSTGRES_POOL_ALIAS: ""
+    mem_limit: 256M
+    cpus: 1
+  web:
+    <<: *school-web
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_core
+      DATABASE_APPLICATION_NAME: kt-school-core
+      GUNICORN_WORKERS: 12
+      SCHOOL_CAPTURE_SHORT: "1"
+      WEB_REPLICAS: 1
+    deploy:
+      replicas: 1
+    mem_limit: 3G
+    cpus: 0
+    cpu_shares: 4096
+  student-read:
+    <<: *school-web
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_student
+      DATABASE_APPLICATION_NAME: kt-school-student-read
+      GUNICORN_WORKERS: 2
+      WEB_REPLICAS: 1
+    deploy:
+      replicas: 1
+    mem_limit: 1280M
+    cpus: 1
+    cpu_shares: 512
+  teacher-read:
+    <<: *school-web
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_teacher
+      DATABASE_APPLICATION_NAME: kt-school-teacher-read
+      GUNICORN_WORKERS: 1
+      WEB_REPLICAS: 1
+    deploy:
+      replicas: 1
+    mem_limit: 768M
+    cpus: 0.5
+    cpu_shares: 256
+  scheduler:
+    build:
+      dockerfile: deploy/Dockerfile.school
+    entrypoint: ["docker/school-entrypoint.sh"]
+    command: ["python", "manage.py", "run_scheduler"]
+    environment:
+      SCHOOL_RUNTIME_ISOLATION_ENABLED: ${SCHOOL_RUNTIME_ISOLATION_ENABLED:?Set SCHOOL_RUNTIME_ISOLATION_ENABLED=1 for school only}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_POOL_ALIAS: ""
+      DATABASE_CONN_MAX_AGE: 0
+      RUN_SCHEDULER_EXPORT_JOBS: "0"
+      DATABASE_APPLICATION_NAME: kt-school-scheduler-direct
+    deploy:
+      replicas: 1
+    mem_limit: 256M
+    cpus: 0.25
+    cpu_shares: 512
+  analytics-worker:
+    build:
+      dockerfile: deploy/Dockerfile.school
+    volumes:
+      - runtime_control:/runtime-control:ro
+    entrypoint: ["docker/school-entrypoint.sh"]
+    command: ["python", "manage.py", "run_research_materializations"]
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_background
+      DATABASE_APPLICATION_NAME: kt-school-analytics
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 1G
+    mem_limit: 1G
+    cpus: 0.75
+    cpu_shares: 256
+  student-comparison-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.school
+      target: student-comparison-worker
+    env_file: ../server/.env
+    volumes:
+      - runtime_control:/runtime-control:ro
+    entrypoint: ["docker/school-entrypoint.sh"]
+    command: ["python", "manage.py", "run_student_comparisons"]
+    restart: unless-stopped
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_background
+      DATABASE_APPLICATION_NAME: kt-school-student-comparison
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+    deploy:
+      replicas: 1
+    mem_limit: 512M
+    cpus: 0.5
+    cpu_shares: 256
+  publication-worker:
+    build:
+      dockerfile: deploy/Dockerfile.school
+    volumes:
+      - runtime_control:/runtime-control:ro
+    entrypoint: ["docker/school-entrypoint.sh"]
+    command: ["python", "manage.py", "run_publication_jobs"]
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_background
+      DATABASE_APPLICATION_NAME: kt-school-publication
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 512M
+    mem_limit: 512M
+    cpus: 0.25
+    cpu_shares: 256
+  export-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.school
+      target: export-worker
+    env_file: ../server/.env
+    entrypoint: ["docker/school-entrypoint.sh"]
+    command: ["docker/export-worker.sh"]
+    restart: unless-stopped
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_background
+      DATABASE_APPLICATION_NAME: kt-school-export
+    volumes:
+      - media_data:/app/media
+      - runtime_control:/runtime-control:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+    deploy:
+      replicas: 1
+    mem_limit: 768M
+    cpus: 0.25
+    cpu_shares: 128
+  nginx:
+    build:
+      dockerfile: client/Dockerfile
+      target: production
+    volumes:
+      - ./nginx/kt-school.conf:/etc/nginx/conf.d/default.conf:ro
+    ports: !override
+      - "127.0.0.1:${SCHOOL_HTTP_PORT:-8080}:80"
+    depends_on:
+      student-read:
+        condition: service_healthy
+      teacher-read:
+        condition: service_healthy
+    mem_limit: 128M
+    cpus: 0
+    cpu_shares: 1024
+
+volumes:
+  runtime_control:

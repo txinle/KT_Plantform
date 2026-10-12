@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+LAUNCHER_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        export MSYS_NO_PATHCONV=1
+        exec cmd.exe /d /c "$(cygpath -w "$LAUNCHER_ROOT/run_local.bat")"
+        ;;
+esac
+
+PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/server" && pwd -P)"
 cd "$PROJECT_ROOT"
 
 APP_URL="http://127.0.0.1:8000/"
@@ -10,8 +18,16 @@ REQUIREMENTS_STAMP="$VENV_DIR/.requirements.sha256"
 : "${CLASS_CENTER_ENABLED:=1}"
 : "${STUDENT_LEARNING_ANALYTICS_ENABLED:=1}"
 export CLASS_CENTER_ENABLED STUDENT_LEARNING_ANALYTICS_ENABLED
-FIRST_RUN=0
-[[ -f "$PROJECT_ROOT/db.sqlite3" ]] || FIRST_RUN=1
+: "${POSTGRES_HOST:=127.0.0.1}"
+: "${POSTGRES_PORT:=5432}"
+: "${POSTGRES_USER:=kt_user}"
+: "${POSTGRES_PASSWORD:=kt_password}"
+: "${POSTGRES_DB:=kt_platform}"
+export POSTGRES_HOST POSTGRES_PORT POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB
+LOCAL_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/kt-data-lab"
+export PIP_CACHE_DIR="$LOCAL_CACHE/pip" npm_config_cache="$LOCAL_CACHE/npm"
+export TMPDIR="$LOCAL_CACHE/tmp"
+mkdir -p "$TMPDIR"
 
 fail() {
     printf '\n[ERROR] Local startup failed. %s\n' "$1" >&2
@@ -19,13 +35,13 @@ fail() {
 }
 
 port_is_in_use() {
-    (exec 3<>/dev/tcp/127.0.0.1/8000) >/dev/null 2>&1
+    (exec 3<>/dev/tcp/127.0.0.1/"$1") >/dev/null 2>&1
 }
 
 discover_python() {
     local candidate name
     local -a candidates=()
-    for name in python3 python; do
+    for name in python3.13 python3 python; do
         candidate="$(command -v "$name" 2>/dev/null || true)"
         [[ -n "$candidate" ]] && candidates+=("$candidate")
     done
@@ -42,7 +58,7 @@ discover_python() {
     )
     for candidate in "${candidates[@]}"; do
         [[ -f "$candidate" ]] || continue
-        if "$candidate" -c "import ensurepip, os, sys, venv; raise SystemExit(0 if sys.version_info >= (3, 10) and os.path.isfile(sys.executable) else 1)" >/dev/null 2>&1; then
+        if "$candidate" -c "import ensurepip, os, sys, venv; raise SystemExit(0 if sys.version_info[:2] == (3, 13) and os.path.isfile(sys.executable) else 1)" >/dev/null 2>&1; then
             printf '%s\n' "$candidate"
             return 0
         fi
@@ -67,9 +83,13 @@ remove_incomplete_venv() {
     rm -rf -- "$VENV_DIR"
 }
 
-if port_is_in_use; then
-    fail "Port 8000 is already in use. Stop the existing local server first."
-fi
+for port in 8000 8001; do
+    if port_is_in_use "$port"; then
+        fail "Port $port is already in use. Stop the existing local server first."
+    fi
+done
+command -v pg_isready >/dev/null || fail "PostgreSQL 17 tools must be on PATH."
+pg_isready -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" >/dev/null || fail "Start the configured PostgreSQL server before retrying."
 
 VENV_PYTHON="$(find_venv_python || true)"
 if [[ -d "$VENV_DIR" && -z "$VENV_PYTHON" ]]; then
@@ -80,7 +100,7 @@ fi
 if [[ -z "$VENV_PYTHON" ]]; then
     printf '[1/4] Discovering Python and creating the local environment...\n'
     BOOTSTRAP_PYTHON="$(discover_python || true)"
-    [[ -n "$BOOTSTRAP_PYTHON" ]] || fail "Python 3.10+ with venv and ensurepip was not found."
+    [[ -n "$BOOTSTRAP_PYTHON" ]] || fail "Python 3.13 with venv and ensurepip was not found."
     "$BOOTSTRAP_PYTHON" -m venv "$VENV_DIR" || fail "Python could not create .venv."
     VENV_PYTHON="$(find_venv_python || true)"
     [[ -n "$VENV_PYTHON" ]] || fail "The new .venv does not contain Python."
@@ -88,6 +108,7 @@ if [[ -z "$VENV_PYTHON" ]]; then
 else
     printf "[1/4] Reusing this project's local Python environment.\n"
 fi
+"$VENV_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 13) else 1)" || fail "This checkout requires a Python 3.13 virtual environment."
 
 printf '[2/4] Checking Python dependencies...\n'
 CURRENT_REQUIREMENTS_HASH="$("$VENV_PYTHON" -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$PROJECT_ROOT/requirements.txt")"
@@ -102,29 +123,9 @@ fi
 
 printf '[3/4] Checking the database...\n'
 "$VENV_PYTHON" manage.py migrate --noinput || fail "Database migration failed."
-if [[ "$FIRST_RUN" == "1" ]]; then
-    "$VENV_PYTHON" manage.py seed_demo || fail "Demo data initialization failed."
-fi
+"$VENV_PYTHON" manage.py shell -c "from django.contrib.auth import get_user_model; from django.core.management import call_command; call_command('seed_demo') if not get_user_model().objects.exists() else None" || fail "Empty database initialization failed."
 
 printf '[4/4] Starting the local website...\n'
 printf 'Website: %s\n' "$APP_URL"
 printf 'Open the URL above if the browser does not open automatically.\n'
-if [[ "${KT_SKIP_BROWSER:-0}" != "1" ]]; then
-    "$VENV_PYTHON" - "$APP_URL" >/dev/null 2>&1 <<'PY' &
-import socket
-import sys
-import time
-import webbrowser
-
-url = sys.argv[1]
-for _ in range(60):
-    try:
-        with socket.create_connection(("127.0.0.1", 8000), timeout=1):
-            webbrowser.open(url)
-            break
-    except OSError:
-        time.sleep(0.5)
-PY
-fi
-
 exec "$VENV_PYTHON" scripts/run_dev.py

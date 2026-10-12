@@ -1,0 +1,172 @@
+from apps.api.test_support import domain_payload
+import json
+import uuid
+from io import BytesIO
+
+from django.test import TestCase
+from django.urls import reverse
+from openpyxl import load_workbook
+
+from apps.accounts.models import User
+from apps.experiments.models import Experiment, ExperimentStudent
+from apps.experiments.services import publish_experiment
+from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept
+
+from .models import Attempt, SubmissionEvent
+from .services import get_or_create_session
+from .test_support import accept_research_consent
+
+
+class StudentQuestionTypeFlowTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="student-type-teacher",
+            role=User.Role.TEACHER,
+        )
+        self.student = User.objects.create_user(
+            username="student-type-student",
+            student_number="student-type-student",
+            role=User.Role.STUDENT,
+        )
+        accept_research_consent(self.student)
+        bank = QuestionBank.objects.create(owner=self.teacher, name="学生题型题库")
+        concept = Concept.objects.create(
+            owner=self.teacher,
+            scope=Concept.Scope.PRIVATE,
+            name="题型 KC",
+            normalized_name="题型 kc",
+        )
+        fill_blank = Question.objects.create(
+            bank=bank,
+            sequence=1,
+            question_type=Question.Type.FILL_BLANK,
+            text="KT 的全称是？",
+            correct_answer="Knowledge Tracing",
+            accepted_answers=["KT"],
+        )
+        judgement = Question.objects.create(
+            bank=bank,
+            sequence=2,
+            question_type=Question.Type.TRUE_FALSE,
+            text="所有学生会收到相同的配额题集。",
+            correct_answer=False,
+        )
+        numeric_questions = [
+            Question.objects.create(
+                bank=bank,
+                sequence=sequence,
+                question_type=Question.Type.NUMERIC,
+                text=f"数值题 {sequence}",
+                correct_answer="2",
+            )
+            for sequence in range(3, 6)
+        ]
+        for question in (fill_blank, judgement, *numeric_questions):
+            QuestionConcept.objects.create(question=question, concept=concept, is_primary=True)
+        self.experiment = Experiment.objects.create(
+            owner=self.teacher,
+            question_bank=bank,
+            name="学生题型实验",
+            feedback_mode=Experiment.Feedback.FULL,
+        )
+        ExperimentStudent.objects.create(experiment=self.experiment, student=self.student)
+        publish_experiment(self.experiment, self.teacher)
+        self.experiment.refresh_from_db()
+        self.session = get_or_create_session(self.experiment, self.student)
+        self.client.force_login(self.student)
+
+    def assignment_for(self, question_type):
+        return self.session.assignments.get(snapshot__question_type=question_type)
+
+    def save_and_submit(self, assignment, answer):
+        page = self.client.get(
+            f"/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/"
+        )
+        self.assertEqual(page.status_code, 200)
+        save_response = self.client.post(
+            reverse("assessment_api:save_draft", args=[assignment.attempt.pk]),
+            data=json.dumps({"answer": answer}),
+            content_type="application/json",
+        )
+        self.assertEqual(save_response.status_code, 200)
+        return self.client.post(
+            reverse("assessment_api:submit", args=[assignment.attempt.pk]),
+            data=json.dumps({"submission_token": str(uuid.uuid4())}),
+            content_type="application/json",
+        )
+
+    def test_fill_blank_runtime_and_scoring_accept_the_configured_answer(self):
+        assignment = self.assignment_for(Question.Type.FILL_BLANK)
+        response = self.client.get(
+            f"/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(domain_payload(response)["question"]["question_type"], Question.Type.FILL_BLANK)
+
+        submitted = self.save_and_submit(assignment, "  kt  ")
+        self.assertEqual(submitted.status_code, 200)
+        self.assertTrue(domain_payload(submitted)["is_correct"])
+        self.assertEqual(domain_payload(submitted)["correct_answer"], "Knowledge Tracing")
+
+    def test_judgement_renders_fixed_bool_payload_and_is_available_in_identified_export(self):
+        assignment = self.assignment_for(Question.Type.TRUE_FALSE)
+        page = self.client.get(
+            f"/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/"
+        )
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(
+            [option["key"] for option in domain_payload(page)["question"]["options"]],
+            ["true", "false"],
+        )
+
+        submitted = self.save_and_submit(assignment, "false")
+        self.assertEqual(submitted.status_code, 200)
+        self.assertTrue(domain_payload(submitted)["is_correct"])
+        self.assertIs(domain_payload(submitted)["correct_answer"], False)
+
+        self.client.force_login(self.teacher)
+        exported = self.client.post(
+            reverse("teacher-experiment-identified-export", args=[self.experiment.pk]),
+            {"fields": ["question_type", "final_answer", "is_correct"]},
+        )
+        self.assertEqual(exported.status_code, 200)
+        rows = list(load_workbook(BytesIO(exported.content), data_only=True).active.values)
+        self.assertEqual(rows[0][:3], ("学号", "姓名", "题库唯一编号"))
+        self.assertIn(
+            (Question.Type.TRUE_FALSE, "false", True),
+            [row[-3:] for row in rows[1:]],
+        )
+
+    def test_numeric_nonfinite_draft_submit_returns_400_without_mutating_submission_state(self):
+        self.client.raise_request_exception = False
+
+        assignments = self.session.assignments.filter(
+            snapshot__question_type=Question.Type.NUMERIC
+        ).order_by("assigned_sequence_index")
+        for assignment, answer in zip(assignments, ("NaN", "sNaN", "Infinity")):
+            with self.subTest(answer=answer):
+                self.client.get(
+                    f"/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/"
+                )
+                saved = self.client.post(
+                    reverse("assessment_api:save_draft", args=[assignment.attempt.pk]),
+                    data=json.dumps({"answer": answer}),
+                    content_type="application/json",
+                )
+                self.assertEqual(saved.status_code, 200)
+
+                submitted = self.client.post(
+                    reverse("assessment_api:submit", args=[assignment.attempt.pk]),
+                    data=json.dumps({"submission_token": str(uuid.uuid4())}),
+                    content_type="application/json",
+                )
+
+                self.assertEqual(submitted.status_code, 400)
+                assignment.attempt.refresh_from_db()
+                self.session.refresh_from_db()
+                self.assertEqual(assignment.attempt.status, Attempt.Status.DRAFT)
+                self.assertIsNone(assignment.attempt.final_answer)
+                self.assertIsNone(assignment.attempt.submission_sequence_index)
+                self.assertEqual(self.session.submission_count, 0)
+                self.assertEqual(SubmissionEvent.objects.filter(attempt=assignment.attempt).count(), 0)

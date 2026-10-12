@@ -2,7 +2,9 @@
 
 KT 交互数据采集平台是一个以课程为中心的 Django 实验管理与作答数据采集系统。教师可在同一工作区管理课程、班级、题库、知识组件（KC）、实验发布与研究数据导出；学生通过课程选课关系参加实验，并在单题页面完成作答。
 
-一键本地运行使用项目专用 PostgreSQL 17，并由 Django 与 Vite 联合提供开发页面。Docker 部署使用 PostgreSQL、Gunicorn 与 Nginx，适合在校内服务器或云主机上运行。
+一键本地运行使用项目专用 PostgreSQL 17，由同源网关提供 Vue 构建产物并转发 Django API。Docker 部署使用 PostgreSQL、Gunicorn 与 Nginx，适合在校内服务器或云主机上运行。
+
+上一轮验收结果见 [历史交付说明](docs/ops/school-final-delivery-20261011.md)。当前 `/server`—`/client` 统一重构的范围与验证进度见 [执行记录](docs/superpowers/plans/2026-10-11-unified-frontend-backend-architecture.md)；学校完整验收尚未通过，生产未切换。
 
 ## 核心能力
 
@@ -18,11 +20,10 @@ KT 交互数据采集平台是一个以课程为中心的 Django 实验管理与
 
 ## 技术与运行环境
 
-- Python 3.10+
-- Django 服务端模板、DRF 与权限控制
+- Python 3.13 / Django 5.2.16
+- Django 领域服务、DRF、Session 认证与权限控制
 - Vue 3、TypeScript、Vite 8、Node.js 24 LTS
-- 本地托管的 Bootstrap 5.3.8
-- Fetch API
+- 统一 Fetch API 客户端；业务接口位于 `/api/v1/`
 - PostgreSQL 17（本地与 Docker 部署）
 - Gunicorn、Nginx（Docker 部署）
 
@@ -30,7 +31,7 @@ KT 交互数据采集平台是一个以课程为中心的 Django 实验管理与
 
 ## 一键本地运行
 
-启动脚本会自动发现 Python 与 Node.js、创建或复用项目内的 `.venv`、按需安装依赖、执行数据库迁移，并在新建本地数据库时写入演示数据。脚本会同时启动 Django 后端和 Vite 前端，页面入口为 `http://127.0.0.1:8000/`。
+启动脚本会发现 Python 3.13 与 Node 24、创建或复用项目内的 `server/.venv`、按需安装依赖、执行 PostgreSQL 数据库迁移，仅在数据库没有用户时写入演示数据，不重置已有题库。脚本先构建前端，再启动构建监听、Django 后端、同源 Node 网关，以及调度/导出、研究数据物化、实验发布和学生比较后台任务。页面就绪后自动打开 `http://127.0.0.1:8000/`。根目录启动器调用 `server/scripts/run_dev.py`，请保留 `server`、`client` 和 `contracts` 的并列结构。
 
 ### Windows
 
@@ -40,9 +41,13 @@ KT 交互数据采集平台是一个以课程为中心的 Django 实验管理与
 .\run_local.bat
 ```
 
-在脚本窗口按一次 `Ctrl+C` 会同步关闭本次启动的 Django、npm、Vite 及其子进程；项目 PostgreSQL 实例保持运行，供下次启动复用。
+本机工具默认位于 `E:\ATOP\ATOP-tooling`，可通过 `KT_TOOLING_ROOT` 指定其他位置；npm、pip 和临时文件缓存也写入该目录的 `cache` 子目录。PostgreSQL 使用已初始化的本机实例 `127.0.0.1:55432`、数据库 `kt_platform`。Git Bash 中运行 `./run_local.sh` 会调用同一 Windows 启动器。
+
+在脚本窗口按 `Ctrl+C` 会同步关闭本次启动的 Django、构建监听、Node 网关、后台任务及其子进程；若出现 `Terminate batch job (Y/N)?`，输入 `Y` 关闭启动器。项目 PostgreSQL 实例保持运行，供下次启动复用。
 
 ### Linux / macOS
+
+先安装 Python 3.13、Node 24 和 PostgreSQL 17，并将 PostgreSQL 工具加入 `PATH`。脚本要求已有可连接的数据库，默认连接 `127.0.0.1:5432`，账号 `kt_user`、密码 `kt_password`、数据库 `kt_platform`；可通过 `POSTGRES_HOST/PORT/USER/PASSWORD/DB` 覆盖。不使用 SQLite 回退。
 
 ```bash
 chmod +x run_local.sh
@@ -61,55 +66,14 @@ chmod +x run_local.sh
 
 ## 手工分别启动前后端
 
-前后端最核心的启动命令就是：
+先用当前 checkout 的 `server/.venv` 安装 `server/requirements.txt`，在 `client` 执行 `npm ci`。前端构建与 API 类型检查只读取 `contracts`，不需要 Python 或 Django。数据库迁移与演示造数在 `server` 目录执行；已有数据库不必重复执行 `seed_demo`。
 
-```text
-前端：npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
-后端：python manage.py runserver 0.0.0.0:8000
-```
+以下 PowerShell 命令在项目根目录分别打开三个终端执行。所有业务页面统一访问 `http://127.0.0.1:8000/`；内部 Django 端口只提供 API、授权下载和运维页面。
 
-本项目还需要指定 Node.js、PostgreSQL 和 Vue 功能开关。以下命令假定已经至少成功运行过一次 `run_local.bat`，在项目根目录打开两个普通 CMD 命令窗口后，可以直接逐行输入。
-
-第一个 CMD 窗口启动前端：
-
-```bat
-set "NODE_DIR=%USERPROFILE%\Downloads\ATOP-tooling\node-v24.20.0-win-x64"
-set "PATH=%NODE_DIR%;%PATH%"
-cd frontend
-"%NODE_DIR%\npm.cmd" run dev -- --host 127.0.0.1 --port 5173 --strictPort
-```
-
-第二个 CMD 窗口启动后端：
-
-```bat
-set "POSTGRES_BIN=%USERPROFILE%\Downloads\ATOP-tooling\PostgreSQL-17.11-portable\pgsql\bin"
-set "PATH=%POSTGRES_BIN%;%PATH%"
-set "POSTGRES_HOST=127.0.0.1"
-set "POSTGRES_PORT=55432"
-set "POSTGRES_USER=kt_user"
-set "POSTGRES_PASSWORD=kt_password"
-set "POSTGRES_DB=kt_platform"
-set "CLASS_CENTER_ENABLED=1"
-set "STUDENT_LEARNING_ANALYTICS_ENABLED=1"
-set "VITE_DEV_SERVER_URL=http://127.0.0.1:5173"
-.venv\Scripts\python.exe manage.py runserver 0.0.0.0:8000
-```
-
-如果使用 PowerShell，对应命令如下。
-
-PowerShell 前端窗口：
+后端终端：
 
 ```powershell
-$nodeDir = "$env:USERPROFILE\Downloads\ATOP-tooling\node-v24.20.0-win-x64"
-$env:PATH = "$nodeDir;$env:PATH"
-Set-Location .\frontend
-& "$nodeDir\npm.cmd" run dev -- --host 127.0.0.1 --port 5173 --strictPort
-```
-
-PowerShell 后端窗口：
-
-```powershell
-$postgresBin = "$env:USERPROFILE\Downloads\ATOP-tooling\PostgreSQL-17.11-portable\pgsql\bin"
+$postgresBin = "E:\ATOP\ATOP-tooling\PostgreSQL-17.11-portable\pgsql\bin"
 $env:PATH = "$postgresBin;$env:PATH"
 $env:POSTGRES_HOST = "127.0.0.1"
 $env:POSTGRES_PORT = "55432"
@@ -118,43 +82,41 @@ $env:POSTGRES_PASSWORD = "kt_password"
 $env:POSTGRES_DB = "kt_platform"
 $env:CLASS_CENTER_ENABLED = "1"
 $env:STUDENT_LEARNING_ANALYTICS_ENABLED = "1"
-$env:VITE_DEV_SERVER_URL = "http://127.0.0.1:5173"
-.\.venv\Scripts\python.exe manage.py runserver 0.0.0.0:8000
+Set-Location .\server
+.\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8001
 ```
 
-分别启动时，需要在两个窗口中分别按 `Ctrl+C`。停止后端不会自动停止另一个窗口中的 Vite。
+前端构建与监听终端：
 
-如果尚未初始化项目，可先执行完整的手工准备流程：
-
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
-python manage.py migrate
-python manage.py seed_demo
-python manage.py runserver
+```powershell
+$nodeDir = "E:\ATOP\ATOP-tooling\node-v24.20.0-win-x64"
+$env:PATH = "$nodeDir;$env:PATH"
+Set-Location .\client
+& "$nodeDir\npm.cmd" run build
+& "$nodeDir\npm.cmd" run dev:watch
 ```
 
-如果不需要演示数据，可跳过 `python manage.py seed_demo`。
+同源网关终端：
 
-班级中心采用分级旗标，默认均关闭。验证完成后先开启教师端，再开启学生端：
-
-```text
-CLASS_CENTER_ENABLED=1
-STUDENT_LEARNING_ANALYTICS_ENABLED=1
+```powershell
+$nodeDir = "E:\ATOP\ATOP-tooling\node-v24.20.0-win-x64"
+$env:PATH = "$nodeDir;$env:PATH"
+$env:KT_GATEWAY_PORT = "8000"
+$env:KT_BACKEND_ORIGIN = "http://127.0.0.1:8001"
+Set-Location .\client
+& "$nodeDir\npm.cmd" run dev
 ```
 
-学生旗标只有在教师旗标开启时生效。应用回滚只需关闭旗标，不删除任务、发布快照、策略或历史事实。升级后可用 `python manage.py audit_class_experiment_tasks` 检查无法无歧义回填的历史班级实验；命令只读，不会自动合并或修复历史。
+分别启动时，在三个终端分别按 `Ctrl+C`。`CLASS_CENTER_ENABLED` 与 `STUDENT_LEARNING_ANALYTICS_ENABLED` 控制领域功能开放，不切换前端实现。升级前可在后端运行 `python manage.py audit_class_experiment_tasks` 只读检查历史任务；该命令不自动修复数据。
 
 ## Docker 部署
 
 ### 启动
 
 ```bash
-cp .env.example .env
-# 修改 .env 中的密钥、数据库密码和允许访问的主机
-docker compose up --build -d
+cp server/.env.example server/.env
+# 修改 server/.env 中的密钥、数据库密码和允许访问的主机
+docker compose --env-file server/.env -f deploy/docker-compose.yml up --build -d
 ```
 
 部署前至少应检查：
@@ -168,9 +130,9 @@ docker compose up --build -d
 ### 查看生产日志
 
 ```bash
-docker compose ps
-docker compose logs web --tail=200
-docker compose logs nginx --tail=100
+docker compose --env-file server/.env -f deploy/docker-compose.yml ps
+docker compose --env-file server/.env -f deploy/docker-compose.yml logs web --tail=200
+docker compose --env-file server/.env -f deploy/docker-compose.yml logs nginx --tail=100
 ```
 
 `django.request` 的错误会写入 Gunicorn 控制台，因此 Django 请求异常可直接通过 `web` 服务日志查看。
@@ -191,7 +153,7 @@ docker compose logs nginx --tail=100
 - 旧版多班级导入继续严格匹配班级名称，避免学生进入错误班级。
 - “移出课程”只删除学生在当前课程中的选课关系，不删除全局账号，也不影响其他课程。
 - 移出后，学生立即失去当前课程及未完成实验的访问权限；系统同时清理草稿实验中的临时名单和显式覆盖规则。已发布快照、会话、作答、导出和审计记录保持不变。
-- 开启班级中心后，班级页分为概览、学生表现、实验分析和班级管理；成员管理仍使用原有表单、权限、CSRF 和审计路径。
+- 开启班级中心后，班级页分为概览、学生表现、实验分析和班级管理；成员管理使用 Vue 页面与统一 API，权限、CSRF、事务及审计仍由 Django 控制。
 - 教师可在“学生端显示设置”中控制成绩、正确率、逐题结果、班级平均、本人位次、KC 和趋势。完整排行榜、学生过程轨迹和 KT/CD 推断不属于学生端 v1。
 
 已有默认密码识别与数据库迁移分开：迁移只新增默认值为 `false` 的强制改密字段。在已配置目标数据库的运行环境中，可运行 `python manage.py mark_student_default_passwords --dry-run` 查看扫描、匹配、跳过和异常统计。确认结果后，显式运行 `python manage.py mark_student_default_passwords --apply` 才会标记仍使用 `S + 学号` 的账号；命令不修改密码哈希，默认仅预演，也不会随启动或迁移自动运行。
@@ -243,7 +205,7 @@ docker compose logs nginx --tail=100
 
 - 实名结果 XLSX。
 - 实名导航事件 CSV。
-- 实名 KT CSV 和实名导航 CSV（保留既有 URL 路径）。
+- 实名 KT CSV 和实名导航 CSV（通过授权的 `/api/v1/` 下载入口）。
 - 学生名册 CSV。
 - 学生单次作答会话报告。
 
@@ -293,7 +255,7 @@ docker compose logs nginx --tail=100
 
 师生业务页面使用独立构建的 Vue HTML；Django 保留 Session 认证、DRF API、文件下载和 `/admin/`。业务 URL 沿用原路径，未知 API 不会返回前端 HTML。
 
-- 本地启动：当前 checkout 的 `.venv` 运行 `scripts/run_dev.py`。启动器先构建前端，再启动构建监听与同域 Django 服务。手工启动时在 `frontend` 执行 `npm ci`，启动 Vite，并通过 `VITE_DEV_SERVER_URL` 将 Django 业务入口接到开发服务器。
-- 前端与后端可分别构建。生产网关使用 `nginx/kt-platform.conf`；Django 设置 `FRONTEND_INTERNAL_REDIRECT=/__frontend/index.html`，由 Nginx 内部提供前端 HTML。此变量不可用于没有对应 Nginx 配置的本地服务。
-- 采集器及离线 Worker 随前端构建，Worker 继续使用原 URL 和 scope。Nginx 的 `frontend_assets` 持久卷保留旧哈希资源，启动脚本追加新版本文件；发布及回滚不删除该卷，不清理 IndexedDB 或待上传队列。
-- 本轮便携 PostgreSQL 与本地浏览器验证不替代生产 Nginx 容器联调、真实中文输入法或真实浏览器 200% 缩放检查。验证范围与截图见 `docs/ui/UI-AUDIT.md`。
+- 本地启动：当前 checkout 的 `server/.venv` 运行 `server/scripts/run_dev.py`。启动器先构建前端，再启动构建监听、内部 Django API 服务与同源 Node 网关。Node 网关按 `contracts/frontend-routes.json` 提供登记页面，API 和受限下载交给 Django。
+- 前端与后端可分别构建。生产网关使用 `deploy/nginx/kt-platform.conf` 和 `frontend-pages.conf`；只有登记页面的 GET/HEAD 请求获得前端 HTML。Django 保留页面反向 URL 名称，不读取客户端构建产物；旧表单入口已退役。
+- 采集器及离线 Worker 随前端构建，Worker 继续使用原 URL 和 scope。Nginx 的 `frontend_assets` 持久卷保留旧哈希资源及版本化作答壳，启动脚本追加新版本文件；发布及回滚不删除该卷，不清理 IndexedDB 或待上传队列。
+- 本轮便携 PostgreSQL 与本地浏览器验证不替代生产 Nginx 容器联调、真实中文输入法或真实浏览器 200% 缩放检查。当前验证范围及未通过门槛见 [执行记录](docs/superpowers/plans/2026-10-11-unified-frontend-backend-architecture.md)。

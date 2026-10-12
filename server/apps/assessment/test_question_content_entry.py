@@ -1,0 +1,216 @@
+"""The content read must not establish a formal question entry."""
+import uuid
+from datetime import timedelta
+
+from django.test import TestCase
+from django.utils import timezone
+
+from apps.question_bank.models import Question, QuestionConcept, QuestionOption
+
+from .models import AssessmentEvent, Attempt, ExperimentSession, QuestionVisitEvent, SubmissionEvent
+from .test_student_api import StudentApiFixtureMixin
+
+
+class StudentQuestionContentReadTests(StudentApiFixtureMixin, TestCase):
+    def content_fixture(self):
+        started = self.start()
+        self.assertEqual(started.status_code, 201, started.content)
+        session = ExperimentSession.objects.get(class_task=self.task, student=self.student)
+        assignment = session.assignments.get()
+        return session, assignment, f'/api/v1/student/sessions/{session.pk}/questions/{assignment.pk}/'
+
+    def test_offline_identity_is_bound_to_the_authorized_session_and_assignment(self):
+        session, assignment, url = self.content_fixture()
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['data']['offline_authorization'], {
+            'user_id': self.student.pk, 'session_id': session.pk, 'assignment_id': assignment.pk,
+        })
+
+    def test_content_get_does_not_create_visits_or_start_attempt_timing(self):
+        session, assignment, url = self.content_fixture()
+        attempt = assignment.attempt
+        session_fields = ('status', 'current_assignment_id', 'first_open_count', 'visit_event_count',
+                          'submission_count', 'last_activity_at', 'deadline_at')
+        attempt_fields = ('status', 'first_open_sequence_index', 'first_opened_at', 'last_opened_at',
+                          'visit_count', 'active_seconds', 'item_started_at', 'item_deadline_at',
+                          'initial_effective_deadline_at', 'current_effective_deadline_at')
+        before_session = ExperimentSession.objects.filter(pk=session.pk).values(*session_fields).get()
+        before_attempt = Attempt.objects.filter(pk=attempt.pk).values(*attempt_fields).get()
+        before_visits = QuestionVisitEvent.objects.filter(session=session).count()
+        before_entries = AssessmentEvent.objects.filter(session=session, event_type='item_entered').count()
+
+        for _ in range(2):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertEqual(response.json()['data']['question']['snapshot_id'], assignment.snapshot_id)
+            self.assertIsNone(response.json()['data']['process']['visit_id'])
+            self.assertNotIn('entry_receipt', response.json()['data'])
+        with self.subTest('visits'):
+            self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), before_visits)
+        with self.subTest('entry_events'):
+            self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), before_entries)
+        with self.subTest('session_state'):
+            self.assertEqual(ExperimentSession.objects.filter(pk=session.pk).values(*session_fields).get(), before_session)
+        with self.subTest('attempt_timing'):
+            self.assertEqual(Attempt.objects.filter(pk=attempt.pk).values(*attempt_fields).get(), before_attempt)
+
+    def test_expired_content_get_does_not_terminate_or_auto_submit(self):
+        session, assignment, url = self.content_fixture()
+        ExperimentSession.objects.filter(pk=session.pk).update(deadline_at=timezone.now() - timedelta(seconds=1))
+        before_session = ExperimentSession.objects.filter(pk=session.pk).values().get()
+        before_attempt = Attempt.objects.filter(assignment=assignment).values().get()
+        before_events = AssessmentEvent.objects.filter(session=session).count()
+        before_submissions = SubmissionEvent.objects.filter(attempt__session=session).count()
+        response = self.client.get(url)
+        with self.subTest('authorized_read'):
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertFalse(response.json()['data']['entry_allowed'])
+            self.assertEqual(response.json()['data']['entry_denial_code'], 'DEADLINE_EXPIRED')
+        with self.subTest('session_unchanged'):
+            self.assertEqual(ExperimentSession.objects.filter(pk=session.pk).values().get(), before_session)
+        with self.subTest('attempt_unchanged'):
+            self.assertEqual(Attempt.objects.filter(assignment=assignment).values().get(), before_attempt)
+        with self.subTest('no_termination_events'):
+            self.assertEqual(AssessmentEvent.objects.filter(session=session).count(), before_events)
+        with self.subTest('no_automatic_submission'):
+            self.assertEqual(SubmissionEvent.objects.filter(attempt__session=session).count(), before_submissions)
+        for forbidden in ('correct_answer', 'explanation', 'is_correct', 'score'):
+            self.assertNotIn(forbidden, response.content.decode('utf-8'))
+
+
+class StudentQuestionFormalEntryTests(StudentApiFixtureMixin, TestCase):
+    def entry(self, *, task=None):
+        started = self.start(task=task)
+        self.assertEqual(started.status_code, 201, started.content)
+        session = ExperimentSession.objects.get(class_task=task or self.task, student=self.student)
+        assignment = session.assignments.order_by('assigned_sequence_index').first()
+        clicked_at = timezone.now() - timedelta(seconds=1)
+        document = {'reason': 'navigation_click', 'navigation_id': str(uuid.uuid4()),
+                    'client_occurred_at': clicked_at.isoformat(), 'client_monotonic_ms': '20000.500',
+                    'client_time_origin': (clicked_at - timedelta(seconds=20)).isoformat()}
+        return session, assignment, f'/api/v1/student/sessions/{session.pk}/questions/{assignment.pk}/', document
+
+    def post_entry(self, url, document):
+        return self.client.post(url, data=document, content_type='application/json')
+
+    def test_same_navigation_token_and_material_replays_stable_receipt_once(self):
+        session, assignment, url, document = self.entry()
+        first = self.post_entry(url, document)
+        self.assertEqual(first.status_code, 200, first.content)
+        first_receipt = first.json()['data']['entry_receipt']
+        self.assertEqual(set(first_receipt), {'navigation_id', 'session_id', 'assignment_id', 'attempt_id',
+                                             'visit_id', 'visit_index', 'entry_event_id', 'entered_at'})
+        before_attempt = Attempt.objects.filter(assignment=assignment).values().get()
+        before_session = ExperimentSession.objects.filter(pk=session.pk).values().get()
+        replay = self.post_entry(url, document)
+        self.assertEqual(replay.status_code, 200, replay.content)
+        self.assertEqual(replay.json()['data']['entry_receipt'], first_receipt)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 1)
+        self.assertEqual(Attempt.objects.filter(assignment=assignment).values().get(), before_attempt)
+        self.assertEqual(ExperimentSession.objects.filter(pk=session.pk).values().get(), before_session)
+
+    def test_same_token_with_changed_reason_or_clock_material_is_rejected(self):
+        session, assignment, url, document = self.entry()
+        first = self.post_entry(url, document)
+        self.assertEqual(first.status_code, 200, first.content)
+        before_attempt = Attempt.objects.filter(assignment=assignment).values().get()
+        before_session = ExperimentSession.objects.filter(pk=session.pk).values().get()
+        changes = {'reason': 'resume', 'client_monotonic_ms': '20001.500',
+                   'client_occurred_at': (timezone.now() - timedelta(seconds=2)).isoformat(),
+                   'client_time_origin': (timezone.now() - timedelta(seconds=22)).isoformat()}
+        for field, value in changes.items():
+            with self.subTest(field=field):
+                changed = self.post_entry(url, {**document, field: value})
+                self.assertEqual(changed.status_code, 409, changed.content)
+                self.assertEqual(changed.json()['error']['code'], 'ENTRY_MATERIAL_CONFLICT')
+                self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+                self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 1)
+                self.assertEqual(Attempt.objects.filter(assignment=assignment).values().get(), before_attempt)
+                self.assertEqual(ExperimentSession.objects.filter(pk=session.pk).values().get(), before_session)
+
+    def test_same_token_for_another_assignment_is_rejected_without_entry(self):
+        second = Question.objects.create(bank=self.bank, sequence=2, code='STU-Q2',
+            question_type=Question.Type.SINGLE, text='另一题', correct_answer='B')
+        QuestionOption.objects.create(question=second, key='A', text='3', display_order=1)
+        QuestionOption.objects.create(question=second, key='B', text='4', display_order=2)
+        QuestionConcept.objects.create(question=second, concept=self.question.primary_concept, is_primary=True)
+        _, task = self.publish_task(name='两个题目的进入任务', feedback_mode=self.feedback_mode)
+        session, assignment, url, document = self.entry(task=task)
+        first = self.post_entry(url, document)
+        self.assertEqual(first.status_code, 200, first.content)
+        other = session.assignments.exclude(pk=assignment.pk).get()
+        other_url = f'/api/v1/student/sessions/{session.pk}/questions/{other.pk}/'
+        conflict = self.post_entry(other_url, document)
+        self.assertEqual(conflict.status_code, 409, conflict.content)
+        self.assertEqual(conflict.json()['error']['code'], 'ENTRY_MATERIAL_CONFLICT')
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+        self.assertEqual(Attempt.objects.get(assignment=other).status, Attempt.Status.UNVISITED)
+
+    def test_formal_entry_requires_navigation_id_and_complete_clock_group(self):
+        session, assignment, url, document = self.entry()
+        for field in ('navigation_id', 'client_occurred_at', 'client_monotonic_ms', 'client_time_origin'):
+            with self.subTest(missing=field):
+                incomplete = {key: value for key, value in document.items() if key != field}
+                response = self.post_entry(url, incomplete)
+                self.assertEqual(response.status_code, 400, response.content)
+                self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 0)
+                self.assertEqual(Attempt.objects.get(assignment=assignment).status, Attempt.Status.UNVISITED)
+
+    def test_new_formal_entry_after_deadline_is_rejected_without_opening_attempt(self):
+        session, assignment, url, document = self.entry()
+        ExperimentSession.objects.filter(pk=session.pk).update(deadline_at=timezone.now() - timedelta(seconds=1))
+        response = self.post_entry(url, document)
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 0)
+        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 0)
+
+    def test_expired_item_content_and_original_receipt_are_read_only_and_new_entry_is_denied(self):
+        session, assignment, url, document = self.entry()
+        first = self.post_entry(url, document)
+        self.assertEqual(first.status_code, 200, first.content)
+        receipt = first.json()['data']['entry_receipt']
+        Attempt.objects.filter(assignment=assignment).update(
+            current_effective_deadline_at=timezone.now() - timedelta(seconds=1))
+        before_attempt = Attempt.objects.filter(assignment=assignment).values().get()
+        content = self.client.get(url)
+        self.assertEqual(content.status_code, 200, content.content)
+        self.assertFalse(content.json()['data']['entry_allowed'])
+        replay = self.post_entry(url, document)
+        self.assertEqual(replay.status_code, 200, replay.content)
+        self.assertEqual(replay.json()['data']['entry_receipt'], receipt)
+        self.assertFalse(replay.json()['data']['entry_allowed'])
+        rejected = self.post_entry(url, {**document, 'navigation_id': str(uuid.uuid4())})
+        self.assertEqual(rejected.status_code, 409, rejected.content)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+        self.assertEqual(Attempt.objects.filter(assignment=assignment).values().get(), before_attempt)
+
+    def test_successful_entry_replay_after_deadline_confirms_receipt_with_read_only_dto(self):
+        session, assignment, url, document = self.entry()
+        first = self.post_entry(url, document)
+        self.assertEqual(first.status_code, 200, first.content)
+        receipt = first.json()['data']['entry_receipt']
+        ExperimentSession.objects.filter(pk=session.pk).update(deadline_at=timezone.now() - timedelta(seconds=1))
+        before_session = ExperimentSession.objects.filter(pk=session.pk).values().get()
+        replay = self.post_entry(url, document)
+        self.assertEqual(replay.status_code, 200, replay.content)
+        self.assertEqual(replay.json()['data']['entry_receipt'], receipt)
+        self.assertFalse(replay.json()['data']['entry_allowed'])
+        self.assertEqual(replay.json()['data']['entry_denial_code'], 'DEADLINE_EXPIRED')
+        self.assertEqual(ExperimentSession.objects.filter(pk=session.pk).values().get(), before_session)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+
+    def test_successful_token_cannot_replay_question_after_enrollment_revocation(self):
+        from apps.accounts.models import CourseEnrollment
+
+        session, assignment, url, document = self.entry()
+        first = self.post_entry(url, document)
+        self.assertEqual(first.status_code, 200, first.content)
+        enrollment = CourseEnrollment.objects.get(student=self.student, course=self.course)
+        enrollment.is_active = False
+        enrollment.save(update_fields=['is_active'])
+        response = self.post_entry(url, document)
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertNotIn('question', response.json())
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)

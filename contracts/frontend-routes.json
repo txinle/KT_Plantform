@@ -1,0 +1,281 @@
+{
+  "version": 1,
+  "methods": [
+    "GET",
+    "HEAD"
+  ],
+  "routes": [
+    {
+      "name": "home",
+      "path": ""
+    },
+    {
+      "name": "login",
+      "path": "login/"
+    },
+    {
+      "name": "password-change",
+      "path": "password/change/"
+    },
+    {
+      "name": "accounts:home",
+      "path": "teacher/accounts/"
+    },
+    {
+      "name": "question_bank:dashboard",
+      "path": "teacher/"
+    },
+    {
+      "name": "question_bank:bank_list",
+      "path": "teacher/banks/"
+    },
+    {
+      "name": "question_bank:bank_detail",
+      "path": "teacher/banks/<int:pk>/"
+    },
+    {
+      "name": "question_bank:question_import",
+      "path": "teacher/banks/<int:pk>/import/"
+    },
+    {
+      "name": "question_bank:kc_import",
+      "path": "teacher/banks/<int:pk>/kc-import/"
+    },
+    {
+      "name": "question_bank:question_edit",
+      "path": "teacher/banks/<int:bank_pk>/questions/<int:question_pk>/edit/"
+    },
+    {
+      "name": "question_bank:concept_list",
+      "path": "teacher/concepts/"
+    },
+    {
+      "name": "courses:list",
+      "path": "teacher/courses/"
+    },
+    {
+      "name": "courses:create",
+      "path": "teacher/courses/create/"
+    },
+    {
+      "name": "courses:detail",
+      "path": "teacher/courses/<int:course_pk>/"
+    },
+    {
+      "name": "courses:data",
+      "path": "teacher/courses/<int:course_pk>/data/"
+    },
+    {
+      "name": "courses:data_teaching",
+      "path": "teacher/courses/<int:course_pk>/data/teaching/"
+    },
+    {
+      "name": "courses:data_export",
+      "path": "teacher/courses/<int:course_pk>/data/export/"
+    },
+    {
+      "name": "courses:data_exports",
+      "path": "teacher/courses/<int:course_pk>/data/exports/"
+    },
+    {
+      "name": "courses:data_quality",
+      "path": "teacher/courses/<int:course_pk>/data/quality/"
+    },
+    {
+      "name": "courses:data_export_history",
+      "path": "teacher/courses/<int:course_pk>/data/exports/history/"
+    },
+    {
+      "name": "courses:data_advanced",
+      "path": "teacher/courses/<int:course_pk>/data/advanced/"
+    },
+    {
+      "name": "courses:data_tables",
+      "path": "teacher/courses/<int:course_pk>/data/tables/"
+    },
+    {
+      "name": "courses:settings",
+      "path": "teacher/courses/<int:course_pk>/settings/"
+    },
+    {
+      "name": "courses:banks",
+      "path": "teacher/courses/<int:course_pk>/banks/"
+    },
+    {
+      "name": "courses:archived_banks",
+      "path": "teacher/courses/<int:course_pk>/banks/archived/"
+    },
+    {
+      "name": "courses:shared_sources",
+      "path": "teacher/courses/<int:course_pk>/banks/shared/"
+    },
+    {
+      "name": "courses:shared_creators",
+      "path": "teacher/courses/<int:course_pk>/banks/shared/<int:source_course_pk>/"
+    },
+    {
+      "name": "courses:shared_creator_banks",
+      "path": "teacher/courses/<int:course_pk>/banks/shared/<int:source_course_pk>/creators/<int:creator_pk>/"
+    },
+    {
+      "name": "courses:bank_detail",
+      "path": "teacher/courses/<int:course_pk>/banks/<int:pk>/"
+    },
+    {
+      "name": "courses:bank_edit",
+      "path": "teacher/courses/<int:course_pk>/banks/<int:pk>/edit/"
+    },
+    {
+      "name": "courses:question_import",
+      "path": "teacher/courses/<int:course_pk>/banks/<int:pk>/import/"
+    },
+    {
+      "name": "courses:kc_import",
+      "path": "teacher/courses/<int:course_pk>/banks/<int:pk>/kc-import/"
+    },
+    {
+      "name": "courses:question_edit",
+      "path": "teacher/courses/<int:course_pk>/banks/<int:bank_pk>/questions/<int:question_pk>/edit/"
+    },
+    {
+      "name": "courses:classes",
+      "path": "teacher/courses/<int:course_pk>/classes/"
+    },
+    {
+      "name": "courses:class_detail",
+      "path": "teacher/courses/<int:course_pk>/classes/<int:class_pk>/"
+    },
+    {
+      "name": "courses:class_student_visibility",
+      "path": "teacher/courses/<int:course_pk>/classes/<int:class_pk>/student-visibility/"
+    },
+    {
+      "name": "courses:class_student_detail",
+      "path": "teacher/courses/<int:course_pk>/classes/<int:class_pk>/students/<int:student_pk>/analysis/"
+    },
+    {
+      "name": "courses:class_student_experiment_detail",
+      "path": "teacher/courses/<int:course_pk>/classes/<int:class_pk>/students/<int:student_pk>/experiments/<int:experiment_pk>/"
+    },
+    {
+      "name": "courses:class_question_detail",
+      "path": "teacher/courses/<int:course_pk>/classes/<int:class_pk>/experiments/<int:experiment_pk>/questions/<int:question_pk>/"
+    },
+    {
+      "name": "courses:class_question_process",
+      "path": "teacher/courses/<int:course_pk>/classes/<int:class_pk>/experiments/<int:experiment_pk>/questions/<int:question_pk>/students/<int:student_pk>/process/"
+    },
+    {
+      "name": "courses:class_edit",
+      "path": "teacher/courses/<int:course_pk>/classes/<int:class_pk>/edit/"
+    },
+    {
+      "name": "courses:student_add",
+      "path": "teacher/courses/<int:course_pk>/classes/<int:class_pk>/students/add/"
+    },
+    {
+      "name": "courses:student_add_manual",
+      "path": "teacher/courses/<int:course_pk>/classes/<int:class_pk>/students/add/manual/"
+    },
+    {
+      "name": "courses:student_copy",
+      "path": "teacher/courses/<int:course_pk>/classes/<int:class_pk>/students/copy/"
+    },
+    {
+      "name": "courses:student_import",
+      "path": "teacher/courses/<int:course_pk>/classes/<int:class_pk>/students/import/"
+    },
+    {
+      "name": "courses:experiments",
+      "path": "teacher/courses/<int:course_pk>/experiments/"
+    },
+    {
+      "name": "courses:experiment_create",
+      "path": "teacher/courses/<int:course_pk>/experiments/create/"
+    },
+    {
+      "name": "courses:experiment_detail",
+      "path": "teacher/courses/<int:course_pk>/experiments/<int:pk>/"
+    },
+    {
+      "name": "courses:experiment_edit",
+      "path": "teacher/courses/<int:course_pk>/experiments/<int:pk>/edit/"
+    },
+    {
+      "name": "courses:experiment_grading",
+      "path": "teacher/courses/<int:course_pk>/experiments/<int:pk>/class-tasks/<int:task_pk>/grading/"
+    },
+    {
+      "name": "courses:experiment_publish_plan",
+      "path": "teacher/courses/<int:course_pk>/experiments/<int:pk>/publish-plan/<int:plan_pk>/step/<int:step>/"
+    },
+    {
+      "name": "courses:experiment_results",
+      "path": "teacher/courses/<int:course_pk>/experiments/<int:pk>/results/"
+    },
+    {
+      "name": "courses:experiment_session_detail",
+      "path": "teacher/courses/<int:course_pk>/experiments/<int:pk>/sessions/<int:session_pk>/"
+    },
+    {
+      "name": "accounts:class_list",
+      "path": "teacher/accounts/classes/"
+    },
+    {
+      "name": "accounts:student_list",
+      "path": "teacher/accounts/students/"
+    },
+    {
+      "name": "accounts:student_import",
+      "path": "teacher/accounts/students/import/"
+    },
+    {
+      "name": "experiments:list",
+      "path": "teacher/experiments/"
+    },
+    {
+      "name": "experiments:create",
+      "path": "teacher/experiments/create/"
+    },
+    {
+      "name": "experiments:detail",
+      "path": "teacher/experiments/<int:pk>/"
+    },
+    {
+      "name": "experiments:edit",
+      "path": "teacher/experiments/<int:pk>/edit/"
+    },
+    {
+      "name": "experiments:results",
+      "path": "teacher/experiments/<int:pk>/results/"
+    },
+    {
+      "name": "assessment:dashboard",
+      "path": "student/"
+    },
+    {
+      "name": "assessment:course",
+      "path": "student/courses/<int:course_id>/"
+    },
+    {
+      "name": "assessment:learning",
+      "path": "student/courses/<int:course_id>/learning/"
+    },
+    {
+      "name": "assessment:learning_experiment",
+      "path": "student/courses/<int:course_id>/learning/experiments/<int:experiment_id>/"
+    },
+    {
+      "name": "assessment:learning_question",
+      "path": "student/courses/<int:course_id>/learning/experiments/<int:experiment_id>/questions/<int:question_id>/"
+    },
+    {
+      "name": "assessment:question",
+      "path": "student/sessions/<int:session_id>/questions/<int:assignment_id>/"
+    },
+    {
+      "name": "assessment:complete",
+      "path": "student/sessions/<int:session_id>/complete/"
+    }
+  ]
+}

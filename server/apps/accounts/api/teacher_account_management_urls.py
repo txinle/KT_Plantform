@@ -1,0 +1,118 @@
+from django.urls import path
+from apps.api.downloads import XLSX, download_view
+from ..downloads import student_import_template
+
+from .teacher_account_management_views import (
+    CourseClassCopyConfirmView,
+    CourseClassCopyPreviewView,
+    CourseClassDeleteView,
+    CourseClassManagementView,
+    CourseClassManualEnrollmentView,
+    CourseStudentImportConfirmView,
+    CourseStudentImportJobView,
+    CourseStudentImportPreviewView,
+    CourseStudentImportTemplateView,
+    CourseStudentMoveView,
+    CourseStudentRemoveView,
+    CourseStudentResetView,
+    CourseStudentIdentityView,
+    CourseStudentVisibilityView,
+    TeacherAccountClassCollectionView,
+    TeacherAccountStudentCollectionView,
+    TeacherAccountStudentImportConfirmView,
+    TeacherAccountStudentImportPreviewView,
+    TeacherAccountStudentResetView,
+)
+
+
+urlpatterns = [
+    path('students/import-template.xlsx', download_view(student_import_template, media_types=(XLSX,),
+         operation_id='teacher_account_student_import_template'), name='teacher-account-student-import-template'),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/<int:student_id>/identity/",
+        CourseStudentIdentityView.as_view(),
+        name="teacher-course-student-identity-update",
+    ),
+    path("classes/", TeacherAccountClassCollectionView.as_view(), name="teacher-account-class-list"),
+    path("students/", TeacherAccountStudentCollectionView.as_view(), name="teacher-account-student-list"),
+    path(
+        "students/import/preview/",
+        TeacherAccountStudentImportPreviewView.as_view(),
+        name="teacher-account-student-import-preview",
+    ),
+    path(
+        "students/import/confirm/",
+        TeacherAccountStudentImportConfirmView.as_view(),
+        name="teacher-account-student-import-confirm",
+    ),
+    path(
+        "students/<int:student_id>/reset-password/",
+        TeacherAccountStudentResetView.as_view(),
+        name="teacher-account-student-reset-password",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/manage/",
+        CourseClassManagementView.as_view(),
+        name="teacher-course-class-management",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/delete/",
+        CourseClassDeleteView.as_view(),
+        name="teacher-course-class-delete",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/manual/",
+        CourseClassManualEnrollmentView.as_view(),
+        name="teacher-course-class-manual-enrollment",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/copy/preview/",
+        CourseClassCopyPreviewView.as_view(),
+        name="teacher-course-class-copy-preview",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/copy/confirm/",
+        CourseClassCopyConfirmView.as_view(),
+        name="teacher-course-class-copy-confirm",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/import/preview/",
+        CourseStudentImportPreviewView.as_view(),
+        name="teacher-course-class-student-import-preview",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/import/confirm/",
+        CourseStudentImportConfirmView.as_view(),
+        name="teacher-course-class-student-import-confirm",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/import/jobs/<uuid:job_id>/",
+        CourseStudentImportJobView.as_view(),
+        name="teacher-course-class-student-import-job",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/import-template.xlsx",
+        CourseStudentImportTemplateView.as_view(),
+        name="teacher-course-class-student-import-template",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/<int:student_id>/move/",
+        CourseStudentMoveView.as_view(),
+        name="teacher-course-class-student-move",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/<int:student_id>/remove/",
+        CourseStudentRemoveView.as_view(),
+        name="teacher-course-class-student-remove",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/students/<int:student_id>/reset-password/",
+        CourseStudentResetView.as_view(),
+        name="teacher-course-class-student-reset-password",
+    ),
+    path(
+        "courses/<int:course_id>/classes/<int:class_id>/student-visibility/",
+        CourseStudentVisibilityView.as_view(),
+        name="teacher-course-class-student-visibility",
+    ),
+]

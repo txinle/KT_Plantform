@@ -1,10 +1,18 @@
-KT 交互数据采集平台：本地首版
+KT 交互数据采集平台
 
 Windows：双击 run_local.bat
+Windows Git Bash：执行 ./run_local.sh（调用同一 Windows 启动器）
 Linux/macOS：终端执行 ./run_local.sh
 
-首次运行需要联网安装 Python 依赖。启动后访问：
+请在项目根目录启动，并保留 server、client、contracts 的并列目录结构。
+Python 环境位于 server/.venv，开发启动逻辑位于 server/scripts/run_dev.py。
+Windows 工具、npm/pip 缓存和临时目录默认位于 E:\ATOP\ATOP-tooling。
+Linux/macOS 需预先启动 PostgreSQL 17 并配置数据库，连接变量见 README.md。
+仅空用户数据库自动写入演示数据；已有题库不会在启动时重置。
+
+使用 Python 3.13、Node 24 和 PostgreSQL 17；首次运行需安装依赖。启动后访问：
 http://127.0.0.1:8000/
+页面就绪后自动打开浏览器；Ctrl+C 关闭本次前后端和后台任务进程。
 
 演示账号：
 管理员 admin / admin123
@@ -12,3 +20,6 @@ http://127.0.0.1:8000/
 学生 S001 / student123
 
 正式采集前请修改演示密码并先完成小规模试测。
+
+运行说明见 README.md；修改和验收结果见 docs/ops/school-final-delivery-20261011.md。
+学校 180 人性能验收未通过，新增保存离题和原子提交协议默认关闭。

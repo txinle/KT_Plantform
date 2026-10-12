@@ -13,6 +13,9 @@ env:
 
 jobs:
   backend:
+    defaults:
+      run:
+        working-directory: server
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -34,21 +37,17 @@ jobs:
         with:
           python-version: '3.13'
           cache: pip
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: server/requirements.txt
       - run: pip install -r requirements.txt
-      - run: npm ci
-        working-directory: frontend
-      - run: npm run build
-        working-directory: frontend
+      - run: python manage.py export_api_schema --check
       - run: python manage.py check
       - run: python manage.py makemigrations --check --dry-run
       - run: python manage.py test
 
   postgresql-contracts:
+    defaults:
+      run:
+        working-directory: server
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -76,6 +75,7 @@ jobs:
         with:
           python-version: '3.13'
           cache: pip
+          cache-dependency-path: server/requirements.txt
       - run: pip install -r requirements.txt
       - run: python manage.py migrate --noinput
       - run: >-
@@ -88,47 +88,29 @@ jobs:
           apps.assessment.tests_postgresql_enrollment_race
           apps.analytics.test_export_lineage_v2.ExportLineageV2Tests.test_outer_read_committed_transaction_is_rejected_for_source_freeze
 
-  frontend:
+  client:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_DB: kt_platform
-          POSTGRES_USER: kt_user
-          POSTGRES_PASSWORD: kt_password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U kt_user -d kt_platform"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.13'
-          cache: pip
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: pip install -r requirements.txt
+          cache-dependency-path: client/package-lock.json
       - run: npm ci
-        working-directory: frontend
+        working-directory: client
       - run: npm run lint
-        working-directory: frontend
+        working-directory: client
       - run: npm run typecheck
-        working-directory: frontend
+        working-directory: client
       - run: npm run test:unit
-        working-directory: frontend
+        working-directory: client
+      - run: npm run test:scripts
+        working-directory: client
       - run: npm run api:check
-        working-directory: frontend
+        working-directory: client
       - run: npm run build
-        working-directory: frontend
-      - run: python manage.py check_vue_assets
+        working-directory: client
 
   e2e:
     runs-on: ubuntu-latest
@@ -170,23 +152,25 @@ jobs:
         with:
           python-version: '3.13'
           cache: pip
+          cache-dependency-path: server/requirements.txt
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: pip install -r requirements.txt
+          cache-dependency-path: client/package-lock.json
+      - run: python -m venv server/.venv && server/.venv/bin/python -m pip install -r server/requirements.txt
       - run: npm ci
-        working-directory: frontend
+        working-directory: client
       - run: npx playwright install --with-deps chromium firefox webkit
-        working-directory: frontend
+        working-directory: client
       - name: Run browser end-to-end tests
         run: |
-          node --test scripts/e2e-database.test.mjs
+          npm run test:scripts
           npm run build
+          npm run build:check
           node scripts/prepare-e2e.mjs --capture-v2
           npx playwright test --config ${{ matrix.config }}
-        working-directory: frontend
+        working-directory: client
       - name: Upload Playwright failure artifacts
         if: ${{ failure() }}
         uses: actions/upload-artifact@v7
@@ -194,7 +178,7 @@ jobs:
           name: playwright-e2e-failure-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
           include-hidden-files: true
           path: |
-            frontend/.e2e-results/
-            frontend/playwright-report/
+            client/.e2e-results/
+            client/playwright-report/
           if-no-files-found: warn
           retention-days: 7
