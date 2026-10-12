@@ -351,17 +351,23 @@ class ResearchDeletionConcurrencyTests(TransactionTestCase):
         return thread
 
     def test_export_materialization_finishes_before_confirmed_deletion_cleans_its_file(self):
-        from apps.analytics.services import run_export_job
+        from apps.analytics.services import _finalize_export_job, renew_export_job_lease, run_export_job
         job, path = self.export([self.experiment])
         token = self.preview(self.url())["confirmation_token"]
-        entered, release, deleted = Event(), Event(), Event()
+        entered, release, deleted, renewed = Event(), Event(), Event(), Event()
         errors = Queue()
+        running = []
 
         def materialize(current):
+            running.append(current)
             entered.set()
             if not release.wait(10):
                 raise TimeoutError("export release not signalled")
-            return current
+            return _finalize_export_job(current, str(path), {})
+
+        def renew():
+            current = running[0]
+            self.assertIsNotNone(renew_export_job_lease(current, worker_id=current.locked_by))
 
         with patch("apps.analytics.services._materialize_export_job", side_effect=materialize):
             worker = self._start(lambda: run_export_job(job), errors)
@@ -369,11 +375,16 @@ class ResearchDeletionConcurrencyTests(TransactionTestCase):
                 self.assertTrue(entered.wait(10))
                 deleter = self._start(lambda: self._delete(token), errors, deleted)
                 self.assertFalse(deleted.wait(.2), "deletion must wait for the running export")
+                self.assertTrue(path.exists())
+                heartbeat = self._start(renew, errors, renewed)
+                self.assertTrue(renewed.wait(2), "waiting deletion must not block the export heartbeat")
             finally:
                 release.set()
                 worker.join(10)
                 if "deleter" in locals():
                     deleter.join(10)
+                if "heartbeat" in locals():
+                    heartbeat.join(10)
         self.assertTrue(errors.empty(), list(errors.queue))
         self.assertTrue(deleted.is_set())
         self.assertFalse(ExportJob.objects.filter(pk=job.pk).exists())

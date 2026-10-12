@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from contextlib import ExitStack, contextmanager
 
 from django.core import signing
 from django.core.exceptions import ValidationError
@@ -260,9 +261,27 @@ def _purge_experiment_relations(experiment, counts, class_group=None):
     experiment.delete()
 
 
+@contextmanager
+def _lock_export_generations(*, course, experiment, class_group):
+    from apps.analytics.services import _export_file_lock
+
+    with ExitStack() as locks:
+        if experiment is not None:
+            snapshots = affected_export_snapshots(course_id=course.pk, experiment_ids=[experiment.pk],
+                class_id=class_group.pk if class_group else None)
+            job_ids = list(ExportJob.objects.filter(snapshot__in=snapshots).order_by("pk")
+                           .values_list("pk", flat=True))
+            # Exporters need the course lock to finalize; wait before taking it,
+            # leaving their lease rows writable by the heartbeat thread.
+            # The confirmation fingerprint rechecks the export set after waiting.
+            for job_id in job_ids:
+                locks.enter_context(_export_file_lock(job_id))
+        yield
+
+
 def execute_deletion(*, request, course, action, confirmation_token, experiment=None, class_group=None):
     actor = request.user
-    with transaction.atomic():
+    with _lock_export_generations(course=course, experiment=experiment, class_group=class_group), transaction.atomic():
         course = lock_writable_course(course.pk)
         require_course_manager(course, actor)
         ids = list(class_experiments(class_group).values_list("pk", flat=True)) if action == "delete_class" else [experiment.pk]
