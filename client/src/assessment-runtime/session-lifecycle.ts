@@ -134,7 +134,10 @@ export function bindLifecycle(collector: ProcessEventCollector, options: Lifecyc
       await record('pageshow', { persisted: false });
       await record(visible ? 'document_visible' : 'document_hidden', {});
       await record(focused ? 'window_focused' : 'window_blurred', {});
-      await collector.checkpoint?.('resume');
+      const state = await collector.outbox.captureState(collector.clientInstanceId);
+      await collector.checkpoint?.('resume', {
+        boundary: { [collector.clientInstanceId]: state.highestEmitted },
+      });
     })(),
     closeAttempt,
     prepareNavigation,

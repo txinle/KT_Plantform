@@ -249,14 +249,21 @@ test('ordinary navigation confirms one durable save and replays a lost response 
   expect(final.left).toBe(2)
 })
 
-test('capture pointer writes wait for the target event acknowledgement under delayed upload', async ({ page }) => {
+for (const bundled of [false, true]) test(`capture pointer writes require ${bundled ? 'an atomic bundle' : 'a prior acknowledgement'} under delayed upload`, async ({ page }) => {
   const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-wait-delayed-${Date.now()}'; command.handle()`])
   const witness = await captureProtocol(page)
   witnesses.set(page, witness)
+  if (!bundled) await page.route('**/api/v1/student/sessions/*/questions/*/', async route => {
+    if (route.request().method() !== 'POST') return route.continue()
+    const response = await route.fetch()
+    const body = await response.json()
+    body.data.process.capture_bundle.enabled = false
+    await route.fulfill({ response, json: body })
+  })
   const earlyPointers: string[] = []
   await page.route('**/api/v1/assessment/process/capture-v2/batch/', async (route) => {
     const body = route.request().postDataJSON()
-    if (body.events?.some((row: { event_type: string }) => row.event_type === 'response_transition')) {
+    if ((body.capture_bundle?.events ?? body.events)?.some((row: { event_type: string }) => row.event_type === 'response_transition')) {
       await new Promise((resolve) => setTimeout(resolve, 2500))
     }
     await route.continue()
@@ -265,7 +272,8 @@ test('capture pointer writes wait for the target event acknowledgement under del
     if (!request.url().endsWith('/draft/') || request.method() !== 'POST') return
     const body = request.postDataJSON()
     const confirmed = witness.clientAcknowledgements.flatMap((row: { acknowledgements: { event_id: string }[] }) => row.acknowledgements.map(ack => ack.event_id))
-    if (body.target_event_id && !confirmed.includes(body.target_event_id)) earlyPointers.push(body.target_event_id)
+    const inlineTarget = body.capture_bundle?.events?.some((event: { event_id: string }) => event.event_id === body.target_event_id)
+    if (body.target_event_id && !confirmed.includes(body.target_event_id) && !inlineTarget) earlyPointers.push(body.target_event_id)
   })
   await page.goto('/login/')
   await page.getByLabel('账号或学号').fill('S002')
@@ -282,6 +290,14 @@ test('capture pointer writes wait for the target event acknowledgement under del
   const saved = await response
   expect(earlyPointers).toEqual([])
   expect(saved.status()).toBe(200)
+  const request = saved.request().postDataJSON()
+  const receipt = (await saved.json()).data
+  expect(receipt.active_response_event_id).toBe(request.target_event_id)
+  if (bundled) {
+    expect(request.capture_bundle.events.map((event: { event_id: string }) => event.event_id)).toContain(request.target_event_id)
+    expect(receipt.acknowledgements.map((ack: { event_id: string }) => ack.event_id)).toContain(request.target_event_id)
+  } else expect(request.capture_bundle).toBeUndefined()
+  await expect.poll(() => witness.clientAcknowledgements.flatMap((row: { acknowledgements: { event_id: string }[] }) => row.acknowledgements.map(ack => ack.event_id))).toContain(request.target_event_id)
 })
 
 test('teacher feedback defaults and optional short-response tools remain usable at supported sizes', async ({ page }, testInfo) => {

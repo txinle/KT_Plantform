@@ -352,7 +352,8 @@ export class ProcessEventCollector {
             const earlier = this.flushPromise;
             const upload = earlier || this.flush({ ...options, boundary });
             const result = await Promise.race([upload, changed]);
-            if (result === false && !earlier) return false;
+            // flush() notifies waiters in finally before its result settles.
+            if (!earlier && (result === false || (!this.flushPromise && await upload === false))) return false;
           } finally { this.progressWaiters.delete(notify); }
         }
       }
@@ -423,7 +424,7 @@ export class ProcessEventCollector {
     if (!this.checkpointEndpoint || !this.fetch || !this.outbox.captureState) return null;
     if (this.captureBundle?.enabled && this.captureBundle.version === 1) {
       const operationId = options.operationId ?? this.operationId;
-      const local = this.recordQueue.then(async () => ({ document: await this._createCheckpoint(trigger, operationId ?? null), boundary: await this.outbox.freezeBoundary(this.clientInstanceId) }));
+      const local = this.recordQueue.then(async () => ({ document: await this._createCheckpoint(trigger, operationId ?? null), boundary: options.boundary ?? await this.outbox.freezeBoundary(this.clientInstanceId) }));
       this.recordQueue = local.then(() => undefined);
       const { document, boundary } = await local;
       await this.flushConfirmed({ ...options, boundary, operationId });

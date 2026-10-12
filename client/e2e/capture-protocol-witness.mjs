@@ -16,7 +16,7 @@ export function projectPayload(value, fields, eventType) {
 }
 export function safeRequest(path, body) {
   if (!/^\/(api\/v1\/assessment\/process\/|api\/v1\/student\/attempts\/)/.test(path) || !body || typeof body !== 'object') return null
-  const material = body.atomic_submission ?? body.save_and_leave ?? body
+  const material = body.atomic_submission ?? body.save_and_leave ?? body.capture_bundle ?? body
   return { path, field_names: Object.keys(body).sort(), client_instance_id: material.client_instance_id ?? body.writer_client_instance_id ?? null,
     has_writer_lease: Boolean(body.writer_lease_token || body.lease_token),
     events: (material.events || []).map((event) => ({ event_id: event.event_id, client_sequence_no: event.client_sequence_no,
@@ -40,7 +40,7 @@ export async function captureProtocol(page) {
       const response = await fetch(input, options)
       if (options?.method?.toUpperCase() === 'POST' && /^\/(api\/v1\/assessment\/process\/|api\/v1\/student\/attempts\/)/.test(path)) {
         const request = JSON.parse(String(options.body))
-        const material = request.atomic_submission ?? request.save_and_leave ?? request
+        const material = request.atomic_submission ?? request.save_and_leave ?? request.capture_bundle ?? request
         if (material.client_instance_id && Array.isArray(material.events)) {
           const body = (await response.clone().json()).data
           await globalThis.__ktWitnessAcknowledgement({ client_instance_id: material.client_instance_id, acknowledgements: body?.acknowledgements || [] })

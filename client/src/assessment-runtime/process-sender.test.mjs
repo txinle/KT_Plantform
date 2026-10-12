@@ -637,6 +637,8 @@ test('lifecycle capture emits approved events and heartbeat stops after close', 
   let monotonic = 5000;
   const collector = {
     attemptId: 11,
+    clientInstanceId: 'lifecycle-client',
+    outbox: { captureState: async () => ({ highestEmitted: records.length }) },
     record: async (eventType, payload) => { records.push({ eventType, payload }); },
     flush: async () => true,
     checkpoint: async (trigger) => { checkpoints.push(trigger); },
