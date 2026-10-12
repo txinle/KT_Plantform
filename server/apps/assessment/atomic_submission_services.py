@@ -41,9 +41,11 @@ def atomic_submission_capability(attempt):
     }
 
 
-def validate_process_bundle(attempt, document):
+def validate_process_bundle(attempt, document, *, session=None, capture_scope=False):
     """Validate the shared bounded evidence envelope without performing writes."""
-    bundle = require_exact_mapping(document, allowed=BUNDLE_FIELDS)
+    fields = BUNDLE_FIELDS - {'expected_version'} if capture_scope else BUNDLE_FIELDS
+    bundle = require_exact_mapping(document, allowed=fields)
+    session = session or attempt.session
     if type(bundle['version']) is not int or bundle['version'] != 1:
         raise ProcessRequestError('unsupported_atomic_submission_version')
     client_id = parse_uuid(bundle['client_instance_id'])
@@ -53,18 +55,23 @@ def validate_process_bundle(attempt, document):
             raise ProcessRequestError('invalid_atomic_submission')
         if len(rows) > limit:
             raise ProcessRequestError('atomic_submission_too_large', status=413)
-    for field in ('event_boundary', 'expected_version'):
+    for field in (('event_boundary',) if capture_scope else ('event_boundary', 'expected_version')):
         if type(bundle[field]) is not int or bundle[field] < 0:
             raise ProcessRequestError('invalid_atomic_submission')
     for event in bundle['events']:
         if (not isinstance(event, dict) or type(event.get('session_id')) is not int
-                or event['session_id'] != attempt.session_id
-                or event.get('attempt_id') != attempt.pk):
+                or event['session_id'] != session.pk):
             raise ProcessRequestError('invalid_bundle_link')
+        if attempt is not None and event.get('attempt_id') != attempt.pk:
+            from .event_invariants import SESSION_ONLY_EVENTS
+            if not (capture_scope and event.get('attempt_id') is None
+                    and event.get('event_type') in SESSION_ONLY_EVENTS):
+                raise ProcessRequestError('invalid_bundle_link')
         if type(event.get('client_sequence_no')) is not int or not 0 < event['client_sequence_no'] <= bundle['event_boundary']:
             raise ProcessRequestError('invalid_bundle_boundary')
     for checkpoint in bundle['checkpoints']:
-        if (not isinstance(checkpoint, dict) or checkpoint.get('session_id') != attempt.session_id
+        if (not isinstance(checkpoint, dict) or type(checkpoint.get('session_id')) is not int
+                or checkpoint.get('session_id') != session.pk
                 or parse_uuid(checkpoint.get('client_instance_id')) != client_id):
             raise ProcessRequestError('invalid_bundle_link')
         if type(checkpoint.get('highest_emitted_sequence_no')) is not int or checkpoint['highest_emitted_sequence_no'] > bundle['event_boundary']:

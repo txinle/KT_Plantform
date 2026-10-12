@@ -76,16 +76,16 @@ describe('prepareOfflineQuestion', () => {
     })
   })
 
-  it('checks the current worker script once even when an old assessment worker is active', async () => {
+  it('reuses an active assessment worker without registering it again', async () => {
     workerResponse = { ok: true }
     getRegistration.mockResolvedValue({ active: worker })
 
     await prepareOfflineQuestion(state)
 
     expect(getRegistration).toHaveBeenCalledWith('/student/sessions/')
-    expect(register).toHaveBeenCalledOnce()
+    expect(register).not.toHaveBeenCalled()
     await prepareOfflineQuestion(state)
-    expect(register).toHaveBeenCalledOnce()
+    expect(register).not.toHaveBeenCalled()
   })
 
   it('sends unique static resources and the loaded Vite entry identity', async () => {

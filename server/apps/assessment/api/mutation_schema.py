@@ -67,6 +67,11 @@ BUNDLE = obj({
 ACK = obj({'client_sequence_no': POSITIVE, 'event_id': UUID, 'server_ingest_sequence_no': POSITIVE},
           ['client_sequence_no', 'event_id', 'server_ingest_sequence_no'])
 ACKS = array(ACK)
+CAPTURE_BUNDLE = obj({name: shape for name, shape in BUNDLE['properties'].items() if name != 'expected_version'},
+    ['version', 'client_instance_id', 'event_boundary', 'events', 'checkpoints'],
+    description=f'Original bounded capture facts; maximum complete body {MAX_BYTES} bytes. '
+                'Batch facts share one owned session; draft/tool facts belong to the current attempt or session.')
+CAPTURE_RECEIPT = {'committed': SUCCESS, 'acknowledgements': ACKS, 'checkpoint_ids': array(UUID)}
 REJECTION = obj({'client_sequence_no': {'description': 'Original rejected client sequence value, possibly absent/null or malformed.'},
                 'code': STRING, 'permanent': BOOLEAN},
                 ['client_sequence_no', 'code', 'permanent'])
@@ -80,14 +85,20 @@ CONFIDENCE = {'nullable': True, 'oneOf': [
 ], 'description': 'Only allowed for a server-assigned confidence prompt; probability uses its frozen scale.'}
 
 DRAFT = obj({'answer': ANSWER, 'client_occurred_at': nullable(TIME), 'target_event_id': nullable(UUID),
-             'expected_version': COUNTER, **LEASE_INPUT}, exact=False)
+             'expected_version': COUNTER, 'capture_bundle': CAPTURE_BUNDLE, 'capture_operation_id': UUID,
+             **LEASE_INPUT}, exact=False,
+             description='capture_operation_id is required with capture_bundle; it binds the original durable draft receipt.')
 DRAFT['not'] = {'required': ['save_and_leave']}
+DRAFT['allOf'] = [{'anyOf': [
+    {'not': {'required': ['capture_bundle']}}, {'required': ['capture_operation_id']},
+]}]
 NAVIGATION = obj({
     'navigation_token': UUID, 'leave_event_id': UUID, 'target_event_id': nullable(UUID),
     'to_assignment_id': POSITIVE, 'client_clicked_at': nullable(TIME), **LEASE_INPUT,
     'save_and_leave': BUNDLE,
 }, ['navigation_token', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'save_and_leave'])
 DRAFT_RECEIPT = obj({
+    **CAPTURE_RECEIPT,
     'success': SUCCESS, 'saved_at': TIME, 'response_version': COUNTER,
     'active_response_event_id': nullable(UUID), 'response_snapshot_id': UUID,
     'content_hash': STRING, 'content_length': COUNTER, 'state_hash': STRING,
@@ -157,8 +168,8 @@ LEASE_RECEIPT = obj({'success': SUCCESS, 'lease_token': UUID, 'client_instance_i
                     ['success', 'lease_token', 'client_instance_id', 'expires_at'])
 PROCESS_ERRORS = (400, 409, 413, 415)
 TOOL_INPUT = obj({'tool': STRING, 'stage': STRING, 'operation_id': UUID, 'data': obj({}, exact=False),
-                  'answer_event_id': nullable(UUID), 'initiation_type': STRING}, ['tool', 'stage', 'operation_id'])
-TOOL_RESULT = obj({'success': SUCCESS, 'event_id': UUID, 'content_version': STRING, 'text': STRING},
+                  'answer_event_id': nullable(UUID), 'initiation_type': STRING, 'capture_bundle': CAPTURE_BUNDLE}, ['tool', 'stage', 'operation_id'])
+TOOL_RESULT = obj({'success': SUCCESS, 'event_id': UUID, 'content_version': STRING, 'text': STRING, **CAPTURE_RECEIPT},
                   ['success', 'event_id', 'content_version'])
 TOOLS_AVAILABLE = obj({'success': SUCCESS, 'state': obj({'doubt': BOOLEAN, 'pending_check': BOOLEAN,
     'checking': BOOLEAN, 'doubt_note': STRING}, ['doubt', 'pending_check', 'checking', 'doubt_note']),
@@ -169,16 +180,17 @@ TOOLS_AVAILABLE = obj({'success': SUCCESS, 'state': obj({'doubt': BOOLEAN, 'pend
 
 PROCESS = {
     'research_tools': spec({'oneOf': [obj({}), TOOL_INPUT]}, {'oneOf': [TOOLS_AVAILABLE, TOOL_RESULT]},
-        errors=(404, 409), description='Empty JSON object reads authorized tools/rules; action JSON '
-        'records the existing research-tool operation. Frozen tool configuration validates stage and data.'),
+        errors=(400, 404, 409, 413, 415), description='Empty JSON object reads authorized tools/rules; action JSON '
+        'records the existing research-tool operation. Optional capture_bundle commits original evidence with the action. '
+        'Frozen tool configuration validates stage and data.'),
     'resolve_branch': spec(obj({'candidate_event_ids': array(UUID), 'selected_event_id': UUID,
         'expected_version': COUNTER, 'operation_id': UUID, **LEASE_INPUT},
         ['candidate_event_ids', 'selected_event_id', 'expected_version', 'operation_id']),
         obj({'success': SUCCESS, 'response_version': COUNTER, 'active_response_event_id': UUID,
              'answer': ANSWER}, ['success', 'response_version', 'active_response_event_id', 'answer']),
         errors=(409,), description='Resolve the existing response branch using domain CAS and lease rules.'),
-    'capture_v2_batch': spec(EVENT_BATCH,
-        obj({'success': SUCCESS, 'acknowledgements': ACKS, 'rejections': array(REJECTION)},
+    'capture_v2_batch': spec({'oneOf': [EVENT_BATCH, obj({'capture_bundle': CAPTURE_BUNDLE}, ['capture_bundle'])]},
+        obj({'success': SUCCESS, 'acknowledgements': ACKS, 'rejections': array(REJECTION), **CAPTURE_RECEIPT},
             ['success', 'acknowledgements', 'rejections']), errors=PROCESS_ERRORS,
         description=f'Ingest capture-v2 raw facts under the existing idempotency and lock rules; maximum body {MAX_BYTES} bytes.'),
     'event_batch': spec(EVENT_BATCH, obj({'success': SUCCESS, 'acknowledgements': ACKS,

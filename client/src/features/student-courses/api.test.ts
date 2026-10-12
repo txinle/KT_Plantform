@@ -68,6 +68,29 @@ describe('student course API', () => {
     ])
   })
 
+  it('polls a queued admission and retries the original entry request once admitted', async () => {
+    vi.useFakeTimers()
+    try {
+      sessionStorage.clear()
+      const client = {
+        get: vi.fn(),
+        mutate: vi.fn()
+          .mockResolvedValueOnce({ status: 'queued', admission_token: 'token-1', poll_url: '/api/v1/student/tasks/19/admission/status/', retry_after_seconds: 1 })
+          .mockResolvedValueOnce({ status: 'admitted', admission_token: 'token-1', poll_url: '/api/v1/student/tasks/19/admission/status/', retry_after_seconds: 1 })
+          .mockResolvedValueOnce({ task_id: 19, session_id: 7, question_url: '/student/sessions/7/questions/11/', admission_token: 'token-1', admission_action: 'start' }),
+      }
+      const api = createStudentCourseApi(client as never)
+      const pending = api.start(19)
+      await vi.advanceTimersByTimeAsync(1600)
+      await expect(pending).resolves.toMatchObject({ session_id: 7 })
+      expect(client.mutate.mock.calls).toEqual([
+        ['/api/v1/student/tasks/19/start/', { method: 'POST' }],
+        ['/api/v1/student/tasks/19/admission/status/', { method: 'POST', body: { admission_token: 'token-1', action: 'start' } }],
+        ['/api/v1/student/tasks/19/start/', { method: 'POST', body: { admission_token: 'token-1', admission_action: 'start' } }],
+      ])
+    } finally { vi.useRealTimers() }
+  })
+
   it('reuses an in-flight experiment result request', async () => {
     let resolveRequest!: (value: object) => void
     const response = new Promise<object>((resolve) => { resolveRequest = resolve })

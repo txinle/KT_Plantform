@@ -157,7 +157,7 @@ class BrowserPersistenceChecksTests(SimpleTestCase):
             (verifier.Attempt, arguments[4]), (verifier.ClientCaptureCheckpoint, arguments[5]),
             (verifier.ClientTimeSync, arguments[6]), (verifier.QuestionVisitEvent, arguments[7]),
             (verifier.SubmissionEvent, arguments[8]), (verifier.ConfidenceAssignment, arguments[9]),
-            (verifier.NavigationReceipt, [])]
+            (verifier.NavigationReceipt, []), (verifier.CaptureMutationReceipt, [])]
         with ExitStack() as stack:
             mocks = {}
             for model, rows in sources:

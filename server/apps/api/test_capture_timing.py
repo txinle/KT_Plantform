@@ -7,6 +7,15 @@ from config.capture_timing import TIMING_ENV_KEY, WSGICaptureTiming, mark, timin
 
 
 class WSGICaptureTimingTests(SimpleTestCase):
+    def test_light_aggregates_reach_wsgi_and_gunicorn_timing_fields(self):
+        state = {'diagnostics_mode': 'light', 'capture_metrics': {'sql_count': 3, 'sql_seconds': .25,
+                 'connection_seconds': .1, 'commit_seconds': .03, 'response_body_bytes': 12}}
+        row = timing_fields(state)
+        self.assertEqual(row.get('diagnostics_mode'), 'light')
+        self.assertEqual(row.get('sql_count'), 3)
+        self.assertEqual(row.get('sql_seconds'), .25)
+        self.assertEqual(row.get('response_body_bytes'), 12)
+
     def test_disabled_wrapper_preserves_app_and_iterable_and_does_not_stamp(self):
         response = [b'ok']
         app = Mock(return_value=response)

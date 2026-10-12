@@ -427,6 +427,24 @@ class NavigationReceipt(models.Model):
         constraints = [models.UniqueConstraint(fields=['attempt', 'token'], name='unique_attempt_navigation_token')]
 
 
+class CaptureMutationReceipt(models.Model):
+    """Original confirmed draft/tool receipt, without request bodies or credentials."""
+
+    class Kind(models.TextChoices):
+        DRAFT = 'draft', '草稿'
+        TOOL = 'tool', '工具'
+
+    attempt = models.ForeignKey(Attempt, on_delete=models.CASCADE, related_name='capture_mutation_receipts')
+    token = models.UUIDField(editable=False)
+    kind = models.CharField(max_length=8, choices=Kind.choices, editable=False)
+    material_fingerprint = models.CharField(max_length=64, editable=False)
+    receipt = models.JSONField(editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['attempt', 'token'], name='unique_attempt_capture_mutation_token')]
+
+
 class ResponseInputObservation(models.Model):
     """Privacy-preserving stable-input metadata, never the text itself."""
 
@@ -839,10 +857,12 @@ class ClientCaptureCheckpoint(models.Model):
             ),
         ]
 
-    def save(self, *args, **kwargs):
+    def save(self, *args, _validated_links=False, **kwargs):
         if not self._state.adding:
             raise ValueError("ClientCaptureCheckpoint rows are immutable")
-        self.full_clean(validate_unique=False, validate_constraints=False)
+        # Bundle ingestion checked these loaded links; database FKs enforce existence.
+        self.full_clean(exclude=('session', 'student', 'time_sync') if _validated_links else (),
+                        validate_unique=False, validate_constraints=False)
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):

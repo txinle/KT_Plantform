@@ -24,6 +24,7 @@ from school_short_storm import checks as short_checks
 from school_mixed_300 import THRESHOLDS, CAPTURE_P99_THRESHOLDS, start_gate
 from capture_protocol import CONTRACT
 from observe_school_runtime import BACKLOG_SQL
+from school_native_db_probe import NativeProbeClient, config_hash, expected_identity, helper_hash, private_config, validate_calibration
 
 PROJECT = 'kt-school-e2e'
 DATABASE = 'kt_plantform-db-1'
@@ -197,6 +198,19 @@ class DiagnosticRuntime:
         self.http_launched = False
         self.observer = None
         self.guard = SafetyGuard()
+        self.postgres_guard = config.get('postgres_guard', 'docker')
+        self.native_probe = NativeProbeClient(config['native_probe']) if config.get('native_probe') else None
+        if self.postgres_guard not in ('docker', 'native'):
+            raise SafetyInterrupted('Unknown PostgreSQL protection mode')
+        if self.postgres_guard == 'native':
+            try:
+                certificate = read(config['probe_calibration'])
+                self.validated_probe_binding = self.probe_binding()
+                calibrated = self.native_probe is not None and validate_calibration(certificate, self.validated_probe_binding)
+            except (OSError, ValueError, KeyError, TypeError):
+                calibrated = False
+            if not calibrated:
+                raise SafetyInterrupted('Native protection requires bound paired calibration and fault tests')
         self.compose = ['docker', 'compose', '-p', PROJECT, '--env-file', str(self.private / 'school-test.env')]
         for name in ('docker-compose.yml', 'docker-compose.school.yml', 'docker-compose.school-test.yml', 'docker-compose.school-test-external-db.yml'):
             self.compose += ['-f', str(self.candidate / name)]
@@ -209,6 +223,17 @@ class DiagnosticRuntime:
     def source_value(self):
         value = self.config['source_config']
         return read(value) if isinstance(value, str) else value
+
+    def probe_binding(self):
+        probe_config = self.config['native_probe']
+        secret = Path(probe_config['secret_file'])
+        secret_config = private_config(secret)
+        return {'source_config_sha256': fingerprint(self.source_value()),
+                'probe_config_sha256': fingerprint(probe_config),
+                'probe_secret_sha256': config_hash(secret_config),
+                'native_identity_sha256': config_hash(expected_identity(secret_config)),
+                'helper_sha256': helper_hash(), 'database_container': DATABASE,
+                'docker_deadline_seconds': 1, 'native_deadline_seconds': 1}
 
     def start_command(self):
         return self.compose + ['up', '-d', '--no-deps', '--no-build', '--pull', 'never', *ROLES]
@@ -373,8 +398,10 @@ class DiagnosticRuntime:
                 healthy = response.status == 200
         except Exception:
             healthy = False
+        ticket = self.native_probe.begin() if self.native_probe is not None else None
         probe_started = time.monotonic()
-        probe = {'outcome': 'returncode', 'returncode': None}
+        probe = {'source': 'docker_exec_pg_isready', 'outcome': 'returncode', 'returncode': None,
+                 'started_monotonic': probe_started, 'deadline_seconds': 1}
         try:
             probe['returncode'] = subprocess.run(['docker', 'exec', DATABASE, 'pg_isready', '-d', 'kt_e2e', '-U', 'kt_e2e_user'],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1, check=False).returncode
@@ -382,15 +409,35 @@ class DiagnosticRuntime:
             probe['outcome'] = 'timeout'
         except OSError:
             probe['outcome'] = 'os_error'
-        probe['elapsed_seconds'] = time.monotonic() - probe_started
+        probe['ended_monotonic'] = time.monotonic()
+        probe['elapsed_seconds'] = probe['ended_monotonic'] - probe_started
+        native = self.native_probe.finish(ticket) if ticket is not None else None
         pg = probe['returncode'] == 0
+        if self.postgres_guard == 'native':
+            pg = (native is not None and native.get('outcome') == 'ready'
+                  and native.get('deadline_seconds') == 1 and 0 <= native.get('total_seconds', 1) < 1
+                  and native.get('helper_sha256') == self.validated_probe_binding['helper_sha256']
+                  and native.get('probe_secret_sha256') == self.validated_probe_binding['probe_secret_sha256']
+                  and native.get('identity_sha256') == self.validated_probe_binding['native_identity_sha256'])
         try:
             disk = os.statvfs(attempt)
             disk_error = disk.f_bavail == 0
         except OSError:
             disk_error = True
-        return {'at': time.time(), 'memory_available_bytes': available, 'production_healthy': healthy,
-                'postgres_available': pg, 'postgres_probe': probe, 'disk_error': disk_error}
+        sample = {'at': time.time(), 'memory_available_bytes': available, 'production_healthy': healthy,
+                  'postgres_available': pg, 'postgres_probe': probe, 'postgres_guard': self.postgres_guard,
+                  'native_postgres_probe': native, 'disk_error': disk_error}
+        if self.native_probe is not None:
+            path = attempt / 'database-probe.progress.json'
+            temporary = path.with_suffix('.tmp')
+            try:
+                temporary.write_text(json.dumps({key: sample[key] for key in
+                    ('at', 'postgres_available', 'postgres_guard', 'postgres_probe', 'native_postgres_probe')}))
+                temporary.chmod(0o600)
+                os.replace(temporary, path)
+            except OSError:
+                sample['disk_error'] = True
+        return sample
 
     def stop_owned(self):
         # A production container and the shared PostgreSQL can never enter this list.
@@ -596,6 +643,8 @@ class DiagnosticRuntime:
             finally:
                 self.stop_load()
                 self.terminate_child(process)
+                if self.native_probe is not None:
+                    self.native_probe.close()
 
     def load(self, stage, attempt, fixture_id):
         self.bind_attempt(attempt)
@@ -604,9 +653,12 @@ class DiagnosticRuntime:
         stop = attempt / 'observer.stop'
         log = (attempt / 'observer.log').open('x', encoding='utf-8')
         os.chmod(attempt / 'observer.log', 0o600)
-        observer = subprocess.Popen([sys.executable, str(self.candidate / 'scripts/load/observe_school_runtime.py'), '--project', PROJECT,
+        observer_command = [sys.executable, str(self.candidate / 'scripts/load/observe_school_runtime.py'), '--project', PROJECT,
             '--database-container', DATABASE, '--scope', 'short' if stage.startswith('short-') else 'formal',
-            '--duration', '2700', '--stop-file', str(stop), '--output', str(attempt / 'observation.json')],
+            '--duration', '2700', '--stop-file', str(stop), '--output', str(attempt / 'observation.json')]
+        if self.native_probe is not None:
+            observer_command += ['--database-probe-progress', str(attempt / 'database-probe.progress.json')]
+        observer = subprocess.Popen(observer_command,
             cwd=self.candidate, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         log.close(); self.children.append(observer)
         self.observer = observer
@@ -733,6 +785,8 @@ def main():
         runtime.stop_load()
         for child in runtime.children:
             runtime.terminate_child(child)
+        if runtime.native_probe is not None:
+            runtime.native_probe.close()
     if attempt is not None:
         write_once(attempt / (args.step + '-result.json'), result)
     print(json.dumps({'stage': args.stage, 'step': args.step, **result}))

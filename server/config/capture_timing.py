@@ -19,6 +19,13 @@ def diagnostics_enabled():
     return True
 
 
+def diagnostics_mode():
+    mode = os.getenv('SCHOOL_CAPTURE_DIAGNOSTICS_MODE', 'sql')
+    if mode not in ('light', 'sql'):
+        raise ValueError('Capture diagnostics mode must be light or sql')
+    return mode
+
+
 def sanitized_id(value):
     return value if isinstance(value, str) and re.fullmatch('[a-f0-9]{32}', value) else None
 
@@ -54,6 +61,9 @@ def finish_interval(detail, started_clock, state, phase):
 def timing_fields(state):
     marks = state.get('marks', {})
     row = {}
+    if 'diagnostics_mode' in state:
+        row['diagnostics_mode'] = state['diagnostics_mode']
+    row.update(state.get('capture_metrics', {}))
     for phase, field in (
         ('wsgi_start', 'wsgi_started_at'), ('middleware_start', 'middleware_started_at'),
         ('middleware_end', 'middleware_ended_at'), ('wsgi_headers', 'wsgi_headers_at'),
@@ -129,6 +139,7 @@ class WSGICaptureTiming:
         if state is None:
             state = {}
         environ[TIMING_ENV_KEY] = state
+        state['diagnostics_mode'] = diagnostics_mode()
         mark(state, 'wsgi_start')
         state['nginx_ingress_at'] = ingress_stamp(environ.get('HTTP_X_REQUEST_STARTED_AT'))
 

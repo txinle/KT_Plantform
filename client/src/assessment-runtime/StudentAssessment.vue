@@ -20,7 +20,9 @@ import { createProcessRuntime, getSessionController, disposeSessionController, t
 import { ResponseTrajectory } from './response-trajectory'
 import StudentResearchTools from './StudentResearchTools.vue'
 import { prepareOfflineQuestion } from './offline-cache'
+import { clearAdmissionCredentials } from './admission'
 import { isWriterLeaseConflict, type WriterLease } from './writer-lease'
+import type { CaptureBundle } from './capture-contract'
 import { beginAssessmentOperation, currentAssessmentOperationId, finishAssessmentOperation, timedAssessmentStage } from './operation-timing'
 import {
   createTextObservation,
@@ -344,6 +346,7 @@ async function saveDraft(force = false) {
   const fixedLease = writerLease
   const targetEventId = fixedTrajectory?.head
   const clientTime = new Date().toISOString()
+  const operationId = currentAssessmentOperationId()
   const serialized = JSON.stringify(fixedAnswer)
   if (!force && serialized === lastQueuedAnswer) return
   lastQueuedAnswer = serialized
@@ -366,18 +369,27 @@ async function saveDraft(force = false) {
       const questionType = currentState.question.question_type
       if (fixedTrajectory) {
         if (!targetEventId) return
-        if (await fixedRuntime?.flushConfirmed() === false) throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。')
+        if (!fixedRuntime?.captureMutation && await fixedRuntime?.flushConfirmed() === false) throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。')
       } else if (questionType !== 'short_answer') {
         await recordChoiceState(questionType, fixedAnswer, force)
       }
       if (navigationSaving || navigationUncertain.value) return
       pointerWritePromise = new Promise<void>((resolve) => { pointerDone = resolve })
-      const response = await timedAssessmentStage('draft_remote', async () => getStudentAssessmentApi().saveDraft(
+      const prepareLease = () => timedAssessmentStage('lease', async () => fixedTrajectory ? { ...await fixedLease?.beforePointerWrite() } : undefined, operationId ?? null)
+      const credentials = fixedRuntime?.captureMutation ? undefined : await prepareLease()
+      const body = { answer: fixedAnswer, client_occurred_at: clientTime,
+        ...(fixedTrajectory ? { target_event_id: targetEventId || null, expected_version: fixedRuntime?.responseVersion ?? 0, ...credentials } : {}) }
+      const send = (frozen: Record<string, unknown>) => timedAssessmentStage('draft_remote', () => getStudentAssessmentApi(operationId ?? null).saveDraft(
         currentState.actions.save_draft_url,
-        fixedAnswer,
-        clientTime,
-        ...(fixedTrajectory ? [{ target_event_id: targetEventId || null, expected_version: fixedRuntime?.responseVersion ?? 0, ...await fixedLease?.beforePointerWrite() }] : []),
-      ))
+        frozen.answer,
+        frozen.client_occurred_at as string,
+        ...(fixedTrajectory ? [{ target_event_id: frozen.target_event_id as string | null, expected_version: frozen.expected_version as number,
+          ...(frozen.writer_lease_token ? { writer_lease_token: frozen.writer_lease_token as string, writer_client_instance_id: frozen.writer_client_instance_id as string } : credentials),
+          ...(frozen.capture_bundle ? { capture_bundle: frozen.capture_bundle as CaptureBundle, capture_operation_id: frozen.capture_operation_id as string } : {}) }] : []),
+      ), operationId ?? null)
+      const response = fixedTrajectory && fixedRuntime?.captureMutation
+        ? await fixedRuntime.captureMutation(currentState.actions.save_draft_url, body, send, operationId ?? null, prepareLease)
+        : await send(body)
       if (!fixedTrajectory && questionType === 'short_answer') await recordTextSnapshot(response, force)
       if (response.response_version !== undefined && fixedRuntime) fixedRuntime.responseVersion = response.response_version
       if (state.value !== currentState || processRuntime !== fixedRuntime) return
@@ -1280,7 +1292,8 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
       }
       const intent = await controller.freezeEntry(sessionId, assignmentId, reason, navigation)
       if (generation !== initializationGeneration) throw new DOMException('Initialization replaced', 'AbortError')
-      const dto = await getStudentAssessmentApi().enterQuestion(sessionId, assignmentId, intent.reason, intent)
+      const dto = await getStudentAssessmentApi().enterQuestion(sessionId, assignmentId, intent.reason, { ...intent, sessionId })
+      if (dto.task_id) clearAdmissionCredentials(dto.task_id)
       controller.validateEntry(sessionId, intent, dto)
       return dto
     })
@@ -1413,20 +1426,23 @@ onBeforeRouteUpdate(async (to) => {
   const targetAssignmentId = Number(to.params.assignmentId)
   if (navigationUncertain.value && !routeTransitionPrepared) return false
   try {
-    await processRuntime?.pointerWritesSettled()
     if (!routeTransitionPrepared && state.value) {
       const destination = state.value.navigation.find((row) => row.assignment_id === targetAssignmentId)
       if (trajectory && state.value.process.save_and_leave?.version === 1 && destination) {
+        navigationSaving = true
         const navigation = { navigationId: crypto.randomUUID(), clientOccurredAt: new Date().toISOString(),
           clientMonotonicMs: performance.now(), clientTimeOrigin: new Date(performance.timeOrigin).toISOString() }
-        await (await getSessionController(state.value.session_id, getBootstrapContext().csrf_token)).freezeEntry(state.value.session_id, targetAssignmentId, 'navigation_click', navigation, { sourceAssignmentId: state.value.assignment.assignment_id, targetUrl: destination.url })
-        await saveAndLeave(destination, navigation)
+        try {
+          await (await getSessionController(state.value.session_id, getBootstrapContext().csrf_token)).freezeEntry(state.value.session_id, targetAssignmentId, 'navigation_click', navigation, { sourceAssignmentId: state.value.assignment.assignment_id, targetUrl: destination.url })
+          await saveAndLeave(destination, navigation)
+        } finally { navigationSaving = false }
       } else {
+        await processRuntime?.pointerWritesSettled()
         await flushTextObservation()
         if (!answerLocked.value) await saveDraft(true)
         await closeAttemptAndRelease('navigation', targetAssignmentId)
       }
-    }
+    } else await processRuntime?.pointerWritesSettled()
     routeTransitionPrepared = false
     disposeQuestionRuntime()
     resetQuestionState()

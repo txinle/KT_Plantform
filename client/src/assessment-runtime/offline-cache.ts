@@ -69,7 +69,8 @@ async function logWorkerInitializationFailure(firstError: unknown, retryError: u
 }
 
 async function resolveOfflineWorker() {
-  await activeWorkerForScope().catch(() => undefined)
+  const active = await activeWorkerForScope().catch(() => undefined)
+  if (active) return active
 
   let firstError: unknown
   try {
@@ -78,7 +79,8 @@ async function resolveOfflineWorker() {
     firstError = error
   }
 
-  await activeWorkerForScope().catch(() => undefined)
+  const recovered = await activeWorkerForScope().catch(() => undefined)
+  if (recovered) return recovered
 
   try {
     return await registerOfflineWorker()

@@ -5,7 +5,7 @@ import uuid
 from django.db import transaction
 from django.core.exceptions import ValidationError
 
-from .event_batch_services import ProcessConflictError, ProcessRequestError, append_event_batch
+from .event_batch_services import ProcessConflictError, ProcessRequestError, append_event_batch, batch_session_contexts
 from .models import AssessmentEvent, ExperimentSession
 from .response_snapshot_services import (
     ResponseState, canonical_response_state, create_response_snapshot, response_snapshot_content,
@@ -77,13 +77,12 @@ def prepare_transition(parsed):
 
 
 @transaction.atomic
-def ingest_capture_batch(*, student, document, request_received_at=None):
+def ingest_capture_batch(*, student, document, request_received_at=None, locked_sessions=None, locked_attempts=None):
     # Session locks precede attempt/event locks throughout assessment writes.
     if not isinstance(document, dict) or not isinstance(document.get('events'), list):
         raise ProcessRequestError('invalid_request')
-    session_ids = sorted({row.get('session_id') for row in document.get('events', [])
-                          if isinstance(row, dict) and isinstance(row.get('session_id'), int)})
-    list(ExperimentSession.objects.select_for_update().filter(pk__in=session_ids, student=student).order_by('pk'))
+    sessions = locked_sessions if locked_sessions is not None else batch_session_contexts(
+        student=student, event_documents=document['events'], locked=True)
     document = deepcopy(document)
     if isinstance(document.get('events'), list):
         document['events'].sort(key=lambda row: row.get('client_sequence_no', 0) if isinstance(row, dict) and isinstance(row.get('client_sequence_no'), int) else 0)
@@ -91,6 +90,8 @@ def ingest_capture_batch(*, student, document, request_received_at=None):
         student=student,
         document=document,
         request_received_at=request_received_at,
+        locked_sessions=sessions,
+        locked_attempts=locked_attempts,
     )
 
 

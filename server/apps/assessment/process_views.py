@@ -1,6 +1,7 @@
 import json
 
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from django.http import JsonResponse
@@ -89,17 +90,26 @@ def _sync_document(sample):
 
 @role_required("student")
 @require_POST
+@transaction.non_atomic_requests
 def research_tools(request, attempt_id):
     from .research_tool_services import available_tools, due_rules, record_tool_action
     from .models import Attempt
     request_received_at = timezone.now()
+    document = None
     try:
-        document = _json_document(request)
+        document = _json_document(request, max_bytes=8 * 1024 * 1024)
         attempt = Attempt.objects.select_related('session__version', 'assignment__snapshot').filter(pk=attempt_id, session__student=request.user).first()
         if attempt is None:
             return _error('not_found', status=404)
         if not document:
             return JsonResponse({'success': True, **available_tools(attempt), 'rules': due_rules(attempt)})
+        if 'capture_bundle' in document:
+            from .capture_bundle_services import record_tool_capture_bundle
+            result = record_tool_capture_bundle(student=request.user, attempt_id=attempt_id,
+                document=document, request_received_at=request_received_at)
+            return JsonResponse({'success': True, **result})
+        if len(request.body) > MAX_PROCESS_REQUEST_BYTES:
+            raise ProcessRequestError('request_too_large', status=413)
         require_exact_mapping(document, allowed=frozenset({'tool', 'stage', 'operation_id', 'data', 'answer_event_id', 'initiation_type'}),
                               required=frozenset({'tool', 'stage', 'operation_id'}))
         result = record_tool_action(
@@ -109,6 +119,11 @@ def research_tools(request, attempt_id):
             **document,
         )
         return JsonResponse({'success': True, **result})
+    except ProcessRequestError as error:
+        status = error.status if document and 'capture_bundle' in document else 409
+        if error.code == 'request_too_large' and document is None:
+            status = error.status
+        return _error(error.code, status=status)
     except (ValidationError, ValueError) as error:
         return _error(str(error), status=409)
 
@@ -133,13 +148,20 @@ def resolve_branch(request, attempt_id):
 
 @role_required("student")
 @require_POST
+@transaction.non_atomic_requests
 def capture_v2_batch(request):
     from .capture_v2_services import ingest_capture_batch
     request_received_at = timezone.now()
     try:
+        document = _json_document(request, max_bytes=8 * 1024 * 1024)
+        if 'capture_bundle' in document:
+            from .capture_bundle_services import ingest_capture_bundle
+            receipt = ingest_capture_bundle(student=request.user, document=document,
+                                             request_received_at=request_received_at)
+            return JsonResponse({'success': True, **receipt, 'rejections': []})
         acknowledgements = ingest_capture_batch(
             student=request.user,
-            document=_json_document(request, max_bytes=8 * 1024 * 1024),
+            document=document,
             request_received_at=request_received_at,
         )
         return JsonResponse({'success': True, 'acknowledgements': acknowledgements, 'rejections': []})

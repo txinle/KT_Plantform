@@ -24,6 +24,7 @@ class ArchitectureLoadTests(unittest.TestCase):
         subject = object.__new__(runtime.ArchitectureRuntime)
         subject.candidate = Path('/candidate/deploy')
         subject.config = {}
+        subject.native_probe = None
         subject.children = []
         subject.compose = []
         for name in ('verify_runtime', 'bind_attempt', 'backlog', 'load_command', 'direct_command', 'source_value'):
@@ -34,6 +35,9 @@ class ArchitectureLoadTests(unittest.TestCase):
         process = Mock(returncode=0)
         process.poll.return_value = None
         evidence = {
+            'gateway-routing.json': {'passed': True, 'requests': [
+                {'request_id': str(index) * 32, 'expected_role': role, 'observed_roles': [role]}
+                for index, role in enumerate(('web', 'student-read', 'teacher-read'), start=1)]},
             'http.json': {'workflow_completed': True, 'performance_passed': True, 'started': 2, 'ended': 3},
             'persistence.json': {'passed': True},
             'architecture-results.json': {'passed': False, 'status': 'mismatch'},

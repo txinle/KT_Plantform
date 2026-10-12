@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   runtime: {
     writerLease: undefined as import('./writer-lease').WriterLease | undefined,
     serializePointerWrite: vi.fn(),
+    captureMutation: undefined as undefined | ReturnType<typeof vi.fn>,
     pointerWritesSettled: vi.fn(),
     clientInstanceId: '00000000-0000-4000-8000-000000000002',
     record: vi.fn(),
@@ -161,6 +162,7 @@ function preparationFailure() {
 describe('StudentAssessment', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.runtime.captureMutation = undefined
     mocks.offlineBootstrapRecovery = false
     mocks.pendingEntry.mockResolvedValue(null)
     mocks.beforeRouteUpdate = undefined
@@ -427,6 +429,31 @@ describe('StudentAssessment', () => {
     expect(mocks.runtime.saveNavigationIntent).toHaveBeenCalledWith(null)
     expect(mocks.push).toHaveBeenCalledOnce()
     wrapper.unmount()
+  })
+
+  it('subsumes queued drafts in route navigation while preserving every local transition', async () => {
+    const captured = captureV2Question()
+    Object.assign(captured.process, { save_and_leave: { version: 1 } })
+    mocks.api.question.mockResolvedValue(captured)
+    let release!: () => void
+    let queue: Promise<unknown> = new Promise<void>(resolve => { release = resolve })
+    mocks.runtime.serializePointerWrite.mockImplementation(operation => { const pending = queue.then(operation); queue = pending.catch(() => undefined); return pending })
+    mocks.runtime.pointerWritesSettled.mockImplementation(() => queue)
+    mocks.api.post.mockResolvedValue({ success: true, client_instance_id: mocks.runtime.clientInstanceId, lease_token: '00000000-0000-4000-8000-000000000099', expires_at: '2099-01-01T00:00:00Z' })
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      await wrapper.get('input[value="A"]').setValue(true)
+      await wrapper.get('input[value="B"]').setValue(true)
+      await flushPromises()
+      const navigating = mocks.beforeRouteUpdate!({ params: { sessionId: '7', assignmentId: '12' }, query: {} })
+      await flushPromises()
+      release()
+      await navigating
+      expect(mocks.api.saveDraft).not.toHaveBeenCalled()
+      expect(mocks.runtime.record.mock.calls.filter(call => call[0] === 'response_transition')).toHaveLength(2)
+      expect(mocks.api.saveAndLeave).toHaveBeenCalledOnce()
+    } finally { wrapper.unmount() }
   })
 
   it('restores an uncertain navigation snapshot and replays it even after the capability is disabled', async () => {
@@ -979,6 +1006,22 @@ describe('StudentAssessment', () => {
     await wrapper.get('[data-nav-assignment="12"]').trigger('click')
     await flushPromises()
     expect(mocks.api.saveDraft).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('combines a draft pointer with its locally frozen capture facts without a prior event flush', async () => {
+    const captured = captureV2Question()
+    mocks.api.question.mockResolvedValue(captured)
+    mocks.runtime.captureMutation = vi.fn(async (_url, body, send) => send({ ...body, capture_bundle: { version: 1, events: ['all-local-transitions'], checkpoints: [] } }))
+    mocks.api.post.mockResolvedValue({ success: true, client_instance_id: mocks.runtime.clientInstanceId, lease_token: '00000000-0000-4000-8000-000000000099', expires_at: '2099-01-01T00:00:00Z' })
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    mocks.runtime.flushConfirmed.mockClear()
+    await wrapper.get('input[value="A"]').setValue(true)
+    await flushPromises()
+    expect(mocks.runtime.flushConfirmed).not.toHaveBeenCalled()
+    expect(mocks.runtime.captureMutation).toHaveBeenCalledOnce()
+    expect(mocks.api.saveDraft).toHaveBeenCalledWith(captured.actions.save_draft_url, 'A', expect.any(String), expect.objectContaining({ capture_bundle: expect.objectContaining({ version: 1 }) }))
     wrapper.unmount()
   })
 

@@ -42,7 +42,8 @@ class _ErrorCodeOpener:
         'response_root_not_empty', 'unchanged_response', 'unknown_response_option', 'response_snapshot_mismatch',
         'capture_contract_mismatch', 'deadline_expired', 'task_terminated', 'course_access_revoked',
         'writer_lease_conflict', 'writer_lease_expired', 'navigation_response_version_conflict',
-        'response_version_conflict', 'ENTRY_MATERIAL_CONFLICT', 'SESSION_NOT_ENTERABLE', 'CSRF_FAILED'))
+        'response_version_conflict', 'capture_mutation_material_conflict', 'invalid_bundle_link',
+        'invalid_bundle_boundary', 'invalid_checkpoint', 'ENTRY_MATERIAL_CONFLICT', 'SESSION_NOT_ENTERABLE', 'CSRF_FAILED'))
 
     def __init__(self, opener, state, runner):
         self.opener, self.state, self.runner = opener, state, runner
@@ -155,6 +156,7 @@ class BrowserAlignedStream(ProtocolStream):
             self.started = started
         self.origin = origin or datetime.now(timezone.utc).isoformat(timespec='milliseconds')
         self.events, self.event_ids, self.acked, self.checkpoints = {}, {}, set(), {}
+        self.acked_checkpoint_ids = set()
         self.time_sync_id = None
         self.correlation_id = None
 
@@ -339,7 +341,7 @@ class CaptureProtocolMixin:
     def request(self, state, path, *, method='GET', body=None):
         if getattr(self, 'workload_version', CONTRACT) == BROWSER_ALIGNED_WORKLOAD and hasattr(self, 'remaining_budget'):
             self.remaining_budget()
-        bundle = (body.get('atomic_submission') or body.get('save_and_leave')) if body else None
+        bundle = (body.get('atomic_submission') or body.get('save_and_leave') or body.get('capture_bundle')) if body else None
         event_body = bundle or body
         checkpoints = (bundle.get('checkpoints', []) if bundle else
                        ([body] if body and 'checkpoint_id' in body else []))
@@ -555,12 +557,83 @@ class CaptureProtocolMixin:
         stream = runtime['stream']
         document = stream.checkpoint(trigger)
         stream.validate_checkpoint(document)
+        if self._browser_bundle_enabled(runtime):
+            return document
         self._browser_post(state, runtime['dto']['process']['checkpoint_url'], document, 'checkpoint')
+        stream.acked_checkpoint_ids.add(document['checkpoint_id'])
         return document
+
+    @staticmethod
+    def _browser_bundle_enabled(runtime):
+        capability = runtime['dto']['process'].get('capture_bundle', {})
+        return capability.get('enabled') is True and capability.get('version') == 1
+
+    def _browser_mutation_bundle_enabled(self, runtime):
+        return self._browser_bundle_enabled(runtime) and runtime['dto']['process']['capture_bundle'].get('mutation_receipts') is True
+
+    def _browser_capture_mutation(self, state, runtime, body, kind, result=None):
+        token = body['capture_operation_id'] if kind == 'draft' else body['operation_id']
+        expected = {'attempt_id': runtime['dto']['assignment']['attempt_id'], 'kind': kind,
+                    'material_fingerprint': digest({key: value for key, value in body.items()
+                        if key not in {'writer_lease_token', 'writer_client_instance_id'}}),
+                    'event_identities': {str(row['client_sequence_no']): row['event_id'] for row in body['capture_bundle']['events']},
+                    'checkpoint_ids': [row['checkpoint_id'] for row in body['capture_bundle']['checkpoints']],
+                    'target_event_id': body.get('target_event_id') if kind == 'draft' else body.get('answer_event_id')}
+        with self.lock:
+            rows = self.ledger[str(state.session_id)].setdefault('capture_mutation_receipts', {})
+            prior = rows.setdefault(token, {**expected, 'acknowledged': False, 'receipt_sha256': None})
+            if any(prior[key] != value for key, value in expected.items()):
+                raise RuntimeError('Capture mutation identity changed during replay')
+            if result is not None:
+                receipt_hash = digest(result)
+                if prior['receipt_sha256'] not in (None, receipt_hash):
+                    raise RuntimeError('Capture mutation receipt changed during replay')
+                prior.update(acknowledged=True, receipt_sha256=receipt_hash)
+
+    @staticmethod
+    def _browser_freeze_bundle(runtime):
+        stream = runtime['stream']
+        bundle = {'version': 1, 'client_instance_id': stream.client_instance_id,
+                  'event_boundary': stream.sequence, 'events': stream.pending_events(),
+                  'checkpoints': [deepcopy(row) for key, row in stream.checkpoints.items()
+                                  if key not in stream.acked_checkpoint_ids
+                                  and row['highest_emitted_sequence_no'] <= stream.sequence]}
+        if len(bundle['events']) > 100 or len(bundle['checkpoints']) > 100 or len(json.dumps(bundle).encode()) > 8 * 1024 * 1024:
+            raise RuntimeError('Capture bundle exceeds the frozen bounded envelope')
+        return bundle
+
+    @staticmethod
+    def _browser_accept_bundle(runtime, bundle, result):
+        expected_events = {event['client_sequence_no']: event['event_id'] for event in bundle['events']}
+        acks = result.get('acknowledgements')
+        expected_checkpoints = {row['checkpoint_id'] for row in bundle['checkpoints']}
+        ids = result.get('checkpoint_ids')
+        if (result.get('committed') is not True or not isinstance(acks, list)
+                or len(acks) != len(expected_events)
+                or {row.get('client_sequence_no'): row.get('event_id') for row in acks} != expected_events
+                or not isinstance(ids, list) or len(ids) != len(expected_checkpoints)
+                or set(ids) != expected_checkpoints):
+            raise RuntimeError('Capture bundle acknowledgement mismatch')
+        runtime['stream'].accept_acknowledgements(acks)
+        runtime['stream'].acked_checkpoint_ids.update(ids)
 
     def _browser_flush(self, state, runtime):
         stream = runtime['stream']
         events = stream.pending_events()
+        if self._browser_bundle_enabled(runtime):
+            bundle = self._browser_freeze_bundle(runtime)
+            if not bundle['events'] and not bundle['checkpoints']:
+                return
+            response = self._browser_post(state, runtime['dto']['process']['event_batch_url'],
+                {'capture_bundle': bundle}, 'event_batch')
+            self._browser_accept_bundle(runtime, bundle, response)
+            if events:
+                self._browser_checkpoint(state, runtime, 'ack_progress')
+                confirmation = self._browser_freeze_bundle(runtime)
+                response = self._browser_post(state, runtime['dto']['process']['event_batch_url'],
+                    {'capture_bundle': confirmation}, 'checkpoint_batch')
+                self._browser_accept_bundle(runtime, confirmation, response)
+            return
         if not events:
             return
         response = self._browser_post(state, runtime['dto']['process']['event_batch_url'],
@@ -596,10 +669,21 @@ class CaptureProtocolMixin:
             'initiation_type': initiation, 'answer_event_id': runtime['head'], 'operation_id': str(uuid.uuid4())}
         stream.event(dto['assignment']['attempt_id'], 'research_tool_requested', {
             'capture_version': 'capture-v2', 'content_version': runtime['tools']['content_version'], **request})
-        self._browser_flush(state, runtime)
+        bundle = self._browser_freeze_bundle(runtime) if self._browser_mutation_bundle_enabled(runtime) else None
+        if bundle is not None:
+            request['capture_bundle'] = bundle
+            self._browser_capture_mutation(state, runtime, request, 'tool')
+        else:
+            self._browser_flush(state, runtime)
         response = self._browser_post(state, dto['actions']['research_tools_url'], request, 'research_tool')
+        if bundle is not None:
+            self._browser_accept_bundle(runtime, bundle, response)
+            if bundle['events']:
+                self._browser_checkpoint(state, runtime, 'ack_progress')
         if response.get('event_id') != request['operation_id'] or response.get('content_version') != runtime['tools']['content_version']:
             raise RuntimeError('Research tool reference mismatch')
+        if bundle is not None:
+            self._browser_capture_mutation(state, runtime, request, 'tool', response)
         return response
 
     def _browser_tool_observed(self, runtime, source, tool, stage, data, initiation):
@@ -692,13 +776,25 @@ class CaptureProtocolMixin:
         runtime['lease_valid_until'] = datetime.fromisoformat(result['expires_at'].replace('Z', '+00:00')).timestamp()
 
     def _browser_save(self, state, runtime, event):
-        self._browser_flush(state, runtime)
+        bundle = self._browser_freeze_bundle(runtime) if self._browser_mutation_bundle_enabled(runtime) else None
+        if bundle is None:
+            self._browser_flush(state, runtime)
         self._browser_ensure_lease(state, runtime)
-        result = self._browser_post(state, runtime['dto']['actions']['save_draft_url'], {
+        body = {
             'answer': runtime['answer'], 'target_event_id': runtime['head'], 'expected_version': runtime['version'],
-            'client_occurred_at': event['client_wall_time_utc'], **runtime['lease']}, 'save_draft')
+            'client_occurred_at': event['client_wall_time_utc'], **runtime['lease'],
+            **({'capture_bundle': bundle, 'capture_operation_id': str(uuid.uuid4())} if bundle is not None else {})}
+        if bundle is not None:
+            self._browser_capture_mutation(state, runtime, body, 'draft')
+        result = self._browser_post(state, runtime['dto']['actions']['save_draft_url'], body, 'save_draft')
+        if bundle is not None:
+            self._browser_accept_bundle(runtime, bundle, result)
+            if bundle['events']:
+                self._browser_checkpoint(state, runtime, 'ack_progress')
         if result.get('active_response_event_id') != runtime['head'] or type(result.get('response_version')) is not int:
             raise RuntimeError('Saved target/version mismatch')
+        if bundle is not None:
+            self._browser_capture_mutation(state, runtime, body, 'draft', result)
         runtime['version'] = result['response_version']
 
     def _browser_close(self, state, runtime, reason, to_assignment=None):
@@ -712,12 +808,13 @@ class CaptureProtocolMixin:
             # The same immutable local fact must be used by journal, envelope and replay.
             stream.events[left['client_sequence_no']] = deepcopy(left)
             checkpoint = stream.checkpoint('navigation')
+            checkpoints = self._browser_freeze_bundle(runtime)['checkpoints'] if self._browser_bundle_enabled(runtime) else [checkpoint]
             body = {'navigation_token': token, 'leave_event_id': left['event_id'],
                 'to_assignment_id': to_assignment, 'target_event_id': runtime['head'],
                 'client_clicked_at': material['client_occurred_at'], **runtime['lease'],
                 'save_and_leave': {'version': 1, 'client_instance_id': stream.client_instance_id,
                     'event_boundary': stream.sequence, 'events': stream.pending_events(),
-                    'checkpoints': [checkpoint], 'expected_version': runtime['version']}}
+                    'checkpoints': checkpoints, 'expected_version': runtime['version']}}
             receipt = self._browser_post(state, runtime['dto']['actions']['save_draft_url'], body, 'save_and_leave')
             if (receipt.get('committed') is not True or receipt.get('navigation_token') != token
                     or receipt.get('to_assignment_id') != to_assignment
@@ -725,6 +822,7 @@ class CaptureProtocolMixin:
                     or receipt.get('writer_lease_released') is not True):
                 raise RuntimeError('Saved navigation receipt mismatch')
             stream.accept_acknowledgements(receipt['acknowledgements'])
+            stream.acked_checkpoint_ids.update(receipt['checkpoint_ids'])
             runtime['version'] = receipt['response_version']
             return
         runtime['stream'].event(runtime['dto']['assignment']['attempt_id'], 'item_left',
@@ -874,8 +972,9 @@ class CaptureProtocolMixin:
             atomic = getattr(self, 'atomic_submission', 'auto') != 'off' and capability.get('enabled') is True and capability.get('version') == 1
             if atomic:
                 checkpoint = stream.checkpoint('commit')
+                checkpoints = self._browser_freeze_bundle(runtime)['checkpoints'] if self._browser_bundle_enabled(runtime) else [checkpoint]
                 body['atomic_submission'] = {'version': 1, 'client_instance_id': stream.client_instance_id,
-                    'event_boundary': stream.sequence, 'events': stream.pending_events(), 'checkpoints': [checkpoint],
+                    'event_boundary': stream.sequence, 'events': stream.pending_events(), 'checkpoints': checkpoints,
                     'expected_version': runtime['version']}
             else:
                 self._browser_save(state, runtime, commit)
@@ -887,6 +986,7 @@ class CaptureProtocolMixin:
                 if result.get('committed') is not True or result.get('final_response_event_id') != runtime['head']:
                     raise RuntimeError('Atomic submission receipt mismatch')
                 stream.accept_acknowledgements(result['acknowledgements'])
+                stream.acked_checkpoint_ids.update(result['checkpoint_ids'])
                 self._browser_checkpoint(state, runtime, 'ack_progress')
             stream.event(attempt_id, 'feedback_shown', {'feedback_mode': result.get('feedback_mode', 'none'),
                 'included_correctness': 'is_correct' in result, 'included_correct_answer': 'correct_answer' in result,

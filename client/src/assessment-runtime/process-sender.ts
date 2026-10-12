@@ -1,8 +1,9 @@
 import { ApiError, createApiClient } from '../api/client'
-import type { CaptureStore, CaptureEvent, CaptureCheckpoint, CaptureResponse, RecordOptions, FlushOptions, ProcessSnapshot, ProcessConfirmation, DurableIntent, SenderOptions, SyncUrls, OnlineOptions, Timer } from './capture-contract'
+import type { CaptureStore, CaptureEvent, CaptureCheckpoint, CaptureResponse, CaptureBundle, CaptureBundleCapability, CaptureMutation, RecordOptions, FlushOptions, ProcessSnapshot, ProcessConfirmation, DurableIntent, SenderOptions, SyncUrls, OnlineOptions, Timer } from './capture-contract'
+import { timedAssessmentStage } from './operation-timing'
 import { MAX_BATCH_SIZE, DEFAULT_SYNC_INTERVAL_MS, PERMANENT_CAPTURE_V2_REJECTIONS, V2_EVENT_TYPES, clone, sanitizePayload, backoffDelay, normalizeMonotonic } from './process-types'
 interface CaptureTransport { (url: string, init: { method: string; headers: Record<string, string>; credentials: string; body: string; keepalive?: boolean }): Promise<{ ok: boolean; status: number; json(): Promise<CaptureResponse> }> }
-interface BoundedFlush { recordQueue: Promise<unknown>; timeoutMs: number | null; ignoreVisibility: boolean; keepalive: boolean; promise: Promise<boolean> | null }
+interface BoundedFlush { recordQueue: Promise<unknown>; timeoutMs: number | null; ignoreVisibility: boolean; keepalive: boolean; boundary?: Record<string, number>; promise: Promise<boolean> | null }
 type CheckpointQueue = { flights: Map<string, Promise<CaptureResponse | null>>; confirmed: Map<string, CaptureResponse>; queue: Promise<void> }
 const checkpointQueues = new WeakMap<CaptureStore, CheckpointQueue>()
 export class ProcessEventCollector {
@@ -13,6 +14,8 @@ export class ProcessEventCollector {
   autoSchedule: boolean; uploadDelayMs: number; clientInstanceId: string; timeSyncId: string | null; failureCount: number; lastCheckpointedContiguousAck: number
   retryTimer: Timer | null; syncTimer: Timer | null; flushPromise: Promise<boolean> | null; boundedFlush: BoundedFlush | null; recordQueue: Promise<unknown>; operationId: string | undefined
   checkpointUploads: CheckpointQueue
+  captureBundle?: CaptureBundleCapability
+  private progressWaiters = new Set<() => void>()
 
   constructor(options: SenderOptions) {
     if (!options || !options.outbox) throw new Error('An outbox is required.');
@@ -24,11 +27,12 @@ export class ProcessEventCollector {
     this.appVersion = options.appVersion || '';
     this.correlationId = options.correlationId || null;
     this.outbox = options.outbox;
+    this.captureBundle = options.captureBundle;
     this.checkpointUploads = checkpointQueues.get(options.outbox) || { flights: new Map(), confirmed: new Map(), queue: Promise.resolve() }
     checkpointQueues.set(options.outbox, this.checkpointUploads)
-    const client = createApiClient({ fetchImpl: options.fetch, getCsrfToken: () => this.csrfToken, getOperationId: () => this.operationId })
     this.fetch = async (url, init) => {
       try {
+        const client = createApiClient({ fetchImpl: options.fetch, getCsrfToken: () => this.csrfToken, getOperationId: () => init.headers['X-KT-Operation-ID'] })
         const data = await client.mutate<CaptureResponse>(url, { method: 'POST', body: init.body ? JSON.parse(init.body) : undefined, keepalive: init.keepalive })
         return { ok: true, status: 200, json: async () => data }
       } catch (error) {
@@ -65,9 +69,9 @@ export class ProcessEventCollector {
     this.operationId = operationId;
   }
 
-  _requestHeaders() {
+  _requestHeaders(operationId: string | null = this.operationId ?? null) {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrfToken };
-    if (this.operationId) headers['X-KT-Operation-ID'] = this.operationId;
+    if (operationId) headers['X-KT-Operation-ID'] = operationId;
     if (globalThis.crypto?.randomUUID) headers['X-Request-ID'] = globalThis.crypto.randomUUID();
     return headers;
   }
@@ -81,6 +85,7 @@ export class ProcessEventCollector {
   }
 
   async record(eventType: string, payload: Record<string, unknown>, options: RecordOptions = {}) {
+    const operationId = this.operationId;
     const attemptId = this.attemptId;
     const correlation = this.correlationId;
     const syncId = this.timeSyncId;
@@ -92,9 +97,9 @@ export class ProcessEventCollector {
     ])];
     const materialized = options.materialize ? options.materialize() : Promise.resolve(payload);
     void materialized.catch(() => {});
-    const operation = this.recordQueue.then(async () => {
+    const operation = timedAssessmentStage('record_queue', () => this.recordQueue.then(async () => {
     const sanitized = sanitizePayload(eventType, await materialized);
-    const event = await this.outbox.enqueue(
+    const event = await timedAssessmentStage('local_store', () => this.outbox.enqueue(
       this.clientInstanceId,
       (sequence) => {
         const document: CaptureEvent = {
@@ -116,10 +121,10 @@ export class ProcessEventCollector {
         if (syncId) document.time_sync_id = syncId;
         return document;
       },
-    );
+    ), operationId ?? null);
     if (this.autoSchedule) this.scheduleUpload(this.uploadDelayMs);
     return event;
-    });
+    }), operationId ?? null);
     this.recordQueue = operation;
     void operation.catch(() => {});
     return operation;
@@ -133,7 +138,64 @@ export class ProcessEventCollector {
     }, delay);
   }
 
+  async _flushBundleLoop(options: FlushOptions, resumeOnly = false) {
+    if (!this.fetch || !this.isOnline() || (!options.ignoreVisibility && !this.isVisible())) return false;
+    const capability = this.captureBundle!;
+    const key = `capture-flush:${this.sessionId}`;
+    let completed = true;
+    while (this.isOnline() && (options.ignoreVisibility || this.isVisible())) {
+      let intent = await this.outbox.readMetadata<DurableIntent & { processSnapshot: CaptureBundle }>(key);
+      if (!intent) {
+        if (resumeOnly) break;
+        const batch = await this.outbox.peekBatch(Math.min(MAX_BATCH_SIZE, capability.max_events), options.boundary);
+        const pending = (await this.outbox.pendingCheckpoints(false)).filter(row => row.session_id === this.sessionId
+          && row.highest_emitted_sequence_no <= (options.boundary?.[row.client_instance_id] ?? Number.MAX_SAFE_INTEGER));
+        const clientId = batch?.clientInstanceId || pending[0]?.client_instance_id;
+        if (!clientId) break;
+        const events = batch?.events || [];
+        const checkpoints = pending.filter(row => row.client_instance_id === clientId).slice(0, capability.max_checkpoints);
+        const snapshot: CaptureBundle = { version: 1, client_instance_id: clientId,
+          event_boundary: options.boundary?.[clientId] ?? Math.max(0, ...events.map(event => event.client_sequence_no), ...checkpoints.map(row => row.highest_emitted_sequence_no)),
+          events, checkpoints };
+        while (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > capability.max_bytes - 64 * 1024) {
+          if (snapshot.checkpoints.length) snapshot.checkpoints.pop();
+          else if (snapshot.events.length > 1) snapshot.events.pop();
+          else return false;
+        }
+        intent = { processSnapshot: snapshot, operationId: options.operationId };
+        await timedAssessmentStage('local_store', () => this.outbox.writeMetadata(key, intent), options.operationId ?? null);
+      }
+      const snapshot = intent.processSnapshot;
+      try {
+        const body = JSON.stringify({ capture_bundle: snapshot });
+        const response = await this.fetch(this.endpoint, { method: 'POST', headers: this._requestHeaders(intent.operationId as string || null),
+          body, credentials: 'same-origin', keepalive: Boolean(options.keepalive) && new TextEncoder().encode(body).byteLength < 60 * 1024 });
+        const result = await response.json();
+        if (!response.ok || !result.success) { completed = false; break; }
+        await timedAssessmentStage('ack', () => this._acknowledgeProcessSnapshot(snapshot, result, true), intent.operationId as string || null);
+        await this.outbox.writeMetadata(key, null);
+        for (const notify of this.progressWaiters) notify();
+        this.progressWaiters.clear();
+        const state = await this.outbox.captureState(this.clientInstanceId);
+        if (!resumeOnly && state.highestContiguousAcked > this.lastCheckpointedContiguousAck) {
+          const pendingProgress = (await this.outbox.pendingCheckpoints()).some(row => row.trigger === 'ack_progress'
+            && row.client_instance_id === this.clientInstanceId && row.highest_contiguous_acked_sequence_no >= state.highestContiguousAcked);
+          if (!pendingProgress) await this._createCheckpoint('ack_progress', options.operationId ?? null);
+        }
+      } catch { completed = false; break; }
+    }
+    if (completed) this.failureCount = 0;
+    else if (this.autoSchedule) this.scheduleUpload(backoffDelay(this.failureCount++));
+    return completed;
+  }
+
   async _flushLoop(options: FlushOptions = {}) {
+    if (this.captureBundle?.enabled && this.captureBundle.version === 1) return this._flushBundleLoop(options);
+    const ownedPacket = await this.outbox.readMetadata(`capture-flush:${this.sessionId}`);
+    if (ownedPacket) {
+      if (this.captureBundle?.version !== 1 || this.captureBundle.recovery_supported !== true) return false;
+      if (!await this._flushBundleLoop(options, true)) return false;
+    }
     if (!this.fetch || !this.isOnline()) return false;
     if (!options.ignoreVisibility && !this.isVisible()) return false;
     let completed = true;
@@ -150,7 +212,7 @@ export class ProcessEventCollector {
       try {
         response = await this.fetch(this.endpoint, {
           method: 'POST',
-          headers: this._requestHeaders(),
+          headers: this._requestHeaders(options.operationId ?? null),
           body,
           credentials: 'same-origin',
           keepalive: Boolean(options.keepalive) && new TextEncoder().encode(body).byteLength < 60 * 1024,
@@ -217,7 +279,7 @@ export class ProcessEventCollector {
         state
         && state.highestContiguousAcked > this.lastCheckpointedContiguousAck
       ) {
-        if (this.checkpointEndpoint) await this._createCheckpoint('ack_progress');
+        if (this.checkpointEndpoint) await this._createCheckpoint('ack_progress', options.operationId ?? null);
       }
       if (this.checkpointEndpoint) {
         const checkpoints = await this.outbox.pendingCheckpoints(false);
@@ -243,8 +305,11 @@ export class ProcessEventCollector {
   flush(options: FlushOptions = {}) {
     if (this.flushPromise) return this.flushPromise;
     const boundary = options.boundary ? Promise.resolve(options.boundary) : this._freezeBoundary();
-    this.flushPromise = boundary.then((frozen) => this._flushLoop({ ...options, boundary: frozen })).finally(() => {
+    const operationId = options.operationId ?? this.operationId;
+    this.flushPromise = boundary.then((frozen) => this._flushLoop({ ...options, boundary: frozen, operationId })).finally(() => {
       this.flushPromise = null;
+      for (const notify of this.progressWaiters) notify();
+      this.progressWaiters.clear();
     });
     return this.flushPromise;
   }
@@ -258,6 +323,7 @@ export class ProcessEventCollector {
     if (existing
       && existing.recordQueue === this.recordQueue
       && existing.timeoutMs === timeoutMs
+      && JSON.stringify(existing.boundary) === JSON.stringify(options.boundary)
       && existing.ignoreVisibility === Boolean(options.ignoreVisibility)
       && existing.keepalive === Boolean(options.keepalive)) return existing.promise;
     const flight: BoundedFlush = {
@@ -266,12 +332,30 @@ export class ProcessEventCollector {
       ignoreVisibility: Boolean(options.ignoreVisibility),
       keepalive: Boolean(options.keepalive),
       promise: null,
+      boundary: options.boundary,
     };
-    const boundaryReady = this._freezeBoundary();
+    const boundaryReady = options.boundary ? Promise.resolve(options.boundary) : this._freezeBoundary();
     // Calls for the same record fence share the same bounded wait.
     flight.recordQueue = this.recordQueue;
     const flushLatest = async () => {
       const boundary = await boundaryReady;
+      if (this.captureBundle?.enabled && this.captureBundle.version === 1) {
+        const requiredCheckpoints = (await this.outbox.pendingCheckpoints()).filter(row => row.session_id === this.sessionId
+          && row.highest_emitted_sequence_no <= (boundary[row.client_instance_id] ?? -1)).map(row => row.checkpoint_id);
+        while (true) {
+          let notify!: () => void;
+          const changed = new Promise<void>(resolve => { notify = resolve; this.progressWaiters.add(notify); });
+          try {
+            const states = await Promise.all(Object.entries(boundary).map(async ([id, sequence]) => (await this.outbox.captureState(id)).highestContiguousAcked >= sequence));
+            const pendingIds = new Set((await this.outbox.pendingCheckpoints()).map(row => row.checkpoint_id));
+            if (states.every(Boolean) && requiredCheckpoints.every(id => !pendingIds.has(id))) return true;
+            const earlier = this.flushPromise;
+            const upload = earlier || this.flush({ ...options, boundary });
+            const result = await Promise.race([upload, changed]);
+            if (result === false && !earlier) return false;
+          } finally { this.progressWaiters.delete(notify); }
+        }
+      }
       while (true) {
         if (this.flushPromise) await this.flushPromise;
         let confirmed = true;
@@ -279,7 +363,7 @@ export class ProcessEventCollector {
           const state = await this.outbox.captureState(clientInstanceId);
           if (state.highestContiguousAcked < sequence) confirmed = false;
         }
-        if (confirmed && !this.checkpointEndpoint) return true;
+        if (confirmed && !this.checkpointEndpoint && !await this.outbox.readMetadata(`capture-flush:${this.sessionId}`)) return true;
         // Another caller may start an older boundary while captureState awaits.
         const joinedEarlierFlush = Boolean(this.flushPromise);
         const uploaded = await this.flush({ ...options, boundary });
@@ -309,7 +393,8 @@ export class ProcessEventCollector {
     return flight.promise;
   }
 
-  async _createCheckpoint(trigger: string) {
+  async _createCheckpoint(trigger: string, operationId: string | null = this.operationId ?? null) {
+    return timedAssessmentStage('checkpoint', async () => {
     const state = await this.outbox.captureState(this.clientInstanceId);
     const document: CaptureCheckpoint = {
       checkpoint_id: (globalThis.crypto?.randomUUID?.() || `00000000-0000-4000-8000-${String(Date.now()).slice(-12).padStart(12, '0')}`),
@@ -329,12 +414,21 @@ export class ProcessEventCollector {
       quality_flags: this._qualityFlags(),
       app_version: this.appVersion,
     };
-    await this.outbox.enqueueCheckpoint(document);
+    await timedAssessmentStage('local_store', () => this.outbox.enqueueCheckpoint(document), operationId ?? null);
     return document;
+    }, operationId ?? null);
   }
 
   async checkpoint(trigger: string, options: FlushOptions = {}) {
     if (!this.checkpointEndpoint || !this.fetch || !this.outbox.captureState) return null;
+    if (this.captureBundle?.enabled && this.captureBundle.version === 1) {
+      const operationId = options.operationId ?? this.operationId;
+      const local = this.recordQueue.then(async () => ({ document: await this._createCheckpoint(trigger, operationId ?? null), boundary: await this.outbox.freezeBoundary(this.clientInstanceId) }));
+      this.recordQueue = local.then(() => undefined);
+      const { document, boundary } = await local;
+      await this.flushConfirmed({ ...options, boundary, operationId });
+      return this.checkpointUploads.confirmed.get(document.checkpoint_id) || null;
+    }
     const document = await this._createCheckpoint(trigger);
     const pending = await this.outbox.pendingCheckpoints(false);
     const uploads = pending.map((checkpoint) => this._uploadCheckpoint(checkpoint, options));
@@ -343,6 +437,7 @@ export class ProcessEventCollector {
   }
 
   _uploadCheckpoint(checkpoint: CaptureCheckpoint, options: FlushOptions = {}) {
+    const operationId = options.operationId ?? this.operationId;
     const confirmed = this.checkpointUploads.confirmed.get(checkpoint.checkpoint_id);
     if (confirmed) return Promise.resolve(confirmed);
     const existing = this.checkpointUploads.flights.get(checkpoint.checkpoint_id);
@@ -355,7 +450,7 @@ export class ProcessEventCollector {
         }
         const response = await this.fetch(this.checkpointEndpoint, {
           method: 'POST',
-          headers: this._requestHeaders(),
+          headers: this._requestHeaders(operationId ?? null),
           body: JSON.stringify(checkpoint),
           credentials: 'same-origin',
           keepalive: Boolean(options.keepalive) || checkpoint.trigger === 'pagehide' || checkpoint.trigger === 'session_end',
@@ -380,8 +475,6 @@ export class ProcessEventCollector {
 
   freezeSubmissionSnapshot<T extends DurableIntent>(intent: T): Promise<T & { processSnapshot: ProcessSnapshot }> {
     const recordFence = this.recordQueue;
-    const uploading = this.flushPromise;
-    const checkpointFence = this.checkpointUploads.queue;
     const frozen = recordFence.then(async () => {
       const saved = await this.outbox.restoreSubmissionIntent(this.sessionId, this.attemptId);
       if (saved?.processSnapshot) {
@@ -392,8 +485,6 @@ export class ProcessEventCollector {
         if (JSON.stringify(savedIntent) !== JSON.stringify(requestedIntent)) throw new Error('Submission snapshot is immutable.');
         return clone(saved) as T & { processSnapshot: ProcessSnapshot };
       }
-      if (uploading) await uploading;
-      await checkpointFence;
       const boundary = await this.outbox.freezeBoundary(this.clientInstanceId);
       if (Object.keys(boundary).some((id) => id !== this.clientInstanceId)) {
         throw Object.assign(new Error('Earlier client evidence must be confirmed before submission.'), { code: 'submission_snapshot_backlog' });
@@ -463,6 +554,52 @@ export class ProcessEventCollector {
     return frozen;
   }
 
+  freezeCaptureMutation(url: string, body: Record<string, unknown>, operationId: string | null = this.operationId ?? null): Promise<CaptureMutation> {
+    const recordFence = this.recordQueue;
+    const sessionId = this.sessionId;
+    const attemptId = this.attemptId;
+    const frozen = recordFence.then(async () => {
+      const key = `capture-mutation:${sessionId}:${attemptId}`;
+      const saved = await this.outbox.readMetadata<CaptureMutation>(key);
+      if (saved) {
+        if (saved.url !== url || JSON.stringify(saved.body) !== JSON.stringify(body)) {
+          throw new Error('先前操作结果尚未确认，请先核验原操作。');
+        }
+        return saved;
+      }
+      const boundary = await this.outbox.freezeBoundary(this.clientInstanceId);
+      const sequence = boundary[this.clientInstanceId]!;
+      const state = await this.outbox.captureState(this.clientInstanceId);
+      if (state.failed || state.missingLocalRanges.length) throw new Error('作答轨迹存在缺失或拒绝，请先核验原操作。');
+      const events = (await this.outbox.pendingEvents(this.clientInstanceId, sequence)).filter(event => event.session_id === sessionId
+        && (event.attempt_id === attemptId || event.attempt_id === null));
+      const checkpoints = (await this.outbox.pendingCheckpoints(false)).filter(checkpoint => checkpoint.session_id === sessionId
+        && checkpoint.client_instance_id === this.clientInstanceId && checkpoint.highest_emitted_sequence_no <= sequence);
+      const processSnapshot: CaptureBundle = { version: 1, client_instance_id: this.clientInstanceId, event_boundary: sequence, events, checkpoints };
+      const capability = this.captureBundle;
+      if (events.length > (capability?.max_events ?? MAX_BATCH_SIZE) || checkpoints.length > (capability?.max_checkpoints ?? MAX_BATCH_SIZE)
+        || new TextEncoder().encode(JSON.stringify({ ...body, capture_bundle: processSnapshot })).byteLength > (capability?.max_bytes ?? 8 * 1024 * 1024) - 64 * 1024) {
+        throw Object.assign(new Error('待保存轨迹超出单次请求边界，请先同步后重试。'), { code: 'capture_bundle_too_large' });
+      }
+      const intent: CaptureMutation = { url, body: clone(body), sessionId, attemptId, operationId: operationId || undefined, processSnapshot };
+      await timedAssessmentStage('local_store', () => this.outbox.writeMetadata(key, intent), operationId ?? null);
+      return intent;
+    });
+    this.recordQueue = frozen.then(() => undefined, () => recordFence);
+    return frozen;
+  }
+
+  async acknowledgeCaptureMutation(intent: CaptureMutation, response: ProcessConfirmation) {
+    const key = `capture-mutation:${intent.sessionId}:${intent.attemptId}`;
+    const saved = await this.outbox.readMetadata<CaptureMutation>(key);
+    if (!saved || JSON.stringify(saved) !== JSON.stringify(intent)) throw new Error('Capture confirmation does not match the durable operation.');
+    await timedAssessmentStage('ack', () => this._acknowledgeProcessSnapshot(intent.processSnapshot, response, true), intent.operationId ?? null);
+    await this.outbox.writeMetadata(key, null);
+    const state = await this.outbox.captureState(this.clientInstanceId);
+    if (state.highestContiguousAcked > this.lastCheckpointedContiguousAck) await this._createCheckpoint('ack_progress', intent.operationId ?? null);
+    if (this.autoSchedule) this.scheduleUpload(this.uploadDelayMs);
+  }
+
   async acknowledgeSubmission(snapshot: ProcessSnapshot, response: ProcessConfirmation) {
     const saved = await this.outbox.restoreSubmissionIntent(this.sessionId, this.attemptId);
     if (!saved?.processSnapshot || JSON.stringify(saved.processSnapshot) !== JSON.stringify(snapshot)) {
@@ -482,7 +619,7 @@ export class ProcessEventCollector {
     return this._acknowledgeProcessSnapshot(snapshot, response);
   }
 
-  async _acknowledgeProcessSnapshot(snapshot: ProcessSnapshot, response: ProcessConfirmation) {
+  async _acknowledgeProcessSnapshot(snapshot: ProcessSnapshot, response: ProcessConfirmation, exactOrdinal = false) {
     const acknowledgements = response?.acknowledgements;
     const checkpointIds = response?.checkpoint_ids;
     const eventSequences = new Set(snapshot.events.map((event) => event.client_sequence_no));
@@ -490,7 +627,9 @@ export class ProcessEventCollector {
       && acknowledgements.length === snapshot.events.length
       && new Set(acknowledgements.map((ack) => ack.client_sequence_no)).size === eventSequences.size
       && snapshot.events.every((event) => acknowledgements.some((ack) => ack.client_sequence_no === event.client_sequence_no
-        && (!event.event_id || ack.event_id === event.event_id)));
+        && (!event.event_id || ack.event_id === event.event_id)
+        && (!exactOrdinal || (typeof ack.event_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ack.event_id)
+          && Number.isSafeInteger(ack.server_ingest_sequence_no) && Number(ack.server_ingest_sequence_no) > 0))));
     const validCheckpoints = Array.isArray(checkpointIds)
       && checkpointIds.length === snapshot.checkpoints.length
       && new Set(checkpointIds).size === snapshot.checkpoints.length
@@ -510,13 +649,14 @@ export class ProcessEventCollector {
   }
 
   async synchronizeClock({ createUrl, finalizeUrl }: SyncUrls = {}) {
+    const operationId = this.operationId;
     if (!this.fetch || !this.isOnline() || !createUrl || !finalizeUrl) return null;
     const sentWall = this.wallNow().toISOString();
     const sentMonotonic = normalizeMonotonic(this.monotonicNow());
     try {
       const createdResponse = await this.fetch(createUrl, {
         method: 'POST',
-        headers: this._requestHeaders(),
+        headers: this._requestHeaders(operationId ?? null),
         credentials: 'same-origin',
         body: JSON.stringify({
           session_id: this.sessionId,
@@ -532,7 +672,7 @@ export class ProcessEventCollector {
       const receivedMonotonic = normalizeMonotonic(this.monotonicNow());
       const finalizedResponse = await this.fetch(finalizeUrl, {
         method: 'POST',
-        headers: this._requestHeaders(),
+        headers: this._requestHeaders(operationId ?? null),
         credentials: 'same-origin',
         body: JSON.stringify({
           time_sync_id: created.time_sync_id,

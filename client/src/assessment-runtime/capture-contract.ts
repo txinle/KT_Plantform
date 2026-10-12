@@ -38,6 +38,9 @@ export interface ProcessSnapshot {
   events: CaptureEvent[]
   checkpoints: CaptureCheckpoint[]
 }
+export interface CaptureBundle extends ProcessSnapshot { version: 1 }
+export interface CaptureBundleCapability { enabled: boolean; version: 1; max_events: number; max_checkpoints: number; max_bytes: number; mutation_receipts?: boolean; recovery_supported?: boolean }
+export interface CaptureMutation extends DurableIntent { url: string; body: Record<string, unknown>; sessionId: number; attemptId: number; operationId?: string; processSnapshot: CaptureBundle }
 export interface DurableIntent { processSnapshot?: ProcessSnapshot; [key: string]: unknown }
 export interface FactRecord {
   client_instance_id: string
@@ -85,10 +88,10 @@ export interface RecordOptions {
   correlationId?: string
   eventId?: string
 }
-export interface FlushOptions { boundary?: Record<string, number>; ignoreVisibility?: boolean; keepalive?: boolean }
+export interface FlushOptions { boundary?: Record<string, number>; ignoreVisibility?: boolean; keepalive?: boolean; operationId?: string }
 export interface ProcessConfirmation {
   committed?: boolean
-  acknowledgements?: Array<{ client_sequence_no: number; event_id?: string }>
+  acknowledgements?: Array<{ client_sequence_no: number; event_id?: string; server_ingest_sequence_no?: number }>
   checkpoint_ids?: string[]
   navigation_token?: string
   to_assignment_id?: number
@@ -107,6 +110,7 @@ export interface SyncUrls { createUrl?: string; finalizeUrl?: string }
 export interface OnlineOptions { synchronize?: boolean; syncUrls?: SyncUrls }
 export type Timer = ReturnType<typeof globalThis.setTimeout>
 export interface SenderOptions {
+  captureBundle?: CaptureBundleCapability
   sessionId: number
   attemptId: number
   endpoint: string

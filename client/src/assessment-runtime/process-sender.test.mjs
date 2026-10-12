@@ -1289,7 +1289,7 @@ test('atomic snapshot ownership survives replacement and explicit cancellation r
   assert.ok(sent.some(request => request.body.checkpoint_id === frozen.processSnapshot.checkpoints[0].checkpoint_id));
 });
 
-test('freezing submission coordinates existing uploads before claiming pending evidence', async () => {
+test('freezing submission claims its original local boundary before an existing upload confirms', async () => {
   let releaseUpload;
   const gate = new Promise(resolve => { releaseUpload = resolve; });
   const collector = new ProcessEventCollector(eventPayload({
@@ -1306,12 +1306,12 @@ test('freezing submission coordinates existing uploads before claiming pending e
   let frozen = false;
   freezing.then(() => { frozen = true; });
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(frozen, false);
+  assert.equal(frozen, true);
   releaseUpload();
   await upload;
   const snapshot = (await freezing).processSnapshot;
-  assert.deepEqual(snapshot.events, []);
-  assert.equal(snapshot.checkpoints[0].highest_contiguous_acked_sequence_no, 1);
+  assert.equal(snapshot.events.length, 1);
+  assert.equal(snapshot.checkpoints[0].highest_contiguous_acked_sequence_no, 0);
 });
 
 test('replacing a durable submission with a plain intent cannot silently release its owned rows', async () => {

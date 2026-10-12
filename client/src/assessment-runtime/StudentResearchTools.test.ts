@@ -119,6 +119,21 @@ it('waits for event confirmation before a tool request and retains failure for r
   } finally { wrapper.unmount() }
 })
 
+it('sends a locally frozen tool bundle in one business request without a prior network flush', async () => {
+  const toolsRuntime = { ...runtime(), captureMutation: vi.fn(async (_url, body, send) => send({ ...body, capture_bundle: { version: 1, events: ['local-fact'], checkpoints: ['original-checkpoint'] } })) }
+  mocks.post.mockResolvedValue({ event_id: 'confirmed-tool', content_version: 'v1', committed: true })
+  const wrapper = mount(StudentResearchTools, { props: { endpoint: '/tools/', answerEventId: 'target', waitForCapture: async () => undefined,
+    runtime: toolsRuntime, initialConfiguration: toolsResponse({ doubt_enabled: true }) } })
+  try {
+    await flushPromises()
+    await buttonWithText(wrapper, '标记疑点').trigger('click')
+    await flushPromises()
+    expect(toolsRuntime.flushConfirmed).not.toHaveBeenCalled()
+    expect(toolsRuntime.captureMutation).toHaveBeenCalledOnce()
+    expect(mocks.post).toHaveBeenCalledExactlyOnceWith('/tools/', expect.objectContaining({ tool: 'doubt', stage: 'mark_added', capture_bundle: expect.objectContaining({ version: 1 }) }))
+  } finally { wrapper.unmount() }
+})
+
 it('persists hint closure and subsequent answer events through the real collector', async () => {
   const outbox = new MemoryOutbox()
   const collector = new ProcessEventCollector({ sessionId: 7, attemptId: 13, endpoint: '/api/v1/assessment/process/events/batch/', outbox, autoSchedule: false })

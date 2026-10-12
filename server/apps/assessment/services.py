@@ -1268,17 +1268,25 @@ def _save_draft_transaction(
     target_event_id=None,
     expected_version=None,
     branch_resolution=None,
+    locked_attempt=None,
 ):
-    session_id = Attempt.objects.filter(pk=attempt_id).values_list(
-        "session_id", flat=True
-    ).get()
-    session = ExperimentSession.objects.select_for_update(of=("self",)).select_related(
-        "version__experiment__course", "class_task", "capture_contract"
-    ).get(pk=session_id)
-    attempt = Attempt.objects.select_for_update(of=("self",)).select_related(
-        "assignment__snapshot", "current_response_snapshot",
-    ).get(pk=attempt_id, session=session)
-    attempt.session = session
+    if locked_attempt is None:
+        session_id = Attempt.objects.filter(pk=attempt_id).values_list(
+            "session_id", flat=True
+        ).get()
+        session = ExperimentSession.objects.select_for_update(of=("self",)).select_related(
+            "version__experiment__course", "class_task", "capture_contract"
+        ).get(pk=session_id)
+        attempt = Attempt.objects.select_for_update(of=("self",)).select_related(
+            "assignment__snapshot", "current_response_snapshot",
+        ).get(pk=attempt_id, session=session)
+        attempt.session = session
+    else:
+        # Internal bundle caller acquired session, then attempt, in this transaction.
+        attempt = locked_attempt
+        session = attempt.session
+        if attempt.pk != attempt_id:
+            raise ValidationError('作答锁与请求不匹配。')
     assert_attempt_writer_lease(
         attempt,
         lease_token=writer_lease_token,
@@ -1349,6 +1357,7 @@ def save_draft(
     request_received_at=None,
     target_event_id=None,
     expected_version=None,
+    _locked_attempt=None,
 ):
     attempt, time_error = _save_draft_transaction(
         attempt_id,
@@ -1359,6 +1368,7 @@ def save_draft(
         request_received_at,
         target_event_id,
         expected_version,
+        locked_attempt=_locked_attempt,
     )
     if time_error:
         raise ValidationError(time_error)
