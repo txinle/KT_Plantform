@@ -4,6 +4,7 @@ from unittest import skipUnless
 from django.db import close_old_connections, connection, transaction
 from django.core.exceptions import ValidationError
 from django.test import TestCase, TransactionTestCase
+from django.test.utils import CaptureQueriesContext
 from . import test_capture_v2 as capture_fixtures
 from .models import AssessmentEvent
 from apps.question_bank.models import Question
@@ -96,6 +97,86 @@ class ResearchToolTests(TestCase):
 
         attempt.confidence_assignment.refresh_from_db()
         self.assertEqual(attempt.confidence_assignment.probability, 57)
+
+
+class ResearchToolProjectionTests(TestCase):
+    def setUp(self):
+        ResearchToolTests.setUp(self)
+        base = self.version.configuration['research_tools']['rules'][0]
+        rules = [{**base, 'id': f'check{index}', 'max_exposures': 2, 'required': index == 1}
+                 for index in range(1, 4)]
+        self.version.configuration['research_tools']['rules'] = rules
+        self.version.save(update_fields=['configuration'])
+        self.attempt = self.attempts[Question.Type.SINGLE]
+        self.attempt.session.version = self.version
+        self.client.force_login(self.student)
+        self.url = f'/api/v1/student/sessions/{self.session.pk}/questions/{self.attempt.assignment_id}/'
+
+    def action(self, stage, rule_id):
+        from .research_tool_services import record_tool_action
+        return record_tool_action(student=self.student, attempt_id=self.attempt.pk, tool='check',
+            stage=stage, operation_id=str(uuid.uuid4()), data={'rule_id': rule_id},
+            initiation_type='task_required' if rule_id == 'check1' else 'system_prompted')
+
+    def test_runtime_uses_one_tool_event_read_for_all_rule_projections(self):
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200, response.content)
+        tool_reads = [query['sql'] for query in queries
+                      if 'FROM "assessment_assessmentevent"' in query['sql'] and "'research_tool'" in query['sql']]
+        self.assertEqual([rule['id'] for rule in response.json()['data']['research_tools']['rules']],
+                         ['check1', 'check2', 'check3'])
+        print(f'Runtime rule projection SQL: total={len(queries)}, tool_events={len(tool_reads)}')
+        self.assertEqual(len(tool_reads), 1, tool_reads)
+
+    def test_pending_latest_request_exposure_limit_and_new_request_stay_distinct(self):
+        from .research_tool_services import assert_required_tools
+        first = self.action('requested', 'check1')
+        self.action('presented', 'check1')
+        self.action('responded', 'check1')
+        latest = self.action('requested', 'check1')
+        for _ in range(2):
+            self.action('requested', 'check2')
+            self.action('responded', 'check2')
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200, response.content)
+        rules = response.json()['data']['research_tools']['rules']
+        self.assertEqual([rule['id'] for rule in rules], ['check1', 'check3'])
+        self.assertNotEqual(first['event_id'], latest['event_id'])
+        self.assertEqual(rules[0]['pending_request'], latest)
+        self.assertFalse(rules[0]['already_presented'], 'Earlier presentation belongs to the earlier request')
+        self.action('presented', 'check1')
+        self.assertTrue(self.client.get(self.url).json()['data']['research_tools']['rules'][0]['already_presented'])
+        self.action('finished', 'check1')
+        self.assertEqual([rule['id'] for rule in self.client.get(self.url).json()['data']['research_tools']['rules']], ['check3'])
+        assert_required_tools(self.attempt)
+
+    def test_required_rule_gate_and_closed_attempt_projection_remain_authoritative(self):
+        from .research_tool_services import assert_required_tools
+        with self.assertRaises(ValidationError):
+            assert_required_tools(self.attempt)
+        self.action('requested', 'check1')
+        with self.assertRaises(ValidationError):
+            assert_required_tools(self.attempt)
+        self.attempt.status = 'submitted'
+        self.attempt.save(update_fields=['status'])
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['data']['research_tools']['rules'], [])
+
+    def test_unrelated_self_initiated_data_does_not_match_string_rule_ids(self):
+        from .research_tool_services import record_tool_action
+        for rule_id in (['check1'], {'id': 'check1'}):
+            record_tool_action(student=self.student, attempt_id=self.attempt.pk, tool='doubt',
+                stage='mark_added', operation_id=str(uuid.uuid4()), data={'rule_id': rule_id})
+        try:
+            response = self.client.get(self.url)
+        except TypeError:
+            self.fail('Schema-valid self-initiated tool data must not break the rule projection')
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.json()['data']['research_tools']['state']['doubt'])
+        self.assertEqual([rule['id'] for rule in response.json()['data']['research_tools']['rules']],
+                         ['check1', 'check2', 'check3'])
 
 
 @skipUnless(connection.vendor == 'postgresql', 'Requires PostgreSQL row locks')

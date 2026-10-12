@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { createStudentCourseApi } from './api'
-import { createApiClient } from '@/api/client'
+import { ApiError, createApiClient } from '@/api/client'
+import { readAdmissionCredentials, writeAdmissionCredentials } from '@/assessment-runtime/admission'
 
 describe('student course API', () => {
   it('merges identical lightweight checks independently from full learning requests', async () => {
@@ -89,6 +90,39 @@ describe('student course API', () => {
         ['/api/v1/student/tasks/19/start/', { method: 'POST', body: { admission_token: 'token-1', admission_action: 'start' } }],
       ])
     } finally { vi.useRealTimers() }
+  })
+
+  it.each(['start', 'resume'] as const)('reacquires an invalid saved %s grant once without stale credentials', async (action) => {
+    sessionStorage.clear()
+    writeAdmissionCredentials(19, { admission_token: 'expired', admission_action: action })
+    const client = {
+      get: vi.fn(),
+      mutate: vi.fn()
+        .mockRejectedValueOnce(new ApiError(409, { error: { code: 'ADMISSION_TOKEN_INVALID' } }))
+        .mockResolvedValueOnce({ task_id: 19, session_id: 7, question_url: '/question/', admission_token: 'fresh', admission_action: action }),
+    }
+    await expect(createStudentCourseApi(client)[action](19)).resolves.toMatchObject({ session_id: 7 })
+    expect(client.mutate.mock.calls).toEqual([
+      [`/api/v1/student/tasks/19/${action}/`, { method: 'POST', body: { admission_token: 'expired', admission_action: action } }],
+      [`/api/v1/student/tasks/19/${action}/`, { method: 'POST' }],
+    ])
+    expect(readAdmissionCredentials(19)).toEqual({ admission_token: 'fresh', admission_action: action, session_id: 7 })
+    expect(client.get).not.toHaveBeenCalled()
+    sessionStorage.clear()
+  })
+
+  it('stops after one invalid-grant refresh and does not retry other authorization errors', async () => {
+    for (const code of ['ADMISSION_TOKEN_INVALID', 'RESEARCH_CONSENT_REQUIRED']) {
+      sessionStorage.clear()
+      writeAdmissionCredentials(19, { admission_token: 'expired', admission_action: 'start' })
+      const error = new ApiError(code === 'ADMISSION_TOKEN_INVALID' ? 409 : 403, { error: { code } })
+      const client = { get: vi.fn(), mutate: vi.fn().mockRejectedValue(error) }
+      await expect(createStudentCourseApi(client).start(19)).rejects.toBe(error)
+      expect(client.mutate).toHaveBeenCalledTimes(code === 'ADMISSION_TOKEN_INVALID' ? 2 : 1)
+      expect(client.get).not.toHaveBeenCalled()
+      expect(readAdmissionCredentials(19)?.admission_token).toBe(code === 'ADMISSION_TOKEN_INVALID' ? undefined : 'expired')
+    }
+    sessionStorage.clear()
   })
 
   it('reuses an in-flight experiment result request', async () => {

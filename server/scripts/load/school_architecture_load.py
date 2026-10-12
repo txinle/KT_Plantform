@@ -61,6 +61,8 @@ def main():
         result['mode'] = 'architecture_' + args.mode
         result['source_config'] = fixture['source_config']
         result['request_attempts_file'] = args.output.with_suffix('.attempts.jsonl').name
+        result['operation_measurements_file'] = args.output.with_suffix('.operations.jsonl').name
+        result['progress_file'] = args.output.with_suffix('.progress.json').name
         after = resource.getrusage(resource.RUSAGE_SELF)
         result['generator'].update(cpu_seconds=after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime,
             max_rss_bytes=after.ru_maxrss * 1024, same_host_as_service=True,
@@ -72,6 +74,7 @@ def main():
                 result.pop(key, None)
         files['complete'] = result['workflow_completed']
         json.dump(result, files['result'], indent=2)
+        files['result_ready'] = True
     print(json.dumps({key: result[key] for key in ('mode', 'student_count', 'workflow_completed', 'performance_passed', 'budget_interrupted')}))
     # A diagnostic budget cutoff is recorded as incomplete evidence, never a capacity pass.
     raise SystemExit(0 if result['workflow_completed'] else 1)

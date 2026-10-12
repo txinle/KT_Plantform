@@ -25,11 +25,38 @@ class AdmissionResult:
     retry_after: int
 
 
+_REQUEST_SCRIPT = """
+local existing = redis.call('GET', KEYS[1])
+if existing then
+  local token_key = KEYS[4] .. existing
+  local state = redis.call('HGET', token_key, 'state')
+  local lease_until = tonumber(redis.call('HGET', token_key, 'lease_until') or '0')
+  if state == 'queued' or (state == 'admitted' and lease_until > tonumber(ARGV[6])) then
+    return existing
+  end
+  redis.call('ZREM', KEYS[2], existing)
+  redis.call('ZREM', KEYS[3], existing)
+  if state == 'admitted' then redis.call('HSET', token_key, 'state', 'expired') end
+end
+local token = ARGV[4]
+local token_key = KEYS[4] .. token
+local sequence = redis.call('INCR', KEYS[5])
+redis.call('HSET', token_key, 'user_id', ARGV[1], 'task_id', ARGV[2],
+  'action', ARGV[3], 'state', 'queued', 'created_at', ARGV[6])
+redis.call('EXPIRE', token_key, tonumber(ARGV[5]))
+redis.call('SET', KEYS[1], token, 'EX', tonumber(ARGV[5]))
+redis.call('ZADD', KEYS[2], sequence, token)
+return token
+"""
+
+
 _PROMOTE_SCRIPT = """
 local now = tonumber(ARGV[1])
 local capacity = tonumber(ARGV[2])
 for _, token in ipairs(redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', now)) do
-  redis.call('HSET', KEYS[3] .. token, 'state', 'expired')
+  if redis.call('EXISTS', KEYS[3] .. token) == 1 then
+    redis.call('HSET', KEYS[3] .. token, 'state', 'expired')
+  end
 end
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
 local active = redis.call('ZCARD', KEYS[2])
@@ -42,6 +69,8 @@ for _, token in ipairs(redis.call('ZRANGE', KEYS[1], 0, -1)) do
     redis.call('ZREM', KEYS[1], token)
     redis.call('ZADD', KEYS[2], lease_until, token)
     active = active + 1
+  else
+    redis.call('ZREM', KEYS[1], token)
   end
 end
 return active
@@ -114,38 +143,14 @@ class AdmissionCoordinator:
             raise AdmissionUnavailable from exc
 
     def request(self, *, task_id: int, user_id: int, action: str) -> AdmissionResult:
-        queue_key, _, token_prefix = self._keys(task_id)
+        queue_key, active_key, token_prefix = self._keys(task_id)
         request_key = f'{queue_key}:request:{user_id}:{action}'
         try:
-            existing = self.client.get(request_key)
-            if existing:
-                token = str(existing)
-            else:
-                token = secrets.token_urlsafe(32)
-                claimed = self.client.set(
-                    request_key,
-                    token,
-                    nx=True,
-                    ex=settings.ASSESSMENT_ADMISSION_TTL_SECONDS,
-                )
-                if not claimed:
-                    token = str(self.client.get(request_key) or '')
-                    if not token:
-                        raise AdmissionUnavailable
-                else:
-                    sequence = self.client.incr(f'{queue_key}:sequence')
-                    token_key = f'{token_prefix}{token}'
-                    pipe = self.client.pipeline(transaction=True)
-                    pipe.hset(token_key, mapping={
-                        'user_id': str(user_id),
-                        'task_id': str(task_id),
-                        'action': action,
-                        'state': 'queued',
-                        'created_at': str(time.time()),
-                    })
-                    pipe.expire(token_key, settings.ASSESSMENT_ADMISSION_TTL_SECONDS)
-                    pipe.zadd(queue_key, {token: sequence})
-                    pipe.execute()
+            token = str(self.client.eval(
+                _REQUEST_SCRIPT, 5, request_key, queue_key, active_key, token_prefix,
+                f'{queue_key}:sequence', str(user_id), str(task_id), action,
+                secrets.token_urlsafe(32), str(settings.ASSESSMENT_ADMISSION_TTL_SECONDS), str(time.time()),
+            ))
             self._promote(task_id)
             state = self.client.hget(f'{token_prefix}{token}', 'state')
             if state not in {'queued', 'admitted'}:

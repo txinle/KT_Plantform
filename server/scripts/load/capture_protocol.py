@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from html.parser import HTMLParser
 from urllib.parse import urlencode, urlsplit
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 
 QUESTION_TYPES = ('single_choice', 'true_false', 'multiple_choice', 'fill_blank', 'short_answer')
@@ -43,7 +43,8 @@ class _ErrorCodeOpener:
         'capture_contract_mismatch', 'deadline_expired', 'task_terminated', 'course_access_revoked',
         'writer_lease_conflict', 'writer_lease_expired', 'navigation_response_version_conflict',
         'response_version_conflict', 'capture_mutation_material_conflict', 'invalid_bundle_link',
-        'invalid_bundle_boundary', 'invalid_checkpoint', 'ENTRY_MATERIAL_CONFLICT', 'SESSION_NOT_ENTERABLE', 'CSRF_FAILED'))
+        'invalid_bundle_boundary', 'invalid_checkpoint', 'ENTRY_MATERIAL_CONFLICT', 'SESSION_NOT_ENTERABLE', 'CSRF_FAILED',
+        'ADMISSION_TOKEN_INVALID', 'ADMISSION_UNAVAILABLE', 'ADMISSION_ACTION_INVALID'))
 
     def __init__(self, opener, state, runner):
         self.opener, self.state, self.runner = opener, state, runner
@@ -62,6 +63,11 @@ class _ErrorCodeOpener:
                 self.state.browser_last_error_code = code if code in self.allowed_codes else 'unrecognized_error_code'
             except (ValueError, TypeError, AttributeError):
                 self.state.browser_last_error_code = 'unreadable_error_code'
+            raise
+
+        except (TimeoutError, URLError) as error:
+            if isinstance(error, TimeoutError) or isinstance(getattr(error, 'reason', None), TimeoutError):
+                self.state.browser_last_error_code = 'transport_timeout'
             raise
 
 
@@ -270,65 +276,260 @@ def acknowledged(ledger, body, response):
         row['ack_count'] += 1
 
 
+_MEASUREMENT_FIELDS = frozenset(('metric', 'student_index', 'item_index', 'elapsed_seconds',
+    'http_status', 'error_type', 'successful', 'server_error_code', 'admission_error'))
+_ERROR_FIELDS = frozenset(('phase', 'student_index', 'error', 'http_status'))
+
+
+def _measurement_metadata(row):
+    return {key: value for key, value in row.items() if key in _MEASUREMENT_FIELDS
+            and (value is None or isinstance(value, (str, int, float, bool)))}
+
+
+def _private_stream(path):
+    return open(path, 'x+', encoding='utf-8', opener=lambda name, flags: os.open(name, flags, 0o600))
+
+
+def _atomic_evidence_json(path, value):
+    temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
+    try:
+        with _private_stream(temporary) as handle:
+            json.dump(value, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+class _MeasurementJournal(list):
+    def __init__(self, rows, output, source, lock):
+        super().__init__(rows)
+        self.output, self.source, self.lock = output, source, lock
+        for row in rows:
+            self._write(row)
+
+    def _write(self, row):
+        with self.lock:
+            self.output.write(json.dumps({**_measurement_metadata(row), 'measurement_source': self.source}) + '\n')
+            self.output.flush()
+
+    def append(self, row):
+        super().append(row)
+        self._write(row)
+
+
+class _EvidenceFiles(dict):
+    def __init__(self, streams, attach):
+        super().__init__(streams)
+        self.attach = attach
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        if key == 'runner':
+            self.attach(value)
+
+
 @contextmanager
 def evidence_files(manifest_path, output_path):
-    """Reserve task and evidence before any HTTP; partial failures remain reviewable."""
+    """Keep flushed journals readable and publish JSON snapshots by atomic replace."""
+    from assessment_300 import percentile
+
     manifest_path, output_path = Path(manifest_path), Path(output_path)
     fixture = json.loads(manifest_path.read_text(encoding='utf-8-sig'))
-    paths = {'result': output_path, 'attempts': output_path.with_suffix('.attempts.jsonl'),
-             'ledger': manifest_path.with_suffix('.ledger.json')}
+    final_paths = {'result': output_path, 'attempts': output_path.with_suffix('.attempts.jsonl'),
+        'operations': output_path.with_suffix('.operations.jsonl'),
+        'progress': output_path.with_suffix('.progress.json'), 'ledger': manifest_path.with_suffix('.ledger.json')}
     claim = manifest_path.parent / f".school-task-{fixture['task_id']}.claim.json"
-    for path in (*paths.values(), claim):
+    for path in (*final_paths.values(), claim):
         if path.exists():
             raise FileExistsError(f'Evidence/task already claimed: {path.name}')
-    with claim.open('x', encoding='utf-8') as handle:
+    with _private_stream(claim) as handle:
         json.dump({'task_id': fixture['task_id'], 'run_id': fixture.get('run_id'),
-                   'manifest_sha256': hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
-                   'output_file': output_path.name, 'claimed_at': time.time()}, handle)
+            'manifest_sha256': hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            'output_file': output_path.name, 'claimed_at': time.time()}, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    stop = threading.Event()
+    snapshot_lock, journal_lock = threading.RLock(), threading.Lock()
+    interruption_signal = None
+    last_snapshots = {True: {}, False: {}}
+    progress_thread = None
+    temporary_paths = []
+
     with ExitStack() as stack:
-        files = {key: stack.enter_context(path.open('x', encoding='utf-8')) for key, path in paths.items()}
-        for path in paths.values():
-            os.chmod(path, 0o600)
-        def persist_partial(signum=None):
+        streams = {}
+        for key in ('result', 'ledger'):
+            temporary = final_paths[key].with_name(f'.{final_paths[key].name}.{uuid.uuid4().hex}.tmp')
+            temporary_paths.append(temporary)
+            streams[key] = stack.enter_context(_private_stream(temporary))
+        for key in ('attempts', 'operations'):
+            streams[key] = stack.enter_context(_private_stream(final_paths[key]))
+
+        def attach(runner):
+            for name in ('operation_measurements', 'protocol_operation_measurements'):
+                if hasattr(runner, name):
+                    setattr(runner, name, _MeasurementJournal(getattr(runner, name), files['operations'], name, journal_lock))
+            # Legacy short workloads have only aggregate record() measurements.
+            if not hasattr(runner, 'operation_measurements') and hasattr(runner, 'record'):
+                record = runner.record
+                def journal_record(metric, seconds):
+                    record(metric, seconds)
+                    with journal_lock:
+                        files['operations'].write(json.dumps({'metric': metric, 'elapsed_seconds': seconds,
+                            'measurement_source': 'record'}) + '\n')
+                        files['operations'].flush()
+                runner.record = journal_record
+            runner.attempt_output = files['attempts']
+            persist_progress()
+
+        files = _EvidenceFiles(streams, attach)
+
+        def snapshot(*, full_ledger=True):
             runner = files.get('runner')
-            if runner is not None:
-                with runner.lock:
-                    sessions = deepcopy(runner.ledger)
-            else:
-                sessions = {}
-            if files['result'].tell() == 0:
-                json.dump({'passed': False, 'incomplete': True, 'task_id': fixture['task_id'],
-                           'reason': 'Workload did not produce a result; task remains claimed'}, files['result'])
-            if files['ledger'].tell() == 0:
-                json.dump({'task_id': fixture['task_id'], 'student_count': fixture.get('student_count'),
-                    'source_config': fixture.get('source_config'), 'capture_protocol': fixture.get('capture_protocol'),
-                    'incomplete': signum is not None or files.get('complete') is not True,
-                    'interruption_signal': signum,
-                    'workload_version': getattr(runner, 'workload_version', CONTRACT),
-                    'sessions': sessions}, files['ledger'])
-            for key in paths:
-                files[key].flush()
-                os.fsync(files[key].fileno())
+            lock = getattr(runner, 'lock', None)
+            acquired = lock is None or lock.acquire(timeout=.25)
+            if not acquired:
+                return {**last_snapshots[full_ledger], 'snapshot_incomplete': True}
+            try:
+                sessions = getattr(runner, 'ledger', {})
+                material = {'sessions': (deepcopy(sessions) if full_ledger else
+                    {key: {'complete': row.get('complete', False)} for key, row in sessions.items()}),
+                    'measurements': [_measurement_metadata(row) for name in
+                        ('operation_measurements', 'protocol_operation_measurements') for row in getattr(runner, name, [])],
+                    'metrics': deepcopy(getattr(runner, 'metrics', {})),
+                    'errors': [{key: row[key] for key in _ERROR_FIELDS if key in row}
+                               for row in getattr(runner, 'errors', [])],
+                    'http_request_count': getattr(runner, 'request_count', 0),
+                    'http_error_count': getattr(runner, 'request_errors', 0)}
+                last_snapshots[full_ledger] = material
+                return material
+            finally:
+                if lock is not None:
+                    lock.release()
+
+        def distribution(rows):
+            values = [row['elapsed_seconds'] for row in rows if isinstance(row.get('elapsed_seconds'), (int, float))]
+            return {'count': len(rows), 'p50_seconds': percentile(values, .5), 'p95_seconds': percentile(values, .95),
+                'p99_seconds': percentile(values, .99), 'max_seconds': max(values, default=None)}
+
+        def partial_result(material):
+            sessions, measurements = material.get('sessions', {}), material.get('measurements', [])
+            completed = sum(bool(row.get('complete')) for row in sessions.values())
+            latency = {}
+            for metric in {row['metric'] for row in measurements if 'metric' in row}:
+                rows = [row for row in measurements if row.get('metric') == metric]
+                latency[metric] = {name: distribution(selected) for name, selected in (
+                    ('all', rows), ('successful', [row for row in rows if row.get('successful') is True]),
+                    ('failed', [row for row in rows if row.get('successful') is False]))}
+            return {'passed': False, 'workflow_completed': False, 'incomplete': True,
+                'formal_capacity_accepted': False, 'task_id': fixture['task_id'], 'student_count': fixture.get('student_count'),
+                'reason': 'Workload interrupted or did not produce a result; task remains claimed',
+                'interruption_signal': interruption_signal,
+                'budget_interrupted': bool(interruption_signal is not None or getattr(files.get('runner'), 'budget_interrupted', False)),
+                'completed_session_count': completed, 'completed_student_count': completed,
+                'incomplete_student_count': max(0, fixture.get('student_count', 0) - completed),
+                'session_count': len(sessions), 'unique_session_count': len(sessions),
+                'operation_latency': latency, 'operation_measurements': measurements,
+                'metrics': {key: distribution([{'elapsed_seconds': seconds} for seconds in values])
+                            for key, values in material.get('metrics', {}).items()},
+                'errors': material.get('errors', []), 'http_request_count': material.get('http_request_count', 0),
+                'http_error_count': material.get('http_error_count', 0),
+                'request_attempts_file': final_paths['attempts'].name,
+                'operation_measurements_file': final_paths['operations'].name,
+                'snapshot_incomplete': material.get('snapshot_incomplete', False), 'updated_at': time.time()}
+
+        def persist_progress():
+            with snapshot_lock:
+                progress = partial_result(snapshot(full_ledger=False))
+                progress.pop('operation_measurements')
+                _atomic_evidence_json(final_paths['progress'], progress)
+
+        def persist_partial(signum=None):
+            nonlocal interruption_signal
+            if signum is not None:
+                interruption_signal = signum
+            with snapshot_lock:
+                material = snapshot()
+                partial = partial_result(material)
+                if files.get('result_ready') is True:
+                    files['result'].flush()
+                    files['result'].seek(0)
+                    report = json.load(files['result'])
+                    if interruption_signal is not None:
+                        report.update(passed=False, workflow_completed=False, formal_capacity_accepted=False,
+                            incomplete=True, interruption_signal=interruption_signal, budget_interrupted=True)
+                else:
+                    report = partial
+                if files.get('progress_error_type'):
+                    report.update(passed=False, formal_capacity_accepted=False,
+                                  progress_error_type=files['progress_error_type'])
+                _atomic_evidence_json(final_paths['result'], report)
+                _atomic_evidence_json(final_paths['progress'], {key: value for key, value in partial.items()
+                    if key != 'operation_measurements'})
+                _atomic_evidence_json(final_paths['ledger'], {'task_id': fixture['task_id'],
+                    'student_count': fixture.get('student_count'), 'source_config': fixture.get('source_config'),
+                    'capture_protocol': fixture.get('capture_protocol'),
+                    'incomplete': interruption_signal is not None or files.get('complete') is not True,
+                    'interruption_signal': interruption_signal,
+                    'workload_version': getattr(files.get('runner'), 'workload_version', CONTRACT),
+                    'completed_session_count': partial['completed_session_count'],
+                    'snapshot_incomplete': partial['snapshot_incomplete'], 'sessions': material.get('sessions', {})})
+                for key in ('attempts', 'operations'):
+                    files[key].flush()
+                    os.fsync(files[key].fileno())
 
         def interrupted(signum, frame):
             runner = files.get('runner')
             if runner is not None:
                 runner.budget_deadline = time.monotonic()
                 runner.budget_interrupted = True
-            # Docker's bounded stop may kill us before HTTP threads unwind.
+            # Worker HTTP requests may still be returning: do not close their journals.
             persist_partial(signum)
             raise SystemExit(128 + signum)
+
+        def periodic_progress():
+            while not stop.wait(5):
+                try:
+                    persist_progress()
+                except Exception as error:
+                    files['progress_error_type'] = type(error).__name__
+                    stop.set()
 
         prior = signal.getsignal(signal.SIGTERM)
         main_thread = threading.current_thread() is threading.main_thread()
         if main_thread:
             signal.signal(signal.SIGTERM, interrupted)
         try:
+            files.update(persist_partial=persist_partial, persist_progress=persist_progress,
+                         commit=persist_partial, interrupt=interrupted)
+            persist_partial()
+            progress_thread = threading.Thread(target=periodic_progress, name='load-evidence-progress', daemon=True)
+            progress_thread.start()
             yield files
+            # Older callers write their complete result without an explicit marker.
+            if 'result_ready' not in files:
+                files['result'].flush()
+                files['result'].seek(0)
+                try:
+                    json.load(files['result'])
+                except ValueError:
+                    pass
+                else:
+                    files['result_ready'] = True
         finally:
             if main_thread:
                 signal.signal(signal.SIGTERM, prior)
-            persist_partial()
+            stop.set()
+            if progress_thread is not None:
+                progress_thread.join(timeout=1)
+            try:
+                persist_partial()
+            finally:
+                for key in ('result', 'ledger'):
+                    files[key].close()
+                for path in temporary_paths:
+                    path.unlink(missing_ok=True)
 
 
 class CaptureProtocolMixin:

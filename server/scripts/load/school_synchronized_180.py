@@ -5,6 +5,7 @@ from collections import Counter
 import concurrent.futures
 import json
 import math
+import random
 import re
 import threading
 import time
@@ -17,6 +18,12 @@ from assessment_300 import percentile
 
 class InternalBudgetExceeded(RuntimeError):
     pass
+
+
+def admission_poll_delay(retry_after_seconds, jitter_ms=None):
+    """Return the browser-equivalent poll delay without exposing credentials."""
+    jitter_ms = random.randrange(500) if jitter_ms is None else jitter_ms()
+    return max(1, retry_after_seconds or 3) + jitter_ms / 1000
 
 
 class AttemptJournal:
@@ -66,7 +73,11 @@ class ObservedOpener:
             phase = 'login_post'
         elif stage == 'start':
             if path == f'/api/v1/student/tasks/{self.runner.task_id}/start/' and request.get_method() == 'POST':
-                phase = 'start'
+                operation_id = self.runner.request_context.current['operation_id']
+                if not hasattr(self.state, 'admission_initial_operation_id'):
+                    self.state.admission_initial_operation_id = operation_id
+                if self.state.admission_initial_operation_id == operation_id:
+                    phase = 'start'
             elif re.fullmatch(r'/api/v1/student/sessions/\d+/questions/\d+/(?:\?.*)?', path) and request.get_method() == 'POST':
                 phase = 'first_question'
         if phase is None:
@@ -184,7 +195,7 @@ class Synchronized180Runner(ProtocolShortRunner):
         try:
             result = self.request(state, path, **kwargs)
             status = result[0]
-            successful = status in (200, 201)
+            successful = status in (200, 201, 202)
             return result
         except Exception as error:
             error_type = type(error).__name__
@@ -201,7 +212,55 @@ class Synchronized180Runner(ProtocolShortRunner):
         with self.lock:
             self.operation_measurements.append({'metric': metric, 'student_index': state.load_student_index,
                 'elapsed_seconds': seconds, 'http_status': status, 'error_type': error_type,
-                'successful': successful})
+                'successful': successful,
+                'admission_error': (({'ADMISSION_TOKEN_INVALID': 'invalid_token',
+                    'ADMISSION_UNAVAILABLE': 'redis_failure', 'transport_timeout': 'timeout'}.get(
+                        getattr(state, 'browser_last_error_code', None)) or
+                    {409: 'invalid_token', 503: 'redis_failure'}.get(status)) if not successful
+                        and metric in ('start', 'admission_poll', 'admission_start', 'admission_wait',
+                                       'admitted_to_first_question_ready', 'start_to_first_question_ready') else None)})
+
+    def _start_with_admission(self, state):
+        path = f'/api/v1/student/tasks/{self.task_id}/start/'
+        status, successful, error_type = None, False, None
+        credentials = None
+        try:
+            status, payload, _ = self.measured_request(
+                state, path, 'start', origin=self.released_at, method='POST', body={})
+            while status == 202:
+                if payload.get('status') != 'queued' or not payload.get('admission_token') or not payload.get('poll_url'):
+                    raise RuntimeError('Admission response missing required fields')
+                credentials = {'admission_token': payload['admission_token'], 'admission_action': 'start'}
+                delay = admission_poll_delay(payload.get('retry_after_seconds'))
+                remaining = self.remaining_budget()
+                time.sleep(min(delay, remaining) if remaining is not None else delay)
+                self.remaining_budget()
+                status, payload, _ = self.measured_request(state, payload['poll_url'], 'admission_poll',
+                    method='POST', body={'admission_token': credentials['admission_token'], 'action': 'start'})
+                if status == 200 and payload.get('status') == 'admitted':
+                    break
+            if status not in (200, 201):
+                raise RuntimeError('Start failed')
+            state.admitted_at = time.perf_counter()
+            successful = True
+        except Exception as error:
+            error_type = type(error).__name__
+            match = re.fullmatch(r'HTTP (\d{3})', str(error))
+            if match:
+                status = int(match.group(1))
+            raise
+        finally:
+            self.record_outcome(state, 'admission_wait', self.released_at, successful, status, error_type)
+        if credentials is not None:
+            status, payload, _ = self.measured_request(state, path, 'admission_start',
+                method='POST', body=credentials)
+            if status not in (200, 201):
+                raise RuntimeError('Start failed')
+        if payload.get('admission_token'):
+            credentials = {'admission_token': payload['admission_token'],
+                           'admission_action': payload.get('admission_action') or 'start'}
+        state.admission_credentials = credentials
+        return status, payload
 
     def prepare_login(self, state):
         began = time.perf_counter()
@@ -249,18 +308,20 @@ class Synchronized180Runner(ProtocolShortRunner):
         try:
             with self.lock:
                 self.send_delays.append(time.perf_counter() - self.released_at)
-            status, payload, _ = self.measured_request(state, f'/api/v1/student/tasks/{self.task_id}/start/',
-                'start', origin=self.released_at, method='POST', body={})
-            if status not in (200, 201):
-                raise RuntimeError('Start failed')
+            status, payload = self._start_with_admission(state)
             state.session_id = int(payload['session_id'])
             state.assignment_ids = [int(payload['question_url'].rstrip('/').split('/')[-1])]
             path = f'/api/v1/student/sessions/{state.session_id}/questions/{state.assignment_ids[0]}/'
             state.browser_entry_material = self.entry_material(state)
+            if state.admission_credentials:
+                state.browser_entry_material.update(state.admission_credentials)
             status, dto, _ = self.measured_request(state, path, 'first_question', method='POST', body=state.browser_entry_material)
             process = dto.get('process', {}) if isinstance(dto, dict) else {}
             if status != 200 or process.get('capture_version') != 'capture-v2':
                 raise RuntimeError('First question capture contract absent')
+            state.browser_entry_material.pop('admission_token', None)
+            state.browser_entry_material.pop('admission_action', None)
+            state.admission_credentials = None
             if process.get('active_response_event_id') or process.get('response_version') != 0:
                 raise RuntimeError('First question response is not cold')
             if self.workload_version == BROWSER_ALIGNED_WORKLOAD:
@@ -274,6 +335,9 @@ class Synchronized180Runner(ProtocolShortRunner):
                 status = int(match.group(1))
             raise
         finally:
+            if getattr(state, 'admitted_at', None) is not None:
+                self.record_outcome(state, 'admitted_to_first_question_ready', state.admitted_at,
+                                    successful, status, error_type)
             self.record_outcome(state, 'start_to_first_question_ready', self.released_at,
                                 successful, status, error_type)
 
@@ -335,6 +399,7 @@ def browser_aligned_checks(result):
 
 def full_operation_accounting(rows, students):
     counts = {'login_entry_to_authentication_end': 1, 'start_to_first_question_ready': 1,
+        'admission_wait': 1, 'admitted_to_first_question_ready': 1,
         'answer_input': 20, 'navigation_next_ready': 19, 'navigation_return_ready': 19,
         'submit_confirmation_ready': 20, 'submit_next_ready': 20, 'finish_ready': 1}
     result = {}
@@ -383,7 +448,8 @@ def build_result(runner, states, started, ended, *, expected_students=180):
             'retry_attempts': summary([row['elapsed_seconds'] for row in attempts if row['attempt'] > 1]),
             'final_attempts': summary([row['elapsed_seconds'] for row in final_attempts.values()]),
             'successful_only': summary([row['elapsed_seconds'] for row in attempts if row['successful']])}
-    for metric in ('login_entry_to_authentication_end', 'start_to_first_question_ready'):
+    for metric in ('login_entry_to_authentication_end', 'start_to_first_question_ready',
+                   'admission_wait', 'admitted_to_first_question_ready'):
         operations = [row for row in runner.operation_measurements if row['metric'] == metric]
         operation_latency[metric] = {
             'all_operations': summary([row['elapsed_seconds'] for row in operations]),
@@ -408,7 +474,7 @@ def build_result(runner, states, started, ended, *, expected_students=180):
         'send_observation_boundary': 'Timestamp immediately before urllib opener.open; socket/TLS transmission is not directly observed.',
         'end_to_end_boundaries': {
             'login_entry_to_authentication_end': 'Per identity login-page preparation invocation through final authentication outcome, including waiting for other preparation and the POST barrier.',
-            'start_to_first_question_ready': 'Shared start barrier release through formal question-entry POST and cold-state validation, including retries and preceding sender delay.'},
+            'start_to_first_question_ready': 'Shared start barrier release through formal question-entry POST and cold-state validation, including admission polling, retries and preceding sender delay.'},
         'synchronized_sends': runner.synchronized_sends,
         'item_arrivals': runner.item_arrivals,
         'session_count': sum(state.session_id is not None for state in states),
@@ -430,7 +496,7 @@ def build_result(runner, states, started, ended, *, expected_students=180):
             'Fixed 18-second item action arrivals share the answer-phase start origin. Generator lateness is observed invocation minus planned arrival; service waits can make later arrivals late.')
         result['generator']['item_arrival_lateness'] = summary([row['generator_lateness_seconds'] for row in runner.item_arrivals])
         result['end_to_end_boundaries']['start_to_first_question_ready'] = (
-            'Shared start barrier through authorized entry DTO, resume checkpoint, time synchronization, live offline authorization, versioned generic shell/assets and research tool setup. Independent initial RPCs are serialized conservatively; rendering needs a separate browser witness.')
+            'Shared start barrier through admission polling, authorized entry DTO, resume checkpoint, time synchronization, live offline authorization, versioned generic shell/assets and research tool setup. Independent initial RPCs are serialized conservatively; rendering needs a separate browser witness.')
         checks = browser_aligned_checks(result)
     else:
         checks = short_checks(result)
@@ -507,8 +573,11 @@ def main():
         result['generator'].update(cpu_seconds=after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime,
                                    max_rss_bytes=after.ru_maxrss * 1024)
         result['request_attempts_file'] = Path(args.output).with_suffix('.attempts.jsonl').name
+        result['operation_measurements_file'] = Path(args.output).with_suffix('.operations.jsonl').name
+        result['progress_file'] = Path(args.output).with_suffix('.progress.json').name
         files['complete'] = result['workflow_completed']
         json.dump(result, files['result'], indent=2)
+        files['result_ready'] = True
     print(json.dumps({key: result[key] for key in ('student_count', 'authentication_success_count',
         'execution_completed', 'workflow_completed', 'performance_passed', 'data_integrity_passed', 'checks')}))
     raise SystemExit(0 if result['performance_passed'] else 1)

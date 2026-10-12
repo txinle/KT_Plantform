@@ -6,6 +6,7 @@ import io
 import unittest
 import asyncio
 import sys
+from copy import deepcopy
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -140,6 +141,7 @@ class SchoolDiagnosticRuntimeTests(unittest.TestCase):
                               'Config': {'Env': env, 'Labels': {'com.docker.compose.project': module.PROJECT,
                                                                'com.docker.compose.service': role}}})
             runtime.validate_containers(items)
+
             items.append({'Id': 'native-helper', 'Config': {'Labels': {
                 'com.docker.compose.project': module.PROJECT, 'com.docker.compose.service': 'native-db-probe',
                 'com.docker.compose.oneoff': 'true'}}})
@@ -150,10 +152,35 @@ class SchoolDiagnosticRuntimeTests(unittest.TestCase):
             items[0]['Config']['Env'].append('GUNICORN_WORKERS=12')
             with self.assertRaises(module.SafetyInterrupted):
                 runtime.validate_containers(items)
-            items[0]['Config']['Env'].pop()
-            items[0]['Image'] = 'sha256:' + 'b' * 64
-            with self.assertRaises(module.SafetyInterrupted):
-                runtime.validate_containers(items)
+
+    def assert_redis_binding_rejects_changes(self, module, runtime, items, images):
+        for field, value in [('Image', 'sha256:' + 'c' * 64), ('State', {'Running': False}),
+                             ('NetworkSettings', {'Networks': {'kt_plantform_default': {}}}),
+                             ('HostConfig', {'Memory': 128 * 1024**2, 'NanoCpus': 250000000,
+                                             'PortBindings': {'6379/tcp': [{'HostPort': '6379'}]}})]:
+            with self.subTest(redis_field=field):
+                changed = deepcopy(items)
+                changed[-1][field] = value
+                with self.assertRaises(module.SafetyInterrupted):
+                    runtime.validate_containers(changed)
+        for role in ('web', 'student-read'):
+            for setting in ('ASSESSMENT_ADMISSION_TASK_IDS=*', 'ASSESSMENT_ADMISSION_TASK_IDS=19,23,24',
+                            'ASSESSMENT_ADMISSION_CAPACITY=9', 'ASSESSMENT_ADMISSION_ENABLED=0',
+                            'ASSESSMENT_ADMISSION_REDIS_URL=redis://production:6379/0'):
+                with self.subTest(role=role, setting=setting):
+                    changed = deepcopy(items)
+                    next(item for item in changed if item['Id'] == role)['Config']['Env'].append(setting)
+                    with self.assertRaises(module.SafetyInterrupted):
+                        runtime.validate_containers(changed)
+        production = deepcopy(items[-1])
+        production['Id'] = 'production'
+        production['Config']['Labels']['com.docker.compose.project'] = 'kt_plantform'
+        self.assertEqual(module.owned_test_ids([items[-1], production], images, runtime.runtime_roles), ['redis'])
+        self.assertEqual(module.owned_test_ids([items[-1], production], images), [])
+        items[0]['Config']['Env'].pop()
+        items[0]['Image'] = 'sha256:' + 'b' * 64
+        with self.assertRaises(module.SafetyInterrupted):
+            runtime.validate_containers(items)
 
     def test_failed_observation_is_explicit_failure_even_if_oom_count_zero(self):
         module = self.module()
@@ -214,6 +241,72 @@ class SchoolDiagnosticRuntimeTests(unittest.TestCase):
             self.assertEqual(command[command.index('--pull') + 1], 'never')
             self.assertEqual(command[-len(module.ROLES):], list(module.ROLES))
             self.assertNotIn('migrate', command)
+
+    def test_frozen_redis_admission_is_optional_and_bound_to_web_clients(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module = self.module()
+            images = {role: 'sha256:' + 'a' * 64 for role in module.ROLES}
+            images['redis-admission'] = 'sha256:' + 'b' * 64
+            source = {'admission': {'enabled': True, 'task_ids': [19, 23], 'capacity': 8},
+                      'roles': {'redis-admission': {'memory_bytes': 128 * 1024**2, 'cpus': .25}}}
+            runtime = module.DiagnosticRuntime({'run_id': 'diagnostic', 'candidate_dir': directory,
+                'private_dir': directory, 'source_config': source,
+                'compose_overlay_path': str(Path(directory) / 'images.json'), 'images': images,
+                'anchor_manifest': str(Path(directory) / 'anchor.json'), 'pair_dir': str(Path(directory) / 'pair'),
+                'fixture_password_file': str(Path(directory) / 'password'),
+                'production_health_url': 'http://127.0.0.1:8080/health/'})
+            self.assertEqual(runtime.start_command()[-1], 'redis-admission')
+            items = []
+            for role in module.ROLES:
+                env = ['POSTGRES_DB=kt_e2e', 'POSTGRES_USER=kt_e2e_user', 'CAPTURE_V2_ENABLED=1', 'CAPTURE_V2_COURSE_IDS=*']
+                env += ['POSTGRES_HOST=' + ('school-test-postgres' if role == 'scheduler' else 'pgbouncer'),
+                        'POSTGRES_POOL_ALIAS=' + module.POOL_ALIASES.get(role, ''), 'PGBOUNCER_SERVER_HOST=school-test-postgres']
+                if role in module.WORKERS:
+                    env.append('GUNICORN_WORKERS=' + str(module.WORKERS[role]))
+                if role in ('web', 'student-read'):
+                    env += ['ASSESSMENT_ADMISSION_ENABLED=1', 'ASSESSMENT_ADMISSION_TASK_IDS=19,23',
+                            'ASSESSMENT_ADMISSION_CAPACITY=8', 'ASSESSMENT_ADMISSION_REDIS_URL=redis://redis-admission:6379/0']
+                items.append({'Id': role, 'Image': runtime.config['images'][role], 'State': {'Running': True},
+                              'HostConfig': {'Memory': 1, 'NanoCpus': 0, 'PortBindings': {'80/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '18080'}]}},
+                              'NetworkSettings': {'Networks': {module.PROJECT + '_default': {'Aliases': [role]}}},
+                              'Config': {'Env': env, 'Labels': {'com.docker.compose.project': module.PROJECT,
+                                                               'com.docker.compose.service': role}}})
+            items.append({'Id': 'redis', 'Image': images['redis-admission'], 'State': {'Running': True},
+                          'HostConfig': {'Memory': 128 * 1024**2, 'NanoCpus': 250000000, 'PortBindings': {}},
+                          'NetworkSettings': {'Networks': {module.PROJECT + '_default': {'Aliases': ['redis-admission']}}},
+                          'Config': {'Env': [], 'Labels': {'com.docker.compose.project': module.PROJECT,
+                                                           'com.docker.compose.service': 'redis-admission'}}})
+            runtime.validate_containers(items)
+
+            self.assert_redis_binding_rejects_changes(module, runtime, items, images)
+
+    def test_redis_requires_frozen_role_and_rejects_wrong_network_or_host_port(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module, runtime = self.runtime(directory)
+            runtime.config['images']['redis-admission'] = 'sha256:' + 'b' * 64
+            with self.assertRaises(module.SafetyInterrupted):
+                runtime.start_command()
+            runtime.config['source_config'] = {'admission': {'enabled': True, 'task_ids': [19], 'capacity': 8},
+                'roles': {'redis-admission': {'memory_bytes': 1, 'cpus': .1}}}
+            self.assertIn('redis-admission', runtime.start_command())
+            items = []
+            for role in module.ROLES:
+                env = ['POSTGRES_DB=kt_e2e', 'POSTGRES_USER=kt_e2e_user', 'CAPTURE_V2_ENABLED=1', 'CAPTURE_V2_COURSE_IDS=*',
+                       'POSTGRES_HOST=' + ('school-test-postgres' if role == 'scheduler' else 'pgbouncer'),
+                       'POSTGRES_POOL_ALIAS=' + module.POOL_ALIASES.get(role, ''), 'PGBOUNCER_SERVER_HOST=school-test-postgres']
+                if role in module.WORKERS:
+                    env.append('GUNICORN_WORKERS=' + str(module.WORKERS[role]))
+                items.append({'Id': role, 'Image': runtime.config['images'][role], 'State': {'Running': True},
+                              'HostConfig': {'Memory': 1, 'NanoCpus': 0, 'PortBindings': {'80/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '18080'}]}},
+                              'Config': {'Env': env, 'Labels': {'com.docker.compose.project': module.PROJECT,
+                                                               'com.docker.compose.service': role}}})
+            redis = {'Id': 'redis', 'Image': runtime.config['images']['redis-admission'], 'State': {'Running': True},
+                     'HostConfig': {'Memory': 1, 'NanoCpus': 100000000, 'PortBindings': {'6379/tcp': [{'HostPort': '6379'}]}},
+                     'NetworkSettings': {'Networks': {'foreign_default': {'Aliases': ['redis-admission']}}},
+                     'Config': {'Env': [], 'Labels': {'com.docker.compose.project': module.PROJECT,
+                                                      'com.docker.compose.service': 'redis-admission'}}}
+            with self.assertRaises(module.SafetyInterrupted):
+                runtime.validate_containers(items + [redis])
 
     def test_safety_monitor_keeps_two_second_sample_period(self):
         with tempfile.TemporaryDirectory() as directory:

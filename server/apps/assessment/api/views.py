@@ -536,53 +536,17 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
         admission_token = material.get('admission_token')
         admission_action = material.get('admission_action')
         admission = None
-        admission_enabled = False
-        preliminary_session = None
-        if getattr(settings, 'ASSESSMENT_ADMISSION_ENABLED', False):
-            preliminary_session = self.session(request, session_id)
-            admission_enabled = bool(
-                preliminary_session.class_task_id
-                and AdmissionCoordinator.enabled_for(preliminary_session.class_task_id)
-            )
-        if admission_enabled and preliminary_session is not None and not AssessmentEvent.objects.filter(
-            session=preliminary_session, event_type='item_entered'
-        ).exists():
-            if not admission_token or not admission_action:
-                raise ApiConflict('首次进入题目需要有效准入许可。', code='ADMISSION_TOKEN_REQUIRED')
-            admission = AdmissionCoordinator()
-            try:
-                admission.status(
-                    task_id=preliminary_session.class_task_id,
-                    user_id=request.user.pk,
-                    action=admission_action,
-                    token=admission_token,
-                )
-            except AdmissionInvalid as error:
-                raise ApiConflict('准入许可无效或已过期，请返回任务列表重试。', code='ADMISSION_TOKEN_INVALID') from error
-            except AdmissionUnavailable as error:
-                raise ApiConflict('当前任务入口正在保护中，请稍后重试。', code='ADMISSION_UNAVAILABLE', status=503) from error
-            try:
-                admission.consume(
-                    task_id=preliminary_session.class_task_id,
-                    user_id=request.user.pk,
-                    action=admission_action,
-                    token=admission_token,
-                )
-            except AdmissionInvalid as error:
-                raise ApiConflict('准入许可已失效，请核验后重试。', code='ADMISSION_TOKEN_INVALID') from error
-            except AdmissionUnavailable as error:
-                raise ApiConflict('当前任务入口正在保护中，请稍后重试。', code='ADMISSION_UNAVAILABLE', status=503) from error
-        first_entry = False
         with transaction.atomic():
             session = self.session(request, session_id, locked=True)
             self.assert_content_access(request, session, timezone.now())
+            admission_enabled = bool(session.class_task_id and AdmissionCoordinator.enabled_for(session.class_task_id))
             first_entry = (
                 admission_enabled
                 and not AssessmentEvent.objects.filter(
                     session=session, event_type='item_entered'
                 ).exists()
             )
-            if admission_enabled and first_entry and not admission_token:
+            if first_entry and (not admission_token or not admission_action):
                 raise ApiConflict('首次进入题目需要有效准入许可。', code='ADMISSION_TOKEN_REQUIRED')
             assignment = get_object_or_404(
                 StudentQuestionAssignment.objects.select_related('snapshot', 'item_instance'),
@@ -613,6 +577,17 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                         and attempt.status not in (Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED)
                         and not self.entry_decision(session, attempt, request_received_at).allowed):
                     raise ApiConflict('本题作答时间已结束。', code='SESSION_NOT_ENTERABLE')
+                if first_entry:
+                    admission = AdmissionCoordinator()
+                    try:
+                        grant = admission.status(task_id=session.class_task_id, user_id=request.user.pk,
+                                                 action=admission_action, token=admission_token)
+                        if grant.status != 'admitted':
+                            raise AdmissionInvalid
+                    except AdmissionInvalid as error:
+                        raise ApiConflict('准入许可无效或已过期，请返回任务列表重试。', code='ADMISSION_TOKEN_INVALID') from error
+                    except AdmissionUnavailable as error:
+                        raise ApiConflict('当前任务入口正在保护中，请稍后重试。', code='ADMISSION_UNAVAILABLE', status=503) from error
                 try:
                     visit_entry = record_visit_entry(session.pk, assignment.pk, material['reason'],
                         material['client_occurred_at'], request_received_at=request_received_at,
@@ -623,6 +598,16 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                 decision = DeadlineDecision(False, 'ATTEMPT_CLOSED') if visit_entry.attempt.status in (
                     Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED,
                 ) else DeadlineDecision(True)
+                if admission is not None:
+                    def consume_admission():
+                        try:
+                            admission.consume(task_id=session.class_task_id, user_id=request.user.pk,
+                                              action=admission_action, token=admission_token)
+                        except AdmissionInvalid as error:
+                            raise ApiConflict('准入许可已失效，请核验后重试。', code='ADMISSION_TOKEN_INVALID') from error
+                        except AdmissionUnavailable as error:
+                            raise ApiConflict('当前任务入口正在保护中，请稍后重试。', code='ADMISSION_UNAVAILABLE', status=503) from error
+                    transaction.on_commit(consume_admission)
             runtime_attempt = visit_entry.attempt
             runtime_entry = visit_entry
 
@@ -639,8 +624,10 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
             )
         )
         from ..research_tool_services import available_tools, due_rules, tool_configuration
-        research_tools = available_tools(attempt)
-        research_tools['rules'] = due_rules(attempt)
+        tool_events = list(AssessmentEvent.objects.filter(attempt=attempt, event_type='research_tool')
+                           .order_by('server_ingest_sequence_no'))
+        research_tools = available_tools(attempt, events=tool_events)
+        research_tools['rules'] = due_rules(attempt, events=tool_events)
         payload = {
             'offline_authorization': {'user_id': session.student_id, 'session_id': session.pk, 'assignment_id': assignment.pk},
             'entry_allowed': decision.allowed,
