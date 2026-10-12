@@ -2,6 +2,20 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { digest, safeRequest, projectPayload } from './capture-protocol-witness.mjs'
 
+test('bundled draft witnesses retain event identities and payload hashes without answer values', () => {
+  const row = safeRequest('/api/v1/student/attempts/4/draft/', {
+    answer: 'PRIVATE ANSWER', writer_lease_token: 'PRIVATE LEASE',
+    capture_bundle: { version: 1, client_instance_id: 'client', events: [{
+      event_id: 'target', client_sequence_no: 3, session_id: 7, attempt_id: 4,
+      event_type: 'response_transition', payload: { after_state: { value: 'PRIVATE ANSWER' } },
+    }] },
+  })
+  assert.equal(row.client_instance_id, 'client')
+  assert.equal(row.events[0].event_id, 'target')
+  assert.equal(row.events[0].payload_sha256, digest({ after_state: { value: 'PRIVATE ANSWER' } }))
+  assert.ok(!JSON.stringify(row).includes('PRIVATE'))
+})
+
 test('witness excludes authentication, answers and lease tokens while retaining event identity', () => {
   assert.equal(safeRequest('/login/', { password: 'secret' }), null)
   const body = { writer_lease_token: 'secret-token', answer: 'secret-answer', client_instance_id: 'client', events: [

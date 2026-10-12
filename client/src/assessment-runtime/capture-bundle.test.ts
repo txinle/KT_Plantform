@@ -14,6 +14,26 @@ function receipt(bundle: { events: { client_sequence_no: number; event_id?: stri
 }
 function response(body: unknown) { return Response.json({ data: body, meta: { request_id: 'test' } }) }
 
+it.each(['offline', 'transport', 'incomplete-ack'])('returns an unconfirmed bundled flush after %s without silently retrying it', async mode => {
+  let requests = 0
+  let onlineChecks = 0
+  const sender = collector(async (_url, init) => {
+    const bundle = JSON.parse(String(init?.body)).capture_bundle
+    requests++
+    if (requests === 1 && mode === 'transport') throw new Error('network unavailable')
+    if (requests === 1 && mode === 'incomplete-ack') return response({ ...receipt(bundle), acknowledgements: [] })
+    return response(receipt(bundle))
+  })
+  if (mode === 'offline') sender.isOnline = () => onlineChecks++ > 0
+  const event = await sender.record('document_visible', {})
+  // The first check belongs to record() quality flags, not the upload.
+  onlineChecks = 0
+  expect(await sender.flushConfirmed()).toBe(false)
+  expect(requests).toBe(mode === 'offline' ? 0 : 1)
+  expect(await sender.outbox.pendingEvents(sender.clientInstanceId, 99)).toContainEqual(event)
+  expect(await sender.flushConfirmed()).toBe(true)
+})
+
 it('freezes a draft request and original own-attempt facts locally, excludes background ownership, and replays after unknown outcome', async () => {
   const sender = collector(async () => { throw new Error('no network during local freeze') })
   const one = await sender.record('response_input_started', { question_type: 'single_choice' }, { eventId: crypto.randomUUID() })

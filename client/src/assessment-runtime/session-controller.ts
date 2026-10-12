@@ -251,6 +251,10 @@ export class SessionController {
           const result = await confirmMutation(pending, frozen => getStudentAssessmentApi(pending.operationId ?? null).post<Awaited<ReturnType<typeof send>>>(pending.url, frozen));
           if (pending.url === url && (JSON.stringify(pending.body) === JSON.stringify(body)
             || (Object.hasOwn(body, 'target_event_id') && pending.body.target_event_id === body.target_event_id))) return result;
+          if (pending.processSnapshot.client_instance_id !== sender.clientInstanceId
+            && await sender.flushConfirmed({ ignoreVisibility: true, operationId: operationId || undefined }) === false) {
+            throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。');
+          }
           if (Object.hasOwn(body, 'expected_version')) body = { ...body, expected_version: runtime.responseVersion };
         }
         if (Object.hasOwn(body, 'target_event_id')) body = { ...body, capture_operation_id: crypto.randomUUID() };

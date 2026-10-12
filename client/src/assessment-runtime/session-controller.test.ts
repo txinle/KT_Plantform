@@ -12,6 +12,39 @@ const process = { session_id: 7, attempt_id: 13, event_batch_url: '/api/v1/asses
   response_version: 0, writer_lease_acquire_url: '/api/v1/assessment/process/attempts/13/writer-lease/acquire/',
   writer_lease_renew_url: '/api/v1/assessment/process/attempts/13/writer-lease/renew/', writer_lease_release_url: '/api/v1/assessment/process/attempts/13/writer-lease/release/' }
 
+it.each(['navigation', 'submission'])('initializes a reloaded page without awaiting its held %s snapshot', async kind => {
+  const store = new MemoryOutbox()
+  const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608 }
+  const previous = new ProcessEventCollector({ sessionId: 7, attemptId: 13, endpoint: '/events/',
+    checkpointEndpoint: '/checkpoints/', outbox: store, autoSchedule: false, captureBundle: capability })
+  const event = await previous.record('document_visible', {})
+  const frozen = kind === 'navigation'
+    ? await previous.freezeNavigationSnapshot({ token: 'held-navigation', toAssignmentId: 14 })
+    : await previous.freezeSubmissionSnapshot({ token: 'held-submission', answer: 'A' })
+  const captureState = store.captureState.bind(store)
+  vi.spyOn(store, 'captureState').mockImplementation(id => {
+    if (id === previous.clientInstanceId) throw new Error('Initialization awaited the held recovery stream')
+    return captureState(id)
+  })
+  const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  controller.sender = new ProcessEventCollector({ sessionId: 7, attemptId: 13, endpoint: '/events/',
+    checkpointEndpoint: '/checkpoints/', outbox: store, autoSchedule: false, captureBundle: capability,
+    fetch: async (_url, init) => {
+      const bundle = JSON.parse(String(init?.body)).capture_bundle
+      return Response.json({ data: { success: true, committed: true,
+        acknowledgements: bundle.events.map((row: { event_id: string; client_sequence_no: number }) => ({
+          event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no,
+        })), checkpoint_ids: bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id),
+      }, meta: { request_id: 'test' } })
+    } })
+  try {
+    const runtime = await controller.activate({ ...process, checkpoint_url: '/checkpoints/', capture_bundle: capability } as never, 'visited')
+    expect(kind === 'navigation' ? runtime.restoredNavigation : runtime.restoredSubmission).toEqual(frozen)
+    expect(await store.pendingEvents(previous.clientInstanceId, 99)).toContainEqual(event)
+    expect(kind === 'navigation' ? await store.restoreNavigationIntent(7, 13) : await store.restoreSubmissionIntent(7, 13)).toEqual(frozen)
+  } finally { controller.dispose() }
+})
+
 it('recovers an already dispatched bundled draft before a later navigation and promotes CAS only after complete ACK', async () => {
   const store = new MemoryOutbox()
   const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
@@ -38,6 +71,46 @@ it('recovers an already dispatched bundled draft before a later navigation and p
     expect(post).toHaveBeenLastCalledWith('/draft/', { ...saved?.body, capture_bundle: saved?.processSnapshot })
     expect(runtime.responseVersion).toBe(1)
     expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+  } finally { spy.mockRestore(); controller.dispose() }
+})
+
+it('confirms the previous document stream after draft replay before sending the reloaded document pointer', async () => {
+  const store = new MemoryOutbox()
+  const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true }
+  const previous = new ProcessEventCollector({ sessionId: 7, attemptId: 13, endpoint: '/events/',
+    checkpointEndpoint: '/checkpoints/', outbox: store, autoSchedule: false, captureBundle: capability })
+  const oldHead = await previous.record('response_input_started', { question_type: 'short_answer' }, { eventId: crypto.randomUUID() })
+  const pending = await previous.freezeCaptureMutation('/draft/', { answer: 'A', target_event_id: oldHead.event_id,
+    expected_version: 0, writer_lease_token: 'old-lease', writer_client_instance_id: previous.clientInstanceId })
+  const parent = await previous.record('activity_heartbeat', {})
+  const acknowledgement = (bundle: typeof pending.processSnapshot) => ({ success: true, committed: true,
+    acknowledgements: bundle.events.map(row => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+    checkpoint_ids: bundle.checkpoints.map(row => row.checkpoint_id) })
+  let replayed = false
+  const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  controller.sender = new ProcessEventCollector({ sessionId: 7, attemptId: 13, endpoint: '/events/',
+    checkpointEndpoint: '/checkpoints/', outbox: store, autoSchedule: false, captureBundle: capability,
+    fetch: async (_url, init) => {
+      const bundle = JSON.parse(String(init?.body)).capture_bundle
+      if (bundle.client_instance_id === previous.clientInstanceId && !replayed) return Response.json({ error: { code: 'parent_not_received' } }, { status: 409 })
+      return Response.json({ data: acknowledgement(bundle), meta: { request_id: 'test' } })
+    } })
+  const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post: async () => {
+    replayed = true
+    return { ...acknowledgement(pending.processSnapshot), active_response_event_id: oldHead.event_id, response_version: 1 }
+  } } as never)
+  try {
+    const runtime = await controller.activate({ ...process, checkpoint_url: '/checkpoints/', capture_bundle: capability } as never, 'visited')
+    await controller.sender.flushPromise
+    const head = await runtime.record('response_input_started', { question_type: 'short_answer' }, { eventId: crypto.randomUUID() })
+    expect(await store.pendingEvents(previous.clientInstanceId, 99)).toContainEqual(parent)
+    await runtime.captureMutation!('/draft/', { answer: 'AB', target_event_id: head.event_id, expected_version: 0,
+      writer_lease_token: 'new-lease', writer_client_instance_id: runtime.clientInstanceId }, async body => {
+      expect(await store.pendingEvents(previous.clientInstanceId, 99)).toEqual([])
+      expect(body.expected_version).toBe(1)
+      return { ...acknowledgement(body.capture_bundle as typeof pending.processSnapshot), active_response_event_id: head.event_id, response_version: 2 }
+    })
+    expect(runtime.responseVersion).toBe(2)
   } finally { spy.mockRestore(); controller.dispose() }
 })
 
