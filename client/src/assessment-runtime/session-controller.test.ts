@@ -12,6 +12,84 @@ const process = { session_id: 7, attempt_id: 13, event_batch_url: '/api/v1/asses
   response_version: 0, writer_lease_acquire_url: '/api/v1/assessment/process/attempts/13/writer-lease/acquire/',
   writer_lease_renew_url: '/api/v1/assessment/process/attempts/13/writer-lease/renew/', writer_lease_release_url: '/api/v1/assessment/process/attempts/13/writer-lease/release/' }
 
+it('replays a frozen bundled close after response loss and releases only with the matching receipt', async () => {
+  const store = new MemoryOutbox()
+  const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true }
+  const requests: Array<Record<string, unknown>> = []
+  let loseResponse = true
+  const post = vi.fn(async (_url, body) => {
+    if (!body.capture_bundle) return { success: true, lease_token: 'lease-token', client_instance_id: body.client_instance_id, expires_at: new Date(Date.now() + 60000).toISOString() }
+    requests.push(body)
+    if (loseResponse) throw new Error('response lost')
+    const bundle = body.capture_bundle
+    return { success: true, committed: true, writer_lease_released: true, capture_operation_id: body.capture_operation_id,
+      acknowledgements: bundle.events.map((row: { event_id: string; client_sequence_no: number }) => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+      checkpoint_ids: bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id) }
+  })
+  const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+  let controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  try {
+    const runtime = await controller.activate({ ...process, capture_bundle: capability, close_bundle: capability } as never, 'visited')
+    await runtime.writerLease!.beforePointerWrite()
+    await expect(runtime.closeAttempt('submit')).rejects.toThrow('response lost')
+    expect(await store.readMetadata('capture-mutation:7:13')).not.toBeNull()
+    const original = requests[0]
+    controller.dispose()
+    loseResponse = false
+    controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const reloaded = await controller.activate({ ...process, capture_bundle: capability, close_bundle: capability } as never, 'submitted')
+    expect(await reloaded.closeAttempt('submit')).toBe(true)
+    expect(requests[1]).toEqual(original)
+    expect(requests[1]!.capture_bundle).toEqual(original!.capture_bundle)
+    expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+    expect(await reloaded.closeAttempt('submit')).toBe(true)
+    expect(requests).toHaveLength(2)
+  } finally { controller.dispose(); spy.mockRestore() }
+})
+
+it('recovers a held close before following a denied terminal entry', async () => {
+  const store = new MemoryOutbox()
+  const closure = { next_url: '/student/sessions/7/questions/14/', status: 'submitted' }
+  await store.writeMetadata('submission-close:7:13', closure)
+  const sender = new ProcessEventCollector({ sessionId: 7, attemptId: 13, endpoint: '/events/', outbox: store, autoSchedule: false })
+  const left = await sender.record('item_left', { leave_reason: 'submit', to_assignment_id: null }, { eventId: crypto.randomUUID() })
+  const frozen = await sender.freezeCaptureMutation('/release/', { capture_operation_id: crypto.randomUUID(),
+    leave_event_id: left.event_id, lease_token: 'expired-token', client_instance_id: sender.clientInstanceId })
+  const post = vi.fn(async () => ({ committed: true, writer_lease_released: true, capture_operation_id: frozen.body.capture_operation_id,
+    acknowledgements: frozen.processSnapshot.events.map(row => ({ event_id: row.event_id, client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })), checkpoint_ids: [] }))
+  const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+  const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  try {
+    expect(await controller.recoverClosedSubmission(process as never)).toEqual(closure)
+    expect(post).toHaveBeenCalledExactlyOnceWith('/release/', { ...frozen.body, capture_bundle: frozen.processSnapshot })
+    expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+    expect(await store.readMetadata('submission-close:7:13')).toBeNull()
+  } finally { controller.dispose(); spy.mockRestore() }
+})
+
+it('a close receipt for one visit cannot suppress a later return to the same attempt', async () => {
+  const store = new MemoryOutbox()
+  const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true }
+  let closes = 0
+  const post = vi.fn(async (_url, body) => {
+    if (!body.capture_bundle) return { success: true, lease_token: 'lease', client_instance_id: body.client_instance_id, expires_at: new Date(Date.now() + 60000).toISOString() }
+    closes++
+    return { committed: true, writer_lease_released: true, capture_operation_id: body.capture_operation_id,
+      acknowledgements: body.capture_bundle.events.map((row: { event_id?: string; client_sequence_no: number }) => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+      checkpoint_ids: body.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id) }
+  })
+  const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+  const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  try {
+    for (const navigation_id of [crypto.randomUUID(), crypto.randomUUID()]) {
+      const runtime = await controller.activate({ ...process, navigation_id, capture_bundle: capability, close_bundle: capability } as never, 'visited')
+      await runtime.writerLease!.beforePointerWrite()
+      expect(await runtime.closeAttempt('navigation', 14)).toBe(true)
+    }
+    expect(closes).toBe(2)
+  } finally { controller.dispose(); spy.mockRestore() }
+})
+
 it.each(['navigation', 'submission'])('initializes a reloaded page without awaiting its held %s snapshot', async kind => {
   const store = new MemoryOutbox()
   const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608 }

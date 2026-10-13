@@ -1,0 +1,418 @@
+import sys
+import unittest
+from collections import Counter
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+class NaturalWorkloadTests(unittest.TestCase):
+    def plan(self, n=180):
+        from natural_workload import build_workload
+        return build_workload({'student_count': n, 'item_count': 20, 'task_id': 31,
+            'usernames': [f'u{i:03}' for i in range(n)]}, seed=20261013)
+
+    def test_plan_is_frozen_deterministic_and_partitioned(self):
+        plan = self.plan()
+        self.assertEqual(plan, self.plan())
+        self.assertEqual(plan['workload_version'], 'natural-180-v1')
+        self.assertEqual(Counter(s['role'] for s in plan['students']), {'browser': 2, 'protocol': 178})
+        self.assertEqual(plan['students'][0]['username'], 'u000')
+
+    def test_exact_selection_and_speed_distributions(self):
+        students = self.plan()['students']
+        self.assertEqual(Counter(s['speed_stratum'] for s in students), {'fast':72,'medium':81,'slow':27})
+        for field, count in [('modify_items',54),('excursion_items',36),('optional_tool_items',36)]:
+            self.assertEqual(sum(bool(s[field]) for s in students), count)
+            self.assertTrue(all(not s[field] or len(set(s[field])) == 2 for s in students))
+        self.assertTrue(all(max(s['excursion_items'], default=0) < 19 for s in students))
+
+    def test_all_timings_are_bounded_and_every_item_has_a_dwell(self):
+        bounds={'fast':(35,55),'medium':(45,75),'slow':(65,95)}
+        for student in self.plan()['students']:
+            low,high=bounds[student['speed_stratum']]
+            self.assertTrue(0 <= student['arrival_offset_seconds'] <=60)
+            self.assertEqual(len(student['item_dwell_seconds']),20)
+            self.assertTrue(all(low<=v<=high for v in student['item_dwell_seconds']))
+
+    def test_precheck_and_smaller_stages_have_exact_counts(self):
+        for n in (2,10,80):
+            students=self.plan(n)['students']
+            self.assertEqual(len(students), n)
+            self.assertEqual(sum(s['role']=='protocol' for s in students), n-2)
+            self.assertEqual(sum(bool(s['modify_items']) for s in students), 1 if n==2 else round(n*.3))
+            self.assertEqual(sum(bool(s['excursion_items']) for s in students), 1 if n==2 else round(n*.2))
+            self.assertEqual(sum(bool(s['optional_tool_items']) for s in students), 1 if n==2 else round(n*.2))
+
+    def test_frozen_plan_rejects_identity_or_schedule_drift(self):
+        from natural_workload import validate_workload
+        fixture={'student_count':180,'item_count':20,'task_id':31,'usernames':[f'u{i:03}' for i in range(180)]}
+        plan=self.plan()
+        validate_workload(fixture,plan)
+        plan['students'][3]['item_dwell_seconds'][0]=0
+        with self.assertRaises(ValueError): validate_workload(fixture,plan)
+
+    def test_expected_inputs_and_visits_follow_frozen_plan(self):
+        from natural_workload import expected_input_counts, visit_indices
+        student={'modify_items':[0,1], 'excursion_items':[1,4]}
+        self.assertEqual(expected_input_counts(student,['short_answer','single_choice']+['true_false']*18),
+            {'transitions':23,'text_operations':3,'per_item':[3,2]+[1]*18})
+        self.assertEqual(visit_indices(student),[0,1,2,1,2,3,4,5,4]+list(range(5,20)))
+
+    def test_login_only_partition_uses_all_protocol_identities(self):
+        from natural_workload import build_workload
+        fixture={'student_count':180,'item_count':20,'task_id':1,'usernames':[f'u{i}' for i in range(180)]}
+        fixture['protocol_usernames']=fixture['usernames'][:]
+        self.assertTrue(all(s['role']=='protocol' for s in build_workload(fixture)['students']))
+
+    def test_missing_planned_operations_remain_in_denominator(self):
+        from school_natural_load import NaturalRunner, natural_result
+        runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=self.plan(10),start_at=0)
+        result=natural_result(runner,list(range(8)),0,'natural')
+        self.assertEqual(result['full_operation_accounting']['submit_next_ready']['planned_count'],160)
+        self.assertEqual(result['full_operation_accounting']['submit_next_ready']['not_reached_count'],160)
+        self.assertFalse(result['passed'])
+        self.assertFalse(result['workflow_completed'])
+        self.assertIn('max_rss_bytes',result['generator'])
+        self.assertGreater(result['generator']['max_rss_bytes'],0)
+
+    def test_login_only_reads_home_and_courses_after_authentication(self):
+        from school_natural_load import NaturalRunner, StudentState
+        from unittest.mock import Mock, patch
+        runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=self.plan(10),start_at=0)
+        state=StudentState('u002','unused')
+        state.load_student_index=2
+        runner.login_barrier=Mock()
+        with patch.object(runner,'wait_until'), patch.object(runner,'prepare_login'), patch.object(runner,'authenticate'), patch.object(runner,'_browser_request') as request:
+            runner.lifecycle(state,runner.plan['students'][2],'login-only')
+        self.assertEqual([call.args[1] for call in request.call_args_list],['/student/','/api/v1/auth/session/','/api/v1/student/courses/'])
+        self.assertTrue(runner.identity_outcomes[0]['workflow_completed'])
+        self.assertIsNotNone(runner.identity_outcomes[0]['home_ready_at'])
+        self.assertEqual(runner.metrics['login_to_home_ready'].__len__(),1)
+
+    def test_failed_home_operation_is_counted_as_attempted_failure(self):
+        from school_natural_load import NaturalRunner, StudentState
+        from unittest.mock import Mock, patch
+        runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=self.plan(10),start_at=0)
+        state=StudentState('u002','unused')
+        state.load_student_index=2
+        runner.login_barrier=Mock()
+        with patch.object(runner,'wait_until'), patch.object(runner,'prepare_login'), patch.object(runner,'authenticate'), patch.object(runner,'_browser_request',side_effect=RuntimeError('HTTP 503')):
+            runner.lifecycle(state,runner.plan['students'][2],'login-only')
+        rows=[r for r in runner.operation_measurements if r['metric']=='login_to_home_ready']
+        self.assertEqual(len(rows),1)
+        self.assertFalse(rows[0]['successful'])
+        self.assertFalse(runner.identity_outcomes[0]['workflow_completed'])
+
+    def test_stop_file_prevents_any_new_request(self):
+        from school_natural_load import NaturalRunner, LoadStopped
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as directory:
+            stop=Path(directory)/'stop'
+            runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=self.plan(10),start_at=0,stop_file=stop)
+            stop.touch()
+            with self.assertRaises(LoadStopped): runner.remaining_budget()
+
+class NaturalWriterLeaseTests(unittest.TestCase):
+    def test_terminal_summary_waits_for_final_capture_drain_and_propagates_failure(self):
+        from capture_protocol import BrowserAlignedStream
+        from unittest.mock import patch
+        for failed in (False, True):
+            with self.subTest(failed=failed):
+                runner,state=self.runner()
+                state.session_id=11
+                runner.ledger['11']={'answers':{}}
+                runtime={'stream':BrowserAlignedStream(11,'client'),'head':'head','version':0,
+                    'lease':{'writer_lease_token':'lease','writer_client_instance_id':'client'},
+                    'dto':{'assignment':{'attempt_id':21},'question':{'question_type':'true_false'},
+                        'actions':{'submit_url':'/submit/'},'process':{'capture_bundle':{'enabled':True,'version':1}}}}
+                calls=[]
+                def submit(_,__,body,metric):
+                    bundle=body['atomic_submission']
+                    return {'success':True,'committed':True,'status':'submitted','final_response_event_id':'head',
+                        'next_url':'/student/sessions/11/complete/', 'checkpoint_ids':[row['checkpoint_id'] for row in bundle['checkpoints']],
+                        'acknowledgements':[{'event_id':row['event_id'],'client_sequence_no':row['client_sequence_no'],
+                            'server_ingest_sequence_no':row['client_sequence_no']} for row in bundle['events']]}
+                def drain(*args,**kwargs):
+                    self.assertEqual(kwargs,{'metric':'final_capture_drain'})
+                    calls.append('drain')
+                    if failed: raise RuntimeError('final checkpoint unconfirmed')
+                def read(_,path,metric):
+                    calls.append(metric)
+                    return {'session_id':11,'status':'completed','submission_count':20,'attempt_count':20}
+                with patch.object(runner,'_browser_ensure_lease'),patch.object(runner,'_browser_post',side_effect=submit),patch.object(runner,'_browser_close',side_effect=lambda *args:calls.append('close')),patch.object(runner,'_browser_flush',side_effect=drain),patch.object(runner,'_browser_request',side_effect=read):
+                    if failed:
+                        with self.assertRaisesRegex(RuntimeError,'final checkpoint unconfirmed'):
+                            runner._submit_material(state,runtime,19,{'payload':{'after_state_hash':'hash'}},list(range(20)))
+                        self.assertEqual(calls,['close','drain'])
+                    else:
+                        runner._submit_material(state,runtime,19,{'payload':{'after_state_hash':'hash'}},list(range(20)))
+                        self.assertEqual(calls,['close','drain','completion_shell','completion_auth','finish','task_recovery'])
+
+    def runtime(self, expires):
+        from types import SimpleNamespace
+        return {'lease':{'writer_lease_token':'old-token','writer_client_instance_id':'client'},
+            'lease_valid_until':expires,'stream':SimpleNamespace(client_instance_id='client'),
+            'dto':{'process':{'writer_lease_acquire_url':'/acquire/','writer_lease_renew_url':'/renew/'}}}
+
+    def runner(self):
+        from school_natural_load import NaturalRunner, StudentState
+        runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=NaturalWorkloadTests().plan(10),start_at=0)
+        return runner,StudentState('u002','unused')
+
+    def response(self):
+        return {'lease_token':'confirmed-token','client_instance_id':'client','expires_at':'1970-01-01T00:02:10+00:00'}
+
+    def test_expired_lease_after_natural_think_is_acquired_without_renewing(self):
+        from unittest.mock import patch
+        runner,state=self.runner()
+        runtime=self.runtime(99)
+        with patch('school_natural_load.time.time',return_value=100), patch.object(runner,'_browser_post',return_value=self.response()) as post:
+            runner._browser_ensure_lease(state,runtime)
+        self.assertEqual(post.call_args.args[1],'/acquire/')
+        self.assertEqual(post.call_args.args[2],{'client_instance_id':'client'})
+        self.assertEqual(runtime['lease']['writer_lease_token'],'confirmed-token')
+
+    def test_valid_lease_reuses_and_nearing_expiry_renews_before_ttl(self):
+        from unittest.mock import patch
+        runner,state=self.runner()
+        with patch('school_natural_load.time.time',return_value=100), patch.object(runner,'_browser_post',return_value=self.response()) as post:
+            runner._browser_ensure_lease(state,self.runtime(106))
+            post.assert_not_called()
+            runner._browser_ensure_lease(state,self.runtime(103))
+        self.assertEqual(post.call_args.args[1],'/renew/')
+        self.assertEqual(post.call_args.args[2],{'client_instance_id':'client','lease_token':'old-token'})
+
+    def test_confirmed_renew_conflict_reacquires_as_browser_does(self):
+        from unittest.mock import patch
+        runner,state=self.runner()
+        def respond(*args):
+            if args[1]=='/renew/':
+                state.browser_last_error_code='writer_lease_conflict'
+                raise RuntimeError('HTTP 409')
+            return self.response()
+        with patch('school_natural_load.time.time',return_value=100), patch.object(runner,'_browser_post',side_effect=respond) as post:
+            runner._browser_ensure_lease(state,self.runtime(103))
+        self.assertEqual([call.args[1] for call in post.call_args_list],['/renew/','/acquire/'])
+
+    def test_long_think_keeps_heartbeat_tools_refresh_and_reacquires_only_at_write(self):
+        from unittest.mock import Mock, patch
+        runner,state=self.runner()
+        clock=[100.0]
+        runtime=self.runtime(130)
+        runtime.update(heartbeat_due=115,heartbeat_seconds=15,tools_refresh_due=110,last_interaction=100)
+        runtime['dto']['assignment']={'attempt_id':8}
+        runtime['dto']['actions']={'research_tools_url':'/tools/'}
+        runtime['stream'].event=Mock()
+        def sleep(seconds): clock[0]+=seconds
+        with patch('school_natural_load.time.monotonic',side_effect=lambda:clock[0]), patch('school_natural_load.time.time',side_effect=lambda:clock[0]), patch('school_natural_load.time.sleep',side_effect=sleep), patch.object(runner,'_browser_post',return_value=self.response()) as post, patch.object(runner,'_browser_checkpoint') as checkpoint, patch.object(runner,'_browser_flush') as flush:
+            runner.wait_until(180,runtime,state)
+            self.assertEqual([call.args[1] for call in post.call_args_list],['/tools/']*7)
+            self.assertEqual(checkpoint.call_count,5)
+            self.assertEqual(flush.call_count,5)
+            self.assertEqual(runtime['stream'].event.call_count,5)
+            runner._browser_ensure_lease(state,runtime)
+        self.assertEqual(post.call_args.args[1],'/acquire/')
+
+    def test_acquire_conflict_is_not_hidden_or_retried(self):
+        from unittest.mock import patch
+        runner,state=self.runner()
+        state.browser_last_error_code='writer_lease_conflict'
+        with patch('school_natural_load.time.time',return_value=100), patch.object(runner,'_browser_post',side_effect=RuntimeError('HTTP 409')) as post:
+            with self.assertRaisesRegex(RuntimeError,'HTTP 409'):
+                runner._browser_ensure_lease(state,self.runtime(99))
+        self.assertEqual(post.call_count,1)
+
+class ConfidenceOnlyWorkloadTests(unittest.TestCase):
+    def fixture(self):
+        return {'student_count':10,'item_count':20,'task_id':31,'scenario':'confidence-only-v1',
+            'confidence_scale_version':'v2','usernames':[f'u{i:03}' for i in range(10)]}
+
+    def plan(self):
+        from natural_workload import build_workload
+        return build_workload(self.fixture())
+
+    def test_confidence_plan_has_legal_values_skips_and_no_optional_tools(self):
+        plan=self.plan()
+        self.assertEqual(plan['scenario'],'confidence-only-v1')
+        self.assertTrue(plan['synthetic_confidence'])
+        self.assertEqual(plan['confidence_scale'],{'minimum':0,'maximum':100,'step':1})
+        for student in plan['students']:
+            self.assertEqual(student['optional_tool_items'],[])
+            self.assertEqual(Counter(student['confidence_actions']),{'fill':16,'skip':4})
+            self.assertEqual(len(student['confidence_values']),20)
+            self.assertEqual(len(student['confidence_think_seconds']),20)
+            for action,value,think in zip(student['confidence_actions'],student['confidence_values'],student['confidence_think_seconds']):
+                self.assertTrue(1<=think<=3)
+                self.assertTrue(value is None if action=='skip' else isinstance(value,int) and 0<=value<=100)
+
+    def test_confidence_decision_is_bound_to_actual_head_and_scale(self):
+        from natural_workload import confidence_decision
+        student=self.plan()['students'][0]
+        index=student['confidence_actions'].index('fill')
+        contract={'minimum':0,'maximum':100,'step':1}
+        self.assertEqual(confidence_decision(student,index,contract,'actual-head'),
+            {'status':'committed','probability':student['confidence_values'][index],'answer_event_id':'actual-head'})
+        index=student['confidence_actions'].index('skip')
+        self.assertEqual(confidence_decision(student,index,contract,'actual-head'),
+            {'status':'skipped','answer_event_id':'actual-head'})
+        student['confidence_values'][student['confidence_actions'].index('fill')]=101
+        with self.assertRaises(ValueError): confidence_decision(student,student['confidence_actions'].index('fill'),contract,'head')
+
+    def test_last_item_is_excluded_from_submit_next_metrics(self):
+        from school_natural_load import NaturalRunner,natural_result
+        runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=self.plan(),start_at=0)
+        result=natural_result(runner,list(range(8)),0,'natural')
+        for key in ('submit_ack','submit_ack_to_next_ready','submit_next_ready'):
+            self.assertEqual(result['full_operation_accounting'][key]['planned_count'],152)
+        self.assertEqual(result['full_operation_accounting']['finish_ready']['planned_count'],8)
+        self.assertEqual(result['full_operation_accounting']['confidence_entry']['planned_count'],160)
+        self.assertTrue(result['synthetic_confidence'])
+        self.assertNotIn('submit_ack_p95',result['checks'])
+        self.assertNotIn('submit_ack_to_next_ready_p95',result['checks'])
+
+    def test_prepare_confidence_fills_and_skips_using_atomic_response_material(self):
+        from school_natural_load import NaturalRunner,StudentState
+        from unittest.mock import Mock,patch
+        runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=self.plan(),start_at=0)
+        state=StudentState('u002','unused')
+        state.load_student_index=2
+        state.session_id=77
+        state.natural_student_plan=runner.plan['students'][2]
+        runner.ledger['77']={'events':{},'answers':{}}
+        stream=Mock()
+        runtime={'head':'actual-head','stream':stream,'dto':{'assignment':{'attempt_id':8},
+            'pending_confidence':{'confidence_assignment_id':'assignment-id','scale_version':'v2','minimum':0,'maximum':100,'step':1,'prompt_shown_url':'/confidence/prompt/'}}}
+        for action in ('fill','skip'):
+            index=state.natural_student_plan['confidence_actions'].index(action)
+            stream.reset_mock()
+            with patch.object(runner,'wait_until'),patch.object(runner,'_browser_post',return_value={'success':True}) as post:
+                result=runner.prepare_confidence(state,runtime,index)
+            self.assertEqual(result['status'],'committed' if action=='fill' else 'skipped')
+            self.assertEqual(result['answer_event_id'],'actual-head')
+            self.assertEqual([call.args[2]['stage'] for call in stream.event.call_args_list],['presented']+(['skipped'] if action=='skip' else []))
+            self.assertEqual([call.args[1] for call in post.call_args_list],['/confidence/prompt/'])
+        self.assertEqual(len(runner.metrics['confidence_entry']),2)
+
+    def test_submission_ack_and_next_ready_use_distinct_clock_boundaries(self):
+        from school_natural_load import NaturalRunner,StudentState
+        from unittest.mock import patch
+        runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=self.plan(),start_at=0)
+        state=StudentState('u002','unused')
+        state.load_student_index=2
+        def material(*args):
+            state.natural_submission_ack_at=102
+            return {'interactive':True}
+        with patch.object(runner,'prepare_confidence',return_value={'status':'skipped'}),patch.object(runner,'_submit_material',side_effect=material),patch('school_natural_load.time.perf_counter',side_effect=[100,105]):
+            runner.submit(state,{},0,{},list(range(20)))
+        self.assertEqual(runner.metrics['submit_ack'],[2])
+        self.assertEqual(runner.metrics['submit_ack_to_next_ready'],[3])
+        self.assertEqual(runner.metrics['submit_next_ready'],[5])
+        self.assertNotIn('finish_ready',runner.metrics)
+
+    def test_closed_tool_dto_enters_without_querying_tool_configuration(self):
+        from school_natural_load import NaturalRunner,Synchronized180Runner,StudentState
+        from unittest.mock import patch
+        runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=self.plan(),start_at=0)
+        with patch.object(Synchronized180Runner,'browser_open_question',return_value={'tools_refresh_due':10}) as enter:
+            runtime=runner.browser_open_question(StudentState('u002','unused'),12,dto={'actions':{},'research_tools':None})
+        self.assertEqual(runtime['tools_refresh_due'],float('inf'))
+        self.assertEqual(enter.call_args.args[3]['research_tools'],{'rules':[],'hints':[]})
+        with self.assertRaisesRegex(RuntimeError,'exposed a research tool'):
+            runner.browser_open_question(StudentState('u002','unused'),12,dto={'actions':{'research_tools_url':'/tools/'}})
+
+    def test_readonly_kc_display_without_tool_entry_does_not_mount_tools(self):
+        from school_natural_load import NaturalRunner,Synchronized180Runner,StudentState
+        from unittest.mock import patch
+        runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=self.plan(),start_at=0)
+        dto={'actions':{},'research_tools':{'kc_visible':True,'doubt_enabled':False,'check_enabled':False,'hints':[]}}
+        with patch.object(Synchronized180Runner,'browser_open_question',return_value={}) as enter:
+            value=runner.browser_open_question(StudentState('u002','unused'),12,dto=dto)
+        self.assertEqual(value['tools_refresh_due'],float('inf'))
+        self.assertEqual(enter.call_args.args[3]['research_tools'],{'rules':[],'hints':[]})
+
+    def test_last_item_has_terminal_metrics_without_submit_next_sample(self):
+        from school_natural_load import NaturalRunner,StudentState
+        from unittest.mock import patch
+        runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=self.plan(),start_at=0)
+        state=StudentState('u002','unused')
+        state.load_student_index=2
+        def material(*args):
+            state.natural_submission_ack_at=102
+            return {'terminal':True}
+        with patch.object(runner,'prepare_confidence',return_value={'status':'skipped'}),patch.object(runner,'_submit_material',side_effect=material),patch('school_natural_load.time.perf_counter',side_effect=[100,105]):
+            runner.submit(state,{},19,{},list(range(20)))
+        self.assertEqual(runner.metrics['finish_submit_ack'],[2])
+        self.assertEqual(runner.metrics['finish_ack_to_terminal_ready'],[3])
+        self.assertEqual(runner.metrics['finish_ready'],[5])
+        self.assertNotIn('submit_next_ready',runner.metrics)
+        self.assertNotIn('submit_ack',runner.metrics)
+
+    def test_actual_tool_request_journal_rejects_unnamed_refresh(self):
+        from school_natural_load import NaturalRunner,natural_result
+        runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=self.plan(),start_at=0)
+        runner.request_attempts.append({'path':'/api/v1/assessment/process/capture-v2/attempts/:id/tools/',
+            'method':'POST','attempt':1,'sent_at':1,'elapsed_seconds':.1,'successful':True,'operation_id':'tool-refresh'})
+        result=natural_result(runner,list(range(8)),0,'natural')
+        self.assertEqual(result['actual_tool_request_count'],1)
+        self.assertFalse(result['checks']['confidence_only_zero_tool_requests'])
+
+    def test_no_tools_refresh_while_confidence_only_student_thinks(self):
+        from school_natural_load import NaturalRunner,StudentState
+        from unittest.mock import Mock,patch
+        runner=NaturalRunner('http://127.0.0.1:18080',31,35,plan=self.plan(),start_at=0)
+        clock=[100.0]
+        runtime={'heartbeat_due':1000,'heartbeat_seconds':30,'tools_refresh_due':100,
+            'last_interaction':100,'dto':{'actions':{},'assignment':{'attempt_id':8}},'stream':Mock()}
+        with patch('school_natural_load.time.monotonic',side_effect=lambda:clock[0]),patch('school_natural_load.time.sleep',side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)),patch.object(runner,'_browser_post') as post:
+            runner.wait_until(111,runtime,StudentState('u002','unused'))
+        post.assert_not_called()
+
+class ConfidencePersistenceTests(unittest.TestCase):
+    def test_exact_confidence_value_head_receipt_and_unique_records_are_required(self):
+        import os
+        from types import SimpleNamespace as Row
+        os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings')
+        sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
+        import django
+        django.setup()
+        from apps.experiments.management.commands.verify_school_protocol_load import confidence_persistence_checks
+        from capture_protocol import digest
+        from natural_workload import confidence_decision
+        plan=ConfidenceOnlyWorkloadTests().plan()
+        student=plan['students'][2]
+        index=student['confidence_actions'].index('fill')
+        # This isolated helper fixture has one assignment; make item0 a committed response.
+        student['confidence_actions'][0]='fill'
+        student['confidence_values'][0]=73
+        session=Row(pk=77,student=Row(username=student['username']))
+        receipt={'committed':True,'final_response_event_id':'head'}
+        attempt=Row(pk=8,session_id=77,assignment=Row(assigned_sequence_index=1),final_response_event_id='head',submission_token='token',submission_receipt=receipt)
+        assigned=Row(pk='assignment',attempt_id=8,condition='prompt',response_status='committed',probability=73,prompt_shown_at=1,committed_at=2)
+        response=confidence_decision(student,0,plan['confidence_scale'],'head')
+        ledger={'sessions':{'77':{'confidence':{'8':{'confidence_assignment_id':'assignment','scale_version':'v2',
+            'response':response,'synthetic':True,'item_index':0,'acknowledged':True,'submission_token':'token',
+            'submission_receipt_sha256':digest(receipt)}}}}}
+        events=[Row(attempt_id=8,event_type='confidence_observed',client_instance_id='client',payload={'stage':'presented','confidence_assignment_id':'assignment','answer_event_id':'head','probability':None}),
+            Row(attempt_id=8,event_type='confidence_prompt_shown',client_instance_id=None,payload={'confidence_assignment_id':'assignment'}),
+            Row(attempt_id=8,event_type='confidence_committed',client_instance_id=None,payload={'confidence_assignment_id':'assignment','probability':73})]
+        checks=confidence_persistence_checks(plan,ledger,[session],[attempt],[assigned],events)
+        self.assertTrue(all(checks.values()))
+        assigned.probability=72
+        self.assertFalse(all(confidence_persistence_checks(plan,ledger,[session],[attempt],[assigned],events).values()))
+        assigned.probability=73
+        self.assertFalse(all(confidence_persistence_checks(plan,ledger,[session],[attempt],[assigned,assigned],events).values()))
+        attempt.submission_receipt={'committed':True,'final_response_event_id':'wrong'}
+        self.assertFalse(all(confidence_persistence_checks(plan,ledger,[session],[attempt],[assigned],events).values()))
+        attempt.submission_receipt=receipt
+        self.assertFalse(all(confidence_persistence_checks(plan,ledger,[session],[attempt],[assigned],events+[events[1]]).values()))
+        student['confidence_actions'][0]='skip'
+        student['confidence_values'][0]=None
+        assigned.response_status='skipped'
+        assigned.probability=None
+        assigned.committed_at=None
+        ledger['sessions']['77']['confidence']['8']['response']=confidence_decision(student,0,plan['confidence_scale'],'head')
+        events[-1].event_type='confidence_skipped'
+        events[-1].payload={'confidence_assignment_id':'assignment','reason_code':'student_skipped'}
+        events.append(Row(attempt_id=8,event_type='confidence_observed',client_instance_id='client',payload={'stage':'skipped','confidence_assignment_id':'assignment','answer_event_id':'head','probability':None}))
+        self.assertTrue(all(confidence_persistence_checks(plan,ledger,[session],[attempt],[assigned],events).values()))
+
+if __name__ == '__main__': unittest.main()

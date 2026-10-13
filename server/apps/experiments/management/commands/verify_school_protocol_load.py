@@ -12,6 +12,7 @@ from apps.assessment.models import (AssessmentEvent, Attempt, CaptureMutationRec
     ConfidenceAssignment, ExperimentSession, NavigationReceipt, QuestionVisitEvent, SubmissionEvent)
 from apps.assessment.response_snapshot_services import canonical_response_state
 from scripts.load.capture_protocol import BROWSER_ALIGNED_WORKLOAD, CONTRACT, digest, project_payload
+from scripts.load.natural_workload import CONFIDENCE_ONLY, NATURAL_WORKLOAD, confidence_decision, expected_input_counts, validate_workload, visit_indices
 
 
 def event_matches(event, expected, student_id, *, require_ack=True):
@@ -207,6 +208,12 @@ def capture_mutation_receipt_checks(ledger, receipts, events):
                 return False
             if stored.kind == 'tool' and receipt.get('event_id') != token:
                 return False
+            if stored.kind == 'close':
+                leave = event_rows.get(planned['leave_event_id'])
+                if (receipt.get('capture_operation_id') != token or receipt.get('writer_lease_released') is not True
+                        or type(receipt.get('response_version')) is not int
+                        or leave is None or leave.event_type != 'item_left' or leave.attempt_id != planned['attempt_id']):
+                    return False
             return not planned.get('acknowledged') or digest(receipt) == planned['receipt_sha256']
         except (KeyError, TypeError, ValueError, AttributeError):
             return False
@@ -219,7 +226,65 @@ def capture_mutation_receipt_checks(ledger, receipts, events):
             'capture_mutation_unknown_receipts_missing': len(set(expected) - confirmed - set(actual))}
 
 
-def browser_persistence_checks(fixture, ledger, sessions, events, attempts, checkpoints, syncs, visits, submissions, confidence):
+def confidence_persistence_checks(plan, ledger, sessions, attempts, confidence, events):
+    """Require frozen synthetic decisions, final heads and exact durable terminal evidence."""
+    plans = {row['username']: row for row in plan['students']}
+    session_plans = {row.pk: plans[row.student.username] for row in sessions}
+    assignments = {row.attempt_id: row for row in confidence}
+    grouped_attempts, grouped_events = defaultdict(list), defaultdict(list)
+    for attempt in attempts:
+        grouped_attempts[attempt.session_id].append(attempt)
+    for event in events:
+        grouped_events[event.attempt_id].append(event)
+    checks = {'confidence_exact_unique_assignment_count':len(assignments) == len(confidence) == len(attempts),
+        'confidence_exact_frozen_decisions_and_final_heads':True,
+        'confidence_exact_acknowledged_submission_receipts':True,
+        'confidence_exact_unique_prompt_and_terminal_events':True,
+        'confidence_exact_browser_observations':True,
+        'confidence_only_zero_research_tool_events':not any(row.event_type in (
+            'research_tool','research_tool_requested','research_tool_observed') for row in events)}
+    for session_id, rows in grouped_attempts.items():
+        student = session_plans[session_id]
+        stored = ledger['sessions'].get(str(session_id), {}).get('confidence', {})
+        checks['confidence_exact_frozen_decisions_and_final_heads'] &= set(stored) == {str(row.pk) for row in rows}
+        for index, attempt in enumerate(sorted(rows, key=lambda row:row.assignment.assigned_sequence_index)):
+            assigned, material = assignments.get(attempt.pk), stored.get(str(attempt.pk), {})
+            decision = confidence_decision(student,index,plan['confidence_scale'],str(attempt.final_response_event_id))
+            status, probability = decision['status'], decision.get('probability')
+            checks['confidence_exact_frozen_decisions_and_final_heads'] &= (
+                assigned is not None and assigned.condition == 'prompt' and assigned.response_status == status
+                and assigned.probability == probability and assigned.prompt_shown_at is not None
+                and ((assigned.committed_at is not None) == (status == 'committed'))
+                and material.get('response') == decision and material.get('synthetic') is True
+                and material.get('scale_version') == plan['confidence_scale_version']
+                and material.get('item_index') == index
+                and material.get('confidence_assignment_id') == str(assigned.pk))
+            checks['confidence_exact_acknowledged_submission_receipts'] &= (
+                material.get('acknowledged') is True and material.get('submission_token') == str(attempt.submission_token)
+                and material.get('submission_receipt_sha256') == digest(attempt.submission_receipt)
+                and attempt.submission_receipt.get('committed') is True
+                and attempt.submission_receipt.get('final_response_event_id') == str(attempt.final_response_event_id))
+            actual = grouped_events[attempt.pk]
+            prompts = [row for row in actual if row.event_type == 'confidence_prompt_shown']
+            terminals = [row for row in actual if row.event_type in ('confidence_committed','confidence_skipped')]
+            checks['confidence_exact_unique_prompt_and_terminal_events'] &= (
+                len(prompts) == len(terminals) == 1 and assigned is not None
+                and prompts[0].payload.get('confidence_assignment_id') == str(assigned.pk)
+                and terminals[0].event_type == ('confidence_committed' if status == 'committed' else 'confidence_skipped')
+                and terminals[0].payload.get('confidence_assignment_id') == str(assigned.pk)
+                and (terminals[0].payload.get('probability') == probability if status == 'committed' else
+                    terminals[0].payload.get('reason_code') == 'student_skipped'))
+            observed = [row for row in actual if row.event_type == 'confidence_observed']
+            checks['confidence_exact_browser_observations'] &= (
+                assigned is not None and Counter(row.payload.get('stage') for row in observed) ==
+                    Counter(['presented'] + (['skipped'] if status == 'skipped' else []))
+                and all(row.client_instance_id is not None and row.payload.get('confidence_assignment_id') == str(assigned.pk)
+                    and row.payload.get('answer_event_id') == str(attempt.final_response_event_id)
+                    and row.payload.get('probability') is None for row in observed))
+    return checks
+
+
+def browser_persistence_checks(fixture, ledger, sessions, events, attempts, checkpoints, syncs, visits, submissions, confidence, natural_plan=None):
     """Compare persisted artifacts with the frozen per-client HTTP ledger, never repair them."""
     session_map = {str(row.pk): row for row in sessions}
     event_map = {str(row.pk): row for row in events}
@@ -256,8 +321,22 @@ def browser_persistence_checks(fixture, ledger, sessions, events, attempts, chec
         page_origins[row.session_id].add(row.client_time_origin)
     visit_clients = {row['client_instance_id'] for row in expected_visits}
     n = fixture['student_count']
+    natural = natural_plan is not None
+    confidence_only = natural and natural_plan.get('scenario') == CONFIDENCE_ONLY
+    planned_students = {row['username']: row for row in (natural_plan or {}).get('students', [])}
+    plans_by_session = {row.pk: planned_students[row.student.username] for row in sessions} if natural else {}
+    expected_visits_count = sum(len(visit_indices(row)) for row in plans_by_session.values()) if natural else n * 58
+    expected_nav_count = sum(2 * len(row['excursion_items']) for row in plans_by_session.values()) if natural else n * 38
+    input_counts = {}
+    for session in sessions:
+        ordered = sorted(session_attempts[session.pk], key=lambda row: row.assignment.assigned_sequence_index)
+        counts = expected_input_counts(plans_by_session[session.pk], [row.assignment.snapshot.question_type for row in ordered]) if natural else {
+            'per_item': [1] * len(ordered)}
+        input_counts.update({row.pk: count for row, count in zip(ordered, counts['per_item'])})
+    expected_transition_count = sum(input_counts.values()) if natural else n * 20
+    expected_text_count = sum(input_counts[row.pk] for row in attempts if row.assignment.snapshot.question_type in ('fill_blank', 'short_answer')) if natural else n * 8
     checks = {
-        'browser_workload_ledger_version': ledger.get('workload_version') == BROWSER_ALIGNED_WORKLOAD,
+        'browser_workload_ledger_version': ledger.get('workload_version') == (NATURAL_WORKLOAD if natural else BROWSER_ALIGNED_WORKLOAD),
         'browser_twenty_item_frozen_workload': fixture['item_count'] == 20 and len(attempts) == n * 20,
         'browser_unique_full_ingest_ordinals': bool(events) and len(event_map) == len(events) and all(
             sorted(ingests[session.pk])
@@ -269,13 +348,13 @@ def browser_persistence_checks(fixture, ledger, sessions, events, attempts, chec
         'browser_exact_client_event_envelopes': bool(clients) and all(
             browser_event_envelope_matches(row, expected_events.get(str(row.pk)))
             for row in clients),
-        'browser_no_fabricated_input_or_legacy_scenarios': totals['response_transition'] == n * 20
-            and totals['response_input_started'] == n * 20 and totals['text_edit_observed'] == n * 8
-            and totals['input_operation'] == n * 8
+        'browser_no_fabricated_input_or_legacy_scenarios': totals['response_transition'] == expected_transition_count
+            and totals['response_input_started'] == expected_transition_count and totals['text_edit_observed'] == expected_text_count
+            and totals['input_operation'] == expected_text_count
             and not any(row.event_type in ('composition_started', 'composition_updated', 'composition_ended',
                 'outbox_recovered', 'network_offline') for row in clients),
         'browser_one_actual_response_and_commit_per_attempt': len(attempts) == n * 20 and all(
-            per_attempt_counts[(attempt.pk, 'response_transition')] == 1
+            per_attempt_counts[(attempt.pk, 'response_transition')] == input_counts[attempt.pk]
             and commits[(attempt.pk, str(attempt.submission_token))] == 1
             for attempt in attempts),
         'browser_exact_immutable_checkpoint_ids_fields_hashes_and_acks': bool(expected_checkpoints)
@@ -292,36 +371,39 @@ def browser_persistence_checks(fixture, ledger, sessions, events, attempts, chec
                 getattr(row, 'trigger', None) == 'resume' or
                 (getattr(row, 'event_type', None) in ('pageshow', 'document_visible', 'window_focused')
                  and getattr(row, 'client_sequence_no', 4) <= 3)) for row in [*clients, *checkpoints]),
-        'browser_visits_match_authorized_dto_ids': len(visits) == len(expected_visits) == n * 58
+        'browser_visits_match_authorized_dto_ids': len(visits) == len(expected_visits) == expected_visits_count
             and len({row['visit_id'] for row in expected_visits}) == len(visits),
-        'browser_navigation_visit_order_and_render_counts': totals['item_rendered'] == n * 58
-            and totals['item_left'] == n * 58 and totals['pageshow'] == n,
+        'browser_navigation_visit_order_and_render_counts': totals['item_rendered'] == expected_visits_count
+            and totals['item_left'] == expected_visits_count and totals['pageshow'] == n,
         'browser_session_collector_with_continuous_sequence_and_page_clock': len(visit_clients) == n
             and visit_clients == set(client_sequences) == {str(row.client_instance_id) for row in checkpoints}
             and all(sorted(numbers) == list(range(1, len(numbers) + 1)) for numbers in client_sequences.values())
             and len(page_origins) == n and all(len(origins) == 1 for origins in page_origins.values()),
         'browser_checkpoint_trigger_counts': Counter(row.trigger for row in checkpoints)['resume'] == n
-            and Counter(row.trigger for row in checkpoints)['navigation'] == n * 38
+            and Counter(row.trigger for row in checkpoints)['navigation'] == expected_nav_count
             and Counter(row.trigger for row in checkpoints)['commit'] == n * 20
             and Counter(row.trigger for row in checkpoints)['session_end'] == n * 20
-            and Counter(row.trigger for row in checkpoints)['ack_progress'] >= n * 58,
+            and Counter(row.trigger for row in checkpoints)['ack_progress'] >= expected_visits_count,
         'browser_submission_rows_match_final_snapshots_and_tokens': len(submissions) == n * 20,
         'browser_tool_requests_observations_and_server_references': True,
         'browser_confidence_prompt_skip_references_and_final_state': True,
         'browser_completed_session_counters': bool(sessions) and all(row.first_open_count == 20
-            and row.submission_count == 20 and row.visit_event_count == 58
+            and row.submission_count == 20 and row.visit_event_count == (len(visit_indices(plans_by_session[row.pk])) if natural else 58)
             and ledger['sessions'].get(str(row.pk), {}).get('complete') is True for row in sessions),
     }
     for session_id, ledger_row in ledger['sessions'].items():
         ordered = sorted(session_attempts[int(session_id)],
                          key=lambda row: row.assignment.assigned_sequence_index)
         expected_order = [ordered[0].pk] if ordered else []
-        for index in range(max(0, len(ordered) - 1)):
-            expected_order.extend([ordered[index + 1].pk, ordered[index].pk, ordered[index + 1].pk])
+        if natural:
+            expected_order = [ordered[index].pk for index in visit_indices(plans_by_session[int(session_id)])] if len(ordered) == 20 else []
+        else:
+            for index in range(max(0, len(ordered) - 1)):
+                expected_order.extend([ordered[index + 1].pk, ordered[index].pk, ordered[index + 1].pk])
         stored_visits = sorted(session_visits[int(session_id)], key=lambda row: row.event_sequence)
         checks['browser_navigation_visit_order_and_render_counts'] &= (
             [row.attempt_id for row in stored_visits] == expected_order
-            and [row.event_sequence for row in stored_visits] == list(range(1, 59)))
+            and [row.event_sequence for row in stored_visits] == list(range(1, len(expected_order) + 1 if natural else 59)))
         for visit in ledger_row.get('visits', []):
             stored = visit_map.get(visit['visit_id'])
             entered = event_map.get(visit['entry_event_id'])
@@ -360,7 +442,7 @@ def browser_persistence_checks(fixture, ledger, sessions, events, attempts, chec
             match = match and (target_id is None or (target is not None and target.attempt_id == row.attempt_id
                 and target.event_type == 'response_transition' and payload.get('snapshot_id') == target.payload.get('after_snapshot_id')))
             checks['browser_tool_requests_observations_and_server_references'] &= match
-        if row.event_type == 'confidence_observed':
+        if row.event_type == 'confidence_observed' and not confidence_only:
             key = payload.get('confidence_assignment_id')
             assigned = confidence_map.get(key)
             target = event_map.get(payload.get('answer_event_id'))
@@ -383,17 +465,26 @@ def browser_persistence_checks(fixture, ledger, sessions, events, attempts, chec
                 and row.payload.get('initiation_type') == 'task_required' for row in tool_events[attempt.pk])
         hints = [hint for hint in config.get('hints', []) if hint['question_code'] == attempt.assignment.snapshot.code
                  and not hint['contains_answer']]
-        if attempt.assignment.snapshot.question_type == 'fill_blank':
+        if natural:
+            ordered = sorted(session_attempts[attempt.session_id], key=lambda row: row.assignment.assigned_sequence_index)
+            item_index = next(index for index, row in enumerate(ordered) if row.pk == attempt.pk)
+            optional = item_index in plans_by_session[attempt.session_id]['optional_tool_items']
+            optional_events = [row for row in tool_events[attempt.pk] if row.payload.get('initiation_type') == 'self_initiated']
+            checks['browser_tool_requests_observations_and_server_references'] &= (
+                any(row.payload.get('stage') in ('presented', 'finished') for row in optional_events) if optional else not optional_events)
+        if not natural and attempt.assignment.snapshot.question_type == 'fill_blank':
             checks['browser_tool_requests_observations_and_server_references'] &= bool(hints) and any(
                 row.attempt_id == attempt.pk and row.event_type == 'research_tool' and row.payload.get('tool') == 'hint'
                 and row.payload.get('stage') == 'requested' and row.payload.get('data', {}).get('hint_id') == hints[0]['id']
                 for row in tool_events[attempt.pk])
     for assigned in confidence:
-        if assigned.condition == 'prompt':
+        if assigned.condition == 'prompt' and not confidence_only:
             checks['browser_confidence_prompt_skip_references_and_final_state'] &= (
                 observed_confidence[(str(assigned.pk), 'presented')] == observed_confidence[(str(assigned.pk), 'skipped')] == 1
                 and all_counts[(assigned.attempt_id, 'confidence_prompt_shown')] == 1
                 and all_counts[(assigned.attempt_id, 'confidence_skipped')] == 1)
+    if confidence_only:
+        checks.update(confidence_persistence_checks(natural_plan,ledger,sessions,attempts,confidence,events))
     return checks
 
 
@@ -404,7 +495,8 @@ class Command(BaseCommand):
         parser.add_argument('--manifest', required=True)
         parser.add_argument('--output', required=True)
         parser.add_argument('--cold-manifest', action='append', default=[])
-        parser.add_argument('--workload-version', choices=(CONTRACT, BROWSER_ALIGNED_WORKLOAD), default=CONTRACT)
+        parser.add_argument('--workload-version', choices=(CONTRACT, BROWSER_ALIGNED_WORKLOAD, NATURAL_WORKLOAD), default=CONTRACT)
+        parser.add_argument('--plan')
 
     def handle(self, *args, **options):
         if connection.settings_dict['NAME'] != 'kt_e2e':
@@ -416,22 +508,41 @@ class Command(BaseCommand):
                 or ledger.get('task_id') != fixture.get('task_id')
                 or ledger.get('source_config') != fixture.get('source_config')):
             raise CommandError('Dedicated protocol ledger binding required')
+        plan = None
+        if options.get('workload_version') == NATURAL_WORKLOAD:
+            if not options.get('plan'):
+                raise CommandError('Natural workload requires its original frozen --plan')
+            try:
+                plan = validate_workload(fixture, json.loads(Path(options['plan']).read_text(encoding='utf-8-sig')))
+            except (ValueError, KeyError) as error:
+                raise CommandError('Natural frozen plan mismatch') from error
         with Path(options['output']).open('x', encoding='utf-8') as output:
-            result = self.verify(fixture, ledger, options['cold_manifest'], options.get('workload_version', CONTRACT))
+            result = self.verify(fixture, ledger, options['cold_manifest'], options.get('workload_version', CONTRACT), plan)
             json.dump(result, output, indent=2)
         self.stdout.write(json.dumps(result))
         if not result['passed']:
             raise CommandError('Capture protocol persistence verification failed')
 
-    def verify(self, fixture, ledger, cold_manifests, workload_version=CONTRACT):
-        sessions = list(ExperimentSession.objects.filter(class_task_id=fixture['task_id']).select_related('student'))
+    def verify(self, fixture, ledger, cold_manifests, workload_version=CONTRACT, natural_plan=None):
+        natural = workload_version == NATURAL_WORKLOAD
+        if natural:
+            if natural_plan is None:
+                raise CommandError('Frozen natural plan required')
+            names = [row['username'] for row in natural_plan['students'] if row['role'] == 'protocol']
+            if fixture.get('protocol_usernames', names) != names:
+                raise CommandError('Fixture protocol partition differs from frozen plan')
+            fixture = {**fixture, 'student_count': len(names), 'usernames': names}
+        query = ExperimentSession.objects.filter(class_task_id=fixture['task_id'])
+        if natural:
+            query = query.filter(student__username__in=fixture['usernames'])
+        sessions = list(query.select_related('student'))
         ids = {row.pk for row in sessions}
         expected = {token: (session, values) for session, row in ledger['sessions'].items()
                     for token, values in row['events'].items()}
         stored = list(AssessmentEvent.objects.filter(session_id__in=ids, client_instance_id__isnull=False))
         actual = {str(row.pk): row for row in stored}
         attempt_query = Attempt.objects.filter(session_id__in=ids).select_related('assignment__snapshot')
-        if workload_version == BROWSER_ALIGNED_WORKLOAD:
+        if workload_version in (BROWSER_ALIGNED_WORKLOAD, NATURAL_WORKLOAD):
             attempt_query = attempt_query.select_related('session__version')
         attempts = list(attempt_query)
         expected_answers = {int(pk): values for row in ledger['sessions'].values() for pk, values in row.get('answers', {}).items()}
@@ -464,7 +575,7 @@ class Command(BaseCommand):
                 and SubmissionEvent.objects.filter(attempt__session_id__in=ids).count() == len(attempts),
             'formal_tasks_remain_cold': all(not ExperimentSession.objects.filter(class_task_id=json.loads(Path(path).read_text())['task_id']).exists() for path in cold_manifests)}
         extra = {}
-        if workload_version == BROWSER_ALIGNED_WORKLOAD:
+        if workload_version in (BROWSER_ALIGNED_WORKLOAD, NATURAL_WORKLOAD):
             events = list(AssessmentEvent.objects.filter(session_id__in=ids))
             checkpoints = list(ClientCaptureCheckpoint.objects.filter(session_id__in=ids))
             syncs = list(ClientTimeSync.objects.filter(session_id__in=ids))
@@ -472,8 +583,19 @@ class Command(BaseCommand):
             submissions = list(SubmissionEvent.objects.filter(attempt__session_id__in=ids))
             confidence = list(ConfidenceAssignment.objects.filter(attempt__session_id__in=ids))
             checks.update(browser_persistence_checks(fixture, ledger, sessions, events, attempts,
-                checkpoints, syncs, visits, submissions, confidence))
-            extra = {'workload_version': workload_version, 'visit_count': len(visits), 'checkpoint_count': len(checkpoints),
+                checkpoints, syncs, visits, submissions, confidence, natural_plan=natural_plan))
+            if natural:
+                checks['natural_frozen_identity_plans_match'] = all(
+                    ledger['sessions'].get(str(row.pk), {}).get('natural_plan') == next(
+                        planned for planned in natural_plan['students'] if planned['username'] == row.student.username)
+                    for row in sessions)
+                checks['natural_plan_bound_to_task'] = natural_plan['task_id'] == fixture['task_id']
+                if natural_plan.get('scenario') == CONFIDENCE_ONLY:
+                    checks['confidence_only_synthetic_session_flags'] = all(
+                        ledger['sessions'].get(str(row.pk), {}).get('synthetic_confidence') is True
+                        and ledger['sessions'].get(str(row.pk), {}).get('scenario') == CONFIDENCE_ONLY for row in sessions)
+            extra = {'workload_version': workload_version,
+                     **({'scenario':CONFIDENCE_ONLY,'synthetic_confidence':True} if natural_plan and natural_plan.get('scenario') == CONFIDENCE_ONLY else {}), 'visit_count': len(visits), 'checkpoint_count': len(checkpoints),
                      'time_sync_count': len(syncs), 'submission_count': len(submissions)}
             extra.update(known_fact_integrity(fixture, ledger, sessions, events, checkpoints, attempts))
             navigation = navigation_receipt_checks(ledger, list(NavigationReceipt.objects.filter(attempt__session_id__in=ids)))

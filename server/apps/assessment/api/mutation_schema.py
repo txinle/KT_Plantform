@@ -166,6 +166,14 @@ SYNC_RECEIPT = obj({'success': SUCCESS, 'time_sync_id': UUID, 'server_received_a
      'estimated_clock_offset_ms', 'estimated_rtt_ms'])
 LEASE_RECEIPT = obj({'success': SUCCESS, 'lease_token': UUID, 'client_instance_id': UUID, 'expires_at': TIME},
                     ['success', 'lease_token', 'client_instance_id', 'expires_at'])
+CLOSE_BUNDLE = obj({'lease_token': UUID, 'client_instance_id': UUID, 'capture_bundle': CAPTURE_BUNDLE,
+    'capture_operation_id': UUID, 'leave_event_id': UUID},
+    ['lease_token', 'client_instance_id', 'capture_bundle', 'capture_operation_id', 'leave_event_id'])
+CLOSE_RECEIPT = obj({'success': SUCCESS, **CAPTURE_RECEIPT, 'capture_operation_id': UUID,
+    'writer_lease_released': SUCCESS, 'status': STRING, 'response_version': COUNTER,
+    'active_response_event_id': nullable(UUID), 'final_response_event_id': nullable(UUID)},
+    ['success', 'committed', 'acknowledgements', 'checkpoint_ids', 'capture_operation_id',
+     'writer_lease_released', 'status', 'response_version', 'active_response_event_id', 'final_response_event_id'])
 PROCESS_ERRORS = (400, 409, 413, 415)
 TOOL_INPUT = obj({'tool': STRING, 'stage': STRING, 'operation_id': UUID, 'data': obj({}, exact=False),
                   'answer_event_id': nullable(UUID), 'initiation_type': STRING, 'capture_bundle': CAPTURE_BUNDLE}, ['tool', 'stage', 'operation_id'])
@@ -214,8 +222,11 @@ PROCESS = {
         LEASE_RECEIPT, status=201, errors=PROCESS_ERRORS, description='Acquire the owned attempt writer lease.'),
     'writer_lease_renew': spec(obj({'lease_token': UUID, 'client_instance_id': UUID}, ['lease_token', 'client_instance_id']),
         LEASE_RECEIPT, errors=PROCESS_ERRORS, description='Renew the matching attempt writer lease.'),
-    'writer_lease_release': spec(obj({'lease_token': UUID, 'client_instance_id': UUID}, ['lease_token', 'client_instance_id']),
-        obj({'success': SUCCESS}, ['success']), errors=PROCESS_ERRORS, description='Release the matching attempt writer lease.'),
+    'writer_lease_release': spec({'oneOf': [obj({'lease_token': UUID, 'client_instance_id': UUID},
+        ['lease_token', 'client_instance_id']), CLOSE_BUNDLE]},
+        {'oneOf': [obj({'success': SUCCESS}, ['success']), CLOSE_RECEIPT]}, errors=PROCESS_ERRORS,
+        description='Release the matching lease; optional close bundle commits original recording evidence, '
+                    'checkpoints and release together. capture_operation_id replays its immutable durable receipt.'),
     'confidence_prompt_shown': spec(obj({}), obj({'success': SUCCESS, 'response_status': STRING},
         ['success', 'response_status']), errors=PROCESS_ERRORS, description='Mark the server-assigned confidence prompt as shown.'),
     'confidence_commit': spec(None, errors=(409,), body_required=False,

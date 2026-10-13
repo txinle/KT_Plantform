@@ -60,7 +60,7 @@ function acknowledgement(value) {
 }
 export function browserRequestMaterial(path, body) {
   if (!protocolPath(path) || !body || typeof body !== 'object') return null
-  const bundle = body.atomic_submission ?? body.save_and_leave ?? body
+  const bundle = body.atomic_submission ?? body.save_and_leave ?? body.capture_bundle ?? body
   const row = { path, client_instance_id: uuid(bundle.client_instance_id ?? body.writer_client_instance_id),
     material_sha256: digest(body), material_fields: fields(body),
     events: Array.isArray(bundle.events) ? bundle.events.map(event) : [],

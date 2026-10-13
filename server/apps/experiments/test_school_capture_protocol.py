@@ -46,6 +46,108 @@ class SchoolCaptureProtocolTests(SimpleTestCase):
         import capture_protocol
         return capture_protocol
 
+    def browser_bundle_harness(self):
+        module = self.module()
+        from assessment_300 import Runner, StudentState
+        class Harness(module.CaptureProtocolMixin, Runner):
+            workload_version = module.BROWSER_ALIGNED_WORKLOAD
+        runner = Harness('http://localhost', 3, 35)
+        state = StudentState('private', 'private')
+        state.session_id = 11
+        runner.ledger['11'] = {'events': {}, 'event_ids': [], 'answers': {}, 'submission_tokens': []}
+        runtime = {'stream': module.BrowserAlignedStream(11, 'client'), 'head': 'head', 'version': 2,
+            'lease': {'writer_lease_token': 'lease', 'writer_client_instance_id': 'client'},
+            'dto': {'assignment': {'attempt_id': 21}, 'process': {'event_batch_url': '/events/',
+                'writer_lease_release_url': '/release/', 'capture_bundle': {'enabled': True, 'version': 1},
+                'close_bundle': {'enabled': True, 'version': 1}}}}
+        calls = []
+        def request(_, path, *, method='GET', body=None):
+            calls.append((path, copy.deepcopy(body)))
+            bundle = body.get('capture_bundle', body)
+            return 200, {'success': True, 'committed': True,
+                'capture_operation_id': body.get('capture_operation_id'), 'writer_lease_released': True,
+                'status': 'submitted', 'response_version': 2, 'active_response_event_id': 'head',
+                'final_response_event_id': 'head', 'rejections': [],
+                'checkpoint_ids': [row['checkpoint_id'] for row in bundle.get('checkpoints', [])],
+                'acknowledgements': [{'event_id': row['event_id'], 'client_sequence_no': row['client_sequence_no'],
+                    'server_ingest_sequence_no': row['client_sequence_no']} for row in bundle.get('events', [])]}, .001
+        return runner, state, runtime, calls, request, Runner
+
+    def test_bundle_flush_defers_new_ack_checkpoint_until_next_frozen_round(self):
+        runner, state, runtime, calls, request, base = self.browser_bundle_harness()
+        stream = runtime['stream']
+        stream.event(21, 'item_entered', {})
+        checkpoint = stream.checkpoint('resume')
+        with patch.object(base, 'request', side_effect=request):
+            runner._browser_flush(state, runtime)
+            self.assertEqual(len(calls), 1, 'ACK progress must not add a second blocking HTTP request')
+            pending = [row for key, row in stream.checkpoints.items() if key not in stream.acked_checkpoint_ids]
+            self.assertEqual([row['trigger'] for row in pending], ['ack_progress'])
+            self.assertIn(checkpoint['checkpoint_id'], stream.acked_checkpoint_ids)
+            self.assertEqual(pending[0]['highest_acked_sequence_no'], 1)
+            frozen = copy.deepcopy(pending[0])
+            runner._browser_flush(state, runtime)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1][1]['capture_bundle']['events'], [])
+        self.assertEqual(calls[1][1]['capture_bundle']['checkpoints'], [frozen])
+        self.assertEqual(set(stream.checkpoints), stream.acked_checkpoint_ids)
+
+    def test_submit_close_combines_actual_leave_checkpoint_and_release_with_immutable_replay(self):
+        runner, state, runtime, calls, request, base = self.browser_bundle_harness()
+        stream = runtime['stream']
+        stream.event(21, 'feedback_shown', {'feedback_mode': 'none'})
+        with patch.object(base, 'request', side_effect=request):
+            runner._browser_close(state, runtime, 'submit')
+            self.assertEqual([path for path, _ in calls], ['/release/'])
+            body = calls[0][1]
+            left = next(row for row in body['capture_bundle']['events'] if row['event_type'] == 'item_left')
+            self.assertEqual(body['leave_event_id'], left['event_id'])
+            self.assertEqual(left['payload']['leave_reason'], 'submit')
+            self.assertEqual([row['trigger'] for row in body['capture_bundle']['checkpoints']], ['session_end'])
+            self.assertEqual(body['lease_token'], 'lease')
+            sequence = stream.sequence
+            runner._browser_close(state, runtime, 'submit')
+            self.assertEqual(calls[1], calls[0])
+            self.assertEqual(stream.sequence, sequence)
+            runner._browser_flush(state, runtime)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(set(stream.checkpoints), stream.acked_checkpoint_ids)
+        planned = runner.ledger['11']['capture_mutation_receipts'][body['capture_operation_id']]
+        self.assertEqual(planned['kind'], 'close')
+        self.assertEqual(planned['leave_event_id'], left['event_id'])
+        self.assertEqual(planned['material_fingerprint'], self.module().digest({key: value for key, value in body.items()
+            if key not in {'lease_token', 'client_instance_id'}}))
+
+    def test_close_lost_receipt_replays_frozen_material_without_new_leave_event(self):
+        runner, state, runtime, calls, request, base = self.browser_bundle_harness()
+        def lost_reply(*args, **kwargs):
+            request(*args, **kwargs)
+            raise RuntimeError('HTTP 500')
+        with patch.object(base, 'request', side_effect=lost_reply):
+            with self.assertRaisesRegex(RuntimeError, 'HTTP 500'):
+                runner._browser_close(state, runtime, 'submit')
+        with patch.object(base, 'request', side_effect=request):
+            runner._browser_close(state, runtime, 'submit')
+        self.assertEqual(calls[1], calls[0])
+        self.assertEqual(runtime['stream'].sequence, 1)
+
+    def test_close_verifier_rejects_unreleased_lease_or_wrong_operation(self):
+        from apps.experiments.management.commands.verify_school_protocol_load import capture_mutation_receipt_checks
+        token, event_id = 'token', 'left'
+        receipt = {'success': True, 'committed': True, 'capture_operation_id': token, 'writer_lease_released': True,
+            'status': 'submitted', 'response_version': 2, 'acknowledgements': [
+                {'event_id': event_id, 'client_sequence_no': 1, 'server_ingest_sequence_no': 7}], 'checkpoint_ids': []}
+        planned = {'attempt_id': 21, 'kind': 'close', 'material_fingerprint': 'a' * 64,
+            'event_identities': {'1': event_id}, 'checkpoint_ids': [], 'leave_event_id': event_id,
+            'target_event_id': None, 'acknowledged': False, 'receipt_sha256': None}
+        ledger = {'sessions': {'11': {'capture_mutation_receipts': {token: planned}}}}
+        stored = SimpleNamespace(token=token, attempt_id=21, kind='close', material_fingerprint='a' * 64, receipt=receipt)
+        event = SimpleNamespace(pk=event_id, attempt_id=21, event_type='item_left', client_sequence_no=1, server_ingest_sequence_no=7)
+        self.assertTrue(capture_mutation_receipt_checks(ledger, [stored], [event])['known_capture_mutation_integrity_passed'])
+        for changed in ({'writer_lease_released': False}, {'capture_operation_id': 'other'}):
+            stored.receipt = {**receipt, **changed}
+            self.assertFalse(capture_mutation_receipt_checks(ledger, [stored], [event])['known_capture_mutation_integrity_passed'])
+
     def test_five_type_trajectories_keep_modification_clear_and_return(self):
         module = self.module()
         from apps.assessment.event_schema_registry import validate_event_payload

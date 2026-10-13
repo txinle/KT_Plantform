@@ -81,7 +81,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Release the matching attempt writer lease. */
+        /** @description Release the matching lease; optional close bundle commits original recording evidence, checkpoints and release together. capture_operation_id replays its immutable durable receipt. */
         post: operations["assessment_writer_lease_release"];
         delete?: never;
         options?: never;
@@ -5451,6 +5451,7 @@ export interface components {
         };
         StudentRuntimeProcess: {
             capture_bundle?: components["schemas"]["AtomicSubmissionCapability"];
+            close_bundle?: components["schemas"]["AtomicSubmissionCapability"];
             atomic_submission?: components["schemas"]["AtomicSubmissionCapability"];
             save_and_leave?: components["schemas"]["AtomicSubmissionCapability"];
             writer_lease_acquire_url?: string;
@@ -6760,6 +6761,86 @@ export interface operations {
                     lease_token: string;
                     /** Format: uuid */
                     client_instance_id: string;
+                } | {
+                    /** Format: uuid */
+                    lease_token: string;
+                    /** Format: uuid */
+                    client_instance_id: string;
+                    /** @description Original bounded capture facts; maximum complete body 8388608 bytes. Batch facts share one owned session; draft/tool facts belong to the current attempt or session. */
+                    capture_bundle: {
+                        /** @enum {integer} */
+                        version: 1;
+                        /** Format: uuid */
+                        client_instance_id: string;
+                        event_boundary: number;
+                        events: {
+                            /** Format: uuid */
+                            event_id?: string;
+                            /** @enum {string} */
+                            event_type: "activity_heartbeat" | "confidence_observed" | "document_hidden" | "document_visible" | "explanation_shown" | "feedback_exposure" | "feedback_shown" | "hint_closed" | "hint_opened" | "input_operation" | "item_left" | "item_rendered" | "legacy_session_end_observed" | "legacy_session_start_observed" | "network_offline" | "network_online" | "pagehide" | "pageshow" | "research_tool_observed" | "research_tool_requested" | "resource_closed" | "resource_opened" | "response_commit_requested" | "response_input_started" | "response_state_changed" | "response_transition" | "session_completed" | "session_expired" | "session_invalidated" | "session_reopened" | "session_started" | "simulation_error_returned" | "simulation_parameter_changed" | "simulation_run_completed" | "simulation_run_started" | "text_edit_observed" | "window_blurred" | "window_focused";
+                            event_version: number;
+                            session_id: number;
+                            attempt_id?: number | null;
+                            client_sequence_no: number;
+                            /** Format: uuid */
+                            correlation_id?: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_wall_time_utc: string;
+                            /** @description Finite nonnegative decimal, validated by the existing domain parser. */
+                            client_monotonic_ms: number | string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_time_origin: string;
+                            /** Format: uuid */
+                            time_sync_id?: string | null;
+                            quality_flags: string[];
+                            app_version: string;
+                            /** @description Versioned payload validated by apps.assessment.event_schema_registry; the authoritative JSON schemas are assessment/event_schemas/<event_type>/v<event_version>.json. */
+                            payload: {
+                                [key: string]: unknown;
+                            };
+                        }[];
+                        checkpoints: {
+                            /** Format: uuid */
+                            checkpoint_id: string;
+                            session_id: number;
+                            /** Format: uuid */
+                            client_instance_id: string;
+                            highest_emitted_sequence_no: number;
+                            highest_acked_sequence_no: number;
+                            highest_contiguous_acked_sequence_no: number;
+                            pending_event_count: number;
+                            failed_event_count: number;
+                            missing_local_sequence_ranges: number[][];
+                            /** @description Finite nonnegative decimal, validated by the existing domain parser. */
+                            client_monotonic_ms: number | string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_wall_time_utc: string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_time_origin: string;
+                            /** Format: uuid */
+                            time_sync_id: string | null;
+                            /** @enum {string} */
+                            trigger: "heartbeat" | "navigation" | "commit" | "pagehide" | "resume" | "session_end" | "ack_progress";
+                            quality_flags: string[];
+                            app_version: string;
+                        }[];
+                    };
+                    /** Format: uuid */
+                    capture_operation_id: string;
+                    /** Format: uuid */
+                    leave_event_id: string;
                 };
             };
         };
@@ -6774,6 +6855,28 @@ export interface operations {
                         data: {
                             /** @enum {boolean} */
                             success: true;
+                        } | {
+                            /** @enum {boolean} */
+                            success: true;
+                            /** @enum {boolean} */
+                            committed: true;
+                            acknowledgements: {
+                                client_sequence_no: number;
+                                /** Format: uuid */
+                                event_id: string;
+                                server_ingest_sequence_no: number;
+                            }[];
+                            checkpoint_ids: string[];
+                            /** Format: uuid */
+                            capture_operation_id: string;
+                            /** @enum {boolean} */
+                            writer_lease_released: true;
+                            status: string;
+                            response_version: number;
+                            /** Format: uuid */
+                            active_response_event_id: string | null;
+                            /** Format: uuid */
+                            final_response_event_id: string | null;
                         };
                         meta: {
                             request_id: string;

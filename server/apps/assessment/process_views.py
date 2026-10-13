@@ -432,9 +432,18 @@ def writer_lease_renew(request, attempt_id):
 
 @role_required("student")
 @require_POST
+@transaction.non_atomic_requests
 def writer_lease_release(request, attempt_id):
+    request_received_at = timezone.now()
     try:
-        document = _json_document(request)
+        document = _json_document(request, max_bytes=8 * 1024 * 1024)
+        if 'capture_bundle' in document:
+            from .capture_bundle_services import close_attempt_capture_bundle
+            receipt = close_attempt_capture_bundle(student=request.user, attempt_id=attempt_id,
+                document=document, request_received_at=request_received_at)
+            return JsonResponse(receipt)
+        if len(request.body) > MAX_PROCESS_REQUEST_BYTES:
+            raise ProcessRequestError('request_too_large', status=413)
         require_exact_mapping(
             document,
             allowed=frozenset({"lease_token", "client_instance_id"}),

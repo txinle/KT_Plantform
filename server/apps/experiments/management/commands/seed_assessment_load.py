@@ -49,6 +49,14 @@ def protocol_tools(questions):
     return {'doubt_enabled': True, 'check_enabled': True, 'kc_visible': True, 'hints': hints, 'rules': rules}
 
 
+def research_profile(questions, *, capture_protocol, confidence_only):
+    if confidence_only:
+        return {'research_tools': {}, 'confidence_mode': Experiment.ConfidenceMode.ALL,
+                'confidence_scale_version': Experiment._meta.get_field('confidence_scale_version').default,
+                'confidence_prompt_version': Experiment._meta.get_field('confidence_prompt_version').default}
+    return {'research_tools': protocol_tools(questions) if capture_protocol else {}}
+
+
 class Command(BaseCommand):
     help = "Create an isolated 300-student, 20-item HTTP load-test fixture in kt_e2e."
 
@@ -59,6 +67,7 @@ class Command(BaseCommand):
         parser.add_argument("--password", default="Load300!pass")
         parser.add_argument("--feedback-mode", choices=Experiment.Feedback.values, default=Experiment.Feedback.NONE)
         parser.add_argument("--capture-protocol", action="store_true", help="Five-type capture-v2 protocol fixture; requires runtime allowlist")
+        parser.add_argument("--confidence-only", action="store_true", help="Isolated confidence-only fixture; no research tool entry")
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -177,7 +186,8 @@ class Command(BaseCommand):
             sampling_total_count=options["items"],
             feedback_mode=options["feedback_mode"],
             feedback_release_policy=Experiment.FeedbackReleasePolicy.AFTER_PERSONAL_SUBMISSION,
-            research_tools=protocol_tools([{'question_type': row.question_type, 'code': row.code} for row in questions]) if options.get('capture_protocol') else {},
+            **research_profile([{'question_type': row.question_type, 'code': row.code} for row in questions],
+                               capture_protocol=options.get('capture_protocol'), confidence_only=options.get('confidence_only')),
         )
         ExperimentSamplingKC.objects.create(experiment=experiment, concept=concept)
         ExperimentQuestion.objects.bulk_create(
@@ -206,4 +216,8 @@ class Command(BaseCommand):
         }
         if options.get('capture_protocol'):
             manifest.update(capture_protocol='school-capture-v2-protocol-v1', required_capture_v2_course_ids=[course.pk])
+        if options.get('confidence_only'):
+            manifest.update(scenario='confidence-only-v1', confidence_scale_version=experiment.confidence_scale_version,
+                            confidence_prompt_version=experiment.confidence_prompt_version,
+                            confidence_mode=experiment.confidence_mode)
         self.stdout.write(json.dumps(manifest, ensure_ascii=False, indent=2))

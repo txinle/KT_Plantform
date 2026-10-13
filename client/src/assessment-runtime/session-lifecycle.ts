@@ -85,17 +85,34 @@ export function bindLifecycle(collector: ProcessEventCollector, options: Lifecyc
   const closeAttempt = async (
     reason: string, toAssignmentId: number | null = null, flush = true, createCheckpoint = true,
   ) => {
-    if (!attemptOpen) return;
+    const key = collector.closeMetadataKey();
+    let closed = await collector.outbox.readMetadata<{ reason: string; toAssignmentId: number | null; eventId: string; checkpointId?: string; recorded?: boolean }>(key);
+    if (!attemptOpen && !closed) return true;
+    if (closed && (closed.reason !== reason || closed.toAssignmentId !== toAssignmentId)) {
+      throw new Error('上一离题操作尚待确认，请核验原操作。');
+    }
     attemptOpen = false;
     stopHeartbeat();
-    await record('item_left', {
-      leave_reason: reason,
-      to_assignment_id: toAssignmentId,
-    });
-    if (createCheckpoint) {
-      await collector.checkpoint?.(reason === 'navigation' ? 'navigation' : 'session_end');
+    if (!closed) {
+      closed = { reason, toAssignmentId, eventId: globalThis.crypto.randomUUID() };
+      await collector.outbox.writeMetadata(key, closed);
     }
-    if (flush) await collector.flushBounded?.(1500, { ignoreVisibility: true, keepalive: true });
+    if (!closed.recorded) {
+      const pending = await collector.outbox.pendingEvents(collector.clientInstanceId, Number.MAX_SAFE_INTEGER);
+      if (!pending.some(event => event.event_id === closed.eventId)) await collector.record('item_left', {
+        leave_reason: reason, to_assignment_id: toAssignmentId,
+      }, { eventId: closed.eventId });
+      closed.recorded = true;
+      await collector.outbox.writeMetadata(key, closed);
+    }
+    if (createCheckpoint && !closed.checkpointId) {
+      const checkpoint = await collector.recordCheckpoint(reason === 'navigation' ? 'navigation' : 'session_end');
+      if (checkpoint) {
+        closed.checkpointId = checkpoint.checkpoint_id;
+        await collector.outbox.writeMetadata(key, closed);
+      }
+    }
+    return flush ? collector.flushBounded(1500, { ignoreVisibility: true, keepalive: true }) : true;
   };
   let navigationPreparation: { token: string; toAssignmentId: number; promise: Promise<{ event_id?: string }> } | null = options.pendingNavigation ? {
     token: options.pendingNavigation.token, toAssignmentId: options.pendingNavigation.toAssignmentId,

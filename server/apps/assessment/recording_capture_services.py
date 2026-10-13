@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
+from datetime import timedelta
 from django.conf import settings
 
 from django.core.exceptions import ValidationError
@@ -17,6 +18,7 @@ from .event_batch_services import (
 )
 from .models import (
     CaptureContractArtifact,
+    Attempt,
     ClientCaptureCheckpoint,
     ClientTimeSync,
     ExperimentSession,
@@ -126,6 +128,55 @@ CHECKPOINT_FIELDS = frozenset(
         "app_version",
     }
 )
+
+
+def capture_checkpoint_context(*, student, bundle, session):
+    """Reuse owned links and checkpoint identities once for a bounded bundle."""
+    rows = bundle['checkpoints']
+    return {
+        'sessions': {session.pk: session},
+        'time_syncs': {sample.pk: sample for sample in ClientTimeSync.objects.filter(
+            pk__in={parse_uuid(row['time_sync_id']) for row in rows if row.get('time_sync_id') is not None},
+            session=session, client_instance_id=parse_uuid(bundle['client_instance_id']))},
+        'checkpoints': {row.pk: row for row in ClientCaptureCheckpoint.objects.filter(
+            pk__in={parse_uuid(row.get('checkpoint_id')) for row in rows})},
+    }
+
+
+def validate_close_recording_time(session, attempt=None, *, request_received_at, event_type=None):
+    """Allow terminal recording facts within the frozen grace, never response writes."""
+    from .event_invariants import SESSION_ONLY_EVENTS, TELEMETRY_EVENTS
+    from .services import _validate_process_event_time
+    now = request_received_at
+    error = _validate_process_event_time(session, attempt, request_received_at=now)
+    if error == '班级任务已结束' or session.status == ExperimentSession.Status.INVALIDATED:
+        return '班级任务已结束'
+    boundaries = [session.terminal_at, session.authoritative_terminal_at, session.deadline_at]
+    if attempt is not None:
+        boundaries.extend([attempt.submitted_at, attempt.authoritative_terminal_at,
+            attempt.current_effective_deadline_at or attempt.initial_effective_deadline_at])
+    if session.class_task_id:
+        from .deadline_services import DeadlineDecisionService
+        schedule = DeadlineDecisionService.schedule_at(session.class_task, now)
+        if schedule is not None:
+            boundaries.append(schedule.closes_at)
+    reached = [boundary for boundary in boundaries if boundary is not None and boundary <= now]
+    terminal = (session.status != ExperimentSession.Status.IN_PROGRESS or
+        attempt is not None and attempt.status in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED})
+    if not terminal and not error:
+        return None
+    if not reached:
+        return error or '作答时间已结束'
+    contract = session.capture_contract.schema_document if session.capture_contract_id else CAPTURE_CONTRACT_V1
+    grace = contract['parameters']['terminal_grace_seconds']
+    if now >= min(reached) + timedelta(seconds=grace):
+        return '作答时间已结束'
+    recording_events = SESSION_ONLY_EVENTS | TELEMETRY_EVENTS | {
+        'item_left', 'item_rendered', 'feedback_exposure', 'feedback_shown', 'explanation_shown',
+    }
+    if event_type is not None and event_type not in recording_events:
+        return '作答时间已结束'
+    return None
 
 
 def _nonnegative_integer(value):

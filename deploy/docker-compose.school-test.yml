@@ -2,8 +2,13 @@
 # Always use a NEW project: -p kt-school-e2e. Never reuse the production project.
 x-test-env: &test-env
   env_file: !override [school-test.env]
-  environment:
+  environment: &test-environment
     POSTGRES_DB: kt_e2e
+    SCHOOL_REDIS_SESSION_ENABLED: ${SCHOOL_REDIS_SESSION_ENABLED:-0}
+    SESSION_REDIS_URL: redis://redis-session:6379/0
+    SESSION_REDIS_TIMEOUT_SECONDS: ${SESSION_REDIS_TIMEOUT_SECONDS:-5}
+    SESSION_REDIS_KEY_PREFIX: "kt:school:session:v1:"
+    CLOSE_BUNDLE_ENABLED: ${CLOSE_BUNDLE_ENABLED:-0}
     DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
     DJANGO_CSRF_TRUSTED_ORIGINS: http://127.0.0.1:18080,http://localhost:18080
     CANONICAL_PUBLIC_ORIGIN: ""
@@ -32,8 +37,15 @@ services:
     <<: *test-env
   web:
     <<: *test-env
+    environment:
+      <<: *test-environment
+      GUNICORN_WORKERS: ${SCHOOL_TEST_WEB_WORKERS:-16}
   student-read:
     <<: *test-env
+    environment:
+      <<: *test-environment
+      GUNICORN_WORKERS: 2
+    cpus: 2
   teacher-read:
     <<: *test-env
   analytics-worker:

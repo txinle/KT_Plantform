@@ -1,4 +1,4 @@
-import type { StudentRuntimeQuestionEntry, SubmissionConfidence, NavigationClickContext, EntryReceipt } from './api'
+import type { StudentRuntimeQuestionEntry, SubmissionConfidence, SubmissionResponse, NavigationClickContext, EntryReceipt } from './api'
 import { defaultOutbox } from './fact-store'
 import { ProcessEventCollector } from './process-sender'
 import { bindLifecycle } from './session-lifecycle'
@@ -11,6 +11,9 @@ type RuntimeProcess = StudentRuntimeQuestionEntry['process']
 type VisitFields = 'visit_id' | 'visit_index' | 'entry_event_id' | 'navigation_id'
 type ProcessState = Omit<RuntimeProcess, VisitFields> & Partial<Pick<RuntimeProcess, VisitFields>>
 export interface StudentProcessRuntime {
+  restoredClosure?: SubmissionResponse | null
+  saveClosureIntent?(intent: SubmissionResponse | null): Promise<void>
+  closesWriterLease?: boolean
   captureMutation?<T extends ProcessConfirmation>(url: string, body: Record<string, unknown>, send: (body: Record<string, unknown>) => Promise<T>, operationId?: string | null, prepare?: () => Promise<Record<string, unknown> | undefined>): Promise<T>
   serializePointerWrite<T>(operation: () => Promise<T>): Promise<T>
   pointerWritesSettled(): Promise<unknown>
@@ -161,6 +164,28 @@ export class SessionController {
     if (intent?.navigationId === navigationId) await this.store.writeMetadata(key, null)
   }
   async recoverClosedSubmission(process: RuntimeProcess) {
+    const closeKey = `submission-close:${process.session_id}:${process.attempt_id}`;
+    const closure = await this.store.readMetadata<SubmissionResponse>(closeKey);
+    if (closure) {
+      const pending = await this.store.readMetadata<CaptureMutation>(`capture-mutation:${process.session_id}:${process.attempt_id}`);
+      const sender = new ProcessEventCollector({ sessionId: process.session_id, attemptId: process.attempt_id,
+        endpoint: process.event_batch_url, checkpointEndpoint: process.checkpoint_url, csrfToken: this.options.csrfToken,
+        captureBundle: process.capture_bundle, outbox: this.store, autoSchedule: false });
+      if (pending?.body.leave_event_id) {
+        const receipt = await getStudentAssessmentApi(pending.operationId ?? null).post<ProcessConfirmation>(pending.url, { ...pending.body, capture_bundle: pending.processSnapshot });
+        if (receipt.capture_operation_id !== pending.body.capture_operation_id || receipt.writer_lease_released !== true) {
+          throw new Error('收尾回执与本次操作不一致，请核验原操作。');
+        }
+        await sender.acknowledgeCaptureMutation(pending, receipt);
+        await this.store.writeMetadata(`confirmed-close:${process.session_id}:${process.attempt_id}`, { leaveEventId: pending.body.leave_event_id, reason: 'submit' });
+      } else if (!await this.store.readMetadata(`confirmed-close:${process.session_id}:${process.attempt_id}`)) {
+        return null;
+      }
+      if (!/^\/student\/sessions\/\d+\/questions\/\d+\//.test(closure.next_url)
+        && await sender.flushBounded(1500, { ignoreVisibility: true }) === false) throw new Error('最终收尾检查点尚未确认。');
+      await this.store.writeMetadata(closeKey, null);
+      return closure;
+    }
     const intent = await this.store.restoreSubmissionIntent(process.session_id, process.attempt_id) as SubmissionIntent | null
     if (!intent) return null
     const recovered = await getStudentAssessmentApi().recover(process.attempt_id, intent.token)
@@ -219,6 +244,7 @@ export class SessionController {
         renewUrl: process.writer_lease_renew_url, releaseUrl: process.writer_lease_release_url }) : undefined
     const restored = await this.store.restoreResponse(process.session_id, process.attempt_id)
     if (this.disposed) throw new Error('会话控制器已关闭。')
+    let closeFlight: Promise<boolean> | undefined;
     const prepareMutation = async (intent: CaptureMutation, prepare?: () => Promise<Record<string, unknown> | undefined>) => {
       if (Object.hasOwn(intent.body, 'target_event_id') && !intent.body.writer_lease_token) {
         const credentials = prepare ? await prepare() : await lease?.beforePointerWrite();
@@ -232,6 +258,9 @@ export class SessionController {
     const confirmMutation = async <T extends ProcessConfirmation>(intent: CaptureMutation, send: (body: Record<string, unknown>) => Promise<T>) => {
       intent = await prepareMutation(intent);
       const result = await send({ ...intent.body, capture_bundle: intent.processSnapshot });
+      if (intent.body.leave_event_id && (result.capture_operation_id !== intent.body.capture_operation_id || result.writer_lease_released !== true)) {
+        throw new Error('收尾回执与本次操作不一致，请核验原操作。');
+      }
       let responseVersion: number | undefined;
       if (Object.hasOwn(intent.body, 'target_event_id')) {
         const draft = result as ProcessConfirmation & { response_version?: number };
@@ -240,6 +269,15 @@ export class SessionController {
         responseVersion = Number(draft.response_version);
       }
       await sender.acknowledgeCaptureMutation(intent, result);
+      if (intent.body.leave_event_id) {
+        const left = intent.processSnapshot.events.find(row => row.event_id === intent.body.leave_event_id);
+        const local = await this.store.readMetadata<{ reason: string }>(sender.closeMetadataKey());
+        await this.store.writeMetadata(`confirmed-close:${process.session_id}:${process.attempt_id}`, {
+          leaveEventId: intent.body.leave_event_id, reason: left?.payload.leave_reason || local?.reason,
+          visitId: left?.correlation_id || sender.correlationId,
+        });
+        lease?.invalidate();
+      }
       if (responseVersion !== undefined) runtime.responseVersion = responseVersion;
       return result;
     };
@@ -279,11 +317,14 @@ export class SessionController {
       },
       pointerWritesSettled: async () => {
         await this.pointerQueue;
+        if (closeFlight) await closeFlight;
         const intent = await this.store.readMetadata<CaptureMutation>(`capture-mutation:${process.session_id}:${process.attempt_id}`);
         if (intent) await confirmMutation(intent, frozen => getStudentAssessmentApi(intent.operationId ?? null).post(intent.url, frozen));
       },
       sender, responseVersion: process.response_version || 0, writerLease: lease, clientInstanceId: sender.clientInstanceId,
       restoredNavigation, restoredSubmission, restoredResponse: restored as RestoredResponse | null,
+      restoredClosure: await this.store.readMetadata<SubmissionResponse>(`submission-close:${process.session_id}:${process.attempt_id}`),
+      saveClosureIntent: intent => this.store.writeMetadata(`submission-close:${process.session_id}:${process.attempt_id}`, intent),
       saveNavigationIntent: intent => this.store.saveNavigationIntent(process.session_id, process.attempt_id, intent),
       saveSubmissionIntent: intent => this.store.saveSubmissionIntent(process.session_id, process.attempt_id, intent),
       clearResponseRecovery: () => this.store.clearResponseRecovery(process.session_id, process.attempt_id),
@@ -301,7 +342,34 @@ export class SessionController {
       checkpoint: trigger => { assertActive(); return sender.checkpoint(trigger) },
       flushBounded: timeout => sender.flushBounded(timeout, { ignoreVisibility: true, keepalive: true }),
       flushConfirmed: () => sender.flushConfirmed({ ignoreVisibility: true, keepalive: true }),
-      closeAttempt: (reason, target = null) => { assertActive(); return lifecycle.closeAttempt(reason, target) },
+      closesWriterLease: process.close_bundle?.enabled === true && process.close_bundle.version === 1 && process.capture_bundle?.mutation_receipts === true,
+      closeAttempt: async (reason, target = null) => {
+        assertActive();
+        if (!runtime.closesWriterLease) return lifecycle.closeAttempt(reason, target);
+        const close = async () => {
+          const confirmed = await this.store.readMetadata<{ reason?: string; visitId?: string }>(`confirmed-close:${process.session_id}:${process.attempt_id}`);
+          if (confirmed?.reason === reason && (reason === 'submit' || confirmed.visitId === sender.correlationId)) return true;
+          const pending = await this.store.readMetadata<CaptureMutation>(`capture-mutation:${process.session_id}:${process.attempt_id}`);
+          if (pending?.body.leave_event_id) {
+            await confirmMutation(pending, frozen => getStudentAssessmentApi(pending.operationId ?? null).post(pending.url, frozen));
+            return true;
+          }
+          await lifecycle.closeAttempt(reason, target, false);
+          const local = await this.store.readMetadata<{ eventId: string }>(sender.closeMetadataKey());
+          if (!local) return true;
+          const credentials = lease?.cachedCredentials() || await lease?.beforePointerWrite();
+          if (!credentials || !process.writer_lease_release_url) throw new Error('缺少收尾租约，请核验原操作。');
+          await runtime.captureMutation!(process.writer_lease_release_url, {
+            lease_token: credentials.writer_lease_token, client_instance_id: credentials.writer_client_instance_id,
+            capture_operation_id: crypto.randomUUID(), leave_event_id: local.eventId,
+          }, frozen => getStudentAssessmentApi().post(process.writer_lease_release_url!, frozen));
+          return true;
+        };
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        if (!closeFlight) closeFlight = close().finally(() => { closeFlight = undefined; });
+        try { return await Promise.race([closeFlight, new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 1500); })]); }
+        finally { if (timer) clearTimeout(timer); }
+      },
       dispose: () => { if (generation === this.generation) this.generation++ },
     }
     if (!process.capture_bundle?.enabled || process.capture_bundle.version !== 1 || process.capture_bundle.mutation_receipts !== true) runtime.captureMutation = undefined;

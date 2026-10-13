@@ -8,6 +8,36 @@ const uuid = number => `${String(number).padStart(8, '0')}-0000-4000-8000-000000
 const clocks = { client_wall_time_utc: '2026-10-12T03:00:00.000Z', client_monotonic_ms: 12.125,
   client_time_origin: '2026-10-12T02:00:00.000Z', time_sync_id: null }
 
+test('ordinary draft and tool mutations retain capture_bundle events checkpoints and real ACKs', async () => {
+  for (const path of ['/api/v1/student/attempts/8/draft/', '/api/v1/assessment/process/capture-v2/attempts/8/tools/',
+    '/api/v1/assessment/process/capture-v2/attempts/8/resolve/']) {
+    const page = new EventEmitter()
+    const capture = witness.observeBrowserProtocol(page)
+    const event = { event_id: uuid(2), client_sequence_no: 1, session_id: 7, attempt_id: 8,
+      event_type: 'response_transition', event_version: 3, app_version: 'capture-v2', ...clocks,
+      payload: { after_state: { question_type: 'short_answer', value: 'PRIVATE ANSWER' } } }
+    const checkpoint = { checkpoint_id: uuid(8), session_id: 7, client_instance_id: uuid(1), trigger: 'commit', ...clocks }
+    const body = { writer_lease_token: 'PRIVATE LEASE', tool: 'check', stage: 'started', operation_id: uuid(3),
+      capture_bundle: { version: 1, client_instance_id: uuid(1), events: [event], checkpoints: [checkpoint] } }
+    const emitted = request(path, body)
+    page.emit('request', emitted)
+    page.emit('response', response(emitted, { success: true, acknowledgements: [
+      { event_id: uuid(2), client_sequence_no: 1, server_ingest_sequence_no: 22 }], checkpoint_ids: [uuid(8)] }))
+    page.emit('requestfinished', emitted)
+    await capture.settle(100)
+    const saved = capture.evidence.requests[0]
+    assert.equal(saved.client_instance_id, uuid(1))
+    assert.equal(saved.events.length, 1)
+    assert.equal(saved.events[0].material_sha256, digest(event))
+    assert.equal(saved.checkpoints[0].material_sha256, digest(checkpoint))
+    assert.equal(saved.material_sha256, digest(body))
+    assert.equal(saved.acknowledgements[0].event_id, uuid(2))
+    assert.deepEqual(saved.checkpoint_ids, [uuid(8)])
+    assert.equal(capture.evidence.settlement.complete, true)
+    assert.doesNotMatch(JSON.stringify(capture.evidence), /PRIVATE/)
+  }
+})
+
 test('entry clock retains the actual decimal-string wire representation', () => {
   const path = '/api/v1/student/sessions/7/questions/11/'
   const body = { navigation_id: uuid(4), reason: 'navigation_click', client_occurred_at: clocks.client_wall_time_utc,

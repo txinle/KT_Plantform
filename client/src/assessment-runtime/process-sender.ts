@@ -69,6 +69,10 @@ export class ProcessEventCollector {
     this.operationId = operationId;
   }
 
+  closeMetadataKey() {
+    return `close-local:${this.sessionId}:${this.attemptId}:${this.correlationId || 'unscoped'}`;
+  }
+
   _requestHeaders(operationId: string | null = this.operationId ?? null) {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrfToken };
     if (operationId) headers['X-KT-Operation-ID'] = operationId;
@@ -142,13 +146,14 @@ export class ProcessEventCollector {
     if (!this.fetch || !this.isOnline() || (!options.ignoreVisibility && !this.isVisible())) return false;
     const capability = this.captureBundle!;
     const key = `capture-flush:${this.sessionId}`;
+    const roundCheckpoints = new Set((await this.outbox.pendingCheckpoints(false)).map(row => row.checkpoint_id));
     let completed = true;
     while (this.isOnline() && (options.ignoreVisibility || this.isVisible())) {
       let intent = await this.outbox.readMetadata<DurableIntent & { processSnapshot: CaptureBundle }>(key);
       if (!intent) {
         if (resumeOnly) break;
         const batch = await this.outbox.peekBatch(Math.min(MAX_BATCH_SIZE, capability.max_events), options.boundary);
-        const pending = (await this.outbox.pendingCheckpoints(false)).filter(row => row.session_id === this.sessionId
+        const pending = (await this.outbox.pendingCheckpoints(false)).filter(row => roundCheckpoints.has(row.checkpoint_id) && row.session_id === this.sessionId
           && row.highest_emitted_sequence_no <= (options.boundary?.[row.client_instance_id] ?? Number.MAX_SAFE_INTEGER));
         const clientId = batch?.clientInstanceId || pending[0]?.client_instance_id;
         if (!clientId) break;
@@ -180,7 +185,10 @@ export class ProcessEventCollector {
         if (!resumeOnly && state.highestContiguousAcked > this.lastCheckpointedContiguousAck) {
           const pendingProgress = (await this.outbox.pendingCheckpoints()).some(row => row.trigger === 'ack_progress'
             && row.client_instance_id === this.clientInstanceId && row.highest_contiguous_acked_sequence_no >= state.highestContiguousAcked);
-          if (!pendingProgress) await this._createCheckpoint('ack_progress', options.operationId ?? null);
+          if (!pendingProgress) {
+            await this._createCheckpoint('ack_progress', options.operationId ?? null);
+            if (this.autoSchedule) this.scheduleUpload(Math.min(1000, this.uploadDelayMs));
+          }
         }
       } catch { completed = false; break; }
     }
@@ -435,6 +443,14 @@ export class ProcessEventCollector {
     const uploads = pending.map((checkpoint) => this._uploadCheckpoint(checkpoint, options));
     const ownIndex = pending.findIndex((checkpoint) => checkpoint.checkpoint_id === document.checkpoint_id);
     return ownIndex < 0 ? null : uploads[ownIndex];
+  }
+
+  recordCheckpoint(trigger: string) {
+    if (!this.checkpointEndpoint) return Promise.resolve(null);
+    const operationId = this.operationId;
+    const pending = this.recordQueue.then(() => this._createCheckpoint(trigger, operationId ?? null));
+    this.recordQueue = pending.then(() => undefined);
+    return pending;
   }
 
   _uploadCheckpoint(checkpoint: CaptureCheckpoint, options: FlushOptions = {}) {

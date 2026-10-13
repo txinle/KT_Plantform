@@ -165,4 +165,18 @@ describe('capture-v2 writer lease', () => {
       { keepalive: true },
     )
   })
+
+  it('replays the same release credentials after its acknowledgement is lost', async () => {
+    const now = Date.parse('2026-09-06T00:00:00.000Z')
+    const post = vi.fn().mockResolvedValueOnce(lease('lease-one', now + 30_000))
+      .mockRejectedValueOnce(new Error('response lost')).mockResolvedValueOnce({ success: true })
+    const writerLease = createWriterLease({ client: clientFor(post), clientInstanceId,
+      acquireUrl: '/acquire/', renewUrl: '/renew/', releaseUrl: '/release/', now: () => now })
+    await writerLease.beforePointerWrite()
+    await expect(writerLease.release()).rejects.toThrow('response lost')
+    await writerLease.release()
+    expect(post).toHaveBeenCalledTimes(3)
+    expect(post.mock.calls[2]).toEqual(post.mock.calls[1])
+    expect(writerLease.cachedCredentials()).toBeUndefined()
+  })
 })

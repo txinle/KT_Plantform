@@ -51,6 +51,7 @@ export type StudentRuntimeQuestionEntry = components['schemas']['StudentRuntimeQ
   research_tools?: StudentResearchToolConfiguration
   process: components['schemas']['StudentRuntimeProcess'] & {
     capture_bundle?: CaptureBundleCapability
+    close_bundle?: CaptureBundleCapability
     atomic_submission?: { version: 1; max_events: number; max_checkpoints: number; max_bytes: number }
     save_and_leave?: { version: 1; max_events: number; max_checkpoints: number; max_bytes: number }
   }

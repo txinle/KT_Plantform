@@ -10,3 +10,5 @@ COPY .school-client/spa-assets/capture-shell-*.html /opt/kt-frontend-shells/
 COPY client/legacy/js/ /static/js/
 COPY deploy/docker/20-frontend-assets.sh /docker-entrypoint.d/20-frontend-assets.sh
 RUN sed -i 's/\r$//' /docker-entrypoint.d/20-frontend-assets.sh && chmod +x /docker-entrypoint.d/20-frontend-assets.sh
+RUN find /static/spa-assets /opt/kt-frontend-assets /opt/kt-frontend-shells -type d -exec chmod 755 {} + \
+    && find /static/spa-assets /opt/kt-frontend-assets /opt/kt-frontend-shells -type f -exec chmod 644 {} +

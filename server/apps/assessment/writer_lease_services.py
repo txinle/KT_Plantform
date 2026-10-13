@@ -88,11 +88,14 @@ def release_attempt_writer_lease(
     lease_token,
     client_instance_id,
     now=None,
+    _locked_attempt=None,
 ):
     now = now or timezone.now()
     token = uuid.UUID(str(lease_token)); client = uuid.UUID(str(client_instance_id))
     with transaction.atomic():
-        current = Attempt.objects.select_for_update().get(pk=attempt.pk)
+        current = _locked_attempt if _locked_attempt is not None else Attempt.objects.select_for_update().get(pk=attempt.pk)
+        if current.pk != attempt.pk:
+            raise WriterLeaseConflict('writer lease attempt does not match')
         active = (
             current.writer_lease_expires_at
             and current.writer_lease_expires_at > now

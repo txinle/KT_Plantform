@@ -26,6 +26,68 @@ function django(args: string[]) {
   return JSON.parse(result.stdout.trim().split('\n').at(-1)!)
 }
 
+for (const { recovery, bundled } of [{ recovery: 'reload', bundled: true }, { recovery: 'retry', bundled: true }, { recovery: 'retry', bundled: false }]) test(`submitted answers stay locked while closing receipt is delayed and recover after ${recovery}${bundled ? '' : ' with legacy close'}`, async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  test.skip(process.env.CLOSE_BUNDLE_ENABLED !== '1', 'Requires the explicit close bundle candidate.')
+  const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-close-retry-${Date.now()}'; command.handle()`])
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const closeBodies: unknown[] = []
+  if (!bundled) await page.route('**/api/v1/student/sessions/*/questions/*/', async route => {
+    if (route.request().method() !== 'POST') return route.continue()
+    const response = await route.fetch()
+    const body = await response.json()
+    body.data.process.close_bundle.enabled = false
+    await route.fulfill({ response, json: body })
+  })
+  await page.route('**/writer-lease/release/', async route => {
+    const body = route.request().postDataJSON()
+    if (bundled && !body.capture_bundle) return route.continue()
+    closeBodies.push(body)
+    const response = await route.fetch()
+    expect(response.ok(), await response.text()).toBe(true)
+    if (closeBodies.length === 1) { await held; await route.abort('failed'); return }
+    await route.fulfill({ response })
+  })
+  await page.goto('/login/')
+  await page.getByLabel('账号或学号').fill('S002')
+  await page.getByLabel('密码').fill('student123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
+  await page.goto(`/student/courses/${fixture.course.id}/`)
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'E2E Capture V2 五题回放', exact: true }) }).getByRole('button', { name: '开始作业' }).click()
+  await page.getByRole('radio').first().check()
+  const rule = page.locator('[aria-label="题目工具"] .kt-alert').filter({ hasText: '本题要求完成' })
+  await rule.getByRole('button', { name: '开始检查', exact: true }).click()
+  await rule.getByRole('button', { name: '完成检查', exact: true }).click()
+  const current = new URL(page.url()).pathname
+  await page.getByRole('button', { name: '确认提交本题', exact: true }).click()
+  if (await page.locator('[data-confidence-panel]').isVisible()) await page.getByRole('button', { name: /跳过评价/ }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '提交并锁定', exact: true }).click()
+  await expect(page.locator('[data-retry-close]')).toBeVisible()
+  expect(new URL(page.url()).pathname).toBe(current)
+  await expect(page.getByRole('radio').first()).toBeDisabled()
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    await expect(page.locator('[data-retry-close]')).toBeEnabled()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`close-pending-${viewport.width}.png`), fullPage: true })
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.evaluate(() => { document.documentElement.style.zoom = '2' })
+  await page.screenshot({ path: testInfo.outputPath('close-pending-document-zoom200.png'), fullPage: true })
+  await expect(page.locator('[data-retry-close]')).toBeEnabled()
+  await page.evaluate(() => { document.documentElement.style.zoom = '' })
+  release()
+  await expect.poll(() => closeBodies.length).toBe(1)
+  if (recovery === 'reload') await page.reload()
+  else await page.locator('[data-retry-close]').click()
+  await expect(page).not.toHaveURL(url => url.pathname === current)
+  expect(closeBodies).toHaveLength(2)
+  expect(closeBodies[1]).toEqual(closeBodies[0])
+})
+
 test('five short-response types retain trajectories through offline reload, IME and formal feedback', async ({ browserName, page, context }, testInfo) => {
   test.setTimeout(240_000)
   test.skip(browserName !== 'chromium', 'Chromium provides the CDP IME controls used by this capture journey.')

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 
 import { getBootstrapContext, isOfflineBootstrapRecovery } from '@/app/bootstrap'
@@ -55,6 +55,7 @@ let navigationSaving = false
 let pointerWritePromise: Promise<void> | undefined
 const taskClosed = ref(false)
 const pendingSubmission = ref<SubmissionIntent>()
+const pendingClosure = shallowRef<SubmissionResponse>()
 const finishing = ref(false)
 const timedOut = ref(false)
 const online = ref(globalThis.navigator.onLine)
@@ -608,11 +609,32 @@ async function acceptSubmission(response: SubmissionResponse) {
   submissionUncertain.value = false
   submitDialogOpen.value = false
   pendingConfidence.value = undefined
+  const resumedClose = !!pendingClosure.value
+  pendingClosure.value = response
+  await processRuntime?.saveClosureIntent?.(response)
   await processRuntime?.saveSubmissionIntent?.(null)
   pendingSubmission.value = undefined
-  await showFeedback(response)
-  await closeAttemptAndRelease('submit')
+  if (!resumedClose) await showFeedback(response)
+  try {
+    await closeAttemptAndRelease('submit')
+    if (!/^\/student\/sessions\/\d+\/questions\/\d+\//.test(response.next_url)
+      && await processRuntime?.flushBounded(1500) === false) throw new Error('最终收尾检查点尚未确认。')
+  }
+  catch (caught) {
+    error.value = '本题已提交，收尾轨迹尚未确认，请恢复网络后重试。'
+    throw caught
+  }
+  await processRuntime?.saveClosureIntent?.(null)
+  pendingClosure.value = undefined
   await navigate(response.next_url, true, 'submit_next')
+}
+
+async function retrySubmittedClose() {
+  if (!pendingClosure.value || submitting.value) return
+  submitting.value = true
+  try { await acceptSubmission(pendingClosure.value); error.value = '' }
+  catch { error.value = '本题已提交，收尾轨迹尚未确认，请恢复网络后重试。' }
+  finally { submitting.value = false }
 }
 
 async function closeAttemptAndRelease(reason: string, toAssignmentId?: number | null) {
@@ -621,12 +643,20 @@ async function closeAttemptAndRelease(reason: string, toAssignmentId?: number | 
   if (!runtime) return
   if (closePromise?.runtime === runtime) return closePromise.pending
   const pending = (async () => {
-    await runtime.pointerWritesSettled()
-    const confirmed = await timedAssessmentStage('close', async () => toAssignmentId === undefined
-      ? await runtime.closeAttempt(reason)
-      : await runtime.closeAttempt(reason, toAssignmentId))
-    if (confirmed === false) throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。')
-    await timedAssessmentStage('lease', () => lease?.release().catch(() => undefined))
+    const close = async () => {
+      await runtime.pointerWritesSettled()
+      const confirmed = await timedAssessmentStage('close', async () => toAssignmentId === undefined
+        ? await runtime.closeAttempt(reason)
+        : await runtime.closeAttempt(reason, toAssignmentId))
+      if (confirmed === false) throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。')
+      if (!runtime.closesWriterLease) await timedAssessmentStage('lease', () => lease?.release())
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([close(), new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('作答轨迹尚未确认保存，请恢复网络后重试。')), 1500)
+      })])
+    } finally { if (timer) clearTimeout(timer) }
   })()
   closePromise = { runtime, pending }
   try { await pending }
@@ -637,6 +667,7 @@ async function closeAttemptAndRelease(reason: string, toAssignmentId?: number | 
 }
 
 function releaseWriterLeaseOnPageHide() {
+  if (processRuntime?.closesWriterLease && (pendingClosure.value || closePromise?.runtime === processRuntime)) return
   void writerLease?.release({ keepalive: true }).catch(() => undefined)
 }
 
@@ -790,7 +821,7 @@ async function confirmSubmit() {
     await acceptSubmission(response)
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : '提交失败，请重试。'
-    error.value = state.value?.assignment.status === 'submitted'
+    error.value = pendingClosure.value ? '本题已提交，收尾轨迹尚未确认，请恢复网络后重试。' : state.value?.assignment.status === 'submitted'
       ? `上一题已提交，下一题加载失败。${message}` : message
     submitting.value = false
     if (pendingSubmission.value) await recoverSubmission()
@@ -1159,7 +1190,8 @@ async function finishInitialization(
   }
   if (currentState.process.capture_version === 'capture-v2') startRecoveryTimer()
   finishAssessmentOperation()
-  if (pendingSubmission.value) await recoverSubmission()
+  if (pendingClosure.value) await retrySubmittedClose()
+  else if (pendingSubmission.value) await recoverSubmission()
 }
 
 async function prepareCaptureInitialization(generation = initializationGeneration) {
@@ -1215,6 +1247,7 @@ function disposeQuestionRuntime() {
 }
 
 function resetQuestionState() {
+  pendingClosure.value = undefined
   toolsPending.value = false
   captureReady.value = false
   initializationState.value = 'loading'
@@ -1338,6 +1371,7 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
       return
     }
     processRuntime = loadedRuntime
+    pendingClosure.value = loadedRuntime.restoredClosure || undefined
     pendingNavigation.value = loadedRuntime.restoredNavigation || undefined
     navigationUncertain.value = !!pendingNavigation.value || Boolean(pendingNavigationClick)
     loadedRuntime.setOperationId?.(currentAssessmentOperationId())
@@ -1575,6 +1609,7 @@ onBeforeUnmount(() => {
         </section>
         <p v-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
         <button v-if="navigationUncertain" type="button" class="kt-button" data-navigation-retry :disabled="actionBusy" @click="recoverNavigation">重新核验切题保存结果</button>
+        <button v-if="pendingClosure" type="button" class="kt-button" data-retry-close :disabled="actionBusy" @click="retrySubmittedClose">确认收尾并继续</button>
         <button v-if="trajectory && online && captureReady && !answerLocked && saveStatus.includes('失败')" class="kt-button kt-button--secondary" type="button" @click="saveDraft(true).catch(() => undefined)">重试同步</button>
         <section v-if="responseConflict" class="kt-alert kt-alert--warning" aria-label="选择答案版本">
           <p>另一设备保存了不同答案。请选择接下来使用的版本。</p>

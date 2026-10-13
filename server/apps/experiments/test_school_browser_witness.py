@@ -109,6 +109,98 @@ def fixture_rows():
 
 
 class BrowserWitnessTests(SimpleTestCase):
+    def confidence_browser_rows(self):
+        plan={'scenario':'confidence-only-v1','confidence_scale_version':'v2',
+            'confidence_scale':{'minimum':0,'maximum':100,'step':1}, 'students':[]}
+        report={'probes':[]}; sessions=[]; attempts=[]; confidence=[]; events=[]
+        for student in range(2):
+            session=student+1; name=f'confidence-browser-{student}'
+            sessions.append(Row(pk=session,student=Row(username=name)))
+            plan['students'].append({'username':name,'role':'browser',
+                'confidence_actions':['skip' if item%5==0 else 'fill' for item in range(20)],
+                'confidence_values':[None if item%5==0 else 57 for item in range(20)]})
+            probe={'protocol_witness':{'session_ids':[session],'requests':[]},
+                'waterfall':[{'endpoint':'/api/v1/student/attempts/:id/submit/'}]}
+            report['probes'].append(probe)
+            for item in range(20):
+                attempt=student*20+item+1; head=uid(5000+attempt); token=uid(6000+attempt)
+                skipped=item%5==0; probability=None if skipped else 57; assignment=uid(7000+attempt)
+                receipt={'committed':True,'acknowledgements':[],'checkpoint_ids':[],
+                    'final_response_event_id':head,'response_version':1}
+                attempts.append(Row(pk=attempt,session_id=session,assignment=Row(assigned_sequence_index=item+1),
+                    final_response_event_id=head,active_response_event_id=head,submission_token=token,
+                    submission_receipt=receipt,submission_fingerprint='a'*64))
+                confidence.append(Row(pk=assignment,attempt_id=attempt,condition='prompt',
+                    response_status='skipped' if skipped else 'committed',probability=probability,
+                    prompt_shown_at=NOW,committed_at=None if skipped else NOW))
+                probe['protocol_witness']['requests'].append({'path':f'/api/v1/student/attempts/{attempt}/submit/',
+                    'status':200,'submission':{'token':token,'target_event_id':head,'material_sha256':'a'*64},
+                    'receipt':{'committed':True,'final_response_event_id':head,'persisted_material_sha256':js_digest(receipt)}})
+                for kind,payload,client in [('confidence_prompt_shown',{'confidence_assignment_id':assignment,'scale_version':'v2'},None),
+                    ('confidence_skipped' if skipped else 'confidence_committed',{'confidence_assignment_id':assignment,
+                        **({'reason_code':'student_skipped'} if skipped else {'probability':probability})},None),
+                    *[('confidence_observed',{'confidence_assignment_id':assignment,'stage':stage,
+                        'answer_event_id':head,'probability':None},uid(8000+attempt))
+                        for stage in (['presented','skipped'] if skipped else ['presented'])]]:
+                    events.append(Row(attempt_id=attempt,session_id=session,event_type=kind,payload=payload,client_instance_id=client))
+        return plan,report,sessions,attempts,confidence,events
+
+    def test_confidence_browser_gate_checks_all_forty_frozen_final_answer_associations(self):
+        from .management.commands.verify_school_browser_witness import browser_confidence_checks
+        rows=self.confidence_browser_rows()
+        checks=browser_confidence_checks(*rows)
+        self.assertTrue(all(checks.values()),checks)
+        for mutation in (lambda r:setattr(r[4][1],'probability',58),
+                lambda r:r[5].append(copy.deepcopy(r[5][0])),
+                lambda r:r[5][2].payload.update(answer_event_id=uid(999)),
+                lambda r:r[1]['probes'][0]['protocol_witness']['requests'][0]['receipt'].update(persisted_material_sha256='b'*64)):
+            changed=copy.deepcopy(rows);mutation(changed)
+            self.assertFalse(all(browser_confidence_checks(*changed).values()))
+
+    def test_confidence_browser_zero_tools_uses_actual_journal_and_events_not_metrics(self):
+        from .management.commands.verify_school_browser_witness import browser_confidence_checks
+        for mutation in (lambda r:r[1]['probes'][0]['waterfall'].append({'endpoint':'/api/v1/assessment/process/capture-v2/attempts/:id/tools/'}),
+                lambda r:r[1]['probes'][0]['protocol_witness']['requests'].append({'path':'/api/v1/assessment/process/capture-v2/attempts/1/resolve/'}),
+                lambda r:r[5].append(Row(attempt_id=1,session_id=1,event_type='research_tool_requested',payload={},client_instance_id=uid(888))),
+                lambda r:r[1]['probes'][0].pop('waterfall')):
+            rows=self.confidence_browser_rows();rows[1]['probes'][0]['tools_request_count']=0;mutation(rows)
+            self.assertFalse(all(browser_confidence_checks(*rows).values()))
+
+    def test_confidence_browser_uncertain_submission_can_be_confirmed_by_same_material_replay(self):
+        from .management.commands.verify_school_browser_witness import browser_confidence_checks
+        rows=self.confidence_browser_rows()
+        original=copy.deepcopy(rows[1]['probes'][0]['protocol_witness']['requests'][0])
+        original.pop('receipt');original['status']=None
+        rows[1]['probes'][0]['protocol_witness']['requests'].insert(0,original)
+        self.assertTrue(all(browser_confidence_checks(*rows).values()))
+
+    def test_explicit_natural_browser_subset_binds_two_of_a_larger_fixture(self):
+        fixture, report, facts = fixture_rows()
+        fixture.update(browser_usernames=fixture['usernames'][:2], item_count=20)
+        report['workload_version']='natural-180-v1'
+        report['probes']=report['probes'][:2]
+        for key in ('sessions','attempts','events','checkpoints','visits','navigations','submissions'):
+            facts[key]=[row for row in facts[key] if getattr(row,'session_id',getattr(row,'pk',None) if key=='sessions' else None) in (1,2)
+                or key=='submissions' and row.attempt_id in (11,12)]
+        result=verify_witness(fixture,report,**facts)
+        self.assertTrue(result['evidence_binding_passed'],result)
+        self.assertFalse(result['passed'])  # One synthetic response is not a twenty-item natural completion.
+
+    def test_natural_behavior_counts_come_from_the_frozen_sparse_plan(self):
+        from .management.commands.verify_school_browser_witness import natural_behavior_matches
+        plan={'modify_items':[3,9], 'excursion_items':[5,15], 'optional_tool_items':[2,12],
+            'item_dwell_seconds':[45]*20}
+        actions=[{'action':kind,'sequence':item+1,'completed':True} for kind,key in (
+            ('answer_modify','modify_items'),('navigation_next_ready','excursion_items'),
+            ('navigation_return_ready','excursion_items'),('optional_tool','optional_tool_items')) for item in plan[key]]
+        probe={'natural_plan':plan,'actions':actions,'submitted_count':20,
+            'think_waits':[{'item':i,'started_at':0,'completed_at':45,'planned_seconds':45} for i in range(20)]}
+        attempts=[Row(pk=i,status='submitted',final_response_event_id=uid(i+1)) for i in range(20)]
+        events=[Row(event_type='response_transition',attempt_id=i%20) for i in range(22)]
+        self.assertTrue(natural_behavior_matches(probe,attempts,events))
+        probe['actions'].append({'action':'navigation_next_ready','sequence':1,'completed':True})
+        self.assertFalse(natural_behavior_matches(probe,attempts,events))
+
     def verify(self, report_change=None, facts_change=None):
         fixture, report, facts = fixture_rows()
         if report_change: report_change(report)

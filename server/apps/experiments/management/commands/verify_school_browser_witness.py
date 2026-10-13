@@ -4,7 +4,7 @@ import json
 import math
 import os
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -12,10 +12,11 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
 
-from apps.assessment.models import (AssessmentEvent, Attempt, ClientCaptureCheckpoint,
+from apps.assessment.models import (AssessmentEvent, Attempt, ClientCaptureCheckpoint, ConfidenceAssignment,
     ExperimentSession, NavigationReceipt, QuestionVisitEvent, SubmissionEvent, StudentQuestionAssignment)
 from apps.experiments.models import ClassExperimentTask
 from scripts.load.capture_protocol import project_payload
+from scripts.load.natural_workload import confidence_decision
 
 HASH = re.compile(r'^[a-f0-9]{64}$')
 ENTRY_PATH = re.compile(r'^/api/v1/student/sessions/(\d+)/questions/(\d+)/$')
@@ -191,12 +192,117 @@ def _candidate(fixture):
 
 def _fixture_matches(fixture, task):
     return _safe_match(lambda: fixture['database'] == 'kt_e2e' and bool(fixture['run_id'])
-        and fixture['student_count'] == 3 and len(fixture['usernames']) == len(set(fixture['usernames'])) == 3
+        and (type(fixture['student_count']) is int and fixture['student_count'] >= 2
+            and len(fixture['usernames']) == len(set(fixture['usernames'])) == fixture['student_count']
+            and len(fixture['browser_usernames']) == len(set(fixture['browser_usernames'])) == 2
+            and set(fixture['browser_usernames']) <= set(fixture['usernames']) and fixture['item_count'] == 20
+            if 'browser_usernames' in fixture else fixture['student_count'] == 3
+            and len(fixture['usernames']) == len(set(fixture['usernames'])) == 3)
         and all(isinstance(name, str) and name for name in fixture['usernames'])
         and type(fixture['task_id']) is int and type(fixture['course_id']) is int and type(fixture['class_id']) is int
         and task.pk == fixture['task_id'] and task.experiment_id == fixture['experiment_id']
         and task.experiment.course_id == fixture['course_id'] and task.class_group_id == fixture['class_id']
         and all(value is not None for value in _candidate(fixture).values()))
+
+
+def natural_behavior_matches(probe, attempts, events):
+    """A natural completion requires twenty unique answers and only planned optional actions."""
+    def matches():
+        plan = probe['natural_plan']
+        if (len(attempts) != 20 or len({row.pk for row in attempts}) != 20
+                or len({row.final_response_event_id for row in attempts}) != 20
+                or any(row.status != 'submitted' or row.final_response_event_id is None for row in attempts)
+                or probe['submitted_count'] != 20):
+            return False
+        for action, key in (('answer_modify', 'modify_items'), ('navigation_next_ready', 'excursion_items'),
+                ('navigation_return_ready', 'excursion_items'), ('optional_tool', 'optional_tool_items')):
+            actual = [row['sequence'] - 1 for row in probe['actions'] if row['action'] == action and row['completed']]
+            if sorted(actual) != sorted(plan[key]):
+                return False
+        waits = probe['think_waits']
+        if (len(waits) != 20 or {row['item'] for row in waits} != set(range(20))
+                or any(row['planned_seconds'] != plan['item_dwell_seconds'][row['item']]
+                    or row['completed_at'] - row['started_at'] + .01 < row['planned_seconds'] for row in waits)):
+            return False
+        transitions = [row for row in events if row.event_type == 'response_transition']
+        return (len(transitions) >= 20 + len(plan['modify_items'])
+            and {row.attempt_id for row in transitions} == {row.pk for row in attempts})
+    return _safe_match(matches)
+
+
+def browser_confidence_checks(plan, report, sessions, attempts, confidence, events):
+    """Reconcile the two browser students with frozen choices and actual durable evidence."""
+    checks = {key: True for key in ('browser_confidence_evidence_binding',
+        'browser_confidence_exact_frozen_decisions_and_final_heads',
+        'browser_confidence_exact_unique_prompt_and_terminal_events',
+        'browser_confidence_exact_client_observations', 'browser_confidence_acknowledged_receipts_match',
+        'browser_confidence_only_zero_tool_events_and_requests')}
+    try:
+        plans = {row['username']: row for row in plan['students'] if row['role'] == 'browser'}
+        probes = {row['protocol_witness']['session_ids'][0]: row for row in report['probes']}
+        assigned = {row.attempt_id: row for row in confidence}
+        checks['browser_confidence_evidence_binding'] = (
+            len(sessions) == len(probes) == len(plans) == 2
+            and set(probes) == {row.pk for row in sessions}
+            and set(plans) == {row.student.username for row in sessions}
+            and all(isinstance(row.get('waterfall'), list) and row['waterfall']
+                and all(isinstance(request.get('endpoint'), str) for request in row['waterfall']) for row in probes.values()))
+        checks['browser_confidence_exact_frozen_decisions_and_final_heads'] = (
+            len(attempts) == len(confidence) == len(assigned) == 40
+            and set(assigned) == {row.pk for row in attempts})
+        checks['browser_confidence_only_zero_tool_events_and_requests'] = (
+            not any(row.event_type in ('research_tool', 'research_tool_requested', 'research_tool_observed') for row in events)
+            and not any(re.search(r'/(?:tools|resolve)/$', request.get(field, ''))
+                for probe in probes.values() for field, requests in (
+                    ('endpoint', probe.get('waterfall', [])), ('path', probe['protocol_witness']['requests'])) for request in requests))
+        for session in sessions:
+            student, probe = plans[session.student.username], probes[session.pk]
+            rows = sorted((row for row in attempts if row.session_id == session.pk), key=lambda row: row.assignment.assigned_sequence_index)
+            checks['browser_confidence_exact_frozen_decisions_and_final_heads'] &= (
+                len(rows) == 20 and {row.assignment.assigned_sequence_index for row in rows} == set(range(1, 21)))
+            for index, attempt in enumerate(rows):
+                decision = confidence_decision(student, index, plan['confidence_scale'], str(attempt.final_response_event_id))
+                status, probability = decision['status'], decision.get('probability')
+                row = assigned.get(attempt.pk)
+                checks['browser_confidence_exact_frozen_decisions_and_final_heads'] &= (
+                    row is not None and row.condition == 'prompt' and row.response_status == status
+                    and row.probability == probability and row.prompt_shown_at is not None
+                    and ((row.committed_at is not None) == (status == 'committed'))
+                    and attempt.final_response_event_id is not None
+                    and str(attempt.active_response_event_id) == str(attempt.final_response_event_id))
+                actual = [event for event in events if event.attempt_id == attempt.pk]
+                prompts = [event for event in actual if event.event_type == 'confidence_prompt_shown']
+                terminals = [event for event in actual if event.event_type in ('confidence_committed', 'confidence_skipped')]
+                checks['browser_confidence_exact_unique_prompt_and_terminal_events'] &= (
+                    row is not None and len(prompts) == len(terminals) == 1
+                    and prompts[0].client_instance_id is None and terminals[0].client_instance_id is None
+                    and prompts[0].payload.get('confidence_assignment_id') == str(row.pk)
+                    and prompts[0].payload.get('scale_version') == plan['confidence_scale_version']
+                    and terminals[0].payload.get('confidence_assignment_id') == str(row.pk)
+                    and terminals[0].event_type == ('confidence_committed' if status == 'committed' else 'confidence_skipped')
+                    and (terminals[0].payload.get('probability') == probability if status == 'committed'
+                        else terminals[0].payload.get('reason_code') == 'student_skipped'))
+                observed = [event for event in actual if event.event_type == 'confidence_observed']
+                checks['browser_confidence_exact_client_observations'] &= (
+                    row is not None and Counter(event.payload.get('stage') for event in observed)
+                        == Counter(['presented'] + (['skipped'] if status == 'skipped' else []))
+                    and all(event.client_instance_id is not None and event.payload.get('confidence_assignment_id') == str(row.pk)
+                        and event.payload.get('answer_event_id') == str(attempt.final_response_event_id)
+                        and event.payload.get('probability') is None for event in observed))
+                requests = [request for request in probe['protocol_witness']['requests'] if request.get('submission')
+                    and request['path'] == f'/api/v1/student/attempts/{attempt.pk}/submit/']
+                confirmed = [request for request in requests if type(request.get('status')) is int
+                    and 200 <= request['status'] < 300 and request.get('receipt', {}).get('committed') is True]
+                checks['browser_confidence_acknowledged_receipts_match'] &= bool(confirmed) and all(
+                    request['submission']['token'] == str(attempt.submission_token)
+                    and request['submission']['target_event_id'] == str(attempt.final_response_event_id)
+                    and request['submission']['material_sha256'] == attempt.submission_fingerprint for request in requests) and all(
+                    request['receipt']['final_response_event_id'] == str(attempt.final_response_event_id)
+                    and request['receipt']['persisted_material_sha256'] == js_digest({
+                        key: attempt.submission_receipt.get(key) for key in SUBMISSION_RECEIPT_FIELDS}) for request in confirmed)
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+        checks['browser_confidence_evidence_binding'] = False
+    return checks
 
 
 def _missing_ranges(highest, known):
@@ -212,7 +318,7 @@ def _missing_ranges(highest, known):
 
 def _local_storage_observations(probes, sessions, attempts, assignments, observations, acknowledgements):
     """Read-only snapshot summaries extend the same immutable material comparisons."""
-    checks = {'all_storage_reads_complete_and_scoped': len(probes) == 3,
+    checks = {'all_storage_reads_complete_and_scoped': len(probes) == len(sessions) and bool(probes),
         'local_record_counts_and_delivery_states_match': True, 'stream_boundaries_reconciled': True,
         'intent_snapshot_boundaries_reconciled': True, 'all_local_intent_material_available': True}
     ids = {kind: set() for kind in observations}
@@ -370,7 +476,7 @@ def _local_storage_observations(probes, sessions, attempts, assignments, observa
 
 
 def verify_witness(fixture, report, *, task, sessions, events, checkpoints, attempts, visits, navigations, submissions,
-                   assignments=None):
+                   assignments=None, plan=None, confidence=None):
     """No writes or repair. Missing unacknowledged facts remain unknown."""
     checks = {}
     session_map = {row.pk: row for row in sessions}
@@ -380,14 +486,16 @@ def verify_witness(fixture, report, *, task, sessions, events, checkpoints, atte
     visits_map = {row.pk: row for row in visits}
     candidate = _candidate(fixture)
     probes = report.get('probes', [])
+    browser_names = fixture.get('browser_usernames', fixture.get('usernames', []))
+    browser_count = len(browser_names)
     checks['fixture_task_course_class_binding'] = _fixture_matches(fixture, task)
-    checks['three_independent_fixture_sessions_students'] = _safe_match(lambda: len(sessions) == len(session_map) == 3
-        and {row.student.username for row in sessions} == set(fixture['usernames'])
-        and len({row.student_id for row in sessions}) == 3
+    checks['three_independent_fixture_sessions_students'] = _safe_match(lambda: len(sessions) == len(session_map) == browser_count
+        and {row.student.username for row in sessions} == set(browser_names)
+        and len({row.student_id for row in sessions}) == browser_count
         and all(row.class_task_id == task.pk for row in sessions)
         and all(row.session_id in session_map for row in attempts))
-    checks['real_nonempty_candidate_bound_probes'] = _safe_match(lambda: len(probes) == 3
-        and {row['protocol_witness']['probe'] for row in probes} == {1, 2, 3}
+    checks['real_nonempty_candidate_bound_probes'] = _safe_match(lambda: len(probes) == browser_count
+        and {row['protocol_witness']['probe'] for row in probes} == set(range(1, browser_count + 1))
         and all(row['protocol_witness']['schema_version'] == 1
             and row['protocol_witness']['evidence_kind'] == 'real_browser_network_witness'
             and row['protocol_witness']['candidate'] == candidate
@@ -572,13 +680,31 @@ def verify_witness(fixture, report, *, task, sessions, events, checkpoints, atte
             f'local_{kind}_unacknowledged_missing': len(local_unknown - actual)})
     counts['local_intents_unknown_material'] = unknown_intents
     counts['local_record_count'] = local_record_count
+    if plan is not None and plan.get('scenario') == 'confidence-only-v1':
+        checks.update(browser_confidence_checks(plan, report, sessions, attempts, confidence or [], events))
+        counts['browser_confidence_assignments'] = len(confidence or [])
     binding_keys = ('fixture_task_course_class_binding', 'three_independent_fixture_sessions_students',
         'real_nonempty_candidate_bound_probes', 'request_and_ack_shapes_and_session_ownership',
         'nonempty_emitted_events_checkpoints_and_entries')
+    if 'browser_confidence_evidence_binding' in checks:
+        binding_keys += ('browser_confidence_evidence_binding',)
     binding = all(checks[key] for key in binding_keys)
     integrity = all(checks.values())
-    completed = (_safe_match(lambda: report['completed'] is True and len(probes) == 3
-        and all(row['completed'] is True for row in probes)) and len(sessions) == 3
+    natural_passed = True
+    if 'browser_usernames' in fixture:
+        natural_passed = _safe_match(lambda: report['workload_version'] == 'natural-180-v1' and plan is not None
+            and all(natural_behavior_matches(probe,
+                [row for row in attempts if row.session_id == probe['protocol_witness']['session_ids'][0]],
+                [row for row in events if row.session_id == probe['protocol_witness']['session_ids'][0]])
+                and len([row for row in visits if row.session_id == probe['protocol_witness']['session_ids'][0]])
+                    == 20 + 2 * len(probe['natural_plan']['excursion_items'])
+                for probe in probes)
+            and (plan['workload_version'] == 'natural-180-v1' and plan['task_id'] == fixture['task_id']
+                and all(probe['natural_plan'] == next(row for row in plan['students']
+                    if row['username'] == session_map[probe['protocol_witness']['session_ids'][0]].student.username
+                    and row['role'] == 'browser') for probe in probes)))
+    completed = (natural_passed and _safe_match(lambda: report['completed'] is True and len(probes) == browser_count
+        and all(row['completed'] is True for row in probes)) and len(sessions) == browser_count
         and all(row.status == 'completed' and row.terminal_at is not None for row in sessions))
     local_complete = local_checks['all_storage_reads_complete_and_scoped']
     local_boundary = (local_complete and local_checks['local_record_counts_and_delivery_states_match']
@@ -594,6 +720,7 @@ def verify_witness(fixture, report, *, task, sessions, events, checkpoints, atte
         'raw_fact_integrity_failed': binding and not integrity,
         'transport_observations_settled': settled, 'all_emitted_material_acknowledged': all_confirmed,
         'workflow_completed': completed, 'passed': full_passed, 'network_witness_passed': network_passed,
+        'natural_behavior_passed': natural_passed,
         'verification_scope': 'observed_network_and_read_only_indexeddb_material', 'local_storage_checks': local_checks,
         'local_storage_read_complete': local_complete, 'local_boundary_reconciled': local_boundary,
         'all_known_local_material_acknowledged': local_confirmed,
@@ -614,12 +741,14 @@ class Command(BaseCommand):
         parser.add_argument('--manifest', required=True)
         parser.add_argument('--browser-report', required=True)
         parser.add_argument('--output', required=True)
+        parser.add_argument('--plan')
 
     def handle(self, *args, **options):
         require_isolated_database()
         try:
             fixture = json.loads(Path(options['manifest']).read_text(encoding='utf-8-sig'))
             report = json.loads(Path(options['browser_report']).read_text(encoding='utf-8-sig'))
+            plan = json.loads(Path(options['plan']).read_text(encoding='utf-8-sig')) if options.get('plan') else None
         except (OSError, ValueError):
             raise CommandError('Private fixture and browser report must be readable JSON') from None
         if not isinstance(fixture, dict) or not isinstance(report, dict):
@@ -630,13 +759,15 @@ class Command(BaseCommand):
                     cursor.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
                 task = ClassExperimentTask.objects.select_related('experiment').filter(pk=fixture.get('task_id')).first()
                 if not _fixture_matches(fixture, task):
-                    raise CommandError('Dedicated three-student fixture task/course/class/candidate binding required')
+                    raise CommandError('Dedicated fixture task/course/class/candidate and explicit browser account binding required')
                 scoped = ExperimentSession.objects.filter(class_task_id=task.pk)
                 if scoped.exclude(student__username__in=fixture['usernames']).exists():
                     raise CommandError('Task contains sessions outside the private fixture')
-                sessions = list(scoped.filter(student__username__in=fixture['usernames']).select_related('student'))
+                sessions = list(scoped.filter(student__username__in=fixture.get('browser_usernames',fixture['usernames'])).select_related('student'))
                 ids = [row.pk for row in sessions]
-                result = verify_witness(fixture, report, task=task, sessions=sessions,
+                result = verify_witness(fixture, report, task=task, sessions=sessions, plan=plan,
+                    confidence=list(ConfidenceAssignment.objects.filter(attempt__session_id__in=ids))
+                        if plan is not None and plan.get('scenario') == 'confidence-only-v1' else None,
                     events=list(AssessmentEvent.objects.filter(session_id__in=ids)),
                     checkpoints=list(ClientCaptureCheckpoint.objects.filter(session_id__in=ids)),
                     attempts=list(Attempt.objects.filter(session_id__in=ids)),

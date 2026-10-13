@@ -9,7 +9,7 @@
 - 基线工具链：Python 3.13、Django 5.2.16、PostgreSQL 17、Node 24、Vue 3.5、Vite 8。Compose 需支持 `!override`/`!reset`。
 - 外层 TLS Nginx 转发到内层 loopback 8080，覆盖 `X-Forwarded-Proto`，保留 Host、Cookie 和业务 URL；应用和数据库不开放 host 端口。
 - `SCHOOL_RUNTIME_ISOLATION_ENABLED=1` 是显式激活条件。角色、排期、反馈和授权仍由 Django 判断。
-- 源码 overlay 默认核心 12、学生读 2、教师读 1 worker。最终候选使用独立冻结配置的 16/2/1；该配置不是已通过验收的生产推荐值。
+- 学校基础 overlay 默认核心 12、学生读 2、教师读 1 worker；学校测试 overlay 明确固定 16/2/1，学生读 2 CPU，准入容量仍为 8。`SCHOOL_TEST_WEB_WORKERS` 仅用于隔离测试的显式单变量对照，默认 16；该配置尚未通过 180 人容量验收。
 - Nginx 对 `contracts/frontend-routes.json` 登记的 68 条页面路径提供前端 HTML，未知路径不做 SPA 回退；API 依据显式白名单分配读取池。作答写入、登录和发布使用核心池，既有导出 job 创建继续使用教师池。
 - PgBouncer 别名 `kt_core`、`kt_student`、`kt_teacher`、`kt_background` 映射到同一个 `POSTGRES_DB`，Django 通过 `POSTGRES_POOL_ALIAS` 选择真实池。核心 16+2、学生 6+1、教师 4+1、后台 4+1。
 - 研究、比较、发布、导出使用独立 worker。scheduler 直接连接 PostgreSQL，保留 session advisory lock，不能改成 transaction pool。
@@ -20,6 +20,14 @@
 使用 `deploy/docker-compose.school-test.yml`、`deploy/docker-compose.school-test-external-db.yml`，project 固定为 `kt-school-e2e`，独立 `kt_e2e` 数据库和专用角色。测试容器使用独立网络；现有 PostgreSQL 以显式 `school-test-postgres` 别名加入该网络。不能把测试服务加入生产网络或将 fixture 写入生产数据库。
 
 激活前核对 Compose 解析、镜像绑定、数据库 owner、连接预算、主机可用内存及峰值余量。至少保留 2 GiB 主机可用内存，按实测峰值加 30% 检查总工作集。只记录共享 PostgreSQL 现有限制；不关闭 fsync、同步提交，不调整 NTP 或生产卷，不用延长超时掩盖失败。
+
+Redis 会话仅用于显式隔离候选：在上述学校测试 overlay、`kt-school-e2e` project 和 `kt_e2e` 数据库下，同时设置 `SCHOOL_REDIS_SESSION_ENABLED=1`，并给 Compose 增加 `--profile school-redis-session`。核心、学生读、教师读使用同一 `redis-session:6379/0` 和键前缀；服务固定 Redis 7.4、AOF `appendfsync always`、`noeviction`、256 MiB 数据上限、512 MiB 容器上限、1 CPU 和独立持久卷。默认数据库会话、Cookie 名称/属性和 CSRF 契约保持原样。开关开启而服务不可用时返回明确 503，不回退数据库；响应阶段保存失败可能发生在业务已提交之后，必须先按原 token 确认状态。
+
+学校测试 overlay 将 `SESSION_REDIS_TIMEOUT_SECONDS` 默认设为 5 秒，可显式覆盖。2026-10-13 的 1 秒候选配置在响应阶段记录到约 1.002 秒的会话保存超时及 503，失败轮次保留；5 秒配置使用新数据重新验收。该值只是 Redis 访问上限，35 秒操作预算、提交切题 P95≤3 秒/P99≤5 秒和草稿保存 P95≤1 秒均不放宽。AOF always、noeviction、资源限制及故障时的明确 503 保持不变。
+
+启用及回滚均需先排空候选请求，再清除浏览器会话 Cookie 并重新登录；两种存储之间不迁移会话、不复用旧 Cookie 所指的认证状态。回滚设置 `SCHOOL_REDIS_SESSION_ENABLED=0`，移除 Redis profile，重建候选应用；保留会话持久卷和业务数据库。禁止将该候选会话开关复制到生产配置。
+
+本地验证使用 Windows Cygwin Redis 7.4.3：可执行文件 `C:\Users\31606\Downloads\ATOP-tooling\Redis-7.4.3-Windows-x64-cygwin\Redis-7.4.3-Windows-x64-cygwin\redis-server.exe`，数据目录 `C:\Users\31606\Downloads\ATOP-tooling\Redis-7.4.3-session-test-data`，监听 `127.0.0.1:56379`；测试键与浏览器验证键使用独立前缀。已检查 AOF always、noeviction、TTL、会话故障与正常重启持久化；这些本地验证不等同 Linux Docker 资源一致性或异常断电验证。
 
 保留的可复用工具：
 

@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   createProcessRuntime: vi.fn(),
   prepareOfflineQuestion: vi.fn(),
   runtime: {
+    closesWriterLease: false,
     writerLease: undefined as import('./writer-lease').WriterLease | undefined,
     serializePointerWrite: vi.fn(),
     captureMutation: undefined as undefined | ReturnType<typeof vi.fn>,
@@ -41,6 +42,7 @@ const mocks = vi.hoisted(() => ({
     closeAttempt: vi.fn(),
     dispose: vi.fn(),
     saveSubmissionIntent: vi.fn(),
+    saveClosureIntent: vi.fn(),
     freezeSubmissionSnapshot: vi.fn(),
     acknowledgeSubmission: vi.fn(),
     prepareNavigation: vi.fn(),
@@ -159,10 +161,17 @@ function preparationFailure() {
   )
 }
 
+const confidenceOnlyContract = {
+  confidence_assignment_id: '31', scale_version: 'v2', prompt_version: 'v1', minimum: 0, maximum: 100, step: 1,
+  prompt_shown_url: '/assessment/process/confidence/13/prompt-shown/',
+  commit_url: '/assessment/process/confidence/13/commit/', skip_url: '/assessment/process/confidence/13/skip/',
+}
+
 describe('StudentAssessment', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.runtime.captureMutation = undefined
+    mocks.runtime.closesWriterLease = false
     mocks.offlineBootstrapRecovery = false
     mocks.pendingEntry.mockResolvedValue(null)
     mocks.beforeRouteUpdate = undefined
@@ -210,6 +219,7 @@ describe('StudentAssessment', () => {
     mocks.runtime.pointerWritesSettled.mockImplementation(() => pointerQueue)
     mocks.runtime.record.mockResolvedValue({ recorded: true })
     mocks.runtime.saveSubmissionIntent.mockImplementation(async (intent) => { structuredClone(intent) })
+    mocks.runtime.saveClosureIntent.mockImplementation(async (receipt) => { structuredClone(receipt) })
     mocks.runtime.freezeSubmissionSnapshot.mockImplementation(async (intent) => ({ ...structuredClone(intent), processSnapshot: {
       client_instance_id: mocks.runtime.clientInstanceId, event_boundary: 8, events: [],
       checkpoints: [{ checkpoint_id: 'checkpoint-one' }],
@@ -228,6 +238,102 @@ describe('StudentAssessment', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('does not mount or poll disabled tools across 29 seconds in a confidence-only question', async () => {
+    vi.useFakeTimers()
+    mocks.api.question.mockResolvedValue(captureV2Question({ remaining_seconds: 600,
+      pending_confidence: confidenceOnlyContract,
+      research_tools: { doubt_enabled: false, check_enabled: false, hints: [], rules: [] },
+    }))
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(wrapper.findComponent({ name: 'StudentResearchTools' }).exists()).toBe(false)
+      await vi.advanceTimersByTimeAsync(29_000)
+      await flushPromises()
+      expect(wrapper.findComponent({ name: 'StudentResearchTools' }).exists()).toBe(false)
+      expect(wrapper.find('[aria-label="题目工具"]').exists()).toBe(false)
+      expect(mocks.api.post.mock.calls.filter(call => /\/(tools|resolve)\//.test(String(call[0])))).toHaveLength(0)
+      expect(mocks.runtime.record.mock.calls.filter(call => String(call[0]).includes('research_tool'))).toHaveLength(0)
+      await wrapper.get('[data-submit-request]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-confidence-panel]').exists()).toBe(true)
+    } finally { wrapper.unmount() }
+  })
+
+  it('keeps skipped confidence bound to the final answer and ignores duplicate confirmation clicks', async () => {
+    const captured = captureV2Question({ pending_confidence: confidenceOnlyContract })
+    captured.process.active_response_event_id = '00000000-0000-4000-8000-000000000050'
+    Object.assign(captured.process, { atomic_submission: { version: 1 } })
+    mocks.api.question.mockResolvedValue(captured)
+    mocks.api.post.mockResolvedValue({ success: true, client_instance_id: mocks.runtime.clientInstanceId,
+      lease_token: '00000000-0000-4000-8000-000000000099', expires_at: '2099-01-01T00:00:00Z' })
+    let commit!: (value: unknown) => void
+    mocks.api.submit.mockImplementation(() => new Promise(resolve => { commit = resolve }))
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      await wrapper.get('[data-submit-request]').trigger('click')
+      await flushPromises()
+      const skip = wrapper.findAll('button').find(button => button.text() === '跳过评价')!
+      await Promise.all([skip.trigger('click'), skip.trigger('click')])
+      await flushPromises()
+      const confirm = wrapper.get('[data-submit-confirm]')
+      await Promise.all([confirm.trigger('click'), confirm.trigger('click')])
+      await flushPromises()
+      expect(mocks.api.submit).toHaveBeenCalledOnce()
+      expect(mocks.api.submit.mock.calls[0]?.[5]).toEqual({ status: 'skipped', answer_event_id: captured.process.active_response_event_id })
+      expect(mocks.api.post.mock.calls.some(call => String(call[0]).endsWith('/skip/'))).toBe(false)
+      commit({ success: true, status: 'submitted', committed: true, next_url: '/student/sessions/7/questions/12/',
+        final_response_event_id: captured.process.active_response_event_id, response_version: 1, acknowledgements: [], checkpoint_ids: ['checkpoint-one'] })
+      await flushPromises()
+      expect(mocks.push).toHaveBeenCalledWith({ path: '/student/sessions/7/questions/12/', query: { reason: 'submit_next' } })
+    } finally { wrapper.unmount() }
+  })
+
+  it.each(['recovered acknowledgement', 'last question completion'])('preserves filled final-answer confidence through %s', async mode => {
+    const captured = captureV2Question({ pending_confidence: confidenceOnlyContract })
+    captured.process.active_response_event_id = '00000000-0000-4000-8000-000000000050'
+    Object.assign(captured.process, { atomic_submission: { version: 1 } })
+    mocks.api.question.mockResolvedValue(captured)
+    mocks.api.post.mockResolvedValue({ success: true, client_instance_id: mocks.runtime.clientInstanceId,
+      lease_token: '00000000-0000-4000-8000-000000000099', expires_at: '2099-01-01T00:00:00Z' })
+    const result = { success: true, status: 'submitted', committed: true,
+      next_url: mode === 'last question completion' ? '/student/sessions/7/summary/' : '/student/sessions/7/questions/12/',
+      final_response_event_id: captured.process.active_response_event_id, response_version: 1,
+      acknowledgements: [], checkpoint_ids: ['checkpoint-one'] }
+    if (mode === 'recovered acknowledgement') {
+      mocks.api.submit.mockRejectedValueOnce(new TypeError('network lost after commit'))
+      mocks.api.recover.mockResolvedValue({ status: 'submitted', submission_matches: true, can_continue: false, result })
+    } else mocks.api.submit.mockResolvedValue(result)
+    const originalLocation = globalThis.location
+    const assign = vi.fn()
+    if (mode === 'last question completion') vi.stubGlobal('location', { assign })
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      await wrapper.get('[data-submit-request]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-confidence-number]').setValue('57')
+      await wrapper.get('[data-confidence-submit]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-submit-confirm]').trigger('click')
+      await flushPromises()
+      expect(mocks.api.submit).toHaveBeenCalledOnce()
+      expect(mocks.api.submit.mock.calls[0]?.[5]).toEqual({ status: 'committed', probability: 57,
+        answer_event_id: captured.process.active_response_event_id })
+      if (mode === 'last question completion') {
+        expect(assign).toHaveBeenCalledWith(result.next_url)
+        expect(mocks.push).not.toHaveBeenCalled()
+      } else {
+        expect(mocks.api.recover).toHaveBeenCalledWith(13, expect.any(String))
+        expect(mocks.push).toHaveBeenCalledWith({ path: result.next_url, query: { reason: 'submit_next' } })
+      }
+    } finally {
+      wrapper.unmount()
+      if (mode === 'last question completion') vi.stubGlobal('location', originalLocation)
+    }
   })
 
   it('blocks submit, skip, finish and navigation while a research tool is awaiting confirmation', async () => {
@@ -616,6 +722,69 @@ describe('StudentAssessment', () => {
     expect(mocks.push).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('作答轨迹尚未确认保存')
     wrapper.unmount()
+  })
+
+  it('retries a durably stored submitted close without submitting or showing feedback twice', async () => {
+    mocks.runtime.closeAttempt.mockResolvedValueOnce(false).mockResolvedValue(true)
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    await wrapper.findAll<HTMLInputElement>('input[name="answer"]')[1]!.setValue(true)
+    await wrapper.get('[data-submit-request]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-submit-confirm]').trigger('click')
+    await flushPromises()
+    expect(mocks.push).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('本题已提交，收尾轨迹尚未确认')
+    await wrapper.get('[data-retry-close]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.submit).toHaveBeenCalledOnce()
+    expect(mocks.runtime.closeAttempt).toHaveBeenCalledTimes(2)
+    expect(mocks.push).toHaveBeenCalledOnce()
+    wrapper.unmount()
+  })
+
+  it('does not independently release a lease while a bundled close is unconfirmed on page hide', async () => {
+    mocks.api.question.mockResolvedValue(captureV2Question())
+    mocks.api.post.mockResolvedValue({ success: true, client_instance_id: mocks.runtime.clientInstanceId,
+      lease_token: '00000000-0000-4000-8000-000000000099', expires_at: '2099-01-01T00:00:00Z' })
+    mocks.runtime.closesWriterLease = true
+    mocks.runtime.closeAttempt.mockResolvedValueOnce(false)
+    const release = vi.spyOn(mocks.runtime.writerLease!, 'release')
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    await wrapper.findAll<HTMLInputElement>('input[name="answer"]')[1]!.setValue(true)
+    await wrapper.get('[data-submit-request]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-submit-confirm]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-retry-close]').exists()).toBe(true)
+    window.dispatchEvent(new Event('pagehide'))
+    await flushPromises()
+    expect(release).not.toHaveBeenCalled()
+    wrapper.unmount()
+    release.mockRestore()
+  })
+
+  it('bounds the entire submitted close even when pointer recovery is still waiting', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    mocks.api.submit.mockImplementation(async () => {
+      mocks.runtime.pointerWritesSettled.mockImplementation(() => new Promise(() => {}))
+      return { success: true, status: 'submitted', confidence_required: false, next_url: '/student/sessions/7/questions/12/' }
+    })
+    await wrapper.findAll<HTMLInputElement>('input[name="answer"]')[1]!.setValue(true)
+    await wrapper.get('[data-submit-request]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-submit-confirm]').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1500)
+    await flushPromises()
+    expect(wrapper.text()).toContain('本题已提交，收尾轨迹尚未确认')
+    expect(wrapper.get('[data-retry-close]').attributes('disabled')).toBeUndefined()
+    expect(mocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+    vi.useRealTimers()
   })
 
   it('includes submission feedback in the closing evidence before entering another attempt', async () => {

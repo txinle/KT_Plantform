@@ -1,14 +1,25 @@
 from pathlib import Path
 import os
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 REPOSITORY_DIR = BASE_DIR.parent
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "local-development-key-change-before-production")
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED = os.getenv('SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED', '0') == '1'
+SCHOOL_REDIS_SESSION_ENABLED = os.getenv('SCHOOL_REDIS_SESSION_ENABLED', '0') == '1'
+SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+SESSION_REDIS_URL = os.getenv('SESSION_REDIS_URL', 'redis://redis-session:6379/0')
+SESSION_REDIS_KEY_PREFIX = os.getenv('SESSION_REDIS_KEY_PREFIX', 'kt:school:session:v1:')
+SESSION_REDIS_TIMEOUT_SECONDS = float(os.getenv('SESSION_REDIS_TIMEOUT_SECONDS', '1'))
+if SCHOOL_REDIS_SESSION_ENABLED:
+    if os.getenv('SCHOOL_RUNTIME_ISOLATION_ENABLED') != '1' or os.getenv('POSTGRES_DB') != 'kt_e2e':
+        raise ImproperlyConfigured('Redis sessions require the explicit isolated school candidate database kt_e2e')
+    SESSION_ENGINE = 'apps.accounts.redis_sessions'
 ASSESSMENT_CONNECT_RETRY_ENABLED = os.getenv('ASSESSMENT_CONNECT_RETRY_ENABLED', '0') == '1'
 CAPTURE_V2_ENABLED = os.getenv('CAPTURE_V2_ENABLED', '0') == '1'
 CAPTURE_BUNDLE_ENABLED = os.getenv('CAPTURE_BUNDLE_ENABLED', '1') == '1'
+CLOSE_BUNDLE_ENABLED = os.getenv('CLOSE_BUNDLE_ENABLED', '0') == '1'
 ASSESSMENT_ADMISSION_ENABLED = os.getenv('ASSESSMENT_ADMISSION_ENABLED', '0') == '1'
 ASSESSMENT_ADMISSION_TASK_IDS = frozenset(
     filter(None, os.getenv('ASSESSMENT_ADMISSION_TASK_IDS', '').split(','))
@@ -74,8 +85,8 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
     "apps.api.middleware.RequestIdMiddleware",
+    "apps.accounts.session_middleware.SessionMiddleware",
     "apps.accounts.middleware.CanonicalPublicOriginMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",

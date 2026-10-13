@@ -12,7 +12,7 @@ from apps.analytics.research_materialization_jobs import coalesce_session_materi
 from .capture_v2_services import ResponseVersionConflict, ingest_capture_batch, uses_capture_v2
 from .event_batch_services import ProcessRequestError, parse_uuid, require_exact_mapping
 from .models import Attempt, ExperimentSession
-from .recording_capture_services import record_client_capture_checkpoint
+from .recording_capture_services import capture_checkpoint_context, record_client_capture_checkpoint
 from .services import _validate_course_access, finish_session, save_draft, submit_attempt
 
 MAX_EVENTS = 100
@@ -128,7 +128,9 @@ def submit_attempt_bundle(*, student, attempt_id, document, request_received_at=
         session = ExperimentSession.objects.select_for_update(of=('self',)).select_related(
             'version__experiment__course', 'capture_contract', 'class_task',
         ).get(pk=session_id, student=student)
-        attempt = Attempt.objects.select_for_update(of=('self',)).get(pk=attempt_id, session=session)
+        attempt = Attempt.objects.select_for_update(of=('self',)).select_related(
+            'assignment__snapshot', 'assignment__item_instance', 'current_response_snapshot', 'active_response_event',
+        ).get(pk=attempt_id, session=session)
         attempt.session = session
         bundle, fingerprint = _validate_bundle(attempt, document)
         if attempt.status == Attempt.Status.SUBMITTED:
@@ -143,18 +145,20 @@ def submit_attempt_bundle(*, student, attempt_id, document, request_received_at=
             if bundle['events']:
                 acknowledgements = ingest_capture_batch(student=student, document={
                     'client_instance_id': bundle['client_instance_id'], 'events': bundle['events'],
-                }, request_received_at=request_received_at)
+                }, request_received_at=request_received_at, locked_sessions={session.pk: session},
+                    locked_attempts={attempt.pk: attempt})
+            checkpoint_context = capture_checkpoint_context(student=student, bundle=bundle, session=session)
             checkpoint_ids = [str(record_client_capture_checkpoint(
-                student=student, document=checkpoint,
+                student=student, document=checkpoint, context=checkpoint_context,
             ).pk) for checkpoint in bundle['checkpoints']]
             client_time = parse_datetime(document['client_clicked_at']) if document.get('client_clicked_at') else None
             try:
-                save_draft(attempt.pk, None, client_time,
+                attempt = save_draft(attempt.pk, None, client_time,
                            writer_lease_token=document.get('writer_lease_token'),
                            writer_client_instance_id=document.get('writer_client_instance_id'),
                            request_received_at=request_received_at,
                            target_event_id=document.get('target_event_id'),
-                           expected_version=bundle['expected_version'])
+                           expected_version=bundle['expected_version'], _locked_attempt=attempt)
             except ResponseVersionConflict as error:
                 raise ProcessRequestError('response_version_conflict', status=409) from error
             attempt = submit_attempt(attempt.pk, token, client_time,
@@ -162,7 +166,7 @@ def submit_attempt_bundle(*, student, attempt_id, document, request_received_at=
                                      writer_client_instance_id=document.get('writer_client_instance_id'),
                                      request_received_at=request_received_at,
                                      target_event_id=document.get('target_event_id'),
-                                     confidence_response=document.get('confidence'))
+                                     confidence_response=document.get('confidence'), _locked_attempt=attempt)
             receipt = {
                 'committed': True, 'acknowledgements': acknowledgements,
                 'checkpoint_ids': checkpoint_ids,

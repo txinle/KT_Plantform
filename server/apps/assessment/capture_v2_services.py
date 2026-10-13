@@ -77,7 +77,7 @@ def prepare_transition(parsed):
 
 
 @transaction.atomic
-def ingest_capture_batch(*, student, document, request_received_at=None, locked_sessions=None, locked_attempts=None):
+def ingest_capture_batch(*, student, document, request_received_at=None, locked_sessions=None, locked_attempts=None, recording_close=False):
     # Session locks precede attempt/event locks throughout assessment writes.
     if not isinstance(document, dict) or not isinstance(document.get('events'), list):
         raise ProcessRequestError('invalid_request')
@@ -92,6 +92,7 @@ def ingest_capture_batch(*, student, document, request_received_at=None, locked_
         request_received_at=request_received_at,
         locked_sessions=sessions,
         locked_attempts=locked_attempts,
+        recording_close=recording_close,
     )
 
 

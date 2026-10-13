@@ -154,10 +154,9 @@ export function createWriterLease(options: CreateWriterLeaseOptions): WriterLeas
             },
             releaseOptions,
           )
+          if (cached === active) cached = undefined
         } catch (error) {
           throw asWriterLeaseConflict(error)
-        } finally {
-          if (cached === active) cached = undefined
         }
       })().finally(() => {
         releasePending = undefined

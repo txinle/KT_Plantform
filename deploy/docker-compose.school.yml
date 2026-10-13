@@ -15,6 +15,9 @@ x-school-environment: &school-environment
   ASSESSMENT_ADMISSION_REDIS_URL: redis://redis-admission:6379/0
   ASSESSMENT_ADMISSION_CAPACITY: ${ASSESSMENT_ADMISSION_CAPACITY:-8}
   ASSESSMENT_ADMISSION_LEASE_SECONDS: ${ASSESSMENT_ADMISSION_LEASE_SECONDS:-180}
+  SCHOOL_REDIS_SESSION_ENABLED: ${SCHOOL_REDIS_SESSION_ENABLED:-0}
+  SESSION_REDIS_URL: redis://redis-session:6379/0
+  SESSION_REDIS_KEY_PREFIX: "kt:school:session:v1:"
 
 x-school-web: &school-web
   build:
@@ -35,6 +38,9 @@ x-school-web: &school-web
       condition: service_healthy
     redis-admission:
       condition: service_healthy
+    redis-session:
+      condition: service_healthy
+      required: false
   healthcheck:
     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=3)"]
     interval: 10s
@@ -74,6 +80,20 @@ services:
     mem_limit: 256M
     cpus: 0.25
     cpu_shares: 256
+  redis-session:
+    profiles: [school-redis-session]
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    restart: unless-stopped
+    volumes:
+      - redis_session_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+    mem_limit: 512M
+    cpus: 1
   migrate:
     build:
       dockerfile: deploy/Dockerfile.school
@@ -250,3 +270,4 @@ services:
 
 volumes:
   runtime_control:
+  redis_session_data:

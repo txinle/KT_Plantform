@@ -310,7 +310,7 @@ def parse_event_batch(*, student, document, sessions=None, attempts=None):
 
 
 @transaction.atomic
-def append_event_batch(*, student, document, request_received_at=None, locked_sessions=None, locked_attempts=None):
+def append_event_batch(*, student, document, request_received_at=None, locked_sessions=None, locked_attempts=None, recording_close=False):
     require_exact_mapping(document, allowed=BATCH_FIELDS)
     if not isinstance(document['events'], list) or not 1 <= len(document['events']) <= MAX_BATCH_EVENTS:
         raise ProcessRequestError('invalid_batch_size')
@@ -330,15 +330,21 @@ def append_event_batch(*, student, document, request_received_at=None, locked_se
         validation_key = (
             parsed.session.pk,
             getattr(parsed.attempt, "pk", None),
+            parsed.event_type if recording_close else None,
         )
         if validation_key in validated:
             continue
         try:
-            time_error = _validate_process_event_time(
-                parsed.session,
-                parsed.attempt,
-                request_received_at=request_received_at,
-            )
+            if recording_close:
+                from .recording_capture_services import validate_close_recording_time
+                time_error = validate_close_recording_time(parsed.session, parsed.attempt,
+                    request_received_at=request_received_at, event_type=parsed.event_type)
+            else:
+                time_error = _validate_process_event_time(
+                    parsed.session,
+                    parsed.attempt,
+                    request_received_at=request_received_at,
+                )
         except ValidationError as exc:
             raise ProcessConflictError("course_access_revoked") from exc
         if time_error:

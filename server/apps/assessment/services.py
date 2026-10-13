@@ -1384,17 +1384,24 @@ def _submit_attempt_transaction(
     request_received_at=None,
     target_event_id=None,
     confidence_response=None,
+    locked_attempt=None,
 ):
-    session_id = Attempt.objects.filter(pk=attempt_id).values_list(
-        "session_id", flat=True
-    ).get()
-    session = ExperimentSession.objects.select_for_update(of=("self",)).select_related(
-        "version__experiment__course", "class_task", "capture_contract"
-    ).get(pk=session_id)
-    attempt = Attempt.objects.select_for_update(of=("self",)).select_related(
-        "assignment__snapshot", "assignment__item_instance", "current_response_snapshot", "active_response_event"
-    ).get(pk=attempt_id, session=session)
-    attempt.session = session
+    if locked_attempt is None:
+        session_id = Attempt.objects.filter(pk=attempt_id).values_list(
+            "session_id", flat=True
+        ).get()
+        session = ExperimentSession.objects.select_for_update(of=("self",)).select_related(
+            "version__experiment__course", "class_task", "capture_contract"
+        ).get(pk=session_id)
+        attempt = Attempt.objects.select_for_update(of=("self",)).select_related(
+            "assignment__snapshot", "assignment__item_instance", "current_response_snapshot", "active_response_event"
+        ).get(pk=attempt_id, session=session)
+        attempt.session = session
+    else:
+        attempt = locked_attempt
+        session = attempt.session
+        if attempt.pk != attempt_id:
+            raise ValidationError('作答锁与请求不匹配。')
     try:
         _validate_course_access(
             session,
@@ -1633,6 +1640,7 @@ def submit_attempt(
     request_received_at=None,
     target_event_id=None,
     confidence_response=None,
+    _locked_attempt=None,
 ):
     attempt, time_error = _submit_attempt_transaction(
         attempt_id,
@@ -1643,6 +1651,7 @@ def submit_attempt(
         request_received_at,
         target_event_id,
         confidence_response,
+        locked_attempt=_locked_attempt,
     )
     if time_error:
         raise SubmissionValidationError(

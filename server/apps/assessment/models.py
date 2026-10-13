@@ -428,11 +428,12 @@ class NavigationReceipt(models.Model):
 
 
 class CaptureMutationReceipt(models.Model):
-    """Original confirmed draft/tool receipt, without request bodies or credentials."""
+    """Original confirmed capture mutation receipt, without bodies or credentials."""
 
     class Kind(models.TextChoices):
         DRAFT = 'draft', '草稿'
         TOOL = 'tool', '工具'
+        CLOSE = 'close', '关闭'
 
     attempt = models.ForeignKey(Attempt, on_delete=models.CASCADE, related_name='capture_mutation_receipts')
     token = models.UUIDField(editable=False)

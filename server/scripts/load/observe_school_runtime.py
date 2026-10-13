@@ -11,6 +11,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from school_resource_budget import budget
 
 
+def sample_delay(until, now, interval=10, *, sampled_at=None):
+    remaining = interval if sampled_at is None else interval - (now - sampled_at)
+    return max(0, min(remaining, until - now))
+
+
 def probe_progress(path, now):
     if path is None:
         return {'state': 'not_configured'}
@@ -387,7 +392,7 @@ def observe(args, result):
                 'exec psql -X -t -A -U "$POSTGRES_USER" -d kt_e2e -c "$1"', "school-observer", BACKLOG_SQL,
             ], text=True)
             backlog.append({"at": time.time(), "counts": json.loads(raw_backlog)})
-            time.sleep(min(10, max(0, until - time.time())))
+            time.sleep(sample_delay(until, time.time(), getattr(args, 'interval', 10), sampled_at=now))
         early_stop = bool(stop_file and stop_file.exists())
         terminated_by_coordinator = early_stop and events.poll() is None
         if terminated_by_coordinator:
@@ -452,6 +457,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project', required=True)
     parser.add_argument('--duration', type=int, default=2100)
+    parser.add_argument('--interval', type=int, choices=(5, 10), default=10)
     parser.add_argument('--output', required=True)
     parser.add_argument('--database-container')
     parser.add_argument('--database-probe-progress')

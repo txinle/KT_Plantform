@@ -731,8 +731,9 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
             for key in ('capture_version', 'active_response_event_id', 'response_version', 'writer_lease_acquire_url', 'writer_lease_renew_url', 'writer_lease_release_url'):
                 payload['process'].pop(key, None)
         else:
-            from ..capture_bundle_services import capture_bundle_capability
+            from ..capture_bundle_services import capture_bundle_capability, close_bundle_capability
             payload['process']['capture_bundle'] = capture_bundle_capability(session)
+            payload['process']['close_bundle'] = close_bundle_capability(session)
             from ..atomic_submission_services import atomic_submission_capability
             atomic_capability = atomic_submission_capability(attempt)
             if atomic_capability['enabled']:
