@@ -8,7 +8,7 @@ import yaml
 
 DEPLOY = Path(__file__).resolve().parents[2] / 'deploy'
 HTTP = {'web': (1, 'kt_core', '512M'), 'auth': (4, 'kt_auth', '1G'),
-        'assessment': (24, 'kt_assessment', '2G'), 'capture': (4, 'kt_capture', '1280M'),
+        'assessment': (24, 'kt_assessment', '4G'), 'capture': (4, 'kt_capture', '1280M'),
         'student-read': (2, 'kt_student', '768M'), 'teacher-read': (1, 'kt_teacher', '512M')}
 
 

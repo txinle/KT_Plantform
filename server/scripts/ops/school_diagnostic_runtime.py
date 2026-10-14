@@ -48,7 +48,7 @@ POOL_ALIASES = {'web': 'kt_core', 'student-read': 'kt_student', 'teacher-read': 
 SIX_POOL_PROFILE = 'six-pools-180-v1'
 SIX_WORKERS = {'web': 1, 'auth': 4, 'assessment': 24, 'capture': 4, 'student-read': 2, 'teacher-read': 1}
 SIX_POOL_ALIASES = {**POOL_ALIASES, 'auth': 'kt_auth', 'assessment': 'kt_assessment', 'capture': 'kt_capture'}
-SIX_MEMORY = {'web': 512 * 1024**2, 'auth': 1024**3, 'assessment': 2 * 1024**3,
+SIX_MEMORY = {'web': 512 * 1024**2, 'auth': 1024**3, 'assessment': 4 * 1024**3,
               'capture': 1280 * 1024**2, 'student-read': 768 * 1024**2, 'teacher-read': 512 * 1024**2}
 SIX_CPU_SHARES = {'web': 512, 'auth': 2048, 'assessment': 4096, 'capture': 2048,
                   'student-read': 512, 'teacher-read': 256}

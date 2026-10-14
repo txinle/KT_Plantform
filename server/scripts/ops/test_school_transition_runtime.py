@@ -472,7 +472,7 @@ class SixPoolProfileTests(unittest.TestCase):
             source['roles'] = {role: {'workers': workers, 'memory_bytes': memory, 'cpus': 0,
                 'cpu_shares': shares} for role, workers, memory, shares in (
                 ('web', 1, 512 * 1024**2, 512), ('auth', 4, 1024**3, 2048),
-                ('assessment', 24, 2 * 1024**3, 4096), ('capture', 4, 1280 * 1024**2, 2048),
+                ('assessment', 24, 4 * 1024**3, 4096), ('capture', 4, 1280 * 1024**2, 2048),
                 ('student-read', 2, 768 * 1024**2, 512), ('teacher-read', 1, 512 * 1024**2, 256))}
         policy = {'appendonly': 'yes', 'appendfsync': 'always', 'maxmemory-policy': 'noeviction', 'save': ''}
         source['roles'].update({'redis-session': {'memory_bytes': 512 * 1024**2, 'cpus': 1, 'redis_policy': policy.copy()},
@@ -525,7 +525,7 @@ class SixPoolProfileTests(unittest.TestCase):
     def test_new_profile_validates_fixed_workers_memory_and_cpu_priority(self):
         transition.validate_transition_source(self.source())
         transition.validate_transition_source(self.source(False))
-        for field, value in (('workers', 16), ('memory_bytes', 1024**3), ('cpus', 2), ('cpu_shares', 0)):
+        for field, value in (('workers', 16), ('memory_bytes', 1024**3), ('memory_bytes', 2 * 1024**3), ('cpus', 2), ('cpu_shares', 0)):
             source = self.source()
             source['roles']['assessment'][field] = value
             with self.subTest(field=field), self.assertRaises(transition.SafetyInterrupted):
