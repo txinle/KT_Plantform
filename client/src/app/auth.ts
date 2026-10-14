@@ -3,6 +3,7 @@ import { disposeAllSessionControllers } from '@/assessment-runtime/session-contr
 import { clearOfflineAssessmentCache } from '@/assessment-runtime/offline-cache'
 
 import {
+  acceptBootstrapContext,
   clearBootstrapContext,
   getCsrfToken,
   getBootstrapContext,
@@ -46,10 +47,10 @@ export function createAuthenticationApi(options: AuthenticationApiOptions) {
       return refresh()
     },
     async login(username: string, password: string): Promise<BootstrapContext> {
-      await client.mutate('/api/v1/auth/login/', { method: 'POST', body: { username, password } })
+      const context = await client.mutate<BootstrapContext>('/api/v1/auth/login/', { method: 'POST', body: { username, password } })
       disposeAllSessionControllers()
       await clearOfflineAssessmentCache()
-      return refresh()
+      return acceptBootstrapContext(context)
     },
     async logout(): Promise<void> {
       await client.mutate('/api/v1/auth/logout/', { method: 'POST' })

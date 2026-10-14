@@ -21,6 +21,40 @@ class AtomicSubmissionTests(TestCase):
     transition = capture_fixtures.CaptureV2Tests.transition
     ingest = capture_fixtures.CaptureV2Tests.ingest
 
+    def test_atomic_submission_reuses_one_session_and_attempt_lock(self):
+        from django.test.utils import CaptureQueriesContext
+        from .atomic_submission_services import submit_attempt_bundle
+        attempt, document = self.bundle()
+        with CaptureQueriesContext(connection) as queries:
+            submitted, _ = submit_attempt_bundle(student=self.student, attempt_id=attempt.pk, document=document)
+        for table in ('assessment_experimentsession', 'assessment_attempt'):
+            locks = [row['sql'] for row in queries if row['sql'].startswith('SELECT')
+                     and f'FROM "{table}"' in row['sql'] and 'FOR UPDATE' in row['sql']]
+            self.assertEqual(len(locks), 1, locks)
+        self.assertEqual(submitted.draft_answer, 'A')
+        self.assertEqual(submitted.final_answer, 'A')
+        self.assertEqual(submitted.response_version, 1)
+
+    def test_reused_attempt_replaces_cached_text_snapshot_and_event(self):
+        from .atomic_submission_services import submit_attempt_bundle
+        from .services import save_draft
+        self.stream = uuid.uuid4()
+        attempt = self.attempts[Question.Type.SHORT]
+        first = self.transition(attempt, '', 'old', sequence=1)
+        self.ingest([first])
+        save_draft(attempt.pk, None, target_event_id=first['event_id'], expected_version=0)
+        _, document = self.bundle()
+        # bundle() chooses a new client stream, so its first sequence remains valid.
+        second = self.transition(attempt, 'old', 'new', parent=first['event_id'])
+        document['target_event_id'] = second['event_id']
+        document['atomic_submission']['events'] = [second]
+        document['atomic_submission']['expected_version'] = 1
+        submitted, receipt = submit_attempt_bundle(student=self.student, attempt_id=attempt.pk, document=document)
+        self.assertEqual(submitted.final_answer, 'new')
+        self.assertEqual(submitted.final_response_snapshot.content, 'new')
+        self.assertEqual(str(submitted.final_response_event_id), second['event_id'])
+        self.assertEqual(receipt['response_version'], 2)
+
     def test_previous_server_insert_can_omit_new_receipt_columns(self):
         attempt = self.attempts[Question.Type.SINGLE]
         quote = connection.ops.quote_name

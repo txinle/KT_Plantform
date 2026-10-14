@@ -6,6 +6,7 @@ from django.http import HttpResponse, JsonResponse
 
 
 from .research_consent import research_consent_required
+from .redis_sessions import SessionStore
 
 
 def _is_loopback_host(hostname):
@@ -60,15 +61,16 @@ class StudentSessionIdleTimeoutMiddleware:
     @staticmethod
     def _renew_student_session(request):
         user = getattr(request, "user", None)
-        if (
+        is_student = (
             user is not None
             and user.is_authenticated
             and not user.is_superuser
             and user.role == "student"
-        ):
-            request.session.set_expiry(
-                settings.STUDENT_SESSION_IDLE_TIMEOUT_SECONDS
-            )
+        )
+        if isinstance(request.session, SessionStore):
+            request.session.student_idle_timeout = settings.STUDENT_SESSION_IDLE_TIMEOUT_SECONDS if is_student else None
+        elif is_student:
+            request.session.set_expiry(settings.STUDENT_SESSION_IDLE_TIMEOUT_SECONDS)
 
     def __call__(self, request):
         self._renew_student_session(request)

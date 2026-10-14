@@ -92,6 +92,8 @@ def save_draft_api(request, attempt_id):
                 raise ProcessRequestError('save_and_leave_too_large', status=413)
             _, receipt = save_and_leave_attempt(student=request.user, attempt_id=attempt_id,
                                                document=data, request_received_at=request_received_at)
+            from .transition_entry_services import append_next_entry
+            receipt = append_next_entry(request, attempt_id, data, receipt)
             return JsonResponse(receipt)
         if 'capture_bundle' in data:
             from .capture_bundle_services import save_draft_capture_bundle

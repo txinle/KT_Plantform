@@ -233,6 +233,7 @@ class ExperimentSession(models.Model):
         on_delete=models.PROTECT,
         related_name="sessions",
     )
+    transition_protocol_version = models.PositiveSmallIntegerField(default=0, db_default=0, editable=False)
     terminal_at = models.DateTimeField(null=True, blank=True)
     terminal_reason = models.CharField(max_length=64, blank=True, default="")
     authoritative_terminal_at = models.DateTimeField(null=True, blank=True)
@@ -270,7 +271,7 @@ class ExperimentSession(models.Model):
                 kwargs["update_fields"] = set(update_fields) | {"terminal_at"}
         if self.pk:
             previous = type(self).objects.only(
-                "condition_id", "student_id", "capture_contract_id"
+                "condition_id", "student_id", "capture_contract_id", "transition_protocol_version"
             ).get(pk=self.pk)
             if self.condition_id != previous.condition_id:
                 raise ValidationError("session condition is immutable")
@@ -278,6 +279,8 @@ class ExperimentSession(models.Model):
                 raise ValidationError("session student is immutable")
             if self.capture_contract_id != previous.capture_contract_id:
                 raise ValidationError("session capture contract is immutable")
+            if self.transition_protocol_version != previous.transition_protocol_version:
+                raise ValidationError("session transition protocol is immutable")
         return super().save(*args, **kwargs)
 
 class StudentQuestionAssignment(models.Model):
@@ -428,11 +431,12 @@ class NavigationReceipt(models.Model):
 
 
 class CaptureMutationReceipt(models.Model):
-    """Original confirmed draft/tool receipt, without request bodies or credentials."""
+    """Original confirmed capture mutation receipt, without bodies or credentials."""
 
     class Kind(models.TextChoices):
         DRAFT = 'draft', '草稿'
         TOOL = 'tool', '工具'
+        CLOSE = 'close', '关闭'
 
     attempt = models.ForeignKey(Attempt, on_delete=models.CASCADE, related_name='capture_mutation_receipts')
     token = models.UUIDField(editable=False)

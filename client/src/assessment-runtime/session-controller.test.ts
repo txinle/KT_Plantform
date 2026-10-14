@@ -4,6 +4,8 @@ import * as assessmentApi from './api'
 import { createSessionController } from './session-controller'
 import { MemoryOutbox } from './fact-store'
 import { ProcessEventCollector } from './process-sender'
+import type { EnteredQuestion, NextEntryOutcome } from './api'
+import type { EntryIntent } from './session-controller'
 vi.mock('@/app/bootstrap', () => ({ getBootstrapContext: () => ({ csrf_token: 'csrf' }) }))
 
 const process = { session_id: 7, attempt_id: 13, event_batch_url: '/api/v1/assessment/process/events/batch/',
@@ -11,6 +13,345 @@ const process = { session_id: 7, attempt_id: 13, event_batch_url: '/api/v1/asses
   heartbeat_interval_seconds: 30, navigation_id: '00000000-0000-4000-8000-000000000010', capture_version: 'capture-v2',
   response_version: 0, writer_lease_acquire_url: '/api/v1/assessment/process/attempts/13/writer-lease/acquire/',
   writer_lease_renew_url: '/api/v1/assessment/process/attempts/13/writer-lease/renew/', writer_lease_release_url: '/api/v1/assessment/process/attempts/13/writer-lease/release/' }
+
+function enteredQuestion(intent: EntryIntent): EnteredQuestion {
+  return { session_id: 7, entry_allowed: true, assignment: { assignment_id: intent.assignmentId, attempt_id: 14 },
+    process: { ...process, attempt_id: 14, navigation_id: intent.navigationId, visit_id: 21, visit_index: 1, entry_event_id: 'target-entry' },
+    entry_receipt: { session_id: 7, assignment_id: intent.assignmentId, attempt_id: 14, navigation_id: intent.navigationId,
+      visit_id: 21, visit_index: 1, entry_event_id: 'target-entry', entered_at: '2026-10-13T00:00:00Z' } } as EnteredQuestion
+}
+
+describe('source close and target entry confirmation', () => {
+  const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true }
+  const denied: NextEntryOutcome = { committed: false, error: { code: 'ENTRY_DENIED', message: 'target denied' } }
+
+  it('retains a matched target DTO only once in the live controller and never persists it', async () => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+    const intent = await controller.freezeEntry(7, 14, 'navigation_click')
+    const dto = enteredQuestion(intent)
+    expect(await controller.rememberEnteredQuestion(7, assessmentApi.nextEntryRequest(intent), { committed: true, runtime: dto })).toBe(true)
+    expect(controller.takeEnteredQuestion(7, { ...intent, clientMonotonicMs: intent.clientMonotonicMs + 1 })).toBeUndefined()
+    expect(createSessionController({ store, csrfToken: 'csrf', tabId: 'tab', autoSchedule: false }).takeEnteredQuestion(7, intent)).toBeUndefined()
+    expect(controller.takeEnteredQuestion(7, intent)).toEqual(dto)
+    expect(controller.takeEnteredQuestion(7, intent)).toBeUndefined()
+    expect([...store.metadata.keys()]).toEqual(['entry-intent:7:tab'])
+    controller.dispose()
+  })
+
+  it('rejects missing, malformed, mismatched or denied target authorization without trusting source ACK', async () => {
+    const controller = createSessionController({ store: new MemoryOutbox(), csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+    const intent = await controller.freezeEntry(7, 14, 'navigation_click')
+    const request = assessmentApi.nextEntryRequest(intent)
+    expect(await controller.rememberEnteredQuestion(7, request, denied)).toBe(false)
+    for (const invalid of [undefined, { committed: false }, { committed: false, error: { code: '', message: '' } },
+      { committed: true },
+      { committed: true, runtime: { ...enteredQuestion(intent), assignment: { assignment_id: 99, attempt_id: 14 } } }]) {
+      await expect(controller.rememberEnteredQuestion(7, request, invalid as NextEntryOutcome)).rejects.toThrow()
+    }
+    for (const field of Object.keys(request) as Array<keyof typeof request>) {
+      await expect(controller.rememberEnteredQuestion(7, { ...request, [field]: 'mismatch' } as never,
+        { committed: true, runtime: enteredQuestion(intent) })).rejects.toThrow()
+    }
+    for (const field of ['session_id', 'attempt_id'] as const) {
+      const dto = enteredQuestion(intent)
+      await expect(controller.rememberEnteredQuestion(7, request,
+        { committed: true, runtime: { ...dto, process: { ...dto.process, [field]: 99 } } })).rejects.toThrow()
+    }
+    expect(controller.takeEnteredQuestion(7, intent)).toBeUndefined()
+    expect(await controller.pendingEntry(7)).toEqual(intent)
+    controller.dispose()
+  })
+
+  it('validates a frozen terminal or denied entry receipt while refusing to cache it as ready', async () => {
+    const controller = createSessionController({ store: new MemoryOutbox(), csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+    const intent = await controller.freezeEntry(7, 14, 'navigation_click')
+    const dto = { ...enteredQuestion(intent), entry_allowed: false }
+    expect(() => controller.validateEntry(7, intent, dto)).not.toThrow()
+    expect(await controller.rememberEnteredQuestion(7, assessmentApi.nextEntryRequest(intent), { committed: true, runtime: dto })).toBe(false)
+    expect(controller.takeEnteredQuestion(7, intent)).toBeUndefined()
+    expect(await controller.pendingEntry(7)).toEqual(intent)
+    controller.dispose()
+  })
+
+  it.each(['cancel', 'confirmed', 'dispose'] as const)('clears matching ready material on %s', async action => {
+    const controller = createSessionController({ store: new MemoryOutbox(), csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+    const intent = await controller.freezeEntry(7, 14, 'navigation_click')
+    await controller.rememberEnteredQuestion(7, assessmentApi.nextEntryRequest(intent), { committed: true, runtime: enteredQuestion(intent) })
+    if (action === 'cancel') await controller.cancelEntry(7, intent.navigationId)
+    if (action === 'confirmed') await controller.confirmEntry(7, 14)
+    if (action === 'dispose') controller.dispose()
+    expect(controller.takeEnteredQuestion(7, intent)).toBeUndefined()
+    controller.dispose()
+  })
+
+  it.each(['entered', 'denied', 'missing'] as const)('keeps source ACK and invalidated lease when target is %s', async outcome => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+    const intent = await controller.freezeEntry(7, 14, 'navigation_click')
+    const nextEntry = assessmentApi.nextEntryRequest(intent)
+    const bodies: Array<Record<string, unknown>> = []
+    const post = vi.fn(async (_url, body) => {
+      if (!body.capture_bundle) return { success: true, lease_token: 'lease', client_instance_id: body.client_instance_id, expires_at: new Date(Date.now()+60000).toISOString() }
+      bodies.push(body)
+      return { committed: true, writer_lease_released: true, capture_operation_id: body.capture_operation_id,
+        acknowledgements: body.capture_bundle.events.map((row: { event_id?: string; client_sequence_no: number }) => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+        checkpoint_ids: body.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id),
+        ...(outcome === 'missing' ? {} : { next_entry: outcome === 'entered' ? { committed: true, runtime: enteredQuestion(intent) } : denied }) }
+    })
+    const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+    try {
+      const runtime = await controller.activate({ ...process, capture_bundle: capability, close_bundle: capability } as never, 'visited')
+      await runtime.writerLease!.beforePointerWrite()
+      const close = runtime.closeAttempt('navigation', 14, nextEntry)
+      if (outcome === 'missing') await expect(close).rejects.toThrow()
+      else expect(await close).toBe(true)
+      expect(bodies[0]!.next_entry).toEqual(nextEntry)
+      expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+      expect(await store.readMetadata('confirmed-close:7:13')).toMatchObject({ reason: 'navigation' })
+      expect(runtime.writerLease!.cachedCredentials()).toBeUndefined()
+      expect(await controller.pendingEntry(7)).toMatchObject({ leaveConfirmed: true })
+      expect(controller.takeEnteredQuestion(7, intent)).toEqual(outcome === 'entered' ? enteredQuestion(intent) : undefined)
+      expect(await runtime.closeAttempt('navigation', 14, nextEntry)).toBe(true)
+      expect(bodies).toHaveLength(1)
+    } finally { controller.dispose(); spy.mockRestore() }
+  })
+
+  it('replays the same next-entry close envelope after response loss and reload with one leave fact', async () => {
+    const store = new MemoryOutbox()
+    let controller = createSessionController({ store, csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+    const intent = await controller.freezeEntry(7, 14, 'navigation_click')
+    const request = assessmentApi.nextEntryRequest(intent)
+    const bodies: Array<Record<string, unknown>> = []
+    let lost = true
+    const post = vi.fn(async (_url, body) => {
+      if (!body.capture_bundle) return { success: true, lease_token: 'lease', client_instance_id: body.client_instance_id, expires_at: new Date(Date.now()+60000).toISOString() }
+      bodies.push(body)
+      if (lost) throw new Error('response lost')
+      return { committed: true, writer_lease_released: true, capture_operation_id: body.capture_operation_id,
+        acknowledgements: body.capture_bundle.events.map((row: { event_id?: string; client_sequence_no: number }) => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+        checkpoint_ids: body.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id), next_entry: denied }
+    })
+    const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+    try {
+      const runtime = await controller.activate({ ...process, capture_bundle: capability, close_bundle: capability } as never, 'visited')
+      await expect(runtime.closeAttempt('navigation', 14, request)).rejects.toThrow('response lost')
+      const leaves = store.records.filter(row => row.event.event_type === 'item_left')
+      expect(leaves).toHaveLength(1)
+      controller.dispose()
+      lost = false
+      controller = createSessionController({ store, csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+      const restored = await controller.activate({ ...process, capture_bundle: capability, close_bundle: capability } as never, 'visited')
+      expect(await restored.closeAttempt('navigation', 14, request)).toBe(true)
+      expect(bodies[1]).toEqual(bodies[0])
+      expect(bodies[1]!.next_entry).toEqual(request)
+      expect(new Set(bodies.flatMap(body => (body.capture_bundle as { events: Array<{ event_type: string; event_id: string }> }).events.filter(row => row.event_type === 'item_left').map(row => row.event_id))).size).toBe(1)
+      expect(await controller.pendingEntry(7)).toMatchObject({ leaveConfirmed: true })
+      expect(controller.takeEnteredQuestion(7, intent)).toBeUndefined()
+    } finally { controller.dispose(); spy.mockRestore() }
+  })
+
+  it('blocks the close request when frozen entry persistence is unavailable', async () => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+    const write = vi.spyOn(store, 'writeMetadata').mockRejectedValue(new Error('disk full'))
+    await expect(controller.freezeEntry(7, 14, 'navigation_click')).rejects.toThrow('disk full')
+    write.mockRestore()
+    const runtime = await controller.activate({ ...process, capture_bundle: capability, close_bundle: capability } as never, 'visited')
+    const post = vi.fn()
+    const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+    try {
+      await expect(runtime.closeAttempt('navigation', 14, assessmentApi.nextEntryRequest({ assignmentId: 14, reason: 'navigation_click', navigationId: crypto.randomUUID(), clientOccurredAt: new Date().toISOString(), clientMonotonicMs: 1, clientTimeOrigin: new Date().toISOString() }))).rejects.toThrow()
+      expect(post).not.toHaveBeenCalled()
+      expect(store.records.some(row => row.event.event_type === 'item_left')).toBe(false)
+    } finally { controller.dispose(); spy.mockRestore() }
+  })
+
+  it.each(['denied', 'missing'] as const)('recovers a submitted source close while preserving %s target recovery', async outcome => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+    const intent = await controller.freezeEntry(7, 14, 'navigation_click')
+    const closure = { next_url: '/student/sessions/7/questions/14/', status: 'submitted' }
+    await store.writeMetadata('submission-close:7:13', closure)
+    const sender = new ProcessEventCollector({ sessionId: 7, attemptId: 13, endpoint: '/events/', outbox: store, autoSchedule: false })
+    const left = await sender.record('item_left', { leave_reason: 'submit', to_assignment_id: 14 }, { eventId: crypto.randomUUID() })
+    const frozen = await sender.freezeCaptureMutation('/release/', { capture_operation_id: crypto.randomUUID(),
+      leave_event_id: left.event_id, lease_token: 'expired', client_instance_id: sender.clientInstanceId,
+      next_entry: assessmentApi.nextEntryRequest(intent) })
+    const post = vi.fn(async () => ({ committed: true, writer_lease_released: true, capture_operation_id: frozen.body.capture_operation_id,
+      acknowledgements: frozen.processSnapshot.events.map(row => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+      checkpoint_ids: frozen.processSnapshot.checkpoints.map(row => row.checkpoint_id), ...(outcome === 'denied' ? { next_entry: denied } : {}) }))
+    const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+    try {
+      const recovery = controller.recoverClosedSubmission(process as never)
+      if (outcome === 'missing') await expect(recovery).rejects.toThrow('目标题')
+      else expect(await recovery).toEqual(closure)
+      expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+      expect(await store.readMetadata('confirmed-close:7:13')).toMatchObject({ reason: 'submit' })
+      expect(await controller.pendingEntry(7)).toMatchObject({ ...intent, leaveConfirmed: true })
+      expect(controller.takeEnteredQuestion(7, intent)).toBeUndefined()
+      if (outcome === 'missing') expect(await controller.recoverClosedSubmission(process as never)).toEqual(closure)
+      expect(post).toHaveBeenCalledExactlyOnceWith('/release/', { ...frozen.body, capture_bundle: frozen.processSnapshot }, { timeoutMs: 30000 })
+    } finally { controller.dispose(); sender.dispose(); spy.mockRestore() }
+  })
+})
+
+it('replays a frozen bundled close after response loss and releases only with the matching receipt', async () => {
+  const store = new MemoryOutbox()
+  const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true }
+  const requests: Array<Record<string, unknown>> = []
+  let loseResponse = true
+  const post = vi.fn(async (_url, body) => {
+    if (!body.capture_bundle) return { success: true, lease_token: 'lease-token', client_instance_id: body.client_instance_id, expires_at: new Date(Date.now() + 60000).toISOString() }
+    requests.push(body)
+    if (loseResponse) throw new Error('response lost')
+    const bundle = body.capture_bundle
+    return { success: true, committed: true, writer_lease_released: true, capture_operation_id: body.capture_operation_id,
+      acknowledgements: bundle.events.map((row: { event_id: string; client_sequence_no: number }) => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+      checkpoint_ids: bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id) }
+  })
+  const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+  let controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  try {
+    const runtime = await controller.activate({ ...process, capture_bundle: capability, close_bundle: capability } as never, 'visited')
+    await runtime.writerLease!.beforePointerWrite()
+    await expect(runtime.closeAttempt('submit')).rejects.toThrow('response lost')
+    expect(await store.readMetadata('capture-mutation:7:13')).not.toBeNull()
+    const original = requests[0]
+    controller.dispose()
+    loseResponse = false
+    controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const reloaded = await controller.activate({ ...process, capture_bundle: capability, close_bundle: capability } as never, 'submitted')
+    expect(await reloaded.closeAttempt('submit')).toBe(true)
+    expect(requests[1]).toEqual(original)
+    expect(requests[1]!.capture_bundle).toEqual(original!.capture_bundle)
+    expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+    expect(await reloaded.closeAttempt('submit')).toBe(true)
+    expect(requests).toHaveLength(2)
+  } finally { controller.dispose(); spy.mockRestore() }
+})
+
+it('keeps a bundled close single flight for six seconds until the exact receipt confirms', async () => {
+  vi.useFakeTimers()
+  const store = new MemoryOutbox()
+  const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true }
+  let confirm!: () => void
+  const post = vi.fn(async (_url, body) => {
+    if (!body.capture_bundle) return { success: true, lease_token: 'lease', client_instance_id: body.client_instance_id, expires_at: new Date(Date.now() + 60000).toISOString() }
+    await new Promise<void>(resolve => { confirm = resolve })
+    return { success: true, committed: true, writer_lease_released: true, capture_operation_id: body.capture_operation_id,
+      acknowledgements: body.capture_bundle.events.map((row: { event_id: string; client_sequence_no: number }) => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+      checkpoint_ids: body.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id) }
+  })
+  const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+  const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  try {
+    const runtime = await controller.activate({ ...process, capture_bundle: capability, close_bundle: capability } as never, 'visited')
+    await runtime.writerLease!.beforePointerWrite()
+    let settled = false
+    const first = runtime.closeAttempt('submit').then(result => { settled = true; return result })
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(settled).toBe(false)
+    expect(await store.readMetadata('capture-mutation:7:13')).not.toBeNull()
+    const second = runtime.closeAttempt('submit')
+    confirm()
+    expect(await first).toBe(true)
+    expect(await second).toBe(true)
+    expect(post.mock.calls.filter(([, body]) => body.capture_bundle)).toHaveLength(1)
+    expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+  } finally { controller.dispose(); spy.mockRestore(); vi.useRealTimers() }
+})
+
+it('replays the exact durably frozen close after a committed response is lost at the transport deadline', async () => {
+  vi.useFakeTimers()
+  const store = new MemoryOutbox()
+  const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true }
+  const committed: Array<Record<string, unknown>> = []
+  let loseResponse = true
+  const fetchImpl = vi.fn(async (_url, options: RequestInit) => {
+    const body = JSON.parse(String(options.body))
+    if (!body.capture_bundle) return new Response(JSON.stringify({ meta: { request_id: 'lease-request' }, data: {
+      success: true, lease_token: 'lease', client_instance_id: body.client_instance_id, expires_at: new Date(Date.now() + 60000).toISOString(),
+    } }))
+    committed.push(body)
+    if (loseResponse) await new Promise((_resolve, reject) => options.signal!.addEventListener('abort', () => reject(options.signal!.reason)))
+    return new Response(JSON.stringify({ meta: { request_id: 'close-request' }, data: { success: true, committed: true, writer_lease_released: true,
+      capture_operation_id: body.capture_operation_id,
+      acknowledgements: body.capture_bundle.events.map((row: { event_id?: string; client_sequence_no: number }) => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+      checkpoint_ids: body.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id) } }))
+  })
+  const api = assessmentApi.createStudentAssessmentApi(createApiClient({ fetchImpl: fetchImpl as never }))
+  const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue(api)
+  let controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  try {
+    const runtime = await controller.activate({ ...process, capture_bundle: capability, close_bundle: capability } as never, 'visited')
+    await runtime.writerLease!.beforePointerWrite()
+    const close = runtime.closeAttempt('submit')
+    let failure: unknown
+    const failed = close.catch(error => { failure = error })
+    await vi.advanceTimersByTimeAsync(29999)
+    expect(failure).toBeUndefined()
+    expect(committed).toHaveLength(1)
+    expect(await store.readMetadata('capture-mutation:7:13')).not.toBeNull()
+    await vi.advanceTimersByTimeAsync(1)
+    await failed
+    expect(failure).toMatchObject({ name: 'MutationOutcomeUnknownError' })
+    expect(await store.readMetadata('capture-mutation:7:13')).not.toBeNull()
+    expect(await store.readMetadata('confirmed-close:7:13')).toBeNull()
+    controller.dispose()
+    loseResponse = false
+    controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const recovered = await controller.activate({ ...process, capture_bundle: capability, close_bundle: capability } as never, 'submitted')
+    expect(await recovered.closeAttempt('submit')).toBe(true)
+    expect(committed[1]).toEqual(committed[0])
+    expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+    expect(await recovered.closeAttempt('submit')).toBe(true)
+    expect(committed).toHaveLength(2)
+  } finally { controller.dispose(); spy.mockRestore(); vi.useRealTimers() }
+})
+
+it('recovers a held close before following a denied terminal entry', async () => {
+  const store = new MemoryOutbox()
+  const closure = { next_url: '/student/sessions/7/questions/14/', status: 'submitted' }
+  await store.writeMetadata('submission-close:7:13', closure)
+  const sender = new ProcessEventCollector({ sessionId: 7, attemptId: 13, endpoint: '/events/', outbox: store, autoSchedule: false })
+  const left = await sender.record('item_left', { leave_reason: 'submit', to_assignment_id: null }, { eventId: crypto.randomUUID() })
+  const frozen = await sender.freezeCaptureMutation('/release/', { capture_operation_id: crypto.randomUUID(),
+    leave_event_id: left.event_id, lease_token: 'expired-token', client_instance_id: sender.clientInstanceId })
+  const post = vi.fn(async () => ({ committed: true, writer_lease_released: true, capture_operation_id: frozen.body.capture_operation_id,
+    acknowledgements: frozen.processSnapshot.events.map(row => ({ event_id: row.event_id, client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })), checkpoint_ids: [] }))
+  const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+  const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  try {
+    expect(await controller.recoverClosedSubmission(process as never)).toEqual(closure)
+    expect(post).toHaveBeenCalledExactlyOnceWith('/release/', { ...frozen.body, capture_bundle: frozen.processSnapshot }, { timeoutMs: 30000 })
+    expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+    expect(await store.readMetadata('submission-close:7:13')).toBeNull()
+  } finally { controller.dispose(); spy.mockRestore() }
+})
+
+it('a close receipt for one visit cannot suppress a later return to the same attempt', async () => {
+  const store = new MemoryOutbox()
+  const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true }
+  let closes = 0
+  const post = vi.fn(async (_url, body) => {
+    if (!body.capture_bundle) return { success: true, lease_token: 'lease', client_instance_id: body.client_instance_id, expires_at: new Date(Date.now() + 60000).toISOString() }
+    closes++
+    return { committed: true, writer_lease_released: true, capture_operation_id: body.capture_operation_id,
+      acknowledgements: body.capture_bundle.events.map((row: { event_id?: string; client_sequence_no: number }) => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+      checkpoint_ids: body.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id) }
+  })
+  const spy = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+  const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  try {
+    for (const navigation_id of [crypto.randomUUID(), crypto.randomUUID()]) {
+      const runtime = await controller.activate({ ...process, navigation_id, capture_bundle: capability, close_bundle: capability } as never, 'visited')
+      await runtime.writerLease!.beforePointerWrite()
+      expect(await runtime.closeAttempt('navigation', 14)).toBe(true)
+    }
+    expect(closes).toBe(2)
+  } finally { controller.dispose(); spy.mockRestore() }
+})
 
 it.each(['navigation', 'submission'])('initializes a reloaded page without awaiting its held %s snapshot', async kind => {
   const store = new MemoryOutbox()
@@ -68,7 +409,7 @@ it('recovers an already dispatched bundled draft before a later navigation and p
       acknowledgements: frozen.capture_bundle.events.map((row: { client_sequence_no: number; event_id?: string }) => ({ client_sequence_no: row.client_sequence_no, event_id: row.event_id || crypto.randomUUID(), server_ingest_sequence_no: row.client_sequence_no })),
       checkpoint_ids: frozen.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id) }))
     await runtime.pointerWritesSettled()
-    expect(post).toHaveBeenLastCalledWith('/draft/', { ...saved?.body, capture_bundle: saved?.processSnapshot })
+    expect(post).toHaveBeenLastCalledWith('/draft/', { ...saved?.body, capture_bundle: saved?.processSnapshot }, undefined)
     expect(runtime.responseVersion).toBe(1)
     expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
   } finally { spy.mockRestore(); controller.dispose() }

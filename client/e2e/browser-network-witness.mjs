@@ -23,6 +23,8 @@ const knownEventTypes = new Set(['activity_heartbeat', 'confidence_skipped', 'co
 const navigationReceiptFields = ['success', 'committed', 'navigation_token', 'acknowledgements', 'checkpoint_ids',
   'response_version', 'active_response_event_id', 'saved_at', 'status', 'writer_lease_released', 'to_assignment_id', 'next_url']
 const submissionReceiptFields = ['committed', 'acknowledgements', 'checkpoint_ids', 'final_response_event_id', 'response_version']
+const closeReceiptFields = ['success', 'committed', 'capture_operation_id', 'acknowledgements', 'checkpoint_ids',
+  'writer_lease_released', 'status', 'response_version', 'active_response_event_id', 'final_response_event_id']
 const protocolPath = path => /^\/api\/v1\/(?:assessment\/process\/(?:capture-v2\/(?:batch|attempts\/\d+\/(?:tools|resolve))|events\/batch|capture-checkpoints|time-sync\/(?:create|finalize)|attempts\/\d+\/(?:writer-lease\/(?:acquire|renew|release)|confidence\/(?:prompt-shown|commit|skip)))\/|student\/attempts\/\d+\/(?:draft|submit|skip|recover)\/|student\/sessions\/\d+\/questions\/\d+\/)$/.test(path)
 
 export const browserStorageContract = () => ({ eventTypes: [...knownEventTypes], checkpointTriggers: [...knownTriggers] })
@@ -60,7 +62,7 @@ function acknowledgement(value) {
 }
 export function browserRequestMaterial(path, body) {
   if (!protocolPath(path) || !body || typeof body !== 'object') return null
-  const bundle = body.atomic_submission ?? body.save_and_leave ?? body
+  const bundle = body.atomic_submission ?? body.save_and_leave ?? body.capture_bundle ?? body
   const row = { path, client_instance_id: uuid(bundle.client_instance_id ?? body.writer_client_instance_id),
     material_sha256: digest(body), material_fields: fields(body),
     events: Array.isArray(bundle.events) ? bundle.events.map(event) : [],
@@ -71,7 +73,18 @@ export function browserRequestMaterial(path, body) {
     target_event_id: uuid(body.target_event_id), to_assignment_id: integer(body.to_assignment_id), expected_version: integer(bundle.expected_version),
     client_clicked_at: timestamp(body.client_clicked_at), material_sha256: digest(Object.fromEntries([
       'save_and_leave', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'client_clicked_at',
-    ].map(key => [key, body[key]]))) }
+    ].map(key => [key, body[key]]).concat(Object.hasOwn(body, 'next_entry') ? [['next_entry', body.next_entry]] : []))) }
+  if (body.capture_bundle && body.leave_event_id) row.close = { token: uuid(body.capture_operation_id),
+    leave_event_id: uuid(body.leave_event_id), material_sha256: digest(Object.fromEntries(Object.entries(body)
+      .filter(([key]) => !['lease_token', 'client_instance_id'].includes(key)))) }
+  if (Object.hasOwn(body, 'next_entry')) {
+    const { assignment_id, ...original } = body.next_entry || {}
+    row.entry = { assignment_id: integer(assignment_id), navigation_id: uuid(original.navigation_id),
+      reason: ['navigation_click', 'resume'].includes(original.reason) ? original.reason : null,
+      ...clock(original), material_sha256: digest(original) }
+    row.transition = { source_attempt_id: integer(Number(/\/attempts\/(\d+)\//.exec(path)?.[1])),
+      request_material_sha256: digest(body.next_entry), outcome: 'unknown' }
+  }
   if (body.submission_token) row.submission = { token: uuid(body.submission_token), target_event_id: uuid(body.target_event_id),
     expected_version: integer(bundle.expected_version), bundle_sha256: digest(body.atomic_submission ?? null),
     material_sha256: digest({ atomic_submission: body.atomic_submission ?? null, target_event_id: body.target_event_id ?? null, confidence: body.confidence ?? null }) }
@@ -137,14 +150,31 @@ export function observeBrowserProtocol(page, { candidate = {}, taskId, probe } =
       row.acknowledgements = Array.isArray(data?.acknowledgements) ? data.acknowledgements.map(acknowledgement) : []
       row.checkpoint_ids = Array.isArray(data?.checkpoint_ids) ? data.checkpoint_ids.map(uuid) : data?.checkpoint_id ? [uuid(data.checkpoint_id)] : []
       row.rejection_count = Array.isArray(data?.rejections) ? data.rejections.length : 0
-      if (row.entry) row.entry_receipt = entryReceipt(data?.entry_receipt)
-      if (row.navigation || row.submission) row.receipt = { navigation_token: uuid(data?.navigation_token), submission_token: uuid(data?.submission_token),
+      if (row.entry) row.entry_receipt = entryReceipt(row.transition
+        ? data?.next_entry?.committed === true ? data.next_entry.runtime?.entry_receipt : null : data?.entry_receipt)
+      if (row.transition) {
+        const next = data?.next_entry
+        row.transition.outcome = next?.committed === true ? 'committed'
+          : next?.committed === false ? 'retry_required' : 'unknown'
+        row.transition.error_code_sha256 = next?.committed === false ? digest(next.error?.code ?? null) : null
+        if (next?.committed === true) {
+          const runtime = next.runtime
+          row.transition.runtime_identity = { session_id: integer(runtime?.session_id),
+            assignment_id: integer(runtime?.assignment?.assignment_id), attempt_id: integer(runtime?.assignment?.attempt_id),
+            process: entryReceipt({ ...runtime?.process, assignment_id: runtime?.assignment?.assignment_id,
+              entered_at: runtime?.entry_receipt?.entered_at }), entry_allowed: runtime?.entry_allowed === true,
+            remaining_seconds: runtime?.remaining_seconds === null ? null : integer(runtime?.remaining_seconds),
+            presented_deadline_at: timestamp(runtime?.presented_deadline_at) }
+        }
+      }
+      if (row.navigation || row.submission || row.close) row.receipt = { navigation_token: uuid(data?.navigation_token), submission_token: uuid(data?.submission_token),
+        capture_operation_id: uuid(data?.capture_operation_id),
         response_version: integer(data?.response_version), active_response_event_id: uuid(data?.active_response_event_id),
         final_response_event_id: uuid(data?.final_response_event_id), committed: data?.committed === true,
         to_assignment_id: integer(data?.to_assignment_id), saved_at: timestamp(data?.saved_at),
         writer_lease_released: data?.writer_lease_released === true,
         status: ['draft', 'visited', 'submitted', 'timed_out', 'unanswered'].includes(data?.status) ? data.status : null,
-        persisted_material_sha256: digest(Object.fromEntries((row.navigation ? navigationReceiptFields : submissionReceiptFields)
+        persisted_material_sha256: digest(Object.fromEntries((row.navigation ? navigationReceiptFields : row.close ? closeReceiptFields : submissionReceiptFields)
           .map(key => [key, data?.[key] ?? null]))),
         material_sha256: digest(data ?? null) }
     }).catch(() => { if (!closed) row.response_json_unavailable = true }).finally(() => { pending.delete(work); changed() })

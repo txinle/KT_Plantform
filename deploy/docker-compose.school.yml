@@ -1,6 +1,7 @@
 # Explicit school activation only; Compose >= 2.24.4 required for !override.
 # docker compose -f docker-compose.yml -f docker-compose.school.yml ...
 x-school-environment: &school-environment
+  SCHOOL_POOL_PROFILE: six-pools-180-v1
   SCHOOL_RUNTIME_ISOLATION_ENABLED: ${SCHOOL_RUNTIME_ISOLATION_ENABLED:?Set SCHOOL_RUNTIME_ISOLATION_ENABLED=1 for school only}
   POSTGRES_HOST: pgbouncer
   POSTGRES_PORT: 5432
@@ -15,8 +16,12 @@ x-school-environment: &school-environment
   ASSESSMENT_ADMISSION_REDIS_URL: redis://redis-admission:6379/0
   ASSESSMENT_ADMISSION_CAPACITY: ${ASSESSMENT_ADMISSION_CAPACITY:-8}
   ASSESSMENT_ADMISSION_LEASE_SECONDS: ${ASSESSMENT_ADMISSION_LEASE_SECONDS:-180}
+  SCHOOL_REDIS_SESSION_ENABLED: ${SCHOOL_REDIS_SESSION_ENABLED:-0}
+  SESSION_REDIS_URL: redis://redis-session:6379/0
+  SESSION_REDIS_KEY_PREFIX: "kt:school:session:v1:"
 
 x-school-web: &school-web
+  image: ${SCHOOL_BACKEND_IMAGE:-kt-school-backend:local}
   build:
     context: ..
     dockerfile: deploy/Dockerfile.school
@@ -35,6 +40,9 @@ x-school-web: &school-web
       condition: service_healthy
     redis-admission:
       condition: service_healthy
+    redis-session:
+      condition: service_healthy
+      required: false
   healthcheck:
     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=3)"]
     interval: 10s
@@ -74,6 +82,20 @@ services:
     mem_limit: 256M
     cpus: 0.25
     cpu_shares: 256
+  redis-session:
+    profiles: [school-redis-session]
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    restart: unless-stopped
+    volumes:
+      - redis_session_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+    mem_limit: 512M
+    cpus: 1
   migrate:
     build:
       dockerfile: deploy/Dockerfile.school
@@ -88,14 +110,56 @@ services:
       <<: *school-environment
       POSTGRES_POOL_ALIAS: kt_core
       DATABASE_APPLICATION_NAME: kt-school-core
-      GUNICORN_WORKERS: 12
+      GUNICORN_WORKERS: 1
       SCHOOL_CAPTURE_SHORT: "1"
       WEB_REPLICAS: 1
     deploy:
       replicas: 1
-    mem_limit: 3G
+    mem_limit: 512M
+    cpus: 0
+    cpu_shares: 512
+  auth:
+    <<: *school-web
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_auth
+      DATABASE_APPLICATION_NAME: kt-school-auth
+      GUNICORN_WORKERS: 4
+      SCHOOL_CAPTURE_SHORT: "1"
+      WEB_REPLICAS: 1
+    deploy:
+      replicas: 1
+    mem_limit: 1G
+    cpus: 0
+    cpu_shares: 2048
+  assessment:
+    <<: *school-web
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_assessment
+      DATABASE_APPLICATION_NAME: kt-school-assessment
+      GUNICORN_WORKERS: 8
+      SCHOOL_CAPTURE_SHORT: "1"
+      WEB_REPLICAS: 1
+    deploy:
+      replicas: 1
+    mem_limit: 4G
     cpus: 0
     cpu_shares: 4096
+  capture:
+    <<: *school-web
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_capture
+      DATABASE_APPLICATION_NAME: kt-school-capture
+      GUNICORN_WORKERS: 4
+      SCHOOL_CAPTURE_SHORT: "1"
+      WEB_REPLICAS: 1
+    deploy:
+      replicas: 1
+    mem_limit: 1280M
+    cpus: 0
+    cpu_shares: 2048
   student-read:
     <<: *school-web
     environment:
@@ -106,8 +170,8 @@ services:
       WEB_REPLICAS: 1
     deploy:
       replicas: 1
-    mem_limit: 1280M
-    cpus: 1
+    mem_limit: 768M
+    cpus: 0
     cpu_shares: 512
   teacher-read:
     <<: *school-web
@@ -116,17 +180,21 @@ services:
       POSTGRES_POOL_ALIAS: kt_teacher
       DATABASE_APPLICATION_NAME: kt-school-teacher-read
       GUNICORN_WORKERS: 1
+      SCHOOL_RUNTIME_PRESSURE_FILE: /runtime-control/pressure.json
       WEB_REPLICAS: 1
     deploy:
       replicas: 1
-    mem_limit: 768M
-    cpus: 0.5
+    mem_limit: 512M
+    cpus: 0
     cpu_shares: 256
   scheduler:
     build:
       dockerfile: deploy/Dockerfile.school
     entrypoint: ["docker/school-entrypoint.sh"]
     command: ["python", "manage.py", "run_scheduler"]
+    volumes:
+      - media_data:/app/media
+      - runtime_control:/runtime-control:ro
     environment:
       SCHOOL_RUNTIME_ISOLATION_ENABLED: ${SCHOOL_RUNTIME_ISOLATION_ENABLED:?Set SCHOOL_RUNTIME_ISOLATION_ENABLED=1 for school only}
       POSTGRES_HOST: db
@@ -135,6 +203,7 @@ services:
       DATABASE_CONN_MAX_AGE: 0
       RUN_SCHEDULER_EXPORT_JOBS: "0"
       DATABASE_APPLICATION_NAME: kt-school-scheduler-direct
+      SCHOOL_RUNTIME_PRESSURE_FILE: /runtime-control/pressure.json
     deploy:
       replicas: 1
     mem_limit: 256M
@@ -151,6 +220,7 @@ services:
       <<: *school-environment
       POSTGRES_POOL_ALIAS: kt_background
       DATABASE_APPLICATION_NAME: kt-school-analytics
+      SCHOOL_RUNTIME_PRESSURE_FILE: /runtime-control/pressure.json
     deploy:
       replicas: 1
       resources:
@@ -175,6 +245,7 @@ services:
       <<: *school-environment
       POSTGRES_POOL_ALIAS: kt_background
       DATABASE_APPLICATION_NAME: kt-school-student-comparison
+      SCHOOL_RUNTIME_PRESSURE_FILE: /runtime-control/pressure.json
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -196,6 +267,7 @@ services:
       <<: *school-environment
       POSTGRES_POOL_ALIAS: kt_background
       DATABASE_APPLICATION_NAME: kt-school-publication
+      SCHOOL_RUNTIME_PRESSURE_FILE: /runtime-control/pressure.json
     deploy:
       replicas: 1
       resources:
@@ -218,6 +290,7 @@ services:
       <<: *school-environment
       POSTGRES_POOL_ALIAS: kt_background
       DATABASE_APPLICATION_NAME: kt-school-export
+      SCHOOL_RUNTIME_PRESSURE_FILE: /runtime-control/pressure.json
     volumes:
       - media_data:/app/media
       - runtime_control:/runtime-control:ro
@@ -240,6 +313,14 @@ services:
     ports: !override
       - "127.0.0.1:${SCHOOL_HTTP_PORT:-8080}:80"
     depends_on:
+      web:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+      assessment:
+        condition: service_healthy
+      capture:
+        condition: service_healthy
       student-read:
         condition: service_healthy
       teacher-read:
@@ -250,3 +331,4 @@ services:
 
 volumes:
   runtime_control:
+  redis_session_data:

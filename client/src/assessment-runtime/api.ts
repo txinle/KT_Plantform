@@ -8,6 +8,14 @@ import type { ToolRule } from '@/features/teacher-experiments/research-tools'
 import type { CaptureEvent, CaptureCheckpoint, CaptureBundle, CaptureBundleCapability, ProcessConfirmation } from './capture-contract'
 import type { SavedNavigationConfirmation } from './session-controller'
 
+export async function withTransportTimeout<T>(send: (signal?: AbortSignal) => Promise<T>, timeoutMs?: number): Promise<T> {
+  if (timeoutMs === undefined) return send()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(new DOMException('收尾请求等待超时，结果尚待核验。', 'TimeoutError')), timeoutMs)
+  try { return await send(controller.signal) }
+  finally { clearTimeout(timer) }
+}
+
 export interface StudentResearchToolConfiguration {
   content_version: string
   doubt_enabled?: boolean
@@ -36,6 +44,7 @@ export interface SavedNavigationRequest {
   writer_lease_token?: string
   writer_client_instance_id?: string
   save_and_leave: AtomicSubmissionEnvelope
+  next_entry?: NextEntryRequest
 }
 
 export interface SavedNavigationResponse extends SavedNavigationConfirmation {
@@ -44,13 +53,35 @@ export interface SavedNavigationResponse extends SavedNavigationConfirmation {
   saved_at: string | null
   status: string
   next_url: string
+  next_entry?: NextEntryOutcome
+}
+
+export interface NextEntryRequest {
+  assignment_id: number
+  reason: 'navigation_click' | 'resume'
+  navigation_id: string
+  client_occurred_at: string
+  client_monotonic_ms: string
+  client_time_origin: string
+}
+
+export type EnteredQuestion = StudentRuntimeQuestionEntry & { entry_receipt: EntryReceipt }
+export type NextEntryOutcome = { committed: true; runtime: EnteredQuestion }
+  | { committed: false; error: { code: string; message: string } }
+
+export function nextEntryRequest(intent: NavigationClickContext & { assignmentId: number; reason: 'navigation_click' | 'resume' }): NextEntryRequest {
+  return { assignment_id: intent.assignmentId, reason: intent.reason, navigation_id: intent.navigationId,
+    client_occurred_at: intent.clientOccurredAt, client_monotonic_ms: intent.clientMonotonicMs.toFixed(3),
+    client_time_origin: intent.clientTimeOrigin }
 }
 
 export type StudentRuntimeQuestionEntry = components['schemas']['StudentRuntimeQuestionEntry'] & {
   offline_recovery?: boolean
   research_tools?: StudentResearchToolConfiguration
   process: components['schemas']['StudentRuntimeProcess'] & {
+    transition_entry?: { enabled: boolean; version: number }
     capture_bundle?: CaptureBundleCapability
+    close_bundle?: CaptureBundleCapability
     atomic_submission?: { version: 1; max_events: number; max_checkpoints: number; max_bytes: number }
     save_and_leave?: { version: 1; max_events: number; max_checkpoints: number; max_bytes: number }
   }
@@ -166,9 +197,12 @@ export function createStudentAssessmentApi(client: StudentAssessmentClient) {
       })
     ),
     skip: (url: string) => client.mutate<NavigationResponse>(url, { method: 'POST' }),
-    post: <T = SubmissionResponse>(url: string, body: Record<string, unknown>, options: { keepalive?: boolean } = {}) => (
-      client.mutate<T>(url, { method: 'POST', body, ...options })
-    ),
+    post: <T = SubmissionResponse>(url: string, body: Record<string, unknown>, options: { keepalive?: boolean; timeoutMs?: number } = {}) => {
+      const { timeoutMs, ...mutationOptions } = options
+      return withTransportTimeout(signal => client.mutate<T>(url, {
+        method: 'POST', body, ...mutationOptions, ...(signal ? { signal } : {}),
+      }), timeoutMs)
+    },
   }
 }
 

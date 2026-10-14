@@ -83,8 +83,11 @@ it('batches existing immutable checkpoint facts and creates ACK progress only af
   const one = await sender._createCheckpoint('heartbeat')
   const two = await sender._createCheckpoint('resume')
   expect(await sender.flush()).toBe(true)
-  expect(bodies).toHaveLength(2)
+  expect(bodies).toHaveLength(1)
   expect(bodies[0]).toEqual({ capture_bundle: { version: 1, client_instance_id: sender.clientInstanceId, event_boundary: 1, events: [event], checkpoints: [one, two] } })
+  expect(await sender.outbox.pendingCheckpoints()).toMatchObject([{ trigger: 'ack_progress', highest_contiguous_acked_sequence_no: 1 }])
+  expect(await sender.flush()).toBe(true)
+  expect(bodies).toHaveLength(2)
   expect(bodies[1]).toMatchObject({ capture_bundle: { events: [], checkpoints: [{ trigger: 'ack_progress', highest_contiguous_acked_sequence_no: 1 }] } })
   expect(await sender.outbox.pendingCheckpoints()).toEqual([])
 })
@@ -118,6 +121,8 @@ it('a confirmed frozen boundary does not wait for a later background checkpoint 
   let block = false
   const sender = collector(async (_url, init) => { const body = JSON.parse(String(init?.body)); if (block) { started.resolve(); await flight.promise } return response(receipt(body.capture_bundle)) })
   await sender.record('document_visible', {})
+  expect(await sender.flush()).toBe(true)
+  // Confirm the deferred progress fact in its own round before freezing a later fence.
   expect(await sender.flush()).toBe(true)
   const boundary = { [sender.clientInstanceId]: 1 }
   await sender.record('activity_heartbeat', {})

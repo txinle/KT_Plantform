@@ -26,6 +26,129 @@ function django(args: string[]) {
   return JSON.parse(result.stdout.trim().split('\n').at(-1)!)
 }
 
+test('bundled target entry is used once and target-only recovery preserves confirmed source facts', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  test.skip(process.env.ASSESSMENT_TRANSITION_ENABLED !== '1', 'Requires the pinned transition candidate.')
+  const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-transition-${Date.now()}'; command.handle()`])
+  await page.goto('/login/')
+  await page.getByLabel('账号或学号').fill('S002')
+  await page.getByLabel('密码').fill('student123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
+  await page.goto(`/student/courses/${fixture.course.id}/`)
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'E2E Capture V2 五题回放', exact: true }) })
+    .getByRole('button', { name: '开始作业' }).click()
+  await expect(page.locator('[name=answer]').first()).toBeEnabled()
+  const sessionId = Number(page.url().match(/sessions\/(\d+)/)![1])
+  const firstId = Number(page.url().match(/questions\/(\d+)/)![1])
+  await page.getByRole('radio').first().check()
+  await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
+  const nextId = await page.locator('[data-nav-assignment]').evaluateAll((nodes, current) =>
+    Number(nodes.find(node => Number(node.getAttribute('data-nav-assignment')) !== current)?.getAttribute('data-nav-assignment')), firstId)
+  const directEntries: string[] = []
+  page.on('request', request => {
+    if (request.method() === 'POST' && /\/sessions\/\d+\/questions\/\d+\/$/.test(new URL(request.url()).pathname)) directEntries.push(new URL(request.url()).pathname)
+  })
+  const saved = page.waitForResponse(response => response.url().endsWith('/draft/') && Boolean(response.request().postDataJSON().save_and_leave))
+  await page.locator(`[data-nav-assignment="${nextId}"]`).click()
+  const firstReceipt = (await (await saved).json()).data
+  expect(firstReceipt.next_entry.committed).toBe(true)
+  await expect(page).toHaveURL(new RegExp(`/questions/${nextId}/`))
+  await expect(page.locator('[name=answer]').first()).toBeEnabled()
+  expect(directEntries).toEqual([])
+
+  // Hide only the target outcome from a successful real server response. The source ACK stays observable.
+  await page.route('**/api/v1/student/attempts/*/draft/', async route => {
+    const document = route.request().postDataJSON()
+    if (!document.save_and_leave || !document.next_entry) return route.continue()
+    const response = await route.fetch()
+    const body = await response.json()
+    expect(body.data.next_entry.committed).toBe(true)
+    body.data.next_entry = { committed: false, error: { code: 'ENTRY_OUTCOME_UNKNOWN', message: 'injected target response loss' } }
+    await route.fulfill({ response, json: body })
+  })
+  await page.locator(`[data-nav-assignment="${firstId}"]`).click()
+  await expect(page).toHaveURL(new RegExp(`/questions/${firstId}/`))
+  await expect(page.getByRole('radio').first()).toBeChecked()
+  expect(directEntries).toEqual([`/api/v1/student/sessions/${sessionId}/questions/${firstId}/`])
+  const evidence = django(['shell', '-c', `import json; from apps.assessment.models import ExperimentSession,Attempt,NavigationReceipt,SubmissionEvent,QuestionVisitEvent; a=Attempt.objects.get(session_id=${sessionId},assignment_id=${firstId}); print(json.dumps({'protocol':ExperimentSession.objects.get(pk=${sessionId}).transition_protocol_version,'answer':a.draft_answer,'receipts':NavigationReceipt.objects.filter(attempt__session_id=${sessionId}).count(),'submissions':SubmissionEvent.objects.filter(attempt__session_id=${sessionId}).count(),'first_visits':QuestionVisitEvent.objects.filter(session_id=${sessionId},attempt__assignment_id=${firstId}).count(),'next_visits':QuestionVisitEvent.objects.filter(session_id=${sessionId},attempt__assignment_id=${nextId}).count()}))`])
+  expect(evidence).toEqual({ protocol: 1, answer: 'A', receipts: 2, submissions: 0, first_visits: 2, next_visits: 1 })
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    await expect(page.locator('[name=answer]').first()).toBeEnabled()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`transition-ready-${viewport.width}.png`), fullPage: true })
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.evaluate(() => { document.documentElement.style.zoom = '2' })
+  await expect(page.locator('[name=answer]').first()).toBeEnabled()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath('transition-ready-css-200pct.png'), fullPage: true })
+})
+
+for (const { recovery, bundled } of [{ recovery: 'reload', bundled: true }, { recovery: 'retry', bundled: true }, { recovery: 'retry', bundled: false }]) test(`submitted answers stay locked while closing receipt is delayed and recover after ${recovery}${bundled ? '' : ' with legacy close'}`, async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  test.skip(process.env.CLOSE_BUNDLE_ENABLED !== '1', 'Requires the explicit close bundle candidate.')
+  const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-close-retry-${Date.now()}'; command.handle()`])
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const closeBodies: unknown[] = []
+  if (!bundled) await page.route('**/api/v1/student/sessions/*/questions/*/', async route => {
+    if (route.request().method() !== 'POST') return route.continue()
+    const response = await route.fetch()
+    const body = await response.json()
+    body.data.process.close_bundle.enabled = false
+    await route.fulfill({ response, json: body })
+  })
+  await page.route('**/writer-lease/release/', async route => {
+    const body = route.request().postDataJSON()
+    if (bundled && !body.capture_bundle) return route.continue()
+    closeBodies.push(body)
+    const response = await route.fetch()
+    expect(response.ok(), await response.text()).toBe(true)
+    if (closeBodies.length === 1) { await held; await route.abort('failed'); return }
+    await route.fulfill({ response })
+  })
+  await page.goto('/login/')
+  await page.getByLabel('账号或学号').fill('S002')
+  await page.getByLabel('密码').fill('student123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
+  await page.goto(`/student/courses/${fixture.course.id}/`)
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'E2E Capture V2 五题回放', exact: true }) }).getByRole('button', { name: '开始作业' }).click()
+  await page.getByRole('radio').first().check()
+  const rule = page.locator('[aria-label="题目工具"] .kt-alert').filter({ hasText: '本题要求完成' })
+  await rule.getByRole('button', { name: '开始检查', exact: true }).click()
+  await rule.getByRole('button', { name: '完成检查', exact: true }).click()
+  const current = new URL(page.url()).pathname
+  await page.getByRole('button', { name: '确认提交本题', exact: true }).click()
+  if (await page.locator('[data-confidence-panel]').isVisible()) await page.getByRole('button', { name: /跳过评价/ }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '提交并锁定', exact: true }).click()
+  await expect(page.locator('[data-retry-close]')).toBeVisible()
+  expect(new URL(page.url()).pathname).toBe(current)
+  await expect(page.getByRole('radio').first()).toBeDisabled()
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    await expect(page.locator('[data-retry-close]')).toBeEnabled()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`close-pending-${viewport.width}.png`), fullPage: true })
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.evaluate(() => { document.documentElement.style.zoom = '2' })
+  await page.screenshot({ path: testInfo.outputPath('close-pending-document-zoom200.png'), fullPage: true })
+  await expect(page.locator('[data-retry-close]')).toBeEnabled()
+  await page.evaluate(() => { document.documentElement.style.zoom = '' })
+  release()
+  await expect.poll(() => closeBodies.length).toBe(1)
+  if (recovery === 'reload') await page.reload()
+  else await page.locator('[data-retry-close]').click()
+  await expect(page).not.toHaveURL(url => url.pathname === current)
+  expect(closeBodies).toHaveLength(2)
+  expect(closeBodies[1]).toEqual(closeBodies[0])
+})
+
 test('five short-response types retain trajectories through offline reload, IME and formal feedback', async ({ browserName, page, context }, testInfo) => {
   test.setTimeout(240_000)
   test.skip(browserName !== 'chromium', 'Chromium provides the CDP IME controls used by this capture journey.')

@@ -5,13 +5,23 @@ from contextlib import contextmanager
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import OperationalError, connection, transaction
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.test import RequestFactory, SimpleTestCase, TestCase, TransactionTestCase, override_settings
 
 from .middleware import RequestIdMiddleware
 
 
 class CaptureDiagnosticGuardTests(SimpleTestCase):
+    @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=True)
+    def test_full_response_bytes_include_the_existing_api_envelope(self):
+        request = RequestFactory().get('/api/v1/student/attempts/1/')
+        with patch.dict(os.environ, {'POSTGRES_DB': 'kt_e2e'}), self.assertLogs('kt.capture_diagnostics', level='WARNING') as logs:
+            response = RequestIdMiddleware(lambda request: JsonResponse({'value': 'PRIVATE'}))(request)
+        row = json.loads(logs.records[-1].getMessage())
+        self.assertEqual(row['response_body_bytes'], len(response.content))
+        self.assertEqual(json.loads(response.content)['data'], {'value': 'PRIVATE'})
+        self.assertNotIn('PRIVATE', json.dumps(row))
+
     @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=False)
     def test_disabled_diagnostics_does_not_touch_database_or_accept_client_id(self):
         request = RequestFactory().post('/api/v1/student/attempts/1/draft/', HTTP_X_REQUEST_ID='a' * 32)
@@ -123,6 +133,37 @@ class CaptureDiagnosticSQLTests(TestCase):
 
 @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=True)
 class CaptureDiagnosticCommitTests(TransactionTestCase):
+    def test_session_response_save_is_inside_full_diagnostic_and_nested_timings(self):
+        from apps.accounts.session_middleware import SessionMiddleware
+        from django.contrib.sessions.backends.db import SessionStore
+        existing = SessionStore()
+        existing['private'] = 'PRIVATE ANSWER'
+        existing.save()
+        def view(request):
+            self.assertEqual(request.session['private'], 'PRIVATE ANSWER')
+            request.session['private'] = 'PRIVATE ANSWER'
+            return HttpResponse('ok')
+        request = RequestFactory().post('/api/v1/student/attempts/1/draft/')
+        request.COOKIES['sessionid'] = existing.session_key
+        with patch.dict(os.environ, {'POSTGRES_DB': 'kt_e2e'}), self.assertLogs('kt.capture_diagnostics', level='WARNING') as logs:
+            response = RequestIdMiddleware(SessionMiddleware(view))(request)
+        row = json.loads(logs.records[-1].getMessage())
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('timing_nesting', row)
+        self.assertIn('session', row['timing_nesting'])
+        self.assertEqual(row['session_save_count'], 1)
+        self.assertEqual(row['session_load_count'], 1)
+        self.assertGreaterEqual(row['session_load_seconds'], 0)
+        self.assertGreaterEqual(row['session_save_seconds'], 0)
+        self.assertGreaterEqual(row['session_response_seconds'], row['session_save_seconds'])
+        self.assertGreater(row['sql_count'], 0)
+        self.assertGreater(row['commit_count'], 0)
+        self.assertGreaterEqual(row['measured_database_union_seconds'], 0)
+        state = request.META['kt.capture_timing']
+        self.assertGreaterEqual(state['capture_metrics']['middleware_log_serialize_seconds'], 0)
+        self.assertGreaterEqual(state['capture_metrics']['middleware_log_output_seconds'], 0)
+        self.assertNotIn('PRIVATE ANSWER', json.dumps(row))
+
     def test_connection_establishment_and_its_failure_are_timed_without_credentials(self):
         connection.close()
         def view(request):

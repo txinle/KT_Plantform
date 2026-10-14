@@ -9,6 +9,8 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from apps.analytics.research_materialization_jobs import coalesce_session_materializations
+
 from .event_invariants import TELEMETRY_EVENTS, SESSION_ONLY_EVENTS
 from .event_schema_registry import (
     EventPayloadValidationError,
@@ -309,8 +311,9 @@ def parse_event_batch(*, student, document, sessions=None, attempts=None):
     return client_instance_id, tuple(parsed)
 
 
+@coalesce_session_materializations()
 @transaction.atomic
-def append_event_batch(*, student, document, request_received_at=None, locked_sessions=None, locked_attempts=None):
+def append_event_batch(*, student, document, request_received_at=None, locked_sessions=None, locked_attempts=None, recording_close=False):
     require_exact_mapping(document, allowed=BATCH_FIELDS)
     if not isinstance(document['events'], list) or not 1 <= len(document['events']) <= MAX_BATCH_EVENTS:
         raise ProcessRequestError('invalid_batch_size')
@@ -330,15 +333,21 @@ def append_event_batch(*, student, document, request_received_at=None, locked_se
         validation_key = (
             parsed.session.pk,
             getattr(parsed.attempt, "pk", None),
+            parsed.event_type if recording_close else None,
         )
         if validation_key in validated:
             continue
         try:
-            time_error = _validate_process_event_time(
-                parsed.session,
-                parsed.attempt,
-                request_received_at=request_received_at,
-            )
+            if recording_close:
+                from .recording_capture_services import validate_close_recording_time
+                time_error = validate_close_recording_time(parsed.session, parsed.attempt,
+                    request_received_at=request_received_at, event_type=parsed.event_type)
+            else:
+                time_error = _validate_process_event_time(
+                    parsed.session,
+                    parsed.attempt,
+                    request_received_at=request_received_at,
+                )
         except ValidationError as exc:
             raise ProcessConflictError("course_access_revoked") from exc
         if time_error:
@@ -457,10 +466,12 @@ def append_event_batch(*, student, document, request_received_at=None, locked_se
                         "is_ime", observation.get("input_method") == "ime"
                     ),
                 )
-        for session_id, session in sessions.items():
-            session.next_ingest_sequence_no = next_sequences[session_id]
+        changed_sessions = [session for session_id, session in sessions.items()
+                            if session.next_ingest_sequence_no != next_sequences[session_id]]
+        for session in changed_sessions:
+            session.next_ingest_sequence_no = next_sequences[session.pk]
         ExperimentSession.objects.bulk_update(
-            sessions.values(), ["next_ingest_sequence_no"]
+            changed_sessions, ["next_ingest_sequence_no"]
         )
     except EventIdempotencyConflict as error:
         raise ProcessConflictError() from error

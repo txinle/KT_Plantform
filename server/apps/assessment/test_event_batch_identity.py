@@ -54,6 +54,33 @@ class BatchIdentityQueryTests(IdentityBatchFixture, TestCase):
         self.assertEqual(len(self.identity_queries(document)), 1)
         self.assertEqual(len(self.identity_queries({**document, 'events': document['events'][:1]})), 1)
 
+    def test_batch_marks_source_dirty_once_and_registers_one_callback(self):
+        ExperimentSession.objects.filter(pk=self.session.pk).update(
+            status=ExperimentSession.Status.COMPLETED, terminal_at=timezone.now())
+        self.session.refresh_from_db()
+        before = self.session.research_source_revision
+        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+            self.ingest(self.document(6))
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.research_source_revision, before + 1)
+        marked = [callback for callback in callbacks
+                  if getattr(callback, '_coalesced_research_session_ids', ())]
+        self.assertEqual(len(marked), 1)
+
+    def test_exact_batch_replay_does_not_write_sequence_or_source_revision(self):
+        document = self.document()
+        original = self.ingest(document)
+        self.session.refresh_from_db()
+        before = (self.session.next_ingest_sequence_no, self.session.research_source_revision)
+        with CaptureQueriesContext(connection) as queries:
+            self.assertEqual(self.ingest(document), original)
+        writes = [row['sql'] for row in queries
+                  if row['sql'].lstrip().startswith(('INSERT ', 'UPDATE ', 'DELETE '))]
+        self.assertEqual(writes, [])
+        self.session.refresh_from_db()
+        self.assertEqual((self.session.next_ingest_sequence_no,
+                          self.session.research_source_revision), before)
+
     def test_changed_uuid_and_original_material_still_conflict(self):
         document = self.document(1)
         original = self.ingest(document)

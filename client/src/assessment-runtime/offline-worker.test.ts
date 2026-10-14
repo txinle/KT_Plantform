@@ -19,10 +19,11 @@ function enteredState(session: number, assignment: number, user: number) {
     entry_receipt: { session_id: session, assignment_id: assignment, attempt_id: 13, visit_id: 41, entry_event_id: 'entry-event' } }
 }
 
-function harness() {
+function harness(existingStores?: Map<string, Map<string, Response>>) {
   const handlers: Record<string, (event: WorkerEvent) => void> = {}
-  const stores = new Map<string, Map<string, Response>>()
+  const stores = existingStores ?? new Map<string, Map<string, Response>>()
   let beforeRead: ((url: string) => Promise<void>) | undefined
+  let beforePut: ((url: string) => Promise<void>) | undefined
   const key = (request: string | Request) => typeof request === 'string' ? request : request.url
   const caches = {
     keys: async () => [...stores.keys()],
@@ -32,7 +33,7 @@ function harness() {
       const store = stores.get(name)!
       return {
         match: async (request: string | Request) => { const response = store.get(key(request))?.clone(); await beforeRead?.(key(request)); return response },
-        put: async (request: string | Request, response: Response) => { store.set(key(request), response.clone()) },
+        put: async (request: string | Request, response: Response) => { await beforePut?.(key(request)); store.set(key(request), response.clone()) },
         delete: async (request: string | Request) => store.delete(key(request)),
       }
     },
@@ -70,7 +71,8 @@ function harness() {
     await pending
     return response ? await response : undefined
   }
-  return { prepare, message, request, fetch, stores, caches, beforeCacheRead: (hook: typeof beforeRead) => { beforeRead = hook }, switchUser: (id: number) => { userId = id }, activate: async () => {
+  return { prepare, message, request, fetch, stores, caches, beforeCacheRead: (hook: typeof beforeRead) => { beforeRead = hook },
+    beforeCachePut: (hook: typeof beforePut) => { beforePut = hook }, switchUser: (id: number) => { userId = id }, activate: async () => {
     let pending: Promise<unknown> | undefined
     handlers.activate!({ waitUntil: promise => { pending = promise } })
     await pending
@@ -78,17 +80,93 @@ function harness() {
 }
 
 describe('capture-v2 offline worker resource preparation', () => {
-  it('deduplicates resources and reuses immutable hashes while revalidating unversioned URLs', async () => {
+  it('deduplicates resources and reuses completed common preparation in the same account session and build', async () => {
     const worker = harness()
     const mutable = `${origin}/static/js/assessment.js`
-    expect(await worker.prepare([immutable, immutable, mutable])).toMatchObject({ ok: true })
+    expect(await worker.prepare([immutable, immutable, mutable])).toMatchObject({ ok: true, commonResourcesPrepared: true })
     expect(worker.fetch.mock.calls.filter(([url]) => url === immutable)).toHaveLength(1)
     worker.fetch.mockClear()
+    const cacheReads: string[] = []
+    worker.beforeCacheRead(async url => { cacheReads.push(url) })
     expect(await worker.prepare([immutable, mutable])).toMatchObject({ ok: true })
     expect(worker.fetch.mock.calls.map(([url]) => url)).not.toContain(page)
     expect(worker.fetch.mock.calls.filter(([url]) => url === immutable)).toHaveLength(0)
-    expect(worker.fetch.mock.calls.filter(([url]) => url === mutable)).toHaveLength(1)
-    expect(worker.fetch).toHaveBeenCalledWith(mutable, expect.objectContaining({ cache: 'no-cache' }))
+    expect(worker.fetch.mock.calls.filter(([url]) => url === mutable)).toHaveLength(0)
+    expect(cacheReads).not.toContain(shell)
+    expect(cacheReads).not.toContain(immutable)
+    expect(worker.fetch.mock.calls.filter(([url]) => String(url).endsWith('/api/v1/auth/session/'))).toHaveLength(1)
+  })
+
+  it('still durably writes each question bootstrap and API state when common resources are reused', async () => {
+    const worker = harness()
+    expect(await worker.prepare([immutable])).toMatchObject({ ok: true })
+    const otherPage = `${origin}/student/sessions/7/questions/12/`
+    const otherApi = `${origin}/api/v1/student/sessions/7/questions/12/`
+    const updated = { ...enteredState(7, 12, 3), saved_answer: 'updated' }
+    const bootstrap = { version: 1, page_path: new URL(otherPage).pathname, assessment_session_id: 7,
+      assignment_id: 12, csrf_token: 'new-csrf', user: { id: 3 } }
+    expect(await worker.prepare([], { page: otherPage, api: otherApi, state: updated, bootstrap })).toMatchObject({ ok: true })
+    expect(await worker.prepare([], { page: otherPage, api: otherApi,
+      state: { ...updated, saved_answer: 'latest' }, bootstrap })).toMatchObject({ ok: true })
+    worker.fetch.mockRejectedValue(new TypeError('offline'))
+    expect(await (await worker.request(otherApi))?.json()).toMatchObject({ data: { saved_answer: 'latest' } })
+    expect(await (await worker.request(otherPage))?.text()).toContain('new-csrf')
+    expect(await (await worker.request(api))?.json()).toMatchObject({ data: { assignment: { assignment_id: 11 } } })
+  })
+
+  it('retries unsuccessful common preparation and includes newly loaded static resources', async () => {
+    const worker = harness()
+    const mutable = `${origin}/static/js/assessment.js`
+    const later = `${origin}/static/js/question-media.js`
+    const original = worker.fetch.getMockImplementation()!
+    worker.fetch.mockImplementationOnce(original)
+    worker.fetch.mockImplementation(async url => url === mutable ? new Response('', { status: 503 }) : original(url))
+    expect(await worker.prepare([mutable])).toMatchObject({ ok: false })
+    worker.fetch.mockImplementation(original)
+    expect(await worker.prepare([mutable])).toMatchObject({ ok: true })
+    expect(await worker.prepare([mutable, later])).toMatchObject({ ok: true })
+    expect(worker.fetch.mock.calls.filter(([url]) => url === mutable)).toHaveLength(2)
+    expect(worker.fetch.mock.calls.filter(([url]) => url === later)).toHaveLength(1)
+  })
+
+  it('rechecks prior mandatory resources after the worker restarts when the client sends only new URLs', async () => {
+    const firstWorker = harness()
+    expect(await firstWorker.prepare([immutable])).toMatchObject({ ok: true })
+    for (const store of firstWorker.stores.values()) store.delete(immutable)
+    const restarted = harness(firstWorker.stores)
+    const original = restarted.fetch.getMockImplementation()!
+    restarted.fetch.mockImplementation(async url => url === immutable ? new Response('', { status: 503 }) : original(url))
+    expect(await restarted.prepare([])).toMatchObject({ ok: false })
+    restarted.fetch.mockImplementation(original)
+    expect(await restarted.prepare([])).toMatchObject({ ok: true })
+    expect(restarted.fetch.mock.calls.filter(([url]) => url === immutable)).toHaveLength(2)
+  })
+
+  it('does not mark question ready when its API state cannot be durably written and retries the write', async () => {
+    const worker = harness()
+    expect(await worker.prepare([immutable])).toMatchObject({ ok: true })
+    const writes: string[] = []
+    worker.beforeCachePut(async url => { writes.push(url); if (url === api) throw new Error('QuotaExceededError') })
+    expect(await worker.prepare([])).toMatchObject({ ok: false, error: expect.stringContaining('QuotaExceededError') })
+    worker.beforeCachePut(async url => { writes.push(url) })
+    expect(await worker.prepare([])).toMatchObject({ ok: true })
+    expect(writes.filter(url => url === api)).toHaveLength(2)
+  })
+
+  it('revalidates unversioned common resources for different sessions, accounts and after explicit clear', async () => {
+    const worker = harness()
+    const mutable = `${origin}/static/js/assessment.js`
+    expect(await worker.prepare([mutable])).toMatchObject({ ok: true })
+    const otherPage = `${origin}/student/sessions/8/questions/12/`
+    expect(await worker.prepare([mutable], { page: otherPage, api: `${origin}/api/v1/student/sessions/8/questions/12/`,
+      state: enteredState(8, 12, 3), bootstrap: { version: 1, page_path: new URL(otherPage).pathname,
+        assessment_session_id: 8, assignment_id: 12, user: { id: 3 } },
+    }, otherPage)).toMatchObject({ ok: true })
+    worker.switchUser(4)
+    expect(await worker.prepare([mutable])).toMatchObject({ ok: true })
+    await worker.message({ type: 'clear-capture-v2' })
+    expect(await worker.prepare([mutable])).toMatchObject({ ok: true })
+    expect(worker.fetch.mock.calls.filter(([url]) => url === mutable)).toHaveLength(4)
   })
 
   it('fetches missing resources concurrently with at most four requests in flight', async () => {

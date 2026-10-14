@@ -44,8 +44,7 @@ describe('bootstrap initialization', () => {
     } })
     try {
       const bootstrap = await loadBootstrap()
-      const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse({ csrf_token: 'csrf' }))
-        .mockResolvedValueOnce(jsonResponse({}, 401))
+      const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse({ csrf_token: 'csrf', user: null }))
       expect(await bootstrap.initializeBootstrapContext({ fetchImpl: fetchImpl as typeof fetch })).toBeNull()
       expect(postMessage).toHaveBeenCalledWith({ type: 'clear-capture-v2' }, expect.any(Array))
     } finally {
@@ -60,10 +59,10 @@ describe('bootstrap initialization', () => {
     vi.restoreAllMocks()
   })
 
-  it('loads CSRF before an authenticated session and then exposes synchronous context', async () => {
+  it('loads CSRF and authenticated identity in one request then exposes synchronous context', async () => {
     const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ csrf_token: 'csrf-token' }))
       .mockResolvedValueOnce(jsonResponse({
+        csrf_token: 'csrf-token',
         user: {
           id: 7,
           role: 'teacher',
@@ -100,22 +99,17 @@ describe('bootstrap initialization', () => {
     })
     expect(fetchImpl).toHaveBeenNthCalledWith(
       1,
-      '/api/v1/auth/csrf/',
+      '/api/v1/auth/bootstrap/',
       expect.objectContaining({ credentials: 'same-origin', method: 'GET' }),
     )
-    expect(fetchImpl).toHaveBeenNthCalledWith(
-      2,
-      '/api/v1/auth/session/',
-      expect.objectContaining({ credentials: 'same-origin', method: 'GET' }),
-    )
+    expect(fetchImpl).toHaveBeenCalledOnce()
     expect(bootstrap.getBootstrapContext()).toEqual(context)
     expect(bootstrap.getCsrfToken()).toBe('csrf-token')
   })
 
   it('returns a stable unauthenticated state while retaining the CSRF token for login', async () => {
     const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ csrf_token: 'csrf-token' }))
-      .mockResolvedValueOnce(jsonResponse({ error: { code: 'AUTHENTICATION_REQUIRED' } }, 401))
+      .mockResolvedValueOnce(jsonResponse({ csrf_token: 'csrf-token', user: null }))
     const bootstrap = await loadBootstrap()
 
     await expect(bootstrap.initializeBootstrapContext({
@@ -212,8 +206,7 @@ describe('bootstrap initialization', () => {
 
     const user = bootstrap.getBootstrapContext().user
     await bootstrap.initializeBootstrapContext({ force: true, fetchImpl: vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ csrf_token: 'live-csrf' }))
-      .mockResolvedValueOnce(jsonResponse({ user })) as typeof fetch })
+      .mockResolvedValueOnce(jsonResponse({ csrf_token: 'live-csrf', user })) as typeof fetch })
     expect(bootstrap.isOfflineBootstrapRecovery()).toBe(false)
     bootstrap.clearBootstrapContext()
     expect(bootstrap.isOfflineBootstrapRecovery()).toBe(false)
@@ -226,7 +219,7 @@ describe('bootstrap initialization', () => {
 
     await expect(bootstrap.initializeBootstrapContext({
       fetchImpl: fetchImpl as typeof fetch,
-    })).rejects.toThrow('CSRF bootstrap failed with status 503')
+    })).rejects.toThrow('Authentication bootstrap failed with status 503')
   })
 
   it('keeps malformed live JSON hard when an offline envelope exists', async () => {
@@ -242,13 +235,12 @@ describe('bootstrap initialization', () => {
   it('keeps an invalid live identity hard when an offline envelope exists', async () => {
     installValidOfflineBootstrap()
     const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ csrf_token: 'live-csrf-token' }))
-      .mockResolvedValueOnce(jsonResponse({ user: { id: 7 } }))
+      .mockResolvedValueOnce(jsonResponse({ csrf_token: 'live-csrf-token', user: { id: 7 } }))
     const bootstrap = await loadBootstrap()
 
     await expect(bootstrap.initializeBootstrapContext({
       fetchImpl: fetchImpl as typeof fetch,
-    })).rejects.toThrow('Session bootstrap response is invalid')
+    })).rejects.toThrow('Authentication bootstrap response is invalid')
   })
 
   it('does not use an offline envelope whose page scope is stale', async () => {
@@ -262,7 +254,7 @@ describe('bootstrap initialization', () => {
     })).rejects.toThrow('Bootstrap network request failed')
   })
 
-  it('does not use an offline envelope after a live session endpoint returns 401', async () => {
+  it('does not use an offline envelope after live bootstrap returns an anonymous identity', async () => {
     document.body.innerHTML = `<script id="kt-offline-bootstrap" type="application/json">${JSON.stringify({
       version: 1,
       page_path: '/student/sessions/17/questions/23/',
@@ -284,15 +276,14 @@ describe('bootstrap initialization', () => {
     })}</script>`
     window.history.replaceState({}, '', '/student/sessions/17/questions/23/')
     const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ csrf_token: 'live-csrf-token' }))
-      .mockResolvedValueOnce(jsonResponse({ error: { code: 'AUTHENTICATION_REQUIRED' } }, 401))
+      .mockResolvedValueOnce(jsonResponse({ csrf_token: 'live-csrf-token', user: null }))
     const bootstrap = await loadBootstrap()
 
     await expect(bootstrap.initializeBootstrapContext({
       fetchImpl: fetchImpl as typeof fetch,
     })).resolves.toBeNull()
 
-    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(fetchImpl).toHaveBeenCalledOnce()
     expect(bootstrap.getCsrfToken()).toBe('live-csrf-token')
   })
 })

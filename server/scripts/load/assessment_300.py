@@ -4,6 +4,7 @@
 import argparse
 import concurrent.futures
 import http.cookiejar
+import hashlib
 import json
 import math
 import re
@@ -109,6 +110,14 @@ class Runner:
             'attempt': context.get('attempt', 1), 'method': method,
             'path': re.sub(r'/\d+(?=/|$)', '/:id', path.split('?', 1)[0]),
             'sent_at': time.time(), 'http_status': None, 'error_type': None, 'successful': False}
+        row['student_index'] = getattr(state, 'load_student_index', None)
+        if method == 'POST' and re.fullmatch(r'/api/v1/assessment/process/attempts/\d+/writer-lease/(renew|acquire)/', path):
+            client = body.get('client_instance_id') if isinstance(body, dict) else None
+            if isinstance(client, str) and client:
+                row['writer_client_sha256'] = hashlib.sha256(client.encode()).hexdigest()
+                row['lease_scope_sha256'] = hashlib.sha256(path.rsplit('/', 2)[0].encode()).hexdigest()
+                if path.endswith('/renew/'):
+                    row['lease_cached_valid_until'] = getattr(state, 'browser_lease_cached_valid_until', None)
         with self.lock:
             self.request_count += 1
         try:
@@ -140,8 +149,11 @@ class Runner:
             raise RuntimeError("HTTP transport or response decoding failure") from None
         finally:
             row['elapsed_seconds'] = round(time.perf_counter() - started, 6)
+            row['completed_at'] = time.time()
+            row['server_error_code'] = getattr(state, 'browser_last_error_code', None) if not row['successful'] else None
             with self.lock:
                 self.request_attempts.append(row)
+                state.browser_last_request_attempt = row.copy()
                 if self.attempt_output is not None:
                     self.attempt_output.write(json.dumps(row) + '\n')
                     self.attempt_output.flush()

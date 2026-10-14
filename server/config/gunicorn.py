@@ -6,7 +6,7 @@ from pathlib import Path
 
 from config.capture_timing import (
     TIMING_ENV_KEY, coarse_path, diagnostics_enabled, diagnostics_mode, ingress_stamp,
-    mark, pending_timing, sanitized_id, timing_fields,
+    emit_diagnostic, mark, pending_timing, sanitized_id, timing_fields,
 )
 
 
@@ -102,7 +102,8 @@ def post_request(worker, req, environ, resp):
             'seconds': round(ended_clock - req.capture_started_clock, 6),
             'error_type': state.get('error_type')}
         row.update(timing_fields(state))
-        logger.warning(json.dumps(row, separators=(',', ':')))
+        row['own_log_timing_scope'] = 'serialization/output occur after gunicorn_end; unavailable in this record'
+        emit_diagnostic(logger, row, state, 'gunicorn')
     finally:
         pending_timing.reset(req.capture_timing_token)
         del req.capture_timing_token

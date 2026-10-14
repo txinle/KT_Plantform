@@ -2,8 +2,13 @@
 # Always use a NEW project: -p kt-school-e2e. Never reuse the production project.
 x-test-env: &test-env
   env_file: !override [school-test.env]
-  environment:
+  environment: &test-environment
     POSTGRES_DB: kt_e2e
+    SCHOOL_REDIS_SESSION_ENABLED: ${SCHOOL_REDIS_SESSION_ENABLED:-0}
+    SESSION_REDIS_URL: redis://redis-session:6379/0
+    SESSION_REDIS_TIMEOUT_SECONDS: ${SESSION_REDIS_TIMEOUT_SECONDS:-5}
+    SESSION_REDIS_KEY_PREFIX: "kt:school:session:v1:"
+    CLOSE_BUNDLE_ENABLED: ${CLOSE_BUNDLE_ENABLED:-0}
     DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
     DJANGO_CSRF_TRUSTED_ORIGINS: http://127.0.0.1:18080,http://localhost:18080
     CANONICAL_PUBLIC_ORIGIN: ""
@@ -19,6 +24,12 @@ x-test-env: &test-env
 
 services:
   db:
+    # Owned kt-school-e2e database container only; never apply to shared production PostgreSQL.
+    mem_limit: 4G
+    command: !override ["postgres", "-c", "max_connections=64", "-c", "shared_buffers=1GB",
+      "-c", "effective_cache_size=3GB", "-c", "work_mem=4MB", "-c", "maintenance_work_mem=128MB",
+      "-c", "autovacuum_work_mem=64MB", "-c", "max_wal_size=2GB", "-c", "checkpoint_completion_target=0.9",
+      "-c", "fsync=on", "-c", "synchronous_commit=on", "-c", "full_page_writes=on"]
     environment:
       POSTGRES_DB: kt_e2e
       POSTGRES_USER: ${SCHOOL_TEST_POSTGRES_USER:-kt_user}
@@ -31,6 +42,12 @@ services:
   migrate:
     <<: *test-env
   web:
+    <<: *test-env
+  auth:
+    <<: *test-env
+  assessment:
+    <<: *test-env
+  capture:
     <<: *test-env
   student-read:
     <<: *test-env

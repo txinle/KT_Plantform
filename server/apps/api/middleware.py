@@ -10,7 +10,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import OperationalError, connection
 
-from config.capture_timing import TIMING_ENV_KEY, coarse_path, diagnostics_mode, finish_interval, mark, timing_fields
+from config.capture_timing import TIMING_ENV_KEY, coarse_path, diagnostics_mode, emit_diagnostic, finish_interval, interval_union_seconds, mark, timing_fields
 
 
 logger = logging.getLogger('kt.capture_diagnostics')
@@ -44,6 +44,10 @@ class RequestIdMiddleware:
             response = self.profile_capture(request)
         else:
             response = self.assessment_response(request)
+        return response
+
+    @staticmethod
+    def finalize_response(request, response):
         if request.path.startswith("/api/v1/"):
             from .response import apply_api_envelope
             response = apply_api_envelope(request, response)
@@ -52,7 +56,7 @@ class RequestIdMiddleware:
 
     def assessment_response(self, request):
         if not getattr(settings, 'ASSESSMENT_CONNECT_RETRY_ENABLED', False) or not request.path.startswith(ASSESSMENT_PATHS):
-            return self.get_response(request)
+            return self.finalize_response(request, self.get_response(request))
         original_connect = connection.get_new_connection
         remaining = 1
 
@@ -79,7 +83,7 @@ class RequestIdMiddleware:
 
         try:
             connection.get_new_connection = connect
-            return self.get_response(request)
+            return self.finalize_response(request, self.get_response(request))
         finally:
             connection.get_new_connection = original_connect
 
@@ -105,11 +109,14 @@ class RequestIdMiddleware:
             row[phase + '_seconds'] = 0
         lists = {'connection': 'connections', 'sql': 'queries', 'commit': 'commits',
                  'rollback': 'rollbacks', 'commit_hooks': 'commit_hooks'}
+        database_intervals = []
 
         def record(phase, stamp, detail):
             seconds = finish_interval(detail, stamp, state, phase) if detailed else time.perf_counter() - stamp
             row[phase + '_count'] += 1
             row[phase + '_seconds'] += seconds
+            if phase != 'commit_hooks':
+                database_intervals.append((stamp, stamp + seconds))
             if detailed:
                 row[lists[phase]].append(detail)
 
@@ -209,14 +216,22 @@ class RequestIdMiddleware:
             mark(state, 'middleware_end')
             row['seconds'] = round(state['marks']['middleware_end'][0] - started, 6)
             row['ended_at'] = state['marks']['middleware_end'][1]
-            database_seconds = sum(row[phase + '_seconds'] for phase in ('connection', 'sql', 'commit', 'rollback'))
+            database_seconds = interval_union_seconds(database_intervals)
+            row['measured_database_union_seconds'] = round(database_seconds, 6)
+            row['timing_nesting'] = {
+                'session': 'load_and_response_save_within_middleware; SQL/commit may be nested inside session',
+                'database': 'SQL/commit/rollback/connection inclusive; union counts overlaps once',
+                'commit_hooks': 'inclusive; callback SQL is also in SQL metrics',
+                'logging': 'middleware JSON serialization/output after middleware_end; measured in gunicorn record',
+            }
             row['application_excluding_measured_database_seconds'] = round(max(0, row['seconds'] - database_seconds), 6)
             for phase in ('connection', 'sql', 'commit', 'rollback', 'commit_hooks'):
                 row[phase + '_seconds'] = round(row[phase + '_seconds'], 6)
-            state['capture_metrics'] = {key: row[key] for key in (
+            state.setdefault('capture_metrics', {}).update({key: row[key] for key in (
                 'connection_count', 'connection_seconds', 'sql_count', 'sql_seconds',
                 'commit_count', 'commit_seconds', 'rollback_count', 'rollback_seconds',
                 'commit_hooks_count', 'commit_hooks_seconds', 'request_body_bytes', 'response_body_bytes',
-                'application_excluding_measured_database_seconds', 'sql_timing_scope')}
+                'application_excluding_measured_database_seconds', 'sql_timing_scope',
+                'measured_database_union_seconds', 'timing_nesting')})
             row.update(timing_fields(state))
-            logger.warning(json.dumps(row, separators=(',', ':')))
+            emit_diagnostic(logger, row, state, 'middleware')

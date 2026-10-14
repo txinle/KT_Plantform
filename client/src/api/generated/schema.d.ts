@@ -81,7 +81,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Release the matching attempt writer lease. */
+        /** @description Release the matching lease; optional close bundle commits original recording evidence, checkpoints and release together. capture_operation_id replays its immutable durable receipt. */
         post: operations["assessment_writer_lease_release"];
         delete?: never;
         options?: never;
@@ -219,6 +219,22 @@ export interface paths {
         put?: never;
         /** @description Finalize the owned clock-correlation sample. */
         post: operations["assessment_time_sync_finalize"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/bootstrap/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["auth_bootstrap_retrieve"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2862,6 +2878,10 @@ export interface components {
         };
         /** @enum {unknown} */
         BlankEnum: "";
+        BootstrapContext: {
+            csrf_token: string;
+            user: components["schemas"]["ApiUser"] | null;
+        };
         ClassAnalysisScope: {
             course_id: number;
             class_group_id: number;
@@ -3281,14 +3301,15 @@ export interface components {
             completed_sessions: number;
             total_sessions: number;
             submitted_attempts: number;
-            quality_warnings: number;
-            process_records: number;
-            not_evaluable: number;
+            quality_warnings: number | null;
+            process_records: number | null;
+            not_evaluable: number | null;
         };
         DataCenterOverview: {
             course: components["schemas"]["CourseReference"];
             scope: components["schemas"]["DataCenterTeachingScope"];
             facts: components["schemas"]["DataCenterFacts"];
+            preparation?: components["schemas"]["DataCenterPreparation"] | null;
             recent_exports: components["schemas"]["DataCenterRecentExport"][];
             actions: components["schemas"]["DataCenterOverviewActions"];
         };
@@ -3523,6 +3544,10 @@ export interface components {
         };
         LegacyStudentImportResult: {
             imported: number;
+        };
+        LoginContext: {
+            user: components["schemas"]["ApiUser"];
+            csrf_token: string;
         };
         LoginRequest: {
             username: string;
@@ -5450,7 +5475,9 @@ export interface components {
             text: string;
         };
         StudentRuntimeProcess: {
+            transition_entry?: components["schemas"]["TransitionEntryCapability"];
             capture_bundle?: components["schemas"]["AtomicSubmissionCapability"];
+            close_bundle?: components["schemas"]["AtomicSubmissionCapability"];
             atomic_submission?: components["schemas"]["AtomicSubmissionCapability"];
             save_and_leave?: components["schemas"]["AtomicSubmissionCapability"];
             writer_lease_acquire_url?: string;
@@ -6200,6 +6227,10 @@ export interface components {
          * @enum {string}
          */
         TransitionApplicabilityEnum: "applicable" | "not_applicable";
+        TransitionEntryCapability: {
+            enabled: boolean;
+            version: number;
+        };
         /**
          * @description * `private` - private
          *     * `shared` - shared
@@ -6760,6 +6791,106 @@ export interface operations {
                     lease_token: string;
                     /** Format: uuid */
                     client_instance_id: string;
+                } | {
+                    /** Format: uuid */
+                    lease_token: string;
+                    /** Format: uuid */
+                    client_instance_id: string;
+                    /** @description Original bounded capture facts; maximum complete body 8388608 bytes. Batch facts share one owned session; draft/tool facts belong to the current attempt or session. */
+                    capture_bundle: {
+                        /** @enum {integer} */
+                        version: 1;
+                        /** Format: uuid */
+                        client_instance_id: string;
+                        event_boundary: number;
+                        events: {
+                            /** Format: uuid */
+                            event_id?: string;
+                            /** @enum {string} */
+                            event_type: "activity_heartbeat" | "confidence_observed" | "document_hidden" | "document_visible" | "explanation_shown" | "feedback_exposure" | "feedback_shown" | "hint_closed" | "hint_opened" | "input_operation" | "item_left" | "item_rendered" | "legacy_session_end_observed" | "legacy_session_start_observed" | "network_offline" | "network_online" | "pagehide" | "pageshow" | "research_tool_observed" | "research_tool_requested" | "resource_closed" | "resource_opened" | "response_commit_requested" | "response_input_started" | "response_state_changed" | "response_transition" | "session_completed" | "session_expired" | "session_invalidated" | "session_reopened" | "session_started" | "simulation_error_returned" | "simulation_parameter_changed" | "simulation_run_completed" | "simulation_run_started" | "text_edit_observed" | "window_blurred" | "window_focused";
+                            event_version: number;
+                            session_id: number;
+                            attempt_id?: number | null;
+                            client_sequence_no: number;
+                            /** Format: uuid */
+                            correlation_id?: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_wall_time_utc: string;
+                            /** @description Finite nonnegative decimal, validated by the existing domain parser. */
+                            client_monotonic_ms: number | string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_time_origin: string;
+                            /** Format: uuid */
+                            time_sync_id?: string | null;
+                            quality_flags: string[];
+                            app_version: string;
+                            /** @description Versioned payload validated by apps.assessment.event_schema_registry; the authoritative JSON schemas are assessment/event_schemas/<event_type>/v<event_version>.json. */
+                            payload: {
+                                [key: string]: unknown;
+                            };
+                        }[];
+                        checkpoints: {
+                            /** Format: uuid */
+                            checkpoint_id: string;
+                            session_id: number;
+                            /** Format: uuid */
+                            client_instance_id: string;
+                            highest_emitted_sequence_no: number;
+                            highest_acked_sequence_no: number;
+                            highest_contiguous_acked_sequence_no: number;
+                            pending_event_count: number;
+                            failed_event_count: number;
+                            missing_local_sequence_ranges: number[][];
+                            /** @description Finite nonnegative decimal, validated by the existing domain parser. */
+                            client_monotonic_ms: number | string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_wall_time_utc: string;
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            client_time_origin: string;
+                            /** Format: uuid */
+                            time_sync_id: string | null;
+                            /** @enum {string} */
+                            trigger: "heartbeat" | "navigation" | "commit" | "pagehide" | "resume" | "session_end" | "ack_progress";
+                            quality_flags: string[];
+                            app_version: string;
+                        }[];
+                    };
+                    /** Format: uuid */
+                    capture_operation_id: string;
+                    /** Format: uuid */
+                    leave_event_id: string;
+                    /** @description Frozen target entry for a session that selected transition protocol v1 at creation. Executed after the source mutation commits, using a separate transaction and current deadline checks. */
+                    next_entry?: {
+                        assignment_id: number;
+                        /** @enum {string} */
+                        reason: "navigation_click" | "resume";
+                        /** Format: uuid */
+                        navigation_id: string;
+                        /**
+                         * Format: date-time
+                         * @description Timezone-aware timestamp.
+                         */
+                        client_occurred_at: string;
+                        /** @description Finite nonnegative decimal, validated by the existing domain parser. */
+                        client_monotonic_ms: number | string;
+                        /**
+                         * Format: date-time
+                         * @description Timezone-aware timestamp.
+                         */
+                        client_time_origin: string;
+                    };
                 };
             };
         };
@@ -6774,6 +6905,41 @@ export interface operations {
                         data: {
                             /** @enum {boolean} */
                             success: true;
+                        } | {
+                            /** @enum {boolean} */
+                            success: true;
+                            /** @enum {boolean} */
+                            committed: true;
+                            acknowledgements: {
+                                client_sequence_no: number;
+                                /** Format: uuid */
+                                event_id: string;
+                                server_ingest_sequence_no: number;
+                            }[];
+                            checkpoint_ids: string[];
+                            /** Format: uuid */
+                            capture_operation_id: string;
+                            /** @enum {boolean} */
+                            writer_lease_released: true;
+                            status: string;
+                            response_version: number;
+                            /** Format: uuid */
+                            active_response_event_id: string | null;
+                            /** Format: uuid */
+                            final_response_event_id: string | null;
+                            /** @description The target outcome is independent of the confirmed source receipt. Retry only the original frozen target material after partial success. */
+                            next_entry?: {
+                                /** @enum {boolean} */
+                                committed: true;
+                                runtime: components["schemas"]["StudentRuntimeQuestionEntry"];
+                            } | {
+                                /** @enum {boolean} */
+                                committed: false;
+                                error: {
+                                    code: string;
+                                    message: string;
+                                };
+                            };
                         };
                         meta: {
                             request_id: string;
@@ -8562,6 +8728,30 @@ export interface operations {
             };
         };
     };
+    auth_bootstrap_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["BootstrapContext"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
     auth_csrf_retrieve: {
         parameters: {
             query?: never;
@@ -8607,7 +8797,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: components["schemas"]["SessionContext"];
+                        data: components["schemas"]["LoginContext"];
                         meta: {
                             request_id: string;
                         };
@@ -9011,6 +9201,26 @@ export interface operations {
                         }[];
                         expected_version: number;
                     };
+                    /** @description Frozen target entry for a session that selected transition protocol v1 at creation. Executed after the source mutation commits, using a separate transaction and current deadline checks. */
+                    next_entry?: {
+                        assignment_id: number;
+                        /** @enum {string} */
+                        reason: "navigation_click" | "resume";
+                        /** Format: uuid */
+                        navigation_id: string;
+                        /**
+                         * Format: date-time
+                         * @description Timezone-aware timestamp.
+                         */
+                        client_occurred_at: string;
+                        /** @description Finite nonnegative decimal, validated by the existing domain parser. */
+                        client_monotonic_ms: number | string;
+                        /**
+                         * Format: date-time
+                         * @description Timezone-aware timestamp.
+                         */
+                        client_time_origin: string;
+                    };
                 };
             };
         };
@@ -9075,6 +9285,19 @@ export interface operations {
                             status: string;
                             /** @enum {boolean} */
                             writer_lease_released: true;
+                            /** @description The target outcome is independent of the confirmed source receipt. Retry only the original frozen target material after partial success. */
+                            next_entry?: {
+                                /** @enum {boolean} */
+                                committed: true;
+                                runtime: components["schemas"]["StudentRuntimeQuestionEntry"];
+                            } | {
+                                /** @enum {boolean} */
+                                committed: false;
+                                error: {
+                                    code: string;
+                                    message: string;
+                                };
+                            };
                             to_assignment_id: number;
                             next_url: string;
                         };

@@ -3,6 +3,28 @@ type Stage = 'question_entry' | 'process_runtime' | 'offline_prepare' | 'local_i
   | 'draft_remote' | 'save_and_leave_remote' | 'checkpoint' | 'event_boundary' | 'submit_remote' | 'close' | 'lease' | 'ready'
   | 'local_store' | 'pointer_queue' | 'record_queue' | 'ack' | 'tools'
 
+interface MaterialClock { client_monotonic_ms: number; client_time_origin: string }
+
+export function measureConfirmedMaterial(snapshot: { event_boundary: number; events: MaterialClock[]; checkpoints: MaterialClock[] }, id: string | null) {
+  if (typeof performance.measure !== 'function') return false
+  const now = performance.now()
+  const records = [...snapshot.events, ...snapshot.checkpoints]
+  const starts = records.filter(row => Number.isFinite(row.client_monotonic_ms)
+    && row.client_monotonic_ms >= 0 && row.client_monotonic_ms <= now
+    && Math.abs(Date.parse(row.client_time_origin) - performance.timeOrigin) < 1)
+    .map(row => row.client_monotonic_ms)
+  if (!starts.length) return false
+  const started = Math.min(...starts)
+  performance.measure('kt-assessment:background_confirmation', {
+    start: started, duration: now - started,
+    detail: { operation_id: id, stage: 'background_confirmation', outcome: 'success',
+      event_boundary: snapshot.event_boundary, event_count: snapshot.events.length,
+      checkpoint_count: snapshot.checkpoints.length, timed_record_count: starts.length,
+      untimed_record_count: records.length - starts.length },
+  })
+  return true
+}
+
 let operation: { id: string; action: Action; started: number } | undefined
 
 export function currentAssessmentOperationId() { return operation?.id }

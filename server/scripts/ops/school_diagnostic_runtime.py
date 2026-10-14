@@ -28,6 +28,15 @@ from school_native_db_probe import NativeProbeClient, config_hash, expected_iden
 
 PROJECT = 'kt-school-e2e'
 DATABASE = 'kt_plantform-db-1'
+OWNED_DATABASE = 'kt-school-e2e-db-1'
+ISOLATED_POSTGRES_PROFILE = 'isolated-pg17-v1'
+OWNED_POSTGRES_VOLUME = PROJECT + '_pool_postgres_data'
+OWNED_POSTGRES_RESOURCES = {'memory_bytes': 4 * 1024**3, 'cpus': 0, 'cpu_shares': 3122}
+OWNED_POSTGRES_SETTINGS = {'max_connections': 64, 'shared_buffers': 1024**3,
+    'effective_cache_size': 3 * 1024**3, 'work_mem': 4 * 1024**2,
+    'maintenance_work_mem': 128 * 1024**2, 'autovacuum_work_mem': 64 * 1024**2,
+    'max_wal_size': 2 * 1024**3, 'checkpoint_completion_target': .9,
+    'fsync': 'on', 'synchronous_commit': 'on', 'full_page_writes': 'on'}
 BASE_URL = 'http://127.0.0.1:18080'
 ROLES = ('web', 'student-read', 'teacher-read', 'scheduler', 'pgbouncer', 'nginx',
          'analytics-worker', 'student-comparison-worker', 'publication-worker', 'export-worker')
@@ -36,7 +45,33 @@ WORKERS = {'web': 12, 'student-read': 2, 'teacher-read': 1}
 POOL_ALIASES = {'web': 'kt_core', 'student-read': 'kt_student', 'teacher-read': 'kt_teacher',
                 'analytics-worker': 'kt_background', 'student-comparison-worker': 'kt_background',
                 'publication-worker': 'kt_background', 'export-worker': 'kt_background'}
+SIX_POOL_PROFILE = 'six-pools-180-v1'
+SIX_WORKERS = {'web': 1, 'auth': 4, 'assessment': 8, 'capture': 4, 'student-read': 2, 'teacher-read': 1}
+SIX_POOL_ALIASES = {**POOL_ALIASES, 'auth': 'kt_auth', 'assessment': 'kt_assessment', 'capture': 'kt_capture'}
+SIX_MEMORY = {'web': 512 * 1024**2, 'auth': 1024**3, 'assessment': 4 * 1024**3,
+              'capture': 1280 * 1024**2, 'student-read': 768 * 1024**2, 'teacher-read': 512 * 1024**2}
+SIX_CPU_SHARES = {'web': 512, 'auth': 2048, 'assessment': 4096, 'capture': 2048,
+                  'student-read': 512, 'teacher-read': 256}
+
+
+def six_workers_for_source(source):
+    workers = dict(SIX_WORKERS)
+    if 'worker_short_profile' in source:
+        from school_worker_short import validate_policy
+        try:
+            policy = validate_policy(source['worker_short_profile'])
+        except ValueError as error:
+            raise SafetyInterrupted(str(error)) from error
+        workers['assessment'] = policy['workers']
+    return workers
 STAGE_NAMES = ('short-3', 'short-50', 'short-150', 'short-300', 'baseline-300', 'mixed-300')
+
+
+def validate_owned_postgres_settings(settings):
+    version = settings.get('server_version_num')
+    if (type(version) is not int or not 170000 <= version < 180000
+            or any(settings.get(key) != value for key, value in OWNED_POSTGRES_SETTINGS.items())):
+        raise SafetyInterrupted('Owned PostgreSQL 17 tuning or durability differs')
 
 
 def read(path):
@@ -219,19 +254,66 @@ class DiagnosticRuntime:
         self.compose += ['-f', config['compose_overlay_path']]
         if any(not re.fullmatch(r'sha256:[a-f0-9]{64}', config.get('images', {}).get(role, '')) for role in self.runtime_roles):
             raise SafetyInterrupted('Immutable image IDs required for every frozen role')
-        if config.get('database_container', DATABASE) != DATABASE:
-            raise SafetyInterrupted('Only the designated existing PostgreSQL container is permitted')
+        _ = self.database_container
 
     def source_value(self):
         value = self.config['source_config']
         return read(value) if isinstance(value, str) else value
 
     @property
+    def six_pool_profile(self):
+        value = self.config['source_config']
+        source = self.source_value() if isinstance(value, dict) or Path(value).exists() else {}
+        profile = source.get('pool_profile')
+        if profile not in (None, SIX_POOL_PROFILE):
+            raise SafetyInterrupted('Unknown frozen pool profile')
+        return profile == SIX_POOL_PROFILE
+
+    @property
+    def isolated_postgres(self):
+        value = self.config['source_config']
+        source = self.source_value() if isinstance(value, dict) or Path(value).exists() else {}
+        profile = source.get('postgres_profile')
+        if profile not in (None, ISOLATED_POSTGRES_PROFILE) or self.config.get('postgres_profile', profile) != profile:
+            raise SafetyInterrupted('Unknown or inconsistent frozen PostgreSQL profile')
+        if profile == ISOLATED_POSTGRES_PROFILE and any(source.get('roles', {}).get('db', {}).get(key) != value
+                for key, value in OWNED_POSTGRES_RESOURCES.items()):
+            raise SafetyInterrupted('Owned PostgreSQL resource binding differs')
+        return profile == ISOLATED_POSTGRES_PROFILE
+
+    @property
+    def database_container(self):
+        expected = OWNED_DATABASE if self.isolated_postgres else DATABASE
+        if self.config.get('database_container', DATABASE) != expected:
+            raise SafetyInterrupted('Only the designated frozen PostgreSQL container is permitted')
+        return expected
+
+    @property
+    def database_host(self):
+        expected = 'school-pool-postgres' if self.isolated_postgres else 'school-test-postgres'
+        value = self.config['source_config']
+        source = self.source_value() if isinstance(value, dict) or Path(value).exists() else {}
+        if source.get('database_host', expected) != expected:
+            raise SafetyInterrupted('Frozen PostgreSQL network alias differs')
+        return expected
+
+    @property
+    def http_workers(self):
+        return six_workers_for_source(self.source_value()) if self.six_pool_profile else WORKERS
+
+    @property
+    def pool_aliases(self):
+        return SIX_POOL_ALIASES if self.six_pool_profile else POOL_ALIASES
+
+    @property
     def runtime_roles(self):
         source = self.source_value() if isinstance(self.config['source_config'], dict) or Path(self.config['source_config']).exists() else {}
         admission = source.get('admission', {})
+        roles = ROLES + ('auth', 'assessment', 'capture') if self.six_pool_profile else ROLES
+        if self.isolated_postgres:
+            roles += ('db',)
         if REDIS_ROLE not in self.config['images'] and not admission.get('enabled'):
-            return ROLES
+            return roles
         expected = source.get('roles', {}).get(REDIS_ROLE, {})
         task_ids = admission.get('task_ids')
         if (admission.get('enabled') is not True or not expected
@@ -241,7 +323,7 @@ class DiagnosticRuntime:
                 or len(set(task_ids)) != len(task_ids) or admission.get('capacity') != 8
                 or expected.get('memory_bytes', 0) <= 0 or expected.get('cpus', 0) <= 0):
             raise SafetyInterrupted('Redis admission requires a frozen image, resources and exact task allowlist at capacity 8')
-        return ROLES + (REDIS_ROLE,)
+        return roles + (REDIS_ROLE,)
 
     def probe_binding(self):
         probe_config = self.config['native_probe']
@@ -251,7 +333,7 @@ class DiagnosticRuntime:
                 'probe_config_sha256': fingerprint(probe_config),
                 'probe_secret_sha256': config_hash(secret_config),
                 'native_identity_sha256': config_hash(expected_identity(secret_config)),
-                'helper_sha256': helper_hash(), 'database_container': DATABASE,
+                'helper_sha256': helper_hash(), 'database_container': self.database_container,
                 'docker_deadline_seconds': 1, 'native_deadline_seconds': 1}
 
     def start_command(self):
@@ -261,7 +343,7 @@ class DiagnosticRuntime:
         operation = PROJECT + '-diagnostic-op-' + fingerprint({'attempt': str(attempt), 'args': args})[:16]
         command = self.compose + ['run', '--rm', '--no-deps', '--pull=never', '--name', operation,
             '--label', 'school.diagnostic.operation=' + operation, '--entrypoint', 'python',
-            '-e', 'POSTGRES_HOST=school-test-postgres', '-e', 'POSTGRES_PORT=5432',
+            '-e', 'POSTGRES_HOST=' + self.database_host, '-e', 'POSTGRES_PORT=5432',
             '-e', 'POSTGRES_DB=kt_e2e', '-e', 'POSTGRES_USER=kt_e2e_user', '-e', 'POSTGRES_POOL_ALIAS=',
             '-v', str(self.private) + ':/private:ro', '-v', str(attempt) + ':/attempt']
         for mount in mounts:
@@ -361,14 +443,24 @@ class DiagnosticRuntime:
                 if ('memory_bytes' not in expected_redis or item['HostConfig'].get('Memory') != expected_redis['memory_bytes']
                         or 'cpus' not in expected_redis or item['HostConfig'].get('NanoCpus') != round(expected_redis['cpus'] * 1e9)):
                     raise SafetyInterrupted('Frozen Redis admission resources changed')
-            if role in POOL_ALIASES and (env.get('POSTGRES_HOST') != 'pgbouncer' or env.get('POSTGRES_POOL_ALIAS') != POOL_ALIASES[role]):
+            if role in self.pool_aliases and (env.get('POSTGRES_HOST') != 'pgbouncer' or env.get('POSTGRES_POOL_ALIAS') != self.pool_aliases[role]):
                 raise SafetyInterrupted('Isolated pooled database alias mismatch')
-            if role == 'scheduler' and (env.get('POSTGRES_HOST') != 'school-test-postgres' or env.get('POSTGRES_POOL_ALIAS', '') != ''):
+            if role == 'scheduler' and (env.get('POSTGRES_HOST') != self.database_host or env.get('POSTGRES_POOL_ALIAS', '') != ''):
                 raise SafetyInterrupted('Scheduler must use the direct isolated database')
-            if role == 'pgbouncer' and env.get('PGBOUNCER_SERVER_HOST') != 'school-test-postgres':
+            if role == 'pgbouncer' and env.get('PGBOUNCER_SERVER_HOST') != self.database_host:
                 raise SafetyInterrupted('PgBouncer must point to the designated shared PostgreSQL alias')
+            if role == 'db':
+                networks = item.get('NetworkSettings', {}).get('Networks', {})
+                mounts = item.get('Mounts', [])
+                if (not self.isolated_postgres or item.get('Name') != '/' + self.database_container
+                        or set(networks) != {PROJECT + '_default'}
+                        or self.database_host not in networks[PROJECT + '_default'].get('Aliases', [])
+                        or item['HostConfig'].get('PortBindings') or len(mounts) != 1
+                        or mounts[0].get('Type') != 'volume' or mounts[0].get('Name') != OWNED_POSTGRES_VOLUME
+                        or mounts[0].get('Destination') != '/var/lib/postgresql/data' or mounts[0].get('RW') is not True):
+                    raise SafetyInterrupted('Owned PostgreSQL name, network, ports or volume differs')
             expected = source.get('roles', {}).get(role, {})
-            if role in ('web', 'student-read') and source.get('admission', {}).get('enabled') is True:
+            if role in (self.http_workers if self.six_pool_profile else ('web', 'student-read')) and source.get('admission', {}).get('enabled') is True:
                 admission = source['admission']
                 expected_env = {
                     'ASSESSMENT_ADMISSION_ENABLED': '1',
@@ -378,13 +470,15 @@ class DiagnosticRuntime:
                 }
                 if any(env.get(key) != value for key, value in expected_env.items()):
                     raise SafetyInterrupted('Admission environment binding differs on entry workers')
-            if role in WORKERS and (env.get('GUNICORN_WORKERS') != str(expected.get('workers', WORKERS[role])) or
+            if role in self.http_workers and (env.get('GUNICORN_WORKERS') != str(expected.get('workers', self.http_workers[role])) or
                     env.get('CAPTURE_V2_ENABLED') != '1' or env.get('CAPTURE_V2_COURSE_IDS') != '*'):
                 raise SafetyInterrupted('Frozen capture-enabled worker configuration required')
             if 'memory_bytes' in expected and item['HostConfig']['Memory'] != expected['memory_bytes']:
                 raise SafetyInterrupted('Frozen memory configuration changed')
             if 'cpus' in expected and item['HostConfig']['NanoCpus'] != round(expected['cpus'] * 1e9):
                 raise SafetyInterrupted('Frozen CPU configuration changed')
+            if 'cpu_shares' in expected and item['HostConfig'].get('CpuShares') != expected['cpu_shares']:
+                raise SafetyInterrupted('Frozen CPU priority changed')
             if role == 'nginx' and item['HostConfig'].get('PortBindings', {}).get('80/tcp') != [{'HostIp': '127.0.0.1', 'HostPort': '18080'}]:
                 raise SafetyInterrupted('Only loopback diagnostic port 18080 is permitted')
             roles[role] = item
@@ -394,12 +488,33 @@ class DiagnosticRuntime:
 
     def verify_runtime(self):
         self.validate_containers(self.inspect_test())
-        postgres = json.loads(self.capture(['docker', 'inspect', DATABASE]))[0]
-        if not postgres['State']['Running'] or postgres['Config'].get('Labels', {}).get('com.docker.compose.project') != 'kt_plantform':
+        postgres = json.loads(self.capture(['docker', 'inspect', self.database_container]))[0]
+        expected_project = PROJECT if self.isolated_postgres else 'kt_plantform'
+        if not postgres['State']['Running'] or postgres['Config'].get('Labels', {}).get('com.docker.compose.project') != expected_project:
             raise SafetyInterrupted('Designated shared PostgreSQL identity changed')
         network = postgres['NetworkSettings']['Networks'].get(PROJECT + '_default', {})
-        if 'school-test-postgres' not in network.get('Aliases', []):
+        if self.database_host not in network.get('Aliases', []):
             raise SafetyInterrupted('Explicit isolated PostgreSQL alias is missing')
+        if self.isolated_postgres:
+            volume = json.loads(self.capture(['docker', 'volume', 'inspect', OWNED_POSTGRES_VOLUME]))[0]
+            if (volume.get('Name') != OWNED_POSTGRES_VOLUME
+                    or (volume.get('Labels') or {}).get('com.docker.compose.project') != PROJECT):
+                raise SafetyInterrupted('Owned PostgreSQL volume project identity differs')
+            sql = "SELECT json_build_object('server_version_num',current_setting('server_version_num')::int"
+            for key in OWNED_POSTGRES_SETTINGS:
+                value = "current_setting('" + key + "')"
+                if key in ('max_connections',):
+                    value += '::int'
+                elif key == 'checkpoint_completion_target':
+                    value += '::numeric'
+                elif key not in ('fsync', 'synchronous_commit', 'full_page_writes'):
+                    value = 'pg_size_bytes(' + value + ')'
+                sql += ",'" + key + "'," + value
+            validate_owned_postgres_settings(self.db_json(sql + ')'))
+            if self.native_probe is not None:
+                secret = private_config(self.config['native_probe']['secret_file'])
+                if expected_identity(secret)[3:5] != (network.get('IPAddress'), 5432):
+                    raise SafetyInterrupted('Native probe must target the owned PostgreSQL identity')
         try:
             identity = self.db_json("SELECT json_build_object('database',current_database(),'owner',pg_get_userbyid(datdba)) FROM pg_database WHERE datname=current_database()")
         except (subprocess.SubprocessError, OSError) as error:
@@ -408,7 +523,7 @@ class DiagnosticRuntime:
             raise SafetyInterrupted('Direct isolated PostgreSQL owner binding differs')
 
     def db_json(self, sql):
-        output = self.capture(['docker', 'exec', DATABASE, 'sh', '-c',
+        output = self.capture(['docker', 'exec', self.database_container, 'sh', '-c',
             'exec psql -X -t -A -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d kt_e2e -c "$1"', 'diagnostic-read-only',
             'BEGIN READ ONLY; ' + sql + '; COMMIT'], timeout=35)
         rows = [line for line in output.splitlines() if line.strip() not in ('BEGIN', 'COMMIT', '')]
@@ -440,7 +555,7 @@ class DiagnosticRuntime:
         probe = {'source': 'docker_exec_pg_isready', 'outcome': 'returncode', 'returncode': None,
                  'started_monotonic': probe_started, 'deadline_seconds': 1}
         try:
-            probe['returncode'] = subprocess.run(['docker', 'exec', DATABASE, 'pg_isready', '-d', 'kt_e2e', '-U', 'kt_e2e_user'],
+            probe['returncode'] = subprocess.run(['docker', 'exec', self.database_container, 'pg_isready', '-d', 'kt_e2e', '-U', 'kt_e2e_user'],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1, check=False).returncode
         except subprocess.TimeoutExpired:
             probe['outcome'] = 'timeout'
@@ -644,7 +759,7 @@ class DiagnosticRuntime:
             write_once(attempt / 'authentication-attempts.json', runner.request_attempts)
             return {'returncode': 1, 'authenticated': False, 'error_type': type(error).__name__}
         write_once(attempt / 'authentication-attempts.json', runner.request_attempts)
-        return {'returncode': 0, 'healthy': True, 'authenticated': True, 'actual_services': list(ROLES)}
+        return {'returncode': 0, 'healthy': True, 'authenticated': True, 'actual_services': list(self.runtime_roles)}
 
     def monitored_process(self, command, attempt, label, timeout):
         self.load_name = command[command.index('--name') + 1]
@@ -691,7 +806,7 @@ class DiagnosticRuntime:
         log = (attempt / 'observer.log').open('x', encoding='utf-8')
         os.chmod(attempt / 'observer.log', 0o600)
         observer_command = [sys.executable, str(self.candidate / 'scripts/load/observe_school_runtime.py'), '--project', PROJECT,
-            '--database-container', DATABASE, '--scope', 'short' if stage.startswith('short-') else 'formal',
+            '--database-container', self.database_container, '--scope', 'short' if stage.startswith('short-') else 'formal',
             '--duration', '2700', '--stop-file', str(stop), '--output', str(attempt / 'observation.json')]
         if self.native_probe is not None:
             observer_command += ['--database-probe-progress', str(attempt / 'database-probe.progress.json')]
@@ -729,7 +844,7 @@ class DiagnosticRuntime:
         self.load_name = self.container_name(fixture_id)
         self.stop_load()
         since = str(int(read(attempt / 'started.json').get('started_at', time.time() - 3600))) if (attempt / 'started.json').exists() else '1h'
-        self.run_private(self.compose + ['logs', '--no-color', '--since', since, *ROLES], attempt, 'services-private', 30)
+        self.run_private(self.compose + ['logs', '--no-color', '--since', since, *self.runtime_roles], attempt, 'services-private', 30)
         fixture = read(attempt / 'fixture.json') if (attempt / 'fixture.json').exists() else {}
         backlog = {'global': self.backlog(), 'stage': self.backlog(fixture['task_id']) if fixture else {}}
         before = read(attempt / 'backlog-before.json') if (attempt / 'backlog-before.json').exists() else {}

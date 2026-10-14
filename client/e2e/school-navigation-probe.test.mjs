@@ -1,9 +1,425 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { performance } from 'node:perf_hooks'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { probeAccounts, safeEndpoint, captureVisualLayouts, probeExpect } from './school-navigation-probe.mjs'
 import * as probe from './school-navigation-probe.mjs'
 import { chromium } from '@playwright/test'
+import { spawn } from 'node:child_process'
+import { createServer } from 'node:http'
+import { fileURLToPath } from 'node:url'
+
+test('CLI started from another cwd arms the real visual and mobile contexts without student HTTP', { timeout: 15000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'kt-armed-cli-'))
+  const manifestFile = join(directory, 'fixture.json'); const planFile = join(directory, 'plan.json')
+  const armedFile = join(directory, 'armed.json'); const startFile = join(directory, 'start.json'); const stopFile = join(directory, 'stop')
+  const names = ['one', 'two']
+  writeFileSync(manifestFile, JSON.stringify({ usernames: names, browser_usernames: names, password: 'local-test', task_id: 4, course_id: 7 }))
+  writeFileSync(planFile, JSON.stringify({ workload_version: 'natural-180-v1', scenario: 'confidence-only-v1', task_id: 4, item_count: 20,
+    confidence_scale: { minimum: 0, maximum: 100, step: 1 }, students: names.map(username => ({ username, role: 'browser', speed_stratum: 'fast',
+      arrival_offset_seconds: 0, item_dwell_seconds: Array(20).fill(45), modify_items: [], excursion_items: [], optional_tool_items: [],
+      confidence_actions: [...Array(16).fill('fill'), ...Array(4).fill('skip')], confidence_values: [...Array(16).fill(50), ...Array(4).fill(null)],
+      confidence_think_seconds: Array(20).fill(2) })) }))
+  let requests = 0
+  const server = createServer((_request, response) => { requests++; response.writeHead(503); response.end() })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const child = spawn(process.execPath, [fileURLToPath(new URL('./school-navigation-probe.mjs', import.meta.url)),
+    '--base-url', `http://127.0.0.1:${server.address().port}`, '--manifest', manifestFile, '--plan', planFile,
+    '--phase', 'load', '--items', '20', '--output', join(directory, 'browser.json'), '--visual-output', join(directory, 'visual'),
+    '--armed-file', armedFile, '--start-file', startFile, '--stop-file', stopFile], { cwd: directory, stdio: 'ignore' })
+  const exited = new Promise(resolve => child.once('exit', resolve))
+  try {
+    const deadline = Date.now() + 8000
+    while (!existsSync(armedFile) && child.exitCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(existsSync(armedFile), true)
+    const ready = JSON.parse(readFileSync(armedFile))
+    assert.equal(ready.probe_count, 2)
+    assert.equal(ready.pid, child.pid)
+    assert.equal(child.exitCode, null)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(requests, 0)
+    assert.equal(existsSync(startFile), false)
+    writeFileSync(stopFile, '')
+    assert.equal(await exited, 1)
+    assert.equal(requests, 0)
+  } finally {
+    if (child.exitCode === null) { child.kill(); await exited }
+    await new Promise(resolve => server.close(resolve))
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('armed barrier publishes two real contexts before any HTTP and blocks until a bound start', async () => {
+  assert.equal(typeof probe.waitForArmedStart, 'function')
+  const directory = mkdtempSync(join(tmpdir(), 'kt-armed-'))
+  const browser = await chromium.launch()
+  const contexts = await Promise.all([browser.newContext(), browser.newContext()])
+  let requests = 0
+  for (const context of contexts) context.on('request', () => { requests++ })
+  const armedFile = join(directory, 'armed.json'); const startFile = join(directory, 'start.json')
+  const binding = { fixture_sha256: 'a'.repeat(64), plan_sha256: 'b'.repeat(64) }
+  try {
+    let released = false
+    const waiting = probe.waitForArmedStart({ contexts, armedFile, startFile, binding, timeoutMs: 1000 })
+      .then(value => { released = true; return value })
+    const deadline = Date.now() + 1000
+    while (!existsSync(armedFile) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(released, false)
+    assert.equal(requests, 0)
+    assert.equal(JSON.parse(readFileSync(armedFile)).probe_count, 2)
+    assert.equal(JSON.parse(readFileSync(armedFile)).pid, process.pid)
+    writeFileSync(startFile, JSON.stringify({ ...binding, start_at: Date.now() / 1000 + 2 }))
+    assert.ok((await waiting).start_at > 0)
+    assert.equal(requests, 0)
+  } finally { await browser.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('armed barrier rejects wrong fixture release, timeout and stop without HTTP', async () => {
+  assert.equal(typeof probe.waitForArmedStart, 'function')
+  const directory = mkdtempSync(join(tmpdir(), 'kt-armed-errors-'))
+  const browser = await chromium.launch()
+  const contexts = await Promise.all([browser.newContext(), browser.newContext()])
+  const binding = { fixture_sha256: 'a'.repeat(64), plan_sha256: 'b'.repeat(64) }
+  try {
+    for (const kind of ['binding', 'timeout', 'stop']) {
+      const armedFile = join(directory, kind + '.armed.json'); const startFile = join(directory, kind + '.start.json')
+      const stopFile = join(directory, kind + '.stop')
+      if (kind === 'binding') writeFileSync(startFile, JSON.stringify({ ...binding, fixture_sha256: 'wrong', start_at: 1 }))
+      if (kind === 'stop') writeFileSync(stopFile, '')
+      await assert.rejects(probe.waitForArmedStart({ contexts, armedFile, startFile, stopFile, binding, timeoutMs: 15 }),
+        kind === 'binding' ? /binding/ : kind === 'stop' ? /stop/ : /timed out/)
+      assert.equal(existsSync(armedFile), true)
+    }
+  } finally { await browser.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('login-only browser prefills before shared POST release and never enters tasks', async () => {
+  assert.equal(typeof probe.performLoginOnly, 'function')
+  let wall = 900; const calls = []; const actions = []
+  const response = { ok: () => true, finished: async () => null }
+  const page = { goto: async path => calls.push(['goto', path]),
+    getByLabel: label => ({ fill: async () => calls.push(['fill', label]) }),
+    getByRole: (_role, options) => ({ click: async () => { calls.push(['click', options.name, wall]); wall += .2 } }),
+    waitForResponse: async predicate => { assert.equal(predicate({url:()=> 'http://host/api/v1/auth/login/',request:()=>({method:()=> 'POST'})}), true); return response } }
+  const report = {}
+  await probe.performLoginOnly(page, {username:'one',password:'unused'}, report, {
+    startAt:1000, now:()=>wall, pause:async seconds => { calls.push(['release', seconds]); wall += seconds },
+    timed:async (action, operation) => { const start=wall; await operation(); actions.push([action, wall-start]) },
+    waitForHome:async () => { calls.push(['home']); wall += .3 },
+  })
+  assert.deepEqual(calls.slice(0,4).map(row=>row[0]), ['goto','fill','fill','release'])
+  assert.equal(calls[4][2],1000)
+  assert.equal(report.submitted_count,0)
+  assert.equal(report.session_completed,false)
+  assert.equal(report.completed,true)
+  assert.deepEqual(actions.map(row=>row[0]),['login','task_list'])
+  assert.ok(Math.abs(actions[0][1]-.2)<1e-8)
+  assert.ok(Math.abs(actions[1][1]-.5)<1e-8)
+})
+
+test('browser login POST witness uses actual request send time and retains first failed POST', () => {
+  assert.equal(typeof probe.firstLoginPost, 'function')
+  const report = { username_sha256:'identity', waterfall:[
+    { endpoint:'other',method:'GET',sent_at:1,status:200 },
+    { endpoint:'/api/v1/auth/login/',method:'POST',sent_at:1000,status:503,request_id:'first' },
+    { endpoint:'/api/v1/auth/login/',method:'POST',sent_at:1001,status:200,request_id:'retry' },
+  ] }
+  assert.deepEqual(probe.firstLoginPost(report), { username_sha256:'identity',sent_at:1000,http_status:503,successful:false,request_id:'first' })
+})
+
+test('confidence-only plan permits no optional tools and requires frozen legal confidence choices', () => {
+  const student = { username: 'one', role: 'browser', arrival_offset_seconds: 0, speed_stratum: 'fast',
+    item_dwell_seconds: Array(20).fill(45), modify_items: [], excursion_items: [], optional_tool_items: [],
+    confidence_actions: Array(20).fill('fill'), confidence_values: Array(20).fill(57), confidence_think_seconds: Array(20).fill(2) }
+  const plan = { workload_version: 'natural-180-v1', scenario: 'confidence-only-v1', synthetic_confidence: true,
+    confidence_scale: { minimum: 0, maximum: 100, step: 1 }, item_count: 20, task_id: 4, students: [student] }
+  assert.deepEqual(probe.naturalBrowserPlans(plan, [{ username: 'one', taskId: 4 }]), [student])
+  assert.throws(() => probe.naturalBrowserPlans({ ...plan, students: [{ ...student, optional_tool_items: [2, 3] }] }, [{ username: 'one', taskId: 4 }]))
+  assert.throws(() => probe.naturalBrowserPlans({ ...plan, students: [{ ...student, confidence_values: Array(20).fill(101) }] }, [{ username: 'one', taskId: 4 }]))
+})
+
+test('confidence actual UI honors planned fill and skip without counting its think time as submission', async () => {
+  assert.equal(typeof probe.resolvePlannedConfidence, 'function')
+  for (const action of ['fill', 'skip']) {
+    const calls = []
+    const page = { locator: selector => ({ fill: async value => calls.push(['fill', selector, value]), click: async () => calls.push(['click', selector]) }),
+      getByRole: (_role, options) => ({ click: async () => calls.push(['click', options.name]) }) }
+    await probe.resolvePlannedConfidence(page, { action, value: action === 'fill' ? 57 : null, thinkSeconds: 2 }, {
+      pause: async seconds => calls.push(['think', seconds]), timed: async (name, operation) => { calls.push(['timed', name]); return operation() },
+    })
+    assert.equal(calls[0][0], 'think')
+    assert.ok(!calls.some(call => /submit_ack|submit_next_ready|finish_ready/.test(String(call[1]))))
+    if (action === 'fill') assert.deepEqual(calls.slice(2), [['fill', '[data-confidence-number]', '57'], ['click', '[data-confidence-submit]']])
+    else assert.deepEqual(calls.slice(2), [['click', '跳过评价']])
+  }
+})
+
+test('confidence thought records actual wall time before UI resolution and retains interrupted waits', async () => {
+  for (const interrupted of [false, true]) {
+    let wall = 100
+    const waits = []
+    const page = { getByRole: () => ({ click: async () => { wall += 5 } }) }
+    const operation = probe.resolvePlannedConfidence(page, { action: 'skip', value: null, thinkSeconds: 2 }, {
+      now: () => wall, recordThink: row => waits.push(row),
+      pause: async () => { wall += interrupted ? 1 : 3; if (interrupted) throw new Error('explicit stop') },
+      timed: async (_name, callback) => callback(),
+    })
+    if (interrupted) await assert.rejects(operation)
+    else await operation
+    assert.deepEqual(waits, [{ started_at: 100, completed_at: interrupted ? 101 : 103,
+      planned_seconds: 2, actual_seconds: interrupted ? 1 : 3, completed: !interrupted }])
+  }
+})
+
+test('submission phases measure ACK and next-ready inside total, distinguishing final completion', async () => {
+  assert.equal(typeof probe.performSubmissionPhases, 'function')
+  for (const last of [false, true]) {
+    let clock = 2000 // Confidence input and thought already elapsed before this operation.
+    const timings = []
+    await probe.performSubmissionPhases({ last,
+      ack: async () => { clock += 100; return 'receipt' }, ready: async receipt => { assert.equal(receipt, 'receipt'); clock += 400 },
+      timed: async (name, operation) => { const start = clock; const result = await operation(); timings.push([name, clock - start]); return result },
+    })
+    assert.deepEqual(timings, [['submit_ack', 100], [last ? 'last_session_ready' : 'next_question_ready', 400], [last ? 'finish_ready' : 'submit_next_ready', 500]])
+  }
+})
+
+function closeRecoveryPage({ target = '/student/sessions/7/questions/12/', readyAt = 0, enabledAt = 0, navigateOnClick = false } = {}) {
+  const clock = { elapsed: 0, clicks: [], waits: [], path: readyAt === 0 ? target : '/student/sessions/7/questions/11/' }
+  const page = { url: () => `https://host${clock.path}`, locator: selector => {
+    assert.equal(selector, '[data-retry-close]')
+    return { isVisible: async () => clock.elapsed >= readyAt, isEnabled: async () => clock.elapsed >= enabledAt,
+      click: async ({ timeout }) => { clock.clicks.push(timeout); if (navigateOnClick) clock.path = target } }
+  }, waitForTimeout: async timeout => { clock.waits.push(timeout); clock.elapsed += timeout } }
+  return { page, clock, target }
+}
+
+test('submitted destination already ready does not attempt close recovery', async () => {
+  assert.equal(typeof probe.waitForSubmittedDestination, 'function')
+  const { page, clock, target } = closeRecoveryPage()
+  const report = {}
+  await probe.waitForSubmittedDestination(page, target, async remaining => assert.equal(remaining, 35000), {
+    report, sequence: 1, now: () => clock.elapsed,
+  })
+  assert.deepEqual(clock.clicks, [])
+  assert.deepEqual(clock.waits, [])
+  assert.equal(report.close_recovery_actions?.length || 0, 0)
+})
+
+test('destination failure distinguishes URL arrival from interactive readiness without extending its budget', async () => {
+  const { page, clock, target } = closeRecoveryPage()
+  const report = {}
+  await assert.rejects(probe.waitForSubmittedDestination(page, target, async () => {
+    clock.elapsed += 1000
+    throw Object.assign(new Error('not interactive'), { name: 'TimeoutError' })
+  }, { report, sequence: 2, timeoutMs: 1000, now: () => clock.elapsed }))
+  assert.deepEqual(report.destination_waits, [{ sequence: 2, expected_path: target,
+    observed_path: target, stage: 'interactive', completed: false, elapsed_ms: 1000 }])
+  assert.equal(clock.elapsed, 1000)
+})
+
+test('transient close button disappearing during enabled lookup cannot stall an already successful navigation', async () => {
+  const { page, clock, target } = closeRecoveryPage({ readyAt: 100 })
+  const locator = page.locator
+  page.locator = selector => {
+    const button = locator(selector)
+    button.isEnabled = async options => {
+      assert.equal(options?.timeout, 100)
+      clock.elapsed += 100
+      clock.path = target
+      throw Object.assign(new Error('button removed by successful navigation'), { name: 'TimeoutError' })
+    }
+    return button
+  }
+  const report = {}
+  await probe.waitForSubmittedDestination(page, target, async () => {}, {
+    report, sequence: 2, timeoutMs: 1000, now: () => clock.elapsed,
+  })
+  assert.equal(clock.elapsed, 300)
+  assert.deepEqual(clock.clicks, [])
+  assert.equal(report.destination_waits[0].completed, true)
+})
+
+test('pending close clicks only the visible enabled recovery once before next or final readiness', async () => {
+  assert.equal(typeof probe.waitForSubmittedDestination, 'function')
+  for (const target of ['/student/sessions/7/questions/12/', '/student/sessions/7/complete/']) {
+    const { page, clock } = closeRecoveryPage({ target, readyAt: 100, enabledAt: 300, navigateOnClick: true })
+    const report = {}
+    let remaining
+    await probe.waitForSubmittedDestination(page, target, async budget => { remaining = budget; clock.elapsed += 50 }, {
+      report, sequence: 20, timeoutMs: 1000, now: () => clock.elapsed,
+    })
+    assert.equal(clock.clicks.length, 1)
+    assert.equal(clock.clicks[0], 700)
+    assert.equal(remaining, 700)
+    assert.deepEqual(report.close_recovery_actions, [{ sequence: 20, attempt: 1, completed: true }])
+    assert.equal(clock.elapsed, 350)
+  }
+})
+
+test('close recovery exhaustion never exceeds three clicks or resets the original deadline', async () => {
+  assert.equal(typeof probe.waitForSubmittedDestination, 'function')
+  const { page, clock, target } = closeRecoveryPage({ readyAt: 100 })
+  const report = {}
+  await assert.rejects(probe.waitForSubmittedDestination(page, target, async () => assert.fail('never ready'), {
+    report, sequence: 3, timeoutMs: 1000, now: () => clock.elapsed,
+  }), error => error.name === 'TimeoutError')
+  assert.equal(clock.clicks.length, 3)
+  assert.deepEqual(clock.clicks, [900, 800, 700])
+  assert.equal(clock.elapsed, 1000)
+  assert.equal(report.close_recovery_actions.length, 3)
+})
+
+test('close recovery observes the actual stop file while waiting without clicking disabled UI', async () => {
+  assert.equal(typeof probe.waitForSubmittedDestination, 'function')
+  const temporary = mkdtempSync(join(tmpdir(), 'kt-close-recovery-'))
+  try {
+    const stopFile = join(temporary, 'stop')
+    const { page, clock, target } = closeRecoveryPage({ readyAt: 100, enabledAt: 2000 })
+    const wait = page.waitForTimeout
+    page.waitForTimeout = async timeout => { await wait(timeout); writeFileSync(stopFile, '') }
+    await assert.rejects(probe.waitForSubmittedDestination(page, target, async () => assert.fail('never ready'), {
+      report: {}, sequence: 3, timeoutMs: 1000, stopFile, now: () => clock.elapsed,
+    }), error => error.name === 'StoppedError')
+    assert.deepEqual(clock.clicks, [])
+    assert.equal(clock.elapsed, 100)
+  } finally { rmSync(temporary, { recursive: true, force: true }) }
+})
+
+test('submission readiness receives only the budget remaining after the actual ACK wait', async () => {
+  let elapsed = 0
+  let readyBudget
+  await probe.performSubmissionPhases({ last: false, timeoutMs: 1000, now: () => elapsed,
+    timed: async (_name, operation) => operation(), ack: async () => { elapsed = 600; return 'receipt' },
+    ready: async (_receipt, remaining) => { readyBudget = remaining },
+  })
+  assert.equal(readyBudget, 400)
+})
+
+test('mobile navigation opens the real drawer and uses its owned URL within the same action budget', async () => {
+  assert.equal(typeof probe.questionNavigationSteps, 'function')
+  let elapsed = 0
+  const order = []
+  const targetPath = '/student/sessions/7/questions/12/'
+  const trigger = { click: async ({ timeout }) => { order.push(['open', timeout]); elapsed += 2000 } }
+  const link = { click: async ({ timeout }) => { order.push(['navigate', timeout]); elapsed += 1000 } }
+  const drawer = { locator: selector => {
+    assert.equal(selector, `a[href="${targetPath}"]:not([aria-disabled="true"])`)
+    return link
+  } }
+  const page = { locator: selector => {
+    assert.ok(!selector.includes('.kt-assessment-nav'), 'hidden desktop navigation cannot be used')
+    if (selector === '[data-mobile-navigation-trigger]') return trigger
+    assert.equal(selector, '#assessment-mobile-navigation')
+    return drawer
+  } }
+  const steps = probe.questionNavigationSteps(page, '12', targetPath, async () => { elapsed += 500 }, {
+    mobile: true, now: () => elapsed,
+    waitVisible: async (locator, timeout) => { assert.equal(locator, drawer); order.push(['drawer', timeout]); elapsed += 1000 },
+    waitEnabled: async (locator, timeout) => { assert.equal(locator, link); order.push(['enabled', timeout]); elapsed += 1000 },
+    waitTarget: async (_path, timeout) => { order.push(['target', timeout]); elapsed += 1000 },
+  })
+  const report = { actions: [] }
+  await probe.navigationProbeAction(report, 0, 'navigation_next_ready', 15, steps, { now: () => elapsed })
+  assert.deepEqual(order, [['open', 35000], ['drawer', 33000], ['enabled', 32000], ['navigate', 31000], ['target', 30000]])
+  assert.equal(report.actions[0].duration_ms, 6500)
+  assert.equal(report.actions[0].budget_ms, 35000)
+})
+
+test('first-ready screenshots retain each existing viewport and report observed overflow without page mutations', async () => {
+  assert.equal(typeof probe.captureFirstReadyLayout, 'function')
+  for (const [index, width, height, overflow] of [[0, 1440, 900, false], [1, 390, 844, true]]) {
+    const shots = []
+    const page = { evaluate: async callback => {
+      assert.doesNotMatch(callback.toString(), /scrollTo|requestAnimationFrame|fetch|style\s*=/)
+      return { viewport_width: width, viewport_height: height, document_width: width + (overflow ? 20 : 0), overflow }
+    }, screenshot: async options => shots.push(options),
+    setViewportSize: async () => { throw new Error('existing viewport must remain unchanged') },
+    goto: async () => { throw new Error('no additional request or navigation') } }
+    const row = await probe.captureFirstReadyLayout(page, 'unused', index, { width, height })
+    assert.equal(row.viewport_width, width)
+    assert.equal(row.viewport_height, height)
+    assert.equal(row.overflow, overflow)
+    assert.equal(row.passed, !overflow)
+    assert.equal(shots.length, 1)
+    assert.equal(shots[0].fullPage, false)
+    assert.equal(shots[0].animations, undefined)
+    assert.match(row.filename, index === 0 ? /probe-1-active-desktop-1440/ : /probe-2-active-mobile-390/)
+  }
+})
+
+test('architecture response-state evidence observes ordinary draft capture_bundle without retaining answer text', () => {
+  assert.equal(typeof probe.browserResponseStates, 'function')
+  const event = { event_type: 'response_transition', client_sequence_no: 3,
+    payload: { after_state_hash: 'a'.repeat(64), after_state: { question_type: 'short_answer', value: 'PRIVATE ANSWER' } } }
+  const states = probe.browserResponseStates({ capture_bundle: { client_instance_id: 'client', events: [event] } })
+  assert.deepEqual(states, [{ client_instance_id: 'client', client_sequence_no: 3,
+    question_type: 'short_answer', state_sha256: 'a'.repeat(64) }])
+  assert.doesNotMatch(JSON.stringify(states), /PRIVATE/)
+})
+
+test('natural text input is segmented within the full dwell without compressing slow operations', async () => {
+  assert.equal(typeof probe.performNaturalAnswer, 'function')
+  let elapsed = 0
+  const fills = []
+  const pauses = []
+  await probe.performNaturalAnswer({ fill: async value => { fills.push({ value, elapsed }); elapsed += 5 } }, null, 'text', {
+    dwellSeconds: 100, modify: false, pause: async seconds => { pauses.push(seconds); elapsed += seconds },
+    timed: async (_action, operation) => operation(),
+  })
+  assert.deepEqual(fills, [{ value: '浏览器', elapsed: 30 }, { value: '浏览器探针作答', elapsed: 65 }])
+  assert.equal(pauses.reduce((sum, value) => sum + value, 0), 100)
+  assert.equal(elapsed, 110)
+})
+
+test('natural multi-choice modification keeps a valid answer through both witnessed option changes', async () => {
+  assert.equal(typeof probe.performNaturalAnswer, 'function')
+  const selected = new Set()
+  const changes = []
+  const option = key => ({ check: async () => { selected.add(key); changes.push([...selected]) },
+    uncheck: async () => { selected.delete(key); changes.push([...selected]) } })
+  const pauses = []
+  await probe.performNaturalAnswer(option('first'), option('second'), 'checkbox', {
+    dwellSeconds: 100, modify: true, pause: async seconds => pauses.push(seconds), timed: async (_action, operation) => operation(),
+  })
+  assert.deepEqual(changes, [['first'], ['first', 'second'], ['second']])
+  assert.ok(changes.every(answer => answer.length > 0))
+  assert.equal(pauses.reduce((sum, value) => sum + value, 0), 100)
+})
+
+test('natural fixture explicitly binds two browser accounts within a larger cohort', () => {
+  const fixture = { usernames: ['one', 'two', 'three', 'four'], browser_usernames: ['one', 'two'], password: 'private', task_id: 4 }
+  assert.deepEqual(probeAccounts(fixture).map(row => row.username), ['one', 'two'])
+  assert.throws(() => probeAccounts({ ...fixture, browser_usernames: ['one', 'outside'] }))
+  assert.throws(() => probeAccounts({ ...fixture, browser_usernames: ['one', 'one'] }))
+})
+
+test('natural plan keeps the frozen dwell and sparse excursions for each explicit browser account', () => {
+  assert.equal(typeof probe.naturalBrowserPlans, 'function')
+  const students = ['one', 'two'].map(username => ({ username, role: 'browser', arrival_offset_seconds: 5,
+    speed_stratum: 'fast', item_dwell_seconds: Array(20).fill(45), modify_items: [3, 9], excursion_items: [5, 15], optional_tool_items: [] }))
+  const plan = { workload_version: 'natural-180-v1', item_count: 20, task_id: 4, students }
+  assert.deepEqual(probe.naturalBrowserPlans(plan, [{ username: 'one', taskId: 4 }, { username: 'two', taskId: 4 }]), students)
+  assert.throws(() => probe.naturalBrowserPlans({ ...plan, students: [students[0]] }, [{ username: 'one', taskId: 4 }, { username: 'two', taskId: 4 }]))
+})
+
+test('browser architecture answers require an observed final ACK and retain witnessed state hashes', () => {
+  assert.equal(typeof probe.buildBrowserArchitectureSessions, 'function')
+  const report = { probes: [{ completed: true, response_states: [{ client_instance_id: 'client', client_sequence_no: 1,
+    question_type: 'short_answer', state_sha256: 'a'.repeat(64) }], protocol_witness: { session_ids: [7], requests: [
+    { client_instance_id: 'client', acknowledgements: [{ client_sequence_no: 1, event_id: 'event' }] },
+    { path: '/api/v1/student/attempts/9/submit/', status: 200, submission: { token: 'token' },
+      receipt: { committed: true, final_response_event_id: 'event', response_version: 2 } },
+  ] } }] }
+  const sessions = probe.buildBrowserArchitectureSessions(report, [{ username: 'one' }])
+  assert.equal(sessions['7'].complete, true)
+  assert.equal(sessions['7'].answers['9'].state_sha256, 'a'.repeat(64))
+  assert.equal(sessions['7'].answers['9'].target_event_id, 'event')
+  report.probes[0].protocol_witness.requests[0].acknowledgements = []
+  assert.equal(Object.keys(probe.buildBrowserArchitectureSessions(report, [{ username: 'one' }])['7'].answers).length, 0)
+})
 
 test('navigation waits for href restoration when a busy anchor has lost its link role', async () => {
   const browser = await chromium.launch()
@@ -341,6 +757,19 @@ test('extension zoom requires getZoom confirmation as well as independent window
   assert.deepEqual(factors, [1, 2])
 })
 
+test('natural visual precheck captures one real 200 percent screenshot and restores zoom', async () => {
+  let factor = 1
+  const shots = []
+  const page = { setViewportSize: async () => {}, evaluate: async () => ({ device_pixel_ratio: factor,
+    inner_width: 1440 / factor, inner_height: 900 / factor, viewport_width: 1440 / factor,
+    document_width: 1440 / factor, overflow: false }), screenshot: async options => shots.push(options.path) }
+  const visual = await captureVisualLayouts(page, 'unused', async zoom => { factor = zoom; return factor }, { onlyZoom: true })
+  assert.equal(visual.passed, true)
+  assert.equal(shots.length, 1)
+  assert.equal(visual.layouts[0].label, 'zoom200')
+  assert.equal(factor, 1)
+})
+
 test('visual extension capture confirms real zoom then restores the original browser factor', async () => {
   let factor = 1
   let viewport = { width: 1440, height: 900 }
@@ -360,4 +789,39 @@ test('visual extension capture confirms real zoom then restores the original bro
   assert.equal(screenshots.length, 3)
   assert.equal(factor, 1)
   assert.deepEqual(viewport, { width: 1440, height: 900 })
+})
+
+
+test('waterfall settlement accounts for unfinished and failed requests', async () => {
+  const callbacks = new Map(); const page = { on: (event, callback) => callbacks.set(event, callback) }
+  const report = { waterfall: [] }
+  const request = { headers: () => ({}), url: () => 'http://host/api/v1/student/courses/', method: () => 'GET', resourceType: () => 'fetch', failure: () => ({ errorText: 'net::ERR_ABORTED' }) }
+  const waterfall = probe.installProbeWaterfall(page, report, 0, () => 'login')
+  callbacks.get('request')(request)
+  const result = await waterfall.settle(5)
+  assert.equal(result.complete, false)
+  assert.equal(result.unfinished_request_count, 1)
+  assert.equal(report.waterfall[0].terminal_state, 'not_observed')
+  const report2 = { waterfall: [] }; const second = probe.installProbeWaterfall(page, report2, 0, () => 'login')
+  callbacks.get('request')(request); callbacks.get('requestfailed')(request)
+  const done = await second.settle(5)
+  assert.equal(done.complete, true)
+  assert.equal(done.unfinished_request_count, 0)
+  assert.equal(report2.waterfall[0].terminal_state, 'failed')
+  assert.equal(report2.waterfall[0].failure_code, 'net::ERR_ABORTED')
+  assert.ok(report2.waterfall[0].duration_ms >= 0)
+})
+
+
+test('natural login waits for the authorized home course before the fixture navigation', async () => {
+  assert.equal(typeof probe.waitForStudentHomeCourse, 'function')
+  const browser = await chromium.launch()
+  try {
+    const page = await browser.newPage(); await page.setContent('<main>Loading</main>')
+    let completed = false
+    const wait = probe.waitForStudentHomeCourse(page, 42).then(() => { completed = true })
+    await page.waitForTimeout(30); assert.equal(completed, false)
+    await page.setContent('<a href="/student/courses/42/">Course</a>')
+    await wait; assert.equal(completed, true)
+  } finally { await browser.close() }
 })

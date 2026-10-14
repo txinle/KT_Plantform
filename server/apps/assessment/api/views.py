@@ -529,8 +529,11 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
 
     @extend_schema(request=StudentRuntimeQuestionEnterSerializer, responses=StudentRuntimeQuestionEntrySerializer)
     def post(self, request, session_id, assignment_id):
+        return self.enter(request, session_id, assignment_id, request.data)
+
+    def enter(self, request, session_id, assignment_id, document):
         request_received_at = timezone.now()
-        document = StudentRuntimeQuestionEnterSerializer(data=request.data)
+        document = StudentRuntimeQuestionEnterSerializer(data=document)
         document.is_valid(raise_exception=True)
         material = document.validated_data
         admission_token = material.get('admission_token')
@@ -731,8 +734,11 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
             for key in ('capture_version', 'active_response_event_id', 'response_version', 'writer_lease_acquire_url', 'writer_lease_renew_url', 'writer_lease_release_url'):
                 payload['process'].pop(key, None)
         else:
-            from ..capture_bundle_services import capture_bundle_capability
+            from ..capture_bundle_services import capture_bundle_capability, close_bundle_capability
+            if session.transition_protocol_version == 1:
+                payload['process']['transition_entry'] = {'enabled': True, 'version': 1}
             payload['process']['capture_bundle'] = capture_bundle_capability(session)
+            payload['process']['close_bundle'] = close_bundle_capability(session)
             from ..atomic_submission_services import atomic_submission_capability
             atomic_capability = atomic_submission_capability(attempt)
             if atomic_capability['enabled']:

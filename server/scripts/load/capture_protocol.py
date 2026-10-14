@@ -576,7 +576,10 @@ class CaptureProtocolMixin:
             left = next(event for event in bundle['events'] if event['event_id'] == body['leave_event_id'])
             expected = {'attempt_id': left['attempt_id'], 'to_assignment_id': body['to_assignment_id'],
                 'target_event_id': body['target_event_id'], 'material_fingerprint': digest({key: body.get(key)
-                    for key in ['save_and_leave', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'client_clicked_at']})}
+                    for key in ['save_and_leave', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'client_clicked_at']
+                    + (['next_entry'] if 'next_entry' in body else [])})}
+            if 'next_entry' in body:
+                expected['next_entry_sha256'] = digest(body['next_entry'])
             with self.lock:
                 receipts = self.ledger[str(state.session_id)].setdefault('navigation_receipts', {})
                 old = receipts.setdefault(body['navigation_token'], {**expected, 'acknowledged': False})
@@ -608,7 +611,7 @@ class CaptureProtocolMixin:
         if body and body.get('save_and_leave'):
             with self.lock:
                 self.ledger[str(state.session_id)]['navigation_receipts'][body['navigation_token']].update(
-                    acknowledged=True, receipt_sha256=digest(payload))
+                    acknowledged=True, receipt_sha256=digest({key: value for key, value in payload.items() if key != 'next_entry'}))
         return status, payload, seconds
 
     def scenario(self, name):
@@ -773,20 +776,25 @@ class CaptureProtocolMixin:
         return self._browser_bundle_enabled(runtime) and runtime['dto']['process']['capture_bundle'].get('mutation_receipts') is True
 
     def _browser_capture_mutation(self, state, runtime, body, kind, result=None):
-        token = body['capture_operation_id'] if kind == 'draft' else body['operation_id']
+        token = body['capture_operation_id'] if kind in ('draft', 'close') else body['operation_id']
         expected = {'attempt_id': runtime['dto']['assignment']['attempt_id'], 'kind': kind,
                     'material_fingerprint': digest({key: value for key, value in body.items()
-                        if key not in {'writer_lease_token', 'writer_client_instance_id'}}),
+                        if key not in ({'lease_token', 'client_instance_id'} if kind == 'close'
+                                      else {'writer_lease_token', 'writer_client_instance_id'})}),
                     'event_identities': {str(row['client_sequence_no']): row['event_id'] for row in body['capture_bundle']['events']},
                     'checkpoint_ids': [row['checkpoint_id'] for row in body['capture_bundle']['checkpoints']],
                     'target_event_id': body.get('target_event_id') if kind == 'draft' else body.get('answer_event_id')}
+        if kind == 'close':
+            expected['leave_event_id'] = body['leave_event_id']
+        if 'next_entry' in body:
+            expected['next_entry_sha256'] = digest(body['next_entry'])
         with self.lock:
             rows = self.ledger[str(state.session_id)].setdefault('capture_mutation_receipts', {})
             prior = rows.setdefault(token, {**expected, 'acknowledged': False, 'receipt_sha256': None})
             if any(prior[key] != value for key, value in expected.items()):
                 raise RuntimeError('Capture mutation identity changed during replay')
             if result is not None:
-                receipt_hash = digest(result)
+                receipt_hash = digest({key: value for key, value in result.items() if key != 'next_entry'})
                 if prior['receipt_sha256'] not in (None, receipt_hash):
                     raise RuntimeError('Capture mutation receipt changed during replay')
                 prior.update(acknowledged=True, receipt_sha256=receipt_hash)
@@ -818,7 +826,7 @@ class CaptureProtocolMixin:
         runtime['stream'].accept_acknowledgements(acks)
         runtime['stream'].acked_checkpoint_ids.update(ids)
 
-    def _browser_flush(self, state, runtime):
+    def _browser_flush(self, state, runtime, *, metric='event_batch'):
         stream = runtime['stream']
         events = stream.pending_events()
         if self._browser_bundle_enabled(runtime):
@@ -826,19 +834,15 @@ class CaptureProtocolMixin:
             if not bundle['events'] and not bundle['checkpoints']:
                 return
             response = self._browser_post(state, runtime['dto']['process']['event_batch_url'],
-                {'capture_bundle': bundle}, 'event_batch')
+                {'capture_bundle': bundle}, metric)
             self._browser_accept_bundle(runtime, bundle, response)
             if events:
                 self._browser_checkpoint(state, runtime, 'ack_progress')
-                confirmation = self._browser_freeze_bundle(runtime)
-                response = self._browser_post(state, runtime['dto']['process']['event_batch_url'],
-                    {'capture_bundle': confirmation}, 'checkpoint_batch')
-                self._browser_accept_bundle(runtime, confirmation, response)
             return
         if not events:
             return
         response = self._browser_post(state, runtime['dto']['process']['event_batch_url'],
-            {'client_instance_id': stream.client_instance_id, 'events': events}, 'event_batch')
+            {'client_instance_id': stream.client_instance_id, 'events': events}, metric)
         stream.accept_acknowledgements(response['acknowledgements'])
         self._browser_checkpoint(state, runtime, 'ack_progress')
 
@@ -895,6 +899,10 @@ class CaptureProtocolMixin:
 
     def browser_open_question(self, state, assignment_id, reason='direct_open', dto=None):
         material = getattr(state, 'browser_entry_material', None) or self.entry_material(state)
+        with self.lock:
+            transition = self.ledger.get(str(state.session_id), {}).get('transition_entries', {}).get(material['navigation_id'])
+            if transition and transition['material_sha256'] != digest({'assignment_id': assignment_id, **material}):
+                raise RuntimeError('Frozen target entry material changed')
         if dto is None:
             state.browser_entry_material = deepcopy(material)
             dto = self._browser_post(state, f'/api/v1/student/sessions/{state.session_id}/questions/{assignment_id}/', material, 'enter_item')
@@ -905,10 +913,15 @@ class CaptureProtocolMixin:
                 or process.get('atomic_submission', {}).get('version') != 1
                 or process.get('atomic_submission', {}).get('enabled') is not True):
             raise RuntimeError('Student slice capabilities are missing from the frozen candidate')
-        if (receipt.get('navigation_id') != material['navigation_id'] or receipt.get('session_id') != state.session_id
+        if (dto.get('session_id') != state.session_id or dto['assignment'].get('assignment_id') != assignment_id
+                or process.get('navigation_id') != material['navigation_id']
+                or receipt.get('navigation_id') != material['navigation_id'] or receipt.get('session_id') != state.session_id
                 or receipt.get('assignment_id') != assignment_id or receipt.get('attempt_id') != dto['assignment']['attempt_id']
                 or any(not receipt.get(key) or receipt[key] != process.get(key) for key in ('visit_id', 'visit_index', 'entry_event_id'))):
             raise RuntimeError('Formal question entry receipt mismatch')
+        if transition:
+            with self.lock:
+                transition.update(outcome='committed', entry_receipt=deepcopy(receipt))
         state.browser_entry_material = None
         if dto['process'].get('capture_version') != 'capture-v2':
             raise RuntimeError('Required capture-v2 contract absent; legacy fallback forbidden')
@@ -998,24 +1011,81 @@ class CaptureProtocolMixin:
             self._browser_capture_mutation(state, runtime, body, 'draft', result)
         runtime['version'] = result['response_version']
 
+    def _browser_next_entry(self, state, runtime, to_assignment):
+        capability = runtime['dto']['process'].get('transition_entry', {})
+        if to_assignment is None or capability.get('enabled') is not True or capability.get('version') != 1:
+            return None
+        material = getattr(state, 'browser_entry_material', None) or self.entry_material(state)
+        state.browser_entry_material = deepcopy(material)
+        return {'assignment_id': to_assignment, **material}
+
+    def _browser_transition_result(self, state, runtime, body, receipt):
+        entry = body.get('next_entry')
+        if entry is None:
+            return None
+        material = {key: value for key, value in entry.items() if key != 'assignment_id'}
+        with self.lock:
+            rows = self.ledger[str(state.session_id)].setdefault('transition_entries', {})
+            row = rows.setdefault(entry['navigation_id'], {'material': deepcopy(entry),
+                'material_sha256': digest(entry), 'source_acknowledged': True, 'outcome': 'unknown'})
+            if row['material_sha256'] != digest(entry) or getattr(state, 'browser_entry_material', None) != material:
+                raise RuntimeError('Frozen target entry material changed')
+        outcome = receipt.get('next_entry')
+        if isinstance(outcome, dict) and outcome.get('committed') is False:
+            error = outcome.get('error')
+            if isinstance(error, dict) and all(isinstance(error.get(key), str) and error[key] for key in ('code', 'message')):
+                with self.lock:
+                    row.update(outcome='retry_required', error_code=error['code'])
+                return None
+        target = outcome.get('runtime') if isinstance(outcome, dict) and outcome.get('committed') is True else None
+        if isinstance(target, dict) and all(isinstance(target.get(key), dict)
+                for key in ('process', 'assignment', 'offline_authorization', 'entry_receipt', 'question', 'actions')):
+            process, assignment, authorization = target.get('process', {}), target.get('assignment', {}), target.get('offline_authorization', {})
+            entry_receipt = target.get('entry_receipt', {})
+            user_id = runtime['dto'].get('offline_authorization', {}).get('user_id')
+            if (target.get('session_id') == state.session_id and assignment.get('assignment_id') == entry['assignment_id']
+                    and authorization.get('user_id') == user_id and type(user_id) is int
+                    and authorization.get('session_id') == state.session_id and authorization.get('assignment_id') == entry['assignment_id']
+                    and process.get('capture_version') == 'capture-v2' and process.get('navigation_id') == entry['navigation_id']
+                    and process.get('session_id') == state.session_id and process.get('attempt_id') == assignment.get('attempt_id')
+                    and entry_receipt.get('navigation_id') == entry['navigation_id']
+                    and entry_receipt.get('session_id') == state.session_id and entry_receipt.get('assignment_id') == entry['assignment_id']
+                    and type(assignment.get('attempt_id')) is int and assignment['attempt_id'] > 0
+                    and entry_receipt.get('attempt_id') == assignment['attempt_id']
+                    and all(type(entry_receipt.get(key)) is int and entry_receipt[key] > 0 for key in ('visit_id', 'visit_index'))
+                    and all(entry_receipt.get(key) and entry_receipt[key] == process.get(key) for key in ('visit_id', 'visit_index', 'entry_event_id'))):
+                with self.lock:
+                    row.update(outcome='committed', entry_receipt=deepcopy(entry_receipt))
+                return deepcopy(target)
+        raise RuntimeError('Combined target entry outcome is unknown or invalid')
+
     def _browser_close(self, state, runtime, reason, to_assignment=None):
         if reason == 'navigation' and runtime['dto']['process'].get('save_and_leave', {}).get('version') == 1:
             stream = runtime['stream']
-            material = state.browser_entry_material
-            token = material['navigation_id']
-            left = stream.event(runtime['dto']['assignment']['attempt_id'], 'item_left',
-                {'leave_reason': reason, 'to_assignment_id': to_assignment}, event_version=2)
-            left['correlation_id'] = token
-            # The same immutable local fact must be used by journal, envelope and replay.
-            stream.events[left['client_sequence_no']] = deepcopy(left)
-            checkpoint = stream.checkpoint('navigation')
-            checkpoints = self._browser_freeze_bundle(runtime)['checkpoints'] if self._browser_bundle_enabled(runtime) else [checkpoint]
-            body = {'navigation_token': token, 'leave_event_id': left['event_id'],
-                'to_assignment_id': to_assignment, 'target_event_id': runtime['head'],
-                'client_clicked_at': material['client_occurred_at'], **runtime['lease'],
-                'save_and_leave': {'version': 1, 'client_instance_id': stream.client_instance_id,
-                    'event_boundary': stream.sequence, 'events': stream.pending_events(),
-                    'checkpoints': checkpoints, 'expected_version': runtime['version']}}
+            body = runtime.get('navigation_request')
+            if body is None:
+                material = state.browser_entry_material
+                token = material['navigation_id']
+                left = stream.event(runtime['dto']['assignment']['attempt_id'], 'item_left',
+                    {'leave_reason': reason, 'to_assignment_id': to_assignment}, event_version=2)
+                left['correlation_id'] = token
+                # The same immutable local fact must be used by journal, envelope and replay.
+                stream.events[left['client_sequence_no']] = deepcopy(left)
+                checkpoint = stream.checkpoint('navigation')
+                checkpoints = self._browser_freeze_bundle(runtime)['checkpoints'] if self._browser_bundle_enabled(runtime) else [checkpoint]
+                body = {'navigation_token': token, 'leave_event_id': left['event_id'],
+                    'to_assignment_id': to_assignment, 'target_event_id': runtime['head'],
+                    'client_clicked_at': material['client_occurred_at'], **runtime['lease'],
+                    'save_and_leave': {'version': 1, 'client_instance_id': stream.client_instance_id,
+                        'event_boundary': stream.sequence, 'events': stream.pending_events(),
+                        'checkpoints': checkpoints, 'expected_version': runtime['version']}}
+                entry = self._browser_next_entry(state, runtime, to_assignment)
+                if entry is not None:
+                    body['next_entry'] = entry
+                runtime['navigation_request'] = deepcopy(body)
+            if runtime.get('navigation_acknowledged'):
+                return self._browser_transition_result(state, runtime, body, runtime['navigation_receipt'])
+            token = body['navigation_token']
             receipt = self._browser_post(state, runtime['dto']['actions']['save_draft_url'], body, 'save_and_leave')
             if (receipt.get('committed') is not True or receipt.get('navigation_token') != token
                     or receipt.get('to_assignment_id') != to_assignment
@@ -1024,10 +1094,43 @@ class CaptureProtocolMixin:
                 raise RuntimeError('Saved navigation receipt mismatch')
             stream.accept_acknowledgements(receipt['acknowledgements'])
             stream.acked_checkpoint_ids.update(receipt['checkpoint_ids'])
-            runtime['version'] = receipt['response_version']
-            return
+            runtime.update(navigation_acknowledged=True, navigation_receipt=deepcopy(receipt),
+                version=receipt['response_version'], lease={})
+            return self._browser_transition_result(state, runtime, body, receipt)
+        capability = runtime['dto']['process'].get('close_bundle', {})
+        if (reason == 'submit' and self._browser_bundle_enabled(runtime)
+                and capability.get('enabled') is True and capability.get('version') == 1):
+            stream = runtime['stream']
+            body = runtime.get('close_request')
+            if body is None:
+                entry = self._browser_next_entry(state, runtime, to_assignment)
+                left = stream.event(runtime['dto']['assignment']['attempt_id'], 'item_left',
+                    {'leave_reason': reason, 'to_assignment_id': to_assignment if entry is not None else None}, event_version=2)
+                self._browser_checkpoint(state, runtime, 'session_end')
+                body = {'lease_token': runtime['lease']['writer_lease_token'],
+                    'client_instance_id': stream.client_instance_id, 'capture_operation_id': str(uuid.uuid4()),
+                    'leave_event_id': left['event_id'], 'capture_bundle': self._browser_freeze_bundle(runtime)}
+                if entry is not None:
+                    body['next_entry'] = entry
+                runtime['close_request'] = deepcopy(body)
+            if runtime.get('close_acknowledged'):
+                return self._browser_transition_result(state, runtime, body, runtime['close_receipt'])
+            self._browser_capture_mutation(state, runtime, body, 'close')
+            receipt = self._browser_post(state, runtime['dto']['process']['writer_lease_release_url'], body, 'close_bundle')
+            if (receipt.get('capture_operation_id') != body['capture_operation_id']
+                    or receipt.get('writer_lease_released') is not True or receipt.get('status') != 'submitted'
+                    or type(receipt.get('response_version')) is not int
+                    or receipt.get('active_response_event_id') != runtime['head']
+                    or receipt.get('final_response_event_id') != runtime['head']):
+                raise RuntimeError('Close capture receipt mismatch')
+            self._browser_accept_bundle(runtime, body['capture_bundle'], receipt)
+            self._browser_capture_mutation(state, runtime, body, 'close', receipt)
+            if not runtime.get('close_acknowledged'):
+                self._browser_checkpoint(state, runtime, 'ack_progress')
+            runtime.update(close_acknowledged=True, close_receipt=deepcopy(receipt), version=receipt['response_version'], lease={})
+            return self._browser_transition_result(state, runtime, body, receipt)
         runtime['stream'].event(runtime['dto']['assignment']['attempt_id'], 'item_left',
-            {'leave_reason': reason, 'to_assignment_id': to_assignment}, event_version=2)
+            {'leave_reason': reason, 'to_assignment_id': to_assignment if reason != 'submit' else None}, event_version=2)
         self._browser_checkpoint(state, runtime, 'navigation' if reason == 'navigation' else 'session_end')
         self._browser_flush(state, runtime)
         if runtime['lease']:
@@ -1122,12 +1225,12 @@ class CaptureProtocolMixin:
             self._browser_logical_action(state, 'answer_input', index)
             if index < 19:
                 self._browser_start_action(state, 'navigation_next_ready', index)
-                self._browser_close(state, runtime, 'navigation', assignments[index + 1])
-                runtime = self.browser_open_question(state, assignments[index + 1], 'navigation')
+                entry_dto = self._browser_close(state, runtime, 'navigation', assignments[index + 1])
+                runtime = self.browser_open_question(state, assignments[index + 1], 'navigation', entry_dto)
                 self._browser_logical_action(state, 'navigation_next_ready', index)
                 self._browser_start_action(state, 'navigation_return_ready', index)
-                self._browser_close(state, runtime, 'navigation', assignment_id)
-                runtime = self.browser_open_question(state, assignment_id, 'navigation')
+                entry_dto = self._browser_close(state, runtime, 'navigation', assignment_id)
+                runtime = self.browser_open_question(state, assignment_id, 'navigation', entry_dto)
                 self._browser_logical_action(state, 'navigation_return_ready', index)
                 dto, stream = runtime['dto'], runtime['stream']
             if kind == 'single_choice':
@@ -1194,7 +1297,10 @@ class CaptureProtocolMixin:
                 'included_explanation': bool(result.get('explanation'))})
             if result.get('explanation'):
                 stream.event(attempt_id, 'explanation_shown', {'source': 'submission_feedback'})
-            self._browser_close(state, runtime, 'submit')
+            next_path = urlsplit(result['next_url']).path
+            if index < 19 and next_path != f'/student/sessions/{state.session_id}/questions/{assignments[index + 1]}/':
+                raise RuntimeError('Submission next question drifted')
+            entry_dto = self._browser_close(state, runtime, 'submit', assignments[index + 1]) if index < 19 else self._browser_close(state, runtime, 'submit')
             with self.lock:
                 row = self.ledger[str(state.session_id)]
                 row['username_sha256'] = digest(state.username)
@@ -1202,13 +1308,10 @@ class CaptureProtocolMixin:
                     'target_event_id': runtime['head'], 'submission_token': token, 'question_type': kind,
                     'response_version': result.get('response_version', runtime['version'])}
             self.scenario(kind)
-            next_path = urlsplit(result['next_url']).path
             if index < 19:
-                expected = f'/student/sessions/{state.session_id}/questions/{assignments[index + 1]}/'
-                if next_path != expected:
-                    raise RuntimeError('Submission next question drifted')
-                runtime = self.browser_open_question(state, assignments[index + 1], 'submit_next')
+                runtime = self.browser_open_question(state, assignments[index + 1], 'submit_next', entry_dto)
             else:
+                self._browser_flush(state, runtime, metric='final_capture_drain')
                 self._browser_request(state, next_path, 'completion_shell')
                 self._browser_request(state, '/api/v1/auth/session/', 'completion_auth')
                 state.finish_payload = self._browser_request(state, f'/api/v1/student/sessions/{state.session_id}/summary/', 'finish')

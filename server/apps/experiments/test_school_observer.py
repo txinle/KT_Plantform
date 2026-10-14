@@ -11,11 +11,138 @@ from django.test import SimpleTestCase
 
 
 class SchoolObserverTests(SimpleTestCase):
+    def test_batch_inspection_uses_one_command_and_full_container_identities(self):
+        module = self.module()
+        identities = ['a' * 64, 'b' * 64]
+        rows = [{'Id': identity} for identity in identities]
+        with patch.object(module.subprocess, 'run', return_value=SimpleNamespace(
+                returncode=0, stdout=json.dumps(rows))) as inspect, \
+                patch.object(module, 'reinspect_container') as retry:
+            items, lifecycle = module.inspect_containers(identities)
+        inspect.assert_called_once_with(['docker', 'inspect', *identities],
+                                       text=True, capture_output=True, timeout=30)
+        retry.assert_not_called()
+        self.assertEqual(items, rows)
+        self.assertEqual(lifecycle, [])
+
+    def test_partial_batch_reinspects_only_missing_ids_and_records_removal(self):
+        module = self.module()
+        identities = ['a' * 64, 'b' * 64, 'c' * 64]
+        first, recovered = {'Id': identities[0]}, {'Id': identities[2]}
+        with patch.object(module.subprocess, 'run', return_value=SimpleNamespace(
+                returncode=1, stdout=json.dumps([first]))), \
+                patch.object(module, 'reinspect_container', side_effect=[None, recovered]) as retry:
+            items, lifecycle = module.inspect_containers(identities)
+        self.assertEqual([call.args[0] for call in retry.call_args_list], identities[1:])
+        self.assertEqual(items, [first, recovered])
+        self.assertEqual(lifecycle, [{'status': 'skipped_removed_during_discovery',
+                                     'container_id': identities[1]}])
+
+    def test_batch_failure_without_missing_ids_and_identity_substitution_fail_closed(self):
+        module = self.module()
+        identity = 'a' * 64
+        for exit_code, rows in ((1, [{'Id': identity}]), (0, [{'Id': 'b' * 64}]),
+                                (0, [{'Id': identity}, {'Id': identity}])):
+            with patch.object(module.subprocess, 'run', return_value=SimpleNamespace(
+                    returncode=exit_code, stdout=json.dumps(rows))), self.assertRaises(ValueError):
+                module.inspect_containers([identity])
+
+    def test_missing_batch_identity_does_not_hide_real_reinspection_failure(self):
+        module = self.module()
+        with patch.object(module.subprocess, 'run', return_value=SimpleNamespace(returncode=1, stdout='[]')), \
+                patch.object(module, 'reinspect_container', side_effect=ValueError('Runtime container reinspection failed')), \
+                self.assertRaisesMessage(ValueError, 'Runtime container reinspection failed'):
+            module.inspect_containers(['a' * 64])
+
+    def test_pool_metrics_keep_transaction_totals_and_server_transition_states(self):
+        module = self.module()
+        pools = ('database|cl_waiting|sv_active|sv_idle|sv_used|sv_tested|sv_login|maxwait\n'
+                 'kt_assessment|2|3|4|5|6|7|8\n')
+        stats = ('database|total_xact_count|total_xact_time|total_query_count|total_query_time|total_wait_time\n'
+                 'kt_assessment|91|92000|93|94000|95000\n')
+        with patch.object(module.subprocess, 'check_output', side_effect=['pooler', pools, stats]):
+            result = module.pool_metrics('kt-school-e2e')['kt_assessment']
+        self.assertEqual({key: result.get(key) for key in ('sv_used', 'sv_tested', 'sv_login')},
+                         {'sv_used': 5, 'sv_tested': 6, 'sv_login': 7})
+        self.assertEqual(result.get('total_xact_count'), 91)
+        self.assertEqual(result.get('total_xact_time'), 92000)
+        self.assertEqual(result['total_query_time'], 94000)
+
+    def test_host_run_queue_and_process_counts_are_measured(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'stat').write_text('cpu 10 2 30 40 5 6 7 8 9 10\nprocs_running 3\nprocs_blocked 2\n')
+            (root / 'loadavg').write_text('0.50 0.60 0.70 4/120 123\n')
+            counters = module.host_cpu_counters(root)
+        self.assertEqual(counters.get('procs_running'), 3)
+        self.assertEqual(counters.get('procs_blocked'), 2)
+        self.assertEqual(counters.get('run_queue'), 4)
+        self.assertEqual(counters['system_ticks'], 30)
+        self.assertEqual(counters['idle_ticks'], 40)
+
+    def test_failed_metric_is_missing_and_keeps_sanitized_error_and_timing(self):
+        module = self.module()
+        status = {}
+        def fail():
+            raise ValueError('PRIVATE SQL AND PASSWORD')
+        with patch.object(module.time, 'time', side_effect=[100, 100.4]), \
+                patch.object(module.time, 'monotonic', side_effect=[10, 10.4]):
+            value = module.measure_metric('pgbouncer', fail, status)
+        self.assertIsNone(value)
+        self.assertEqual(status['pgbouncer']['state'], 'missing')
+        self.assertEqual(status['pgbouncer']['error_type'], 'ValueError')
+        self.assertEqual(status['pgbouncer']['started_at'], 100)
+        self.assertEqual(status['pgbouncer']['ended_at'], 100.4)
+        self.assertAlmostEqual(status['pgbouncer']['duration_seconds'], 0.4)
+        self.assertNotIn('PRIVATE', json.dumps(status))
+
+    def test_default_interval_is_two_seconds_and_cli_accepts_two(self):
+        module = self.module()
+        self.assertEqual(module.sample_delay(120, 100), 2)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'observation.json'
+            with patch.object(module.sys, 'argv', ['observer', '--project', 'kt-school-e2e',
+                    '--interval', '2', '--output', str(output)]), \
+                    patch.object(module, 'observe') as observe, patch('builtins.print'):
+                module.main()
+            self.assertEqual(observe.call_args.args[0].interval, 2)
+
+    def test_pool_metrics_include_auth_assessment_and_capture_without_other_databases(self):
+        module = self.module()
+        pools = 'database|cl_active|cl_waiting|sv_active|sv_idle|maxwait\n' + '\n'.join(
+            f'{alias}|4|{waiting}|3|1|2' for alias, waiting in (
+                ('kt_core', 0), ('kt_auth', 2), ('kt_assessment', 7), ('kt_capture', 1), ('unrelated', 9)))
+        stats = 'database|total_query_count|total_wait_time|avg_wait_time\n' + '\n'.join(
+            f'{alias}|12|3000|250' for alias in ('kt_core', 'kt_auth', 'kt_assessment', 'kt_capture', 'unrelated'))
+        with patch.object(module.subprocess, 'check_output', side_effect=['owned-pooler', pools, stats]):
+            result = module.pool_metrics('kt-school-e2e')
+        self.assertEqual(set(result), {'kt_core', 'kt_auth', 'kt_assessment', 'kt_capture'})
+        self.assertEqual(result['kt_assessment']['cl_waiting'], 7)
+        self.assertEqual(result['kt_auth']['cl_waiting'], 2)
+        self.assertEqual(result['kt_capture']['cl_waiting'], 1)
+        self.assertEqual(result['kt_assessment']['total_wait_time'], 3000)
+
+    def test_six_pool_roles_and_owned_database_are_required_and_budgeted(self):
+        module = self.module()
+        source = {'pool_profile': 'six-pools-180-v1', 'postgres_profile': 'isolated-pg17-v1', 'roles': {}}
+        self.assertEqual(module.observer_http_roles(source), {'web', 'auth', 'assessment', 'capture', 'student-read', 'teacher-read'})
+        self.assertTrue({'db', 'auth', 'assessment', 'capture'} <= module.observer_required_roles(source))
+        owned = {'Id': 'db', 'Config': {'Labels': {'com.docker.compose.project': 'kt-school-e2e', 'com.docker.compose.service': 'db'}}}
+        production = {'Id': 'prod-db', 'Config': {'Labels': {'com.docker.compose.project': 'kt_plantform', 'com.docker.compose.service': 'db'}}}
+        self.assertEqual(module.observer_resource_scope(owned, source, 'kt-school-e2e', ['db']), 'isolated_test')
+        self.assertEqual(module.observer_resource_scope(production, source, 'kt-school-e2e', ['db']), 'production_or_other')
+        self.assertEqual(module.observer_resource_scope(owned, {}, 'kt-school-e2e', ['db']), 'shared_postgres')
+        source['roles']['db'] = {'cgroup': {'memory_events': {'oom_kill': 1}}}
+        self.assertFalse(module.new_oom(owned, {'memory_events': {'oom_kill': 1}}, source, 'kt-school-e2e', ['db']))
+        self.assertTrue(module.new_oom(owned, {'memory_events': {'oom_kill': 2}}, source, 'kt-school-e2e', ['db']))
+
     def test_host_cpu_steal_and_role_listen_queues_are_raw_bounded_counters(self):
         module = self.module()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'stat').write_text('cpu  10 2 30 40 5 6 7 8 9 10\ncpu0 1 2\n')
+            (root / 'loadavg').write_text('0.50 0.60 0.70 1/120 123\n')
             network = root / '123/net'
             network.mkdir(parents=True)
             (network / 'tcp').write_text('header\n 0: 00000000:1F40 00000000:0000 0A 00000000:00000003 00:0 0 0\n 1: 00000000:1538 00000000:0000 0A 00000000:00000009 00:0 0 0\n')
@@ -90,8 +217,14 @@ class SchoolObserverTests(SimpleTestCase):
 
     def test_real_sampling_loop_uses_full_container_identities_and_finishes(self):
         module = self.module()
-        for stopped, exit_code in ((False, 0), (True, 143), (False, 143)):
-            roles = ['web', 'student-read', 'teacher-read', 'scheduler', 'nginx', 'pgbouncer', 'db']
+        for stopped, exit_code, six, pool_failure, missing_role in (
+                (False, 0, False, False, False), (True, 143, False, False, False),
+                (False, 143, False, False, False), (False, 0, True, False, False),
+                (False, 0, False, True, False), (False, 0, True, False, True)):
+            roles = ['web', 'student-read', 'teacher-read', 'scheduler', 'nginx', 'pgbouncer']
+            if six:
+                roles += ['auth', 'assessment', 'capture']
+            roles += ['db']
             items = {str(i + 1) * 64: {'Id': str(i + 1) * 64, 'Name': '/' + role,
                      'State': {'Running': True, 'Pid': i + 100},
                      'Config': {'Labels': {'com.docker.compose.project': 'kt-school-e2e',
@@ -101,13 +234,17 @@ class SchoolObserverTests(SimpleTestCase):
 
             def docker(args, **kwargs):
                 if args[1] == 'ps':
+                    if missing_role and any(str(arg).startswith('id=') for arg in args):
+                        return ''
                     selected = identities[:-1] if '--filter' in args else identities
                     return '\n'.join(selected if '--no-trunc' in args else [identity[:12] for identity in selected])
                 if args[1] == 'inspect':
                     if '--format' in args:
                         return identities[-1]
-                    identity = args[-1]
-                    return json.dumps([items[next(full for full in identities if full.startswith(identity))]])
+                    selected = [items[next(full for full in identities if full.startswith(identity))]
+                                for identity in args[2:]]
+                    return json.dumps([item for item in selected
+                                       if not missing_role or item['Config']['Labels']['com.docker.compose.service'] != 'capture'])
                 if args[1] == 'exec':
                     return '[]' if args[-1] == module.DATABASE_WAIT_SQL else '{}'
                 if args[1] == 'events':
@@ -123,7 +260,8 @@ class SchoolObserverTests(SimpleTestCase):
             ticks = [100]
             with tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / 'observation.json'
-                (output.parent / 'source-config.json').write_text('{}')
+                source = {'pool_profile': 'six-pools-180-v1', 'postgres_profile': 'isolated-pg17-v1'} if six else {}
+                (output.parent / 'source-config.json').write_text(json.dumps(source))
                 meminfo = output.parent / 'meminfo'
                 meminfo.write_text('MemTotal: 1048576 kB\n')
                 stop = output.parent / 'stop'
@@ -136,20 +274,35 @@ class SchoolObserverTests(SimpleTestCase):
                 args = SimpleNamespace(project='kt-school-e2e', duration=1, output=str(output), scope='short',
                                        database_container='db', abort_memory_below_mb=2, stop_file=str(stop) if stopped else None)
                 with patch.object(module.subprocess, 'check_output', side_effect=docker), \
-                        patch.object(module.subprocess, 'run', side_effect=lambda args, **kwargs: SimpleNamespace(returncode=0, stdout=docker(args), stderr='')), \
+                        patch.object(module.subprocess, 'run', side_effect=lambda args, **kwargs: SimpleNamespace(returncode=1 if missing_role else 0, stdout=docker(args), stderr='')), \
                         patch.object(module.subprocess, 'Popen', return_value=events), \
                         patch.object(module, 'cgroup_path', return_value=Path(directory)), \
                         patch.object(module, 'cgroup_metrics', return_value=kernel), \
                         patch.object(module, 'swap_used_bytes', return_value=0), \
                         patch.object(module, 'memory_available_bytes', return_value=500 * 1024 ** 2), \
-                        patch.object(module, 'pool_metrics', return_value={}), \
+                        patch.object(module, 'pool_metrics', side_effect=ValueError('private pool failure') if pool_failure else None, return_value={}), \
                         patch.object(module, 'host_cpu_counters', return_value={'steal_ticks': 0}), \
-                        patch.object(module, 'http_listen_queues', return_value=[]), \
+                        patch.object(module, 'http_listen_queues', return_value=[]) as queues, \
                         patch.object(module, 'budget', return_value={'combined_working_set_bytes': 7168, 'checks': {'host_headroom': True, 'combined_working_set_plus_margin': True}}), \
                         patch.object(module, 'Path', side_effect=lambda path: meminfo if str(path) == '/proc/meminfo' else Path(path)), \
                         patch.object(module.time, 'time', side_effect=lambda: ticks[0]), \
                         patch.object(module.time, 'sleep', side_effect=advance):
                     result = {}
+                    if missing_role:
+                        with self.assertRaisesMessage(ValueError, 'Required database or runtime role missing'):
+                            module.observe(args, result)
+                        self.assertEqual(result['host_database_samples'], [])
+                        continue
+                    if pool_failure:
+                        with self.assertRaisesMessage(ValueError, 'Runtime diagnostic measurement failed'):
+                            module.observe(args, result)
+                        sample = result['host_database_samples'][0]
+                        self.assertIsNone(sample['pgbouncer'])
+                        self.assertEqual(sample['measurement_status']['pgbouncer']['state'], 'missing')
+                        journal = output.with_suffix('.samples.jsonl').read_text()
+                        self.assertEqual(json.loads(journal)['state'], 'failed')
+                        self.assertNotIn('private pool failure', journal)
+                        continue
                     if exit_code and not stopped:
                         with self.assertRaises(SystemExit):
                             module.observe(args, result)
@@ -158,7 +311,18 @@ class SchoolObserverTests(SimpleTestCase):
                         continue
                     module.observe(args, result)
                 self.assertEqual(len(result['host_database_samples']), 1)
-                self.assertEqual(len(result['host_database_samples'][0]['resource_rows']), 7)
+                self.assertEqual(len(result['host_database_samples'][0]['resource_rows']), len(roles))
+                self.assertEqual(queues.call_count, 6 if six else 3)
+                sample = result['host_database_samples'][0]
+                self.assertEqual(sample['state'], 'sampled')
+                self.assertEqual(sample['measurement_status']['pgbouncer']['state'], 'measured')
+                self.assertEqual(sample['sample_started_at'], 100)
+                self.assertGreaterEqual(sample['sample_duration_seconds'], 0)
+                self.assertGreaterEqual(sample['container_discovery_duration_seconds'], 0)
+                if six:
+                    self.assertEqual(next(row for row in sample['resource_rows'] if row['role'] == 'db')['scope'], 'isolated_test')
+                    self.assertEqual(sample['database_wal']['scope'], 'isolated_postgres_instance')
+                    self.assertNotIn('shared_wal', sample)
                 self.assertEqual(result['oom_kills'], 0)
                 self.assertEqual(result['stopped_by_coordinator'], stopped)
                 self.assertFalse(result['teacher_freshness']['measured'])

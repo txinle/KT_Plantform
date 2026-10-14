@@ -1,5 +1,6 @@
 """Timing boundaries for the explicitly isolated capture diagnostic run."""
 import math
+import json
 import os
 import re
 import time
@@ -56,6 +57,29 @@ def finish_interval(detail, started_clock, state, phase):
     if detail['clock_discontinuity']:
         state.setdefault('clock_errors', []).append((phase, error))
     return seconds
+
+
+def interval_union_seconds(intervals):
+    """Count nested driver intervals once, rather than summing overlapping work."""
+    total = 0
+    end = None
+    for start, stop in sorted(intervals):
+        total += max(0, stop - max(start, end if end is not None else start))
+        end = max(stop, end if end is not None else stop)
+    return total
+
+
+def emit_diagnostic(logger, row, state, phase):
+    """Own output duration is available to the following outer timing record."""
+    stamp = time.perf_counter()
+    document = json.dumps(row, separators=(',', ':'))
+    serialized = time.perf_counter()
+    logger.warning(document)
+    ended = time.perf_counter()
+    state.setdefault('capture_metrics', {}).update({
+        phase + '_log_serialize_seconds': round(serialized - stamp, 6),
+        phase + '_log_output_seconds': round(ended - serialized, 6),
+    })
 
 
 def timing_fields(state):

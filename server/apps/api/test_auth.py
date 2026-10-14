@@ -23,6 +23,39 @@ class AuthenticationApiTests(TestCase):
             student_number="S20260001",
         )
 
+    def test_bootstrap_returns_anonymous_csrf_in_one_uncacheable_response(self):
+        response = self.client.get('/api/v1/auth/bootstrap/')
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(domain_payload(response)['user'])
+        self.assertTrue(domain_payload(response)['csrf_token'])
+        self.assertIn('no-store', response['Cache-Control'])
+
+    def test_bootstrap_returns_authenticated_identity_without_a_session_probe(self):
+        self.client.force_login(self.student)
+        response = self.client.get('/api/v1/auth/bootstrap/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(domain_payload(response)['user']['id'], self.student.pk)
+        self.assertTrue(domain_payload(response)['csrf_token'])
+        self.assertIn('no-store', response['Cache-Control'])
+
+    def test_login_returns_rotated_csrf_that_can_logout_without_another_get(self):
+        client = Client(enforce_csrf_checks=True)
+        initial = domain_payload(client.get(reverse('api-csrf')))['csrf_token']
+        response = client.post(reverse('api-login'),
+                               json.dumps({'username': self.student.username, 'password': 'test-password'}),
+                               content_type='application/json', HTTP_X_CSRFTOKEN=initial)
+        self.assertEqual(response.status_code, 200)
+        rotated = domain_payload(response).get('csrf_token')
+        self.assertTrue(rotated)
+        self.assertIn('no-store', response['Cache-Control'])
+        self.assertEqual(client.post(reverse('api-logout'), HTTP_X_CSRFTOKEN=initial).status_code, 403)
+        self.assertEqual(client.post(reverse('api-logout'), HTTP_X_CSRFTOKEN=rotated).status_code, 204)
+
+    def test_authentication_success_and_error_responses_cannot_be_cached(self):
+        for path in ('/api/v1/auth/csrf/', '/api/v1/auth/session/', '/api/v1/auth/research-consent/'):
+            with self.subTest(path=path):
+                self.assertIn('no-store', self.client.get(path)['Cache-Control'])
+
     def test_session_projects_the_authenticated_identity_and_server_home(self):
         self.client.force_login(self.student)
 

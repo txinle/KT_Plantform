@@ -1,7 +1,7 @@
 import { setImmediate } from 'node:timers'
 import { TextEncoder } from 'node:util'
 import assert from 'node:assert/strict';
-import { test } from 'vitest';
+import { test, vi } from 'vitest';
 
 import {
   ProcessEventCollector,
@@ -11,7 +11,129 @@ import { bindLifecycle } from './session-lifecycle';
 import { backoffDelay, sanitizePayload } from './process-types';
 
 const INSTANCE_A = '11111111-1111-4111-8111-111111111111';
+
+test('background confirmation keeps the frozen upload operation when another question becomes active', async () => {
+  const measure = vi.fn();
+  const origin = Date.parse('2026-10-13T00:00:00Z');
+  vi.stubGlobal('performance', { now: () => 2000, timeOrigin: origin, measure });
+  const store = new MemoryOutbox();
+  let sender;
+  sender = new ProcessEventCollector(eventPayload({ sessionId: 7, attemptId: 13, endpoint: '/events/',
+    outbox: store, autoSchedule: false, clientInstanceId: INSTANCE_A,
+    wallNow: () => new Date(origin + 100), monotonicNow: () => 100,
+    timeOrigin: '2026-10-13T00:00:00Z',
+    isOnline: () => true, isVisible: () => true,
+    captureBundle: { enabled: true, version: 1, max_events: 100, max_checkpoints: 100, max_bytes: 8388608 },
+    fetch: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      sender.setOperationId('later-operation');
+      return okResponse({ success: true, committed: true,
+        acknowledgements: body.capture_bundle.events.map(row => ({ event_id: row.event_id,
+          client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+        checkpoint_ids: body.capture_bundle.checkpoints.map(row => row.checkpoint_id),
+      });
+    },
+  }));
+  try {
+    sender.setOperationId('original-operation');
+    await sender.record('response_input_started', { question_type: 'single_choice' }, { eventId: globalThis.crypto.randomUUID() });
+    assert.equal(await sender.flush({ operationId: 'original-operation' }), true);
+    const confirmation = measure.mock.calls.find(row => row[0] === 'kt-assessment:background_confirmation');
+    assert.equal(confirmation[1].detail.operation_id, 'original-operation');
+  } finally { sender.dispose(); vi.unstubAllGlobals(); }
+});
 const INSTANCE_B = '22222222-2222-4222-8222-222222222222';
+
+test('close returns failed confirmation and retries the same local leave fact', async () => {
+  let online = false;
+  const collector = new ProcessEventCollector(eventPayload({ isOnline: () => online,
+    fetch: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      return okResponse({ success: true, acknowledgements: body.events.map(event => ({
+        client_sequence_no: event.client_sequence_no, event_id: event.event_id || INSTANCE_B,
+        server_ingest_sequence_no: event.client_sequence_no,
+      })) });
+    } }));
+  const lifecycle = bindLifecycle(collector, { deferRendered: true });
+  await lifecycle.ready;
+  assert.equal(await lifecycle.closeAttempt('submit'), false);
+  const left = (await collector.outbox.pendingEvents(INSTANCE_A, 999)).filter(row => row.event_type === 'item_left');
+  assert.equal(left.length, 1);
+  online = true;
+  assert.equal(await lifecycle.closeAttempt('submit'), true);
+  assert.equal(await collector.outbox.count(), 0);
+  assert.equal(await lifecycle.closeAttempt('submit'), true);
+  lifecycle.dispose(); collector.dispose();
+});
+
+test.each([2000, 6000])('legacy close remains pending until its %s ms upload confirms', async delay => {
+  vi.useFakeTimers();
+  const collector = new ProcessEventCollector(eventPayload({ fetch: async (_url, init) => {
+    await new Promise(resolve => globalThis.setTimeout(resolve, delay));
+    const body = JSON.parse(init.body);
+    return okResponse({ success: true, acknowledgements: body.events.map(event => ({ client_sequence_no: event.client_sequence_no })) });
+  } }));
+  const lifecycle = bindLifecycle(collector, { deferRendered: true });
+  try {
+    await lifecycle.ready;
+    let settled = false;
+    const close = lifecycle.closeAttempt('submit').then(result => { settled = true; return result; });
+    await vi.advanceTimersByTimeAsync(1500);
+    assert.equal(settled, false);
+    assert.equal((await collector.outbox.pendingEvents(INSTANCE_A, 999)).filter(row => row.event_type === 'item_left').length, 1);
+    await vi.advanceTimersByTimeAsync(delay - 1500);
+    assert.equal(await close, true);
+    assert.equal(await collector.outbox.count(), 0);
+  } finally { lifecycle.dispose(); collector.dispose(); vi.useRealTimers(); }
+});
+
+test('a background upload joined by close has a transport deadline and preserves pending evidence', async () => {
+  vi.useFakeTimers();
+  let signal;
+  const collector = new ProcessEventCollector(eventPayload({ fetch: async (_url, init) => {
+    signal = init.signal;
+    return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason)));
+  } }));
+  const lifecycle = bindLifecycle(collector, { deferRendered: true });
+  try {
+    await lifecycle.ready;
+    await collector.record('document_visible', {});
+    const background = collector.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    const close = lifecycle.closeAttempt('submit');
+    await vi.advanceTimersByTimeAsync(29999);
+    assert.equal(signal?.aborted, false);
+    await vi.advanceTimersByTimeAsync(1);
+    assert.equal(await background, false);
+    await vi.advanceTimersByTimeAsync(30000);
+    assert.equal(await close, false);
+    assert.ok(await collector.outbox.count() > 0);
+    assert.equal((await collector.outbox.pendingEvents(INSTANCE_A, 999)).filter(row => row.event_type === 'item_left').length, 1);
+  } finally { lifecycle.dispose(); collector.dispose(); vi.useRealTimers(); }
+});
+
+test('bundle flush defers newly generated ack checkpoints beyond its frozen round', async () => {
+  const requests = [];
+  const collector = new ProcessEventCollector(eventPayload({ checkpointEndpoint: '/checkpoint/',
+    captureBundle: { enabled: true, version: 1, max_events: 100, max_checkpoints: 100, max_bytes: 8388608 },
+    fetch: async (_url, init) => {
+      const bundle = JSON.parse(init.body).capture_bundle;
+      requests.push(bundle);
+      return okResponse({ success: true, committed: true,
+        acknowledgements: bundle.events.map(row => ({ event_id: row.event_id || INSTANCE_B,
+          client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+        checkpoint_ids: bundle.checkpoints.map(row => row.checkpoint_id) });
+    } }));
+  await collector.record('document_visible', {});
+  assert.equal(await collector.flushConfirmed(), true);
+  await collector.flushPromise;
+  assert.equal(requests.length, 1);
+  assert.equal((await collector.outbox.pendingCheckpoints()).filter(row => row.trigger === 'ack_progress').length, 1);
+  assert.equal(await collector.flushConfirmed(), true);
+  await collector.flushPromise;
+  assert.equal((await collector.outbox.pendingCheckpoints()).length, 0);
+  collector.dispose();
+});
 
 test('submission intent survives collector replacement and is scoped to one attempt', async () => {
   const outbox = new MemoryOutbox();
@@ -638,7 +760,8 @@ test('lifecycle capture emits approved events and heartbeat stops after close', 
   const collector = {
     attemptId: 11,
     clientInstanceId: 'lifecycle-client',
-    outbox: { captureState: async () => ({ highestEmitted: records.length }) },
+    closeMetadataKey: () => 'test-close',
+    outbox: Object.assign(new MemoryOutbox(), { captureState: async () => ({ highestEmitted: records.length }) }),
     record: async (eventType, payload) => { records.push({ eventType, payload }); },
     flush: async () => true,
     checkpoint: async (trigger) => { checkpoints.push(trigger); },

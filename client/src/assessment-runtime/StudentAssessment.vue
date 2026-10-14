@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 
 import { getBootstrapContext, isOfflineBootstrapRecovery } from '@/app/bootstrap'
@@ -14,8 +14,9 @@ import type {
   SubmissionConfidence,
   NavigationClickContext,
   AtomicSubmissionEnvelope,
+  NextEntryRequest,
 } from './api'
-import { getStudentAssessmentApi } from './api'
+import { getStudentAssessmentApi, nextEntryRequest } from './api'
 import { createProcessRuntime, getSessionController, disposeSessionController, type StudentProcessRuntime, type SubmissionIntent, type NavigationIntent } from './session-controller'
 import { ResponseTrajectory } from './response-trajectory'
 import StudentResearchTools from './StudentResearchTools.vue'
@@ -55,6 +56,7 @@ let navigationSaving = false
 let pointerWritePromise: Promise<void> | undefined
 const taskClosed = ref(false)
 const pendingSubmission = ref<SubmissionIntent>()
+const pendingClosure = shallowRef<SubmissionResponse>()
 const finishing = ref(false)
 const timedOut = ref(false)
 const online = ref(globalThis.navigator.onLine)
@@ -103,6 +105,7 @@ let itemRenderedRecorded = false
 let pendingRouteInitialization: { generation: number; sessionId: number; assignmentId: number } | undefined
 let pendingNavigationClick: (NavigationClickContext & { assignmentId: number }) | undefined
 let closePromise: { runtime: StudentProcessRuntime; pending: Promise<void> } | undefined
+const closureWaiting = ref(false)
 
 interface ConfidenceContract {
   confidence_assignment_id: string
@@ -608,25 +611,66 @@ async function acceptSubmission(response: SubmissionResponse) {
   submissionUncertain.value = false
   submitDialogOpen.value = false
   pendingConfidence.value = undefined
+  const resumedClose = !!pendingClosure.value
+  pendingClosure.value = response
+  await processRuntime?.saveClosureIntent?.(response)
   await processRuntime?.saveSubmissionIntent?.(null)
   pendingSubmission.value = undefined
-  await showFeedback(response)
-  await closeAttemptAndRelease('submit')
+  if (!resumedClose) await showFeedback(response)
+  closureWaiting.value = true
+  const slowHint = setTimeout(() => { error.value = '答案已保存，正在确认收尾' }, 1500)
+  try {
+    let nextEntry: NextEntryRequest | undefined
+    const destination = state.value.navigation.find(item => item.url === response.next_url && !item.current)
+    if (state.value.process.transition_entry?.enabled && state.value.process.transition_entry.version === 1
+      && processRuntime?.closesWriterLease && destination) {
+      const controller = await getSessionController(state.value.session_id, getBootstrapContext().csrf_token)
+      const intent = await timedAssessmentStage('local_intent', () => controller.freezeEntry(
+        state.value!.session_id, destination.assignment_id, 'navigation_click', undefined,
+        { sourceAssignmentId: state.value!.assignment.assignment_id, targetUrl: destination.url },
+      ))
+      nextEntry = nextEntryRequest(intent)
+    }
+    await closeAttemptAndRelease('submit', undefined, nextEntry)
+    if (!/^\/student\/sessions\/\d+\/questions\/\d+\//.test(response.next_url)
+      && await processRuntime?.flushConfirmed({ timeoutMs: 30000 }) === false) throw new Error('最终收尾检查点尚未确认。')
+  }
+  catch (caught) {
+    error.value = '本题已提交，收尾轨迹尚未确认，请恢复网络后重试。'
+    throw caught
+  }
+  finally { clearTimeout(slowHint); closureWaiting.value = false }
+  error.value = ''
+  await processRuntime?.saveClosureIntent?.(null)
+  pendingClosure.value = undefined
   await navigate(response.next_url, true, 'submit_next')
 }
 
-async function closeAttemptAndRelease(reason: string, toAssignmentId?: number | null) {
+async function retrySubmittedClose() {
+  if (!pendingClosure.value || submitting.value) return
+  submitting.value = true
+  try { await acceptSubmission(pendingClosure.value); error.value = '' }
+  catch { error.value = '本题已提交，收尾轨迹尚未确认，请恢复网络后重试。' }
+  finally { submitting.value = false }
+}
+
+async function closeAttemptAndRelease(reason: string, toAssignmentId?: number | null, nextEntry?: NextEntryRequest) {
   const runtime = processRuntime
   const lease = writerLease
   if (!runtime) return
   if (closePromise?.runtime === runtime) return closePromise.pending
   const pending = (async () => {
-    await runtime.pointerWritesSettled()
-    const confirmed = await timedAssessmentStage('close', async () => toAssignmentId === undefined
-      ? await runtime.closeAttempt(reason)
-      : await runtime.closeAttempt(reason, toAssignmentId))
-    if (confirmed === false) throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。')
-    await timedAssessmentStage('lease', () => lease?.release().catch(() => undefined))
+    const close = async () => {
+      await runtime.pointerWritesSettled()
+      const confirmed = await timedAssessmentStage('close', async () => nextEntry
+        ? await runtime.closeAttempt(reason, toAssignmentId, nextEntry)
+        : toAssignmentId === undefined
+        ? await runtime.closeAttempt(reason)
+        : await runtime.closeAttempt(reason, toAssignmentId))
+      if (confirmed === false) throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。')
+      if (!runtime.closesWriterLease) await timedAssessmentStage('lease', () => lease?.release())
+    }
+    await close()
   })()
   closePromise = { runtime, pending }
   try { await pending }
@@ -637,6 +681,7 @@ async function closeAttemptAndRelease(reason: string, toAssignmentId?: number | 
 }
 
 function releaseWriterLeaseOnPageHide() {
+  if (processRuntime?.closesWriterLease && (pendingClosure.value || closePromise?.runtime === processRuntime)) return
   void writerLease?.release({ keepalive: true }).catch(() => undefined)
 }
 
@@ -790,7 +835,7 @@ async function confirmSubmit() {
     await acceptSubmission(response)
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : '提交失败，请重试。'
-    error.value = state.value?.assignment.status === 'submitted'
+    error.value = pendingClosure.value ? '本题已提交，收尾轨迹尚未确认，请恢复网络后重试。' : state.value?.assignment.status === 'submitted'
       ? `上一题已提交，下一题加载失败。${message}` : message
     submitting.value = false
     if (pendingSubmission.value) await recoverSubmission()
@@ -959,6 +1004,8 @@ async function saveAndLeave(item: StudentRuntimeQuestionEntry['navigation'][numb
         token: navigation.navigationId, clickedAt: navigation.clientOccurredAt,
         toAssignmentId: item.assignment_id, leaveEventId: left.event_id,
         head: trajectory.head, expectedResponseVersion: processRuntime?.responseVersion ?? 0,
+        ...(state.value.process.transition_entry?.enabled && state.value.process.transition_entry.version === 1
+          ? { nextEntry: nextEntryRequest({ ...navigation, assignmentId: item.assignment_id, reason: 'navigation_click' }) } : {}),
         ...(credentials ? { writerLeaseToken: credentials.writer_lease_token,
           writerClientInstanceId: credentials.writer_client_instance_id } : {}),
       }
@@ -976,10 +1023,13 @@ async function saveAndLeave(item: StudentRuntimeQuestionEntry['navigation'][numb
         ...(intent.writerLeaseToken ? { writer_lease_token: intent.writerLeaseToken,
           writer_client_instance_id: intent.writerClientInstanceId } : {}),
         save_and_leave: { version: 1, ...snapshot, expected_version: intent.expectedResponseVersion },
+        ...(intent.nextEntry ? { next_entry: intent.nextEntry } : {}),
       },
     ))
     await runtime.acknowledgeNavigation(intent.processSnapshot, receipt)
     await (await getSessionController(state.value!.session_id, getBootstrapContext().csrf_token)).confirmLeave(state.value!.session_id, intent.token)
+    if (intent.nextEntry) await (await getSessionController(state.value!.session_id, getBootstrapContext().csrf_token))
+      .rememberEnteredQuestion(state.value!.session_id, intent.nextEntry, receipt.next_entry)
     writerLease?.invalidate()
     runtime.responseVersion = receipt.response_version
     lastSavedHead = receipt.active_response_event_id
@@ -1151,7 +1201,7 @@ async function finishInitialization(
   initializationError.value = undefined
   await nextTick()
   if (!isCurrentInitialization(generation, currentState, runtime)) return
-  if (!itemRenderedRecorded) {
+  if (!itemRenderedRecorded && !navigationUncertain.value) {
     await runtime.record('item_rendered', { presentation_state: 'interactive' })
     await (await getSessionController(currentState.session_id, getBootstrapContext().csrf_token)).confirmEntry(currentState.session_id, currentState.assignment.assignment_id)
     if (!isCurrentInitialization(generation, currentState, runtime)) return
@@ -1159,7 +1209,8 @@ async function finishInitialization(
   }
   if (currentState.process.capture_version === 'capture-v2') startRecoveryTimer()
   finishAssessmentOperation()
-  if (pendingSubmission.value) await recoverSubmission()
+  if (pendingClosure.value) await retrySubmittedClose()
+  else if (pendingSubmission.value) await recoverSubmission()
 }
 
 async function prepareCaptureInitialization(generation = initializationGeneration) {
@@ -1215,6 +1266,7 @@ function disposeQuestionRuntime() {
 }
 
 function resetQuestionState() {
+  pendingClosure.value = undefined
   toolsPending.value = false
   captureReady.value = false
   initializationState.value = 'loading'
@@ -1292,7 +1344,8 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
       }
       const intent = await controller.freezeEntry(sessionId, assignmentId, reason, navigation)
       if (generation !== initializationGeneration) throw new DOMException('Initialization replaced', 'AbortError')
-      const dto = await getStudentAssessmentApi().enterQuestion(sessionId, assignmentId, intent.reason, { ...intent, sessionId })
+      const dto = controller.takeEnteredQuestion(sessionId, intent)
+        || await getStudentAssessmentApi().enterQuestion(sessionId, assignmentId, intent.reason, { ...intent, sessionId })
       if (dto.task_id) clearAdmissionCredentials(dto.task_id)
       controller.validateEntry(sessionId, intent, dto)
       return dto
@@ -1338,6 +1391,7 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
       return
     }
     processRuntime = loadedRuntime
+    pendingClosure.value = loadedRuntime.restoredClosure || undefined
     pendingNavigation.value = loadedRuntime.restoredNavigation || undefined
     navigationUncertain.value = !!pendingNavigation.value || Boolean(pendingNavigationClick)
     loadedRuntime.setOperationId?.(currentAssessmentOperationId())
@@ -1575,6 +1629,7 @@ onBeforeUnmount(() => {
         </section>
         <p v-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
         <button v-if="navigationUncertain" type="button" class="kt-button" data-navigation-retry :disabled="actionBusy" @click="recoverNavigation">重新核验切题保存结果</button>
+        <button v-if="pendingClosure && !closureWaiting" type="button" class="kt-button" data-retry-close :disabled="actionBusy" @click="retrySubmittedClose">确认收尾并继续</button>
         <button v-if="trajectory && online && captureReady && !answerLocked && saveStatus.includes('失败')" class="kt-button kt-button--secondary" type="button" @click="saveDraft(true).catch(() => undefined)">重试同步</button>
         <section v-if="responseConflict" class="kt-alert kt-alert--warning" aria-label="选择答案版本">
           <p>另一设备保存了不同答案。请选择接下来使用的版本。</p>

@@ -68,7 +68,8 @@ export async function readOnlyBrowserStorage({ sessionIds, clientInstanceIds = [
     const selectedCheckpoints = checkpoints.filter(row => sessions.has(row.session_id))
     if ([...selectedRecords, ...selectedFailed].some(row => (row.event?.event_id != null && !uuid(row.event.event_id))
       || integer(row.client_sequence_no) === null || row.client_sequence_no < 1 || row.client_sequence_no !== row.event.client_sequence_no)) return unknown('invalid_record')
-    const intents = metadata.filter(row => /^(entry|navigation|submission)-intent:(\d+):/.test(row.key)
+    const intents = metadata.filter(row => (/^(entry|navigation|submission)-intent:(\d+):/.test(row.key)
+      || /^capture-mutation:(\d+):/.test(row.key) && row.value?.body?.leave_event_id)
       && sessions.has(Number(row.key.split(':')[1])) && row.value)
     const clients = new Set(clientInstanceIds.map(uuid).filter(Boolean))
     for (const row of [...selectedRecords, ...selectedFailed, ...selectedCheckpoints]) {
@@ -85,7 +86,7 @@ export async function readOnlyBrowserStorage({ sessionIds, clientInstanceIds = [
     for (const row of selectedCheckpoints) output.checkpoints.push({ ...await checkpoint(row), delivery_status: 'pending' })
     for (const row of intents) {
       const [prefix, session, attempt] = row.key.split(':')
-      const kind = prefix.replace('-intent', '')
+      const kind = prefix === 'capture-mutation' ? 'close' : prefix.replace('-intent', '')
       const value = row.value
       const snapshot = value.processSnapshot
       let material = null
@@ -102,14 +103,29 @@ export async function readOnlyBrowserStorage({ sessionIds, clientInstanceIds = [
       } else if (bundle && kind === 'navigation') material = { token: uuid(value.token), leave_event_id: uuid(value.leaveEventId),
         target_event_id: uuid(value.head), to_assignment_id: integer(value.toAssignmentId), expected_version: integer(value.expectedResponseVersion),
         client_clicked_at: timestamp(value.clickedAt), material_sha256: await digest({ save_and_leave: bundle, leave_event_id: value.leaveEventId,
-          target_event_id: value.head, to_assignment_id: value.toAssignmentId, client_clicked_at: value.clickedAt }) }
+          target_event_id: value.head, to_assignment_id: value.toAssignmentId, client_clicked_at: value.clickedAt,
+          ...(value.nextEntry ? { next_entry: value.nextEntry } : {}) }) }
       else if (bundle && kind === 'submission') material = { token: uuid(value.token), target_event_id: uuid(value.head),
         expected_version: integer(value.expectedResponseVersion), bundle_sha256: await digest(bundle),
         material_sha256: await digest({ atomic_submission: bundle, target_event_id: value.head ?? null, confidence: value.confidence ?? null }) }
+      else if (kind === 'close' && snapshot && value.body) material = { token: uuid(value.body.capture_operation_id),
+        leave_event_id: uuid(value.body.leave_event_id), material_sha256: await digest(Object.fromEntries(Object.entries({
+          ...value.body, capture_bundle: snapshot }).filter(([key]) => !['lease_token','client_instance_id'].includes(key)))) }
+      const next = value.nextEntry ?? value.body?.next_entry
+      let nextProjection
+      if (next !== undefined) {
+        const original = { ...next }; delete original.assignment_id
+        nextProjection = { assignment_id: integer(next.assignment_id), navigation_id: uuid(next.navigation_id),
+          reason: ['navigation_click','resume'].includes(next.reason) ? next.reason : null, ...clock(next),
+          material_sha256: await digest(original) }
+        if (!nextProjection.assignment_id || !nextProjection.navigation_id || !nextProjection.reason
+          || !nextProjection.client_occurred_at || !nextProjection.client_time_origin || nextProjection.client_monotonic_ms === null) material = null
+      }
       output.intents.push({ kind, session_id: Number(session), attempt_id: kind === 'entry' ? null : integer(Number(attempt)),
-        token: uuid(kind === 'entry' ? value.navigationId : value.token), assignment_id: integer(value.assignmentId),
+        token: uuid(kind === 'entry' ? value.navigationId : kind === 'close' ? value.body.capture_operation_id : value.token), assignment_id: integer(value.assignmentId),
         to_assignment_id: integer(value.toAssignmentId), delivery_status: 'unconfirmed', document_sha256: await digest(value),
         material_sha256: material?.material_sha256 ?? null, material,
+        ...(next !== undefined ? { next_entry: nextProjection, next_entry_sha256: await digest(next) } : {}),
         snapshot: snapshot ? { client_instance_id: uuid(snapshot.client_instance_id), event_boundary: integer(snapshot.event_boundary),
           events: await Promise.all((snapshot.events || []).map(event)), checkpoints: await Promise.all((snapshot.checkpoints || []).map(checkpoint)) } : null })
     }

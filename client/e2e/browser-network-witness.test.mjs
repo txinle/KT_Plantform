@@ -8,6 +8,80 @@ const uuid = number => `${String(number).padStart(8, '0')}-0000-4000-8000-000000
 const clocks = { client_wall_time_utc: '2026-10-12T03:00:00.000Z', client_monotonic_ms: 12.125,
   client_time_origin: '2026-10-12T02:00:00.000Z', time_sync_id: null }
 
+test('bundled target entry preserves original clocks and source ACK without exposing target contents', async () => {
+  for (const kind of ['navigation', 'close']) {
+    const next = { assignment_id: 11, reason: 'navigation_click', navigation_id: uuid(4),
+      client_occurred_at: clocks.client_wall_time_utc, client_monotonic_ms: '12.125', client_time_origin: clocks.client_time_origin }
+    const body = { next_entry: next, leave_event_id: uuid(5), capture_operation_id: uuid(6),
+      ...(kind === 'navigation' ? { navigation_token: uuid(6), target_event_id: null, to_assignment_id: 11,
+        client_clicked_at: clocks.client_wall_time_utc, save_and_leave: { client_instance_id: uuid(1), events: [], checkpoints: [] } }
+        : { lease_token: 'PRIVATE', client_instance_id: uuid(1), capture_bundle: { client_instance_id: uuid(1), events: [], checkpoints: [] } }) }
+    for (const committed of [true, false]) {
+      const page = new EventEmitter(), capture = witness.observeBrowserProtocol(page)
+      const path = kind === 'navigation' ? '/api/v1/student/attempts/8/draft/' : '/api/v1/assessment/process/attempts/8/writer-lease/release/'
+      const row = request(path, body)
+      const receipt = { navigation_id: uuid(4), session_id: 7, assignment_id: 11, attempt_id: 12,
+        visit_id: 3, visit_index: 1, entry_event_id: uuid(7), entered_at: clocks.client_wall_time_utc }
+      const base = { committed: true, writer_lease_released: true, capture_operation_id: uuid(6),
+        acknowledgements: [], checkpoint_ids: [], success: true, status: 'visited' }
+      page.emit('request', row)
+      page.emit('response', response(row, { ...base, next_entry: committed ? { committed: true, runtime: {
+        entry_receipt: receipt, session_id: 7, assignment: { assignment_id: 11, attempt_id: 12 },
+        process: { session_id: 7, attempt_id: 12, navigation_id: uuid(4), visit_id: 3, visit_index: 1, entry_event_id: uuid(7) },
+        presented_deadline_at: null, remaining_seconds: null, entry_allowed: true, question: { answer: 'PRIVATE' } }
+      } : { committed: false, error: { code: 'ENTRY_OUTCOME_UNKNOWN', message: 'PRIVATE' } } }))
+      page.emit('requestfinished', row)
+      await capture.settle(100)
+      const saved = capture.evidence.requests[0]
+      const original = { ...next }; delete original.assignment_id
+      assert.equal(saved.entry.assignment_id, 11)
+      assert.equal(saved.entry.client_monotonic_ms, '12.125')
+      assert.equal(saved.entry.material_sha256, digest(original))
+      assert.equal(saved.transition.request_material_sha256, digest(next))
+      assert.equal(saved.transition.source_attempt_id, 8)
+      assert.equal(saved.transition.outcome, committed ? 'committed' : 'retry_required')
+      assert.deepEqual(saved.entry_receipt, committed ? receipt : null)
+      assert.equal(saved.receipt.committed, true)
+      assert.equal(saved.material_sha256, digest(body))
+      if (kind === 'close') {
+        const frozen = { ...body }; delete frozen.lease_token; delete frozen.client_instance_id
+        assert.equal(saved.close.material_sha256, digest(frozen))
+      }
+      assert.doesNotMatch(JSON.stringify(saved), /PRIVATE|"question"|cookie/)
+    }
+  }
+})
+
+test('ordinary draft and tool mutations retain capture_bundle events checkpoints and real ACKs', async () => {
+  for (const path of ['/api/v1/student/attempts/8/draft/', '/api/v1/assessment/process/capture-v2/attempts/8/tools/',
+    '/api/v1/assessment/process/capture-v2/attempts/8/resolve/']) {
+    const page = new EventEmitter()
+    const capture = witness.observeBrowserProtocol(page)
+    const event = { event_id: uuid(2), client_sequence_no: 1, session_id: 7, attempt_id: 8,
+      event_type: 'response_transition', event_version: 3, app_version: 'capture-v2', ...clocks,
+      payload: { after_state: { question_type: 'short_answer', value: 'PRIVATE ANSWER' } } }
+    const checkpoint = { checkpoint_id: uuid(8), session_id: 7, client_instance_id: uuid(1), trigger: 'commit', ...clocks }
+    const body = { writer_lease_token: 'PRIVATE LEASE', tool: 'check', stage: 'started', operation_id: uuid(3),
+      capture_bundle: { version: 1, client_instance_id: uuid(1), events: [event], checkpoints: [checkpoint] } }
+    const emitted = request(path, body)
+    page.emit('request', emitted)
+    page.emit('response', response(emitted, { success: true, acknowledgements: [
+      { event_id: uuid(2), client_sequence_no: 1, server_ingest_sequence_no: 22 }], checkpoint_ids: [uuid(8)] }))
+    page.emit('requestfinished', emitted)
+    await capture.settle(100)
+    const saved = capture.evidence.requests[0]
+    assert.equal(saved.client_instance_id, uuid(1))
+    assert.equal(saved.events.length, 1)
+    assert.equal(saved.events[0].material_sha256, digest(event))
+    assert.equal(saved.checkpoints[0].material_sha256, digest(checkpoint))
+    assert.equal(saved.material_sha256, digest(body))
+    assert.equal(saved.acknowledgements[0].event_id, uuid(2))
+    assert.deepEqual(saved.checkpoint_ids, [uuid(8)])
+    assert.equal(capture.evidence.settlement.complete, true)
+    assert.doesNotMatch(JSON.stringify(capture.evidence), /PRIVATE/)
+  }
+})
+
 test('entry clock retains the actual decimal-string wire representation', () => {
   const path = '/api/v1/student/sessions/7/questions/11/'
   const body = { navigation_id: uuid(4), reason: 'navigation_click', client_occurred_at: clocks.client_wall_time_utc,

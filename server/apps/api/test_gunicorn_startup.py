@@ -21,7 +21,7 @@ class GunicornStartupTests(SimpleTestCase):
         request = SimpleNamespace(headers=[('X-REQUEST-ID', 'a' * 32), ('Cookie', 'SECRET')], method='POST', path='/student/attempts/123/draft/')
         with patch.dict('os.environ', {'SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED': '1', 'POSTGRES_DB': 'kt_e2e'}), \
                 patch('config.capture_timing.time.time', side_effect=[100, 101]), \
-                patch('config.capture_timing.time.perf_counter', side_effect=[10, 10.2]), \
+                patch('config.capture_timing.time.perf_counter', side_effect=[10, 10.2, 10.2, 10.21, 10.24]), \
                 patch.object(module.logger, 'warning') as logged:
             module.pre_request(None, request)
             module.post_request(SimpleNamespace(pid=321), request, {}, None)
@@ -31,6 +31,9 @@ class GunicornStartupTests(SimpleTestCase):
         self.assertEqual(value['path'], '/student/attempts/:id/draft/')
         self.assertEqual(value['started_at'], 100)
         self.assertAlmostEqual(value['seconds'], .2)
+        self.assertAlmostEqual(request.capture_timing['capture_metrics']['gunicorn_log_serialize_seconds'], .01)
+        self.assertAlmostEqual(request.capture_timing['capture_metrics']['gunicorn_log_output_seconds'], .03)
+        self.assertIn('after gunicorn_end', value['own_log_timing_scope'])
         self.assertNotIn('SECRET', json.dumps(value))
 
     def test_complete_wsgi_hook_is_disabled_outside_isolated_capture_diagnostics(self):
@@ -60,7 +63,7 @@ class GunicornStartupTests(SimpleTestCase):
 
         with patch.dict('os.environ', {'SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED': '1', 'POSTGRES_DB': 'kt_e2e'}), \
                 patch('config.capture_timing.time.time', side_effect=[100, 100.1, 100.12, 100.2, 100.21, 100.22, 100.3, 100.4]), \
-                patch('config.capture_timing.time.perf_counter', side_effect=[10, 10.1, 10.12, 10.2, 10.21, 10.22, 10.3, 10.4]), \
+                patch('config.capture_timing.time.perf_counter', side_effect=[10, 10.1, 10.12, 10.2, 10.21, 10.22, 10.3, 10.4, 10.4, 10.41, 10.43]), \
                 patch.object(module.logger, 'warning') as logged:
             module.pre_request(None, request)
             self.assertEqual(list(WSGICaptureTiming(app)(environ, lambda status, headers, exc_info=None: None)), [b'ok'])
@@ -76,6 +79,8 @@ class GunicornStartupTests(SimpleTestCase):
         self.assertAlmostEqual(row['nginx_ingress_to_gunicorn_pre_wall_seconds'], .05)
         self.assertFalse(row['clock_discontinuity'])
         self.assertEqual(row['nginx_clock_alignment'], 'assumed_shared_host_clock')
+        self.assertAlmostEqual(request.capture_timing['capture_metrics']['gunicorn_log_serialize_seconds'], .01)
+        self.assertAlmostEqual(request.capture_timing['capture_metrics']['gunicorn_log_output_seconds'], .02)
 
     def test_invalid_request_id_still_clears_pending_timing(self):
         from config.capture_timing import pending_timing

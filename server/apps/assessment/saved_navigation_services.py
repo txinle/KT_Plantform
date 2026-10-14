@@ -15,7 +15,7 @@ from .services import _validate_course_access, _validate_process_event_time, sav
 from .writer_lease_services import WriterLeaseConflict, acquire_attempt_writer_lease, assert_attempt_writer_lease, release_attempt_writer_lease
 
 FIELDS = frozenset({'navigation_token', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'client_clicked_at',
-                    'writer_lease_token', 'writer_client_instance_id', 'save_and_leave'})
+                    'writer_lease_token', 'writer_client_instance_id', 'save_and_leave', 'next_entry'})
 
 
 def saved_navigation_capability(attempt):
@@ -62,6 +62,8 @@ def _save_and_leave_attempt(*, student, attempt_id, document, request_received_a
         ).get(pk=session_id, student=student)
         attempt = Attempt.objects.select_for_update(of=('self',)).get(pk=attempt_id, session=session)
         attempt.session = session
+        from .transition_entry_services import validate_next_entry
+        validate_next_entry(attempt, document, destination_id=destination_id)
         bundle = validate_process_bundle(attempt, document['save_and_leave'])
         client_id = parse_uuid(bundle['client_instance_id'])
         target = document['target_event_id']
@@ -69,8 +71,11 @@ def _save_and_leave_attempt(*, student, attempt_id, document, request_received_a
             parse_uuid(target)
         if document.get('writer_client_instance_id') is not None and parse_uuid(document['writer_client_instance_id']) != client_id:
             raise ProcessRequestError('invalid_bundle_link')
-        fingerprint = process_material_fingerprint({k: document.get(k) for k in
-            ['save_and_leave', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'client_clicked_at']})
+        material = {k: document.get(k) for k in
+            ['save_and_leave', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'client_clicked_at']}
+        if 'next_entry' in document:
+            material['next_entry'] = document['next_entry']
+        fingerprint = process_material_fingerprint(material)
         _validate_course_access(session, request_received_at=request_received_at)
         existing = NavigationReceipt.objects.filter(attempt=attempt, token=token).first()
         if existing is not None:

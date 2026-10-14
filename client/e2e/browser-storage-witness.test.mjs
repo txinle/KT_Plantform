@@ -52,6 +52,33 @@ function rows() {
       { key: 'username', value: 'PRIVATE ACCOUNT' }] }
 }
 
+test('retained navigation and close mutations keep frozen target entry hashes without raw payloads', async () => {
+  const data = rows(), snapshot = { client_instance_id: uuid(1), event_boundary: 2, events: [rawEvent(2)], checkpoints: [] }
+  const next = { assignment_id: 11, reason: 'navigation_click', navigation_id: uuid(24),
+    client_occurred_at: '2026-10-12T03:00:00.000Z', client_monotonic_ms: '12.125', client_time_origin: '2026-10-12T02:00:00.000Z' }
+  const nav = { token: uuid(20), leaveEventId: uuid(21), toAssignmentId: 11, head: uuid(12),
+    clickedAt: next.client_occurred_at, expectedResponseVersion: 5, nextEntry: next, processSnapshot: snapshot }
+  const body = { capture_operation_id: uuid(22), lease_token: 'PRIVATE', client_instance_id: uuid(1),
+    leave_event_id: uuid(21), next_entry: next }
+  data.meta.push({ key: 'navigation-intent:7:8', value: nav }, { key: 'capture-mutation:7:8', value: {
+    sessionId: 7, attemptId: 8, url: '/api/v1/assessment/process/attempts/8/writer-lease/release/', body, processSnapshot: snapshot } })
+  const result = await withDatabase(fakeDatabase(data), () => snapshotStorage({ sessionIds: [7], clientInstanceIds: [uuid(1)] }))
+  const navigation = result.intents.find(intent => intent.kind === 'navigation'), close = result.intents.find(intent => intent.kind === 'close')
+  assert.ok(close, 'held capture mutation is included in the readonly intent boundary')
+  const navNetwork = browserRequestMaterial('/api/v1/student/attempts/8/draft/', { navigation_token: nav.token,
+    leave_event_id: nav.leaveEventId, target_event_id: nav.head, to_assignment_id: 11, client_clicked_at: nav.clickedAt,
+    save_and_leave: { version: 1, ...snapshot, expected_version: 5 }, next_entry: next })
+  const closeNetwork = browserRequestMaterial('/api/v1/assessment/process/attempts/8/writer-lease/release/', { ...body, capture_bundle: snapshot })
+  assert.deepEqual(navigation.material, navNetwork.navigation)
+  assert.deepEqual(close.material, closeNetwork.close)
+  for (const intent of [navigation, close]) {
+    assert.deepEqual(intent.next_entry, navNetwork.entry)
+    assert.equal(intent.next_entry_sha256, navNetwork.transition.request_material_sha256)
+  }
+  assert.equal(result.boundary.intent_count, 2)
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|lease_token|"value"/)
+})
+
 test('one readonly transaction hashes unsent and failed facts without exposing raw values or altering storage', async () => {
   assert.equal(typeof storage.readOnlyBrowserStorage, 'function')
   const data = rows()

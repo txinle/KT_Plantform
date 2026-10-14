@@ -79,8 +79,7 @@ describe('authentication API', () => {
     )
   })
 
-  it('sends login credentials with the bootstrap CSRF token then refreshes the session', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ user: {} }))
+  it('accepts rotated CSRF and authoritative identity directly from login without refreshing', async () => {
     const refreshedContext = {
       csrf_token: 'new-csrf-token',
       user: {
@@ -97,6 +96,7 @@ describe('authentication API', () => {
       },
     }
     const refreshBootstrapContext = vi.fn().mockResolvedValue(refreshedContext)
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(refreshedContext))
     const api = createAuthenticationApi({
       fetchImpl: fetchImpl as typeof fetch,
       getCsrfToken: () => 'csrf-token',
@@ -119,7 +119,8 @@ describe('authentication API', () => {
         body: JSON.stringify({ username: 'teacher', password: 'test-password' }),
       }),
     )
-    expect(refreshBootstrapContext).toHaveBeenCalledWith({ force: true })
+    expect(refreshBootstrapContext).not.toHaveBeenCalled()
+    expect(fetchImpl).toHaveBeenCalledOnce()
   })
 
   it('uses only same-origin relative next paths after login', () => {

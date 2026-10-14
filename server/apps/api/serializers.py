@@ -18,6 +18,15 @@ class SessionContextSerializer(serializers.Serializer):
     user = ApiUserSerializer()
 
 
+class BootstrapContextSerializer(serializers.Serializer):
+    csrf_token = serializers.CharField()
+    user = ApiUserSerializer(allow_null=True)
+
+
+class LoginContextSerializer(SessionContextSerializer):
+    csrf_token = serializers.CharField()
+
+
 class LoginRequestSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(trim_whitespace=False)

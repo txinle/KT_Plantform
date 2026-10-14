@@ -92,10 +92,21 @@ DRAFT['not'] = {'required': ['save_and_leave']}
 DRAFT['allOf'] = [{'anyOf': [
     {'not': {'required': ['capture_bundle']}}, {'required': ['capture_operation_id']},
 ]}]
+NEXT_ENTRY = obj({'assignment_id': POSITIVE, 'reason': {'type': 'string', 'enum': ['navigation_click', 'resume']},
+    'navigation_id': UUID, 'client_occurred_at': TIME, 'client_monotonic_ms': DECIMAL, 'client_time_origin': TIME},
+    ['assignment_id', 'reason', 'navigation_id', 'client_occurred_at', 'client_monotonic_ms', 'client_time_origin'],
+    description='Frozen target entry for a session that selected transition protocol v1 at creation. '
+                'Executed after the source mutation commits, using a separate transaction and current deadline checks.')
+NEXT_ENTRY_RESULT = {'oneOf': [
+    obj({'committed': SUCCESS, 'runtime': {'$ref': '#/components/schemas/StudentRuntimeQuestionEntry'}}, ['committed', 'runtime']),
+    obj({'committed': {'type': 'boolean', 'enum': [False]},
+         'error': obj({'code': STRING, 'message': STRING}, ['code', 'message'])}, ['committed', 'error']),
+], 'description': 'The target outcome is independent of the confirmed source receipt. '
+                  'Retry only the original frozen target material after partial success.'}
 NAVIGATION = obj({
     'navigation_token': UUID, 'leave_event_id': UUID, 'target_event_id': nullable(UUID),
     'to_assignment_id': POSITIVE, 'client_clicked_at': nullable(TIME), **LEASE_INPUT,
-    'save_and_leave': BUNDLE,
+    'save_and_leave': BUNDLE, 'next_entry': NEXT_ENTRY,
 }, ['navigation_token', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'save_and_leave'])
 DRAFT_RECEIPT = obj({
     **CAPTURE_RECEIPT,
@@ -107,7 +118,7 @@ DRAFT_RECEIPT = obj({
 NAVIGATION_RECEIPT = obj({
     'success': SUCCESS, 'committed': SUCCESS, 'navigation_token': UUID, 'acknowledgements': ACKS,
     'checkpoint_ids': array(UUID), 'response_version': COUNTER, 'active_response_event_id': nullable(UUID),
-    'saved_at': nullable(TIME), 'status': STRING, 'writer_lease_released': SUCCESS,
+    'saved_at': nullable(TIME), 'status': STRING, 'writer_lease_released': SUCCESS, 'next_entry': NEXT_ENTRY_RESULT,
     'to_assignment_id': POSITIVE, 'next_url': STRING,
 }, ['success', 'committed', 'navigation_token', 'acknowledgements', 'checkpoint_ids', 'response_version',
     'active_response_event_id', 'saved_at', 'status', 'writer_lease_released', 'to_assignment_id', 'next_url'])
@@ -166,6 +177,14 @@ SYNC_RECEIPT = obj({'success': SUCCESS, 'time_sync_id': UUID, 'server_received_a
      'estimated_clock_offset_ms', 'estimated_rtt_ms'])
 LEASE_RECEIPT = obj({'success': SUCCESS, 'lease_token': UUID, 'client_instance_id': UUID, 'expires_at': TIME},
                     ['success', 'lease_token', 'client_instance_id', 'expires_at'])
+CLOSE_BUNDLE = obj({'lease_token': UUID, 'client_instance_id': UUID, 'capture_bundle': CAPTURE_BUNDLE,
+    'capture_operation_id': UUID, 'leave_event_id': UUID, 'next_entry': NEXT_ENTRY},
+    ['lease_token', 'client_instance_id', 'capture_bundle', 'capture_operation_id', 'leave_event_id'])
+CLOSE_RECEIPT = obj({'success': SUCCESS, **CAPTURE_RECEIPT, 'capture_operation_id': UUID,
+    'writer_lease_released': SUCCESS, 'status': STRING, 'response_version': COUNTER,
+    'active_response_event_id': nullable(UUID), 'final_response_event_id': nullable(UUID), 'next_entry': NEXT_ENTRY_RESULT},
+    ['success', 'committed', 'acknowledgements', 'checkpoint_ids', 'capture_operation_id',
+     'writer_lease_released', 'status', 'response_version', 'active_response_event_id', 'final_response_event_id'])
 PROCESS_ERRORS = (400, 409, 413, 415)
 TOOL_INPUT = obj({'tool': STRING, 'stage': STRING, 'operation_id': UUID, 'data': obj({}, exact=False),
                   'answer_event_id': nullable(UUID), 'initiation_type': STRING, 'capture_bundle': CAPTURE_BUNDLE}, ['tool', 'stage', 'operation_id'])
@@ -214,8 +233,11 @@ PROCESS = {
         LEASE_RECEIPT, status=201, errors=PROCESS_ERRORS, description='Acquire the owned attempt writer lease.'),
     'writer_lease_renew': spec(obj({'lease_token': UUID, 'client_instance_id': UUID}, ['lease_token', 'client_instance_id']),
         LEASE_RECEIPT, errors=PROCESS_ERRORS, description='Renew the matching attempt writer lease.'),
-    'writer_lease_release': spec(obj({'lease_token': UUID, 'client_instance_id': UUID}, ['lease_token', 'client_instance_id']),
-        obj({'success': SUCCESS}, ['success']), errors=PROCESS_ERRORS, description='Release the matching attempt writer lease.'),
+    'writer_lease_release': spec({'oneOf': [obj({'lease_token': UUID, 'client_instance_id': UUID},
+        ['lease_token', 'client_instance_id']), CLOSE_BUNDLE]},
+        {'oneOf': [obj({'success': SUCCESS}, ['success']), CLOSE_RECEIPT]}, errors=PROCESS_ERRORS,
+        description='Release the matching lease; optional close bundle commits original recording evidence, '
+                    'checkpoints and release together. capture_operation_id replays its immutable durable receipt.'),
     'confidence_prompt_shown': spec(obj({}), obj({'success': SUCCESS, 'response_status': STRING},
         ['success', 'response_status']), errors=PROCESS_ERRORS, description='Mark the server-assigned confidence prompt as shown.'),
     'confidence_commit': spec(None, errors=(409,), body_required=False,

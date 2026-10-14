@@ -97,20 +97,25 @@ async function jsonResponse(fetchImpl: typeof fetch, path: string): Promise<Resp
 }
 
 async function initializeLiveBootstrap(fetchImpl: typeof fetch): Promise<BootstrapContext | null> {
-  const csrfResponse = await jsonResponse(fetchImpl, '/api/v1/auth/csrf/')
-  if (!csrfResponse.ok) throw new Error(`CSRF bootstrap failed with status ${csrfResponse.status}.`)
-  const csrf = unwrapApiData<{ csrf_token?: unknown }>(await csrfResponse.json())
-  if (typeof csrf.csrf_token !== 'string' || !csrf.csrf_token) {
-    throw new Error('CSRF bootstrap response is invalid.')
+  const response = await jsonResponse(fetchImpl, '/api/v1/auth/bootstrap/')
+  if (!response.ok) throw new Error(`Authentication bootstrap failed with status ${response.status}.`)
+  const context = unwrapApiData<{ csrf_token?: unknown, user?: unknown }>(await response.json())
+  if (typeof context.csrf_token !== 'string' || !context.csrf_token
+    || (context.user !== null && !isAuthenticatedUser(context.user))) {
+    throw new Error('Authentication bootstrap response is invalid.')
   }
-  csrfToken = csrf.csrf_token
+  csrfToken = context.csrf_token
+  return context.user === null ? null : { csrf_token: csrfToken, user: context.user }
+}
 
-  const sessionResponse = await jsonResponse(fetchImpl, '/api/v1/auth/session/')
-  if (sessionResponse.status === 401) return null
-  if (!sessionResponse.ok) throw new Error(`Session bootstrap failed with status ${sessionResponse.status}.`)
-  const session = unwrapApiData<{ user?: unknown }>(await sessionResponse.json())
-  if (!isAuthenticatedUser(session.user)) throw new Error('Session bootstrap response is invalid.')
-  return { csrf_token: csrfToken, user: session.user }
+export function acceptBootstrapContext(context: BootstrapContext): BootstrapContext {
+  if (typeof context.csrf_token !== 'string' || !context.csrf_token || !isAuthenticatedUser(context.user)) {
+    throw new Error('Authentication bootstrap response is invalid.')
+  }
+  cachedContext = context
+  csrfToken = context.csrf_token
+  offlineRecoveryPagePath = undefined
+  return context
 }
 
 export function getBootstrapContext(): BootstrapContext {

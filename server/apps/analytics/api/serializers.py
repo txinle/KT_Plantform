@@ -284,9 +284,9 @@ class DataCenterFactsSerializer(serializers.Serializer):
     completed_sessions = serializers.IntegerField(min_value=0)
     total_sessions = serializers.IntegerField(min_value=0)
     submitted_attempts = serializers.IntegerField(min_value=0)
-    quality_warnings = serializers.IntegerField(min_value=0)
-    process_records = serializers.IntegerField(min_value=0)
-    not_evaluable = serializers.IntegerField(min_value=0)
+    quality_warnings = serializers.IntegerField(min_value=0, allow_null=True)
+    process_records = serializers.IntegerField(min_value=0, allow_null=True)
+    not_evaluable = serializers.IntegerField(min_value=0, allow_null=True)
 
 
 class DataCenterRecentExportSerializer(serializers.Serializer):
@@ -310,10 +310,26 @@ class DataCenterOverviewActionsSerializer(serializers.Serializer):
     history_url = serializers.CharField()
 
 
+class DataCenterPreparationSerializer(serializers.Serializer):
+    retry_after_seconds = serializers.IntegerField(min_value=5, max_value=30, required=False)
+    state = serializers.CharField()
+    message = serializers.CharField()
+    updated_at = serializers.DateTimeField(allow_null=True)
+    result_version = serializers.CharField(allow_null=True)
+    projection_version = serializers.CharField()
+    stale = serializers.BooleanField()
+    ready_count = serializers.IntegerField(min_value=0)
+    pending_count = serializers.IntegerField(min_value=0)
+    failed_count = serializers.IntegerField(min_value=0)
+    updating_count = serializers.IntegerField(min_value=0)
+    oldest_pending_seconds = serializers.IntegerField(min_value=0, allow_null=True)
+
+
 class DataCenterOverviewSerializer(serializers.Serializer):
     course = CourseReferenceSerializer()
     scope = DataCenterTeachingScopeSerializer()
     facts = DataCenterFactsSerializer()
+    preparation = DataCenterPreparationSerializer(required=False, allow_null=True)
     recent_exports = DataCenterRecentExportSerializer(many=True)
     actions = DataCenterOverviewActionsSerializer()
 
@@ -389,21 +405,6 @@ class DataCenterQualityRowSerializer(serializers.Serializer):
     state_label = serializers.CharField()
     problem = serializers.CharField()
     impact = serializers.CharField()
-
-
-class DataCenterPreparationSerializer(serializers.Serializer):
-    retry_after_seconds = serializers.IntegerField(min_value=5, max_value=30, required=False)
-    state = serializers.CharField()
-    message = serializers.CharField()
-    updated_at = serializers.DateTimeField(allow_null=True)
-    result_version = serializers.CharField(allow_null=True)
-    projection_version = serializers.CharField()
-    stale = serializers.BooleanField()
-    ready_count = serializers.IntegerField(min_value=0)
-    pending_count = serializers.IntegerField(min_value=0)
-    failed_count = serializers.IntegerField(min_value=0)
-    updating_count = serializers.IntegerField(min_value=0)
-    oldest_pending_seconds = serializers.IntegerField(min_value=0, allow_null=True)
 
 
 class DataCenterQualityCollectionSerializer(serializers.Serializer):

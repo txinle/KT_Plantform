@@ -88,8 +88,9 @@ export interface RecordOptions {
   correlationId?: string
   eventId?: string
 }
-export interface FlushOptions { boundary?: Record<string, number>; ignoreVisibility?: boolean; keepalive?: boolean; operationId?: string }
+export interface FlushOptions { boundary?: Record<string, number>; ignoreVisibility?: boolean; keepalive?: boolean; operationId?: string; timeoutMs?: number }
 export interface ProcessConfirmation {
+  capture_operation_id?: string
   committed?: boolean
   acknowledgements?: Array<{ client_sequence_no: number; event_id?: string; server_ingest_sequence_no?: number }>
   checkpoint_ids?: string[]

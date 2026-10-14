@@ -147,7 +147,7 @@ async function submitAnswer(page: Page) {
 
 async function login(page: Page, username: string, password: string) {
   const bootstrapSession = page.waitForResponse((response) => (
-    new URL(response.url()).pathname === '/api/v1/auth/session/'
+    new URL(response.url()).pathname === '/api/v1/auth/bootstrap/'
     && response.request().method() === 'GET'
   ))
   await page.goto('/login/')

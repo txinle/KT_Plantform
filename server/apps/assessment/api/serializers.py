@@ -165,8 +165,15 @@ class AtomicSubmissionCapabilitySerializer(serializers.Serializer):
     max_bytes = serializers.IntegerField()
 
 
+class TransitionEntryCapabilitySerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+    version = serializers.IntegerField()
+
+
 class StudentRuntimeProcessSerializer(serializers.Serializer):
+    transition_entry = TransitionEntryCapabilitySerializer(required=False)
     capture_bundle = AtomicSubmissionCapabilitySerializer(required=False)
+    close_bundle = AtomicSubmissionCapabilitySerializer(required=False)
     atomic_submission = AtomicSubmissionCapabilitySerializer(required=False)
     save_and_leave = AtomicSubmissionCapabilitySerializer(required=False)
     writer_lease_acquire_url = serializers.CharField(required=False)

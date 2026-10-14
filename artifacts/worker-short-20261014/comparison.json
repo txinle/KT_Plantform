@@ -1,0 +1,40 @@
+{
+  "candidate_qualified": false,
+  "checks": {
+    "both_eligible": true,
+    "both_items_improved": false,
+    "throughput_not_reduced": true,
+    "secondary_not_regressed": false
+  },
+  "paired_items": [
+    {
+      "item_index": 0,
+      "baseline_count": 178,
+      "candidate_count": 178,
+      "same_students": true,
+      "enough_samples": true,
+      "baseline_p95": 6.3728251330321655,
+      "candidate_p95": 9.65622371196514,
+      "baseline_median": 2.428215146996081,
+      "candidate_median": 3.791381001006812,
+      "improved": false
+    },
+    {
+      "item_index": 1,
+      "baseline_count": 178,
+      "candidate_count": 178,
+      "same_students": true,
+      "enough_samples": true,
+      "baseline_p95": 8.776869298017118,
+      "candidate_p95": 5.456350240972824,
+      "baseline_median": 2.9446215989883058,
+      "candidate_median": 2.2844094799947925,
+      "improved": true
+    }
+  ],
+  "formal_capacity_accepted": false,
+  "frozen_application_driver_resources_verified": true,
+  "selected_workers": 8,
+  "expanded_pool_attempted": false,
+  "reverse_confirmation_attempted": false
+}

@@ -77,7 +77,7 @@ class SchoolBrowserAlignedTests(unittest.TestCase):
             stream.accept_acknowledgements([{'event_id': str(uuid.uuid4()), 'client_sequence_no': event['client_sequence_no']}])
         self.assertEqual(stream.checkpoint('resume')['highest_acked_sequence_no'], 0)
 
-    def workflow(self, atomic=False, failure_path=None, embedded_tools=False, saved_navigation=False, capture_bundle=False):
+    def workflow(self, atomic=False, failure_path=None, embedded_tools=False, saved_navigation=False, capture_bundle=False, close_bundle=False):
         self.assertTrue(hasattr(protocol.CaptureProtocolMixin, 'browser_aligned_answer'), 'Opt-in browser-aligned workflow is missing')
         class Harness(protocol.CaptureProtocolMixin, Runner):
             workload_version = 'browser-aligned-v2'
@@ -135,6 +135,8 @@ class SchoolBrowserAlignedTests(unittest.TestCase):
                 if capture_bundle:
                     dto['process']['capture_bundle'] = {'enabled': True, 'version': 1, 'mutation_receipts': True,
                         'max_events': 100, 'max_checkpoints': 100, 'max_bytes': 8 * 1024 * 1024}
+                if close_bundle:
+                    dto['process']['close_bundle'] = {'enabled': True, 'version': 1}
                 return 200, dto, .001
             if route.startswith('/student/sessions/'):
                 return 200, b'<html><head></head></html>', .001
@@ -148,6 +150,14 @@ class SchoolBrowserAlignedTests(unittest.TestCase):
                     return 200, {**ack(material), 'committed': True,
                         'checkpoint_ids': [row['checkpoint_id'] for row in material['checkpoints']]}, .001
                 return 200, ack(body), .001
+            if route == '/release/' and body.get('capture_bundle'):
+                material = body['capture_bundle']
+                attempt = next(row['attempt_id'] for row in material['events'] if row['event_id'] == body['leave_event_id'])
+                target = saved[attempt]['target_event_id']
+                return 200, {**ack(material), 'committed': True, 'capture_operation_id': body['capture_operation_id'],
+                    'checkpoint_ids': [row['checkpoint_id'] for row in material['checkpoints']],
+                    'writer_lease_released': True, 'status': 'submitted', 'response_version': versions[attempt] + 1,
+                    'active_response_event_id': target, 'final_response_event_id': target}, .001
             if route == '/checkpoint/':
                 return 201, {'success': True, 'checkpoint_id': body['checkpoint_id']}, .001
             if route == '/sync/create/':
@@ -275,6 +285,24 @@ class SchoolBrowserAlignedTests(unittest.TestCase):
                          [(row['action'], row['item_index']) for row in candidate.protocol_summary()['logical_actions']])
         self.assertTrue(all(bundle['version'] == 1 and len(bundle['events']) <= 100
                             and len(bundle['checkpoints']) <= 100 for bundle in bundled))
+
+    def test_combined_close_confirms_full_twenty_item_trajectory_and_records_final_drain(self):
+        runner, _, calls = self.workflow(atomic=True, saved_navigation=True, embedded_tools=True,
+            capture_bundle=True, close_bundle=True)
+        closes = [body for path, _, body in calls if path == '/release/']
+        self.assertEqual(len(closes), 20)
+        self.assertTrue(all(body.get('capture_bundle') and body.get('capture_operation_id') for body in closes))
+        receipts = runner.ledger['11']['capture_mutation_receipts']
+        self.assertEqual(sum(row['kind'] == 'close' and row['acknowledged'] for row in receipts.values()), 20)
+        self.assertTrue(runner.protocol_summary()['all_events_acknowledged'])
+        self.assertTrue(runner.protocol_summary()['all_checkpoints_acknowledged'])
+        measurements = runner.protocol_summary()['operation_measurements']
+        self.assertEqual(sum(row['metric'] == 'close_bundle' for row in measurements), 20)
+        self.assertEqual(sum(row['metric'] == 'final_capture_drain' for row in measurements), 1)
+        last_close = max(index for index, (path, _, _) in enumerate(calls) if path == '/release/')
+        self.assertEqual(calls[last_close + 1][0], '/events/')
+        self.assertEqual(calls[last_close + 1][2]['capture_bundle']['events'], [])
+        self.assertEqual([row['trigger'] for row in calls[last_close + 1][2]['capture_bundle']['checkpoints']], ['ack_progress'])
 
     def test_mutation_receipts_account_for_unknown_commits_and_exact_ack_ordinals(self):
         from apps.experiments.management.commands.verify_school_protocol_load import capture_mutation_receipt_checks
