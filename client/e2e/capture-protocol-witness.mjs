@@ -27,8 +27,10 @@ export async function captureProtocol(page) {
   const requests = []
   const clientAcknowledgements = []
   const byRequest = new Map()
-  const pending = new Set()
+  const pending = new Map()
+  let closed = false
   await page.exposeBinding('__ktWitnessAcknowledgement', (_, row) => {
+    if (closed) return
     if (!row || typeof row.client_instance_id !== 'string' || !Array.isArray(row.acknowledgements)) throw new Error('Invalid witness acknowledgement')
     clientAcknowledgements.push({ client_instance_id: row.client_instance_id, acknowledgements: row.acknowledgements.map((ack) => ({
       event_id: ack.event_id, client_sequence_no: ack.client_sequence_no, server_ingest_sequence_no: ack.server_ingest_sequence_no })) })
@@ -50,6 +52,7 @@ export async function captureProtocol(page) {
     }
   })
   page.on('request', (request) => {
+    if (closed) return
     if (request.method() !== 'POST') return
     let body
     try { body = request.postDataJSON() } catch { return }
@@ -60,21 +63,36 @@ export async function captureProtocol(page) {
     requests.push(row)
   })
   page.on('requestfailed', (request) => {
+    if (closed) return
     const row = byRequest.get(request)
     if (row) row.transport_failure = true
   })
   page.on('response', (response) => {
+    if (closed) return
     const row = byRequest.get(response.request())
     if (!row) return
     row.status = response.status()
     const work = response.json().then((body) => {
+      if (closed) return
       row.success = body.data?.success ?? null
       row.error_code = body.error?.code ?? null
       row.acknowledgements = (body.data?.acknowledgements || []).map((ack) => ({ event_id: ack.event_id,
         client_sequence_no: ack.client_sequence_no, server_ingest_sequence_no: ack.server_ingest_sequence_no }))
       row.rejection_count = (body.data?.rejections || []).length
-    }).catch(() => { row.response_json_unavailable = true }).finally(() => pending.delete(work))
-    pending.add(work)
+    }).catch(() => { if (!closed) row.response_json_unavailable = true }).finally(() => pending.delete(work))
+    pending.set(work, row)
   })
-  return { requests, clientAcknowledgements, audit: null, async settle() { await Promise.all([...pending]) } }
+  return { requests, clientAcknowledgements, audit: null, settlement: null, async settle(timeoutMs = 2000) {
+    if (closed) return this.settlement
+    let timer
+    try {
+      await Promise.race([Promise.all([...pending.keys()]), new Promise(resolve => {
+        timer = globalThis.setTimeout(resolve, timeoutMs)
+      })])
+    } finally { globalThis.clearTimeout(timer) }
+    this.settlement = { complete: pending.size === 0, pending_response_count: pending.size, budget_ms: timeoutMs }
+    for (const row of pending.values()) row.response_json_unavailable = true
+    closed = true
+    return this.settlement
+  } }
 }

@@ -26,8 +26,8 @@ export async function waitForArmedStart({ contexts, armedFile, startFile, stopFi
   writeFileSync(armedFile + '.tmp', JSON.stringify(marker), { flag: 'wx', mode: 0o600 })
   if (existsSync(armedFile)) throw new Error('Armed marker already exists')
   renameSync(armedFile + '.tmp', armedFile)
-  const deadline = performance.now() + Math.min(180000, timeoutMs)
-  while (performance.now() < deadline) {
+  const deadline = globalThis.performance.now() + Math.min(180000, timeoutMs)
+  while (globalThis.performance.now() < deadline) {
     if (stopFile && existsSync(stopFile)) throw Object.assign(new Error('Explicit stop file observed before release'), { name: 'StoppedError' })
     if (contextClosed) throw new Error('Chromium exited before start release')
     if (existsSync(startFile)) {
@@ -36,7 +36,7 @@ export async function waitForArmedStart({ contexts, armedFile, startFile, stopFi
         || !Number.isFinite(start.start_at) || start.start_at <= 0) throw new Error('Start release binding or timestamp differs')
       return start
     }
-    await new Promise(resolveWait => globalThis.setTimeout(resolveWait, Math.min(100, Math.max(1, deadline - performance.now()))))
+    await new Promise(resolveWait => globalThis.setTimeout(resolveWait, Math.min(100, Math.max(1, deadline - globalThis.performance.now()))))
   }
   throw Object.assign(new Error('Armed start timed out before release'), { name: 'TimeoutError' })
 }

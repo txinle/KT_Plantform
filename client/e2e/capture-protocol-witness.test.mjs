@@ -1,6 +1,46 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { digest, safeRequest, projectPayload } from './capture-protocol-witness.mjs'
+import { EventEmitter } from 'node:events'
+import { captureProtocol, digest, safeRequest, projectPayload } from './capture-protocol-witness.mjs'
+
+test('protocol settlement records interrupted bodies within its budget and freezes late evidence', { timeout: 1000 }, async () => {
+  const page = new EventEmitter()
+  page.exposeBinding = async () => {}
+  page.addInitScript = async () => {}
+  const witness = await captureProtocol(page)
+  const request = { method: () => 'POST', url: () => 'http://local/api/v1/assessment/process/capture-v2/batch/',
+    postDataJSON: () => ({ client_instance_id: 'client', events: [] }) }
+  page.emit('request', request)
+  let release
+  page.emit('response', { request: () => request, status: () => 200,
+    json: () => new Promise(resolve => { release = resolve }) })
+  page.emit('requestfailed', request)
+  const settlement = await witness.settle(15)
+  assert.equal(settlement.complete, false)
+  assert.equal(settlement.pending_response_count, 1)
+  assert.equal(witness.requests[0].transport_failure, true)
+  assert.equal(witness.requests[0].response_json_unavailable, true)
+  const saved = JSON.stringify(witness)
+  release({ data: { success: true, acknowledgements: [] } })
+  await new Promise(resolve => globalThis.setTimeout(resolve, 5))
+  page.emit('request', request)
+  assert.equal(JSON.stringify(witness), saved)
+})
+
+test('protocol settlement retains normally resolved response evidence', async () => {
+  const page = new EventEmitter()
+  page.exposeBinding = async () => {}
+  page.addInitScript = async () => {}
+  const witness = await captureProtocol(page)
+  const request = { method: () => 'POST', url: () => 'http://local/api/v1/assessment/process/capture-v2/batch/',
+    postDataJSON: () => ({ client_instance_id: 'client', events: [] }) }
+  page.emit('request', request)
+  page.emit('response', { request: () => request, status: () => 200, json: async () => ({ data: {
+    success: true, acknowledgements: [{ event_id: 'event', client_sequence_no: 1, server_ingest_sequence_no: 2 }] } }) })
+  assert.equal((await witness.settle(100)).complete, true)
+  assert.equal(witness.requests[0].success, true)
+  assert.equal(witness.requests[0].acknowledgements[0].event_id, 'event')
+})
 
 test('bundled draft witnesses retain event identities and payload hashes without answer values', () => {
   const row = safeRequest('/api/v1/student/attempts/4/draft/', {

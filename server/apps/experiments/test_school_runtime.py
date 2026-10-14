@@ -139,7 +139,7 @@ class SchoolRuntimeTests(SimpleTestCase):
         loader.add_constructor('!reset', lambda loader, node: loader.construct_sequence(node))
         services = yaml.load((Path(settings.REPOSITORY_DIR) / "deploy" / "docker-compose.school.yml").read_text(), Loader=loader)["services"]
         for name, workers, alias in (("web", 1, "kt_core"), ("auth", 4, "kt_auth"),
-                                     ("assessment", 24, "kt_assessment"), ("capture", 4, "kt_capture"),
+                                     ("assessment", 8, "kt_assessment"), ("capture", 4, "kt_capture"),
                                      ("student-read", 2, "kt_student"), ("teacher-read", 1, "kt_teacher")):
             self.assertEqual(str(services[name]["environment"]["GUNICORN_WORKERS"]), str(workers))
             self.assertEqual(services[name]["environment"]["POSTGRES_POOL_ALIAS"], alias)
@@ -152,7 +152,7 @@ class SchoolRuntimeTests(SimpleTestCase):
         template = (Path(settings.REPOSITORY_DIR) / "deploy" / "docker/pgbouncer-school.ini.template").read_text()
         for alias, size, reserve in (("kt_core", 1, 0), ("kt_auth", 4, 0), ("kt_assessment", 8, 2),
                                      ("kt_capture", 4, 1), ("kt_student", 2, 0), ("kt_teacher", 1, 0), ("kt_background", 3, 0)):
-            self.assertRegex(template, rf'{alias} = .*dbname=\$\{{POSTGRES_DB\}}.*pool_size={size} reserve_pool_size={reserve}')
+            self.assertRegex(template, rf'{alias} = .*dbname=\$\{{POSTGRES_DB\}}.*pool_size={size} min_pool_size={size} reserve_pool_size={reserve}')
         self.assertNotIn("kt_password", template)
 
 

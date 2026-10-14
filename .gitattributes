@@ -2,3 +2,4 @@
 *.sh text eol=lf
 openapi-schema.yml text eol=lf
 frontend/src/api/generated/schema.d.ts text eol=lf
+client/src/api/generated/schema.d.ts text eol=lf

@@ -1,3 +1,6 @@
+import process from 'node:process'
+import { URL } from 'node:url'
+import { setTimeout } from 'node:timers'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { performance } from 'node:perf_hooks'
