@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
+import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import process from 'node:process'
@@ -11,6 +12,34 @@ import { digest } from './capture-protocol-witness.mjs'
 
 export const probeExpect = baseExpect.configure({ timeout: 35000 })
 const expect = probeExpect
+
+export async function waitForArmedStart({ contexts, armedFile, startFile, stopFile, binding, timeoutMs = 180000 }) {
+  if (!isAbsolute(armedFile) || !isAbsolute(startFile) || contexts.length !== 2
+    || new Set(contexts).size !== 2) throw new Error('Armed start requires absolute paths and two live Chromium contexts')
+  let contextClosed = false
+  for (const context of contexts) {
+    context.once('close', () => { contextClosed = true })
+    const page = await context.newPage()
+    try { await page.evaluate(() => 2) } finally { await page.close() }
+  }
+  const marker = { probe_count: contexts.length, pid: process.pid, armed_at: Date.now() / 1000, ...binding }
+  writeFileSync(armedFile + '.tmp', JSON.stringify(marker), { flag: 'wx', mode: 0o600 })
+  if (existsSync(armedFile)) throw new Error('Armed marker already exists')
+  renameSync(armedFile + '.tmp', armedFile)
+  const deadline = performance.now() + Math.min(180000, timeoutMs)
+  while (performance.now() < deadline) {
+    if (stopFile && existsSync(stopFile)) throw Object.assign(new Error('Explicit stop file observed before release'), { name: 'StoppedError' })
+    if (contextClosed) throw new Error('Chromium exited before start release')
+    if (existsSync(startFile)) {
+      const start = JSON.parse(readFileSync(startFile, 'utf8'))
+      if (start.fixture_sha256 !== binding.fixture_sha256 || start.plan_sha256 !== binding.plan_sha256
+        || !Number.isFinite(start.start_at) || start.start_at <= 0) throw new Error('Start release binding or timestamp differs')
+      return start
+    }
+    await new Promise(resolveWait => globalThis.setTimeout(resolveWait, Math.min(100, Math.max(1, deadline - performance.now()))))
+  }
+  throw Object.assign(new Error('Armed start timed out before release'), { name: 'TimeoutError' })
+}
 
 export function firstLoginPost(report) {
   const row = report.waterfall.find(request => request.endpoint === '/api/v1/auth/login/' && request.method === 'POST')
@@ -538,11 +567,16 @@ export async function startFixtureTask(page, account, ready) {
   return operation
 }
 
-async function runAccount(browser, account, baseURL, index, itemLimit, visualOutput, candidate, natural = null) {
-  const loginOnly = natural?.mode === 'login-only'
+async function prepareAccountContext(browser, baseURL, index, visualOutput, natural, loginOnly) {
   const visualContext = visualOutput && index === 0 && !loginOnly ? await createVisualProbeContext(baseURL) : null
   const viewport = natural && index === 1 ? { width: 390, height: 844 } : { width: 1440, height: 900 }
   const context = visualContext?.context || await browser.newContext({ baseURL, viewport })
+  return { visualContext, viewport, context }
+}
+
+async function runAccount(browser, account, baseURL, index, itemLimit, visualOutput, candidate, natural = null, prepared = null) {
+  const loginOnly = natural?.mode === 'login-only'
+  const { visualContext, viewport, context } = prepared || await prepareAccountContext(browser, baseURL, index, visualOutput, natural, loginOnly)
   const page = await context.newPage()
   page.setDefaultTimeout(35000)
   const origin = globalThis.performance.now()
@@ -798,16 +832,21 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { values } = parseArgs({ options: { 'base-url': { type: 'string' }, manifest: { type: 'string' }, output: { type: 'string' }, phase: { type: 'string' }, mode: { type: 'string', default: 'natural' }, items: { type: 'string', default: '20' }, 'visual-output': { type: 'string' }, plan: { type: 'string' }, 'start-at': { type: 'string' }, 'stop-file': { type: 'string' }, progress: { type: 'string' }, accounts: { type: 'string' } } })
+  const { values } = parseArgs({ options: { 'base-url': { type: 'string' }, manifest: { type: 'string' }, output: { type: 'string' }, phase: { type: 'string' }, mode: { type: 'string', default: 'natural' }, items: { type: 'string', default: '20' }, 'visual-output': { type: 'string' }, plan: { type: 'string' }, 'start-at': { type: 'string' }, 'stop-file': { type: 'string' }, progress: { type: 'string' }, accounts: { type: 'string' }, 'armed-file': { type: 'string' }, 'start-file': { type: 'string' } } })
   if (!values['base-url'] || !values.manifest || !values.output || !['baseline', 'repaired', 'load'].includes(values.phase)) throw new Error('Required: --base-url --manifest --output --phase baseline|repaired|load')
-  const manifest = JSON.parse(readFileSync(values.manifest, 'utf8'))
+  const manifestMaterial = readFileSync(values.manifest)
+  const manifest = JSON.parse(manifestMaterial.toString('utf8'))
   const accounts = probeAccounts(manifest)
   if (values.accounts && values.accounts.split(',').join(',') !== accounts.map(row => row.username).join(',')) throw new Error('Accounts must equal the explicit fixture browser account subset')
-  const workload = values.plan ? JSON.parse(readFileSync(values.plan, 'utf8')) : null
+  const planMaterial = values.plan ? readFileSync(values.plan) : null
+  const workload = planMaterial ? JSON.parse(planMaterial.toString('utf8')) : null
   const plans = workload ? naturalBrowserPlans(workload, accounts) : null
-  const startAt = Number(values['start-at'])
+  const armedStart = Boolean(values['armed-file'] || values['start-file'])
+  if (armedStart && (!values['armed-file'] || !values['start-file'] || !isAbsolute(values['armed-file']) || !isAbsolute(values['start-file']) || values['start-at'])) throw new Error('Armed start requires --armed-file and --start-file absolute paths without --start-at')
+  for (const key of ['manifest', 'plan', 'output', 'visual-output', 'stop-file', 'progress']) if (values[key]) values[key] = resolve(values[key])
+  let startAt = Number(values['start-at'])
   if (!['natural', 'login-only'].includes(values.mode) || values.mode === 'login-only' && (!plans || plans.some(row => row.arrival_offset_seconds !== 0))) throw new Error('Login-only mode requires frozen zero-arrival browser plans')
-  if (plans && (!Number.isFinite(startAt) || startAt <= 0 || Number(values.items) !== 20 || !manifest.browser_usernames)) throw new Error('Natural mode requires --start-at UNIX, 20 items, and explicit two-account browser fixture')
+  if ((armedStart && !plans) || plans && ((!armedStart && (!Number.isFinite(startAt) || startAt <= 0)) || Number(values.items) !== 20 || !manifest.browser_usernames)) throw new Error('Natural mode requires a start release, 20 items, and explicit two-account browser fixture')
   const progressPath = values.progress || values.output.replace(/\.json$/, '') + '.progress.json'
   const live = new Map()
   const publish = report => {
@@ -822,14 +861,25 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   if (values['visual-output']) mkdirSync(values['visual-output'], { recursive: true })
   const browser = await chromium.launch()
+  const prepared = []
   try {
+    if (armedStart) {
+      for (let index = 0; index < accounts.length; index++) prepared.push(await prepareAccountContext(browser, values['base-url'], index, values['visual-output'], true, values.mode === 'login-only'))
+      const hashMaterial = material => createHash('sha256').update(material).digest('hex')
+      const start = await waitForArmedStart({ contexts: prepared.map(row => row.context), armedFile: values['armed-file'], startFile: values['start-file'],
+        stopFile: values['stop-file'], binding: { fixture_sha256: hashMaterial(manifestMaterial), plan_sha256: hashMaterial(planMaterial) } })
+      startAt = start.start_at
+    }
     const probes = await Promise.all(accounts.map((account, index) => runAccount(browser, account, values['base-url'], index, Number(values.items), values['visual-output'], manifest.source_config,
-      plans ? { plan: plans[index], scenario: workload.scenario, mode: values.mode, startAt, stopFile: values['stop-file'], publish } : null)))
+      plans ? { plan: plans[index], scenario: workload.scenario, mode: values.mode, startAt, stopFile: values['stop-file'], publish } : null, prepared[index] || null)))
     const report = { phase: values.phase, mode: values.mode, completed: probes.every((probe) => probe.completed), probes }
     if (values.mode !== 'login-only') report.architecture_sessions = buildBrowserArchitectureSessions(report, accounts)
     if (plans) { report.workload_version = 'natural-180-v1'; report.start_at = startAt }
     writeFileSync(values.output, JSON.stringify(report, null, 2), { flag: 'wx', mode: 0o600 })
     globalThis.console.log(JSON.stringify({ completed: probes.every((probe) => probe.completed), actions: probes.map((probe) => probe.actions.length), output: values.output }))
     if (probes.some((probe) => !probe.completed)) process.exitCode = 1
-  } finally { await browser.close() }
+  } finally {
+    for (const row of prepared) { if (row.visualContext) await row.visualContext.close(); else await row.context.close() }
+    await browser.close()
+  }
 }

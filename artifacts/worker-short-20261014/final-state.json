@@ -1,0 +1,20 @@
+{
+  "checked_at": 1791955086.33391,
+  "selected_workers": 8,
+  "memory_gib": 4,
+  "pool": [
+    8,
+    2
+  ],
+  "running_load_containers": [],
+  "production_container_ids_unchanged": true,
+  "expanded_pool_attempted": false,
+  "reverse_confirmation_attempted": false,
+  "worker24_attempted": false,
+  "expansion_blocker": {
+    "idle_transaction_over1_samples": 4,
+    "maximum_idle_transaction_age_seconds": 1.396231
+  },
+  "both_rounds_drained": true,
+  "both_pressure_controllers_restored": true
+}

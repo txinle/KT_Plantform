@@ -1,11 +1,11 @@
 [databases]
-kt_core = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=1 reserve_pool_size=0
-kt_auth = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=4 reserve_pool_size=0
-kt_assessment = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=8 reserve_pool_size=2
-kt_capture = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=4 reserve_pool_size=1
-kt_student = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=2 reserve_pool_size=0
-kt_teacher = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=1 reserve_pool_size=0
-kt_background = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=3 reserve_pool_size=0
+kt_core = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=1 min_pool_size=1 reserve_pool_size=0
+kt_auth = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=4 min_pool_size=4 reserve_pool_size=0
+kt_assessment = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=8 min_pool_size=8 reserve_pool_size=2
+kt_capture = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=4 min_pool_size=4 reserve_pool_size=1
+kt_student = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=2 min_pool_size=2 reserve_pool_size=0
+kt_teacher = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=1 min_pool_size=1 reserve_pool_size=0
+kt_background = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=3 min_pool_size=3 reserve_pool_size=0
 
 [pgbouncer]
 listen_addr = 0.0.0.0

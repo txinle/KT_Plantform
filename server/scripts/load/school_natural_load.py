@@ -606,6 +606,29 @@ def natural_result(runner,states,started,mode):
             'arrival_lateness':summary([max(0,s['actual_arrival_at']-s['planned_arrival_at']) for s in runner.identity_outcomes if s['actual_arrival_at'] is not None])}}
 
 
+def await_armed_start(manifest, plan, armed, start, stop, count):
+    import hashlib
+    import os
+    manifest, plan, armed, start = map(Path, (manifest, plan, armed, start))
+    binding = {'fixture_sha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
+               'plan_sha256': hashlib.sha256(plan.read_bytes()).hexdigest()}
+    with armed.open('x', encoding='utf-8') as output:
+        json.dump({'pid': os.getpid(), 'protocol_count': count, **binding}, output)
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        if stop and Path(stop).exists():
+            raise ValueError('Protocol stopped before common start')
+        if start.exists():
+            release = json.loads(start.read_text())
+            if (any(release.get('fixture_binding', {}).get(key) != value for key, value in binding.items())
+                    or not math.isfinite(release.get('start_at', math.nan))
+                    or not time.time() + 2 <= release['start_at'] <= time.time() + 300):
+                raise ValueError('Protocol common start binding or time differs')
+            return release['start_at']
+        time.sleep(.2)
+    raise TimeoutError('Protocol common start was not released within 180 seconds')
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--manifest',required=True)
@@ -613,6 +636,8 @@ def main():
     parser.add_argument('--output',required=True)
     parser.add_argument('--base-url',default='http://127.0.0.1:18080')
     parser.add_argument('--start-at',type=float,required=True)
+    parser.add_argument('--armed-file')
+    parser.add_argument('--start-file')
     parser.add_argument('--stop-file')
     parser.add_argument('--mode',choices=('natural','login-only'),default='natural')
     parser.add_argument('--timeout',type=float,default=35)
@@ -635,6 +660,11 @@ def main():
     with evidence_files(args.manifest,args.output) as files:
         files['runner']=runner
         runner.enable_attempt_journal(files['attempts'])
+        if bool(args.armed_file) != bool(args.start_file):
+            parser.error('Armed and common start files must be provided together')
+        if args.armed_file:
+            runner.start_at = await_armed_start(args.manifest, args.plan, args.armed_file, args.start_file,
+                                              args.stop_file, len(fixture['protocol_usernames']))
         states=runner.run(fixture,args.mode)
         result=natural_result(runner,states,started,args.mode)
         result['students_progress_file'] = runner.identity_progress_path.name

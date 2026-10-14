@@ -26,16 +26,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'load'))
 from school_architecture_runtime import ArchitectureRuntime, confirmed_fact_failure
 from school_diagnostic_runtime import (BASE_URL, DATABASE, PROJECT, SIX_POOL_PROFILE, SIX_WORKERS,
-    SIX_MEMORY, SIX_CPU_SHARES, validate_owned_postgres_settings, SafetyInterrupted, fingerprint, read, read_evidence, write_once)
+    SIX_MEMORY, SIX_CPU_SHARES, six_workers_for_source, validate_owned_postgres_settings, SafetyInterrupted, fingerprint, read, read_evidence, write_once)
+from school_worker_short import armed_matches, short_stop_reason, protocol_finished_error
 from natural_workload import CONFIDENCE_ONLY, build_workload, validate_workload
 from school_natural_load import observed_active_overlap, LEASE_RECOVERY_PROFILE, lease_recovery_accounting
 from school_short_storm import summary
 from capture_protocol import digest
 
 STAGES = ('baseline10', 'candidate10', 'candidate50', 'login180', 'natural180-r1', 'natural180-r2')
-DIAGNOSTIC_STAGES = ('diagnostic180',)
+DIAGNOSTIC_STAGES = ('diagnostic180', 'diagnostic2')
 COUNTS = dict(zip(STAGES, (10, 10, 50, 180, 180, 180)))
 COUNTS['diagnostic180'] = 180
+COUNTS['diagnostic2'] = 2
 SEEDS = {stage: 20261014 if stage == 'natural180-r2' else 20261013 for stage in STAGES + DIAGNOSTIC_STAGES}
 THRESHOLDS = {'login_entry_to_authentication_end': (5, 10), 'login_to_home_ready': (5, 10),
     'start_to_first_question_ready': (5, 10), 'navigation_next_ready': (1, 2),
@@ -62,7 +64,7 @@ def validate_transition_source(source):
         if (source['phase'] != 'candidate' or source.get('host_budget') != HOST_BUDGET
                 or source.get('durability') != DURABILITY or source.get('workload_profile') != 'natural-180-v1'):
             raise SafetyInterrupted('Six-pool candidate requires fixed host, durability and workload bindings')
-        for role, workers in SIX_WORKERS.items():
+        for role, workers in six_workers_for_source(source).items():
             expected = source.get('roles', {}).get(role, {})
             if (expected.get('workers') != workers or expected.get('memory_bytes') != SIX_MEMORY[role]
                     or expected.get('cpus') != 0 or expected.get('cpu_shares') != SIX_CPU_SHARES[role]):
@@ -76,11 +78,13 @@ def validate_transition_source(source):
         raise SafetyInterrupted('Unknown frozen pool profile')
 
 
-def validate_pool_budget(content, database_host='school-test-postgres'):
+def validate_pool_budget(content, database_host='school-test-postgres', assessment_size=8):
     config = configparser.ConfigParser(interpolation=None)
     try:
         config.read_string(content)
-        pools = {'kt_core': (1, 0), 'kt_auth': (4, 0), 'kt_assessment': (8, 2),
+        if assessment_size not in (8, 12):
+            raise ValueError()
+        pools = {'kt_core': (1, 0), 'kt_auth': (4, 0), 'kt_assessment': (assessment_size, 2),
                  'kt_capture': (4, 1), 'kt_student': (2, 0), 'kt_teacher': (1, 0), 'kt_background': (3, 0)}
         if (set(config['databases']) != set(pools) or config['pgbouncer'].get('pool_mode') != 'transaction'
                 or config['pgbouncer'].get('default_pool_size') != '0'):
@@ -89,6 +93,8 @@ def validate_pool_budget(content, database_host='school-test-postgres'):
             fields = dict(part.split('=', 1) for part in config['databases'][alias].split())
             required = {'host': database_host, 'port': '5432', 'dbname': 'kt_e2e',
                         'user': 'kt_e2e_user', 'pool_size': str(size), 'reserve_pool_size': str(reserve)}
+            if 'min_pool_size' in fields:
+                required['min_pool_size'] = str(size)
             if fields != required:
                 raise ValueError()
     except (configparser.Error, KeyError, ValueError) as error:
@@ -402,7 +408,7 @@ def score_stage(stage, fixture, plan, http, browser, observation, *, persistence
 
 
 def require_previous(stage, history, source):
-    if stage == 'diagnostic180':
+    if stage in DIAGNOSTIC_STAGES:
         if source.get('diagnostic_180_authorized') is not True or source.get('phase') != 'candidate':
             raise SafetyInterrupted('Single 180 diagnostic requires explicit candidate authorization')
         return
@@ -487,6 +493,7 @@ class TransitionRuntime(ArchitectureRuntime):
         required.update(str(Path(__file__).resolve().parent/name) for name in (
             'school_architecture_runtime.py','school_diagnostic_runtime.py','school_diagnostic_sweep.py','school_native_db_probe.py'))
         required.add(str(Path(__file__).resolve()))
+        required.add(str(Path(__file__).resolve().with_name('school_worker_short.py')))
         if self.six_pool_profile:
             required.add(str(self.driver_dir / 'scripts/ops/school_capture_priority.py'))
         if not required.issubset(files) or any(not re.fullmatch('[a-f0-9]{64}',value) or sha256(path)!=value for path,value in files.items()):
@@ -577,7 +584,8 @@ class TransitionRuntime(ArchitectureRuntime):
                 raise SafetyInterrupted('Different source version on role '+role)
         if self.six_pool_profile:
             validate_pool_budget(self.capture(['docker', 'exec', roles['pgbouncer']['Id'],
-                'cat', '/tmp/pgbouncer-school.ini']), self.database_host)
+                'cat', '/tmp/pgbouncer-school.ini']), self.database_host,
+                self.source_value().get('worker_short_profile', {}).get('assessment_pool_size', 8))
         return roles
 
     def verify_runtime(self):
@@ -719,8 +727,47 @@ os.chmod('/attempt/unbound-fixture.json',0o600)
             if code or error:architecture={**architecture,'passed':False,'verification_exit_code':code,'evidence_error':error}
         return *outputs,architecture
 
+    def release_armed_start(self, attempt, bridge, fixture, process):
+        deadline = time.monotonic() + 180
+        binding = read(attempt/'fixture-binding.json') if (attempt/'fixture-binding.json').exists() else {}
+        while time.monotonic() < deadline:
+            if (bridge/'browser-launch-error.json').exists():
+                raise SafetyInterrupted('Browser failed before common start')
+            if process.poll() is not None:
+                raise SafetyInterrupted('Protocol driver exited before common start')
+            protocol, _ = read_evidence(attempt/'protocol-armed.json')
+            browser, _ = read_evidence(bridge/'browser-armed.json')
+            if armed_matches(protocol, browser, binding, len(fixture['protocol_usernames'])):
+                start_at = time.time() + 15
+                release = {'stage': attempt.name, 'start_at': start_at, 'fixture_binding': binding}
+                write_once(attempt/'start.json', release)
+                write_once(attempt/'started.json', {'started_at': time.time(), 'start_at': start_at,
+                                                    'stage': attempt.name, 'both_drivers_armed': True})
+                write_bridge_start(bridge, release)
+                return start_at
+            time.sleep(.2)
+        raise SafetyInterrupted('Both browser contexts and protocol driver did not arm within 180 seconds')
+
+    def collect_browser_reports(self, attempt, bridge, *, wait_for_final=False):
+        if wait_for_final:
+            deadline = time.monotonic() + 40
+            while not (bridge/'browser.json').exists() and time.monotonic() < deadline:
+                if (bridge/'browser-launch-error.json').exists():
+                    break
+                time.sleep(.2)
+        for name in ('browser.json', 'browser.progress.json', 'browser-binding.json'):
+            if (bridge/name).exists():
+                with (attempt/name).open('xb') as stream:
+                    stream.write((bridge/name).read_bytes())
+                (attempt/name).chmod(0o600)
+        return (attempt/'browser.json').exists()
+
     def run_stage(self,stage,start_at):
-        if not finite(start_at) or start_at<time.time()+5 or start_at>time.time()+300:
+        short_policy = self.source_value().get('worker_short_profile')
+        coordinated = short_policy is not None
+        if coordinated and stage not in DIAGNOSTIC_STAGES:
+            raise SafetyInterrupted('Worker short policy cannot replace a formal capacity stage')
+        if not coordinated and (not finite(start_at) or start_at<time.time()+5 or start_at>time.time()+300):
             raise ValueError('Common browser/protocol start must be five to 300 seconds in the future')
         attempt=self.stage_attempt(stage)
         fixture,plan=self.assert_prepared(stage,attempt)
@@ -731,8 +778,9 @@ os.chmod('/attempt/unbound-fixture.json',0o600)
         bridge=self.bridge_root/stage
         if any((bridge/name).exists() for name in ('browser.json','browser.progress.json','browser.stop','start.json')):
             raise SafetyInterrupted('Browser bridge already consumed')
-        write_once(attempt/'started.json',{'started_at':time.time(),'start_at':start_at,'stage':stage})
-        write_bridge_start(bridge,{'stage':stage,'start_at':start_at,'fixture_binding':read(attempt/'fixture-binding.json')})
+        if not coordinated:
+            write_once(attempt/'started.json',{'started_at':time.time(),'start_at':start_at,'stage':stage})
+            write_bridge_start(bridge,{'stage':stage,'start_at':start_at,'fixture_binding':read(attempt/'fixture-binding.json')})
         logs=[]
         def spawn(command,label):
             log=(attempt/(label+'.log')).open('x',encoding='utf-8');os.chmod(attempt/(label+'.log'),0o600)
@@ -741,7 +789,7 @@ os.chmod('/attempt/unbound-fixture.json',0o600)
             self.children.append(child)
             return child
         observer=spawn([sys.executable,str(self.observer_script),'--project',PROJECT,'--database-container',self.database_container,
-            '--output',str(attempt/'observation.json'),'--duration','3060','--interval','5',
+            '--output',str(attempt/'observation.json'),'--duration','3060','--interval','2' if coordinated else '5',
             '--stop-file',str(attempt/'observer.stop')],'observer')
         self.observer=observer
         teacher_runtime=None
@@ -751,16 +799,21 @@ os.chmod('/attempt/unbound-fixture.json',0o600)
         load_exit=None
         began=time.time()
         offset=0
+        all_entered = False
         try:
             time.sleep(2)
             if observer.poll() is not None:raise SafetyInterrupted('Observer exited before load')
             command=self.load_command(attempt,self.config['run_id']+'-'+stage,
                 ['scripts/load/school_natural_load.py','--manifest','/attempt/fixture.json','--plan','/attempt/plan.json',
                  '--output','/attempt/http.json','--mode','login-only' if stage=='login180' else 'natural',
-                 '--base-url',BASE_URL,'--start-at',str(start_at),'--timeout','35','--total-budget-seconds','2700',
+                 '--base-url',BASE_URL,'--start-at',str(0 if coordinated else start_at),'--timeout','35','--total-budget-seconds','2700',
                  '--stop-file','/attempt/load.stop'])
+            if coordinated:
+                command += ['--armed-file', '/attempt/protocol-armed.json', '--start-file', '/attempt/start.json']
             self.load_name=command[command.index('--name')+1]
             process=spawn(command,'load');self.http_launched=True
+            if coordinated:
+                start_at = self.release_armed_start(attempt, bridge, fixture, process)
             if stage!='login180':
                 teacher_runtime=TransitionRuntime(self.config)
                 teacher_command=self.teacher_command(attempt,'monitor')
@@ -790,23 +843,53 @@ os.chmod('/attempt/unbound-fixture.json',0o600)
                 progress,_=read_evidence(attempt/'http.progress.json')
                 browser_progress,_=read_evidence(bridge/'browser.progress.json')
                 if progress.get('errors'):stop_reason=stop_reason or 'unrecovered_protocol_workflow_error'
+                if (bridge/'browser-launch-error.json').exists():
+                    stop_reason=stop_reason or 'browser_launcher_failed'
                 if any(row.get('failure_stage') for row in browser_progress.get('probes',[])):
                     stop_reason=stop_reason or 'unrecovered_browser_workflow_error'
                 protocol_done=process.poll() is not None
                 browser_done=(bridge/'browser.json').exists()
                 if protocol_done:
                     completed,_=read_evidence(attempt/'http.json')
-                    if completed.get('workflow_completed') is not True or completed.get('errors'):
+                    if protocol_finished_error(completed, len(fixture['protocol_usernames'])):
                         stop_reason=stop_reason or 'unrecovered_protocol_workflow_error'
                 if browser_done:
                     completed,_=read_evidence(bridge/'browser.json')
                     if completed.get('completed') is not True:stop_reason=stop_reason or 'unrecovered_browser_workflow_error'
+                if coordinated:
+                    students, _ = read_evidence(attempt/'http.students.json')
+                    protocol_ready = sum(bool(row.get('ready_at')) for row in students.get('students', []))
+                    browser_ready = sum(bool(row.get('ready_at')) for row in browser_progress.get('probes', []))
+                    if protocol_ready == len(fixture['protocol_usernames']) and browser_ready == 2:
+                        if not all_entered:
+                            write_once(attempt/'all-entered.json', {'observed_at': tick, 'start_at': start_at,
+                                'protocol_ready': protocol_ready, 'browser_ready': browser_ready})
+                        all_entered = True
+                    if stage == 'diagnostic2':
+                        probes = browser_progress.get('probes', [])
+                        if len(probes) == 2 and all(row.get('submitted_count', 0) >= 1 for row in probes):
+                            stop_reason = stop_reason or 'short_connectivity_complete'
+                    stop_reason = stop_reason or short_stop_reason(short_policy, start_at, tick,
+                                                                   protocol_ready, browser_ready, all_entered)
+                    value = {'observed_at': tick, 'start_at': start_at, 'workers': short_policy['workers'],
+                             'protocol_ready': protocol_ready, 'browser_ready': browser_ready,
+                             'all_entered': all_entered, 'stop_reason': stop_reason}
+                    temporary = bridge/'operator-progress.tmp'
+                    temporary.write_text(json.dumps(value)); temporary.chmod(0o600)
+                    if os.name == 'posix':
+                        os.chown(temporary, bridge.stat().st_uid, bridge.stat().st_gid)
+                    temporary.replace(bridge/'operator-progress.json')
                 if stop_reason or(protocol_done and browser_done):break
                 time.sleep(max(0,2-(time.time()-tick)))
-        except BaseException:
+        except BaseException as error:
             stop_reason=stop_reason or 'coordinator_exception'
+            if coordinated and not (attempt/'first-failure.json').exists():
+                write_once(attempt/'first-failure.json', {'stop_reason': stop_reason,
+                    'error_type': type(error).__name__, 'at': time.time()})
             raise
         finally:
+            if coordinated and stop_reason and not (attempt/'first-failure.json').exists():
+                write_once(attempt/'first-failure.json', {'stop_reason': stop_reason, 'at': time.time()})
             if stop_reason:
                 (attempt/'load.stop').touch(mode=0o600);(bridge/'browser.stop').touch(mode=0o600)
             if process is not None:
@@ -817,19 +900,28 @@ os.chmod('/attempt/unbound-fixture.json',0o600)
                 (attempt/'teacher.stop').touch(mode=0o600)
                 try:teacher.wait(timeout=40)
                 except subprocess.TimeoutExpired:teacher_runtime.stop_load();self.terminate_child(teacher)
-            for name in ('browser.json','browser.progress.json','browser-binding.json'):
-                if (bridge/name).exists():
-                    with (attempt/name).open('xb') as stream:stream.write((bridge/name).read_bytes())
-                    (attempt/name).chmod(0o600)
+            if not coordinated:
+                self.collect_browser_reports(attempt, bridge)
             try:drain=self.drain(attempt,fixture['task_id'])
+            except BaseException as error:
+                if not coordinated:
+                    raise
+                drain = {'passed': False, 'budget_seconds': 300, 'error_type': type(error).__name__}
+                write_once(attempt/'cleanup-error.json', drain)
             finally:
+                if coordinated:
+                    self.collect_browser_reports(attempt, bridge, wait_for_final=True)
                 (attempt/'observer.stop').touch(mode=0o600)
                 try:observer.wait(timeout=60)
                 except subprocess.TimeoutExpired:self.terminate_child(observer)
                 for log in logs:log.close()
         ended=time.time()
         http,_=read_evidence(attempt/'http.json');browser,_=read_evidence(attempt/'browser.json')
-        persistence,browser_persistence,architecture=self.collect_persistence(stage,attempt,fixture,browser)
+        if coordinated:
+            persistence = browser_persistence = architecture = {'passed': False,
+                'status': 'short_diagnostic_incomplete', 'raw_fact_integrity_failed': False}
+        else:
+            persistence,browser_persistence,architecture=self.collect_persistence(stage,attempt,fixture,browser)
         teacher_low={}
         if stage!='login180' and stop_reason is None and drain['passed']:
             teacher_code=self.run_private(self.teacher_command(attempt,'low'),attempt,'teacher-low',420)
@@ -846,10 +938,14 @@ os.chmod('/attempt/unbound-fixture.json',0o600)
         result.update(attempt_dir=str(attempt),started_at=began,ended_at=ended,stage_elapsed_seconds=ended-began,
             workload_budget_seconds=300 if stage=='login180' else 2700,drain_budget_seconds=300,
             confidence_feedback_timing_boundary='Synthetic confidence thinking and feedback remain separate from operation latency')
+        if coordinated:
+            result.update(short_diagnostic=True, worker_short_profile=short_policy, common_start_at=start_at,
+                          all_entered=all_entered, formal_capacity_accepted=False, escalation_allowed=False,
+                          workload_budget_seconds=short_policy['duration_seconds'], stage_passed=False)
         self.run_private(self.compose+['logs','--no-color','--since',str(int(began)),*self.runtime_roles],attempt,'services',60)
         write_once(attempt/'slow-operations.json',slow_operations(http,browser,attempt))
         history=self.history();history[stage]=result
-        result['formal_capacity_accepted']=stage!='diagnostic180' and formal_acceptance(history)
+        result['formal_capacity_accepted']=stage not in DIAGNOSTIC_STAGES and not coordinated and formal_acceptance(history)
         write_once(attempt/'result.json',result)
         self.history_root.mkdir(mode=0o700,parents=True,exist_ok=True)
         write_once(self.history_root/(stage+'.json'),result)

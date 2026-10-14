@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from school_resource_budget import budget
 
 
-def sample_delay(until, now, interval=10, *, sampled_at=None):
+def sample_delay(until, now, interval=2, *, sampled_at=None):
     remaining = interval if sampled_at is None else interval - (now - sampled_at)
     return max(0, min(remaining, until - now))
 
@@ -107,9 +107,28 @@ DATABASE_WAL_SQL = """SELECT json_build_object(
 
 
 def host_cpu_counters(proc=Path('/proc')):
-    values = [int(value) for value in (proc / 'stat').read_text().splitlines()[0].split()[1:]]
+    lines = (proc / 'stat').read_text().splitlines()
+    values = [int(value) for value in lines[0].split()[1:]]
     names = ('user', 'nice', 'system', 'idle', 'iowait', 'irq', 'softirq', 'steal', 'guest', 'guest_nice')
-    return {name + '_ticks': value for name, value in zip(names, values)}
+    result = {name + '_ticks': value for name, value in zip(names, values)}
+    result.update({key: int(value) for key, value in (line.split() for line in lines
+                   if line.startswith(('procs_running ', 'procs_blocked ')))})
+    result['run_queue'] = int((proc / 'loadavg').read_text().split()[3].split('/')[0])
+    return result
+
+
+def measure_metric(name, collect, status):
+    started_at, started = time.time(), time.monotonic()
+    metadata = {'started_at': started_at}
+    try:
+        value = collect()
+        metadata['state'] = 'measured'
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        value = None
+        metadata.update(state='missing', error_type=type(error).__name__)
+    metadata.update(ended_at=time.time(), duration_seconds=round(time.monotonic() - started, 6))
+    status[name] = metadata
+    return value
 
 
 def http_listen_queues(pid, proc=Path('/proc')):
@@ -207,6 +226,27 @@ def reinspect_container(container_id):
     return items[0]
 
 
+def inspect_containers(identities):
+    if not identities:
+        return [], []
+    result = subprocess.run(['docker', 'inspect', *identities], text=True, capture_output=True, timeout=30)
+    items = json.loads(result.stdout)
+    found = {item['Id']: item for item in items}
+    if len(found) != len(items) or not found.keys() <= set(identities):
+        raise ValueError('Runtime batch inspection container identity mismatch')
+    missing = [identity for identity in identities if identity not in found]
+    if result.returncode and not missing:
+        raise ValueError('Runtime batch container inspection failed')
+    lifecycle = []
+    for identity in missing:
+        item = reinspect_container(identity)
+        if item is None:
+            lifecycle.append({'status': 'skipped_removed_during_discovery', 'container_id': identity})
+        else:
+            found[identity] = item
+    return [found[identity] for identity in identities if identity in found], lifecycle
+
+
 def sample_container(item, *, required):
     """Return actual metrics or an evidenced optional stop; retry changed PID once."""
     original_pid = item['State']['Pid']
@@ -236,20 +276,22 @@ def sample_container(item, *, required):
 def pool_metrics(project):
     import csv
     ids = subprocess.check_output(['docker','ps','-q','--filter',f'label=com.docker.compose.project={project}',
-        '--filter','label=com.docker.compose.service=pgbouncer'],text=True).split()
+        '--filter','label=com.docker.compose.service=pgbouncer'],text=True, timeout=5).split()
     if len(ids) != 1:
         raise ValueError('Isolated PgBouncer unavailable for measurement')
     result = {}
     for command in ('SHOW POOLS','SHOW STATS'):
         raw = subprocess.check_output(['docker','exec',ids[0],'sh','-c',
             'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -A -F "|" -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d pgbouncer -c "$1"',
-            'school-pool-observer',command],text=True)
+            'school-pool-observer',command],text=True, timeout=5)
         for row in csv.DictReader(raw.splitlines(), delimiter='|'):
-            if row.get('database') not in ('kt_core','kt_student','kt_teacher','kt_background'):
+            if row.get('database') not in ('kt_core','kt_auth','kt_assessment','kt_capture',
+                                         'kt_student','kt_teacher','kt_background'):
                 continue
             alias = row['database']
             result.setdefault(alias,{})
-            for key in ('cl_active','cl_waiting','sv_active','sv_idle','maxwait','total_query_count',
+            for key in ('cl_active','cl_waiting','sv_active','sv_idle','sv_used','sv_tested','sv_login',
+                        'maxwait','total_xact_count','total_xact_time','total_query_count',
                         'total_query_time','total_wait_time','avg_query_time','avg_wait_time'):
                 if key in row:
                     result[alias][key] = float(row[key])
@@ -353,6 +395,7 @@ def observe(args, result):
     try:
         while time.time() < until and not (stop_file and stop_file.exists()):
             now = time.time()
+            sample_started = time.monotonic()
             recent_oom = recent_oom_events(args.project, db_ids, oom_checked_until, now)
             oom_checked_until = now
             if recent_oom:
@@ -367,9 +410,11 @@ def observe(args, result):
                 raise SystemExit('Test containers stopped: insufficient host memory headroom; acceptance failed')
             # Sample the current load generator and production siblings too;
             # the shared PostgreSQL container appears exactly once.
+            discovery_started = time.monotonic()
             live = subprocess.check_output(['docker', 'ps', '-q', '--no-trunc'], text=True).split()
-            inspected = [item for identity in live if (item := reinspect_container(identity)) is not None]
-            resource_rows = []; lifecycle = []; sampled_roles = set(); postgres_kernel = None
+            inspected, lifecycle = inspect_containers(live)
+            discovery_duration = round(time.monotonic() - discovery_started, 6)
+            resource_rows = []; sampled_roles = set(); postgres_kernel = None
             for item in inspected:
                 project = item['Config'].get('Labels', {}).get('com.docker.compose.project')
                 role = item['Config'].get('Labels', {}).get('com.docker.compose.service')
@@ -400,15 +445,32 @@ def observe(args, result):
             if postgres_kernel is None or not required_roles <= sampled_roles:
                 raise ValueError('Required database or runtime role missing from observation')
             total = next(int(line.split()[1])*1024 for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemTotal:'))
-            waits = json.loads(subprocess.check_output(['docker', 'exec', db_ids[0], 'sh', '-c',
+            measurement_status = {}
+            waits = measure_metric('database_waits', lambda: json.loads(subprocess.check_output(['docker', 'exec', db_ids[0], 'sh', '-c',
                 'exec psql -X -t -A -U "$POSTGRES_USER" -d kt_e2e -c "$1"',
-                'school-wait-observer', DATABASE_WAIT_SQL], text=True))
-            wal = json.loads(subprocess.check_output(['docker', 'exec', db_ids[0], 'sh', '-c',
+                'school-wait-observer', DATABASE_WAIT_SQL], text=True, timeout=5)), measurement_status)
+            wal = measure_metric('database_wal', lambda: json.loads(subprocess.check_output(['docker', 'exec', db_ids[0], 'sh', '-c',
                 'exec psql -X -t -A -U "$POSTGRES_USER" -d kt_e2e -c "$1"',
-                'school-wal-observer', DATABASE_WAL_SQL], text=True))
-            wal['scope'] = 'isolated_postgres_instance' if isolated_postgres else 'shared_postgres_instance'
-            system_samples.append({'at': time.time(), 'memory_available_bytes': available,
-                'host_cpu_counters': host_cpu_counters(),
+                'school-wal-observer', DATABASE_WAL_SQL], text=True, timeout=5)), measurement_status)
+            if wal is not None:
+                wal['scope'] = 'isolated_postgres_instance' if isolated_postgres else 'shared_postgres_instance'
+            counters = measure_metric('host_cpu_counters', host_cpu_counters, measurement_status)
+            pools = measure_metric('pgbouncer', lambda: pool_metrics(args.project), measurement_status)
+            counts = measure_metric('backlog', lambda: json.loads(subprocess.check_output([
+                'docker', 'exec', db_ids[0], 'sh', '-c',
+                'exec psql -X -t -A -U "$POSTGRES_USER" -d kt_e2e -c "$1"', 'school-observer', BACKLOG_SQL,
+            ], text=True, timeout=5)), measurement_status)
+            backlog.append({'at': measurement_status['backlog']['ended_at'], 'counts': counts,
+                            'measurement': measurement_status['backlog']})
+            failed = any(row['state'] == 'missing' for row in measurement_status.values())
+            duration = round(time.monotonic() - sample_started, 6)
+            interval = getattr(args, 'interval', 2)
+            system_samples.append({'at': time.time(), 'sample_started_at': now,
+                'sample_duration_seconds': duration, 'requested_interval_seconds': interval,
+                'container_discovery_duration_seconds': discovery_duration,
+                'sampling_overrun_seconds': round(max(0, duration - interval), 6),
+                'state': 'failed' if failed else 'sampled', 'measurement_status': measurement_status,
+                'memory_available_bytes': available, 'host_cpu_counters': counters,
                 'database_wal': wal,
                 **({'isolated_wal': wal} if isolated_postgres else {'shared_wal': wal}),
                 'postgres_profile': configuration.get('postgres_profile'),
@@ -416,15 +478,12 @@ def observe(args, result):
                 'postgres_cgroup': postgres_kernel, 'database_waits': waits, 'sampling_lifecycle': lifecycle,
                 'database_wait_measurement': 'instantaneous_blocking_sample_not_exact_lock_duration',
                 'database_probe': probe_progress(getattr(args, 'database_probe_progress', None), time.time()),
-                'pgbouncer': pool_metrics(args.project),
+                'pgbouncer': pools,
                 'resource_rows': resource_rows, 'memory_budget': budget(resource_rows, total, available)})
             publish_progress(args.output, started, system_samples[-1])
-            raw_backlog = subprocess.check_output([
-                "docker", "exec", db_ids[0], "sh", "-c",
-                'exec psql -X -t -A -U "$POSTGRES_USER" -d kt_e2e -c "$1"', "school-observer", BACKLOG_SQL,
-            ], text=True)
-            backlog.append({"at": time.time(), "counts": json.loads(raw_backlog)})
-            time.sleep(sample_delay(until, time.time(), getattr(args, 'interval', 10), sampled_at=now))
+            if failed:
+                raise ValueError('Runtime diagnostic measurement failed')
+            time.sleep(sample_delay(until, time.time(), interval, sampled_at=now))
         early_stop = bool(stop_file and stop_file.exists())
         terminated_by_coordinator = early_stop and events.poll() is None
         if terminated_by_coordinator:
@@ -489,7 +548,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project', required=True)
     parser.add_argument('--duration', type=int, default=2100)
-    parser.add_argument('--interval', type=int, choices=(5, 10), default=10)
+    parser.add_argument('--interval', type=int, choices=(2, 5, 10), default=2)
     parser.add_argument('--output', required=True)
     parser.add_argument('--database-container')
     parser.add_argument('--database-probe-progress')

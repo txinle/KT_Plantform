@@ -140,7 +140,7 @@ class SchoolCapturePriorityTests(SimpleTestCase):
         body = yaml.load((Path(settings.REPOSITORY_DIR) / "deploy" / 'docker-compose.school.yml').read_text(), Loader=loader)
         services = body['services']
         self.assertEqual(services['web']['environment']['GUNICORN_WORKERS'], 1)
-        self.assertEqual(services['assessment']['environment']['GUNICORN_WORKERS'], 24)
+        self.assertEqual(services['assessment']['environment']['GUNICORN_WORKERS'], 8)
         self.assertEqual(services['student-read']['environment']['GUNICORN_WORKERS'], 2)
         self.assertEqual(services['teacher-read']['environment']['GUNICORN_WORKERS'], 1)
         self.assertEqual(services['analytics-worker']['deploy']['replicas'], 1)

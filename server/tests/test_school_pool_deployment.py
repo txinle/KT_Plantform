@@ -8,7 +8,7 @@ import yaml
 
 DEPLOY = Path(__file__).resolve().parents[2] / 'deploy'
 HTTP = {'web': (1, 'kt_core', '512M'), 'auth': (4, 'kt_auth', '1G'),
-        'assessment': (24, 'kt_assessment', '4G'), 'capture': (4, 'kt_capture', '1280M'),
+        'assessment': (8, 'kt_assessment', '4G'), 'capture': (4, 'kt_capture', '1280M'),
         'student-read': (2, 'kt_student', '768M'), 'teacher-read': (1, 'kt_teacher', '512M')}
 
 
@@ -36,7 +36,7 @@ class SchoolPoolDeploymentTests(TestCase):
                 self.assertEqual(config['environment']['SCHOOL_POOL_PROFILE'], 'six-pools-180-v1')
                 self.assertEqual(config['environment']['DATABASE_DISABLE_SERVER_SIDE_CURSORS'], '1')
                 self.assertNotIn('ports', config)
-        self.assertEqual(sum(row[0] for row in HTTP.values()), 36)
+        self.assertEqual(sum(row[0] for row in HTTP.values()), 20)
         for role in HTTP:
             self.assertIn(role, services['nginx']['depends_on'])
         self.assertEqual(services['db']['mem_limit'], 0, 'Shared PostgreSQL must remain uncapped by school overlay')
@@ -52,6 +52,7 @@ class SchoolPoolDeploymentTests(TestCase):
             row = dict(part.split('=', 1) for part in template['databases'][alias].split())
             self.assertEqual(int(row['pool_size']), size)
             self.assertEqual(int(row['reserve_pool_size']), reserve)
+            self.assertEqual(int(row['min_pool_size']), size)
             self.assertEqual(row['user'], '${POSTGRES_USER}')
             self.assertEqual(row['dbname'], '${POSTGRES_DB}')
         self.assertEqual(sum(size + reserve for size, reserve in expected.values()), 26)

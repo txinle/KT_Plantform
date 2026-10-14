@@ -472,7 +472,7 @@ class SixPoolProfileTests(unittest.TestCase):
             source['roles'] = {role: {'workers': workers, 'memory_bytes': memory, 'cpus': 0,
                 'cpu_shares': shares} for role, workers, memory, shares in (
                 ('web', 1, 512 * 1024**2, 512), ('auth', 4, 1024**3, 2048),
-                ('assessment', 24, 4 * 1024**3, 4096), ('capture', 4, 1280 * 1024**2, 2048),
+                ('assessment', 8, 4 * 1024**3, 4096), ('capture', 4, 1280 * 1024**2, 2048),
                 ('student-read', 2, 768 * 1024**2, 512), ('teacher-read', 1, 512 * 1024**2, 256))}
         policy = {'appendonly': 'yes', 'appendfsync': 'always', 'maxmemory-policy': 'noeviction', 'save': ''}
         source['roles'].update({'redis-session': {'memory_bytes': 512 * 1024**2, 'cpus': 1, 'redis_policy': policy.copy()},
@@ -544,6 +544,11 @@ class SixPoolProfileTests(unittest.TestCase):
         config = '[databases]\n' + '\n'.join(f'{alias} = host=school-test-postgres port=5432 dbname=kt_e2e user=kt_e2e_user pool_size={size} reserve_pool_size={reserve}'
             for alias, (size, reserve) in pools.items()) + '\n[pgbouncer]\npool_mode=transaction\ndefault_pool_size=0\n'
         transition.validate_pool_budget(config)
+        prewarmed = '[databases]\n' + '\n'.join(f'{alias} = host=school-test-postgres port=5432 dbname=kt_e2e user=kt_e2e_user pool_size={size} min_pool_size={size} reserve_pool_size={reserve}'
+            for alias, (size, reserve) in pools.items()) + '\n[pgbouncer]\npool_mode=transaction\ndefault_pool_size=0\n'
+        transition.validate_pool_budget(prewarmed)
+        with self.assertRaises(transition.SafetyInterrupted):
+            transition.validate_pool_budget(prewarmed.replace('min_pool_size=8', 'min_pool_size=9'))
         for invalid in (config.replace('pool_size=8', 'pool_size=16'),
                         config.replace(' user=kt_e2e_user', ''),
                         config.replace('reserve_pool_size=2', 'reserve_pool_size=3'),

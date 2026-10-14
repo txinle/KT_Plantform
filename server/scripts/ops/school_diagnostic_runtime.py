@@ -46,12 +46,24 @@ POOL_ALIASES = {'web': 'kt_core', 'student-read': 'kt_student', 'teacher-read': 
                 'analytics-worker': 'kt_background', 'student-comparison-worker': 'kt_background',
                 'publication-worker': 'kt_background', 'export-worker': 'kt_background'}
 SIX_POOL_PROFILE = 'six-pools-180-v1'
-SIX_WORKERS = {'web': 1, 'auth': 4, 'assessment': 24, 'capture': 4, 'student-read': 2, 'teacher-read': 1}
+SIX_WORKERS = {'web': 1, 'auth': 4, 'assessment': 8, 'capture': 4, 'student-read': 2, 'teacher-read': 1}
 SIX_POOL_ALIASES = {**POOL_ALIASES, 'auth': 'kt_auth', 'assessment': 'kt_assessment', 'capture': 'kt_capture'}
 SIX_MEMORY = {'web': 512 * 1024**2, 'auth': 1024**3, 'assessment': 4 * 1024**3,
               'capture': 1280 * 1024**2, 'student-read': 768 * 1024**2, 'teacher-read': 512 * 1024**2}
 SIX_CPU_SHARES = {'web': 512, 'auth': 2048, 'assessment': 4096, 'capture': 2048,
                   'student-read': 512, 'teacher-read': 256}
+
+
+def six_workers_for_source(source):
+    workers = dict(SIX_WORKERS)
+    if 'worker_short_profile' in source:
+        from school_worker_short import validate_policy
+        try:
+            policy = validate_policy(source['worker_short_profile'])
+        except ValueError as error:
+            raise SafetyInterrupted(str(error)) from error
+        workers['assessment'] = policy['workers']
+    return workers
 STAGE_NAMES = ('short-3', 'short-50', 'short-150', 'short-300', 'baseline-300', 'mixed-300')
 
 
@@ -287,7 +299,7 @@ class DiagnosticRuntime:
 
     @property
     def http_workers(self):
-        return SIX_WORKERS if self.six_pool_profile else WORKERS
+        return six_workers_for_source(self.source_value()) if self.six_pool_profile else WORKERS
 
     @property
     def pool_aliases(self):

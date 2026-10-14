@@ -1,12 +1,99 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { performance } from 'node:perf_hooks'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { probeAccounts, safeEndpoint, captureVisualLayouts, probeExpect } from './school-navigation-probe.mjs'
 import * as probe from './school-navigation-probe.mjs'
 import { chromium } from '@playwright/test'
+import { spawn } from 'node:child_process'
+import { createServer } from 'node:http'
+import { fileURLToPath } from 'node:url'
+
+test('CLI started from another cwd arms the real visual and mobile contexts without student HTTP', { timeout: 15000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'kt-armed-cli-'))
+  const manifestFile = join(directory, 'fixture.json'); const planFile = join(directory, 'plan.json')
+  const armedFile = join(directory, 'armed.json'); const startFile = join(directory, 'start.json'); const stopFile = join(directory, 'stop')
+  const names = ['one', 'two']
+  writeFileSync(manifestFile, JSON.stringify({ usernames: names, browser_usernames: names, password: 'local-test', task_id: 4, course_id: 7 }))
+  writeFileSync(planFile, JSON.stringify({ workload_version: 'natural-180-v1', scenario: 'confidence-only-v1', task_id: 4, item_count: 20,
+    confidence_scale: { minimum: 0, maximum: 100, step: 1 }, students: names.map(username => ({ username, role: 'browser', speed_stratum: 'fast',
+      arrival_offset_seconds: 0, item_dwell_seconds: Array(20).fill(45), modify_items: [], excursion_items: [], optional_tool_items: [],
+      confidence_actions: [...Array(16).fill('fill'), ...Array(4).fill('skip')], confidence_values: [...Array(16).fill(50), ...Array(4).fill(null)],
+      confidence_think_seconds: Array(20).fill(2) })) }))
+  let requests = 0
+  const server = createServer((_request, response) => { requests++; response.writeHead(503); response.end() })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const child = spawn(process.execPath, [fileURLToPath(new URL('./school-navigation-probe.mjs', import.meta.url)),
+    '--base-url', `http://127.0.0.1:${server.address().port}`, '--manifest', manifestFile, '--plan', planFile,
+    '--phase', 'load', '--items', '20', '--output', join(directory, 'browser.json'), '--visual-output', join(directory, 'visual'),
+    '--armed-file', armedFile, '--start-file', startFile, '--stop-file', stopFile], { cwd: directory, stdio: 'ignore' })
+  const exited = new Promise(resolve => child.once('exit', resolve))
+  try {
+    const deadline = Date.now() + 8000
+    while (!existsSync(armedFile) && child.exitCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(existsSync(armedFile), true)
+    const ready = JSON.parse(readFileSync(armedFile))
+    assert.equal(ready.probe_count, 2)
+    assert.equal(ready.pid, child.pid)
+    assert.equal(child.exitCode, null)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(requests, 0)
+    assert.equal(existsSync(startFile), false)
+    writeFileSync(stopFile, '')
+    assert.equal(await exited, 1)
+    assert.equal(requests, 0)
+  } finally {
+    if (child.exitCode === null) { child.kill(); await exited }
+    await new Promise(resolve => server.close(resolve))
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('armed barrier publishes two real contexts before any HTTP and blocks until a bound start', async () => {
+  assert.equal(typeof probe.waitForArmedStart, 'function')
+  const directory = mkdtempSync(join(tmpdir(), 'kt-armed-'))
+  const browser = await chromium.launch()
+  const contexts = await Promise.all([browser.newContext(), browser.newContext()])
+  let requests = 0
+  for (const context of contexts) context.on('request', () => { requests++ })
+  const armedFile = join(directory, 'armed.json'); const startFile = join(directory, 'start.json')
+  const binding = { fixture_sha256: 'a'.repeat(64), plan_sha256: 'b'.repeat(64) }
+  try {
+    let released = false
+    const waiting = probe.waitForArmedStart({ contexts, armedFile, startFile, binding, timeoutMs: 1000 })
+      .then(value => { released = true; return value })
+    const deadline = Date.now() + 1000
+    while (!existsSync(armedFile) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(released, false)
+    assert.equal(requests, 0)
+    assert.equal(JSON.parse(readFileSync(armedFile)).probe_count, 2)
+    assert.equal(JSON.parse(readFileSync(armedFile)).pid, process.pid)
+    writeFileSync(startFile, JSON.stringify({ ...binding, start_at: Date.now() / 1000 + 2 }))
+    assert.ok((await waiting).start_at > 0)
+    assert.equal(requests, 0)
+  } finally { await browser.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('armed barrier rejects wrong fixture release, timeout and stop without HTTP', async () => {
+  assert.equal(typeof probe.waitForArmedStart, 'function')
+  const directory = mkdtempSync(join(tmpdir(), 'kt-armed-errors-'))
+  const browser = await chromium.launch()
+  const contexts = await Promise.all([browser.newContext(), browser.newContext()])
+  const binding = { fixture_sha256: 'a'.repeat(64), plan_sha256: 'b'.repeat(64) }
+  try {
+    for (const kind of ['binding', 'timeout', 'stop']) {
+      const armedFile = join(directory, kind + '.armed.json'); const startFile = join(directory, kind + '.start.json')
+      const stopFile = join(directory, kind + '.stop')
+      if (kind === 'binding') writeFileSync(startFile, JSON.stringify({ ...binding, fixture_sha256: 'wrong', start_at: 1 }))
+      if (kind === 'stop') writeFileSync(stopFile, '')
+      await assert.rejects(probe.waitForArmedStart({ contexts, armedFile, startFile, stopFile, binding, timeoutMs: 15 }),
+        kind === 'binding' ? /binding/ : kind === 'stop' ? /stop/ : /timed out/)
+      assert.equal(existsSync(armedFile), true)
+    }
+  } finally { await browser.close(); rmSync(directory, { recursive: true, force: true }) }
+})
 
 test('login-only browser prefills before shared POST release and never enters tasks', async () => {
   assert.equal(typeof probe.performLoginOnly, 'function')

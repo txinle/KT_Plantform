@@ -138,7 +138,7 @@ services:
       <<: *school-environment
       POSTGRES_POOL_ALIAS: kt_assessment
       DATABASE_APPLICATION_NAME: kt-school-assessment
-      GUNICORN_WORKERS: 24
+      GUNICORN_WORKERS: 8
       SCHOOL_CAPTURE_SHORT: "1"
       WEB_REPLICAS: 1
     deploy:
