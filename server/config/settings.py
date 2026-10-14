@@ -7,6 +7,7 @@ REPOSITORY_DIR = BASE_DIR.parent
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "local-development-key-change-before-production")
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED = os.getenv('SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED', '0') == '1'
+ASSESSMENT_REQUEST_TIMING_ENABLED = os.getenv('ASSESSMENT_REQUEST_TIMING_ENABLED', '0') == '1'
 SCHOOL_REDIS_SESSION_ENABLED = os.getenv('SCHOOL_REDIS_SESSION_ENABLED', '0') == '1'
 SESSION_ENGINE = 'django.contrib.sessions.backends.db'
 SESSION_REDIS_URL = os.getenv('SESSION_REDIS_URL', 'redis://redis-session:6379/0')

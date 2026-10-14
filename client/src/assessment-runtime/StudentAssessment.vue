@@ -966,7 +966,7 @@ async function navigateToAssignment(item: StudentRuntimeQuestionEntry['navigatio
   error.value = ''
   try {
     await (await getSessionController(state.value.session_id, getBootstrapContext().csrf_token)).freezeEntry(state.value.session_id, item.assignment_id, 'navigation_click', navigation, { sourceAssignmentId: state.value.assignment.assignment_id, targetUrl: item.url })
-    if (state.value.process.save_and_leave?.version === 1 && trajectory) {
+    if (state.value.process.save_and_leave?.version === 1 && trajectory && !answerLocked.value) {
       await saveAndLeave(item, navigation)
       await navigate(item.url, true, 'navigation_click', navigation)
       return

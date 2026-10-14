@@ -10,7 +10,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import OperationalError, connection
 
-from config.capture_timing import TIMING_ENV_KEY, coarse_path, diagnostics_mode, emit_diagnostic, finish_interval, interval_union_seconds, mark, timing_fields
+from config.capture_timing import SLOW_REQUEST_SECONDS, TIMING_ENV_KEY, coarse_path, diagnostics_mode, emit_diagnostic, finish_interval, interval_union_seconds, mark, timing_fields
 
 
 logger = logging.getLogger('kt.capture_diagnostics')
@@ -21,11 +21,13 @@ ASSESSMENT_PATHS = ('/api/v1/student/', '/api/v1/assessment/process/', '/student
 class RequestIdMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
-        self.capture_diagnostics = getattr(settings, 'SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED', False)
-        if self.capture_diagnostics and os.getenv('POSTGRES_DB') != 'kt_e2e':
+        isolated_diagnostics = getattr(settings, 'SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED', False)
+        self.slow_requests_only = not isolated_diagnostics
+        self.capture_diagnostics = isolated_diagnostics or getattr(settings, 'ASSESSMENT_REQUEST_TIMING_ENABLED', False)
+        if isolated_diagnostics and os.getenv('POSTGRES_DB') != 'kt_e2e':
             raise ImproperlyConfigured('Capture diagnostics requires the isolated kt_e2e database')
         try:
-            self.capture_diagnostics_mode = diagnostics_mode() if self.capture_diagnostics else None
+            self.capture_diagnostics_mode = diagnostics_mode() if isolated_diagnostics else 'light'
         except ValueError as error:
             raise ImproperlyConfigured(str(error)) from error
 
@@ -192,6 +194,13 @@ class RequestIdMiddleware:
                 return execute(sql, params, many, context)
             finally:
                 record('sql', stamp, detail)
+                elapsed = time.perf_counter() - stamp
+                if self.slow_requests_only and elapsed >= SLOW_REQUEST_SECONDS and elapsed > row.get('slowest_sql', {}).get('seconds', 0):
+                    row['slowest_sql'] = {
+                        'seconds': round(elapsed, 6), 'operation': operation,
+                        'fingerprint': hashlib.sha256(sql.encode()).hexdigest()[:16],
+                        'relations': sorted(set(re.findall(r'\b((?:assessment|analytics|experiments|accounts|django)_[a-z_]+)\b', sql))),
+                    }
 
         try:
             connection.commit = commit
@@ -234,4 +243,5 @@ class RequestIdMiddleware:
                 'application_excluding_measured_database_seconds', 'sql_timing_scope',
                 'measured_database_union_seconds', 'timing_nesting')})
             row.update(timing_fields(state))
-            emit_diagnostic(logger, row, state, 'middleware')
+            if not self.slow_requests_only or row['seconds'] >= SLOW_REQUEST_SECONDS:
+                emit_diagnostic(logger, row, state, 'middleware')

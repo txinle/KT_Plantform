@@ -7,7 +7,7 @@ from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
-from django.db import DatabaseError, close_old_connections, connection
+from django.db import DatabaseError, close_old_connections, connection, transaction
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 from django.test.utils import CaptureQueriesContext
@@ -303,6 +303,60 @@ class CaptureBundleCommitTests(TransactionTestCase):
     capture = CaptureBundleTests.capture
     draft_document = CaptureBundleTests.draft_document
     tool_document = CaptureBundleTests.tool_document
+
+    def test_session_lock_allows_independent_time_sync_foreign_key_commit(self):
+        from .capture_bundle_services import _locked_session
+        from .event_batch_services import batch_session_contexts
+        from .models import ClientTimeSync
+        from .time_sync_services import create_pending_time_sync
+
+        if connection.vendor != 'postgresql':
+            self.skipTest('Requires PostgreSQL row-lock and deferred foreign-key semantics')
+
+        def create_sample():
+            close_old_connections()
+            try:
+                with transaction.atomic():
+                    with connection.cursor() as cursor:
+                        cursor.execute("SET LOCAL lock_timeout = '500ms'")
+                    now = timezone.now()
+                    sample = create_pending_time_sync(session=self.session, client_instance_id=uuid.uuid4(),
+                        client_wall_time_utc=now, client_monotonic_ms=100, client_time_origin=now)
+                return sample.pk
+            finally:
+                close_old_connections()
+
+        for path in ('bundle', 'event_batch'):
+            with self.subTest(path=path), ThreadPoolExecutor(max_workers=1) as executor:
+                with transaction.atomic():
+                    if path == 'bundle':
+                        _locked_session(self.student, self.session.pk)
+                    else:
+                        batch_session_contexts(student=self.student,
+                            event_documents=[{'session_id': self.session.pk}], locked=True)
+                    sample_id = executor.submit(create_sample).result(timeout=10)
+                self.assertTrue(ClientTimeSync.objects.filter(pk=sample_id).exists())
+
+    def test_session_mutation_locks_still_exclude_another_writer(self):
+        from .capture_bundle_services import _locked_session
+
+        if connection.vendor != 'postgresql':
+            self.skipTest('Requires PostgreSQL row-lock semantics')
+
+        def second_writer():
+            close_old_connections()
+            try:
+                with transaction.atomic():
+                    with connection.cursor() as cursor:
+                        cursor.execute("SET LOCAL lock_timeout = '500ms'")
+                    _locked_session(self.student, self.session.pk)
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=1) as executor, transaction.atomic():
+            _locked_session(self.student, self.session.pk)
+            with self.assertRaisesMessage(DatabaseError, 'lock timeout'):
+                executor.submit(second_writer).result(timeout=10)
 
     def test_commit_failure_cannot_return_receipt_or_leave_partial_evidence(self):
         from .capture_bundle_services import ingest_capture_bundle

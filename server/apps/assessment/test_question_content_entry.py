@@ -94,6 +94,51 @@ class StudentQuestionFormalEntryTests(StudentApiFixtureMixin, TestCase):
     def post_entry(self, url, document):
         return self.client.post(url, data=document, content_type='application/json')
 
+    def test_submitted_question_can_be_reviewed_and_replayed_without_reopening_answer(self):
+        session, assignment, url, document = self.entry()
+        first = self.post_entry(url, document)
+        self.assertEqual(first.status_code, 200, first.content)
+        attempt = self.submit_attempt_without_finishing(session)
+        original = (attempt.final_answer, attempt.submitted_at, attempt.last_opened_at)
+        for response in (
+            self.client.get(url),
+            self.post_entry(url, document),
+            self.post_entry(url, {**document, 'navigation_id': str(uuid.uuid4())}),
+        ):
+            self.assertEqual(response.status_code, 200, response.content)
+            payload = response.json()['data']
+            self.assertTrue(payload['entry_allowed'], payload)
+            self.assertEqual(payload['entry_denial_code'], '')
+            self.assertEqual(payload['assignment']['status'], 'submitted')
+        attempt.refresh_from_db()
+        self.assertEqual((attempt.final_answer, attempt.submitted_at, attempt.last_opened_at), original)
+        draft = self.client.post(f'/api/v1/student/attempts/{attempt.pk}/draft/',
+                                 data={'answer': 'A'}, content_type='application/json')
+        self.assertEqual(draft.status_code, 409, draft.content)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.final_answer, original[0])
+
+    def test_submitted_question_review_still_obeys_session_deadline(self):
+        session, assignment, url, document = self.entry()
+        self.post_entry(url, document)
+        self.submit_attempt_without_finishing(session)
+        ExperimentSession.objects.filter(pk=session.pk).update(deadline_at=timezone.now() - timedelta(seconds=1))
+        for response in (self.client.get(url), self.post_entry(url, document)):
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertFalse(response.json()['data']['entry_allowed'])
+            self.assertEqual(response.json()['data']['entry_denial_code'], 'DEADLINE_EXPIRED')
+
+    def test_review_uses_session_time_instead_of_the_submitted_item_deadline(self):
+        session, assignment, url, document = self.entry()
+        self.post_entry(url, document)
+        attempt = self.submit_attempt_without_finishing(session)
+        ExperimentSession.objects.filter(pk=session.pk).update(deadline_at=timezone.now() + timedelta(minutes=5))
+        Attempt.objects.filter(pk=attempt.pk).update(current_effective_deadline_at=timezone.now() - timedelta(seconds=1))
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.json()['data']['entry_allowed'])
+        self.assertGreater(response.json()['data']['remaining_seconds'], 290)
+
     def test_same_navigation_token_and_material_replays_stable_receipt_once(self):
         session, assignment, url, document = self.entry()
         first = self.post_entry(url, document)

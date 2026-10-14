@@ -17,6 +17,14 @@ class NaturalWorkloadTests(unittest.TestCase):
         self.assertEqual(Counter(s['role'] for s in plan['students']), {'browser': 2, 'protocol': 178})
         self.assertEqual(plan['students'][0]['username'], 'u000')
 
+    def test_150_student_diagnostic_keeps_two_browsers_and_frozen_natural_rules(self):
+        plan = self.plan(150)
+        self.assertEqual(plan, self.plan(150))
+        self.assertEqual(plan['total_students'], 150)
+        self.assertEqual(Counter(s['role'] for s in plan['students']), {'browser': 2, 'protocol': 148})
+        self.assertEqual(Counter(s['speed_stratum'] for s in plan['students']), {'fast': 60, 'medium': 68, 'slow': 22})
+        self.assertTrue(all(len(s['item_dwell_seconds']) == 20 for s in plan['students']))
+
     def test_exact_selection_and_speed_distributions(self):
         students = self.plan()['students']
         self.assertEqual(Counter(s['speed_stratum'] for s in students), {'fast':72,'medium':81,'slow':27})

@@ -262,7 +262,7 @@ def batch_session_contexts(*, student, event_documents, locked=False):
         'version__experiment__course', 'capture_contract', 'class_task',
     ).filter(pk__in=session_ids, student=student).order_by('pk')
     if locked:
-        sessions = sessions.select_for_update(of=('self',))
+        sessions = sessions.select_for_update(of=('self',), no_key=True)
     return {session.pk: session for session in sessions}
 
 

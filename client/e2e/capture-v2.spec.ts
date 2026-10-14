@@ -26,6 +26,51 @@ function django(args: string[]) {
   return JSON.parse(result.stdout.trim().split('\n').at(-1)!)
 }
 
+test('reviewing a submitted question keeps navigation available without reopening the answer', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-review-${Date.now()}'; command._research_tools=lambda questions: {}; command.handle()`])
+  await page.goto('/login/')
+  await page.getByLabel('账号或学号').fill('S002')
+  await page.getByLabel('密码').fill('student123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
+  await page.goto(`/student/courses/${fixture.course.id}/`)
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'E2E Capture V2 五题回放', exact: true }) }).getByRole('button', { name: '开始作业' }).click()
+  await expect(page.getByRole('radio').first()).toBeEnabled()
+  const firstId = Number(page.url().match(/questions\/(\d+)/)![1])
+  await page.getByRole('radio').first().check()
+  await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '确认提交本题', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '提交并锁定', exact: true }).click()
+  await expect(page).not.toHaveURL(new RegExp(`/questions/${firstId}/`))
+  await expect(page.locator('[name=answer]').first()).toBeEnabled()
+  const secondId = Number(page.url().match(/questions\/(\d+)/)![1])
+  await page.locator(`[data-nav-assignment="${firstId}"]:visible`).click()
+  await expect(page).toHaveURL(new RegExp(`/questions/${firstId}/`))
+  await expect(page.getByRole('radio').first()).toBeChecked()
+  await expect(page.getByRole('radio').first()).toBeDisabled()
+  await expect(page.locator('[data-finish-request]:visible')).toBeEnabled()
+  await expect(page.getByText('当前任务不允许继续作答', { exact: false })).toHaveCount(0)
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    await page.screenshot({ path: testInfo.outputPath(`review-${viewport.width}.png`), fullPage: true })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.evaluate(() => { document.documentElement.style.zoom = '2' })
+  await page.screenshot({ path: testInfo.outputPath('review-zoom200.png'), fullPage: true })
+  await page.evaluate(() => { document.documentElement.style.zoom = '' })
+  const mutations: string[] = []
+  page.on('request', request => {
+    if (request.method() === 'POST' && /\/(draft|submit)\/$/.test(new URL(request.url()).pathname)) mutations.push(request.url())
+  })
+  await page.locator(`[data-nav-assignment="${secondId}"]:visible`).click()
+  await expect(page).toHaveURL(new RegExp(`/questions/${secondId}/`))
+  await expect(page.locator('[name=answer]').first()).toBeEnabled()
+  expect(mutations).toEqual([])
+})
+
 test('bundled target entry is used once and target-only recovery preserves confirmed source facts', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   test.skip(process.env.ASSESSMENT_TRANSITION_ENABLED !== '1', 'Requires the pinned transition candidate.')

@@ -3,10 +3,26 @@ from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase
 
-from config.capture_timing import TIMING_ENV_KEY, WSGICaptureTiming, mark, timing_fields
+from config.capture_timing import TIMING_ENV_KEY, WSGICaptureTiming, mark, should_log_timing, timing_fields
 
 
 class WSGICaptureTimingTests(SimpleTestCase):
+    def test_production_timing_forces_light_mode_and_preserves_response(self):
+        environ = {'PATH_INFO': '/api/v1/student/tasks/35/start/'}
+        start_response = Mock()
+        def app(environ, callback):
+            callback('200 OK', [('Content-Type', 'text/plain')])
+            return [b'ok']
+        with patch.dict(os.environ, {'SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED': '0',
+                'ASSESSMENT_REQUEST_TIMING_ENABLED': '1', 'SCHOOL_CAPTURE_DIAGNOSTICS_MODE': 'sql',
+                'POSTGRES_DB': 'kt_platform'}):
+            self.assertEqual(list(WSGICaptureTiming(app)(environ, start_response)), [b'ok'])
+            self.assertFalse(should_log_timing(.999))
+            self.assertTrue(should_log_timing(1.0))
+        start_response.assert_called_once_with('200 OK', [('Content-Type', 'text/plain')], None)
+        self.assertEqual(environ[TIMING_ENV_KEY]['diagnostics_mode'], 'light')
+        self.assertIn('wsgi_complete', environ[TIMING_ENV_KEY]['marks'])
+
     def test_light_aggregates_reach_wsgi_and_gunicorn_timing_fields(self):
         state = {'diagnostics_mode': 'light', 'capture_metrics': {'sql_count': 3, 'sql_seconds': .25,
                  'connection_seconds': .1, 'commit_seconds': .03, 'response_body_bytes': 12}}

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from config.capture_timing import request_phase
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -338,7 +339,8 @@ class StudentTaskCollectionView(StudentApiMixin, APIView):
 class StudentTaskStartView(StudentApiMixin, APIView):
     @extend_schema(request=None, responses={200: StudentSessionEntrySerializer, 201: StudentSessionEntrySerializer})
     def post(self, request, task_id):
-        task = _student_task(request.user, task_id)
+        with request_phase(request, 'task_lookup'):
+            task = _student_task(request.user, task_id)
         existing = ExperimentSession.objects.filter(
             class_task=task,
             participant_snapshot__student=request.user,
@@ -351,16 +353,19 @@ class StudentTaskStartView(StudentApiMixin, APIView):
             if isinstance(admission_token, Response):
                 return admission_token
         try:
-            session = get_or_create_session(
-                task.experiment,
-                request.user,
-                request_received_at=timezone.now(),
-                class_task=task,
-            )
+            with request_phase(request, 'session_start'):
+                session = get_or_create_session(
+                    task.experiment,
+                    request.user,
+                    request_received_at=timezone.now(),
+                    class_task=task,
+                )
         except ValidationError as error:
             raise ApiConflict("; ".join(error.messages), code="TASK_NOT_OPEN") from error
+        with request_phase(request, 'entry_projection'):
+            payload = _entry_projection(task, session, admission_token=admission_token, admission_action="start")
         return Response(
-            _entry_projection(task, session, admission_token=admission_token, admission_action="start"),
+            payload,
             status=200 if existing is not None else 201,
         )
 
@@ -497,18 +502,18 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
             raise ApiConflict('; '.join(error.messages), code='SESSION_NOT_ENTERABLE') from error
 
     def entry_decision(self, session, attempt, at):
-        if attempt.status in (Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED):
-            if not (session.class_task_id and attempt.status != Attempt.Status.SUBMITTED
-                    and can_recover_session(session.class_task, session, at=at)):
-                return DeadlineDecision(False, 'ATTEMPT_CLOSED')
+        closed_attempt = attempt.status in (Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED)
         if session.status != ExperimentSession.Status.IN_PROGRESS:
             decision = DeadlineDecision(False, 'SESSION_CLOSED')
         elif session.class_task_id:
-            decision = DeadlineDecisionService.can_write_response(session.class_task, session, attempt, at)
+            # Reviewing a locked answer is an entry, not permission to edit it.
+            decision = (DeadlineDecisionService.can_enter_item(session.class_task, session, at)
+                        if closed_attempt else
+                        DeadlineDecisionService.can_write_response(session.class_task, session, attempt, at))
         else:
             deadline = min((value for value in (session.deadline_at,
-                attempt.current_effective_deadline_at or attempt.initial_effective_deadline_at) if value is not None), default=None)
-            decision = DeadlineDecision(False, 'DEADLINE_EXPIRED', deadline) if deadline and at >= deadline else DeadlineDecision(True)
+                None if closed_attempt else attempt.current_effective_deadline_at or attempt.initial_effective_deadline_at) if value is not None), default=None)
+            decision = DeadlineDecision(False, 'DEADLINE_EXPIRED', deadline) if deadline and at >= deadline else DeadlineDecision(True, deadline=deadline)
         if not decision.allowed and session.class_task_id and can_recover_session(session.class_task, session, at=at):
             return DeadlineDecision(True)
         return decision
@@ -592,15 +597,14 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                     except AdmissionUnavailable as error:
                         raise ApiConflict('当前任务入口正在保护中，请稍后重试。', code='ADMISSION_UNAVAILABLE', status=503) from error
                 try:
-                    visit_entry = record_visit_entry(session.pk, assignment.pk, material['reason'],
-                        material['client_occurred_at'], request_received_at=request_received_at,
-                        navigation_id=material['navigation_id'], client_monotonic_ms=material['client_monotonic_ms'],
-                        client_time_origin=material['client_time_origin'])
+                    with request_phase(request, 'question_entry'):
+                        visit_entry = record_visit_entry(session.pk, assignment.pk, material['reason'],
+                            material['client_occurred_at'], request_received_at=request_received_at,
+                            navigation_id=material['navigation_id'], client_monotonic_ms=material['client_monotonic_ms'],
+                            client_time_origin=material['client_time_origin'])
                 except ValidationError as error:
                     raise ApiConflict('; '.join(error.messages), code='SESSION_NOT_ENTERABLE') from error
-                decision = DeadlineDecision(False, 'ATTEMPT_CLOSED') if visit_entry.attempt.status in (
-                    Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED,
-                ) else DeadlineDecision(True)
+                decision = self.entry_decision(visit_entry.attempt.session, visit_entry.attempt, request_received_at)
                 if admission is not None:
                     def consume_admission():
                         try:
@@ -614,7 +618,8 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
             runtime_attempt = visit_entry.attempt
             runtime_entry = visit_entry
 
-        return self.runtime_response(runtime_attempt, runtime_entry, request_received_at, decision=decision)
+        with request_phase(request, 'question_projection'):
+            return self.runtime_response(runtime_attempt, runtime_entry, request_received_at, decision=decision)
 
     def runtime_response(self, attempt, visit_entry, request_received_at, *, decision=None):
         assignment = attempt.assignment
@@ -631,6 +636,10 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                            .order_by('server_ingest_sequence_no'))
         research_tools = available_tools(attempt, events=tool_events)
         research_tools['rules'] = due_rules(attempt, events=tool_events)
+        remaining_seconds = _runtime_remaining_seconds(session, attempt, request_received_at)
+        if attempt.status in (Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED):
+            remaining_seconds = (max(0, int((decision.deadline - request_received_at).total_seconds()))
+                                 if decision.deadline is not None else None)
         payload = {
             'offline_authorization': {'user_id': session.student_id, 'session_id': session.pk, 'assignment_id': assignment.pk},
             'entry_allowed': decision.allowed,
@@ -650,11 +659,7 @@ class StudentRuntimeQuestionEntryView(StudentApiMixin, APIView):
                 "submitted": session.submission_count,
                 "total": len(assignments),
             },
-            "remaining_seconds": _runtime_remaining_seconds(
-                session,
-                attempt,
-                request_received_at,
-            ),
+            "remaining_seconds": remaining_seconds,
             "question": {
                 "snapshot_id": assignment.snapshot_id,
                 "stable_code": assignment.snapshot.stable_code,

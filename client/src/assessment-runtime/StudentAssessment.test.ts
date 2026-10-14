@@ -595,6 +595,28 @@ describe('StudentAssessment', () => {
     wrapper.unmount()
   })
 
+  it('leaves a reviewed submitted question without trying to save its locked answer', async () => {
+    const reviewed = captureV2Question({ entry_allowed: true, entry_denial_code: '',
+      assignment: { ...questionState.assignment, status: 'submitted' } })
+    Object.assign(reviewed.process, { save_and_leave: { version: 1, max_events: 100, max_checkpoints: 100, max_bytes: 8388608 } })
+    mocks.api.question.mockResolvedValue(reviewed)
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(wrapper.get('input[value="B"]').element).toHaveProperty('checked', true)
+      expect(wrapper.get('input[value="B"]').attributes('disabled')).toBeDefined()
+      expect(wrapper.get('[data-finish-request]').attributes('disabled')).toBeUndefined()
+      expect(wrapper.text()).not.toContain('当前任务不允许继续作答')
+      await wrapper.get('[data-nav-assignment="12"]').trigger('click')
+      await flushPromises()
+      expect(mocks.api.saveAndLeave).not.toHaveBeenCalled()
+      expect(mocks.api.saveDraft).not.toHaveBeenCalled()
+      expect(mocks.api.submit).not.toHaveBeenCalled()
+      expect(mocks.runtime.closeAttempt).toHaveBeenCalledWith('navigation', 12)
+      expect(mocks.push).toHaveBeenCalledOnce()
+    } finally { wrapper.unmount() }
+  })
+
   it('ordinary navigation persists one bounded leave envelope without submitting or separate confirmation rounds', async () => {
     const captured = captureV2Question()
     captured.process.active_response_event_id = '00000000-0000-4000-8000-000000000050'

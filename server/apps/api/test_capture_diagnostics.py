@@ -12,6 +12,55 @@ from .middleware import RequestIdMiddleware
 
 
 class CaptureDiagnosticGuardTests(SimpleTestCase):
+    @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=False, ASSESSMENT_REQUEST_TIMING_ENABLED=True)
+    def test_production_timing_records_slow_requests_without_sql_text_or_answers(self):
+        fake = Mock(vendor='postgresql', in_atomic_block=True)
+        fake.get_autocommit.return_value = False
+        callbacks = []
+        @contextmanager
+        def wrapper(callback):
+            callbacks.append(callback)
+            yield
+        fake.execute_wrapper.side_effect = wrapper
+        execute = Mock()
+        def view(request):
+            from config.capture_timing import request_phase
+
+            self.assertEqual(len(callbacks), 1)
+            with request_phase(request, 'session_start'):
+                callbacks[0](execute, 'SELECT secret_answer FROM assessment_attempt WHERE id = %s',
+                             ['PRIVATE'], False, {})
+            fake.commit()
+            return HttpResponse('PRIVATE ANSWER')
+        request = RequestFactory().post('/api/v1/student/tasks/35/start/?secret=PRIVATE')
+        with patch.dict(os.environ, {'POSTGRES_DB': 'kt_platform', 'SCHOOL_CAPTURE_DIAGNOSTICS_MODE': 'sql'}), \
+                patch('apps.api.middleware.connection', fake), \
+                patch('apps.api.middleware.SLOW_REQUEST_SECONDS', 0, create=True), \
+                self.assertLogs('kt.capture_diagnostics', level='WARNING') as logs:
+            response = RequestIdMiddleware(view)(request)
+        row = json.loads(logs.records[-1].getMessage())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(row['diagnostics_mode'], 'light')
+        self.assertEqual(row['sql_count'], 1)
+        self.assertEqual(row['commit_count'], 1)
+        self.assertEqual(row['queries'], [])
+        self.assertGreaterEqual(row['session_start_seconds'], 0)
+        self.assertEqual(row['slowest_sql']['relations'], ['assessment_attempt'])
+        self.assertEqual(execute.call_count, 1)
+        self.assertNotIn('PRIVATE', json.dumps(row))
+        self.assertNotIn('secret_answer', json.dumps(row))
+
+    @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=False, ASSESSMENT_REQUEST_TIMING_ENABLED=True)
+    def test_production_timing_does_not_log_fast_requests(self):
+        request = RequestFactory().post('/api/v1/student/tasks/35/start/')
+        with patch.dict(os.environ, {'POSTGRES_DB': 'kt_platform'}), \
+                patch('apps.api.middleware.SLOW_REQUEST_SECONDS', 1000, create=True), \
+                patch('apps.api.middleware.emit_diagnostic') as emit:
+            response = RequestIdMiddleware(lambda request: HttpResponse('ok'))(request)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('X-Capture-Seconds', response)
+        emit.assert_not_called()
+
     @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=True)
     def test_full_response_bytes_include_the_existing_api_envelope(self):
         request = RequestFactory().get('/api/v1/student/attempts/1/')

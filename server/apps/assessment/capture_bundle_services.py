@@ -28,7 +28,8 @@ def close_bundle_capability(session):
 
 
 def _locked_session(student, session_id):
-    session = ExperimentSession.objects.select_for_update(of=('self',)).select_related(
+    # Serialize mutations while allowing independent time-sync foreign-key inserts.
+    session = ExperimentSession.objects.select_for_update(of=('self',), no_key=True).select_related(
         'version__experiment__course', 'capture_contract', 'class_task',
     ).filter(pk=session_id, student=student).first()
     if session is None:
