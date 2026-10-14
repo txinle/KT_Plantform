@@ -413,10 +413,15 @@ class TeacherDataCenterOverviewView(APIView):
         scope = TeachingScope(course=course, experiment_id=research_scope.experiment_id, class_id=class_id)
         sessions = research_scope.sessions() if research_scope.is_complete else scope.sessions().none()
         attempts = research_scope.attempts() if research_scope.is_complete else scope.attempts().none()
-        if research_scope.is_complete and materialization_enabled_for_course(course.pk):
+        preparation = None
+        high_pressure = runtime_pressure()['mode'] in ('capture_priority', 'capture_emergency')
+        if research_scope.is_complete and (materialization_enabled_for_course(course.pk) or high_pressure):
             counts = materialized_overview_counts(sessions.filter(
                 status__in=(ExperimentSession.Status.COMPLETED, ExperimentSession.Status.EXPIRED)
             ))
+            preparation = counts.pop('preparation')
+            if preparation['ready_count'] == 0 and preparation['pending_count']:
+                counts.update(quality_warnings=None, process_records=None, not_evaluable=None)
             quality_warnings = counts["quality_warnings"]
             process_records = counts["process_records"]
             not_evaluable = counts["not_evaluable"]
@@ -436,6 +441,7 @@ class TeacherDataCenterOverviewView(APIView):
         return Response(
             {
                 "course": _course_payload(course),
+                "preparation": preparation,
                 "scope": {"experiment_id": research_scope.experiment_id, "class_id": class_id,
                           "is_complete": research_scope.is_complete, "display": scope_label(research_scope)},
                 "facts": {

@@ -11,6 +11,20 @@ from django.test import SimpleTestCase
 
 
 class SchoolObserverTests(SimpleTestCase):
+    def test_six_pool_roles_and_owned_database_are_required_and_budgeted(self):
+        module = self.module()
+        source = {'pool_profile': 'six-pools-180-v1', 'postgres_profile': 'isolated-pg17-v1', 'roles': {}}
+        self.assertEqual(module.observer_http_roles(source), {'web', 'auth', 'assessment', 'capture', 'student-read', 'teacher-read'})
+        self.assertTrue({'db', 'auth', 'assessment', 'capture'} <= module.observer_required_roles(source))
+        owned = {'Id': 'db', 'Config': {'Labels': {'com.docker.compose.project': 'kt-school-e2e', 'com.docker.compose.service': 'db'}}}
+        production = {'Id': 'prod-db', 'Config': {'Labels': {'com.docker.compose.project': 'kt_plantform', 'com.docker.compose.service': 'db'}}}
+        self.assertEqual(module.observer_resource_scope(owned, source, 'kt-school-e2e', ['db']), 'isolated_test')
+        self.assertEqual(module.observer_resource_scope(production, source, 'kt-school-e2e', ['db']), 'production_or_other')
+        self.assertEqual(module.observer_resource_scope(owned, {}, 'kt-school-e2e', ['db']), 'shared_postgres')
+        source['roles']['db'] = {'cgroup': {'memory_events': {'oom_kill': 1}}}
+        self.assertFalse(module.new_oom(owned, {'memory_events': {'oom_kill': 1}}, source, 'kt-school-e2e', ['db']))
+        self.assertTrue(module.new_oom(owned, {'memory_events': {'oom_kill': 2}}, source, 'kt-school-e2e', ['db']))
+
     def test_host_cpu_steal_and_role_listen_queues_are_raw_bounded_counters(self):
         module = self.module()
         with tempfile.TemporaryDirectory() as directory:
@@ -90,8 +104,11 @@ class SchoolObserverTests(SimpleTestCase):
 
     def test_real_sampling_loop_uses_full_container_identities_and_finishes(self):
         module = self.module()
-        for stopped, exit_code in ((False, 0), (True, 143), (False, 143)):
-            roles = ['web', 'student-read', 'teacher-read', 'scheduler', 'nginx', 'pgbouncer', 'db']
+        for stopped, exit_code, six in ((False, 0, False), (True, 143, False), (False, 143, False), (False, 0, True)):
+            roles = ['web', 'student-read', 'teacher-read', 'scheduler', 'nginx', 'pgbouncer']
+            if six:
+                roles += ['auth', 'assessment', 'capture']
+            roles += ['db']
             items = {str(i + 1) * 64: {'Id': str(i + 1) * 64, 'Name': '/' + role,
                      'State': {'Running': True, 'Pid': i + 100},
                      'Config': {'Labels': {'com.docker.compose.project': 'kt-school-e2e',
@@ -123,7 +140,8 @@ class SchoolObserverTests(SimpleTestCase):
             ticks = [100]
             with tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / 'observation.json'
-                (output.parent / 'source-config.json').write_text('{}')
+                source = {'pool_profile': 'six-pools-180-v1', 'postgres_profile': 'isolated-pg17-v1'} if six else {}
+                (output.parent / 'source-config.json').write_text(json.dumps(source))
                 meminfo = output.parent / 'meminfo'
                 meminfo.write_text('MemTotal: 1048576 kB\n')
                 stop = output.parent / 'stop'
@@ -144,7 +162,7 @@ class SchoolObserverTests(SimpleTestCase):
                         patch.object(module, 'memory_available_bytes', return_value=500 * 1024 ** 2), \
                         patch.object(module, 'pool_metrics', return_value={}), \
                         patch.object(module, 'host_cpu_counters', return_value={'steal_ticks': 0}), \
-                        patch.object(module, 'http_listen_queues', return_value=[]), \
+                        patch.object(module, 'http_listen_queues', return_value=[]) as queues, \
                         patch.object(module, 'budget', return_value={'combined_working_set_bytes': 7168, 'checks': {'host_headroom': True, 'combined_working_set_plus_margin': True}}), \
                         patch.object(module, 'Path', side_effect=lambda path: meminfo if str(path) == '/proc/meminfo' else Path(path)), \
                         patch.object(module.time, 'time', side_effect=lambda: ticks[0]), \
@@ -158,7 +176,13 @@ class SchoolObserverTests(SimpleTestCase):
                         continue
                     module.observe(args, result)
                 self.assertEqual(len(result['host_database_samples']), 1)
-                self.assertEqual(len(result['host_database_samples'][0]['resource_rows']), 7)
+                self.assertEqual(len(result['host_database_samples'][0]['resource_rows']), len(roles))
+                self.assertEqual(queues.call_count, 6 if six else 3)
+                sample = result['host_database_samples'][0]
+                if six:
+                    self.assertEqual(next(row for row in sample['resource_rows'] if row['role'] == 'db')['scope'], 'isolated_test')
+                    self.assertEqual(sample['database_wal']['scope'], 'isolated_postgres_instance')
+                    self.assertNotIn('shared_wal', sample)
                 self.assertEqual(result['oom_kills'], 0)
                 self.assertEqual(result['stopped_by_coordinator'], stopped)
                 self.assertFalse(result['teacher_freshness']['measured'])

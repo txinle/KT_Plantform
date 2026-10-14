@@ -16,6 +16,35 @@ def sample_delay(until, now, interval=10, *, sampled_at=None):
     return max(0, min(remaining, until - now))
 
 
+def observer_http_roles(configuration):
+    roles = {'web', 'student-read', 'teacher-read'}
+    if configuration.get('pool_profile') == 'six-pools-180-v1':
+        roles.update(('auth', 'assessment', 'capture'))
+    return roles
+
+
+def observer_required_roles(configuration):
+    roles = observer_http_roles(configuration) | {'scheduler', 'nginx', 'pgbouncer'}
+    roles.update(role for role in ('analytics-worker', 'student-comparison-worker', 'publication-worker', 'export-worker')
+                 if configuration.get('roles', {}).get(role, {}).get('actual_running') is True)
+    if configuration.get('postgres_profile') == 'isolated-pg17-v1':
+        roles.add('db')
+    if configuration.get('pool_profile') == 'six-pools-180-v1':
+        roles.update(role for role in ('redis-session', 'redis-admission') if role in configuration.get('roles', {}))
+    return roles
+
+
+def observer_resource_scope(item, configuration, project, database_ids):
+    labels = item['Config'].get('Labels', {})
+    if item['Id'] in database_ids:
+        if (configuration.get('postgres_profile') == 'isolated-pg17-v1'
+                and labels.get('com.docker.compose.project') == project
+                and labels.get('com.docker.compose.service') == 'db'):
+            return 'isolated_test'
+        return 'shared_postgres'
+    return 'isolated_test' if labels.get('com.docker.compose.project') == project else 'production_or_other'
+
+
 def probe_progress(path, now):
     if path is None:
         return {'state': 'not_configured'}
@@ -269,7 +298,7 @@ def stop_test_project(project, database_ids):
 
 def new_oom(item, kernel, configuration, project, database_ids):
     labels = item['Config'].get('Labels', {})
-    if item['Id'] in database_ids:
+    if item['Id'] in database_ids and configuration.get('postgres_profile') != 'isolated-pg17-v1':
         baseline = configuration.get('shared_postgres_cgroup', {})
     elif labels.get('com.docker.compose.project') == project:
         baseline = configuration.get('roles', {}).get(labels.get('com.docker.compose.service'), {}).get('cgroup', {})
@@ -315,9 +344,9 @@ def observe(args, result):
                   host_database_samples=system_samples, swap_start_bytes=swap_start,
                   swap_cached_start_bytes=swap_cached_bytes())
     configuration = json.loads((Path(args.output).parent / 'source-config.json').read_text())
-    required_roles = {'web', 'student-read', 'teacher-read', 'scheduler', 'nginx', 'pgbouncer'}
-    required_roles.update(role for role in ('analytics-worker', 'student-comparison-worker', 'publication-worker', 'export-worker')
-                          if configuration.get('roles', {}).get(role, {}).get('actual_running') is True)
+    required_roles = observer_required_roles(configuration)
+    http_roles = observer_http_roles(configuration)
+    isolated_postgres = configuration.get('postgres_profile') == 'isolated-pg17-v1'
     stop_file = Path(args.stop_file) if args.stop_file else None
     events = subprocess.Popen(events_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     oom_checked_until = started
@@ -356,10 +385,9 @@ def observe(args, result):
                 if item['Id'] in db_ids:
                     postgres_kernel = kernel
                 sampled_roles.update(sampled_service_roles([item], args.project))
-                row = {'container_id': item['Id'], 'scope': 'shared_postgres' if item['Id'] in db_ids
-                    else 'isolated_test' if project == args.project else 'production_or_other',
+                row = {'container_id': item['Id'], 'scope': observer_resource_scope(item, configuration, args.project, db_ids),
                     'role': role, 'working_set_bytes': kernel['working_set_bytes'], 'memory_max': kernel['memory_max'], 'cgroup': kernel}
-                if project == args.project and role in ('web', 'student-read', 'teacher-read'):
+                if project == args.project and role in http_roles:
                     row['http_listen_queues'] = http_listen_queues(item['State']['Pid'])
                 resource_rows.append(row)
                 at = time.time()
@@ -375,11 +403,15 @@ def observe(args, result):
             waits = json.loads(subprocess.check_output(['docker', 'exec', db_ids[0], 'sh', '-c',
                 'exec psql -X -t -A -U "$POSTGRES_USER" -d kt_e2e -c "$1"',
                 'school-wait-observer', DATABASE_WAIT_SQL], text=True))
+            wal = json.loads(subprocess.check_output(['docker', 'exec', db_ids[0], 'sh', '-c',
+                'exec psql -X -t -A -U "$POSTGRES_USER" -d kt_e2e -c "$1"',
+                'school-wal-observer', DATABASE_WAL_SQL], text=True))
+            wal['scope'] = 'isolated_postgres_instance' if isolated_postgres else 'shared_postgres_instance'
             system_samples.append({'at': time.time(), 'memory_available_bytes': available,
                 'host_cpu_counters': host_cpu_counters(),
-                'shared_wal': json.loads(subprocess.check_output(['docker', 'exec', db_ids[0], 'sh', '-c',
-                    'exec psql -X -t -A -U "$POSTGRES_USER" -d kt_e2e -c "$1"',
-                    'school-wal-observer', DATABASE_WAL_SQL], text=True)),
+                'database_wal': wal,
+                **({'isolated_wal': wal} if isolated_postgres else {'shared_wal': wal}),
+                'postgres_profile': configuration.get('postgres_profile'),
                 'host_swap_used_bytes': swap_used_bytes(), 'host_swap_cached_bytes': swap_cached_bytes(),
                 'postgres_cgroup': postgres_kernel, 'database_waits': waits, 'sampling_lifecycle': lifecycle,
                 'database_wait_measurement': 'instantaneous_blocking_sample_not_exact_lock_duration',

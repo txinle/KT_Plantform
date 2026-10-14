@@ -530,6 +530,9 @@ def get_or_create_session(
             "initial_effective_deadline_at": initial_deadline,
             "timer_semantics_version": version.timer_semantics_version,
         }
+    from .transition_entry_services import transition_protocol_for_start
+    session_defaults['transition_protocol_version'] = transition_protocol_for_start(
+        student, experiment, session_defaults['capture_contract'])
     if class_task is not None:
         try:
             with transaction.atomic():

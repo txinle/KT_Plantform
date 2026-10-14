@@ -8,8 +8,8 @@ SPEED_BOUNDS = {'fast': (35,55), 'medium': (45,75), 'slow': (65,95)}
 
 def build_workload(fixture, seed=20261013):
     n, names = fixture['student_count'], fixture['usernames']
-    if n not in (2,10,80,180) or len(names) != n or len(set(names)) != n or fixture['item_count'] !=20:
-        raise ValueError('Natural workload requires distinct 2/10/80/180 students and20 items')
+    if n not in (2,10,50,80,180) or len(names) != n or len(set(names)) != n or fixture['item_count'] !=20:
+        raise ValueError('Natural workload requires distinct 2/10/50/80/180 students and20 items')
     rng=random.Random(seed)
     raw=[n*.4,n*.45,n*.15]
     counts=[int(v) for v in raw]
@@ -21,8 +21,9 @@ def build_workload(fixture, seed=20261013):
     students=[]
     for i,name in enumerate(names):
         low,high=SPEED_BOUNDS[speeds[i]]
+        arrival=round(rng.uniform(0,60),3)
         students.append({'username':name,'role':'protocol' if name in fixture.get('protocol_usernames', names[2:]) else 'browser',
-            'arrival_offset_seconds':round(rng.uniform(0,60),3),'speed_stratum':speeds[i],
+            'arrival_offset_seconds':0 if fixture.get('load_mode')=='login-only' else arrival,'speed_stratum':speeds[i],
             'item_dwell_seconds':[round(rng.uniform(low,high),3) for _ in range(20)],
             **{field:sorted(rng.sample(range(19 if field=='excursion_items' else 20),2))
                 if i in chosen else[] for field,chosen in selected.items()}})

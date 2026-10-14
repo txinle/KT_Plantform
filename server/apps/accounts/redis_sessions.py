@@ -8,6 +8,18 @@ from django.conf import settings
 from django.contrib.sessions.backends.base import CreateError, SessionBase, UpdateError
 
 
+STUDENT_IDLE_GRACE_SECONDS = 30
+TOUCH_IDLE_SCRIPT = '''
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl == -2 then return {ttl, 0} end
+if ttl <= tonumber(ARGV[1]) then
+    redis.call('PEXPIRE', KEYS[1], ARGV[2])
+    return {tonumber(ARGV[2]), 1}
+end
+return {ttl, 0}
+'''
+
+
 class SessionStoreUnavailable(Exception):
     def __init__(self, operation):
         self.operation = operation
@@ -21,6 +33,24 @@ def session_client(url, timeout):
 
 
 class SessionStore(SessionBase):
+    student_idle_timeout = None
+
+    def flush(self):
+        super().flush()
+        self.student_idle_timeout = None
+
+    def get_expiry_age(self, **kwargs):
+        if self.student_idle_timeout is not None:
+            return self.student_idle_timeout + STUDENT_IDLE_GRACE_SECONDS
+        return super().get_expiry_age(**kwargs)
+
+    def touch_idle(self, timeout):
+        if not self.session_key:
+            return -2, False
+        ttl, renewed = self._redis('eval', TOUCH_IDLE_SCRIPT, 1, self._key(self.session_key),
+                                   timeout * 1000, (timeout + STUDENT_IDLE_GRACE_SECONDS) * 1000)
+        return int(ttl), bool(renewed)
+
     def _redis(self, operation, *args, **kwargs):
         try:
             client = session_client(settings.SESSION_REDIS_URL, settings.SESSION_REDIS_TIMEOUT_SECONDS)
@@ -56,6 +86,8 @@ class SessionStore(SessionBase):
         if self.session_key is None:
             return self.create()
         data = self._get_session(no_load=must_create)
+        if self.student_idle_timeout is not None:
+            data['_session_expiry'] = self.get_expiry_age()
         saved = self._redis('set', self._key(self.session_key), self.encode(data),
                             ex=max(1, self.get_expiry_age()), nx=must_create, xx=not must_create)
         if not saved:

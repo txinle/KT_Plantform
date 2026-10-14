@@ -109,6 +109,103 @@ def fixture_rows():
 
 
 class BrowserWitnessTests(SimpleTestCase):
+    def transition_rows(self):
+        fixture, report, facts = fixture_rows()
+        evidence = report['probes'][0]['protocol_witness']
+        request = evidence['requests'][0]
+        source = Row(pk=91, session_id=1, assignment_id=81, status='visited')
+        facts['attempts'].append(source)
+        original = {key:value for key,value in request['entry'].items() if key != 'material_sha256'}
+        request['entry']['material_sha256']=js_digest(original)
+        request['entry']['assignment_id'] = 21
+        request.update(path='/api/v1/assessment/process/attempts/91/writer-lease/release/',
+            close={'token':uid(901),'leave_event_id':uid(902),'material_sha256':'f'*64},
+            transition={'source_attempt_id':91,'request_material_sha256':js_digest({'assignment_id':21,**original}),
+                'outcome':'committed','runtime_identity':{'session_id':1,'assignment_id':21,'attempt_id':11,
+                    'process':copy.deepcopy(request['entry_receipt']),'entry_allowed':True,
+                    'remaining_seconds':None,'presented_deadline_at':None}})
+        receipt = {'success':True,'committed':True,'capture_operation_id':uid(901),'acknowledgements':[],
+            'checkpoint_ids':[],'writer_lease_released':True,'status':'visited','response_version':0,
+            'active_response_event_id':None,'final_response_event_id':None}
+        request['receipt'] = {**receipt,'persisted_material_sha256':js_digest(receipt)}
+        facts['mutations'] = [Row(token=uid(901),attempt_id=91,kind='close',material_fingerprint='f'*64,receipt=receipt)]
+        # The known source leave uses the same observed client stream and source attempt.
+        left = copy.copy(facts['events'][0])
+        left.pk=uid(902);left.attempt_id=91;left.client_sequence_no=2;left.server_ingest_sequence_no=3
+        left.event_type='item_left';left.payload={'leave_reason':'navigation','to_assignment_id':21}
+        facts['events'].append(left)
+        material=copy.deepcopy(evidence['requests'][1]['events'][0])
+        material.update(event_id=left.pk,attempt_id=91,client_sequence_no=2,event_type='item_left',
+            payload_fields=sorted(left.payload),payload_sha256=js_digest(left.payload),material_sha256='9'*64)
+        request['client_instance_id']=left.client_instance_id;request['events']=[material]
+        request['acknowledgements']=[{'event_id':left.pk,'client_sequence_no':2,'server_ingest_sequence_no':3}]
+        receipt['acknowledgements']=copy.deepcopy(request['acknowledgements'])
+        request['receipt']['acknowledgements']=copy.deepcopy(request['acknowledgements'])
+        request['receipt']['persisted_material_sha256']=js_digest(receipt)
+        evidence['local_storage']['streams'][0].update(highest_emitted_sequence_no=2,highest_acked_sequence_no=2,
+            highest_contiguous_acked_sequence_no=2,acknowledged_sequence_nos=[1,2])
+        facts['events'][1].payload['from_assignment_id']=81
+        return fixture, report, facts
+
+    def test_nested_target_entry_binds_source_close_and_independent_target_receipt(self):
+        fixture, report, facts = self.transition_rows()
+        result=verify_witness(fixture,report,**facts)
+        self.assertTrue(result['passed'],result)
+        for where,field,value in [('entry','assignment_id',99),('transition','source_attempt_id',11),
+            ('transition','request_material_sha256','0'*64),('close','material_sha256','0'*64)]:
+            modified=copy.deepcopy(report)
+            modified['probes'][0]['protocol_witness']['requests'][0][where][field]=value
+            self.assertFalse(verify_witness(fixture,modified,**facts)['passed'],(where,field))
+        for field,value in [('assignment_id',99),('attempt_id',91),('presented_deadline_at',STAMP),('remaining_seconds',5)]:
+            modified=copy.deepcopy(report)
+            modified['probes'][0]['protocol_witness']['requests'][0]['transition']['runtime_identity'][field]=value
+            self.assertFalse(verify_witness(fixture,modified,**facts)['passed'],field)
+
+    def test_partial_target_never_counts_source_ack_as_entry_confirmation(self):
+        fixture, report, facts = self.transition_rows()
+        request=report['probes'][0]['protocol_witness']['requests'][0]
+        request['transition'].update(outcome='retry_required');request['transition'].pop('runtime_identity')
+        request['entry_receipt']=None
+        result=verify_witness(fixture,report,**facts)
+        self.assertFalse(result['passed'],result)
+        self.assertTrue(result['checks']['close_receipts_and_present_unknown_match'],result)
+        self.assertEqual(result['counts']['unknown_entry_persisted'],1)
+        # A later standalone replay supplies the same frozen target confirmation.
+        replay=copy.deepcopy(request);replay.pop('transition');replay.pop('close');replay.pop('receipt')
+        replay['entry'].pop('assignment_id');replay.update(path='/api/v1/student/sessions/1/questions/21/',
+            entry_receipt=copy.deepcopy(report['probes'][0]['protocol_witness']['requests'][0].get('entry_receipt')),
+            events=[],acknowledgements=[],request_index=3)
+        replay['entry_receipt']={'navigation_id':uid(104),'session_id':1,'assignment_id':21,'attempt_id':11,
+            'visit_id':31,'visit_index':1,'entry_event_id':uid(105),'entered_at':STAMP}
+        report['probes'][0]['protocol_witness']['requests'].append(replay)
+        self.assertTrue(verify_witness(fixture,report,**facts)['passed'])
+
+    def test_retained_close_intent_reconciles_source_and_frozen_nested_entry(self):
+        fixture, report, facts = self.transition_rows()
+        evidence=report['probes'][0]['protocol_witness'];request=evidence['requests'][0];local=evidence['local_storage']
+        local['intents']=[{'kind':'close','session_id':1,'attempt_id':91,'token':request['close']['token'],
+            'delivery_status':'unconfirmed','document_sha256':'a'*64,'material_sha256':request['close']['material_sha256'],
+            'material':copy.deepcopy(request['close']), 'next_entry':copy.deepcopy(request['entry']),
+            'next_entry_sha256':request['transition']['request_material_sha256'],
+            'snapshot':{'client_instance_id':uid(101),'event_boundary':2,'events':[],'checkpoints':[]}}]
+        local['boundary']['intent_count']=1
+        self.assertTrue(verify_witness(fixture,report,**facts)['passed'])
+        local['intents'][0]['next_entry']['client_monotonic_ms']='8.000'
+        self.assertFalse(verify_witness(fixture,report,**facts)['passed'])
+
+    def test_nested_entry_checks_task_close_and_initial_item_deadline(self):
+        from datetime import timedelta
+        fixture, report, facts=self.transition_rows()
+        runtime=report['probes'][0]['protocol_witness']['requests'][0]['transition']['runtime_identity']
+        facts['sessions'][0].task_closes_at=NOW+timedelta(seconds=60)
+        runtime.update(remaining_seconds=60,presented_deadline_at=(NOW+timedelta(seconds=60)).isoformat())
+        self.assertTrue(verify_witness(fixture,report,**facts)['passed'])
+        facts['attempts'][0].initial_effective_deadline_at=NOW+timedelta(seconds=30)
+        runtime.update(remaining_seconds=30,presented_deadline_at=(NOW+timedelta(seconds=30)).isoformat())
+        self.assertTrue(verify_witness(fixture,report,**facts)['passed'])
+        runtime['presented_deadline_at']=(NOW+timedelta(seconds=60)).isoformat()
+        self.assertFalse(verify_witness(fixture,report,**facts)['passed'])
+
     def confidence_browser_rows(self):
         plan={'scenario':'confidence-only-v1','confidence_scale_version':'v2',
             'confidence_scale':{'minimum':0,'maximum':100,'step':1}, 'students':[]}
@@ -391,6 +488,7 @@ class BrowserWitnessTests(SimpleTestCase):
             'AssessmentEvent':facts['events'],'ClientCaptureCheckpoint':facts['checkpoints'],
             'Attempt':facts['attempts'],'QuestionVisitEvent':facts['visits'],
             'NavigationReceipt':facts['navigations'],'SubmissionEvent':facts['submissions'],
+            'CaptureMutationReceipt':[],
             'StudentQuestionAssignment':[Row(pk=row.assignment_id,session_id=row.session_id) for row in facts['attempts']]}
         with TemporaryDirectory() as directory, ExitStack() as stack:
             stack.enter_context(patch.dict(os.environ, {'POSTGRES_DB':'kt_e2e'}))

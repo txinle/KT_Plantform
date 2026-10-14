@@ -24,9 +24,11 @@ from apps.accounts.student_identity import StudentIdentityError
 from .exceptions import ApiBusinessError
 
 from .serializers import (
+    BootstrapContextSerializer,
     CsrfTokenSerializer,
     HealthSerializer,
     LoginRequestSerializer,
+    LoginContextSerializer,
     ResearchConsentAcceptanceSerializer,
     ResearchConsentDocumentSerializer,
     SessionContextSerializer,
@@ -59,13 +61,29 @@ def enforce_csrf(request):
         raise PermissionDenied(f"CSRF Failed: {reason}")
 
 
-class SessionContextView(APIView):
+class AuthenticationView(APIView):
+    def finalize_response(self, request, response, *args, **kwargs):
+        response = super().finalize_response(request, response, *args, **kwargs)
+        response['Cache-Control'] = 'no-store'
+        return response
+
+
+class BootstrapContextView(AuthenticationView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(responses=BootstrapContextSerializer)
+    def get(self, request):
+        user = session_context(request.user)['user'] if request.user.is_authenticated else None
+        return Response({'csrf_token': get_token(request), 'user': user})
+
+
+class SessionContextView(AuthenticationView):
     @extend_schema(responses=SessionContextSerializer)
     def get(self, request):
         return Response(session_context(request.user))
 
 
-class CsrfTokenView(APIView):
+class CsrfTokenView(AuthenticationView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
@@ -74,11 +92,11 @@ class CsrfTokenView(APIView):
         return Response({"csrf_token": get_token(request)})
 
 
-class LoginApiView(APIView):
+class LoginApiView(AuthenticationView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
-    @extend_schema(request=LoginRequestSerializer, responses=SessionContextSerializer)
+    @extend_schema(request=LoginRequestSerializer, responses=LoginContextSerializer)
     def post(self, request):
         enforce_csrf(request._request)
         serializer = LoginRequestSerializer(data=request.data)
@@ -91,10 +109,10 @@ class LoginApiView(APIView):
         if user is None:
             raise ValidationError({"non_field_errors": ["账号或密码不正确。"]})
         login(request._request, user)
-        return Response(session_context(user))
+        return Response({**session_context(user), 'csrf_token': get_token(request._request)})
 
 
-class StudentPasswordChangeView(APIView):
+class StudentPasswordChangeView(AuthenticationView):
     @extend_schema(request=StudentPasswordChangeSerializer, responses=SessionContextSerializer)
     def post(self, request):
         serializer = StudentPasswordChangeSerializer(data=request.data)
@@ -108,7 +126,7 @@ class StudentPasswordChangeView(APIView):
         return Response(session_context(student))
 
 
-class InitialPasswordReminderShownView(APIView):
+class InitialPasswordReminderShownView(AuthenticationView):
     @extend_schema(request=None, responses=SessionContextSerializer)
     def post(self, request):
         try:
@@ -123,7 +141,7 @@ class InitialPasswordReminderShownView(APIView):
         return Response(session_context(student))
 
 
-class ResearchConsentView(APIView):
+class ResearchConsentView(AuthenticationView):
     @staticmethod
     def _require_student(request):
         if request.user.is_superuser or request.user.role != User.Role.STUDENT:
@@ -155,7 +173,7 @@ class ResearchConsentView(APIView):
         return Response(session_context(request.user))
 
 
-class LogoutApiView(APIView):
+class LogoutApiView(AuthenticationView):
     @extend_schema(request=None, responses={204: None})
     def post(self, request):
         logout(request._request)

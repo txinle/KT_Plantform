@@ -78,7 +78,8 @@ def _ingest(student, bundle, session, request_received_at, attempt=None, *, reco
 def close_attempt_capture_bundle(*, student, attempt_id, document, request_received_at=None):
     from .writer_lease_services import WriterLeaseConflict, release_attempt_writer_lease
     require_exact_mapping(document, allowed={'lease_token', 'client_instance_id', 'capture_bundle',
-        'capture_operation_id', 'leave_event_id'})
+        'capture_operation_id', 'leave_event_id', 'next_entry'},
+        required={'lease_token', 'client_instance_id', 'capture_bundle', 'capture_operation_id', 'leave_event_id'})
     process_material_fingerprint(document)
     token = parse_uuid(document['capture_operation_id'])
     leave_id = parse_uuid(document['leave_event_id'])
@@ -89,6 +90,8 @@ def close_attempt_capture_bundle(*, student, attempt_id, document, request_recei
     request_received_at = request_received_at or timezone.now()
     with coalesce_session_materializations(), transaction.atomic(durable=True):
         attempt = _locked_attempt(student, attempt_id)
+        from .transition_entry_services import validate_next_entry
+        validate_next_entry(attempt, document)
         receipt = _existing_mutation_receipt(student, attempt, token, 'close', fingerprint, request_received_at)
         if receipt is None:
             if not close_bundle_capability(attempt.session)['enabled']:

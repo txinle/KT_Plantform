@@ -31,14 +31,15 @@ class FixedRuntimeTests(SimpleTestCase):
         self.assertFalse(result['checks']['candidate_margin'])
         self.assertEqual(result['recommended_minimum_caps']['web'], 1300)
 
-    def test_fixed_overlay_has12_workers_no_low_capture_quotas_or_dynamic_file(self):
+    def test_fixed_overlay_has_thirty_six_workers_no_low_http_quotas_or_shared_pg_cap(self):
         import yaml
         loader = type('FixedLoader', (yaml.SafeLoader,), {})
         loader.add_constructor('!override', lambda loader, node: loader.construct_sequence(node))
         loader.add_constructor('!reset', lambda loader, node: loader.construct_sequence(node))
         services = yaml.load((Path(settings.REPOSITORY_DIR) / "deploy" / 'docker-compose.school.yml').read_text(), Loader=loader)['services']
-        self.assertEqual(services['web']['environment']['GUNICORN_WORKERS'], 12)
-        for role in ('web','db','nginx','pgbouncer'):
+        http = ('web', 'auth', 'assessment', 'capture', 'student-read', 'teacher-read')
+        self.assertEqual(sum(services[role]['environment']['GUNICORN_WORKERS'] for role in http), 36)
+        for role in (*http, 'db','nginx','pgbouncer'):
             self.assertEqual(services[role]['cpus'], 0)
         self.assertEqual(services['web']['environment']['SCHOOL_RUNTIME_PRESSURE_FILE'], '')
         self.assertEqual(services['db']['mem_limit'], 0)

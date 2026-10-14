@@ -266,7 +266,9 @@ class Synchronized180Runner(ProtocolShortRunner):
         began = time.perf_counter()
         state.load_entry_started_at = began
         try:
-            for path, metric in (('/login/', 'login_page'), ('/api/v1/auth/csrf/', 'csrf')):
+            context_path = ('/api/v1/auth/bootstrap/' if getattr(self, 'authentication_profile', 'legacy') == 'bootstrap-v1'
+                            else '/api/v1/auth/csrf/')
+            for path, metric in (('/login/', 'login_page'), (context_path, 'csrf')):
                 status, _, _ = self.measured_request(state, path, metric)
                 if status != 200:
                     raise RuntimeError('Login preparation failed')

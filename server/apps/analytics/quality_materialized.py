@@ -84,4 +84,5 @@ def materialized_overview_counts(sessions):
     counts["process_records"] = current.aggregate(value=Coalesce(
         Sum(Cast(KeyTextTransform("behavior", "row_counts"), BigIntegerField())), 0
     ))["value"]
+    counts["preparation"] = _preparation(sessions, current)
     return counts

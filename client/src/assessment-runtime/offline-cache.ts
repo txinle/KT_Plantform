@@ -94,6 +94,8 @@ async function resolveOfflineWorker() {
 }
 
 const workerResolutions = new WeakMap<ServiceWorkerContainer, Promise<ServiceWorker>>()
+const preparedResources = new WeakMap<ServiceWorker, { scope: string; urls: Set<string> }>()
+let preparationEpoch = 0
 function currentOfflineWorker() {
   const container = navigator.serviceWorker
   let pending = workerResolutions.get(container)
@@ -105,14 +107,14 @@ function currentOfflineWorker() {
 }
 
 async function sendWorkerMessage(worker: ServiceWorker, message: Record<string, unknown>, timeoutMs = 15000) {
-  await new Promise<void>((resolve, reject) => {
+  return new Promise<{ commonResourcesPrepared?: boolean }>((resolve, reject) => {
     const channel = new MessageChannel()
     const timeout = setTimeout(() => { channel.port1.close(); reject(new Error('离线恢复准备超时。')) }, timeoutMs)
     channel.port1.onmessage = (event) => {
       clearTimeout(timeout)
       channel.port1.close()
-      const result = event.data as { ok?: boolean; error?: unknown; code?: unknown }
-      if (result?.ok) resolve()
+      const result = event.data as { ok?: boolean; error?: unknown; code?: unknown; commonResourcesPrepared?: boolean }
+      if (result?.ok) resolve(result)
       else reject(new OfflinePreparationError(
         `离线恢复准备失败：${String(result?.error ?? '未知错误')}`,
         typeof result?.code === 'string' ? result.code : undefined,
@@ -123,7 +125,9 @@ async function sendWorkerMessage(worker: ServiceWorker, message: Record<string, 
 }
 
 export async function clearOfflineAssessmentCache() {
+  preparationEpoch++
   const worker = navigator.serviceWorker ? await activeWorkerForScope() : undefined
+  if (worker) preparedResources.delete(worker)
   // Runtime-1 workers ignore this message; their durable caches still need clearing.
   if (worker) await sendWorkerMessage(worker, { type: 'clear-capture-v2' }, 250).catch(() => undefined)
   if (globalThis.caches) {
@@ -139,24 +143,39 @@ export async function prepareOfflineQuestion(state: StudentRuntimeQuestionEntry)
     'offline_preparation_unavailable',
   )
   if (!navigator.serviceWorker) throw new Error('浏览器不支持离线恢复，请使用支持 Service Worker 的浏览器。')
+  const epoch = preparationEpoch
   const currentQuestionUrl = state.navigation.find(item => item.current)?.url
   const pageUrl = new URL(currentQuestionUrl || location.href, location.origin)
   const worker = await currentOfflineWorker()
+  const context = getBootstrapContext()
+  const scope = JSON.stringify([context.user.id, state.session_id, assessmentBuildVersion])
+  const prepared = preparedResources.get(worker)
   const resources = [...new Set(performance.getEntriesByType('resource').map((entry) => entry.name))]
     .filter(resource => {
       const url = new URL(resource, location.origin)
       return url.origin === location.origin && url.pathname.startsWith('/static/')
     })
-  await sendWorkerMessage(worker, {
-    type: 'prepare-capture-v2', page: pageUrl.href,
-    bootstrap: {
-      ...getBootstrapContext(), version: 1, page_path: pageUrl.pathname,
-      assessment_session_id: state.session_id, assignment_id: state.assignment.assignment_id,
-    } satisfies OfflineBootstrapEnvelope,
-    api: `/api/v1/student/sessions/${state.session_id}/questions/${state.assignment.assignment_id}/`,
-    state: JSON.parse(JSON.stringify(state)),
-    buildVersion: assessmentBuildVersion,
-    shell: assessmentShellUrl,
-    resources,
-  })
+    .filter(resource => prepared?.scope !== scope || !prepared.urls.has(resource))
+  let commonResourcesPrepared = false
+  try {
+    const result = await sendWorkerMessage(worker, {
+      type: 'prepare-capture-v2', page: pageUrl.href,
+      bootstrap: {
+        ...context, version: 1, page_path: pageUrl.pathname,
+        assessment_session_id: state.session_id, assignment_id: state.assignment.assignment_id,
+      } satisfies OfflineBootstrapEnvelope,
+      api: `/api/v1/student/sessions/${state.session_id}/questions/${state.assignment.assignment_id}/`,
+      state: JSON.parse(JSON.stringify(state)),
+      buildVersion: assessmentBuildVersion,
+      shell: assessmentShellUrl,
+      resources,
+    })
+    commonResourcesPrepared = result.commonResourcesPrepared === true
+  } catch (error) {
+    preparedResources.delete(worker)
+    throw error
+  }
+  if (commonResourcesPrepared && epoch === preparationEpoch) preparedResources.set(worker, { scope, urls: new Set([
+    ...(prepared?.scope === scope ? prepared.urls : []), ...resources,
+  ]) })
 }

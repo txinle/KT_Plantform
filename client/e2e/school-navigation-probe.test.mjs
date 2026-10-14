@@ -8,6 +8,40 @@ import { probeAccounts, safeEndpoint, captureVisualLayouts, probeExpect } from '
 import * as probe from './school-navigation-probe.mjs'
 import { chromium } from '@playwright/test'
 
+test('login-only browser prefills before shared POST release and never enters tasks', async () => {
+  assert.equal(typeof probe.performLoginOnly, 'function')
+  let wall = 900; const calls = []; const actions = []
+  const response = { ok: () => true, finished: async () => null }
+  const page = { goto: async path => calls.push(['goto', path]),
+    getByLabel: label => ({ fill: async () => calls.push(['fill', label]) }),
+    getByRole: (_role, options) => ({ click: async () => { calls.push(['click', options.name, wall]); wall += .2 } }),
+    waitForResponse: async predicate => { assert.equal(predicate({url:()=> 'http://host/api/v1/auth/login/',request:()=>({method:()=> 'POST'})}), true); return response } }
+  const report = {}
+  await probe.performLoginOnly(page, {username:'one',password:'unused'}, report, {
+    startAt:1000, now:()=>wall, pause:async seconds => { calls.push(['release', seconds]); wall += seconds },
+    timed:async (action, operation) => { const start=wall; await operation(); actions.push([action, wall-start]) },
+    waitForHome:async () => { calls.push(['home']); wall += .3 },
+  })
+  assert.deepEqual(calls.slice(0,4).map(row=>row[0]), ['goto','fill','fill','release'])
+  assert.equal(calls[4][2],1000)
+  assert.equal(report.submitted_count,0)
+  assert.equal(report.session_completed,false)
+  assert.equal(report.completed,true)
+  assert.deepEqual(actions.map(row=>row[0]),['login','task_list'])
+  assert.ok(Math.abs(actions[0][1]-.2)<1e-8)
+  assert.ok(Math.abs(actions[1][1]-.5)<1e-8)
+})
+
+test('browser login POST witness uses actual request send time and retains first failed POST', () => {
+  assert.equal(typeof probe.firstLoginPost, 'function')
+  const report = { username_sha256:'identity', waterfall:[
+    { endpoint:'other',method:'GET',sent_at:1,status:200 },
+    { endpoint:'/api/v1/auth/login/',method:'POST',sent_at:1000,status:503,request_id:'first' },
+    { endpoint:'/api/v1/auth/login/',method:'POST',sent_at:1001,status:200,request_id:'retry' },
+  ] }
+  assert.deepEqual(probe.firstLoginPost(report), { username_sha256:'identity',sent_at:1000,http_status:503,successful:false,request_id:'first' })
+})
+
 test('confidence-only plan permits no optional tools and requires frozen legal confidence choices', () => {
   const student = { username: 'one', role: 'browser', arrival_offset_seconds: 0, speed_stratum: 'fast',
     item_dwell_seconds: Array(20).fill(45), modify_items: [], excursion_items: [], optional_tool_items: [],
@@ -668,4 +702,39 @@ test('visual extension capture confirms real zoom then restores the original bro
   assert.equal(screenshots.length, 3)
   assert.equal(factor, 1)
   assert.deepEqual(viewport, { width: 1440, height: 900 })
+})
+
+
+test('waterfall settlement accounts for unfinished and failed requests', async () => {
+  const callbacks = new Map(); const page = { on: (event, callback) => callbacks.set(event, callback) }
+  const report = { waterfall: [] }
+  const request = { headers: () => ({}), url: () => 'http://host/api/v1/student/courses/', method: () => 'GET', resourceType: () => 'fetch', failure: () => ({ errorText: 'net::ERR_ABORTED' }) }
+  const waterfall = probe.installProbeWaterfall(page, report, 0, () => 'login')
+  callbacks.get('request')(request)
+  const result = await waterfall.settle(5)
+  assert.equal(result.complete, false)
+  assert.equal(result.unfinished_request_count, 1)
+  assert.equal(report.waterfall[0].terminal_state, 'not_observed')
+  const report2 = { waterfall: [] }; const second = probe.installProbeWaterfall(page, report2, 0, () => 'login')
+  callbacks.get('request')(request); callbacks.get('requestfailed')(request)
+  const done = await second.settle(5)
+  assert.equal(done.complete, true)
+  assert.equal(done.unfinished_request_count, 0)
+  assert.equal(report2.waterfall[0].terminal_state, 'failed')
+  assert.equal(report2.waterfall[0].failure_code, 'net::ERR_ABORTED')
+  assert.ok(report2.waterfall[0].duration_ms >= 0)
+})
+
+
+test('natural login waits for the authorized home course before the fixture navigation', async () => {
+  assert.equal(typeof probe.waitForStudentHomeCourse, 'function')
+  const browser = await chromium.launch()
+  try {
+    const page = await browser.newPage(); await page.setContent('<main>Loading</main>')
+    let completed = false
+    const wait = probe.waitForStudentHomeCourse(page, 42).then(() => { completed = true })
+    await page.waitForTimeout(30); assert.equal(completed, false)
+    await page.setContent('<a href="/student/courses/42/">Course</a>')
+    await wait; assert.equal(completed, true)
+  } finally { await browser.close() }
 })

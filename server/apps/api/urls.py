@@ -2,6 +2,7 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView
 
 from .views import (
+    BootstrapContextView,
     CsrfTokenView,
     HealthView,
     InitialPasswordReminderShownView,
@@ -14,6 +15,7 @@ from .views import (
 
 
 urlpatterns = [
+    path('auth/bootstrap/', BootstrapContextView.as_view(), name='api-bootstrap'),
     path(
         "auth/research-consent/",
         ResearchConsentView.as_view(),

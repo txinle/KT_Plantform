@@ -12,6 +12,48 @@ import { digest } from './capture-protocol-witness.mjs'
 export const probeExpect = baseExpect.configure({ timeout: 35000 })
 const expect = probeExpect
 
+export function firstLoginPost(report) {
+  const row = report.waterfall.find(request => request.endpoint === '/api/v1/auth/login/' && request.method === 'POST')
+  return row ? { username_sha256: report.username_sha256, sent_at: row.sent_at, http_status: row.status,
+    successful: row.status >= 200 && row.status < 300 && !row.failed, request_id: row.request_id } : null
+}
+
+export async function performLoginOnly(page, account, report, {
+  startAt, pause, timed, now = () => Date.now() / 1000,
+  waitForHome = async () => {
+    await expect(page).toHaveURL(/\/student\/$/)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.locator('[data-vue-shell]')).toBeVisible()
+    await expect(page.locator(`a[href="/student/courses/${account.courseId}/"]`).first()).toBeVisible()
+  },
+}) {
+  report.mode = 'login-only'; report.started_at = now(); report.planned_arrival_at = startAt
+  report.submitted_count = 0; report.session_completed = false
+  const preparationStarted = globalThis.performance.now()
+  report.auth_preparation_started_at = now()
+  await page.goto('/login/')
+  await page.getByLabel('账号或学号').fill(account.username)
+  await page.getByLabel('密码').fill(account.password)
+  report.auth_preparation_completed_at = now()
+  report.auth_preparation_seconds = (globalThis.performance.now() - preparationStarted) / 1000
+  report.login_measurement_boundary = 'Shared login POST release through authentication/home; auth preparation and release waiting excluded'
+  await pause(Math.max(0, startAt - now()))
+  report.actual_arrival_at = now()
+  await timed('task_list', async () => {
+    await timed('login', async () => {
+      const authentication = page.waitForResponse(response => response.url().endsWith('/api/v1/auth/login/') && response.request().method() === 'POST')
+      await page.getByRole('button', { name: '登录', exact: true }).click()
+      const response = await authentication
+      if (!response.ok()) throw new Error('Login-only authentication failed')
+      if (await response.finished()) throw new Error('Login-only authentication response did not complete')
+      report.authenticated_at = now()
+    })
+    await waitForHome()
+    report.home_ready_at = now()
+  })
+  report.completed = true; report.completed_at = now()
+}
+
 export function navigableQuestionLink(page, assignment) {
   return page.locator(`.kt-assessment-nav [data-nav-assignment="${assignment}"][href]:not([aria-disabled="true"])`)
 }
@@ -240,16 +282,24 @@ export function installProbeWaterfall(page, report, origin, currentPhase) {
     if (closed) return
     const headers = request.headers()
     const row = { endpoint: safeEndpoint(request.url()), method: request.method(), resource_type: request.resourceType(), start_ms: globalThis.performance.now() - origin,
-      request_id: correlationId(headers['x-request-id']), operation_id: correlationId(headers['x-kt-operation-id']), phase: currentPhase() }
+      sent_at: Date.now() / 1000, request_id: correlationId(headers['x-request-id']), operation_id: correlationId(headers['x-kt-operation-id']), phase: currentPhase() }
     requests.set(request, row)
     report.waterfall.push(row)
   })
   page.on('requestfinished', (request) => {
     if (closed) return
     const row = requests.get(request)
-    if (row) { row.end_ms = globalThis.performance.now() - origin; row.duration_ms = row.end_ms - row.start_ms }
+    if (row) { row.end_ms = globalThis.performance.now() - origin; row.duration_ms = row.end_ms - row.start_ms; row.terminal_state = 'finished' }
   })
-  page.on('requestfailed', (request) => { if (closed) return; const row = requests.get(request); if (row) row.failed = true })
+  page.on('requestfailed', (request) => {
+    if (closed) return
+    const row = requests.get(request)
+    if (!row) return
+    row.failed = true; row.terminal_state = 'failed'
+    row.end_ms = globalThis.performance.now() - origin; row.duration_ms = row.end_ms - row.start_ms
+    const errorText = request.failure()?.errorText
+    row.failure_code = typeof errorText === 'string' && /^net::ERR_[A-Z_]+$/.test(errorText) ? errorText : 'transport_failure'
+  })
   page.on('response', (response) => {
     if (closed) return
     const row = requests.get(response.request())
@@ -274,13 +324,16 @@ export function installProbeWaterfall(page, report, origin, currentPhase) {
     void pending.finally(() => pendingResponses.delete(pending))
   })
   return { async settle(timeoutMs = 2000) {
-    let timer
-    let complete = false
-    await Promise.race([Promise.allSettled([...pendingResponses]).then(() => { complete = true }),
-      new Promise(resolve => { timer = globalThis.setTimeout(resolve, timeoutMs) })])
-    globalThis.clearTimeout(timer)
+    const deadline = globalThis.performance.now() + timeoutMs
+    const unfinished = () => [...requests.values()].filter(row => !row.terminal_state)
+    while ((pendingResponses.size || unfinished().length) && globalThis.performance.now() < deadline) {
+      await new Promise(resolve => globalThis.setTimeout(resolve, Math.min(10, Math.max(0, deadline - globalThis.performance.now()))))
+    }
+    const unfinishedRequests = unfinished()
+    for (const row of unfinishedRequests) row.terminal_state = 'not_observed'
     closed = true
-    return { complete, pending_response_count: pendingResponses.size, budget_ms: timeoutMs }
+    return { complete: pendingResponses.size === 0 && unfinishedRequests.length === 0,
+      pending_response_count: pendingResponses.size, unfinished_request_count: unfinishedRequests.length, budget_ms: timeoutMs }
   } }
 }
 
@@ -463,6 +516,10 @@ export async function waitForSessionCompletion(page, taskId, waitForSummary = as
   return true
 }
 
+export async function waitForStudentHomeCourse(page, courseId) {
+  await expect(page.locator(`a[href="/student/courses/${courseId}/"]`).first()).toBeVisible()
+}
+
 export async function startFixtureTask(page, account, ready) {
   if (!Number.isInteger(account.courseId)) throw new Error('Fixture course is required')
   const response = page.waitForResponse((row) => new globalThis.URL(row.url()).pathname === `/api/v1/student/courses/${account.courseId}/tasks/`)
@@ -482,7 +539,8 @@ export async function startFixtureTask(page, account, ready) {
 }
 
 async function runAccount(browser, account, baseURL, index, itemLimit, visualOutput, candidate, natural = null) {
-  const visualContext = visualOutput && index === 0 ? await createVisualProbeContext(baseURL) : null
+  const loginOnly = natural?.mode === 'login-only'
+  const visualContext = visualOutput && index === 0 && !loginOnly ? await createVisualProbeContext(baseURL) : null
   const viewport = natural && index === 1 ? { width: 390, height: 844 } : { width: 1440, height: 900 }
   const context = visualContext?.context || await browser.newContext({ baseURL, viewport })
   const page = await context.newPage()
@@ -494,7 +552,7 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
   let stage = 'login'
   let firstReadyVisual = null
   if (natural) { report.natural_plan = natural.plan; natural.publish(report) }
-  const budgetTimer = natural ? globalThis.setTimeout(() => { report.total_timeout = true; void context.close() }, 2700000) : null
+  const budgetTimer = natural ? globalThis.setTimeout(() => { report.total_timeout = true; void context.close() }, loginOnly ? 300000 : 2700000) : null
   await page.exposeBinding('__ktProbeLongtask', (_, task) => report.longtasks.push({ ...task, received_ms: globalThis.performance.now() - origin }))
   await page.exposeBinding('__ktProbeTiming', (_, timing) => report.runtime_timings.push(timing))
   await page.addInitScript(installInputFrameTiming)
@@ -513,8 +571,8 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
   })
   page.on('pageerror', () => { report.page_error_count++ })
   const waterfall = installProbeWaterfall(page, report, origin, () => stage)
-  const protocol = observeBrowserProtocol(page, { candidate, taskId: account.taskId, probe: index + 1 })
-  report.protocol_witness = protocol.evidence
+  const protocol = loginOnly ? null : observeBrowserProtocol(page, { candidate, taskId: account.taskId, probe: index + 1 })
+  if (protocol) report.protocol_witness = protocol.evidence
   page.on('request', request => {
     if (request.method() !== 'POST') return
     let body
@@ -551,6 +609,11 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
       questionNavigationSteps(page, assignment, targetPath, ready, { mobile: viewport.width < 768 }))
   }
   try {
+    if (loginOnly) {
+      await performLoginOnly(page, account, report, { startAt: natural.startAt, pause,
+        timed: (action, operation) => timed(action, 0, operation) })
+      return report
+    }
     if (natural) await pause(Math.max(0, natural.startAt + natural.plan.arrival_offset_seconds - Date.now() / 1000))
     report.started_at = Date.now() / 1000
     await timed('login', 0, async () => {
@@ -561,6 +624,7 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
       await expect(page).toHaveURL(/\/student\/$/)
       await page.waitForLoadState('domcontentloaded')
       await expect(page.locator('[data-vue-shell]')).toBeVisible()
+      await waitForStudentHomeCourse(page, account.courseId)
     })
     stage = 'research_consent'
     const consent = page.getByRole('dialog', { name: '研究参与说明与知情同意' })
@@ -708,7 +772,15 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
   } finally {
     globalThis.clearTimeout(budgetTimer)
     if (firstReadyVisual) await firstReadyVisual
-    try { await settleProbeEvidence(page, report, protocol, waterfall) }
+    try {
+      if (loginOnly) {
+        report.flow_completed = report.completed
+        report.waterfall_settlement = await waterfall.settle()
+        report.first_login_post = firstLoginPost(report)
+        report.evidence_complete = report.waterfall_settlement.complete === true && report.first_login_post !== null
+        report.completed = report.flow_completed && report.evidence_complete && report.first_login_post.successful && report.page_error_count === 0
+      } else await settleProbeEvidence(page, report, protocol, waterfall)
+    }
     catch { report.flow_completed = report.completed; report.completed = false; report.evidence_complete = false }
     if (natural?.scenario === 'confidence-only-v1') {
       report.scenario = natural.scenario
@@ -726,7 +798,7 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { values } = parseArgs({ options: { 'base-url': { type: 'string' }, manifest: { type: 'string' }, output: { type: 'string' }, phase: { type: 'string' }, items: { type: 'string', default: '20' }, 'visual-output': { type: 'string' }, plan: { type: 'string' }, 'start-at': { type: 'string' }, 'stop-file': { type: 'string' }, progress: { type: 'string' }, accounts: { type: 'string' } } })
+  const { values } = parseArgs({ options: { 'base-url': { type: 'string' }, manifest: { type: 'string' }, output: { type: 'string' }, phase: { type: 'string' }, mode: { type: 'string', default: 'natural' }, items: { type: 'string', default: '20' }, 'visual-output': { type: 'string' }, plan: { type: 'string' }, 'start-at': { type: 'string' }, 'stop-file': { type: 'string' }, progress: { type: 'string' }, accounts: { type: 'string' } } })
   if (!values['base-url'] || !values.manifest || !values.output || !['baseline', 'repaired', 'load'].includes(values.phase)) throw new Error('Required: --base-url --manifest --output --phase baseline|repaired|load')
   const manifest = JSON.parse(readFileSync(values.manifest, 'utf8'))
   const accounts = probeAccounts(manifest)
@@ -734,6 +806,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const workload = values.plan ? JSON.parse(readFileSync(values.plan, 'utf8')) : null
   const plans = workload ? naturalBrowserPlans(workload, accounts) : null
   const startAt = Number(values['start-at'])
+  if (!['natural', 'login-only'].includes(values.mode) || values.mode === 'login-only' && (!plans || plans.some(row => row.arrival_offset_seconds !== 0))) throw new Error('Login-only mode requires frozen zero-arrival browser plans')
   if (plans && (!Number.isFinite(startAt) || startAt <= 0 || Number(values.items) !== 20 || !manifest.browser_usernames)) throw new Error('Natural mode requires --start-at UNIX, 20 items, and explicit two-account browser fixture')
   const progressPath = values.progress || values.output.replace(/\.json$/, '') + '.progress.json'
   const live = new Map()
@@ -751,9 +824,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const browser = await chromium.launch()
   try {
     const probes = await Promise.all(accounts.map((account, index) => runAccount(browser, account, values['base-url'], index, Number(values.items), values['visual-output'], manifest.source_config,
-      plans ? { plan: plans[index], scenario: workload.scenario, startAt, stopFile: values['stop-file'], publish } : null)))
-    const report = { phase: values.phase, completed: probes.every((probe) => probe.completed), probes }
-    report.architecture_sessions = buildBrowserArchitectureSessions(report, accounts)
+      plans ? { plan: plans[index], scenario: workload.scenario, mode: values.mode, startAt, stopFile: values['stop-file'], publish } : null)))
+    const report = { phase: values.phase, mode: values.mode, completed: probes.every((probe) => probe.completed), probes }
+    if (values.mode !== 'login-only') report.architecture_sessions = buildBrowserArchitectureSessions(report, accounts)
     if (plans) { report.workload_version = 'natural-180-v1'; report.start_at = startAt }
     writeFileSync(values.output, JSON.stringify(report, null, 2), { flag: 'wx', mode: 0o600 })
     globalThis.console.log(JSON.stringify({ completed: probes.every((probe) => probe.completed), actions: probes.map((probe) => probe.actions.length), output: values.output }))

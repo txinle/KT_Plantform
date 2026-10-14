@@ -441,6 +441,8 @@ def writer_lease_release(request, attempt_id):
             from .capture_bundle_services import close_attempt_capture_bundle
             receipt = close_attempt_capture_bundle(student=request.user, attempt_id=attempt_id,
                 document=document, request_received_at=request_received_at)
+            from .transition_entry_services import append_next_entry
+            receipt = append_next_entry(request, attempt_id, document, receipt)
             return JsonResponse(receipt)
         if len(request.body) > MAX_PROCESS_REQUEST_BYTES:
             raise ProcessRequestError('request_too_large', status=413)

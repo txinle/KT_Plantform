@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 import math
 import os
+import re
 from pathlib import Path
 import threading
 import time
@@ -16,6 +17,58 @@ from capture_protocol import BROWSER_ALIGNED_WORKLOAD, CONTRACT, digest, evidenc
 from natural_workload import CONFIDENCE_ONLY, NATURAL_WORKLOAD, confidence_decision, validate_workload
 from school_synchronized_180 import Synchronized180Runner, InternalBudgetExceeded, AttemptJournal
 from school_short_storm import StudentState, summary
+
+LEASE_RECOVERY_PROFILE = 'same-client-lease-recovery-v1'
+LEASE_RENEW_PATH = '/api/v1/assessment/process/attempts/:id/writer-lease/renew/'
+LEASE_ACQUIRE_PATH = '/api/v1/assessment/process/attempts/:id/writer-lease/acquire/'
+
+
+def lease_recovery_accounting(plan, attempts, markers, raw_error_count):
+    """Classify only journal-linked, same-client recovery; preserve every failed row."""
+    failed = [row for row in attempts if row.get('successful') is not True]
+    by_id = {row.get('request_id'): (index, row) for index, row in enumerate(attempts)}
+    valid = (type(raw_error_count) is int and raw_error_count == len(failed)
+        and len(by_id) == len(attempts) and all(re.fullmatch('[a-f0-9]{32}', str(key)) for key in by_id))
+    recovered, acquired, invalid = set(), set(), 0
+    successful_attempts = []
+    for marker in markers:
+        try:
+            renew_index, renew = by_id[marker['renew_request_id']]
+            acquire_index, acquire = by_id[marker['acquire_request_id']]
+            student_index = marker['student_index']
+            student = plan['students'][student_index] if type(student_index) is int and student_index >= 0 else {}
+            times = [renew['sent_at'], renew['completed_at'], acquire['sent_at'], acquire['completed_at'],
+                     renew['lease_cached_valid_until'], renew['elapsed_seconds'], acquire['elapsed_seconds']]
+            matches = (student.get('role') == 'protocol' and marker['username_sha256'] == digest(student['username'])
+                and renew['student_index'] == acquire['student_index'] == student_index
+                and renew['method'] == acquire['method'] == 'POST'
+                and renew['path'] == LEASE_RENEW_PATH and acquire['path'] == LEASE_ACQUIRE_PATH
+                and renew['successful'] is False and renew['http_status'] == 409 and renew.get('error_type') == 'HTTPError'
+                and renew.get('server_error_code') == 'writer_lease_conflict'
+                and acquire['successful'] is True and acquire['http_status'] == 201
+                and acquire.get('error_type') is None and acquire.get('server_error_code') is None
+                and all(type(value) in (int, float) and math.isfinite(value) for value in times)
+                and renew['sent_at'] <= renew['completed_at'] <= acquire['sent_at'] <= acquire['completed_at']
+                and renew['sent_at'] < renew['lease_cached_valid_until'] <= renew['sent_at'] + 5
+                and renew['elapsed_seconds'] >= 0 and acquire['elapsed_seconds'] >= 0
+                and renew_index < acquire_index
+                and not any(row.get('student_index') == student_index for row in attempts[renew_index + 1:acquire_index])
+                and marker['renew_request_id'] not in recovered and marker['acquire_request_id'] not in acquired)
+            for field in ('writer_client_sha256', 'lease_scope_sha256'):
+                matches = (matches and re.fullmatch('[a-f0-9]{64}', str(marker[field])) is not None
+                    and marker[field] == renew.get(field) == acquire.get(field))
+            if not matches:
+                raise ValueError()
+            recovered.add(marker['renew_request_id']); acquired.add(marker['acquire_request_id'])
+            successful_attempts.append(deepcopy(acquire))
+        except (KeyError, IndexError, TypeError, ValueError):
+            invalid += 1
+    return {'profile': LEASE_RECOVERY_PROFILE, 'valid': valid and invalid == 0,
+        'journal_request_count': len(attempts), 'raw_http_error_count': raw_error_count,
+        'handled_successful_recovery_count': len(recovered), 'unexpected_http_error_count': len(failed) - len(recovered),
+        'invalid_recovery_marker_count': invalid, 'failed_attempts': deepcopy(failed),
+        'successful_recovery_attempts': successful_attempts, 'recovery_markers': deepcopy(markers),
+        'failed_attempt_latency': summary([row['elapsed_seconds'] for row in failed if type(row.get('elapsed_seconds')) in (int, float)])}
 
 
 def peak_rss_bytes():
@@ -56,7 +109,15 @@ class LoadStopped(InternalBudgetExceeded):
 
 
 class NaturalRunner(Synchronized180Runner):
-    def __init__(self,*args,plan,start_at,stop_file=None,total_budget_seconds=2700,**kwargs):
+    def __init__(self,*args,plan,start_at,stop_file=None,total_budget_seconds=2700,
+                 authentication_profile='legacy',load_evidence_profile='legacy',**kwargs):
+        if authentication_profile not in ('legacy', 'bootstrap-v1'):
+            raise ValueError('Unsupported authentication profile')
+        self.authentication_profile = authentication_profile
+        if load_evidence_profile not in ('legacy', LEASE_RECOVERY_PROFILE):
+            raise ValueError('Unsupported load evidence profile')
+        self.load_evidence_profile = load_evidence_profile
+        self.lease_recoveries = []
         super().__init__(*args,workload_version=BROWSER_ALIGNED_WORKLOAD,**kwargs)
         self.plan,self.start_at,self.stop_file=plan,start_at,Path(stop_file) if stop_file else None
         self.confidence_only = plan.get('scenario') == CONFIDENCE_ONLY
@@ -67,6 +128,10 @@ class NaturalRunner(Synchronized180Runner):
         self.identity_progress_path=None
         self.identity_outcomes=[]
         self.local=threading.local()
+
+    @property
+    def authentication_context_path(self):
+        return '/api/v1/auth/bootstrap/' if self.authentication_profile == 'bootstrap-v1' else '/api/v1/auth/session/'
 
     @property
     def released_at(self):
@@ -120,6 +185,7 @@ class NaturalRunner(Synchronized180Runner):
     def _browser_ensure_lease(self, state, runtime):
         # Match writer-lease.ts beforePointerWrite after a natural thinking pause.
         cached_valid = bool(runtime['lease']) and runtime['lease_valid_until'] > time.time()
+        state.browser_lease_cached_valid_until = runtime.get('lease_valid_until') if cached_valid else None
         if runtime['lease'] and not cached_valid:
             runtime['lease'] = {}
             runtime.pop('lease_valid_until', None)
@@ -128,9 +194,23 @@ class NaturalRunner(Synchronized180Runner):
         except RuntimeError:
             if not cached_valid or getattr(state, 'browser_last_error_code', None) != 'writer_lease_conflict':
                 raise
+            renew_attempt = deepcopy(getattr(state, 'browser_last_request_attempt', None))
             runtime['lease'] = {}
             runtime.pop('lease_valid_until', None)
-            return super()._browser_ensure_lease(state, runtime)
+            result = super()._browser_ensure_lease(state, runtime)
+            acquire_attempt = getattr(state, 'browser_last_request_attempt', None)
+            if (self.load_evidence_profile == LEASE_RECOVERY_PROFILE and renew_attempt and acquire_attempt
+                    and renew_attempt.get('http_status') == 409 and renew_attempt.get('server_error_code') == 'writer_lease_conflict'
+                    and acquire_attempt.get('successful') is True and acquire_attempt.get('http_status') == 201):
+                with self.lock:
+                    self.lease_recoveries.append({'renew_request_id': renew_attempt['request_id'],
+                        'acquire_request_id': acquire_attempt['request_id'], 'student_index': state.load_student_index,
+                        'username_sha256': digest(state.username),
+                        'writer_client_sha256': renew_attempt.get('writer_client_sha256'),
+                        'lease_scope_sha256': renew_attempt.get('lease_scope_sha256')})
+            return result
+        finally:
+            state.browser_lease_cached_valid_until = None
 
     def browser_open_question(self, state, assignment_id, reason='direct_open', dto=None):
         if not self.confidence_only:
@@ -162,8 +242,8 @@ class NaturalRunner(Synchronized180Runner):
 
     def navigate(self,state,runtime,to,index,action):
         self._browser_start_action(state,action,index)
-        self._browser_close(state,runtime,'navigation',to)
-        runtime=self.browser_open_question(state,to,'navigation')
+        dto=self._browser_close(state,runtime,'navigation',to)
+        runtime=self.browser_open_question(state,to,'navigation',dto)
         self._browser_logical_action(state,action,index)
         return runtime
 
@@ -227,20 +307,20 @@ class NaturalRunner(Synchronized180Runner):
             'included_correctness':'is_correct' in result,'included_correct_answer':'correct_answer' in result,
             'included_explanation':bool(result.get('explanation'))})
         if result.get('explanation'): stream.event(attempt,'explanation_shown',{'source':'submission_feedback'})
-        self._browser_close(state,runtime,'submit')
+        next_path=urlsplit(result['next_url']).path
+        if index<19 and next_path!=f'/student/sessions/{state.session_id}/questions/{assignments[index+1]}/':
+            raise RuntimeError('Submission next question drifted')
+        entry_dto=self._browser_close(state,runtime,'submit',assignments[index+1]) if index<19 else self._browser_close(state,runtime,'submit')
         with self.lock:
             self.ledger[str(state.session_id)]['answers'][str(attempt)]={'state_sha256':target['payload']['after_state_hash'],
                 'target_event_id':runtime['head'],'submission_token':token,'question_type':kind,
                 'response_version':result.get('response_version',runtime['version'])}
-        next_path=urlsplit(result['next_url']).path
         if index<19:
-            if next_path!=f'/student/sessions/{state.session_id}/questions/{assignments[index+1]}/':
-                raise RuntimeError('Submission next question drifted')
-            runtime=self.browser_open_question(state,assignments[index+1],'submit_next')
+            runtime=self.browser_open_question(state,assignments[index+1],'submit_next',entry_dto)
         else:
             self._browser_flush(state,runtime,metric='final_capture_drain')
             self._browser_request(state,next_path,'completion_shell')
-            self._browser_request(state,'/api/v1/auth/session/','completion_auth')
+            self._browser_request(state,self.authentication_context_path,'completion_auth')
             state.finish_payload=self._browser_request(state,f'/api/v1/student/sessions/{state.session_id}/summary/','finish')
             if (state.finish_payload.get('session_id')!=state.session_id or state.finish_payload.get('status')!='completed'
                     or state.finish_payload.get('submission_count')!=20 or state.finish_payload.get('attempt_count')!=20):
@@ -254,6 +334,7 @@ class NaturalRunner(Synchronized180Runner):
     def prepare_confidence(self, state, runtime, index):
         began=time.perf_counter()
         successful=False
+        error_type=None
         try:
             contract=runtime['dto'].get('pending_confidence')
             if not contract or contract['scale_version'] != self.plan['confidence_scale_version'] or any(
@@ -268,11 +349,15 @@ class NaturalRunner(Synchronized180Runner):
             response=self._browser_post(state,contract['prompt_shown_url'],{},'confidence_prompt')
             think_began=time.perf_counter()
             think_success=False
+            think_error_type=None
             try:
                 self.wait_until(time.monotonic()+state.natural_student_plan['confidence_think_seconds'][index],runtime,state)
                 think_success=True
+            except Exception as error:
+                think_error_type=type(error).__name__
+                raise
             finally:
-                self.record_outcome(state,'confidence_think',think_began,think_success,200 if think_success else None,None)
+                self.record_outcome(state,'confidence_think',think_began,think_success,200 if think_success else None,think_error_type)
             if decision['status']=='skipped':
                 runtime['stream'].event(attempt,'confidence_observed',dict(observed,operation_id=str(uuid.uuid4()),stage='skipped'),
                     event_version=2 if contract['scale_version']=='v2' else 1)
@@ -283,8 +368,11 @@ class NaturalRunner(Synchronized180Runner):
                     'prompt_response_sha256':digest(response),'acknowledged':False,'submission_receipt_sha256':None}
             successful=True
             return decision
+        except Exception as error:
+            error_type=type(error).__name__
+            raise
         finally:
-            self.record_outcome(state,'confidence_entry',began,successful,200 if successful else None,None)
+            self.record_outcome(state,'confidence_entry',began,successful,200 if successful else None,error_type)
 
     def submit(self, state, runtime, index, target, assignments):
         if not self.confidence_only:
@@ -293,29 +381,36 @@ class NaturalRunner(Synchronized180Runner):
         began=time.perf_counter()
         state.natural_submission_ack_at=None
         successful=False
+        failure=None
         try:
             runtime=self._submit_material(state,runtime,index,target,assignments)
             successful=True
             return runtime
+        except Exception as error:
+            failure=error
+            raise
         finally:
             ended=time.perf_counter()
             ack=state.natural_submission_ack_at
             ack_metric='submit_ack' if index<19 else 'finish_submit_ack'
             self.record_boundary(state,ack_metric,index,began,ack if ack is not None else ended,
-                ack is not None)
+                ack is not None,None if ack is not None else failure)
             if ack is not None:
                 next_metric='submit_ack_to_next_ready' if index<19 else 'finish_ack_to_terminal_ready'
-                self.record_boundary(state,next_metric,index,ack,ended,successful)
+                self.record_boundary(state,next_metric,index,ack,ended,successful,failure)
             total_metric='submit_next_ready' if index<19 else 'finish_ready'
-            self.record_boundary(state,total_metric,index,began,ended,successful)
+            self.record_boundary(state,total_metric,index,began,ended,successful,failure)
 
-    def record_boundary(self,state,metric,index,began,ended,successful):
+    def record_boundary(self,state,metric,index,began,ended,successful,error=None):
         elapsed=ended-began
         self.record(metric,elapsed)
         with self.lock:
             self.operation_measurements.append({'metric':metric,'student_index':state.load_student_index,
                 'item_index':index,'elapsed_seconds':elapsed,'http_status':200 if successful else None,
-                'error_type':None,'successful':successful,'began_monotonic':began,'ended_monotonic':ended})
+                'error_type':type(error).__name__ if error else None,
+                'server_error_code':getattr(state,'browser_last_error_code',None) if error else None,
+                'timeout':isinstance(error,TimeoutError) or isinstance(getattr(error,'reason',None),TimeoutError),
+                'successful':successful,'began_monotonic':began,'ended_monotonic':ended})
 
     def natural_answer(self,state,student):
         runtime=state.browser_current
@@ -353,7 +448,7 @@ class NaturalRunner(Synchronized180Runner):
         successful,status,error_type=False,None,None
         try:
             self._browser_request(state,'/student/','home_shell')
-            self._browser_request(state,'/api/v1/auth/session/','home_auth')
+            self._browser_request(state,self.authentication_context_path,'home_auth')
             self._browser_request(state,'/api/v1/student/courses/','home_courses')
             successful,status=True,200
         except Exception as error:
@@ -372,11 +467,17 @@ class NaturalRunner(Synchronized180Runner):
         with self.lock: self.identity_outcomes.append(outcome)
         self.publish_identities()
         try:
+            if mode=='login-only':
+                preparation_started=time.monotonic()
+                outcome['auth_preparation_started_at']=time.time()
+                self.prepare_login(state)
+                outcome.update(auth_preparation_completed_at=time.time(),auth_preparation_seconds=time.monotonic()-preparation_started)
+                self.login_barrier.wait(timeout=min(40,self.remaining_budget()))
             self.wait_until(time.monotonic()+max(0,outcome['planned_arrival_at']-time.time()))
             outcome['actual_arrival_at']=time.time()
-            self.prepare_login(state)
-            if mode=='login-only': self.login_barrier.wait(timeout=min(40,self.remaining_budget()))
+            if mode!='login-only': self.prepare_login(state)
             login_started=time.perf_counter()
+            if mode=='login-only':state.load_entry_started_at=login_started
             self.authenticate(state)
             outcome['authenticated_at']=time.time()
             self.publish_identities()
@@ -404,7 +505,7 @@ class NaturalRunner(Synchronized180Runner):
             self.publish_identities()
 
     def run(self,fixture,mode='natural'):
-        selected=[(i,s) for i,s in enumerate(self.plan['students']) if mode=='login-only' or s['role']=='protocol']
+        selected=[(i,s) for i,s in enumerate(self.plan['students']) if s['role']=='protocol']
         states=[StudentState(s['username'],fixture['password']) for _,s in selected]
         self.students=states
         if mode=='login-only': self.login_barrier=threading.Barrier(len(states))
@@ -416,32 +517,53 @@ class NaturalRunner(Synchronized180Runner):
         return states
 
 
+def observed_active_overlap(plan,students):
+    """Require observed intervals for exactly the frozen identities in this plan."""
+    expected={digest(student['username']) for student in plan['students']}
+    observed=[row.get('username_sha256') for row in students]
+    valid=len(students)==len(expected) and set(observed)==expected and len(set(observed))==len(observed)
+    valid=valid and all(type(row.get(key)) in (int,float) and math.isfinite(row[key])
+        for row in students for key in ('ready_at','completed_at'))
+    valid=valid and all(row['completed_at']>row['ready_at'] for row in students)
+    seconds=max(0,min(row['completed_at'] for row in students)-max(row['ready_at'] for row in students)) if valid and students else 0
+    return {'expected':len(expected),'observed':len(students),'seconds':seconds,'valid_intervals':valid,
+        'achieved':valid and seconds>=600,'boundary':'actual first interactive entry to actual completion'}
+
+
 def natural_result(runner,states,started,mode):
-    n=len(states)
+    selected=[s for s in runner.plan['students'] if s['role']=='protocol']
+    n=len(selected)
     rows=list(runner.operation_measurements)+list(runner.protocol_operation_measurements)
     request_attempts=list(runner.request_attempts)
+    error_accounting = lease_recovery_accounting(runner.plan, request_attempts, runner.lease_recoveries, runner.request_errors)
     tool_attempts=[row for row in request_attempts if row['path'].split('?',1)[0].endswith('/tools/')]
     latency={metric:{'all_operations':summary([r['elapsed_seconds'] for r in rows if r['metric']==metric]),
         'successful_only':summary([r['elapsed_seconds'] for r in rows if r['metric']==metric and r['successful']]),
         'failed_count':sum(r['metric']==metric and not r['successful'] for r in rows)} for metric in {r['metric'] for r in rows}}
     thresholds={'login_entry_to_authentication_end':(5,10),'login_to_home_ready':(5,10),'start_to_first_question_ready':(5,10),
-        'navigation_next_ready':(2,5),'navigation_return_ready':(2,5),'submit_next_ready':(3,5),'finish_ready':(3,5),'save_draft':(1,3)}
+        'navigation_next_ready':(1,2),'navigation_return_ready':(1,2),'submit_next_ready':(1.5,3),'finish_ready':(3,5),'save_draft':(1,3)}
     planned={'login_entry_to_authentication_end':n,'login_to_home_ready':n}
     if mode!='login-only':
-        selected=[s for s in runner.plan['students'] if s['role']=='protocol']
         planned.update(start_to_first_question_ready=n,navigation_next_ready=sum(len(s['excursion_items']) for s in selected),
             navigation_return_ready=sum(len(s['excursion_items']) for s in selected),submit_next_ready=n*20,finish_ready=n,
             save_draft=sum(28+len(s['modify_items']) for s in selected))
         if runner.confidence_only:
             planned.update(submit_next_ready=n*19, submit_ack=n*19, submit_ack_to_next_ready=n*19,
+                finish_submit_ack=n,finish_ack_to_terminal_ready=n,
                 confidence_entry=n*20,confidence_think=n*20,confidence_prompt=n*20)
     accounting={key:{'planned_count':count,'attempted_count':len([r for r in rows if r['metric']==key]),
         'successful_count':sum(r['metric']==key and r['successful'] for r in rows),
         'failed_count':sum(r['metric']==key and not r['successful'] for r in rows),
+        'timeout_count':sum(r['metric']==key and (r.get('timeout') or r.get('error_type') in ('TimeoutError','timeout')
+            or r.get('server_error_code')=='transport_timeout') for r in rows),
         'not_reached_count':max(0,count-len([r for r in rows if r['metric']==key]))} for key,count in planned.items()}
-    checks={'complete_workflow':n>0 and len(runner.identity_outcomes)==n and all(s['workflow_completed'] for s in runner.identity_outcomes),
-        'zero_workflow_errors':not runner.errors,'zero_http_errors':runner.request_errors==0,'bounded_execution':not runner.budget_interrupted,
+    checks={'complete_workflow':n>0 and len(states)==n and len(runner.identity_outcomes)==n and all(s['workflow_completed'] for s in runner.identity_outcomes),
+        'zero_workflow_errors':not runner.errors,'bounded_execution':not runner.budget_interrupted,
         'all_planned_operations_reached':all(v['attempted_count']==v['planned_count'] and v['failed_count']==0 for v in accounting.values())}
+    if runner.load_evidence_profile == LEASE_RECOVERY_PROFILE:
+        checks['all_http_errors_accounted'] = error_accounting['valid'] and error_accounting['unexpected_http_error_count'] == 0
+    else:
+        checks['zero_http_errors'] = runner.request_errors == 0
     if runner.confidence_only:
         checks['confidence_only_zero_tool_requests']=not tool_attempts and not any(row['metric'] in ('research_tool','tools_configuration','tools_refresh') for row in rows)
     for metric,(p95,p99) in thresholds.items():
@@ -450,6 +572,8 @@ def natural_result(runner,states,started,mode):
         checks[metric+'_p95']=aggregate.get('p95_seconds') is not None and aggregate['p95_seconds']<=p95
         checks[metric+'_p99']=aggregate.get('p99_seconds') is not None and aggregate['p99_seconds']<=p99
     login_attempts=[row for row in request_attempts if row['path']=='/api/v1/auth/login/' and row['method']=='POST' and row['attempt']==1]
+    first_login_posts=[{**row,'username_sha256':digest(runner.plan['students'][row['student_index']]['username'])}
+        for row in login_attempts]
     sends=[row['sent_at'] for row in login_attempts]
     send_window=max(sends)-min(sends) if sends else None
     if mode=='login-only':
@@ -461,10 +585,18 @@ def natural_result(runner,states,started,mode):
         **({'scenario':CONFIDENCE_ONLY,'synthetic_confidence':True} if runner.confidence_only else {}),
         'task_id':runner.task_id,'plan_sha256':digest(runner.plan),'start_at':runner.start_at,'started':started,'ended':time.time(),
         'students':runner.identity_outcomes,'metrics':{k:summary(v) for k,v in runner.metrics.items()},'operation_latency':latency,
+        'acceptance_thresholds_seconds':{metric:{'p95':p95,'p99':p99} for metric,(p95,p99) in thresholds.items()},
+        'protocol_active_overlap':observed_active_overlap({'students':selected},runner.identity_outcomes),
+        'formal_overlap_state':'pending_combined_protocol_and_browser_evidence' if mode!='login-only' else 'not_applicable',
         'full_operation_accounting':accounting,'operation_measurements':rows,'request_attempts':runner.attempt_summary(),
         'actual_tool_request_count':len(tool_attempts),'tool_request_journal_boundary':'All attempted normalized /tools/ requests, including failures and retries',
         'login_post_send_window_seconds':send_window,'first_login_post_count':len(login_attempts),
+        'first_login_post_attempts':first_login_posts,
+        **({'authentication_preparation_seconds':summary([row['auth_preparation_seconds'] for row in runner.identity_outcomes if 'auth_preparation_seconds' in row]),
+            'login_measurement_boundary':'Shared login POST release through authentication/home; auth preparation and release waiting excluded'} if mode=='login-only' else {}),
         'first_login_post_success_count':sum(row['successful'] for row in login_attempts),'http_request_count':runner.request_count,'http_error_count':runner.request_errors,'errors':runner.errors,
+        'load_evidence_profile': runner.load_evidence_profile,
+        **({'http_error_accounting': error_accounting} if runner.load_evidence_profile == LEASE_RECOVERY_PROFILE else {}),
         'item_arrivals':runner.item_arrivals,'capture_protocol':protocol,'authentication_success_count':sum(s['authenticated_at'] is not None for s in runner.identity_outcomes),
         'execution_completed':runner.execution_completed,'workflow_completed':checks['complete_workflow'],'performance_passed':all(checks.values()),
         'passed':all(checks.values()),'checks':checks,'budget_interrupted':runner.budget_interrupted,'safety_interrupted':runner.budget_interrupted,
@@ -491,7 +623,9 @@ def main():
     fixture=json.loads(Path(args.manifest).read_text(encoding='utf-8-sig'))
     if fixture.get('database')!='kt_e2e' or fixture.get('capture_protocol')!=CONTRACT: parser.error('Dedicated kt_e2e capture fixture required')
     plan=validate_workload(fixture,json.loads(Path(args.plan).read_text(encoding='utf-8-sig')))
-    runner=NaturalRunner(args.base_url,fixture['task_id'],args.timeout,plan=plan,start_at=args.start_at,stop_file=args.stop_file)
+    runner=NaturalRunner(args.base_url,fixture['task_id'],args.timeout,plan=plan,start_at=args.start_at,stop_file=args.stop_file,
+        authentication_profile='bootstrap-v1' if fixture.get('source_config', {}).get('pool_profile') == 'six-pools-180-v1' else 'legacy',
+        load_evidence_profile=fixture.get('source_config', {}).get('load_evidence_profile', 'legacy'))
     runner.browser_shell_url=fixture['source_config']['shell_url']
     runner.protocol_course_id,runner.protocol_experiment_id=fixture['course_id'],fixture['experiment_id']
     runner.identity_progress_path = Path(args.output).with_suffix('.students.json')

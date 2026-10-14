@@ -51,4 +51,26 @@ describe('TeacherDataOverview', () => {
     expect(wrapper.text()).not.toContain('assessment_events.csv')
     expect(wrapper.get('a[href="/teacher/courses/7/data/advanced/?experiment_id=3&class_id=4"]')).toBeTruthy()
   })
+
+  it('shows queued statistics as pending instead of zero during the answer peak', async () => {
+    const original = await mocks.api.overview()
+    mocks.api.overview.mockResolvedValue({ ...original,
+      preparation: { state: 'preparing', message: '数据正在后台整理，完成后可刷新查看。', updated_at: null },
+      facts: { ...original.facts, process_records: null, quality_warnings: null, not_evaluable: null },
+    })
+    const wrapper = mount(TeacherDataOverview)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="preparation-state"]').text()).toContain('数据正在后台整理')
+    expect(wrapper.text()).toContain('待整理')
+  })
+
+  it('shows the update time of completed cached statistics', async () => {
+    const original = await mocks.api.overview()
+    mocks.api.overview.mockResolvedValue({ ...original,
+      preparation: { state: 'ready', message: '研究数据已整理完成。', updated_at: '2026-10-14T02:00:00Z' },
+    })
+    const wrapper = mount(TeacherDataOverview)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="statistics-updated-at"]').text()).toContain('统计更新')
+  })
 })

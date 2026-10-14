@@ -37,11 +37,19 @@ def cpu_budgets(mode):
     return dict(PRIORITY_CPUS if mode in ('capture_priority', 'capture_emergency') else NORMAL_CPUS)
 
 
-def log_metrics(lines):
+def signal_only_policy():
+    return {**{key: value for key, value in POLICY.items()
+               if key not in ('normal_cpus', 'priority_cpus')},
+            'dynamic_cpu_control': False, 'monitored_pools': ['assessment', 'capture']}
+
+
+def log_metrics(lines, pools=None):
     timings, errors = {}, 0
     for line in lines:
         try:
             row = json.loads(line)
+            if pools is not None and row.get('pool') not in pools:
+                continue
             operation = row['operation']
             seconds = float(row['request_time'])
             if operation not in WRITE_LIMITS or not math.isfinite(seconds) or seconds < 0:
@@ -127,12 +135,31 @@ def recovery_limits(actual):
     return normal
 
 
+def pressure_directory(volume, docker_root, project):
+    name = f'{project}_runtime_control'
+    labels = volume.get('Labels') or {}
+    if (volume.get('Name') != name or volume.get('Driver') != 'local'
+            or volume.get('Scope') != 'local'
+            or labels.get('com.docker.compose.project') != project
+            or labels.get('com.docker.compose.volume') != 'runtime_control'):
+        raise ValueError('Pressure volume ownership mismatch')
+    root = Path(docker_root)
+    if not root.is_absolute():
+        raise ValueError('Docker data root must be absolute')
+    directory = Path(volume['Mountpoint']).resolve()
+    if directory != root.resolve() / 'volumes' / name / '_data':
+        raise ValueError('Unexpected local pressure volume')
+    return directory
+
+
 def main():
     import fcntl
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project', required=True, choices=['kt-school-e2e', 'kt_plantform'])
     parser.add_argument('--production-binding')
     parser.add_argument('--output', required=True)
+    parser.add_argument('--signal-only', action='store_true',
+                        help='Six-pool profile: publish pressure without changing CPU limits.')
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit('Fixed controller requires host root')
@@ -156,6 +183,9 @@ def main():
     if binding_path.is_symlink() or binding_path.stat().st_uid != 0 or binding_path.stat().st_mode & 0o077:
         raise ValueError('Controller binding must remain root-private')
     binding = json.loads(binding_path.read_text())
+    if args.signal_only and binding.get('pool_profile') != 'six-pools-180-v1':
+        raise ValueError('Signal-only monitoring requires the frozen six-pool profile')
+    policy = signal_only_policy() if args.signal_only else POLICY
     evidence_binding = {'source_sha256': binding['source_sha256'] if production else binding['candidate_archive_sha256'],
                         'frontend_sha256': binding['frontend_sha256'] if production else binding['frontend_archive_sha256'],
                         'controller_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
@@ -170,23 +200,27 @@ def main():
             raise ValueError('Production controller working directory mismatch')
         role = labels['com.docker.compose.service']
         by_role.setdefault(role, []).append(item)
-    if any(len(by_role.get(role, [])) != 1 for role in (*NORMAL_CPUS, 'nginx', 'pgbouncer')):
+    controlled_roles = (('auth', 'assessment', 'capture', 'web', 'student-read', 'teacher-read',
+                         'analytics-worker', 'student-comparison-worker', 'publication-worker',
+                         'export-worker') if args.signal_only else tuple(NORMAL_CPUS))
+    if any(len(by_role.get(role, [])) != 1 for role in (*controlled_roles, 'nginx', 'pgbouncer')):
         raise ValueError('Requires exactly one running process container for each controlled role')
     if production:
-        images = {role: by_role[role][0]['Image'] for role in (*NORMAL_CPUS, 'nginx', 'pgbouncer')}
+        images = {role: by_role[role][0]['Image'] for role in (*controlled_roles, 'nginx', 'pgbouncer')}
         validate_production_binding(binding, images, evidence_binding['controller_sha256'])
-    groups = {role: group_for(by_role[role][0]) for role in NORMAL_CPUS}
+    if args.signal_only:
+        images = {role: by_role[role][0]['Image'] for role in (*controlled_roles, 'nginx', 'pgbouncer')}
+        if any(binding.get('runtime_images', {}).get(role) != image for role, image in images.items()):
+            raise ValueError('Signal-only monitored images differ from the frozen binding')
+    groups = {role: group_for(by_role[role][0]) for role in controlled_roles}
     actual = {role: (group / 'cpu.max').read_text().strip() for role, group in groups.items()}
-    original_cpu_max = recovery_limits(actual)
+    original_cpu_max = {} if args.signal_only else recovery_limits(actual)
     # Recover a killed controller's known temporary quotas before restarting.
     for role, value in original_cpu_max.items():
         (groups[role] / 'cpu.max').write_text(value + '\n')
     volume = json.loads(command('docker', 'volume', 'inspect', f'{args.project}_runtime_control'))[0]
-    if volume.get('Labels', {}).get('com.docker.compose.project') != args.project:
-        raise ValueError('Pressure volume ownership mismatch')
-    directory = Path(volume['Mountpoint']).resolve()
-    if directory != Path(f'/var/lib/docker/volumes/{args.project}_runtime_control/_data'):
-        raise ValueError('Unexpected local pressure volume')
+    docker_root = command('docker', 'info', '--format', '{{.DockerRootDir}}').strip()
+    directory = pressure_directory(volume, docker_root, args.project)
     path = directory / 'pressure.json'
     controller = PressureState()
     stopped = False
@@ -208,24 +242,31 @@ def main():
             raw = command('docker', 'logs', '--since', str(cursor), '--until', str(now),
                           '--tail', '10000', by_role['nginx'][0]['Id'])
             cursor = now
-            sample = log_metrics(raw.splitlines())
-            cpu = dict((name, int(value)) for name, value in
-                       (line.split() for line in (groups['web'] / 'cpu.stat').read_text().splitlines()))
-            delta_periods = cpu.get('nr_periods', 0) - (last_stat or cpu).get('nr_periods', 0)
-            sample['core_throttle_ratio'] = ((cpu.get('nr_throttled', 0) - (last_stat or cpu).get('nr_throttled', 0))
-                                             / delta_periods if delta_periods > 0 else 0)
+            sample = log_metrics(raw.splitlines(), pools=('assessment', 'capture') if args.signal_only else None)
+            cpu_roles = ('assessment', 'capture') if args.signal_only else ('web',)
+            cpu = {role: dict((name, int(value)) for name, value in
+                    (line.split() for line in (groups[role] / 'cpu.stat').read_text().splitlines()))
+                   for role in cpu_roles}
+            previous_cpu = last_stat or cpu
+            sample['core_throttle_ratio'] = max(
+                max(0, (cpu[role].get('nr_throttled', 0) - previous_cpu[role].get('nr_throttled', 0)) /
+                    (cpu[role].get('nr_periods', 0) - previous_cpu[role].get('nr_periods', 0)))
+                if cpu[role].get('nr_periods', 0) > previous_cpu[role].get('nr_periods', 0) else 0
+                for role in cpu_roles)
             last_stat = cpu
             sample['memory_available_bytes'] = next(int(line.split()[1]) * 1024
                 for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemAvailable:'))
             pools = command('docker', 'exec', by_role['pgbouncer'][0]['Id'], 'sh', '-c',
                 'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -X -h 127.0.0.1 -U "$POSTGRES_USER" -d pgbouncer --csv -c "SHOW POOLS"')
             sample['pool_waiting'] = sum(int(row['cl_waiting']) for row in csv.DictReader(io.StringIO(pools))
-                                         if row['database'] == 'kt_core')
+                                         if row['database'] in (
+                                             ('kt_assessment', 'kt_capture') if args.signal_only else ('kt_core',)))
             sample['at'] = now
             mode = controller.update(sample, now)
             if mode != active:
-                for role, cpus in cpu_budgets(mode).items():
-                    (groups[role] / 'cpu.max').write_text(f'{round(cpus * 100000)} 100000\n')
+                if not args.signal_only:
+                    for role, cpus in cpu_budgets(mode).items():
+                        (groups[role] / 'cpu.max').write_text(f'{round(cpus * 100000)} 100000\n')
                 transitions.append({'at': now, 'before': active, 'after': mode, 'reason_sample': sample})
                 active = mode
             retry = {'normal': 5, 'capture_priority': 15, 'capture_emergency': 30, 'recovering': 10}[mode]
@@ -233,7 +274,7 @@ def main():
             samples.append(sample)
             sample_count += 1
             atomic_json(report, {**evidence_binding, 'state': 'running', 'mode': mode, 'project': args.project, 'started_at': started,
-                'policy': POLICY, 'policy_sha256': hashlib.sha256(json.dumps(POLICY, sort_keys=True).encode()).hexdigest(),
+                'policy': policy, 'policy_sha256': hashlib.sha256(json.dumps(policy, sort_keys=True).encode()).hexdigest(),
                 'transitions': list(transitions), 'samples': list(samples), 'sample_count': sample_count,
                 'samples_window_max': samples.maxlen, 'actual_cpu_max':
                 {role: (group / 'cpu.max').read_text().strip() for role, group in groups.items()}})
@@ -252,8 +293,8 @@ def main():
         atomic_json(path, {'mode': 'normal', 'expires_at': time.time(), 'retry_after_seconds': 5})
         atomic_json(report, {**evidence_binding, 'state': 'failed' if failure or not all(restored.values()) else 'stopped-restored',
             'project': args.project, 'mode': 'normal', 'started_at': started, 'ended_at': time.time(),
-            'failure_type': failure, 'restored': restored, 'last_active_mode': active, 'policy': POLICY,
-            'full_restoredbool': bool(restored) and all(restored.values()),
+            'failure_type': failure, 'restored': restored, 'last_active_mode': active, 'policy': policy,
+            'full_restoredbool': args.signal_only or bool(restored) and all(restored.values()),
             'transitions': list(transitions), 'samples': list(samples), 'sample_count': sample_count,
             'samples_window_max': samples.maxlen})
 

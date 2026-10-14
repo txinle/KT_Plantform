@@ -181,6 +181,46 @@ class TeacherDataCenterApiTests(TestCase):
         self.assertEqual(domain_payload(response)["facts"]["quality_warnings"], 1)
         self.assertEqual(domain_payload(response)["facts"]["not_evaluable"], 1)
 
+    @override_settings(ADVANCED_DATA_MATERIALIZED_ENABLED=False)
+    @patch('apps.analytics.api.views.build_quality_report')
+    def test_overview_defers_uncached_statistics_during_capture_pressure(self, build_quality_report):
+        from django.utils import timezone
+
+        from apps.analytics.quality_reports import QualityReport
+        build_quality_report.return_value = QualityReport(())
+        with patch('apps.analytics.api.views.runtime_pressure', return_value={
+            'mode': 'capture_priority', 'retry_after_seconds': 15,
+            'expires_at': timezone.now().timestamp() + 30,
+        }):
+            response = self.client.get(self.api('overview/'), {
+                'experiment_id': self.experiment.pk, 'class_id': self.class_group.pk})
+        self.assertEqual(response.status_code, 200)
+        build_quality_report.assert_not_called()
+        data = domain_payload(response)
+        self.assertIsNone(data['facts']['quality_warnings'])
+        self.assertIsNone(data['facts']['process_records'])
+        self.assertEqual(data['preparation']['state'], 'preparing')
+
+    @override_settings(ADVANCED_DATA_MATERIALIZED_ENABLED=True,
+                       ADVANCED_DATA_MATERIALIZED_COURSE_IDS=('*',))
+    def test_overview_reports_cached_statistics_timestamp_and_pending_sessions(self):
+        from django.utils import timezone
+
+        finished = timezone.now()
+        ResearchSessionMaterialization.objects.create(
+            session=self.session, status='succeeded', is_current=True,
+            source_revision=self.session.research_source_revision,
+            projection_version=PROJECTION_VERSION, finished_at=finished,
+            row_counts={'behavior': 17})
+        response = self.client.get(self.api('overview/'), {
+            'experiment_id': self.experiment.pk, 'class_id': self.class_group.pk})
+        self.assertEqual(response.status_code, 200)
+        data = domain_payload(response)
+        self.assertEqual(data.get('preparation', {}).get('state'), 'ready')
+        from django.utils.dateparse import parse_datetime
+        self.assertEqual(parse_datetime(data['preparation']['updated_at']), finished)
+        self.assertEqual(data['facts']['process_records'], 17)
+
     def test_scope_update_is_json_and_persists_the_authoritative_selection(self):
         url = self.api("scope/")
 

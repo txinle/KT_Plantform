@@ -112,7 +112,7 @@ export function bindLifecycle(collector: ProcessEventCollector, options: Lifecyc
         await collector.outbox.writeMetadata(key, closed);
       }
     }
-    return flush ? collector.flushBounded(1500, { ignoreVisibility: true, keepalive: true }) : true;
+    return flush ? collector.flushConfirmed({ ignoreVisibility: true, keepalive: true, timeoutMs: 30000 }) : true;
   };
   let navigationPreparation: { token: string; toAssignmentId: number; promise: Promise<{ event_id?: string }> } | null = options.pendingNavigation ? {
     token: options.pendingNavigation.token, toAssignmentId: options.pendingNavigation.toAssignmentId,

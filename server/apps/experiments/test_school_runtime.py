@@ -62,11 +62,11 @@ class SchoolRuntimeTests(SimpleTestCase):
         self.assertEqual(report["role_workers"], {"core": 12, "student_read": 2, "teacher_read": 1})
         self.assertNotIn("at_least_sixteen_web_workers", report["checks"])
 
-    def test_nginx_routes_resolve_and_writes_stay_core(self):
+    def test_nginx_routes_resolve_and_methods_keep_pool_boundaries(self):
         self.assertTrue((Path(settings.REPOSITORY_DIR) / "deploy" / "nginx/kt-school.conf").exists(), "School routing config missing")
         config = (Path(settings.REPOSITORY_DIR) / "deploy" / "nginx/kt-school.conf").read_text()
         # Evaluate the actual map's regex rows, then verify each business path in Django.
-        rows = re.findall(r'~(\^[^\s]+)\s+(student_read|teacher_read);', config)
+        rows = re.findall(r'~(\^[^\s]+)\s+(auth|assessment|capture|student_read|teacher_read);', config)
         self.assertTrue(rows)
         cases = {
             "/api/v1/student/courses/1/learning/": "student_read",
@@ -89,6 +89,8 @@ class SchoolRuntimeTests(SimpleTestCase):
                         target = pool
                         break
                 post_expected='teacher_read' if path=='/api/v1/teacher/courses/1/data/export-jobs/' else 'core'
+                if path in ('/api/v1/student/tasks/1/start/', '/api/v1/student/sessions/1/questions/2/', '/api/v1/student/attempts/1/draft/'):
+                    post_expected = 'assessment'
                 self.assertEqual(target, expected if method != "POST" else post_expected, (method, path))
         self.assertIn('default "http";', config)
         self.assertIn('https "https";', config)
@@ -96,7 +98,7 @@ class SchoolRuntimeTests(SimpleTestCase):
 
     def test_exact_teacher_status_and_export_create_use_teacher_pool(self):
         config=(Path(settings.REPOSITORY_DIR) / "deploy" / 'nginx/kt-school.conf').read_text()
-        rows=re.findall(r'~(\^[^\s]+)\s+(student_read|teacher_read);',config)
+        rows=re.findall(r'~(\^[^\s]+)\s+(auth|assessment|capture|student_read|teacher_read);',config)
         job='/api/v1/teacher/courses/2/data/export-jobs/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/'
         for method,path,expected in (
             ('GET','/api/v1/teacher/courses/2/data/advanced/status/','teacher_read'),
@@ -104,8 +106,8 @@ class SchoolRuntimeTests(SimpleTestCase):
             ('POST','/api/v1/teacher/courses/2/data/export-jobs/','teacher_read'),
             ('POST',job,'core'),('DELETE',job,'core'),
             ('POST','/api/v1/teacher/courses/2/classes/','core'),
-            ('POST','/api/v1/student/tasks/2/start/','core'),
-            ('POST','/api/v1/student/sessions/2/questions/3/','core'),
+            ('POST','/api/v1/student/tasks/2/start/','assessment'),
+            ('POST','/api/v1/student/sessions/2/questions/3/','assessment'),
             ('POST','/api/v1/teacher/courses/2/data/advanced/status/','core')):
             resolve(path)
             actual=next((pool for pattern,pool in rows if re.search(pattern,method+':'+path)),'core')
@@ -136,7 +138,9 @@ class SchoolRuntimeTests(SimpleTestCase):
         loader.add_constructor("!override", lambda loader, node: loader.construct_sequence(node))
         loader.add_constructor('!reset', lambda loader, node: loader.construct_sequence(node))
         services = yaml.load((Path(settings.REPOSITORY_DIR) / "deploy" / "docker-compose.school.yml").read_text(), Loader=loader)["services"]
-        for name, workers, alias in (("web", 12, "kt_core"), ("student-read", 2, "kt_student"), ("teacher-read", 1, "kt_teacher")):
+        for name, workers, alias in (("web", 1, "kt_core"), ("auth", 4, "kt_auth"),
+                                     ("assessment", 24, "kt_assessment"), ("capture", 4, "kt_capture"),
+                                     ("student-read", 2, "kt_student"), ("teacher-read", 1, "kt_teacher")):
             self.assertEqual(str(services[name]["environment"]["GUNICORN_WORKERS"]), str(workers))
             self.assertEqual(services[name]["environment"]["POSTGRES_POOL_ALIAS"], alias)
             self.assertIn("mem_limit", services[name])
@@ -146,7 +150,8 @@ class SchoolRuntimeTests(SimpleTestCase):
         self.assertEqual(services["analytics-worker"]["deploy"]["replicas"], 1)
         self.assertEqual(services["student-comparison-worker"]["deploy"]["replicas"], 1)
         template = (Path(settings.REPOSITORY_DIR) / "deploy" / "docker/pgbouncer-school.ini.template").read_text()
-        for alias, size, reserve in (("kt_core", 16, 2), ("kt_student", 6, 1), ("kt_teacher", 4, 1), ("kt_background", 4, 1)):
+        for alias, size, reserve in (("kt_core", 1, 0), ("kt_auth", 4, 0), ("kt_assessment", 8, 2),
+                                     ("kt_capture", 4, 1), ("kt_student", 2, 0), ("kt_teacher", 1, 0), ("kt_background", 3, 0)):
             self.assertRegex(template, rf'{alias} = .*dbname=\$\{{POSTGRES_DB\}}.*pool_size={size} reserve_pool_size={reserve}')
         self.assertNotIn("kt_password", template)
 

@@ -1,8 +1,9 @@
 import { ApiError, createApiClient } from '../api/client'
 import type { CaptureStore, CaptureEvent, CaptureCheckpoint, CaptureResponse, CaptureBundle, CaptureBundleCapability, CaptureMutation, RecordOptions, FlushOptions, ProcessSnapshot, ProcessConfirmation, DurableIntent, SenderOptions, SyncUrls, OnlineOptions, Timer } from './capture-contract'
-import { timedAssessmentStage } from './operation-timing'
+import { measureConfirmedMaterial, timedAssessmentStage } from './operation-timing'
+import { withTransportTimeout } from './api'
 import { MAX_BATCH_SIZE, DEFAULT_SYNC_INTERVAL_MS, PERMANENT_CAPTURE_V2_REJECTIONS, V2_EVENT_TYPES, clone, sanitizePayload, backoffDelay, normalizeMonotonic } from './process-types'
-interface CaptureTransport { (url: string, init: { method: string; headers: Record<string, string>; credentials: string; body: string; keepalive?: boolean }): Promise<{ ok: boolean; status: number; json(): Promise<CaptureResponse> }> }
+interface CaptureTransport { (url: string, init: { method: string; headers: Record<string, string>; credentials: string; body: string; keepalive?: boolean; timeoutMs?: number }): Promise<{ ok: boolean; status: number; json(): Promise<CaptureResponse> }> }
 interface BoundedFlush { recordQueue: Promise<unknown>; timeoutMs: number | null; ignoreVisibility: boolean; keepalive: boolean; boundary?: Record<string, number>; promise: Promise<boolean> | null }
 type CheckpointQueue = { flights: Map<string, Promise<CaptureResponse | null>>; confirmed: Map<string, CaptureResponse>; queue: Promise<void> }
 const checkpointQueues = new WeakMap<CaptureStore, CheckpointQueue>()
@@ -33,7 +34,9 @@ export class ProcessEventCollector {
     this.fetch = async (url, init) => {
       try {
         const client = createApiClient({ fetchImpl: options.fetch, getCsrfToken: () => this.csrfToken, getOperationId: () => init.headers['X-KT-Operation-ID'] })
-        const data = await client.mutate<CaptureResponse>(url, { method: 'POST', body: init.body ? JSON.parse(init.body) : undefined, keepalive: init.keepalive })
+        const data = await withTransportTimeout(signal => client.mutate<CaptureResponse>(url, {
+          method: 'POST', body: init.body ? JSON.parse(init.body) : undefined, keepalive: init.keepalive, signal,
+        }), init.timeoutMs ?? 30000)
         return { ok: true, status: 200, json: async () => data }
       } catch (error) {
         if (!(error instanceof ApiError)) throw error
@@ -174,10 +177,11 @@ export class ProcessEventCollector {
       try {
         const body = JSON.stringify({ capture_bundle: snapshot });
         const response = await this.fetch(this.endpoint, { method: 'POST', headers: this._requestHeaders(intent.operationId as string || null),
-          body, credentials: 'same-origin', keepalive: Boolean(options.keepalive) && new TextEncoder().encode(body).byteLength < 60 * 1024 });
+          body, credentials: 'same-origin', keepalive: Boolean(options.keepalive) && new TextEncoder().encode(body).byteLength < 60 * 1024,
+          timeoutMs: options.timeoutMs });
         const result = await response.json();
         if (!response.ok || !result.success) { completed = false; break; }
-        await timedAssessmentStage('ack', () => this._acknowledgeProcessSnapshot(snapshot, result, true), intent.operationId as string || null);
+        await timedAssessmentStage('ack', () => this._acknowledgeProcessSnapshot(snapshot, result, true, intent.operationId as string || null), intent.operationId as string || null);
         await this.outbox.writeMetadata(key, null);
         for (const notify of this.progressWaiters) notify();
         this.progressWaiters.clear();
@@ -224,6 +228,7 @@ export class ProcessEventCollector {
           body,
           credentials: 'same-origin',
           keepalive: Boolean(options.keepalive) && new TextEncoder().encode(body).byteLength < 60 * 1024,
+          timeoutMs: options.timeoutMs,
         });
         responseDocument = await response.json();
       } catch {
@@ -471,6 +476,7 @@ export class ProcessEventCollector {
           body: JSON.stringify(checkpoint),
           credentials: 'same-origin',
           keepalive: Boolean(options.keepalive) || checkpoint.trigger === 'pagehide' || checkpoint.trigger === 'session_end',
+          timeoutMs: options.timeoutMs,
         });
         if (!response.ok) return null;
         const result = await response.json();
@@ -610,7 +616,7 @@ export class ProcessEventCollector {
     const key = `capture-mutation:${intent.sessionId}:${intent.attemptId}`;
     const saved = await this.outbox.readMetadata<CaptureMutation>(key);
     if (!saved || JSON.stringify(saved) !== JSON.stringify(intent)) throw new Error('Capture confirmation does not match the durable operation.');
-    await timedAssessmentStage('ack', () => this._acknowledgeProcessSnapshot(intent.processSnapshot, response, true), intent.operationId ?? null);
+    await timedAssessmentStage('ack', () => this._acknowledgeProcessSnapshot(intent.processSnapshot, response, true, intent.operationId ?? null), intent.operationId ?? null);
     await this.outbox.writeMetadata(key, null);
     const state = await this.outbox.captureState(this.clientInstanceId);
     if (state.highestContiguousAcked > this.lastCheckpointedContiguousAck) await this._createCheckpoint('ack_progress', intent.operationId ?? null);
@@ -636,7 +642,7 @@ export class ProcessEventCollector {
     return this._acknowledgeProcessSnapshot(snapshot, response);
   }
 
-  async _acknowledgeProcessSnapshot(snapshot: ProcessSnapshot, response: ProcessConfirmation, exactOrdinal = false) {
+  async _acknowledgeProcessSnapshot(snapshot: ProcessSnapshot, response: ProcessConfirmation, exactOrdinal = false, operationId = this.operationId ?? null) {
     const acknowledgements = response?.acknowledgements;
     const checkpointIds = response?.checkpoint_ids;
     const eventSequences = new Set(snapshot.events.map((event) => event.client_sequence_no));
@@ -663,6 +669,7 @@ export class ProcessEventCollector {
         this.lastCheckpointedContiguousAck = Math.max(this.lastCheckpointedContiguousAck, checkpoint.highest_contiguous_acked_sequence_no);
       }
     }
+    measureConfirmedMaterial(snapshot, operationId);
   }
 
   async synchronizeClock({ createUrl, finalizeUrl }: SyncUrls = {}) {

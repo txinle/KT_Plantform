@@ -1,10 +1,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createStudentAssessmentApi } from './api'
+import { createApiClient, MutationOutcomeUnknownError } from '@/api/client'
 import { writeAdmissionCredentials } from './admission'
 
 describe('student assessment API', () => {
   afterEach(() => sessionStorage.clear())
+
+  it('aborts a close transport at 30 seconds and reports an unknown outcome', async () => {
+    vi.useFakeTimers()
+    const fetchImpl = vi.fn((_url, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(init.signal!.reason))
+    }))
+    try {
+      const api = createStudentAssessmentApi(createApiClient({ fetchImpl: fetchImpl as never }))
+      const close = api.post('/release/', { capture_operation_id: 'original' }, { timeoutMs: 30000 })
+      const outcome = expect(close).rejects.toBeInstanceOf(MutationOutcomeUnknownError)
+      await vi.advanceTimersByTimeAsync(29999)
+      expect(fetchImpl.mock.calls[0]![1].signal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await outcome
+      expect(fetchImpl.mock.calls[0]![1].signal?.aborted).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
 
   it.each([undefined, 19])('sends only permit fields for the session, including task %s', async taskId => {
     writeAdmissionCredentials(19, { admission_token: 'permit', admission_action: 'start', session_id: 7 })

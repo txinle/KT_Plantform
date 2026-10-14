@@ -23,7 +23,7 @@ class ArchitectureLoadTests(unittest.TestCase):
         import school_architecture_runtime as runtime
         subject = object.__new__(runtime.ArchitectureRuntime)
         subject.candidate = Path('/candidate/deploy')
-        subject.config = {}
+        subject.config = {'source_config': {}, 'images': {}}
         subject.native_probe = None
         subject.children = []
         subject.compose = []

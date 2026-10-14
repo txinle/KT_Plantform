@@ -9,6 +9,7 @@ const asset = (url) => url.origin === self.location.origin && url.pathname.start
 const immutableAsset = (url) => (url.pathname.startsWith('/static/spa-assets/assets/')
   && /-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/.test(url.pathname)) || /\.[a-f0-9]{12}\.[a-z0-9]+$/.test(url.pathname);
 let identityEpoch = 0;
+const commonPreparations = new Map();
 async function identity() {
   const cache = await caches.open(META_CACHE);
   const response = await cache.match(META_URL);
@@ -32,6 +33,7 @@ function escapedBootstrap(bootstrap) {
 }
 async function clearRuntimeCaches() {
   identityEpoch++;
+  commonPreparations.clear();
   const names = await caches.keys();
   await Promise.all(names.filter(name => name.startsWith('kt-capture-v2-runtime-')).map(name => caches.delete(name)));
 }
@@ -52,6 +54,49 @@ async function prepareResources(cache, resources) {
     }
   }));
   if (failure) throw failure;
+}
+async function prepareCommonResources(scope, shell, resources) {
+  const key = pageCacheName(scope);
+  const previous = commonPreparations.get(key);
+  const pending = (async () => {
+    let prepared = previous && await previous;
+    if (!prepared) {
+      const cache = await caches.open(assetCacheName(scope));
+      let shellResponse = await cache.match(shell.href);
+      if (!shellResponse) {
+        const response = await fetch(shell.href, { credentials: 'same-origin', cache: 'no-cache' });
+        if (!response.ok) throw new Error('capture_shell_unavailable');
+        const html = await response.text();
+        if (!html.includes(`name="kt-shell-build" content="${scope.buildVersion}"`) || !html.includes('id="kt-app"')) throw new Error('capture_shell_version_mismatch');
+        shellResponse = new Response(html, { headers: { 'Content-Type': 'text/html' } });
+        await cache.put(shell.href, shellResponse.clone());
+      }
+      const html = await shellResponse.text();
+      const shellResources = [...html.matchAll(/(?:src|href)=["']([^"']+)["']/g)].map(match => match[1]);
+      const manifestUrl = `${self.location.origin}/assessment/process/capture-v2/offline-resources/${encodeURIComponent(key)}`;
+      const manifest = await cache.match(manifestUrl);
+      const priorResources = manifest ? await manifest.json() : [];
+      prepared = { cache, manifestUrl, urls: new Set(), required: [...priorResources, ...shellResources] };
+    }
+    const required = [...new Set([...prepared.required, ...resources].map(resource => new URL(resource, self.location.origin).href))]
+      .filter(resource => asset(new URL(resource)));
+    const missing = required.filter(resource => !prepared.urls.has(resource));
+    if (missing.length) {
+      await prepareResources(prepared.cache, missing);
+      const urls = new Set([...prepared.urls, ...missing]);
+      // Retain the common URL list so worker restarts cannot skip mandatory assets.
+      await prepared.cache.put(prepared.manifestUrl, new Response(JSON.stringify([...urls]), {
+        headers: { 'Content-Type': 'application/json' },
+      }));
+      prepared.urls = urls;
+    }
+    return prepared;
+  })().catch(error => {
+    if (commonPreparations.get(key) === pending) commonPreparations.delete(key);
+    throw error;
+  });
+  commonPreparations.set(key, pending);
+  await pending;
 }
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil((async () => {
@@ -150,19 +195,7 @@ self.addEventListener('message', (event) => {
       if (!authorizedState(event.data.state, bootstrap)) throw new Error('invalid_authorized_dto');
       const shell = new URL(event.data.shell, self.location.origin);
       if (shell.origin !== self.location.origin || shell.pathname !== `/static/spa-assets/capture-shell-${scope.buildVersion}.html`) throw new Error('invalid_shell_scope');
-      const resourceCache = await caches.open(assetCacheName(scope));
-      let shellResponse = await resourceCache.match(shell.href);
-      if (!shellResponse) {
-        const response = await fetch(shell.href, { credentials: 'same-origin', cache: 'no-cache' });
-        if (!response.ok) throw new Error('capture_shell_unavailable');
-        const html = await response.text();
-        if (!html.includes(`name="kt-shell-build" content="${scope.buildVersion}"`) || !html.includes('id="kt-app"')) throw new Error('capture_shell_version_mismatch');
-        shellResponse = new Response(html, { headers: { 'Content-Type': 'text/html' } });
-        await resourceCache.put(shell.href, shellResponse.clone());
-      }
-      const html = await shellResponse.text();
-      const shellResources = [...html.matchAll(/(?:src|href)=["']([^"']+)["']/g)].map(match => match[1]);
-      await prepareResources(resourceCache, [...event.data.resources, ...shellResources]);
+      await prepareCommonResources(scope, shell, event.data.resources);
       if (epoch !== identityEpoch) throw new Error('offline_identity_changed');
       const cache = await caches.open(pageCacheName(scope));
       await cache.put(envelopeUrl(page), new Response(JSON.stringify({ bootstrap, state: event.data.state, shell: shell.href }), {
@@ -176,7 +209,7 @@ self.addEventListener('message', (event) => {
       if (epoch !== identityEpoch) throw new Error('offline_identity_changed');
       await metadata.put(META_URL, new Response(JSON.stringify(scope), { headers: { 'Content-Type': 'application/json' } }));
       if (epoch !== identityEpoch) throw new Error('offline_identity_changed');
-      event.ports[0]?.postMessage({ ok: true });
+      event.ports[0]?.postMessage({ ok: true, commonResourcesPrepared: true });
     } catch (error) { event.ports[0]?.postMessage({ ok: false, error: String(error) }); }
   })());
 });

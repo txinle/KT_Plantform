@@ -1054,6 +1054,46 @@ paths:
                   leave_event_id:
                     type: string
                     format: uuid
+                  next_entry:
+                    type: object
+                    properties:
+                      assignment_id:
+                        type: integer
+                        minimum: 1
+                      reason:
+                        type: string
+                        enum:
+                        - navigation_click
+                        - resume
+                      navigation_id:
+                        type: string
+                        format: uuid
+                      client_occurred_at:
+                        type: string
+                        format: date-time
+                        description: Timezone-aware timestamp.
+                      client_monotonic_ms:
+                        oneOf:
+                        - type: number
+                          minimum: 0
+                        - type: string
+                        description: Finite nonnegative decimal, validated by the
+                          existing domain parser.
+                      client_time_origin:
+                        type: string
+                        format: date-time
+                        description: Timezone-aware timestamp.
+                    additionalProperties: false
+                    required:
+                    - assignment_id
+                    - client_monotonic_ms
+                    - client_occurred_at
+                    - client_time_origin
+                    - navigation_id
+                    - reason
+                    description: Frozen target entry for a session that selected transition
+                      protocol v1 at creation. Executed after the source mutation
+                      commits, using a separate transaction and current deadline checks.
                 additionalProperties: false
                 required:
                 - capture_bundle
@@ -1321,6 +1361,44 @@ paths:
                           type: string
                           format: uuid
                           nullable: true
+                        next_entry:
+                          oneOf:
+                          - type: object
+                            properties:
+                              committed:
+                                type: boolean
+                                enum:
+                                - true
+                              runtime:
+                                $ref: '#/components/schemas/StudentRuntimeQuestionEntry'
+                            additionalProperties: false
+                            required:
+                            - committed
+                            - runtime
+                          - type: object
+                            properties:
+                              committed:
+                                type: boolean
+                                enum:
+                                - false
+                              error:
+                                type: object
+                                properties:
+                                  code:
+                                    type: string
+                                  message:
+                                    type: string
+                                additionalProperties: false
+                                required:
+                                - code
+                                - message
+                            additionalProperties: false
+                            required:
+                            - committed
+                            - error
+                          description: The target outcome is independent of the confirmed
+                            source receipt. Retry only the original frozen target
+                            material after partial success.
                       additionalProperties: false
                       required:
                       - acknowledgements
@@ -4342,6 +4420,34 @@ paths:
                       request_id:
                         type: string
           description: Confirmed domain response; wire envelope is added once by middleware.
+  /api/v1/auth/bootstrap/:
+    get:
+      operationId: auth_bootstrap_retrieve
+      tags:
+      - auth
+      security:
+      - SessionAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/BootstrapContext'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
   /api/v1/auth/csrf/:
     get:
       operationId: auth_csrf_retrieve
@@ -4399,7 +4505,7 @@ paths:
                 - meta
                 properties:
                   data:
-                    $ref: '#/components/schemas/SessionContext'
+                    $ref: '#/components/schemas/LoginContext'
                   meta:
                     type: object
                     required:
@@ -5191,6 +5297,46 @@ paths:
                     description: Bounded durable evidence bundle; complete mutation
                       body at most 8388608 bytes. Event/session/attempt links, boundary
                       and checkpoint counters are domain-validated.
+                  next_entry:
+                    type: object
+                    properties:
+                      assignment_id:
+                        type: integer
+                        minimum: 1
+                      reason:
+                        type: string
+                        enum:
+                        - navigation_click
+                        - resume
+                      navigation_id:
+                        type: string
+                        format: uuid
+                      client_occurred_at:
+                        type: string
+                        format: date-time
+                        description: Timezone-aware timestamp.
+                      client_monotonic_ms:
+                        oneOf:
+                        - type: number
+                          minimum: 0
+                        - type: string
+                        description: Finite nonnegative decimal, validated by the
+                          existing domain parser.
+                      client_time_origin:
+                        type: string
+                        format: date-time
+                        description: Timezone-aware timestamp.
+                    additionalProperties: false
+                    required:
+                    - assignment_id
+                    - client_monotonic_ms
+                    - client_occurred_at
+                    - client_time_origin
+                    - navigation_id
+                    - reason
+                    description: Frozen target entry for a session that selected transition
+                      protocol v1 at creation. Executed after the source mutation
+                      commits, using a separate transaction and current deadline checks.
                 additionalProperties: false
                 required:
                 - leave_event_id
@@ -5514,6 +5660,44 @@ paths:
                           type: boolean
                           enum:
                           - true
+                        next_entry:
+                          oneOf:
+                          - type: object
+                            properties:
+                              committed:
+                                type: boolean
+                                enum:
+                                - true
+                              runtime:
+                                $ref: '#/components/schemas/StudentRuntimeQuestionEntry'
+                            additionalProperties: false
+                            required:
+                            - committed
+                            - runtime
+                          - type: object
+                            properties:
+                              committed:
+                                type: boolean
+                                enum:
+                                - false
+                              error:
+                                type: object
+                                properties:
+                                  code:
+                                    type: string
+                                  message:
+                                    type: string
+                                additionalProperties: false
+                                required:
+                                - code
+                                - message
+                            additionalProperties: false
+                            required:
+                            - committed
+                            - error
+                          description: The target outcome is independent of the confirmed
+                            source receipt. Retry only the original frozen target
+                            material after partial success.
                         to_assignment_id:
                           type: integer
                           minimum: 1
@@ -15786,6 +15970,18 @@ components:
     BlankEnum:
       enum:
       - ''
+    BootstrapContext:
+      type: object
+      properties:
+        csrf_token:
+          type: string
+        user:
+          allOf:
+          - $ref: '#/components/schemas/ApiUser'
+          nullable: true
+      required:
+      - csrf_token
+      - user
     ClassAnalysisScope:
       type: object
       properties:
@@ -16910,12 +17106,15 @@ components:
         quality_warnings:
           type: integer
           minimum: 0
+          nullable: true
         process_records:
           type: integer
           minimum: 0
+          nullable: true
         not_evaluable:
           type: integer
           minimum: 0
+          nullable: true
       required:
       - completed_sessions
       - not_evaluable
@@ -16934,6 +17133,10 @@ components:
           $ref: '#/components/schemas/DataCenterTeachingScope'
         facts:
           $ref: '#/components/schemas/DataCenterFacts'
+        preparation:
+          allOf:
+          - $ref: '#/components/schemas/DataCenterPreparation'
+          nullable: true
         recent_exports:
           type: array
           items:
@@ -17544,6 +17747,16 @@ components:
           minimum: 0
       required:
       - imported
+    LoginContext:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/ApiUser'
+        csrf_token:
+          type: string
+      required:
+      - csrf_token
+      - user
     LoginRequest:
       type: object
       properties:
@@ -22495,6 +22708,8 @@ components:
     StudentRuntimeProcess:
       type: object
       properties:
+        transition_entry:
+          $ref: '#/components/schemas/TransitionEntryCapability'
         capture_bundle:
           $ref: '#/components/schemas/AtomicSubmissionCapability'
         close_bundle:
@@ -24603,6 +24818,16 @@ components:
       description: |-
         * `applicable` - applicable
         * `not_applicable` - not_applicable
+    TransitionEntryCapability:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        version:
+          type: integer
+      required:
+      - enabled
+      - version
     VisibilityE8aEnum:
       enum:
       - private

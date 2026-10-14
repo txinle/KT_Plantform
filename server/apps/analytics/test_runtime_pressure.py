@@ -121,6 +121,14 @@ class RuntimePressureClaimTests(TestCase):
         with patch('apps.analytics.runtime_pressure.runtime_pressure', return_value=state()):
             self.assertEqual(claim_export_job(worker_id='worker').pk, job.pk)
 
+    def test_publication_pressure_blocks_before_queries(self):
+        from apps.experiments.publication_jobs import claim_publish_operation
+        for mode in ('capture_priority', 'capture_emergency'):
+            with self.subTest(mode=mode), patch(
+                'apps.analytics.runtime_pressure.runtime_pressure', return_value=state(mode)
+            ), self.assertNumQueries(0):
+                self.assertIsNone(claim_publish_operation(worker_id='worker'))
+
 
 class RuntimePressureCommandTests(SimpleTestCase):
     def test_comparison_emergency_does_not_start_a_unit(self):

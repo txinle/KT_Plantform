@@ -24,6 +24,12 @@ x-test-env: &test-env
 
 services:
   db:
+    # Owned kt-school-e2e database container only; never apply to shared production PostgreSQL.
+    mem_limit: 4G
+    command: !override ["postgres", "-c", "max_connections=64", "-c", "shared_buffers=1GB",
+      "-c", "effective_cache_size=3GB", "-c", "work_mem=4MB", "-c", "maintenance_work_mem=128MB",
+      "-c", "autovacuum_work_mem=64MB", "-c", "max_wal_size=2GB", "-c", "checkpoint_completion_target=0.9",
+      "-c", "fsync=on", "-c", "synchronous_commit=on", "-c", "full_page_writes=on"]
     environment:
       POSTGRES_DB: kt_e2e
       POSTGRES_USER: ${SCHOOL_TEST_POSTGRES_USER:-kt_user}
@@ -37,15 +43,14 @@ services:
     <<: *test-env
   web:
     <<: *test-env
-    environment:
-      <<: *test-environment
-      GUNICORN_WORKERS: ${SCHOOL_TEST_WEB_WORKERS:-16}
+  auth:
+    <<: *test-env
+  assessment:
+    <<: *test-env
+  capture:
+    <<: *test-env
   student-read:
     <<: *test-env
-    environment:
-      <<: *test-environment
-      GUNICORN_WORKERS: 2
-    cpus: 2
   teacher-read:
     <<: *test-env
   analytics-worker:

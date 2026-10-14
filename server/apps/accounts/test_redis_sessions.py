@@ -3,6 +3,7 @@ import json
 import os
 import runpy
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import skipUnless
 from unittest.mock import patch
@@ -174,6 +175,49 @@ class RealRedisSessionTests(SimpleTestCase):
         self.assertFalse(session.exists(old_key))
         self.assertEqual(self.store_class(session.session_key)['value'], 1)
 
+    def test_idle_touch_only_writes_at_the_threshold_and_preserves_signed_payload(self):
+        session = self.store_class()
+        session['value'] = 1
+        session.set_expiry(1830)
+        session.save()
+        key = self.prefix + session.session_key
+        signed = self.redis.get(key)
+        self.redis.pexpire(key, 1810000)
+        untouched, renewed = session.touch_idle(1800)
+        self.assertFalse(renewed)
+        self.assertGreater(untouched, 1800000)
+        self.assertLessEqual(untouched, 1810000)
+        self.redis.pexpire(key, 1800000)
+        renewed_ttl, renewed = session.touch_idle(1800)
+        self.assertEqual(renewed_ttl, 1830000)
+        self.assertTrue(renewed)
+        self.assertEqual(self.redis.get(key), signed)
+        loaded = self.store_class(session.session_key)
+        loaded.load()
+        loaded.touch_idle(1800)
+        self.assertFalse(loaded.modified)
+
+    def test_concurrent_idle_touches_renew_exactly_once(self):
+        session = self.store_class()
+        session['value'] = 1
+        session.save()
+        key = self.prefix + session.session_key
+        self.redis.pexpire(key, 100000)
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            touches = list(executor.map(lambda _: self.store_class(session.session_key).touch_idle(1800), range(16)))
+        self.assertEqual(sum(renewed for _, renewed in touches), 1)
+        self.assertTrue(all(1800000 < ttl <= 1830000 for ttl, _ in touches))
+
+    def test_idle_touch_never_recreates_a_key_deleted_by_another_pool(self):
+        session = self.store_class()
+        session['value'] = 1
+        session.save()
+        inflight = self.store_class(session.session_key)
+        self.assertEqual(inflight['value'], 1)
+        session.flush()
+        self.assertEqual(inflight.touch_idle(1800), (-2, False))
+        self.assertFalse(self.redis.exists(self.prefix + inflight.session_key))
+
 
 @skipUnless(os.getenv('KT_SESSION_TEST_REDIS_URL'), 'requires explicit isolated real Redis')
 @override_settings(SESSION_ENGINE=ENGINE, CANONICAL_PUBLIC_ORIGIN='')
@@ -204,7 +248,8 @@ class RedisAuthenticationTests(TestCase):
         session.set_expiry(60)
         session.save()
         self.assertEqual(client.get('/api/v1/auth/session/').status_code, 200)
-        self.assertEqual(client.session.get_expiry_age(), 1800)
+        self.assertGreater(self.redis.ttl(settings.SESSION_REDIS_KEY_PREFIX + client.session.session_key), 1800)
+        self.assertLessEqual(self.redis.ttl(settings.SESSION_REDIS_KEY_PREFIX + client.session.session_key), 1830)
         old_key = client.session.session_key
         client.logout()
         self.assertFalse(self.redis.exists(settings.SESSION_REDIS_KEY_PREFIX + old_key))
@@ -215,3 +260,118 @@ class RedisAuthenticationTests(TestCase):
         session.save()
         self.assertEqual(client.get('/api/v1/auth/session/').status_code, 200)
         self.assertLessEqual(client.session.get_expiry_age(), 600)
+
+    def test_student_read_touches_ttl_without_resaving_session_and_cookie_matches_remaining_ttl(self):
+        student = User.objects.create_user(username='ttl-student', password='test-password',
+                                          role=User.Role.STUDENT, student_number='TTL-1')
+        client = Client()
+        client.force_login(student)
+        key = settings.SESSION_REDIS_KEY_PREFIX + client.session.session_key
+        self.redis.pexpire(key, 1810000)
+        signed = self.redis.get(key)
+        from apps.accounts.redis_sessions import SessionStore
+        with patch.object(SessionStore, 'save', autospec=True, wraps=SessionStore.save) as save:
+            response = client.get('/api/v1/auth/bootstrap/')
+        self.assertEqual(response.status_code, 200)
+        save.assert_not_called()
+        self.assertEqual(self.redis.get(key), signed)
+        self.assertGreater(self.redis.ttl(key), 1800)
+        cookie_age = int(response.cookies[settings.SESSION_COOKIE_NAME]['max-age'])
+        self.assertLessEqual(cookie_age, 1810)
+        self.assertGreaterEqual(cookie_age, 1808)
+        self.redis.pexpire(key, 100000)
+        response = client.get('/api/v1/auth/bootstrap/')
+        self.assertGreaterEqual(self.redis.ttl(key), 1828)
+        self.assertEqual(self.redis.get(key), signed)
+        self.assertLessEqual(int(response.cookies[settings.SESSION_COOKIE_NAME]['max-age']), 1830)
+
+    def test_student_login_persists_idle_grace_and_rotated_csrf_then_cross_pool_logout(self):
+        student = User.objects.create_user(username='ttl-login', password='test-password',
+                                          role=User.Role.STUDENT, student_number='TTL-LOGIN')
+        client = Client(enforce_csrf_checks=True)
+        token = domain_payload(client.get('/api/v1/auth/bootstrap/'))['csrf_token']
+        response = client.post('/api/v1/auth/login/', json.dumps({'username': student.username, 'password': 'test-password'}),
+                               content_type='application/json', HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(response.status_code, 200)
+        key = settings.SESSION_REDIS_KEY_PREFIX + client.session.session_key
+        self.assertGreaterEqual(self.redis.ttl(key), 1828)
+        self.assertEqual(client.session.get_expiry_age(), 1830)
+        self.assertEqual(int(response.cookies[settings.SESSION_COOKIE_NAME]['max-age']), 1830)
+        other_pool = Client(enforce_csrf_checks=True)
+        other_pool.cookies = client.cookies.copy()
+        self.assertEqual(other_pool.post('/api/v1/auth/logout/',
+                         HTTP_X_CSRFTOKEN=domain_payload(response)['csrf_token']).status_code, 204)
+        self.assertFalse(self.redis.exists(key))
+        self.assertIsNone(domain_payload(client.get('/api/v1/auth/bootstrap/'))['user'])
+
+    def test_student_payload_mutation_saves_immediately_with_idle_ttl(self):
+        from apps.accounts.redis_sessions import SessionStore
+        session = SessionStore()
+        session.student_idle_timeout = 1800
+        session['value'] = 1
+        session.save()
+        key = settings.SESSION_REDIS_KEY_PREFIX + session.session_key
+        session['value'] = 2
+        session.save()
+        self.assertEqual(SessionStore(session.session_key)['value'], 2)
+        self.assertGreaterEqual(self.redis.ttl(key), 1828)
+        self.assertLessEqual(self.redis.ttl(key), 1830)
+
+    def test_idle_touch_outage_is_503_and_does_not_claim_logout(self):
+        student = User.objects.create_user(username='ttl-outage', password='test-password',
+                                          role=User.Role.STUDENT, student_number='TTL-OUTAGE')
+        self.client.force_login(student)
+        from apps.accounts.redis_sessions import SessionStoreUnavailable
+        with patch('apps.accounts.redis_sessions.SessionStore.touch_idle',
+                   side_effect=SessionStoreUnavailable('eval'), create=True):
+            response = self.client.get('/api/v1/auth/bootstrap/')
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()['error']['code'], 'SESSION_STORE_UNAVAILABLE')
+        self.assertNotIn(settings.SESSION_COOKIE_NAME, response.cookies)
+
+    def test_password_change_rotates_the_key_and_immediately_persists_auth_hash(self):
+        student = User.objects.create_user(username='ttl-password', password='test-password',
+                                          role=User.Role.STUDENT, student_number='TTL-PASSWORD')
+        self.client.force_login(student)
+        old_key = self.client.session.session_key
+        response = self.client.post('/api/v1/auth/password/change/',
+                                    json.dumps({'current_password': 'test-password',
+                                                'new_password1': 'Changed-Unique-Pass-93',
+                                                'new_password2': 'Changed-Unique-Pass-93'}),
+                                    content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        new_session = self.client.session
+        self.assertNotEqual(new_session.session_key, old_key)
+        self.assertFalse(self.redis.exists(settings.SESSION_REDIS_KEY_PREFIX + old_key))
+        student.refresh_from_db()
+        self.assertEqual(new_session['_auth_user_hash'], student.get_session_auth_hash())
+        self.assertGreaterEqual(self.redis.ttl(settings.SESSION_REDIS_KEY_PREFIX + new_session.session_key), 1828)
+        self.assertEqual(self.client.get('/api/v1/auth/bootstrap/').status_code, 200)
+
+    def test_logout_during_a_read_response_deletes_cookie_without_recreating_key(self):
+        from apps.accounts.redis_sessions import SessionStore
+        student = User.objects.create_user(username='ttl-concurrent-logout', password='test-password',
+                                          role=User.Role.STUDENT, student_number='TTL-CONCURRENT')
+        self.client.force_login(student)
+        old_key = self.client.session.session_key
+        original = SessionStore.touch_idle
+        def logout_before_touch(store, timeout):
+            self.redis.delete(settings.SESSION_REDIS_KEY_PREFIX + store.session_key)
+            return original(store, timeout)
+        with patch.object(SessionStore, 'touch_idle', logout_before_touch):
+            response = self.client.get('/api/v1/auth/bootstrap/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.cookies[settings.SESSION_COOKIE_NAME]['max-age'], 0)
+        self.assertFalse(self.redis.exists(settings.SESSION_REDIS_KEY_PREFIX + old_key))
+
+    def test_logging_in_as_teacher_from_student_session_does_not_inherit_idle_policy(self):
+        student = User.objects.create_user(username='ttl-switch-student', password='test-password',
+                                          role=User.Role.STUDENT, student_number='TTL-SWITCH')
+        teacher = User.objects.create_user(username='ttl-switch-teacher', password='test-password', role=User.Role.TEACHER)
+        self.client.force_login(student)
+        response = self.client.post('/api/v1/auth/login/',
+                                    json.dumps({'username': teacher.username, 'password': 'test-password'}),
+                                    content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        key = settings.SESSION_REDIS_KEY_PREFIX + self.client.session.session_key
+        self.assertGreater(self.redis.ttl(key), 1830)

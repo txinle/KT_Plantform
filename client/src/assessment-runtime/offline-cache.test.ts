@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const context = vi.hoisted(() => ({ userId: 3, buildVersion: 'a'.repeat(20) }))
 vi.mock('@/app/bootstrap', () => ({
-  getBootstrapContext: () => ({ csrf_token: 'csrf-token' }),
+  getBootstrapContext: () => ({ csrf_token: 'csrf-token', user: { id: context.userId } }),
+}))
+vi.mock('./build-version', () => ({
+  get assessmentBuildVersion() { return context.buildVersion },
+  get assessmentShellUrl() { return `/static/spa-assets/capture-shell-${context.buildVersion}.html` },
 }))
 
 import { clearOfflineAssessmentCache, prepareOfflineQuestion } from './offline-cache'
@@ -32,6 +37,8 @@ class TestMessageChannel {
 
 describe('prepareOfflineQuestion', () => {
   beforeEach(() => {
+    context.userId = 3
+    context.buildVersion = 'a'.repeat(20)
     window.history.replaceState({}, '', '/student/sessions/7/questions/11/')
     Object.defineProperty(globalThis.navigator, 'onLine', { configurable: true, value: true })
     originalServiceWorker = Object.getOwnPropertyDescriptor(globalThis.navigator, 'serviceWorker')
@@ -105,6 +112,105 @@ describe('prepareOfflineQuestion', () => {
       entries.mockRestore()
       script.remove()
     }
+  })
+
+  it('reuses acknowledged common resources while sending each entered question state and bootstrap', async () => {
+    workerResponse = { ok: true, commonResourcesPrepared: true }
+    const resource = 'http://localhost:3000/static/js/assessment.js'
+    const entries = vi.spyOn(performance, 'getEntriesByType').mockReturnValue([{ name: resource }] as PerformanceEntry[])
+    try {
+      await prepareOfflineQuestion(state)
+      await prepareOfflineQuestion({ session_id: 7, assignment: { assignment_id: 12 },
+        navigation: [{ current: true, url: '/student/sessions/7/questions/12/' }],
+      } as never)
+      expect(worker.postMessage).toHaveBeenCalledTimes(2)
+      expect(worker.postMessage.mock.calls[0]![0]).toMatchObject({ resources: [resource] })
+      expect(postedMessage).toMatchObject({ resources: [], api: '/api/v1/student/sessions/7/questions/12/',
+        state: { assignment: { assignment_id: 12 } }, bootstrap: { assignment_id: 12 } })
+    } finally { entries.mockRestore() }
+  })
+
+  it('sends newly loaded static resources after common preparation', async () => {
+    workerResponse = { ok: true, commonResourcesPrepared: true }
+    const first = 'http://localhost:3000/static/js/assessment.js'
+    const second = 'http://localhost:3000/static/js/question-media.js'
+    const entries = vi.spyOn(performance, 'getEntriesByType').mockReturnValue([{ name: first }] as PerformanceEntry[])
+    try {
+      await prepareOfflineQuestion(state)
+      entries.mockReturnValue([{ name: first }, { name: second }] as PerformanceEntry[])
+      await prepareOfflineQuestion(state)
+      expect(postedMessage).toMatchObject({ resources: [second] })
+    } finally { entries.mockRestore() }
+  })
+
+  it('keeps sending all common resources to an active worker without manifest support', async () => {
+    workerResponse = { ok: true }
+    const resource = 'http://localhost:3000/static/js/assessment.js'
+    const entries = vi.spyOn(performance, 'getEntriesByType').mockReturnValue([{ name: resource }] as PerformanceEntry[])
+    try {
+      await prepareOfflineQuestion(state)
+      await prepareOfflineQuestion(state)
+      expect(postedMessage).toMatchObject({ resources: [resource] })
+    } finally { entries.mockRestore() }
+  })
+
+  it('retries common resources after failed question readiness', async () => {
+    const resource = 'http://localhost:3000/static/js/assessment.js'
+    const entries = vi.spyOn(performance, 'getEntriesByType').mockReturnValue([{ name: resource }] as PerformanceEntry[])
+    try {
+      workerResponse = { ok: false, error: 'QuotaExceededError' }
+      await expect(prepareOfflineQuestion(state)).rejects.toThrow('QuotaExceededError')
+      workerResponse = { ok: true, commonResourcesPrepared: true }
+      await prepareOfflineQuestion(state)
+      expect(postedMessage).toMatchObject({ resources: [resource] })
+      await prepareOfflineQuestion(state)
+      expect(postedMessage).toMatchObject({ resources: [] })
+    } finally { entries.mockRestore() }
+  })
+
+  it('isolates common preparation by account, assessment session and build and resets it on clear', async () => {
+    workerResponse = { ok: true, commonResourcesPrepared: true }
+    const resource = 'http://localhost:3000/static/js/assessment.js'
+    const entries = vi.spyOn(performance, 'getEntriesByType').mockReturnValue([{ name: resource }] as PerformanceEntry[])
+    try {
+      await prepareOfflineQuestion(state)
+      context.userId = 4
+      await prepareOfflineQuestion(state)
+      expect(postedMessage).toMatchObject({ resources: [resource] })
+      await prepareOfflineQuestion({ session_id: 8, assignment: { assignment_id: 11 },
+        navigation: [{ current: true, url: '/student/sessions/8/questions/11/' }],
+      } as never)
+      expect(postedMessage).toMatchObject({ resources: [resource] })
+      context.buildVersion = 'b'.repeat(20)
+      await prepareOfflineQuestion(state)
+      expect(postedMessage).toMatchObject({ resources: [resource], buildVersion: 'b'.repeat(20) })
+      getRegistration.mockResolvedValue({ active: worker })
+      await clearOfflineAssessmentCache()
+      await prepareOfflineQuestion(state)
+      expect(postedMessage).toMatchObject({ resources: [resource] })
+      await prepareOfflineQuestion(state)
+      expect(postedMessage).toMatchObject({ resources: [] })
+    } finally { entries.mockRestore() }
+  })
+
+  it('does not restore common readiness when clear races with an earlier acknowledgement', async () => {
+    workerResponse = { ok: true, commonResourcesPrepared: true }
+    getRegistration.mockResolvedValue({ active: worker })
+    const resource = 'http://localhost:3000/static/js/assessment.js'
+    const entries = vi.spyOn(performance, 'getEntriesByType').mockReturnValue([{ name: resource }] as PerformanceEntry[])
+    let acknowledge!: () => void
+    worker.postMessage.mockImplementationOnce((_message, ports: Array<{ replyTo: TestMessageChannel['port1'] }>) => {
+      acknowledge = () => ports[0]!.replyTo.onmessage?.({ data: { ok: true, commonResourcesPrepared: true } })
+    })
+    try {
+      const preparing = prepareOfflineQuestion(state)
+      await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalledTimes(1))
+      await clearOfflineAssessmentCache()
+      acknowledge()
+      await preparing
+      await prepareOfflineQuestion(state)
+      expect(postedMessage).toMatchObject({ resources: [resource] })
+    } finally { entries.mockRestore() }
   })
 
   it('clears assessment recovery without registering a worker or including user data', async () => {

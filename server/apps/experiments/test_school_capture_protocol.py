@@ -13,6 +13,47 @@ from django.test import SimpleTestCase
 
 
 class SchoolCaptureProtocolTests(SimpleTestCase):
+    def test_transition_entries_require_target_receipt_and_exact_frozen_source_link(self):
+        from datetime import datetime, timezone
+        from decimal import Decimal
+        from apps.experiments.management.commands.verify_school_protocol_load import transition_entry_checks
+        digest=self.module().digest;stamp='2026-10-13T00:00:00Z';now=datetime(2026,10,13,tzinfo=timezone.utc)
+        material={'assignment_id':22,'reason':'navigation_click','navigation_id':'navigation',
+            'client_occurred_at':stamp,'client_monotonic_ms':'1.235','client_time_origin':stamp}
+        receipt={'navigation_id':'navigation','session_id':7,'assignment_id':22,'attempt_id':12,
+            'visit_id':3,'visit_index':1,'entry_event_id':'entered','entered_at':stamp}
+        target={'material':material,'material_sha256':digest(material),'source_acknowledged':True,
+            'outcome':'committed','entry_receipt':receipt}
+        source={'attempt_id':11,'kind':'close','acknowledged':True,'material_fingerprint':'frozen',
+            'next_entry_sha256':digest(material)}
+        ledger={'sessions':{'7':{'transition_entries':{'navigation':target},'capture_mutation_receipts':{'close':source}}}}
+        events=[SimpleNamespace(pk='entered',session_id=7,student_id=9,assignment_id=22,attempt_id=12,
+            event_type='item_entered',correlation_id='navigation',payload={'visit_id':3,'entry_reason':'navigation_click','from_assignment_id':21},
+            client_wall_time_utc=now,client_monotonic_ms=Decimal('1.235'),client_time_origin=now,server_received_at=now)]
+        visits=[SimpleNamespace(pk=3,session_id=7,attempt_id=12,visit_index=1,client_occurred_at=now)]
+        attempts=[SimpleNamespace(pk=11,session_id=7,assignment_id=21),SimpleNamespace(pk=12,session_id=7,assignment_id=22)]
+        sessions=[SimpleNamespace(pk=7,student_id=9)]
+        stored=[SimpleNamespace(token='close',attempt_id=11,kind='close',material_fingerprint='frozen',
+            receipt={'committed':True,'writer_lease_released':True})]
+        def check(): return transition_entry_checks(ledger,sessions,events,attempts,visits,[],stored)
+        self.assertTrue(check()['all_transition_entries_confirmed_and_matched'])
+        for field,value in [('material_sha256','0'*64),('source_acknowledged',False),('entry_receipt',None)]:
+            original=target[field];target[field]=value
+            self.assertFalse(check()['known_transition_entry_integrity_passed'],field)
+            target[field]=original
+        source['next_entry_sha256']='0'*64
+        self.assertFalse(check()['known_transition_entry_integrity_passed'])
+        source['next_entry_sha256']=digest(material)
+        target.update(outcome='retry_required');target.pop('entry_receipt')
+        result=check()
+        self.assertTrue(result['known_transition_entry_integrity_passed'])
+        self.assertFalse(result['all_transition_entries_confirmed_and_matched'])
+        self.assertEqual(result['transition_unknown_entries_persisted'],1)
+        events.clear();visits.clear()
+        self.assertEqual(check()['transition_unknown_entries_missing'],1)
+        ledger['sessions']['7']['transition_entries'].clear();source['acknowledged']=False
+        self.assertTrue(check()['known_transition_entry_integrity_passed'], 'An unacknowledged source has no confirmed target outcome')
+
     def test_sigterm_flushes_partial_material_before_waiting_for_http_threads(self):
         module = self.module()
         before = signal.getsignal(signal.SIGTERM)
@@ -107,10 +148,10 @@ class SchoolCaptureProtocolTests(SimpleTestCase):
             self.assertEqual(body['lease_token'], 'lease')
             sequence = stream.sequence
             runner._browser_close(state, runtime, 'submit')
-            self.assertEqual(calls[1], calls[0])
+            self.assertEqual(len(calls),1)
             self.assertEqual(stream.sequence, sequence)
             runner._browser_flush(state, runtime)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 2)
         self.assertEqual(set(stream.checkpoints), stream.acked_checkpoint_ids)
         planned = runner.ledger['11']['capture_mutation_receipts'][body['capture_operation_id']]
         self.assertEqual(planned['kind'], 'close')

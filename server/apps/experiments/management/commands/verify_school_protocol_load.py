@@ -284,6 +284,72 @@ def confidence_persistence_checks(plan, ledger, sessions, attempts, confidence, 
     return checks
 
 
+def transition_entry_checks(ledger, sessions, events, attempts, visits, navigations, mutations):
+    """Source confirmation and target entry confirmation remain independent facts."""
+    session_map={str(row.pk):row for row in sessions}
+    attempt_map={row.pk:row for row in attempts}
+    visit_map={row.pk:row for row in visits}
+    actual_sources={('navigation',str(row.token)):row for row in navigations}
+    actual_sources.update({('close',str(row.token)):row for row in mutations if row.kind=='close'})
+    entries=defaultdict(list)
+    for event in events:
+        if event.event_type=='item_entered': entries[str(event.correlation_id)].append(event)
+    expected=confirmed=persisted_unknown=missing_unknown=0
+    known=True
+    for session_id,row in ledger['sessions'].items():
+        transitions=row.get('transition_entries',{})
+        sources=[(kind,token,source) for kind,name in (('navigation','navigation_receipts'),('close','capture_mutation_receipts'))
+            for token,source in row.get(name,{}).items() if 'next_entry_sha256' in source]
+        known &= {source['next_entry_sha256'] for _,_,source in sources if source.get('acknowledged')} == {
+            target.get('material_sha256') for target in transitions.values()}
+        for navigation_id,target in transitions.items():
+            expected+=1
+            def matches():
+                session=session_map[session_id]; material=target['material']
+                fields={'assignment_id','reason','navigation_id','client_occurred_at','client_monotonic_ms','client_time_origin'}
+                if (set(material)!=fields or material['navigation_id']!=navigation_id
+                        or target['material_sha256']!=digest(material) or target['source_acknowledged'] is not True
+                        or target['outcome'] not in {'committed','retry_required','unknown'}): return False
+                linked=[(kind,token,source) for kind,token,source in sources if source['next_entry_sha256']==target['material_sha256']]
+                if len(linked)!=1: return False
+                kind,token,source=linked[0]; stored=actual_sources.get((kind,token))
+                attempt=attempt_map[source['attempt_id']]
+                if (not source.get('acknowledged') or stored is None or stored.attempt_id!=attempt.pk
+                        or attempt.session_id!=session.pk or stored.material_fingerprint!=source['material_fingerprint']
+                        or stored.receipt.get('committed') is not True or stored.receipt.get('writer_lease_released') is not True
+                        or material['assignment_id']==attempt.assignment_id): return False
+                actual=entries.get(navigation_id,[])
+                if len(actual)>1: return False
+                if actual:
+                    event=actual[0]
+                    if (event.student_id!=session.student_id or event.assignment_id!=material['assignment_id']
+                            or event.session_id!=session.pk or event.payload['from_assignment_id']!=attempt.assignment_id
+                            or event.payload['entry_reason']!=material['reason']
+                            or not _field_matches(event,'client_wall_time_utc',material['client_occurred_at'])
+                            or not _field_matches(event,'client_monotonic_ms',material['client_monotonic_ms'])
+                            or not _field_matches(event,'client_time_origin',material['client_time_origin'])): return False
+                if target['outcome']!='committed': return not target.get('entry_receipt')
+                receipt=target['entry_receipt']
+                if not actual or receipt is None: return False
+                event=actual[0]; visit=visit_map.get(receipt['visit_id']); target_attempt=attempt_map[event.attempt_id]
+                return (receipt['navigation_id']==navigation_id and receipt['session_id']==session.pk
+                    and receipt['assignment_id']==material['assignment_id'] and receipt['attempt_id']==event.attempt_id
+                    and receipt['entry_event_id']==str(event.pk) and event.payload['visit_id']==receipt['visit_id']
+                    and target_attempt.session_id==session.pk and target_attempt.assignment_id==material['assignment_id']
+                    and visit is not None and visit.session_id==session.pk and visit.attempt_id==event.attempt_id
+                    and visit.visit_index==receipt['visit_index'] and visit.client_occurred_at==event.client_wall_time_utc
+                    and event.server_received_at==datetime.fromisoformat(receipt['entered_at'].replace('Z','+00:00')))
+            try: known &= matches()
+            except (KeyError,TypeError,ValueError,AttributeError): known=False
+            if target.get('outcome')=='committed': confirmed+=1
+            elif entries.get(navigation_id): persisted_unknown+=1
+            else: missing_unknown+=1
+    return {'known_transition_entry_integrity_passed':known,
+        'all_transition_entries_confirmed_and_matched':known and expected==confirmed,
+        'transition_entry_count':expected,'transition_confirmed_entry_count':confirmed,
+        'transition_unknown_entries_persisted':persisted_unknown,'transition_unknown_entries_missing':missing_unknown}
+
+
 def browser_persistence_checks(fixture, ledger, sessions, events, attempts, checkpoints, syncs, visits, submissions, confidence, natural_plan=None):
     """Compare persisted artifacts with the frozen per-client HTTP ledger, never repair them."""
     session_map = {str(row.pk): row for row in sessions}
@@ -598,15 +664,20 @@ class Command(BaseCommand):
                      **({'scenario':CONFIDENCE_ONLY,'synthetic_confidence':True} if natural_plan and natural_plan.get('scenario') == CONFIDENCE_ONLY else {}), 'visit_count': len(visits), 'checkpoint_count': len(checkpoints),
                      'time_sync_count': len(syncs), 'submission_count': len(submissions)}
             extra.update(known_fact_integrity(fixture, ledger, sessions, events, checkpoints, attempts))
-            navigation = navigation_receipt_checks(ledger, list(NavigationReceipt.objects.filter(attempt__session_id__in=ids)))
+            navigation_rows=list(NavigationReceipt.objects.filter(attempt__session_id__in=ids))
+            navigation = navigation_receipt_checks(ledger, navigation_rows)
             extra.update(navigation)
             extra['known_fact_integrity_passed'] &= navigation['known_navigation_integrity_passed']
             checks['all_navigation_receipts_confirmed_and_matched'] = navigation['all_navigation_receipts_confirmed_and_matched']
-            mutations = capture_mutation_receipt_checks(ledger,
-                list(CaptureMutationReceipt.objects.filter(attempt__session_id__in=ids)), events)
+            mutation_rows=list(CaptureMutationReceipt.objects.filter(attempt__session_id__in=ids))
+            mutations = capture_mutation_receipt_checks(ledger, mutation_rows, events)
             extra.update(mutations)
             extra['known_fact_integrity_passed'] &= mutations['known_capture_mutation_integrity_passed']
             checks['all_capture_mutation_receipts_confirmed_and_matched'] = mutations['all_capture_mutation_receipts_confirmed_and_matched']
+            transition=transition_entry_checks(ledger,sessions,events,attempts,visits,navigation_rows,mutation_rows)
+            extra.update(transition)
+            extra['known_fact_integrity_passed'] &= transition['known_transition_entry_integrity_passed']
+            checks['all_transition_entries_confirmed_and_matched']=transition['all_transition_entries_confirmed_and_matched']
             extra['full_workflow_passed'] = all(checks.values())
         return {'database': 'kt_e2e', 'read_only': True, 'evidence_kind': 'http_protocol_persistence', **extra,
             'browser_dom_ime_offline_verified': False, 'student_count': count, 'session_count': len(sessions),

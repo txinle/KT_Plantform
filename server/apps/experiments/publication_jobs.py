@@ -106,6 +106,10 @@ def publish_operation_projection(job):
 
 
 def claim_publish_operation(*, worker_id):
+    from apps.analytics.runtime_pressure import runtime_pressure
+
+    if runtime_pressure()['mode'] in ('capture_priority', 'capture_emergency'):
+        return None
     now = timezone.now()
     with transaction.atomic():
         job = (
