@@ -204,6 +204,47 @@ class TeacherTeachingLegacyApiTests(TestCase):
         self.assertEqual(payload["sessions"], [])
         self.assertEqual(payload["attempts"], [])
 
+    def test_accepts_single_experiment_from_shared_scope(self):
+        response = self.client.get(self.api_url, {
+            "experiment_ids": str(self.experiment.pk),
+            "class_id": self.class_group.pk,
+            "student_id": self.student.pk,
+            "session_id": self.session.pk,
+        })
+        self.assertEqual(response.status_code, 200)
+        payload = domain_payload(response)
+        self.assertEqual(payload["scope"]["values"], self.teaching_scope_query())
+        self.assertTrue(payload["scope"]["is_complete"])
+        self.assertEqual(payload["total_roster_count"], 2)
+        self.assertEqual(payload["attempts"][0]["grade_score"], "1.00")
+
+    def test_multiple_experiments_prompt_selection_without_selecting_one(self):
+        second = Experiment.objects.create(
+            course=self.course, created_by=self.teacher,
+            question_bank=self.experiment.question_bank, name="另一个教学实验",
+        )
+        response = self.client.get(self.api_url, {
+            "experiment_ids": f"{self.experiment.pk},{second.pk}",
+            "class_id": self.class_group.pk,
+        })
+        self.assertEqual(response.status_code, 200)
+        payload = domain_payload(response)
+        self.assertFalse(payload["scope"]["is_complete"])
+        self.assertEqual(payload["blocked_message"], "教学数据一次只查看一个实验，请在上方选择一个实验和班级")
+        self.assertEqual(payload["student_summaries"], [])
+        self.assertEqual(payload["sessions"], [])
+        self.assertEqual(payload["attempts"], [])
+
+    def test_shared_scope_preserves_validation_and_course_authorization(self):
+        for query, status in (
+            ({"experiment_ids": "999999"}, 404),
+            ({"experiment_ids": "invalid"}, 400),
+            ({"experiment_ids": str(self.experiment.pk), "experiment_id": 999999}, 400),
+        ):
+            with self.subTest(query=query):
+                response = self.client.get(self.api_url, {"class_id": self.class_group.pk, **query})
+                self.assertEqual(response.status_code, status)
+
     def test_rejects_an_out_of_scope_student_or_session(self):
         outside_student = User.objects.create_user(
             username="teaching-api-outside-student",

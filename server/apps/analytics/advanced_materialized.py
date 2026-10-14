@@ -398,10 +398,11 @@ def _preparation(session_queryset, current):
     latest = ResearchSessionMaterialization.objects.filter(
         session_id=OuterRef("pk"), projection_version=PROJECTION_VERSION,
         source_revision=OuterRef("research_source_revision"),
-    ).order_by("-created_at", "-pk").values("status")[:1]
+    ).order_by("-created_at", "-pk")
     sessions = session_queryset.annotate(
         has_current=Exists(current.filter(session_id=OuterRef("pk"))),
-        latest_materialization_status=Subquery(latest),
+        latest_materialization_status=Subquery(latest.values("status")[:1]),
+        latest_materialization_created_at=Subquery(latest.values("created_at")[:1]),
         source_stale=Exists(current.filter(
             session_id=OuterRef("pk"), source_revision__lt=F("session__research_source_revision")
         )),
@@ -417,7 +418,7 @@ def _preparation(session_queryset, current):
         total=Count("pk"), ready_count=Count("pk", filter=Q(has_current=True)),
         failed_count=Count("pk", filter=failed), pending_count=Count("pk", filter=pending),
         updating_count=Count("pk", filter=updating), stale_count=Count("pk", filter=Q(source_stale=True)),
-        oldest_pending_at=Min(Coalesce("terminal_at", "completed_at"), filter=pending),
+        oldest_pending_at=Min("latest_materialization_created_at", filter=pending),
     )
     failed_count, pending_count, updating_count = (
         totals["failed_count"], totals["pending_count"], totals["updating_count"]
@@ -429,7 +430,7 @@ def _preparation(session_queryset, current):
         message = f"{failed_count} 名已结束学生的数据整理失败；已有兼容版本仍可查看，缺失的数据暂不显示。"
     elif pending_count:
         state = "preparing"
-        wait_note = f"最早已等待 {oldest_pending_seconds} 秒。" if oldest_pending_seconds is not None else ""
+        wait_note = f"最早已等待 {oldest_pending_seconds} 秒。" if oldest_pending_seconds is not None else "等待任务调度。"
         message = f"{pending_count} 名已结束学生的数据正在后台整理，完成后可刷新查看。{wait_note}"
     elif updating_count:
         state = "updating"

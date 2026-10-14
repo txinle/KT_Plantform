@@ -5,10 +5,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.analytics.request_scopes import (
+    _scope_from_request,
     _teaching_page_context,
     _teaching_scope_display,
     _teaching_scope_from_request,
 )
+from apps.analytics.teaching_scope import TeachingScope
 
 from .teaching_legacy_serializers import TeachingLegacyResponseSerializer
 from .views import _course_for_teacher, _course_payload
@@ -38,8 +40,21 @@ class TeacherTeachingLegacyView(APIView):
     )
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
-        scope = _teaching_scope_from_request(request, course)
+        multiple_experiments = False
+        if request.query_params.get("experiment_ids"):
+            shared_scope = _scope_from_request(request, course)
+            multiple_experiments = len(shared_scope.experiment_ids) > 1
+            values = {}
+            if len(shared_scope.experiment_ids) == 1:
+                values["experiment_id"] = shared_scope.experiment_ids[0]
+                if shared_scope.class_id is not None:
+                    values["class_id"] = shared_scope.class_id
+            scope = TeachingScope.from_mapping(course, values)
+        else:
+            scope = _teaching_scope_from_request(request, course)
         context = _teaching_page_context(request, scope)
+        if multiple_experiments:
+            context["blocked_message"] = "教学数据一次只查看一个实验，请在上方选择一个实验和班级"
         payload = {
             "course": _course_payload(course),
             "scope": {

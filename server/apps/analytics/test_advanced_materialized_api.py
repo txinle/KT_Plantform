@@ -1,4 +1,5 @@
 from apps.api.test_support import domain_payload
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.db import connection
@@ -48,6 +49,49 @@ class AdvancedMaterializedApiTests(TestCase):
         item.refresh_from_db()
         self.assertTrue(item.is_current, item.error)
         return item
+
+    def test_pending_wait_starts_at_current_projection_queue_time(self):
+        now = timezone.now()
+        ExperimentSession.objects.filter(pk=self.session.pk).update(
+            terminal_at=now - timedelta(days=26), completed_at=now - timedelta(days=26),
+        )
+        ResearchSessionMaterialization.objects.create(
+            session=self.session, status="succeeded", is_current=True,
+            projection_version="research-session-v3",
+            source_revision=self.session.research_source_revision,
+        )
+        queued = ResearchSessionMaterialization.objects.create(
+            session=self.session, projection_version=PROJECTION_VERSION,
+            source_revision=self.session.research_source_revision,
+        )
+        ResearchSessionMaterialization.objects.filter(pk=queued.pk).update(
+            created_at=now - timedelta(seconds=120),
+        )
+        with patch("apps.analytics.advanced_materialized.timezone.now", return_value=now):
+            response = self.client.get(self.api("advanced/status/"), self._query())
+        self.assertEqual(response.status_code, 200)
+        preparation = domain_payload(response)["preparation"]
+        self.assertEqual(preparation["pending_count"], 1)
+        self.assertEqual(preparation["oldest_pending_seconds"], 120)
+        self.assertIn("最早已等待 120 秒", preparation["message"])
+
+    def test_missing_current_projection_job_does_not_claim_historical_wait(self):
+        now = timezone.now()
+        ExperimentSession.objects.filter(pk=self.session.pk).update(
+            terminal_at=now - timedelta(days=26), completed_at=now - timedelta(days=26),
+        )
+        ResearchSessionMaterialization.objects.create(
+            session=self.session, status="succeeded", is_current=True,
+            projection_version="research-session-v3",
+            source_revision=self.session.research_source_revision,
+        )
+        response = self.client.get(self.api("advanced/status/"), self._query())
+        self.assertEqual(response.status_code, 200)
+        preparation = domain_payload(response)["preparation"]
+        self.assertEqual(preparation["pending_count"], 1)
+        self.assertIsNone(preparation["oldest_pending_seconds"])
+        self.assertNotIn("已等待", preparation["message"])
+        self.assertIn("等待任务调度", preparation["message"])
 
     def _mark_ready(self, session):
         from .advanced_materialized import (
@@ -214,7 +258,8 @@ class AdvancedMaterializedApiTests(TestCase):
         self.assertIsNone(payload["workspace"]["session"])
         self.assertEqual(payload["preparation"]["state"], "preparing")
         self.assertEqual(payload["preparation"]["pending_count"], 1)
-        self.assertGreaterEqual(payload["preparation"]["oldest_pending_seconds"], 0)
+        self.assertIsNone(payload["preparation"]["oldest_pending_seconds"])
+        self.assertNotIn("已等待", payload["preparation"]["message"])
         self.assertNotIn(self.student.student_number, payload["preparation"]["message"])
 
         quality = domain_payload(self.client.get(self.api("quality/"), self._query()))
