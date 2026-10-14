@@ -20,6 +20,8 @@ from apps.analytics.models import (
     ResearchSessionMaterialization,
     ResearchSessionResponse,
     ResearchSessionVisit,
+    StudentClassTaskComparison,
+    StudentTaskComparisonMember,
 )
 from apps.assessment.models import Attempt, ExperimentSession, ResponseSnapshot
 from apps.assessment.response_snapshot_services import create_response_snapshot
@@ -134,6 +136,9 @@ class ResearchDeletionTests(TestCase):
         self.assertEqual(QuestionConcept.objects.count(), 1)
 
     def test_remove_only_this_class_preserves_other_class_and_shared_release(self):
+        comparisons = [StudentClassTaskComparison.objects.create(class_task=task) for task in self.tasks]
+        members = [StudentTaskComparisonMember.objects.create(comparison=comparison, student=student)
+                   for comparison, student in zip(comparisons, [self.student, self.student_b])]
         shared_job, shared_path = self.export([self.experiment])
         other_job, other_path = self.export([self.experiment], class_id=self.class_group_b.pk)
         remaining_session = self.sessions[1]
@@ -144,6 +149,10 @@ class ResearchDeletionTests(TestCase):
         self.assertTrue(ExperimentSession.objects.filter(pk=remaining_session.pk).exists())
         self.assertTrue(ResponseSnapshot.objects.filter(attempt__session=remaining_session).exists())
         self.assertEqual(ClassExperimentTask.objects.filter(experiment=self.experiment).count(), 1)
+        self.assertFalse(StudentClassTaskComparison.objects.filter(pk=comparisons[0].pk).exists())
+        self.assertFalse(StudentTaskComparisonMember.objects.filter(pk=members[0].pk).exists())
+        self.assertTrue(StudentClassTaskComparison.objects.filter(pk=comparisons[1].pk).exists())
+        self.assertTrue(StudentTaskComparisonMember.objects.filter(pk=members[1].pk).exists())
         self.assertTrue(QuestionSnapshot.objects.filter(version__experiment=self.experiment).exists())
         self.assertFalse(ExportJob.objects.filter(pk=shared_job.pk).exists())
         self.assertFalse(shared_path.exists())
@@ -190,13 +199,21 @@ class ResearchDeletionTests(TestCase):
             sampling_mode=Experiment.SamplingMode.TOTAL_COUNT, sampling_total_count=1)
         ExperimentSamplingKC.objects.create(experiment=empty,
             concept=self.experiment.sampling_kcs.first().concept)
-        self.publish(empty, [self.class_group])
+        task = self.publish(empty, [self.class_group])[0]
+        comparison = StudentClassTaskComparison.objects.create(class_task=task)
+        member = StudentTaskComparisonMember.objects.create(comparison=comparison, student=self.student)
+        other_comparison = StudentClassTaskComparison.objects.create(class_task=self.tasks[0])
+        other_member = StudentTaskComparisonMember.objects.create(comparison=other_comparison, student=self.student)
         url = self.url(experiment=empty)
         preview = self.preview(url)
         self.assertEqual(preview["counts"]["session_count"], 0)
         self.assertEqual(preview["counts"]["class_count"], 1)
         self.assertEqual(self.execute(url, preview).status_code, 200)
         self.assertFalse(Experiment.objects.filter(pk=empty.pk).exists())
+        self.assertFalse(StudentClassTaskComparison.objects.filter(pk=comparison.pk).exists())
+        self.assertFalse(StudentTaskComparisonMember.objects.filter(pk=member.pk).exists())
+        self.assertTrue(StudentClassTaskComparison.objects.filter(pk=other_comparison.pk).exists())
+        self.assertTrue(StudentTaskComparisonMember.objects.filter(pk=other_member.pk).exists())
         self.assertEqual(ExperimentSession.objects.count(), 2)
 
     def test_audit_failure_rolls_back_database_and_keeps_export_file(self):

@@ -21,6 +21,8 @@ from apps.analytics.models import (
     ResearchSessionMaterialization,
     ResearchSessionResponse,
     ResearchSessionVisit,
+    StudentClassTaskComparison,
+    StudentTaskComparisonMember,
 )
 from apps.analytics.research_deletion import affected_export_snapshots, cleanup_state, retire_research_exports
 from apps.assessment import models as assessment
@@ -223,7 +225,10 @@ def _purge_experiment_relations(experiment, counts, class_group=None):
     removed_students = set(participants.values_list("student_id", flat=True))
     if class_group:
         removed_students.update(CourseEnrollment.objects.filter(class_group=class_group).values_list("student_id", flat=True))
-    for queryset in [participants, experiments.ScheduleRevision.objects.filter(class_task_id__in=task_ids), task_query, class_snapshots]:
+    comparisons = StudentClassTaskComparison.objects.filter(class_task_id__in=task_ids)
+    list(comparisons.select_for_update().order_by("pk").values_list("pk", flat=True))
+    for queryset in [StudentTaskComparisonMember.objects.filter(comparison__in=comparisons), comparisons,
+                     participants, experiments.ScheduleRevision.objects.filter(class_task_id__in=task_ids), task_query, class_snapshots]:
         _raw_remove(queryset, counts)
     preview_results = experiments.PublishPreviewClassResult.objects.filter(
         Q(randomization_identity_id__in=root_ids) | Q(publish_plan_class_id__in=plan_class_ids))
