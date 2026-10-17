@@ -12,6 +12,7 @@ vi.mock('vue-router', () => ({
   RouterView: { template: '<div data-router-view />' },
 }))
 vi.mock('@/app/bootstrap', () => ({
+  getAuthenticationGeneration: () => 1,
   getBootstrapContext: () => ({
     csrf_token: 'csrf',
     user: { display_name: '学生一', student_number: 'STUDENT-001', username: 'student-one' },

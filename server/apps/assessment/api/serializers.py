@@ -45,6 +45,22 @@ class StudentSessionEntrySerializer(serializers.Serializer):
     question_url = serializers.CharField()
     admission_token = serializers.CharField(required=False, read_only=True)
     admission_action = serializers.CharField(required=False, read_only=True)
+    runtime = serializers.JSONField(required=False, read_only=True)
+    admission_execution_id = serializers.UUIDField(required=False, allow_null=True, read_only=True)
+
+
+class StudentPreparedStartSerializer(serializers.Serializer):
+    admission_token = serializers.CharField(required=False, max_length=128)
+    client_instance_id = serializers.UUIDField(required=False)
+    navigation_id = serializers.UUIDField(required=False)
+    client_occurred_at = serializers.DateTimeField(required=False)
+    client_monotonic_ms = serializers.DecimalField(max_digits=20, decimal_places=3, required=False)
+    client_time_origin = serializers.DateTimeField(required=False)
+
+
+class StudentPreparedStartPendingSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=('executing',))
+    retry_after_seconds = serializers.IntegerField(min_value=1)
 
 
 class StudentAdmissionStatusSerializer(serializers.Serializer):
@@ -53,7 +69,7 @@ class StudentAdmissionStatusSerializer(serializers.Serializer):
 
 
 class StudentAdmissionStatusResponseSerializer(serializers.Serializer):
-    status = serializers.ChoiceField(choices=('queued', 'admitted'))
+    status = serializers.ChoiceField(choices=('queued', 'admitted', 'executing', 'succeeded', 'failed'))
     admission_token = serializers.CharField()
     poll_url = serializers.CharField()
     retry_after_seconds = serializers.IntegerField(min_value=1)
@@ -98,8 +114,6 @@ class StudentRuntimeActionsSerializer(serializers.Serializer):
     research_tools_url = serializers.CharField(required=False)
     resolve_branch_url = serializers.CharField(required=False)
     save_draft_url = serializers.CharField()
-    submit_url = serializers.CharField()
-    skip_url = serializers.CharField()
     finish_url = serializers.CharField()
 
 
@@ -131,6 +145,7 @@ class StudentRuntimeQuestionEntryQuerySerializer(serializers.Serializer):
 
 
 class StudentRuntimeQuestionEnterSerializer(StudentRuntimeQuestionEntryQuerySerializer):
+    client_instance_id = serializers.UUIDField(required=False)
     reason = serializers.ChoiceField(choices=('navigation_click', 'resume'), default='navigation_click')
     navigation_id = serializers.UUIDField()
     client_occurred_at = serializers.DateTimeField()
@@ -171,6 +186,7 @@ class TransitionEntryCapabilitySerializer(serializers.Serializer):
 
 
 class StudentRuntimeProcessSerializer(serializers.Serializer):
+    paper_flow_version = serializers.IntegerField(required=False)
     transition_entry = TransitionEntryCapabilitySerializer(required=False)
     capture_bundle = AtomicSubmissionCapabilitySerializer(required=False)
     close_bundle = AtomicSubmissionCapabilitySerializer(required=False)
@@ -203,9 +219,14 @@ class StudentRuntimeOfflineAuthorizationSerializer(serializers.Serializer):
 
 
 class StudentRuntimeQuestionEntrySerializer(serializers.Serializer):
+    assessment_flow_version = serializers.IntegerField(required=False)
+    prepared_paper = serializers.JSONField(required=False)
+    initial_writer_lease = serializers.JSONField(required=False)
+    inline_confidence = serializers.JSONField(required=False)
     offline_authorization = StudentRuntimeOfflineAuthorizationSerializer()
     entry_receipt = StudentRuntimeEntryReceiptSerializer(required=False)
     entry_allowed = serializers.BooleanField()
+    response_write_allowed = serializers.BooleanField(required=False)
     entry_denial_code = serializers.CharField(allow_blank=True)
     presented_deadline_at = serializers.DateTimeField(required=False, allow_null=True)
     research_tools = serializers.JSONField(required=False)

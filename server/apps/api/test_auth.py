@@ -1,13 +1,38 @@
 from apps.api.test_support import domain_payload
 import json
 
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from apps.accounts.models import User
 
 
 class AuthenticationApiTests(TestCase):
+    @override_settings(STUDENT_COURSE_NAVIGATION_ENABLED=False, STUDENT_COURSE_NAVIGATION_USER_IDS=frozenset({'*'}))
+    def test_navigation_optimization_requires_server_switch_and_allowlist(self):
+        self.client.force_login(self.student)
+        def navigation():
+            return domain_payload(self.client.get('/api/v1/auth/bootstrap/'))['client_navigation']
+        self.assertEqual(navigation(), {'student_courses': False, 'course_ids': []})
+        with override_settings(STUDENT_COURSE_NAVIGATION_ENABLED=True,
+                               STUDENT_COURSE_NAVIGATION_USER_IDS=frozenset(),
+                               STUDENT_COURSE_NAVIGATION_COURSE_IDS=frozenset()):
+            self.assertEqual(navigation(), {'student_courses': False, 'course_ids': []})
+            with override_settings(STUDENT_COURSE_NAVIGATION_COURSE_IDS=frozenset({'7'})):
+                self.assertEqual(navigation(), {'student_courses': True, 'course_ids': ['7']})
+            with override_settings(STUDENT_COURSE_NAVIGATION_USER_IDS=frozenset({str(self.student.pk)})):
+                self.assertEqual(navigation(), {'student_courses': True, 'course_ids': ['*']})
+                self.client.force_login(self.teacher)
+                self.assertEqual(navigation(), {'student_courses': False, 'course_ids': []})
+
+    @override_settings(STUDENT_COURSE_NAVIGATION_ENABLED=True, STUDENT_COURSE_NAVIGATION_USER_IDS=frozenset({'*'}))
+    def test_login_projects_navigation_permission_with_rotated_context(self):
+        response = self.client.post(reverse('api-login'), json.dumps({
+            'username': self.student.username, 'password': 'test-password',
+        }), content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(domain_payload(response)['client_navigation'], {'student_courses': True, 'course_ids': ['*']})
+
     def setUp(self):
         self.teacher = User.objects.create_user(
             username="auth-teacher",

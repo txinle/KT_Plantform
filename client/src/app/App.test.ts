@@ -2,6 +2,8 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
 import App from './App.vue'
+import { acceptBootstrapContext, clearBootstrapContext } from './bootstrap'
+import { afterEach } from 'vitest'
 
 function context(researchConsentRequired: boolean) {
   return {
@@ -22,9 +24,25 @@ function context(researchConsentRequired: boolean) {
 }
 
 describe('App research consent gate', () => {
+  afterEach(() => clearBootstrapContext())
+
+  it('rechecks consent when a new student logs in after the app mounted anonymously', async () => {
+    clearBootstrapContext()
+    const wrapper = mount(App, { global: { stubs: { RouterView: { template: '<div data-route-content />' } } } })
+    acceptBootstrapContext(context(true))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-research-consent-gate]').exists()).toBe(true)
+    expect(wrapper.find('[data-route-content]').exists()).toBe(false)
+    acceptBootstrapContext(context(false))
+    await wrapper.vm.$nextTick()
+    acceptBootstrapContext({ ...context(true), user: { ...context(true).user, id: 9 } })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-research-consent-gate]').exists()).toBe(true)
+    wrapper.unmount()
+  })
   it('renders the site registration footer', () => {
+    acceptBootstrapContext(context(false))
     const wrapper = mount(App, {
-      props: { bootstrapContext: context(false) },
       global: { stubs: { RouterView: { template: '<div data-route-content />' } } },
     })
 
@@ -42,8 +60,8 @@ describe('App research consent gate', () => {
   })
 
   it('does not mount the requested route while consent is required', () => {
+    acceptBootstrapContext(context(true))
     const wrapper = mount(App, {
-      props: { bootstrapContext: context(true) },
       global: { stubs: { RouterView: { template: '<div data-route-content />' } } },
     })
 
@@ -52,12 +70,13 @@ describe('App research consent gate', () => {
   })
 
   it('mounts the requested route after the consent gate is cleared', async () => {
+    acceptBootstrapContext(context(true))
     const wrapper = mount(App, {
-      props: { bootstrapContext: context(true) },
       global: { stubs: { RouterView: { template: '<div data-route-content />' } } },
     })
 
-    await wrapper.getComponent({ name: 'ResearchConsentDialog' }).vm.$emit('accepted')
+    acceptBootstrapContext(context(false))
+    await wrapper.vm.$nextTick()
 
     expect(wrapper.find('[data-research-consent-gate]').exists()).toBe(false)
     expect(wrapper.find('[data-route-content]').exists()).toBe(true)

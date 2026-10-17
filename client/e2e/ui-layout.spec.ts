@@ -1,3 +1,4 @@
+import { submitWholePaper } from './whole-paper'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { acceptResearchConsentIfRequired } from './research-consent'
 
@@ -92,11 +93,7 @@ test('student course cards, assignment list and class center reflow with their o
     const saved = page.waitForResponse(response => response.url().includes('/draft/') && response.ok())
     await answer.check()
     await saved
-    await page.getByRole('button', { name: '确认提交本题', exact: true }).click()
-    await Promise.all([
-      page.waitForURL(/\/student\/sessions\/\d+\/complete\/$/),
-      page.getByRole('dialog').getByRole('button', { name: '提交并锁定', exact: true }).click(),
-    ])
+    await submitWholePaper(page)
     await page.goto('/student/courses/1/')
   }
   await inspect(page, info, 'student-tasks')

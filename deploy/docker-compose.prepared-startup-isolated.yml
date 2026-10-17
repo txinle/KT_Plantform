@@ -1,0 +1,74 @@
+# Review-only experimental budget. Do not start this on a shared production host
+# without an explicitly approved maintenance window or a dedicated test host.
+# Apply LAST after base + school + school-test, under a NEW project name.
+# Never include school-test-external-db.yml. All volumes/network belong to the
+# new project; no external volume, production network or container is reused.
+# This preserves 20 HTTP workers and 23 ordinary + 3 reserve DB connections.
+# These hard limits are test constraints, not a measured capacity claim.
+services:
+  db:
+    mem_limit: 1536M
+    cpus: 1.5
+    command: !override ["postgres", "-c", "max_connections=64", "-c", "shared_buffers=256MB",
+      "-c", "effective_cache_size=1GB", "-c", "work_mem=2MB", "-c", "maintenance_work_mem=64MB",
+      "-c", "autovacuum_work_mem=64MB", "-c", "max_wal_size=1GB", "-c", "checkpoint_completion_target=0.9",
+      "-c", "fsync=on", "-c", "synchronous_commit=on", "-c", "full_page_writes=on"]
+  pgbouncer:
+    mem_limit: 128M
+    cpus: 0.25
+  redis-admission:
+    mem_limit: 256M
+    cpus: 0.25
+  redis-session:
+    profiles: [prepared-startup-optional-redis-session]
+    mem_limit: 512M
+    cpus: 0.5
+  migrate:
+    mem_limit: 512M
+    cpus: 1
+  web:
+    mem_limit: 256M
+    cpus: 0.25
+  auth:
+    mem_limit: 512M
+    cpus: 1
+  assessment:
+    mem_limit: 1536M
+    cpus: 2
+  startup:
+    mem_limit: 512M
+    cpus: 1
+  capture:
+    mem_limit: 640M
+    cpus: 1
+  student-read:
+    mem_limit: 384M
+    cpus: 0.5
+  teacher-read:
+    mem_limit: 256M
+    cpus: 0.25
+  nginx:
+    mem_limit: 128M
+    cpus: 0.25
+    # Operator must verify this NEW loopback port is unused before creating.
+    ports: !override ["127.0.0.1:${PREPARED_STARTUP_HTTP_PORT:-18081}:80"]
+  scheduler:
+    mem_limit: 256M
+    cpus: 0.25
+  analytics-worker:
+    profiles: [prepared-startup-background-disabled]
+  student-comparison-worker:
+    profiles: [prepared-startup-background-disabled]
+  publication-worker:
+    mem_limit: 384M
+    cpus: 0.125
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.125"
+  session-submission-worker:
+    mem_limit: 256M
+    cpus: 0.125
+  export-worker:
+    profiles: [prepared-startup-background-disabled]

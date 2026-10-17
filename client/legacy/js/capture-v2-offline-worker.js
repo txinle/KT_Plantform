@@ -21,12 +21,25 @@ const envelopeUrl = (page) => `${self.location.origin}/assessment/process/captur
 function authorizedState(state, bootstrap) {
   const authorization = state?.offline_authorization;
   const receipt = state?.entry_receipt;
-  return authorization?.user_id === bootstrap?.user?.id
+  return state?.assessment_flow_version === 1 && state?.process?.paper_flow_version === 1
+    && authorization?.user_id === bootstrap?.user?.id
     && authorization?.session_id === state?.session_id && authorization?.assignment_id === state?.assignment?.assignment_id
     && receipt?.session_id === state?.session_id && receipt?.assignment_id === state?.assignment?.assignment_id
     && receipt?.attempt_id === state?.assignment?.attempt_id && receipt?.visit_id === state?.process?.visit_id
     && Number.isInteger(receipt?.visit_id) && receipt?.visit_id > 0
     && receipt?.entry_event_id === state?.process?.entry_event_id;
+}
+function authorizedRouterState(state, bootstrap) {
+  const receipt = state?.entry_receipt;
+  const process = state?.process;
+  return authorizedState(state, bootstrap)
+    && receipt?.session_id === process?.session_id && receipt?.attempt_id === process?.attempt_id
+    && typeof receipt?.entry_event_id === 'string' && receipt.entry_event_id.length > 0
+    && typeof receipt?.navigation_id === 'string' && receipt.navigation_id.length > 0
+    && receipt.navigation_id === process?.navigation_id
+    && Number.isInteger(receipt?.visit_index) && receipt.visit_index > 0
+    && receipt.visit_index === process?.visit_index
+    && typeof receipt?.entered_at === 'string' && receipt.entered_at.length > 0;
 }
 function escapedBootstrap(bootstrap) {
   return JSON.stringify(bootstrap).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
@@ -56,7 +69,7 @@ async function prepareResources(cache, resources) {
   if (failure) throw failure;
 }
 async function prepareCommonResources(scope, shell, resources) {
-  const key = pageCacheName(scope);
+  const key = scope.sessionId ? pageCacheName(scope) : `${PREFIX}common-${scope.buildVersion}`;
   const previous = commonPreparations.get(key);
   const pending = (async () => {
     let prepared = previous && await previous;
@@ -128,6 +141,7 @@ self.addEventListener('fetch', (event) => {
       const response = cache && await cache.match(event.request, { ignoreSearch: !asset(url) });
       if (response && questionApi.test(url.pathname)) {
         const envelope = await response.json();
+        if (envelope.data?.assessment_flow_version !== 1 || envelope.data?.process?.paper_flow_version !== 1) throw error;
         if (epoch !== identityEpoch) throw error;
         return new Response(JSON.stringify({ ...envelope, data: { ...envelope.data, offline_recovery: true } }), {
           headers: { 'Content-Type': 'application/json', 'X-Capture-Offline': 'true' },
@@ -155,6 +169,20 @@ self.addEventListener('message', (event) => {
       .catch(error => event.ports[0]?.postMessage({ ok: false, error: String(error) })));
     return;
   }
+  if (event.data?.type === 'prepare-capture-v2-common') {
+    event.waitUntil((async () => {
+      try {
+        const source = new URL(event.source?.url);
+        const scope = { buildVersion: String(event.data.buildVersion || 'development') };
+        const shell = new URL(event.data.shell, self.location.origin);
+        if (source.origin !== self.location.origin || shell.origin !== self.location.origin
+            || shell.pathname !== `/static/spa-assets/capture-shell-${scope.buildVersion}.html`) throw new Error('invalid_shell_scope');
+        await prepareCommonResources(scope, shell, event.data.resources);
+        event.ports[0]?.postMessage({ ok: true, commonResourcesPrepared: true });
+      } catch (error) { event.ports[0]?.postMessage({ ok: false, error: String(error) }); }
+    })());
+    return;
+  }
   if (event.data?.type !== 'prepare-capture-v2') return;
   event.waitUntil((async () => {
     try {
@@ -165,7 +193,8 @@ self.addEventListener('message', (event) => {
       const pageScope = questionPage.exec(page.pathname);
       const sourceScope = questionPage.exec(source.pathname);
       if (page.origin !== self.location.origin || source.origin !== self.location.origin
-          || !pageScope || !sourceScope || pageScope[1] !== sourceScope[1]) throw new Error('invalid_scope');
+          || !pageScope || (sourceScope ? pageScope[1] !== sourceScope[1]
+            : !authorizedRouterState(event.data.state, event.data.bootstrap))) throw new Error('invalid_scope');
       if (Number(pageScope[1]) !== Number(event.data.state?.session_id)
           || Number(pageScope[2]) !== Number(event.data.state?.assignment?.assignment_id)) throw new Error('invalid_question_scope');
       const api = new URL(event.data.api, self.location.origin);

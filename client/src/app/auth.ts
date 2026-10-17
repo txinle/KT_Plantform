@@ -1,6 +1,7 @@
 import { ApiError, createApiClient } from '@/api/client'
 import { disposeAllSessionControllers } from '@/assessment-runtime/session-controller'
 import { clearOfflineAssessmentCache } from '@/assessment-runtime/offline-cache'
+import { currentAssessmentOperationId } from '@/assessment-runtime/operation-timing'
 
 import {
   acceptBootstrapContext,
@@ -33,7 +34,9 @@ interface AuthenticationApiOptions {
 }
 
 export function createAuthenticationApi(options: AuthenticationApiOptions) {
+  let loginRequest: Promise<BootstrapContext> | undefined
   const client = createApiClient({ fetchImpl: options.fetchImpl, getCsrfToken: options.getCsrfToken,
+    getOperationId: currentAssessmentOperationId,
     onAuthenticationRequired: () => undefined })
   const refresh = async () => {
     const context = await options.refreshBootstrapContext({ force: true })
@@ -46,11 +49,53 @@ export function createAuthenticationApi(options: AuthenticationApiOptions) {
       await client.mutate('/api/v1/auth/research-consent/', { method: 'POST', body: { accepted: true, version } })
       return refresh()
     },
-    async login(username: string, password: string): Promise<BootstrapContext> {
-      const context = await client.mutate<BootstrapContext>('/api/v1/auth/login/', { method: 'POST', body: { username, password } })
-      disposeAllSessionControllers()
-      await clearOfflineAssessmentCache()
-      return acceptBootstrapContext(context)
+    login(username: string, password: string, requestOptions: { signal?: AbortSignal } = {}): Promise<BootstrapContext> {
+      if (loginRequest) return loginRequest
+      const credentials = { username, password }
+      const controller = new AbortController()
+      const cancel = () => controller.abort(requestOptions.signal?.reason)
+      if (requestOptions.signal?.aborted) cancel()
+      else requestOptions.signal?.addEventListener('abort', cancel, { once: true })
+      const deadline = Date.now() + 30000
+      const timeout = setTimeout(() => controller.abort(new DOMException('登录响应尚未确认，请稍后核验登录状态。', 'TimeoutError')), 30000)
+      const pending = (async () => {
+        let retryIndex = 0
+        try {
+          for (;;) {
+            controller.signal.throwIfAborted()
+            let context: BootstrapContext
+            try {
+              context = await client.mutate<BootstrapContext>('/api/v1/auth/login/', {
+                method: 'POST', body: credentials, signal: controller.signal,
+              })
+            } catch (error) {
+              controller.signal.throwIfAborted()
+              if (!(error instanceof ApiError) || error.status !== 429 || error.code !== 'LOGIN_BUSY') throw error
+              const windowMs = Math.min(2000, 250 * 2 ** Math.min(retryIndex++, 3))
+              const delay = (error.retryAfterSeconds ?? 1) * 1000 + Math.floor(Math.random() * windowMs)
+              if (Date.now() + delay >= deadline) throw error
+              await new Promise<void>((resolve, reject) => {
+                const abort = () => { clearTimeout(wait); reject(controller.signal.reason) }
+                const wait = setTimeout(() => { controller.signal.removeEventListener('abort', abort); resolve() }, delay)
+                controller.signal.addEventListener('abort', abort, { once: true })
+              })
+              continue
+            }
+            controller.signal.throwIfAborted()
+            disposeAllSessionControllers()
+            await clearOfflineAssessmentCache()
+            controller.signal.throwIfAborted()
+            return acceptBootstrapContext(context)
+          }
+        } finally {
+          clearTimeout(timeout)
+          requestOptions.signal?.removeEventListener('abort', cancel)
+        }
+      })()
+      loginRequest = pending
+      const clear = () => { if (loginRequest === pending) loginRequest = undefined }
+      pending.then(clear, clear)
+      return pending
     },
     async logout(): Promise<void> {
       await client.mutate('/api/v1/auth/logout/', { method: 'POST' })
@@ -78,8 +123,11 @@ function defaultAuthenticationApi() {
   })
 }
 
-export function login(username: string, password: string) {
-  return defaultAuthenticationApi().login(username, password)
+let loginApi: ReturnType<typeof createAuthenticationApi> | undefined
+
+export function login(username: string, password: string, options?: { signal?: AbortSignal }) {
+  loginApi ??= defaultAuthenticationApi()
+  return loginApi.login(username, password, options)
 }
 
 export function getResearchConsent() {

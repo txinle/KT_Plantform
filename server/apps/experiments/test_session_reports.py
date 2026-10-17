@@ -472,6 +472,8 @@ class CourseExperimentSessionReportTests(TestCase):
         )
 
         for status in ExperimentSession.Status.values:
+            if status == ExperimentSession.Status.PREPARED:
+                continue  # Prepared resources are absent from observed-session reports.
             with self.subTest(status=status):
                 self.session.status = status
                 self.session.save(update_fields=["status"])

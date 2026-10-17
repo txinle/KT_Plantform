@@ -1,3 +1,4 @@
+import { submitWholePaper } from './whole-paper'
 import { expect, test } from '@playwright/test'
 import { acceptResearchConsentIfRequired } from './research-consent'
 import { writeFileSync } from 'node:fs'
@@ -150,11 +151,7 @@ test('student records and feedback keep readable controls across responsive boun
     const draftSaved = page.waitForResponse(response => response.url().includes('/draft/') && response.ok())
     await answer.check()
     await draftSaved
-    await page.getByRole('button', { name: '确认提交本题', exact: true }).click()
-    await Promise.all([
-      page.waitForURL(/\/student\/sessions\/\d+\/complete\/$/),
-      page.getByRole('dialog').getByRole('button', { name: '提交并锁定', exact: true }).click(),
-    ])
+    await submitWholePaper(page)
   }
   await page.goto('/student/courses/1/learning/')
   const result = page.getByRole('link', { name: '查看作答详情', exact: true }).first()

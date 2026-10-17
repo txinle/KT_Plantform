@@ -47,6 +47,8 @@ services:
     <<: *test-env
   assessment:
     <<: *test-env
+  startup:
+    <<: *test-env
   capture:
     <<: *test-env
   student-read:
@@ -58,6 +60,8 @@ services:
   student-comparison-worker:
     <<: *test-env
   publication-worker:
+    <<: *test-env
+  session-submission-worker:
     <<: *test-env
   export-worker:
     <<: *test-env

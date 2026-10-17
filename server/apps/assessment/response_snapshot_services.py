@@ -117,8 +117,13 @@ def canonical_response_state(question_type, answer):
     raise ValueError(f"Unsupported response question type: {question_type}")
 
 
-@transaction.atomic
-def create_response_snapshot(*, attempt, content, schema_version=1, response_state=None):
+def create_response_snapshot(*, attempt, content, schema_version=1, response_state=None, batch_context=None):
+    with transaction.atomic(savepoint=batch_context is None):
+        return _create_response_snapshot(attempt=attempt, content=content,
+            schema_version=schema_version, response_state=response_state, batch_context=batch_context)
+
+
+def _create_response_snapshot(*, attempt, content, schema_version, response_state, batch_context):
     if not isinstance(content, str):
         raise TypeError("Response snapshot content must be text.")
     question_type = getattr(getattr(attempt, "assignment", None), "snapshot", None)
@@ -128,10 +133,9 @@ def create_response_snapshot(*, attempt, content, schema_version=1, response_sta
         canonical_response_state(question_type, content),
     )
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    existing = ResponseSnapshot.objects.filter(
-        attempt=attempt,
-        state_hash=logical_state.state_hash,
-    ).first()
+    key = (attempt.pk, logical_state.state_hash)
+    existing = (batch_context['snapshots'].get(key) if batch_context is not None else
+                ResponseSnapshot.objects.filter(attempt=attempt, state_hash=logical_state.state_hash).first())
     if existing is not None:
         if (
             existing.content != content
@@ -142,6 +146,8 @@ def create_response_snapshot(*, attempt, content, schema_version=1, response_sta
             raise ValueError(
                 "Existing response content hash has conflicting snapshot metadata."
             )
+        if batch_context is not None:
+            batch_context['snapshots'][key] = existing
         return existing
 
     snapshot = ResponseSnapshot(
@@ -153,6 +159,11 @@ def create_response_snapshot(*, attempt, content, schema_version=1, response_sta
         state_hash=logical_state.state_hash,
         schema_version=schema_version,
     )
+    if batch_context is not None and 'new_snapshots' in batch_context:
+        snapshot.full_clean(exclude=('attempt',), validate_unique=False, validate_constraints=False)
+        batch_context['new_snapshots'].append(snapshot)
+        batch_context['snapshots'][key] = snapshot
+        return snapshot
     try:
         with transaction.atomic():
             snapshot.save(force_insert=True)
@@ -166,4 +177,6 @@ def create_response_snapshot(*, attempt, content, schema_version=1, response_sta
         if existing.state_hash != logical_state.state_hash:
             raise ValueError("Existing response state hash has conflicting snapshot metadata.")
         return existing
+    if batch_context is not None:
+        batch_context['snapshots'][key] = snapshot
     return snapshot

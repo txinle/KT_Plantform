@@ -160,6 +160,7 @@ TABLE_FIELD_DESCRIPTIONS = {
         "experiment_id": "实验唯一标识",
         "version": "实验版本号",
         "status": "会话状态",
+        "assessment_flow_version": "作答流程版本：0 为历史逐题正式提交，1 为预备试卷、可编辑草稿及整卷异步提交。",
         "started_at": "会话开始时间",
         "completed_at": "会话完成时间",
     },

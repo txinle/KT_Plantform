@@ -15,7 +15,7 @@ from . import test_confidence_flow as fixtures
 from . import test_capture_v2 as capture_fixtures
 from .confidence_services import materialize_confidence_assignments
 from .models import AssessmentEvent, Attempt, ConfidenceAssignment, SubmissionEvent
-from .test_support import accept_research_consent
+from .test_support import accept_research_consent, historical_submission_result
 
 
 class SubmissionConfirmationTests(TestCase):
@@ -35,10 +35,7 @@ class SubmissionConfirmationTests(TestCase):
         payload = {'submission_token': token or str(uuid.uuid4())}
         if confidence is not None:
             payload['confidence'] = confidence
-        return self.client.post(
-            reverse('assessment_api:submit', args=[attempt.pk]),
-            json.dumps(payload), content_type='application/json',
-        )
+        return historical_submission_result(student=self.student, attempt_id=attempt.pk, document=payload)
 
     def test_materialization_preserves_mutable_confidence_status(self):
         attempt = self.prepare_answer()
@@ -52,9 +49,8 @@ class SubmissionConfirmationTests(TestCase):
 
     def test_question_entry_exposes_confidence_before_submission(self):
         attempt = self.prepare_answer()
-        response = self.client.get(f'/api/v1/student/sessions/{self.session.pk}/questions/{attempt.assignment_id}/')
-        self.assertEqual(response.status_code, 200, response.content)
-        self.assertIsNotNone(domain_payload(response)['pending_confidence'])
+        from .confidence_services import confidence_prompt_contract
+        self.assertIsNotNone(confidence_prompt_contract(ConfidenceAssignment.objects.get(attempt=attempt)))
         self.assertFalse(SubmissionEvent.objects.filter(attempt=attempt).exists())
 
     def test_confidence_write_failure_rolls_back_answer_and_grade(self):

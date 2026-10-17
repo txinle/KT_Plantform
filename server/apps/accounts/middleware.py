@@ -3,10 +3,12 @@ from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
+from django.utils import timezone
 
 
 from .research_consent import research_consent_required
 from .redis_sessions import SessionStore
+from .database_sessions import SessionStore as DatabaseSessionStore
 
 
 def _is_loopback_host(hostname):
@@ -67,8 +69,10 @@ class StudentSessionIdleTimeoutMiddleware:
             and not user.is_superuser
             and user.role == "student"
         )
-        if isinstance(request.session, SessionStore):
+        if isinstance(request.session, (SessionStore, DatabaseSessionStore)):
             request.session.student_idle_timeout = settings.STUDENT_SESSION_IDLE_TIMEOUT_SECONDS if is_student else None
+            if isinstance(request.session, DatabaseSessionStore) and is_student and request.session.student_activity_at is None:
+                request.session.student_activity_at = timezone.now()
         elif is_student:
             request.session.set_expiry(settings.STUDENT_SESSION_IDLE_TIMEOUT_SECONDS)
 

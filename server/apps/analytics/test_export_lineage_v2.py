@@ -161,6 +161,23 @@ class ExportLineageV2Tests(TransactionTestCase):
             [capture_contract.schema_sha256],
         )
 
+    def test_export_identifies_assessment_flow_and_excludes_prepared_students(self):
+        legacy = self._session('legacy-flow-export')
+        paper = self._session('paper-flow-export')
+        ExperimentSession.objects.filter(pk=paper.session_id).update(assessment_flow_version=1)
+        prepared_student = User.objects.create_user(username='prepared-export', role=User.Role.STUDENT)
+        prepared = ExperimentSession.objects.create(version=self.version, student=prepared_student,
+            status=ExperimentSession.Status.PREPARED, started_at=None, assessment_flow_version=1)
+        snapshot = create_export_snapshot(course=self.course, experiment=self.experiment, created_by=self.teacher)
+        rows = list(csv.DictReader(StringIO(base64.b64decode(
+            snapshot.source_bundle['tables']['sessions']).decode('utf-8-sig'))))
+        by_id = {int(row['session_id']): row for row in rows}
+        self.assertEqual(by_id[legacy.session_id]['assessment_flow_version'], '0')
+        self.assertEqual(by_id[paper.session_id]['assessment_flow_version'], '1')
+        self.assertNotIn(prepared.pk, by_id)
+        from apps.analytics.export_catalog import TABLE_FIELD_DESCRIPTIONS
+        self.assertIn('整卷', TABLE_FIELD_DESCRIPTIONS['sessions']['assessment_flow_version'])
+
     def test_source_bundle_freezes_resources_and_table_paths(self):
         self._session("resource-freeze")
         snapshot = create_export_snapshot(

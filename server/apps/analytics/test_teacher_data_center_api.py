@@ -216,7 +216,8 @@ class TeacherDataCenterApiTests(TestCase):
             'experiment_id': self.experiment.pk, 'class_id': self.class_group.pk})
         self.assertEqual(response.status_code, 200)
         data = domain_payload(response)
-        self.assertEqual(data.get('preparation', {}).get('state'), 'ready')
+        self.assertEqual(data.get('preparation', {}).get('state'), 'incomplete')
+        self.assertEqual(data['preparation']['input_unverified_count'], 1)
         from django.utils.dateparse import parse_datetime
         self.assertEqual(parse_datetime(data['preparation']['updated_at']), finished)
         self.assertEqual(data['facts']['process_records'], 17)

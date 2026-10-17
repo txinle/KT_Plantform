@@ -2352,6 +2352,10 @@ def commit_publish_plan(plan, actor, *, expected_revision, progress=None):
         )
         for result in class_results
     ]
+    from apps.assessment.prepared_services import prepare_participant
+    for task in tasks:
+        for participant in task.participant_snapshots.all():
+            prepare_participant(participant)
     plan.status = PublishPlan.Status.COMMITTED
     plan.committed_at = now
     plan.current_step = 2
@@ -2372,7 +2376,8 @@ def append_schedule_revision(
         raise PublicationConflict("任务缺少发布排期。", code="SCHEDULE_LOCKED")
     if expected_revision is not None and expected_revision != current.revision_no:
         raise PublicationConflict("排期已被其他教师修改，请刷新后重试。", code="SCHEDULE_STALE")
-    started = task.sessions.exists()
+    from apps.assessment.models import ExperimentSession
+    started = task.sessions.exclude(status=ExperimentSession.Status.PREPARED).exists()
     can_shorten = not started and current.opens_at is not None and now < current.opens_at
     if (started or (current.opens_at is not None and now >= current.opens_at) or reopen) and expected_revision is None:
         raise PublicationConflict("请刷新任务并使用当前排期版本提交。", code="SCHEDULE_STALE")
@@ -2452,7 +2457,8 @@ def cancel_task(task, actor, *, reason):
     task = ClassExperimentTask.objects.select_for_update().get(pk=task.pk)
     now = database_now()
     schedule = task.schedule_revisions.order_by("-revision_no").first()
-    if task.sessions.exists() or schedule is None or schedule.opens_at is None or now >= schedule.opens_at:
+    from apps.assessment.models import ExperimentSession
+    if task.sessions.exclude(status=ExperimentSession.Status.PREPARED).exists() or schedule is None or schedule.opens_at is None or now >= schedule.opens_at:
         raise PublicationConflict("仅在开放前且尚无会话时允许取消任务。", code="TASK_TERMINATED")
     if task.cancelled_at:
         return task

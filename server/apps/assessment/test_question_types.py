@@ -14,7 +14,7 @@ from apps.question_bank.models import Concept, Question, QuestionBank, QuestionC
 
 from .models import Attempt, SubmissionEvent
 from .services import get_or_create_session
-from .test_support import accept_research_consent
+from .test_support import accept_research_consent, historical_submission_result
 
 
 class StudentQuestionTypeFlowTests(TestCase):
@@ -79,30 +79,17 @@ class StudentQuestionTypeFlowTests(TestCase):
         return self.session.assignments.get(snapshot__question_type=question_type)
 
     def save_and_submit(self, assignment, answer):
-        page = self.client.get(
-            f"/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/"
-        )
-        self.assertEqual(page.status_code, 200)
         save_response = self.client.post(
             reverse("assessment_api:save_draft", args=[assignment.attempt.pk]),
             data=json.dumps({"answer": answer}),
             content_type="application/json",
         )
         self.assertEqual(save_response.status_code, 200)
-        return self.client.post(
-            reverse("assessment_api:submit", args=[assignment.attempt.pk]),
-            data=json.dumps({"submission_token": str(uuid.uuid4())}),
-            content_type="application/json",
-        )
+        return historical_submission_result(student=self.student, attempt_id=assignment.attempt.pk, document={"submission_token": str(uuid.uuid4())})
 
     def test_fill_blank_runtime_and_scoring_accept_the_configured_answer(self):
         assignment = self.assignment_for(Question.Type.FILL_BLANK)
-        response = self.client.get(
-            f"/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/"
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(domain_payload(response)["question"]["question_type"], Question.Type.FILL_BLANK)
+        self.assertEqual(assignment.snapshot.question_type, Question.Type.FILL_BLANK)
 
         submitted = self.save_and_submit(assignment, "  kt  ")
         self.assertEqual(submitted.status_code, 200)
@@ -111,14 +98,8 @@ class StudentQuestionTypeFlowTests(TestCase):
 
     def test_judgement_renders_fixed_bool_payload_and_is_available_in_identified_export(self):
         assignment = self.assignment_for(Question.Type.TRUE_FALSE)
-        page = self.client.get(
-            f"/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/"
-        )
-        self.assertEqual(page.status_code, 200)
-        self.assertEqual(
-            [option["key"] for option in domain_payload(page)["question"]["options"]],
-            ["true", "false"],
-        )
+        from .api.views import _runtime_options
+        self.assertEqual([option["key"] for option in _runtime_options(assignment)], ["true", "false"])
 
         submitted = self.save_and_submit(assignment, "false")
         self.assertEqual(submitted.status_code, 200)
@@ -146,9 +127,6 @@ class StudentQuestionTypeFlowTests(TestCase):
         ).order_by("assigned_sequence_index")
         for assignment, answer in zip(assignments, ("NaN", "sNaN", "Infinity")):
             with self.subTest(answer=answer):
-                self.client.get(
-                    f"/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/"
-                )
                 saved = self.client.post(
                     reverse("assessment_api:save_draft", args=[assignment.attempt.pk]),
                     data=json.dumps({"answer": answer}),
@@ -156,11 +134,7 @@ class StudentQuestionTypeFlowTests(TestCase):
                 )
                 self.assertEqual(saved.status_code, 200)
 
-                submitted = self.client.post(
-                    reverse("assessment_api:submit", args=[assignment.attempt.pk]),
-                    data=json.dumps({"submission_token": str(uuid.uuid4())}),
-                    content_type="application/json",
-                )
+                submitted = historical_submission_result(student=self.student, attempt_id=assignment.attempt.pk, document={"submission_token": str(uuid.uuid4())})
 
                 self.assertEqual(submitted.status_code, 400)
                 assignment.attempt.refresh_from_db()

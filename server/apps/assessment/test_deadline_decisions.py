@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase
 
@@ -8,6 +8,23 @@ from apps.assessment.deadline_services import DeadlineDecisionService, min_non_n
 
 
 class DeadlineCalculationTests(SimpleTestCase):
+    def test_prefetched_closures_preserve_historical_close_reopen_and_second_close(self):
+        at = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        first_close = SimpleNamespace(pk=1, closed_at=at + timedelta(minutes=1), schedule_revision_no=1)
+        second_close = SimpleNamespace(pk=2, closed_at=at + timedelta(minutes=3), schedule_revision_no=2)
+        first_schedule = SimpleNamespace(revision_no=1, created_at=at, opens_at=None,
+            closes_at=None, reopens_manual_close=False)
+        reopened = SimpleNamespace(revision_no=2, created_at=at + timedelta(minutes=2),
+            opens_at=None, closes_at=None, reopens_manual_close=True)
+        task = SimpleNamespace(cancelled_at=None, invalidated_at=None, manual_closed_at=first_close.closed_at,
+            manual_closures=Mock(), current_manual_closures=[second_close, first_close],
+            schedule_revisions=Mock(), latest_schedule_revisions=[reopened, first_schedule])
+        task.manual_closures.filter.side_effect = AssertionError('Prefetched closure history must not query')
+        for elapsed, expected in ((0, 'open'), (1, 'manual_closed'), (2, 'open'), (3, 'manual_closed')):
+            with self.subTest(elapsed=elapsed):
+                self.assertEqual(DeadlineDecisionService.get_task_state(task, at=at + timedelta(minutes=elapsed)), expected)
+        task.manual_closures.filter.assert_not_called()
+
     def test_each_write_uses_one_schedule_snapshot_and_next_request_rechecks(self):
         at = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
         task = SimpleNamespace(cancelled_at=None, manual_closed_at=None, invalidated_at=None)

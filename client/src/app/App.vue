@@ -1,18 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed } from 'vue'
 
-import type { BootstrapContext } from './bootstrap'
+import { bootstrapContext, getAuthenticationGeneration } from './bootstrap'
 import ResearchConsentDialog from './ResearchConsentDialog.vue'
 import SiteRegistrationFooter from './SiteRegistrationFooter.vue'
 
-const props = defineProps<{
-  bootstrapContext: BootstrapContext | null
-}>()
-
-const consentRequired = ref(
-  props.bootstrapContext?.user.role === 'student'
-  && props.bootstrapContext.user.research_consent_required,
-)
+const consentRequired = computed(() => bootstrapContext.value?.user.role === 'student'
+  && bootstrapContext.value.user.research_consent_required)
 </script>
 
 <template>
@@ -24,8 +18,8 @@ const consentRequired = ref(
     <div class="kt-site-root__content">
       <ResearchConsentDialog
         v-if="consentRequired"
+        :key="getAuthenticationGeneration()"
         data-research-consent-gate
-        @accepted="consentRequired = false"
       />
       <RouterView v-else />
     </div>

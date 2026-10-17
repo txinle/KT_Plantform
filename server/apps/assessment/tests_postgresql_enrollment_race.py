@@ -117,7 +117,9 @@ class PostgreSQLEnrollmentRemovalRaceTests(TransactionTestCase):
         )
         generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
         plan.refresh_from_db()
-        commit_publish_plan(plan, self.teacher, expected_revision=plan.plan_revision)
+        # Historical write/removal races use the retained domain contract, not public activation.
+        with patch('apps.assessment.prepared_services.prepare_participant', return_value=None):
+            commit_publish_plan(plan, self.teacher, expected_revision=plan.plan_revision)
         self.experiment.refresh_from_db()
 
     def test_two_students_in_one_task_save_without_a_shared_row_lock(self):

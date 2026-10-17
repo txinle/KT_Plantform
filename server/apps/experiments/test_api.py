@@ -1,3 +1,4 @@
+from unittest.mock import patch
 from apps.api.test_support import domain_payload
 import json
 import uuid
@@ -902,15 +903,14 @@ class TeacherPublishPlanApiTests(TestCase):
         for student, status, submission_count in status_students:
             snapshot = snapshots[student.pk]
             task = tasks[self.class_a.pk]
-            ExperimentSession.objects.create(
-                version=version,
-                class_task=task,
-                participant_snapshot=snapshot,
-                student=student,
-                class_snapshot=snapshot.class_snapshot,
-                class_snapshot_name=snapshot.class_snapshot.name_snapshot,
-                status=status,
-                submission_count=submission_count,
+            ExperimentSession.objects.update_or_create(
+                version=version, student=student,
+                defaults={
+                    'started_at': timezone.now(), 'class_task': task,
+                    'participant_snapshot': snapshot, 'class_snapshot': snapshot.class_snapshot,
+                    'class_snapshot_name': snapshot.class_snapshot.name_snapshot,
+                    'status': status, 'submission_count': submission_count,
+                },
             )
         extra_statuses = (
             ExperimentSession.Status.IN_PROGRESS,
@@ -925,15 +925,14 @@ class TeacherPublishPlanApiTests(TestCase):
         ]
         for index, student in enumerate(extra_students[:extra_session_count]):
             snapshot = snapshots[student.pk]
-            ExperimentSession.objects.create(
-                version=version,
-                class_task=tasks[self.class_a.pk],
-                participant_snapshot=snapshot,
-                student=student,
-                class_snapshot=snapshot.class_snapshot,
-                class_snapshot_name=snapshot.class_snapshot.name_snapshot,
-                status=extra_statuses[index % len(extra_statuses)],
-                submission_count=index % 4,
+            ExperimentSession.objects.update_or_create(
+                version=version, student=student,
+                defaults={
+                    'started_at': timezone.now(), 'class_task': tasks[self.class_a.pk],
+                    'participant_snapshot': snapshot, 'class_snapshot': snapshot.class_snapshot,
+                    'class_snapshot_name': snapshot.class_snapshot.name_snapshot,
+                    'status': extra_statuses[index % len(extra_statuses)], 'submission_count': index % 4,
+                },
             )
         return {
             "version": version,
@@ -1039,6 +1038,20 @@ class TeacherPublishPlanApiTests(TestCase):
             {self.class_a.pk, self.class_b.pk},
         )
         self.assertEqual(fixture["version"].participant_snapshots.count(), 6)
+
+    def test_prepared_and_submitting_sessions_keep_public_collection_states(self):
+        fixture = self.collection_fixture()
+        unstarted = ExperimentSession.objects.get(version=fixture['version'], student__student_number='PUB-001')
+        self.assertEqual(unstarted.status, ExperimentSession.Status.PREPARED)
+        before = self.client.get(self.collection_url(), {'status': 'not_started'})
+        self.assertEqual(before.status_code, 200, before.content)
+        self.assertEqual(len(domain_payload(before)['items']), 2)
+        self.assertTrue(all(row['started_at'] is None and row['submission_count'] == 0 for row in domain_payload(before)['items']))
+        ExperimentSession.objects.filter(pk=unstarted.pk).update(status=ExperimentSession.Status.SUBMITTING, started_at=timezone.now(), terminal_at=timezone.now())
+        during = self.client.get(self.collection_url(), {'status': 'in_progress'})
+        self.assertEqual(during.status_code, 200, during.content)
+        self.assertEqual({row['student_number'] for row in domain_payload(during)['items']}, {'PUB-001', 'PUB-STATE-IN'})
+        self.assertTrue(all(row['status_label'] == '进行中' for row in domain_payload(during)['items']))
 
     def test_collection_participants_filters_by_class_status_and_student_number(self):
         fixture = self.collection_fixture()
@@ -1175,15 +1188,14 @@ class TeacherPublishPlanApiTests(TestCase):
             if snapshot.class_task_id == class_a_task.pk
             and snapshot.student.student_number == "PUB-001"
         )
-        ExperimentSession.objects.create(
-            version=fixture["version"],
-            class_task=class_b_task,
-            participant_snapshot=snapshot,
-            student=snapshot.student,
-            class_snapshot=snapshot.class_snapshot,
-            class_snapshot_name=snapshot.class_snapshot.name_snapshot,
-            status=ExperimentSession.Status.IN_PROGRESS,
+        ExperimentSession.objects.update_or_create(
+            version=fixture['version'], student=snapshot.student,
+            defaults={'started_at': timezone.now(), 'class_task': class_b_task, 'participant_snapshot': snapshot,
+                'class_snapshot': snapshot.class_snapshot,
+                'class_snapshot_name': snapshot.class_snapshot.name_snapshot,
+                'status': ExperimentSession.Status.IN_PROGRESS},
         )
+
 
         response = self.client.get(
             self.collection_url(), {"class_id": self.class_a.pk}
@@ -1978,6 +1990,7 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertEqual(DeadlineDecisionService.get_task_state(task), "open")
         self.assertFalse(task.manual_closures.exists())
 
+    @patch("apps.assessment.prepared_services.prepare_participant", new=lambda *_args, **_kwargs: None)
     def test_expired_student_resumes_once_with_same_session_and_preserved_timeout_event(self):
         plan, _ = self.preview_two_classes()
         commit = self.client.post(
@@ -2011,11 +2024,10 @@ class TeacherPublishPlanApiTests(TestCase):
         direct_refresh = self.client.get(
             f"/api/v1/student/sessions/{session.pk}/questions/{session.assignments.get().pk}/"
         )
-        self.assertEqual(direct_refresh.status_code, 200, direct_refresh.content)
-        self.assertGreater(domain_payload(direct_refresh)["remaining_seconds"], 0)
+        self.assertEqual(direct_refresh.status_code, 409, direct_refresh.content)
         resume_response = self.client.post(f"/api/v1/student/tasks/{task.pk}/resume/")
-        self.assertEqual(resume_response.status_code, 200, resume_response.content)
-        resumed = ExperimentSession.objects.get(pk=session.pk)
+        self.assertEqual(resume_response.status_code, 409, resume_response.content)
+        resumed = resume_task_session(task, student)
         repeated = resume_task_session(task, student)
         self.assertEqual(resumed.pk, session.pk)
         self.assertEqual(repeated.recovery_round, 1)
@@ -2037,6 +2049,7 @@ class TeacherPublishPlanApiTests(TestCase):
             [1],
         )
 
+    @patch("apps.assessment.prepared_services.prepare_participant", new=lambda *_args, **_kwargs: None)
     def test_total_limit_extension_grants_only_added_time_from_first_resume(self):
         self.experiment.time_mode = Experiment.TimeMode.TOTAL
         self.experiment.total_time_limit_minutes = 1
@@ -2064,6 +2077,7 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertLess(resumed.deadline_at, resumed_at + timedelta(seconds=121))
         self.assertEqual(resume_task_session(task, student).deadline_at, resumed.deadline_at)
 
+    @patch("apps.assessment.prepared_services.prepare_participant", new=lambda *_args, **_kwargs: None)
     def test_per_question_extension_restores_timed_out_attempt_without_replacing_close_event(self):
         self.experiment.time_mode = Experiment.TimeMode.PER_QUESTION
         self.experiment.per_question_time_limit_seconds = 30
@@ -2094,6 +2108,7 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertEqual(AssessmentEvent.objects.filter(attempt=attempt, event_type="attempt_closed").count(), 1)
         self.assertEqual(AssessmentEvent.objects.filter(attempt=attempt, event_type="attempt_reopened").count(), 1)
 
+    @patch("apps.assessment.prepared_services.prepare_participant", new=lambda *_args, **_kwargs: None)
     def test_active_question_gets_extended_deadline_but_retains_original_deadline_fact(self):
         self.experiment.time_mode = Experiment.TimeMode.PER_QUESTION
         self.experiment.per_question_time_limit_seconds = 30
@@ -2118,6 +2133,7 @@ class TeacherPublishPlanApiTests(TestCase):
             task, resumed, attempt, original + timedelta(seconds=1)
         ).allowed)
 
+    @patch("apps.assessment.prepared_services.prepare_participant", new=lambda *_args, **_kwargs: None)
     def test_reopen_preserves_submitted_answer_and_only_restores_unsubmitted_item(self):
         question = Question.objects.create(
             bank=self.experiment.question_bank, sequence=2, code="PUB-Q2",
@@ -2156,6 +2172,7 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertFalse(AssessmentEvent.objects.filter(attempt=submitted, event_type="attempt_reopened").exists())
         self.assertEqual(pending.status, Attempt.Status.UNVISITED)
 
+    @patch("apps.assessment.prepared_services.prepare_participant", new=lambda *_args, **_kwargs: None)
     def test_new_class_cutoff_caps_an_existing_unlimited_session_at_the_exact_instant(self):
         plan, _ = self.preview_two_classes()
         commit = self.client.post(self.plan_url(plan, "commit/"), data=json.dumps({"expected_revision": plan.plan_revision}), content_type="application/json")
@@ -2170,6 +2187,7 @@ class TeacherPublishPlanApiTests(TestCase):
         self.assertTrue(DeadlineDecisionService.can_enter_item(task, session, cutoff - timedelta(microseconds=1)).allowed)
         self.assertFalse(DeadlineDecisionService.can_enter_item(task, session, cutoff).allowed)
 
+    @patch("apps.assessment.prepared_services.prepare_participant", new=lambda *_args, **_kwargs: None)
     def test_manual_close_pause_does_not_consume_personal_time_before_resume(self):
         self.experiment.time_mode = Experiment.TimeMode.TOTAL
         self.experiment.total_time_limit_minutes = 2

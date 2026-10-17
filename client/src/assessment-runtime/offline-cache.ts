@@ -34,8 +34,7 @@ async function registerOfflineWorker() {
     candidate.addEventListener('statechange', check)
     check()
   })
-  const readyRegistration = await navigator.serviceWorker.ready
-  const worker = candidate?.state === 'activated' ? candidate : registration.active || readyRegistration.active
+  const worker = candidate?.state === 'activated' ? candidate : registration.active
   if (!worker) throw new Error('offline worker did not become active')
   return worker
 }
@@ -95,6 +94,7 @@ async function resolveOfflineWorker() {
 
 const workerResolutions = new WeakMap<ServiceWorkerContainer, Promise<ServiceWorker>>()
 const preparedResources = new WeakMap<ServiceWorker, { scope: string; urls: Set<string> }>()
+const publicPreparations = new WeakMap<ServiceWorkerContainer, { epoch: number; version: string; promise: Promise<void> }>()
 let preparationEpoch = 0
 function currentOfflineWorker() {
   const container = navigator.serviceWorker
@@ -136,6 +136,27 @@ export async function clearOfflineAssessmentCache() {
   }
 }
 
+function staticResources() {
+  return [...new Set(performance.getEntriesByType('resource').map(entry => entry.name))].filter(resource => {
+    const url = new URL(resource, location.origin)
+    return url.origin === location.origin && url.pathname.startsWith('/static/')
+  })
+}
+
+export function prepareOfflineCommonResources(): Promise<void> {
+  if (!navigator.onLine || !navigator.serviceWorker) return Promise.resolve()
+  const container = navigator.serviceWorker
+  const previous = publicPreparations.get(container)
+  if (previous?.epoch === preparationEpoch && previous.version === assessmentBuildVersion) return previous.promise
+  const epoch = preparationEpoch
+  const promise = Promise.all([currentOfflineWorker(), import('./StudentAssessment.vue')]).then(async ([worker]) => {
+    await sendWorkerMessage(worker, { type: 'prepare-capture-v2-common', buildVersion: assessmentBuildVersion,
+      shell: assessmentShellUrl, resources: staticResources() })
+  }).catch(error => { if (publicPreparations.get(container)?.promise === promise) publicPreparations.delete(container); throw error })
+  publicPreparations.set(container, { epoch, version: assessmentBuildVersion, promise })
+  return promise
+}
+
 export async function prepareOfflineQuestion(state: StudentRuntimeQuestionEntry) {
   if (state.offline_recovery) return
   if (!navigator.onLine) throw new OfflinePreparationError(
@@ -150,14 +171,12 @@ export async function prepareOfflineQuestion(state: StudentRuntimeQuestionEntry)
   const context = getBootstrapContext()
   const scope = JSON.stringify([context.user.id, state.session_id, assessmentBuildVersion])
   const prepared = preparedResources.get(worker)
-  const resources = [...new Set(performance.getEntriesByType('resource').map((entry) => entry.name))]
-    .filter(resource => {
-      const url = new URL(resource, location.origin)
-      return url.origin === location.origin && url.pathname.startsWith('/static/')
-    })
+  const resources = staticResources()
     .filter(resource => prepared?.scope !== scope || !prepared.urls.has(resource))
   let commonResourcesPrepared = false
   try {
+    const recoveryState = JSON.parse(JSON.stringify(state)) as StudentRuntimeQuestionEntry
+    delete recoveryState.initial_writer_lease
     const result = await sendWorkerMessage(worker, {
       type: 'prepare-capture-v2', page: pageUrl.href,
       bootstrap: {
@@ -165,7 +184,7 @@ export async function prepareOfflineQuestion(state: StudentRuntimeQuestionEntry)
         assessment_session_id: state.session_id, assignment_id: state.assignment.assignment_id,
       } satisfies OfflineBootstrapEnvelope,
       api: `/api/v1/student/sessions/${state.session_id}/questions/${state.assignment.assignment_id}/`,
-      state: JSON.parse(JSON.stringify(state)),
+      state: recoveryState,
       buildVersion: assessmentBuildVersion,
       shell: assessmentShellUrl,
       resources,

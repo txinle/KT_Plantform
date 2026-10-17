@@ -41,7 +41,12 @@ class DeadlineDecisionService:
             return None
         if not hasattr(task, "manual_closures"):
             return task.manual_closed_at if at >= task.manual_closed_at else None
-        closure = task.manual_closures.filter(closed_at__lte=at).order_by("-closed_at").first()
+        prefetched = getattr(task, "current_manual_closures", None)
+        closure = (
+            next((row for row in prefetched if row.closed_at <= at), None)
+            if prefetched is not None
+            else task.manual_closures.filter(closed_at__lte=at).order_by("-closed_at").first()
+        )
         closed_at = closure.closed_at if closure is not None else None
         if task.manual_closed_at and task.manual_closed_at <= at:
             closed_at = max(closed_at or task.manual_closed_at, task.manual_closed_at)
@@ -58,9 +63,13 @@ class DeadlineDecisionService:
             schedule = cls.schedule_at(task, at)
         closed_at = cls.manual_close_at(task, at)
         if closed_at is not None:
+            prefetched = getattr(task, "current_manual_closures", None)
             closure = (
-                task.manual_closures.filter(closed_at=closed_at).order_by("-pk").first()
-                if hasattr(task, "manual_closures") else None
+                next((row for row in prefetched if row.closed_at == closed_at), None)
+                if prefetched is not None else (
+                    task.manual_closures.filter(closed_at=closed_at).order_by("-pk").first()
+                    if hasattr(task, "manual_closures") else None
+                )
             )
             if closure is not None:
                 if schedule is None or schedule.revision_no <= closure.schedule_revision_no or not schedule.reopens_manual_close:

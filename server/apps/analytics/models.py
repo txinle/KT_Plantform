@@ -1,4 +1,6 @@
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from django.conf import settings
 from django.db import models
@@ -255,6 +257,20 @@ class ResearchExportAsset(models.Model):
         raise ValueError("ResearchExportAsset rows are immutable")
 
 
+_COVERAGE_RESULT_APPEND_RUN = ContextVar("coverage_result_append_run", default=None)
+
+
+@contextmanager
+def _recording_coverage_result_append_scope(run):
+    if run._state.adding or run.pk is None:
+        raise ValueError("Coverage results require a persisted run")
+    token = _COVERAGE_RESULT_APPEND_RUN.set(run.pk)
+    try:
+        yield
+    finally:
+        _COVERAGE_RESULT_APPEND_RUN.reset(token)
+
+
 class RecordingCoverageImmutableQuerySet(models.QuerySet):
     def update(self, **kwargs):
         raise ValueError("RecordingCoverage rows are immutable")
@@ -263,7 +279,17 @@ class RecordingCoverageImmutableQuerySet(models.QuerySet):
         raise ValueError("RecordingCoverage rows are immutable")
 
     def bulk_create(self, objs, **kwargs):
-        raise ValueError("RecordingCoverage rows must be created through the coverage service")
+        run_id = _COVERAGE_RESULT_APPEND_RUN.get()
+        if run_id is None or self.model not in (RecordingCoverageSession, RecordingCoverageAttempt):
+            raise ValueError("RecordingCoverage rows must be created through the coverage service")
+        rows = list(objs)
+        if kwargs.get("ignore_conflicts") or kwargs.get("update_conflicts") or any(
+            not isinstance(row, self.model)
+            or not row._state.adding or row.pk is not None or row.run_id != run_id
+            for row in rows
+        ):
+            raise ValueError("Coverage batch must contain only new results for the current run")
+        return super().bulk_create(rows, **kwargs)
 
 
 class RecordingCoverageImmutableManager(

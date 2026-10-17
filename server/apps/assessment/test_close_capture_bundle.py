@@ -132,17 +132,13 @@ class CloseCaptureBundleTests(TestCase):
         bare = {key: document[key] for key in ('lease_token', 'client_instance_id')}
         self.assertEqual(domain_payload(self.post('assessment_process:writer_lease_release', bare, attempt)), {'success': True})
 
-    def test_runtime_capability_is_gated_independently(self):
-        attempt, _ = self.capture()
-        url = reverse('student-runtime-question', args=[self.session.pk, attempt.assignment_id])
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 200, response.content)
-        self.assertEqual(domain_payload(response)['process']['close_bundle'], {'enabled': True, 'version': 1,
+    def test_historical_close_capability_is_gated_independently(self):
+        from .capture_bundle_services import close_bundle_capability, capture_bundle_capability
+        self.assertEqual(close_bundle_capability(self.session), {'enabled': True, 'version': 1,
             'max_events': 100, 'max_checkpoints': 100, 'max_bytes': 8388608})
         with override_settings(CLOSE_BUNDLE_ENABLED=False):
-            process = domain_payload(self.client.get(url))['process']
-            self.assertFalse(process['close_bundle']['enabled'])
-            self.assertTrue(process['capture_bundle']['enabled'])
+            self.assertFalse(close_bundle_capability(self.session)['enabled'])
+            self.assertTrue(capture_bundle_capability(self.session)['enabled'])
 
     @override_settings(ATOMIC_SUBMISSION_ENABLED=True, ATOMIC_SUBMISSION_USER_IDS=frozenset({'*'}))
     def test_actual_last_submission_closes_with_identical_final_head(self):

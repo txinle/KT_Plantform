@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "confidence_assignment_id": {"type": "string", "format": "uuid"},
+    "reason_code": {"type": "string", "enum": ["optional_unfilled", "answer_changed", "student_skipped"]}
+  },
+  "required": ["confidence_assignment_id", "reason_code"],
+  "additionalProperties": false
+}

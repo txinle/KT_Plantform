@@ -11,6 +11,9 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.question_bank.models import Question
+from .test_support import historical_submission_result
+from .services import record_submission_rejection
+from django.core.exceptions import ValidationError
 from .models import AssessmentEvent, Attempt, ClientCaptureCheckpoint, SubmissionEvent
 from . import test_capture_v2 as capture_fixtures
 
@@ -98,8 +101,7 @@ class AtomicSubmissionTests(TestCase):
         return attempt, document
 
     def post(self, attempt, document):
-        return self.client.post(reverse('assessment_api:submit', args=[attempt.pk]),
-                                data=json.dumps(document), content_type='application/json')
+        return historical_submission_result(student=self.student, attempt_id=attempt.pk, document=document)
 
     def test_commits_raw_evidence_draft_grade_and_receipt_together(self):
         attempt, document = self.bundle()
@@ -142,6 +144,7 @@ class AtomicSubmissionTests(TestCase):
         self.assertIsNone(attempt.active_response_event_id)
         self.assertEqual(attempt.response_version, 0)
         self.assertFalse(SubmissionEvent.objects.exists())
+        record_submission_rejection(attempt_id=attempt.pk, submission_token=document['submission_token'], reason_code='invalid_answer')
         self.assertEqual(AssessmentEvent.objects.filter(event_type='response_commit_rejected').count(), 1)
 
     def test_replay_returns_original_receipt_and_changed_material_is_rejected(self):
@@ -211,7 +214,7 @@ class AtomicSubmissionTests(TestCase):
 
     def test_total_body_bytes_are_bounded(self):
         attempt, document = self.bundle()
-        document['padding'] = 'x' * (8 * 1024 * 1024)
+        document['atomic_submission']['events'][0]['payload']['padding'] = 'x' * (8 * 1024 * 1024)
         self.assertEqual(self.post(attempt, document).status_code, 413)
         self.assertFalse(SubmissionEvent.objects.exists())
 
@@ -255,6 +258,7 @@ class AtomicSubmissionTests(TestCase):
         self.assertEqual(self.post(attempt, document).status_code, 400)
         self.assertFalse(AssessmentEvent.objects.filter(event_type='response_transition').exists())
         self.assertFalse(ClientCaptureCheckpoint.objects.exists())
+        record_submission_rejection(attempt_id=attempt.pk, submission_token=document['submission_token'], reason_code='session_closed')
         self.assertEqual(AssessmentEvent.objects.filter(event_type='response_commit_rejected').count(), 1)
 
     def test_changed_rejection_reason_preserves_first_audit_and_returns_conflict(self):
@@ -265,7 +269,12 @@ class AtomicSubmissionTests(TestCase):
         with override_settings(ATOMIC_SUBMISSION_ENABLED=False):
             response = self.post(attempt, document)
         self.assertEqual(response.status_code, 409)
+        record_submission_rejection(attempt_id=attempt.pk, submission_token=document['submission_token'], reason_code='invalid_answer')
         self.assertEqual(AssessmentEvent.objects.filter(event_type='response_commit_rejected').count(), 1)
+        with self.assertRaises(ValidationError):
+            record_submission_rejection(attempt_id=attempt.pk, submission_token=document['submission_token'], reason_code='unauthorized')
+        original = record_submission_rejection(attempt_id=attempt.pk, submission_token=document['submission_token'], reason_code='unauthorized', preserve_first_rejection=True)
+        self.assertEqual(original.payload['reason_code'], 'invalid_answer')
         self.assertFalse(SubmissionEvent.objects.exists())
 
     def test_recovery_only_acknowledges_original_submission_token(self):

@@ -8,7 +8,7 @@ from .event_batch_services import ProcessRequestError, require_exact_mapping
 from .models import Attempt
 
 ENTRY_FIELDS = frozenset({'assignment_id', 'reason', 'navigation_id', 'client_occurred_at',
-                          'client_monotonic_ms', 'client_time_origin'})
+                          'client_monotonic_ms', 'client_time_origin', 'client_instance_id'})
 
 
 def transition_protocol_for_start(student, experiment, capture_contract):
@@ -26,7 +26,7 @@ def validate_next_entry(attempt, document, *, destination_id=None):
     if attempt.session.transition_protocol_version != 1:
         raise ProcessRequestError('transition_entry_disabled', status=409)
     entry = document['next_entry']
-    require_exact_mapping(entry, allowed=ENTRY_FIELDS, required=ENTRY_FIELDS)
+    require_exact_mapping(entry, allowed=ENTRY_FIELDS, required=ENTRY_FIELDS - {'client_instance_id'})
     assignment_id = entry['assignment_id']
     if (type(assignment_id) is not int or assignment_id <= 0 or assignment_id == attempt.assignment_id
             or destination_id is not None and assignment_id != destination_id):

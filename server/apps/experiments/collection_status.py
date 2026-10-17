@@ -1,11 +1,14 @@
 from django.db.models import (
+    Case,
     CharField,
+    F,
     DateTimeField,
     IntegerField,
     OuterRef,
     Q,
     Subquery,
     Value,
+    When,
 )
 from django.db.models.functions import Coalesce, Concat, Trim
 
@@ -38,6 +41,11 @@ def collection_participant_queryset(
     session = ExperimentSession.objects.filter(
         participant_snapshot_id=OuterRef("pk"),
         class_task_id=OuterRef("class_task_id"),
+    ).exclude(status=ExperimentSession.Status.PREPARED).annotate(
+        public_status=Case(
+            When(status=ExperimentSession.Status.SUBMITTING, then=Value(ExperimentSession.Status.IN_PROGRESS)),
+            default=F("status"), output_field=CharField(),
+        ),
     ).order_by("pk")
     snapshots = (
         ExperimentVersionParticipantSnapshot.objects.filter(
@@ -46,7 +54,7 @@ def collection_participant_queryset(
         .select_related("student", "class_task__class_group")
         .annotate(
             collection_status=Coalesce(
-                Subquery(session.values("status")[:1], output_field=CharField()),
+                Subquery(session.values("public_status")[:1], output_field=CharField()),
                 Value("not_started"),
                 output_field=CharField(),
             ),

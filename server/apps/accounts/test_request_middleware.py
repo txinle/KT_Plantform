@@ -67,6 +67,7 @@ class CanonicalPublicOriginMiddlewareTests(TestCase):
 
 
 @override_settings(
+    SESSION_ENGINE="apps.accounts.database_sessions",
     CANONICAL_PUBLIC_ORIGIN="",
     STUDENT_SESSION_IDLE_TIMEOUT_SECONDS=1800,
 )
@@ -98,7 +99,9 @@ class StudentSessionIdleTimeoutMiddlewareTests(TestCase):
         response = self.client.get(reverse("api-session"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.client.session.get_expiry_age(), 1800)
+        remaining = (Session.objects.get(session_key=session.session_key).expire_date - timezone.now()).total_seconds()
+        self.assertGreater(remaining, 1799)
+        self.assertLessEqual(remaining, 1830)
 
     def test_student_login_response_sets_the_idle_expiry_immediately(self):
         csrf_client = Client(enforce_csrf_checks=True)
@@ -114,7 +117,9 @@ class StudentSessionIdleTimeoutMiddlewareTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(csrf_client.session.get_expiry_age(), 1800)
+        remaining = (Session.objects.get(session_key=csrf_client.session.session_key).expire_date - timezone.now()).total_seconds()
+        self.assertGreater(remaining, 1799)
+        self.assertLessEqual(remaining, 1830)
 
     def test_teacher_and_admin_session_expiry_is_unchanged(self):
         for user in (self.teacher, self.admin):

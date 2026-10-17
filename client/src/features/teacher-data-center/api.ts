@@ -86,13 +86,18 @@ export interface ResearchBehavior {
 
 export interface ResearchPreparation {
   retry_after_seconds?: number
-  state: 'ready' | 'preparing' | 'updating' | 'failed'
+  state: 'ready' | 'preparing' | 'updating' | 'failed' | 'incomplete'
   message: string
   updated_at: string | null
   result_version: string | null
   projection_version: string
   stale: boolean
   ready_count: number
+  total_count: number
+  latest_complete_count: number
+  input_incomplete_count: number
+  input_unverified_count: number
+  stale_count: number
   pending_count: number
   failed_count: number
   updating_count: number

@@ -72,7 +72,7 @@ class RedisSessionBoundaryTests(SimpleTestCase):
         self.assertEqual(settings.SESSION_COOKIE_NAME, 'sessionid')
         with patch.dict(os.environ, {'SCHOOL_REDIS_SESSION_ENABLED': '0', 'POSTGRES_DB': 'kt_platform'}):
             original = runpy.run_path(str(path))
-        self.assertEqual(original['SESSION_ENGINE'], 'django.contrib.sessions.backends.db')
+        self.assertEqual(original['SESSION_ENGINE'], 'apps.accounts.database_sessions')
 
     def test_school_compose_uses_one_durable_bounded_session_service(self):
         import yaml

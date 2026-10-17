@@ -1,5 +1,6 @@
 """Read-only persistence accounting for the capture protocol ledger."""
 import json
+import re
 from collections import Counter, defaultdict
 from datetime import datetime
 from decimal import Decimal
@@ -227,6 +228,8 @@ def capture_mutation_receipt_checks(ledger, receipts, events):
 
 
 def confidence_persistence_checks(plan, ledger, sessions, attempts, confidence, events):
+    split = ledger.get('source_config', {}).get('runtime_contract') == 'capture-v2-split-v1'
+    confirmation_check = 'confidence_http_confirmations_and_durable_submissions_match' if split else 'confidence_exact_acknowledged_submission_receipts'
     """Require frozen synthetic decisions, final heads and exact durable terminal evidence."""
     plans = {row['username']: row for row in plan['students']}
     session_plans = {row.pk: plans[row.student.username] for row in sessions}
@@ -238,7 +241,7 @@ def confidence_persistence_checks(plan, ledger, sessions, attempts, confidence, 
         grouped_events[event.attempt_id].append(event)
     checks = {'confidence_exact_unique_assignment_count':len(assignments) == len(confidence) == len(attempts),
         'confidence_exact_frozen_decisions_and_final_heads':True,
-        'confidence_exact_acknowledged_submission_receipts':True,
+        confirmation_check:True,
         'confidence_exact_unique_prompt_and_terminal_events':True,
         'confidence_exact_browser_observations':True,
         'confidence_only_zero_research_tool_events':not any(row.event_type in (
@@ -259,11 +262,15 @@ def confidence_persistence_checks(plan, ledger, sessions, attempts, confidence, 
                 and material.get('scale_version') == plan['confidence_scale_version']
                 and material.get('item_index') == index
                 and material.get('confidence_assignment_id') == str(assigned.pk))
-            checks['confidence_exact_acknowledged_submission_receipts'] &= (
+            checks[confirmation_check] &= (
                 material.get('acknowledged') is True and material.get('submission_token') == str(attempt.submission_token)
-                and material.get('submission_receipt_sha256') == digest(attempt.submission_receipt)
-                and attempt.submission_receipt.get('committed') is True
-                and attempt.submission_receipt.get('final_response_event_id') == str(attempt.final_response_event_id))
+                and ((attempt.status == 'submitted' and attempt.submitted_at is not None
+                      and attempt.submission_receipt == {} and material.get('submission_receipt_sha256') is None
+                      and material.get('submission_confirmation_profile') == 'http-submitted-status-v1'
+                      and re.fullmatch('[a-f0-9]{64}', str(material.get('submission_response_sha256', ''))) is not None)
+                     if split else (material.get('submission_receipt_sha256') == digest(attempt.submission_receipt)
+                      and attempt.submission_receipt.get('committed') is True
+                      and attempt.submission_receipt.get('final_response_event_id') == str(attempt.final_response_event_id))))
             actual = grouped_events[attempt.pk]
             prompts = [row for row in actual if row.event_type == 'confidence_prompt_shown']
             terminals = [row for row in actual if row.event_type in ('confidence_committed','confidence_skipped')]

@@ -1,10 +1,26 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { createStudentAssessmentApi } from './api'
+import { createStudentAssessmentApi, nextEntryRequest } from './api'
 import { createApiClient, MutationOutcomeUnknownError } from '@/api/client'
 import { writeAdmissionCredentials } from './admission'
 
 describe('student assessment API', () => {
+  it('exposes only whole-paper submission and no retired per-item submit or skip methods', () => {
+    const api = createStudentAssessmentApi({ mutate: vi.fn(), get: vi.fn() })
+    expect(api).not.toHaveProperty('submit')
+    expect(api).not.toHaveProperty('skip')
+    expect(api.finishPaper).toBeTypeOf('function')
+  })
+
+  it('carries the frozen entry client in direct and compound entry requests', async () => {
+    const client = { mutate: vi.fn().mockResolvedValue({}), get: vi.fn() }
+    const intent = { assignmentId: 11, reason: 'resume' as const, navigationId: 'nav',
+      clientOccurredAt: '2026-10-16T00:00:00Z', clientMonotonicMs: 100,
+      clientTimeOrigin: '2026-10-16T00:00:00Z', clientInstanceId: 'frozen-client' }
+    await createStudentAssessmentApi(client).enterQuestion(7, 11, 'resume', intent)
+    expect(client.mutate.mock.calls[0]![1].body.client_instance_id).toBe('frozen-client')
+    expect(nextEntryRequest(intent).client_instance_id).toBe('frozen-client')
+  })
   afterEach(() => sessionStorage.clear())
 
   it('aborts a close transport at 30 seconds and reports an unknown outcome', async () => {
@@ -38,18 +54,7 @@ describe('student assessment API', () => {
     expect(body).not.toHaveProperty('session_id')
   })
 
-  it('sends a frozen atomic envelope on the existing submission URL', async () => {
-    const client = { get: vi.fn(), mutate: vi.fn().mockResolvedValue({ committed: true }) }
-    const envelope = { version: 1 as const, client_instance_id: 'client', event_boundary: 8,
-      events: [], checkpoints: [], expected_version: 2 }
-    await createStudentAssessmentApi(client as never).submit('/student/attempts/13/submit/', 'token',
-      '2026-10-11T09:00:00Z', 'head', undefined, undefined, envelope)
-    expect(client.mutate).toHaveBeenCalledWith('/student/attempts/13/submit/', expect.objectContaining({
-      body: expect.objectContaining({ submission_token: 'token', target_event_id: 'head', atomic_submission: envelope }),
-    }))
-  })
-
-  it('loads the authoritative assignment and preserves legacy mutation URLs', async () => {
+  it('loads the authoritative assignment and preserves draft and process mutation URLs', async () => {
     const client = {
       get: vi.fn().mockResolvedValue({}),
       mutate: vi.fn().mockResolvedValue({}),
@@ -64,8 +69,6 @@ describe('student assessment API', () => {
       clientTimeOrigin: '2026-08-30T07:59:58.765Z',
     })
     await api.saveDraft('/student/attempts/13/draft/', 'B', '2026-08-30T08:00:00Z')
-    await api.submit('/student/attempts/13/submit/', '00000000-0000-4000-8000-000000000001', '2026-08-30T08:00:01Z')
-    await api.skip('/student/attempts/13/skip/')
     await api.post('/assessment/process/confidence/13/commit/', { probability: 80 })
     await api.post(
       '/assessment/process/attempts/13/writer-lease/release/',
@@ -83,17 +86,6 @@ describe('student assessment API', () => {
           body: { answer: 'B', client_occurred_at: '2026-08-30T08:00:00Z' },
         },
       ],
-      [
-        '/student/attempts/13/submit/',
-        {
-          method: 'POST',
-          body: {
-            submission_token: '00000000-0000-4000-8000-000000000001',
-            client_clicked_at: '2026-08-30T08:00:01Z',
-          },
-        },
-      ],
-      ['/student/attempts/13/skip/', { method: 'POST' }],
       [
         '/assessment/process/confidence/13/commit/',
         { method: 'POST', body: { probability: 80 } },

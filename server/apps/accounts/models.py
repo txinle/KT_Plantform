@@ -1,4 +1,7 @@
+import time
 import uuid
+
+from config.capture_timing import pending_timing
 
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
@@ -278,6 +281,19 @@ class ClassStudentAnalyticsPolicy(models.Model):
 
 
 class User(AbstractUser):
+    def check_password(self, raw_password):
+        state = pending_timing.get()
+        if state is None:
+            return super().check_password(raw_password)
+        started = time.perf_counter()
+        try:
+            return super().check_password(raw_password)
+        finally:
+            elapsed = time.perf_counter() - started
+            metrics = state.setdefault('capture_metrics', {})
+            metrics['password_check_count'] = metrics.get('password_check_count', 0) + 1
+            metrics['password_check_seconds'] = metrics.get('password_check_seconds', 0.0) + elapsed
+
     class Role(models.TextChoices):
         ADMIN = "admin", "管理员"
         TEACHER = "teacher", "教师"

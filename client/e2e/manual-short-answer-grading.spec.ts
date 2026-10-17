@@ -1,3 +1,4 @@
+import { submitWholePaper } from './whole-paper'
 import { expect, test, type Page } from '@playwright/test'
 import { acceptResearchConsentIfRequired } from './research-consent'
 
@@ -33,8 +34,7 @@ test('student submits a short answer and teacher completes and revises manual gr
   const draftSaved = page.waitForResponse(response => response.url().includes('/draft/') && response.ok())
   await page.getByRole('textbox').fill('模型需要估计学生当前的知识掌握状态。')
   await draftSaved
-  await page.getByRole('button', { name: '确认提交本题' }).click()
-  await page.getByRole('dialog').getByRole('button', { name: '提交并锁定' }).click()
+  await submitWholePaper(page)
   await expect(page).toHaveURL(/\/student\/sessions\/\d+\/complete\/$/)
 
   await page.goto(`${origin}/student/courses/1/learning/`)

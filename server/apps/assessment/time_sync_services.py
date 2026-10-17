@@ -3,7 +3,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from django.db import transaction
 from django.utils import timezone
 
-from .models import ClientTimeSync
+from .models import ClientTimeSync, ExperimentSession
 
 
 MAX_SYNC_ROUND_TRIP_MS = Decimal("60000")
@@ -57,6 +57,13 @@ def create_pending_time_sync(
     )
     sample.full_clean(validate_unique=False, validate_constraints=False)
     sample.save(force_insert=True)
+    if sample.session_id is not None and ExperimentSession.objects.filter(
+        pk=sample.session_id,
+        status__in=(ExperimentSession.Status.COMPLETED, ExperimentSession.Status.EXPIRED),
+    ).exists():
+        from apps.analytics.research_materialization_jobs import schedule_session_materialization
+
+        schedule_session_materialization(sample.session_id)
     return sample
 
 
@@ -149,4 +156,11 @@ def finalize_time_sync(
             "finalized_at",
         )
     )
+    if sample.session_id is not None and ExperimentSession.objects.filter(
+        pk=sample.session_id,
+        status__in=(ExperimentSession.Status.COMPLETED, ExperimentSession.Status.EXPIRED),
+    ).exists():
+        from apps.analytics.research_materialization_jobs import schedule_session_materialization
+
+        schedule_session_materialization(sample.session_id)
     return sample

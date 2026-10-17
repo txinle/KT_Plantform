@@ -1,4 +1,5 @@
 from django.contrib.auth import authenticate, login, logout
+from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.middleware.csrf import get_token
 from drf_spectacular.utils import extend_schema
@@ -7,6 +8,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from config.capture_timing import request_phase
 
 from apps.accounts.account_queries import resolve_home_url
 from apps.accounts.password_services import (
@@ -61,6 +63,17 @@ def enforce_csrf(request):
         raise PermissionDenied(f"CSRF Failed: {reason}")
 
 
+def client_navigation(user):
+    """Project the server rollout boundary; API authorization still applies per read/write."""
+    courses = settings.STUDENT_COURSE_NAVIGATION_COURSE_IDS
+    users = settings.STUDENT_COURSE_NAVIGATION_USER_IDS
+    enabled = (settings.STUDENT_COURSE_NAVIGATION_ENABLED and user.is_authenticated
+               and user.role == User.Role.STUDENT)
+    all_courses = enabled and ('*' in users or str(user.pk) in users or '*' in courses)
+    course_ids = ['*'] if all_courses else sorted(value for value in courses if value.isdecimal()) if enabled else []
+    return {'student_courses': bool(course_ids), 'course_ids': course_ids}
+
+
 class AuthenticationView(APIView):
     def finalize_response(self, request, response, *args, **kwargs):
         response = super().finalize_response(request, response, *args, **kwargs)
@@ -74,7 +87,7 @@ class BootstrapContextView(AuthenticationView):
     @extend_schema(responses=BootstrapContextSerializer)
     def get(self, request):
         user = session_context(request.user)['user'] if request.user.is_authenticated else None
-        return Response({'csrf_token': get_token(request), 'user': user})
+        return Response({'csrf_token': get_token(request), 'user': user, 'client_navigation': client_navigation(request.user)})
 
 
 class SessionContextView(AuthenticationView):
@@ -101,15 +114,19 @@ class LoginApiView(AuthenticationView):
         enforce_csrf(request._request)
         serializer = LoginRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = authenticate(
-            request=request._request,
-            username=serializer.validated_data["username"],
-            password=serializer.validated_data["password"],
-        )
+        with request_phase(request, 'login_authenticate'):
+            user = authenticate(
+                request=request._request,
+                username=serializer.validated_data["username"],
+                password=serializer.validated_data["password"],
+            )
         if user is None:
             raise ValidationError({"non_field_errors": ["账号或密码不正确。"]})
-        login(request._request, user)
-        return Response({**session_context(user), 'csrf_token': get_token(request._request)})
+        with request_phase(request, 'login_session'):
+            login(request._request, user)
+        with request_phase(request, 'login_projection'):
+            context = {**session_context(user), 'csrf_token': get_token(request._request), 'client_navigation': client_navigation(user)}
+        return Response(context)
 
 
 class StudentPasswordChangeView(AuthenticationView):

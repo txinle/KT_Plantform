@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
+import { bootstrapContext, getAuthenticationGeneration } from '@/app/bootstrap'
+import { canNavigateStudentCourse } from '@/app/student-navigation'
+import { currentAssessmentAction, finishAssessmentOperation, timedAssessmentStage } from '@/assessment-runtime/operation-timing'
 
 import type { StudentCourse } from './api'
 import { getStudentCourseApi } from './api'
@@ -10,15 +14,30 @@ const loading = ref(true)
 const error = ref('')
 const courseStatusLabels: Record<string, string> = { active: '进行中', archived: '已归档' }
 
-onMounted(async () => {
+let requestSequence = 0
+async function loadCourses() {
+  const sequence = ++requestSequence
+  const generation = getAuthenticationGeneration()
+  courses.value = []
+  loading.value = true
+  error.value = ''
+  if (!bootstrapContext.value) { loading.value = false; return }
   try {
-    courses.value = (await getStudentCourseApi().courses()).items
+    const response = await timedAssessmentStage('course_list_read', () => getStudentCourseApi().courses())
+    if (sequence === requestSequence && generation === getAuthenticationGeneration()) courses.value = response.items
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '课程加载失败。'
+    if (sequence === requestSequence && generation === getAuthenticationGeneration()) {
+      error.value = caught instanceof Error ? caught.message : '课程加载失败。'
+    }
   } finally {
-    loading.value = false
+    if (sequence === requestSequence) {
+      loading.value = false
+      if (generation === getAuthenticationGeneration() && currentAssessmentAction() === 'login') finishAssessmentOperation(!error.value)
+    }
   }
-})
+}
+watch(getAuthenticationGeneration, loadCourses, { immediate: true })
+onBeforeUnmount(() => { requestSequence += 1 })
 </script>
 
 <template>
@@ -45,7 +64,8 @@ onMounted(async () => {
           <h2>{{ course.course_name }}</h2>
           <p>{{ course.class_name }}</p>
         </div>
-        <a class="kt-button" :href="`/student/courses/${course.course_id}/`">进入课程</a>
+        <RouterLink v-if="canNavigateStudentCourse(bootstrapContext, `/student/courses/${course.course_id}/`)" class="kt-button" :to="`/student/courses/${course.course_id}/`">进入课程</RouterLink>
+        <a v-else class="kt-button" :href="`/student/courses/${course.course_id}/`">进入课程</a>
       </article>
     </div>
     <div v-else class="kt-card kt-empty-state">

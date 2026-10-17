@@ -4,7 +4,9 @@ import { requireIsolatedPostgres } from './e2e-database.mjs'
 import { requireServerPython, serverDir } from './e2e-runtime.mjs'
 
 const python = requireServerPython()
-const environment = { ...process.env, ...requireIsolatedPostgres(process.env), PYTHONUTF8: '1' }
+const environment = { ASSESSMENT_PREPARED_ADMISSION_MODE: 'postgres_transaction',
+  ASSESSMENT_ADMISSION_ENABLED: '1', ASSESSMENT_ADMISSION_GLOBAL_ENABLED: '1', ASSESSMENT_ADMISSION_CAPACITY: '4',
+  ...process.env, ...requireIsolatedPostgres(process.env), PYTHONUTF8: '1' }
 const gatewayPort = Number(process.env.E2E_GATEWAY_PORT || '8000')
 const backendPort = Number(process.env.E2E_BACKEND_PORT || String(gatewayPort + 1))
 const gateway = createFrontendGateway({ backendOrigin: `http://127.0.0.1:${backendPort}` })
@@ -37,6 +39,8 @@ const publicationWorker = process.env.E2E_PUBLICATION_WORKER === '1' ? start([
   '--poll-seconds',
   '0.1',
 ]) : undefined
+const submissionWorker = process.env.E2E_SESSION_SUBMISSION_WORKER !== '0'
+  ? start(['manage.py', 'run_session_submissions', '--poll-seconds', '0.1']) : undefined
 const djangoServer = start([
   'manage.py',
   'runserver',
@@ -50,6 +54,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 
 djangoServer.on('exit', (code) => shutdown(code ?? 1))
 publicationWorker?.on('exit', (code) => shutdown(code ?? 1))
+submissionWorker?.on('exit', (code) => shutdown(code ?? 1))
 
 gateway.listen(gatewayPort, '127.0.0.1')
 gateway.on('error', (error) => { process.stderr.write(String(error) + '\n'); shutdown(1) })

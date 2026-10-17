@@ -7,14 +7,23 @@ x-school-environment: &school-environment
   POSTGRES_PORT: 5432
   DATABASE_CONN_MAX_AGE: 0
   SCHOOL_RUNTIME_PRESSURE_FILE: ""
+  ASSESSMENT_REQUEST_TIMING_ENABLED: ${ASSESSMENT_REQUEST_TIMING_ENABLED:-1}
   DATABASE_DISABLE_SERVER_SIDE_CURSORS: "1"
   DJANGO_DEBUG: "0"
   STUDENT_SHARED_RESULTS_ENABLED: "1"
   STUDENT_SHARED_RESULTS_COURSE_IDS: ${SCHOOL_STUDENT_SHARED_RESULTS_COURSE_IDS:-2}
   ASSESSMENT_ADMISSION_ENABLED: ${ASSESSMENT_ADMISSION_ENABLED:-0}
+  ASSESSMENT_PREPARED_ENABLED: ${ASSESSMENT_PREPARED_ENABLED:-0}
+  ASSESSMENT_ADMISSION_GLOBAL_ENABLED: ${ASSESSMENT_ADMISSION_GLOBAL_ENABLED:-0}
   ASSESSMENT_ADMISSION_TASK_IDS: ${ASSESSMENT_ADMISSION_TASK_IDS:-}
   ASSESSMENT_ADMISSION_REDIS_URL: redis://redis-admission:6379/0
-  ASSESSMENT_ADMISSION_CAPACITY: ${ASSESSMENT_ADMISSION_CAPACITY:-8}
+  ASSESSMENT_ADMISSION_CAPACITY: ${ASSESSMENT_ADMISSION_CAPACITY:-1}
+  ASSESSMENT_ADMISSION_RATE_PER_SECOND: ${ASSESSMENT_ADMISSION_RATE_PER_SECOND:-1}
+  ASSESSMENT_ADMISSION_BATCH_SIZE: ${ASSESSMENT_ADMISSION_BATCH_SIZE:-64}
+  ASSESSMENT_STARTUP_WORKERS: ${ASSESSMENT_STARTUP_WORKERS:-2}
+  ASSESSMENT_REMAINING_WORKERS: ${ASSESSMENT_REMAINING_WORKERS:-6}
+  ASSESSMENT_STARTUP_DB_CONNECTIONS: ${ASSESSMENT_STARTUP_DB_CONNECTIONS:-2}
+  ASSESSMENT_REMAINING_DB_CONNECTIONS: ${ASSESSMENT_REMAINING_DB_CONNECTIONS:-6}
   ASSESSMENT_ADMISSION_LEASE_SECONDS: ${ASSESSMENT_ADMISSION_LEASE_SECONDS:-180}
   SCHOOL_REDIS_SESSION_ENABLED: ${SCHOOL_REDIS_SESSION_ENABLED:-0}
   SESSION_REDIS_URL: redis://redis-session:6379/0
@@ -62,6 +71,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-kt_platform}
       POSTGRES_USER: ${POSTGRES_USER:-kt_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      ASSESSMENT_STARTUP_DB_CONNECTIONS: ${ASSESSMENT_STARTUP_DB_CONNECTIONS:-2}
+      ASSESSMENT_REMAINING_DB_CONNECTIONS: ${ASSESSMENT_REMAINING_DB_CONNECTIONS:-6}
     volumes:
       - ./docker/pgbouncer-school.ini.template:/school/pgbouncer.ini.template:ro
       - ./docker/pgbouncer-entrypoint.sh:/school/pgbouncer-entrypoint.sh:ro
@@ -72,8 +83,10 @@ services:
     cpu_shares: 1024
   redis-admission:
     image: redis:7.4-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "allkeys-lru"]
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always", "--maxmemory", "192mb", "--maxmemory-policy", "noeviction"]
     restart: unless-stopped
+    volumes:
+      - redis_admission_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -138,14 +151,28 @@ services:
       <<: *school-environment
       POSTGRES_POOL_ALIAS: kt_assessment
       DATABASE_APPLICATION_NAME: kt-school-assessment
-      GUNICORN_WORKERS: 8
+      GUNICORN_WORKERS: ${ASSESSMENT_REMAINING_WORKERS:-6}
       SCHOOL_CAPTURE_SHORT: "1"
       WEB_REPLICAS: 1
     deploy:
       replicas: 1
-    mem_limit: 4G
+    mem_limit: 3G
     cpus: 0
     cpu_shares: 4096
+  startup:
+    <<: *school-web
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_startup
+      DATABASE_APPLICATION_NAME: kt-school-startup
+      GUNICORN_WORKERS: ${ASSESSMENT_STARTUP_WORKERS:-2}
+      SCHOOL_CAPTURE_SHORT: "1"
+      WEB_REPLICAS: 1
+    deploy:
+      replicas: 1
+    mem_limit: 1G
+    cpus: 0
+    cpu_shares: 1024
   capture:
     <<: *school-web
     environment:
@@ -260,6 +287,7 @@ services:
     build:
       dockerfile: deploy/Dockerfile.school
     volumes:
+      - media_data:/app/media
       - runtime_control:/runtime-control:ro
     entrypoint: ["docker/school-entrypoint.sh"]
     command: ["python", "manage.py", "run_publication_jobs"]
@@ -301,8 +329,35 @@ services:
         condition: service_healthy
     deploy:
       replicas: 1
-    mem_limit: 768M
-    cpus: 0.25
+    mem_limit: 512M
+    cpus: 0.125
+    cpu_shares: 128
+  session-submission-worker:
+    image: ${SCHOOL_BACKEND_IMAGE:-kt-school-backend:local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.school
+      target: web
+    env_file: ../server/.env
+    entrypoint: ["docker/school-entrypoint.sh"]
+    command: ["python", "manage.py", "run_session_submissions"]
+    restart: unless-stopped
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_submission
+      DATABASE_APPLICATION_NAME: kt-school-session-submission
+      SCHOOL_RUNTIME_PRESSURE_FILE: /runtime-control/pressure.json
+    volumes:
+      - runtime_control:/runtime-control:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+    deploy:
+      replicas: 1
+    mem_limit: 256M
+    cpus: 0.125
     cpu_shares: 128
   nginx:
     build:
@@ -319,6 +374,8 @@ services:
         condition: service_healthy
       assessment:
         condition: service_healthy
+      startup:
+        condition: service_healthy
       capture:
         condition: service_healthy
       student-read:
@@ -332,3 +389,4 @@ services:
 volumes:
   runtime_control:
   redis_session_data:
+  redis_admission_data:

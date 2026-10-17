@@ -30,7 +30,7 @@ export function bindLifecycle(collector: ProcessEventCollector, options: Lifecyc
   listen(documentTarget, 'visibilitychange', () => {
     visible = documentTarget.visibilityState !== 'hidden';
     const recorded = record(visible ? 'document_visible' : 'document_hidden', {});
-    if (visible) recorded.then(() => collector.flush?.());
+    if (visible && collector.autoSchedule !== false) recorded.then(() => collector.flush?.());
     return recorded;
   });
   listen(windowTarget, 'focus', () => {
@@ -52,7 +52,7 @@ export function bindLifecycle(collector: ProcessEventCollector, options: Lifecyc
   });
   listen(windowTarget, 'online', async () => {
     await record('network_online', {});
-    return collector.handleOnline?.(options.onlineOptions || {});
+    if (collector.autoSchedule !== false) return collector.handleOnline?.(options.onlineOptions || {});
   });
   listen(windowTarget, 'offline', () => record('network_offline', {}));
   ['pointerdown', 'touchstart', 'input'].forEach((eventType) => {
@@ -71,7 +71,10 @@ export function bindLifecycle(collector: ProcessEventCollector, options: Lifecyc
           0,
           Math.round(monotonicNow() - lastInteractionAt),
         ),
-      }).then(() => collector.checkpoint?.('heartbeat'));
+      }).then(async () => {
+        if (collector.autoSchedule === false) await collector.recordCheckpoint('heartbeat');
+        else await collector.checkpoint?.('heartbeat');
+      });
     }, Math.max(15, heartbeatSeconds) * 1000);
   };
   startHeartbeat();
@@ -147,14 +150,11 @@ export function bindLifecycle(collector: ProcessEventCollector, options: Lifecyc
     // item_rendered is the compatibility event name; the payload makes its
     // measurement boundary explicit: stem and controls are interactive.
     ready: (async () => {
-      if (!options.deferRendered) await record('item_rendered', { presentation_state: 'interactive' });
-      await record('pageshow', { persisted: false });
-      await record(visible ? 'document_visible' : 'document_hidden', {});
-      await record(focused ? 'window_focused' : 'window_blurred', {});
-      const state = await collector.outbox.captureState(collector.clientInstanceId);
-      await collector.checkpoint?.('resume', {
-        boundary: { [collector.clientInstanceId]: state.highestEmitted },
-      });
+      if (!options.deferRendered) await collector.record('item_rendered', { presentation_state: 'interactive' });
+      await collector.record('pageshow', { persisted: false });
+      await collector.record(visible ? 'document_visible' : 'document_hidden', {});
+      await collector.record(focused ? 'window_focused' : 'window_blurred', {});
+      await collector.recordCheckpoint('resume');
     })(),
     closeAttempt,
     prepareNavigation,

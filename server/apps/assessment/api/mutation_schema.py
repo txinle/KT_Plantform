@@ -86,6 +86,8 @@ CONFIDENCE = {'nullable': True, 'oneOf': [
 
 DRAFT = obj({'answer': ANSWER, 'client_occurred_at': nullable(TIME), 'target_event_id': nullable(UUID),
              'expected_version': COUNTER, 'capture_bundle': CAPTURE_BUNDLE, 'capture_operation_id': UUID,
+             'inline_confidence': obj({'probability': nullable({'type': 'integer', 'minimum': 0, 'maximum': 100}),
+                                       'answer_event_id': nullable(UUID)}, ['probability', 'answer_event_id']),
              **LEASE_INPUT}, exact=False,
              description='capture_operation_id is required with capture_bundle; it binds the original durable draft receipt.')
 DRAFT['not'] = {'required': ['save_and_leave']}
@@ -107,6 +109,7 @@ NAVIGATION = obj({
     'navigation_token': UUID, 'leave_event_id': UUID, 'target_event_id': nullable(UUID),
     'to_assignment_id': POSITIVE, 'client_clicked_at': nullable(TIME), **LEASE_INPUT,
     'save_and_leave': BUNDLE, 'next_entry': NEXT_ENTRY,
+    'inline_confidence': DRAFT['properties']['inline_confidence'],
 }, ['navigation_token', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'save_and_leave'])
 DRAFT_RECEIPT = obj({
     **CAPTURE_RECEIPT,
@@ -142,6 +145,15 @@ ATOMIC_SUBMISSION_RECEIPT = obj({**SUBMISSION_RECEIPT['properties'], 'committed'
     description='Receipt returned only after the atomic evidence/response transaction commits; '
                 'feedback fields appear only when the server policy permits them.')
 NEXT_RECEIPT = obj({'success': SUCCESS, 'next_url': STRING}, ['success', 'next_url'])
+PAPER_REQUEST = obj({'submission_token': UUID, 'client_clicked_at': TIME,
+    'expected_versions': array(obj({'attempt_id': POSITIVE, 'response_version': COUNTER,
+                                    'target_event_id': nullable(UUID)},
+                                   ['attempt_id', 'response_version', 'target_event_id']))},
+    ['submission_token', 'client_clicked_at', 'expected_versions'])
+PAPER_RECEIPT = obj({'success': SUCCESS, 'submission_id': UUID,
+    'status': {'type': 'string', 'enum': ['queued', 'running', 'completed', 'failed']},
+    'accepted_at': TIME, 'status_url': STRING, 'next_url': STRING},
+    ['success', 'submission_id', 'status', 'accepted_at', 'status_url', 'next_url'])
 
 
 def spec(request, success=None, *, status=200, errors=(), description='', body_required=True):
@@ -160,15 +172,14 @@ MUTATIONS = {
         errors=(400, 404, 409, 413), body_required=False,
         description='Save a draft or atomically save-and-leave. navigation_token binds immutable material; '
                     'a confirmed retry returns the persisted navigation receipt. Domain CAS and writer lease remain authoritative.'),
-    'submit': spec({'oneOf': [SUBMISSION, ATOMIC_SUBMISSION]},
-        {'oneOf': [SUBMISSION_RECEIPT, ATOMIC_SUBMISSION_RECEIPT]},
-        errors=(400, 404, 409, 413), description='Submit the existing frozen response; optionally ingest the bounded '
-        'atomic_submission evidence in the same durable transaction. submission_token/material replay preserves the original receipt.'),
-    'skip': spec(None, NEXT_RECEIPT, errors=(404, 409), body_required=False,
-                 description='Skip using the existing server-authorized attempt transition.'),
-    'finish': spec(None, NEXT_RECEIPT, errors=(404,), body_required=False,
-                   description='Finish the owned session using the existing domain service.'),
+    'submit': spec(None, errors=(404, 409), body_required=False,
+        description='Retired per-item submission URL. Always rejects with WHOLE_SESSION_SUBMISSION_REQUIRED after ownership authorization.'),
+    'skip': spec(None, errors=(404, 409), body_required=False,
+        description='Retired skip URL. Always rejects with WHOLE_SESSION_SUBMISSION_REQUIRED after ownership authorization.'),
+    'finish': spec(PAPER_REQUEST, errors=(400, 404, 409),
+        description='Durable whole-paper acceptance only; frozen material is processed asynchronously.'),
 }
+MUTATIONS['finish']['responses'][202] = (PAPER_RECEIPT, 'Durable acceptance; not a claim of completed grading.')
 
 SYNC_RECEIPT = obj({'success': SUCCESS, 'time_sync_id': UUID, 'server_received_at': TIME,
     'server_responded_at': TIME, 'sync_quality': STRING, 'estimated_clock_offset_ms': nullable({'type': 'integer'}),
@@ -188,7 +199,8 @@ CLOSE_RECEIPT = obj({'success': SUCCESS, **CAPTURE_RECEIPT, 'capture_operation_i
 PROCESS_ERRORS = (400, 409, 413, 415)
 TOOL_INPUT = obj({'tool': STRING, 'stage': STRING, 'operation_id': UUID, 'data': obj({}, exact=False),
                   'answer_event_id': nullable(UUID), 'initiation_type': STRING, 'capture_bundle': CAPTURE_BUNDLE}, ['tool', 'stage', 'operation_id'])
-TOOL_RESULT = obj({'success': SUCCESS, 'event_id': UUID, 'content_version': STRING, 'text': STRING, **CAPTURE_RECEIPT},
+TOOL_RESULT = obj({'success': SUCCESS, 'event_id': UUID, 'content_version': STRING, 'text': STRING,
+                  'inline_confidence': DRAFT['properties']['inline_confidence'], **CAPTURE_RECEIPT},
                   ['success', 'event_id', 'content_version'])
 TOOLS_AVAILABLE = obj({'success': SUCCESS, 'state': obj({'doubt': BOOLEAN, 'pending_check': BOOLEAN,
     'checking': BOOLEAN, 'doubt_note': STRING}, ['doubt', 'pending_check', 'checking', 'doubt_note']),

@@ -20,7 +20,7 @@ from apps.question_bank.models import (
 from .event_services import append_assessment_event
 from .models import AssessmentEvent, ConfidenceAssignment
 from .services import get_or_create_session
-from .test_support import accept_research_consent
+from .test_support import accept_research_consent, historical_submission_result
 
 
 class ConfidenceFlowTests(TestCase):
@@ -90,11 +90,8 @@ class ConfidenceFlowTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(draft.status_code, 200)
-        return self.client.post(
-            reverse("assessment_api:submit", args=[assignment.attempt.pk]),
-            data=json.dumps({"submission_token": str(uuid.uuid4()), **({"confidence": confidence} if confidence else {})}),
-            content_type="application/json",
-        )
+        return historical_submission_result(student=self.student, attempt_id=assignment.attempt.pk,
+            document={"submission_token": str(uuid.uuid4()), **({"confidence": confidence} if confidence else {})})
 
     def post_process(self, name, attempt, payload=None):
         return self.client.post(
@@ -124,8 +121,8 @@ class ConfidenceFlowTests(TestCase):
 
     def test_prompt_is_available_before_submission_and_feedback_follows_final_confirmation(self):
         assignment = self.session.assignments.order_by("assigned_sequence_index").first()
-        entry = self.client.get(f'/api/v1/student/sessions/{self.session.pk}/questions/{assignment.pk}/')
-        contract = domain_payload(entry)['pending_confidence']
+        from .confidence_services import confidence_prompt_contract
+        contract = confidence_prompt_contract(ConfidenceAssignment.objects.get(attempt=assignment.attempt))
         self.assertEqual(contract['scale_version'], 'v2')
         self.assertEqual(contract['step'], 1)
         self.assertEqual(contract['prompt_version'], 'prompt-v3')

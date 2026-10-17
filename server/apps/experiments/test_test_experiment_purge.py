@@ -29,12 +29,12 @@ class TestExperimentPurgeTests(StudentApiFixtureMixin, TestCase):
         self.course.code = 'KT01'
         self.course.name = 'EDA技术'
         self.course.save(update_fields=['code', 'name'])
-        started = self.start()
-        self.session = ExperimentSession.objects.get(pk=domain_payload(started)['session_id'])
+        from apps.assessment.services import get_or_create_session
+        # These cleanup tests concern retained historical trees, not public student entry.
+        self.session = get_or_create_session(self.experiment, self.student, class_task=self.task)
         self.submit_attempt_without_finishing(self.session)
         self.other_experiment, self.other_task = self.publish_task(name='保留正式实验', feedback_mode=self.feedback_mode)
-        other_started = self.start(task=self.other_task)
-        self.other_session = ExperimentSession.objects.get(pk=domain_payload(other_started)['session_id'])
+        self.other_session = get_or_create_session(self.other_experiment, self.student, class_task=self.other_task)
 
     def purge(self, **kwargs):
         from .test_experiment_purge import purge_test_experiment

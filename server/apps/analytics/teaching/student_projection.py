@@ -241,7 +241,7 @@ def _load_fact_bundle(enrollment, generated_at, *, experiment_id, cohort):
             version_id__in={task.release_snapshot_id for task in tasks},
             class_snapshot_id__in={task.class_snapshot_id for task in tasks},
             student_id__in=eligible_student_ids,
-        ).select_related("student", "capture_contract")
+        ).exclude(status=ExperimentSession.Status.PREPARED).select_related("student", "capture_contract")
         if (session.version_id, session.class_snapshot_id) in task_by_pair
         and session.student_id
         in eligible_by_task[

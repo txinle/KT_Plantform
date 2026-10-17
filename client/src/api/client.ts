@@ -25,8 +25,9 @@ export class ApiError extends Error {
   code: string
   fields: Record<string, unknown>
   requestId: string
+  retryAfterSeconds?: number
 
-  constructor(status: number, body: ApiErrorBody) {
+  constructor(status: number, body: ApiErrorBody, retryAfterSeconds?: number) {
     const structured = body.error
     super(
       structured?.message
@@ -37,6 +38,7 @@ export class ApiError extends Error {
     this.code = structured?.code || 'API_ERROR'
     this.fields = structured?.fields || {}
     this.requestId = structured?.request_id || ''
+    this.retryAfterSeconds = retryAfterSeconds
   }
 }
 
@@ -59,6 +61,7 @@ interface ClientOptions {
   getCsrfToken?: () => string
   onAuthenticationRequired?: (loginUrl: string) => void
   getOperationId?: () => string | undefined
+  onResponse?: (response: Response) => void
 }
 
 interface GetOptions {
@@ -121,9 +124,13 @@ export function createApiClient(options: ClientOptions = {}) {
 
 
   async function parse<T>(response: Response): Promise<T> {
+    options.onResponse?.(response)
     const body = await responseBody(response)
     if (!response.ok) {
-      const apiError = new ApiError(response.status, (body || {}) as ApiErrorBody)
+      const retryAfter = response.headers.get('Retry-After')
+      const seconds = retryAfter === null ? NaN : /^\d+$/.test(retryAfter) ? Number(retryAfter)
+        : /^[A-Za-z]{3}, /.test(retryAfter) ? Math.max(0, (Date.parse(retryAfter) - Date.now()) / 1000) : NaN
+      const apiError = new ApiError(response.status, (body || {}) as ApiErrorBody, Number.isFinite(seconds) ? seconds : undefined)
       if (response.status === 401) {
         const currentPage = `${window.location.pathname}${window.location.search}${window.location.hash}`
         onAuthenticationRequired(`/login/?next=${encodeURIComponent(currentPage)}`)

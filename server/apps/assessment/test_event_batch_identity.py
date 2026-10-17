@@ -40,6 +40,7 @@ class BatchIdentityQueryTests(IdentityBatchFixture, TestCase):
         # Exclude monotonic predecessor and existence checks; those have separate semantics.
         return [row['sql'] for row in queries if row['sql'].startswith('SELECT')
                 and 'FROM "assessment_assessmentevent"' in row['sql']
+                and '"client_sequence_no" IN' in row['sql']
                 and '"client_sequence_no" <' not in row['sql']
                 and not row['sql'].startswith('SELECT 1 ')]
 

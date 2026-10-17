@@ -249,6 +249,15 @@ class CaptureWriteIsolationTests(StudentApiFixtureMixin, TransactionTestCase):
 
 
 class DeadlineAutoSubmissionTests(StudentApiFixtureMixin, TransactionTestCase):
+    def start(self, *, task=None, student=None):
+        from .services import get_or_create_session
+        from .test_support import HistoricalSubmissionResult
+        task, student = task or self.task, student or self.student
+        self.client.force_login(student)
+        # Keep deadline settlement coverage for historical trajectories; no retired HTTP writes.
+        session = get_or_create_session(task.experiment, student, class_task=task)
+        return HistoricalSubmissionResult({'session_id': session.pk}, 201)
+
     def test_scheduler_does_not_lock_a_session_with_future_deadlines(self):
         session = self._session_from(self.start())
         locked = []

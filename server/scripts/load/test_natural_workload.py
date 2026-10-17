@@ -17,6 +17,14 @@ class NaturalWorkloadTests(unittest.TestCase):
         self.assertEqual(Counter(s['role'] for s in plan['students']), {'browser': 2, 'protocol': 178})
         self.assertEqual(plan['students'][0]['username'], 'u000')
 
+    def test_150_student_diagnostic_keeps_two_browsers_and_frozen_natural_rules(self):
+        plan = self.plan(150)
+        self.assertEqual(plan, self.plan(150))
+        self.assertEqual(plan['total_students'], 150)
+        self.assertEqual(Counter(s['role'] for s in plan['students']), {'browser': 2, 'protocol': 148})
+        self.assertEqual(Counter(s['speed_stratum'] for s in plan['students']), {'fast': 60, 'medium': 68, 'slow': 22})
+        self.assertTrue(all(len(s['item_dwell_seconds']) == 20 for s in plan['students']))
+
     def test_exact_selection_and_speed_distributions(self):
         students = self.plan()['students']
         self.assertEqual(Counter(s['speed_stratum'] for s in students), {'fast':72,'medium':81,'slow':27})
@@ -222,6 +230,52 @@ class NaturalWorkloadTests(unittest.TestCase):
                 [rows[0],{**rows[1],'completed_at':19}],
                 [rows[0],{**rows[1],'completed_at':619}]]:
             self.assertFalse(observed_active_overlap(plan,invalid)['achieved'])
+
+class ProductionSplitWorkloadTests(unittest.TestCase):
+    def runner(self):
+        from school_natural_load import NaturalRunner
+        return NaturalRunner('http://127.0.0.1:18080',31,35,plan=NaturalWorkloadTests().plan(10),
+            start_at=0,runtime_contract='capture-v2-split-v1')
+
+    def test_split_contract_is_explicit_and_preserves_the_existing_strict_default(self):
+        from school_natural_load import NaturalRunner
+        self.assertFalse(self.runner().require_student_slice_capabilities)
+        default=NaturalRunner('http://127.0.0.1:18080',31,35,plan=NaturalWorkloadTests().plan(10),start_at=0)
+        self.assertTrue(default.require_student_slice_capabilities)
+        with self.assertRaisesRegex(ValueError,'runtime contract'):
+            NaturalRunner('http://127.0.0.1:18080',31,35,plan=NaturalWorkloadTests().plan(10),start_at=0,runtime_contract='unknown')
+
+    def test_split_submission_confirms_capture_before_plain_submit_without_atomic_receipts(self):
+        from capture_protocol import BrowserAlignedStream
+        from school_natural_load import StudentState
+        from unittest.mock import patch
+        runner=self.runner();state=StudentState('u002','unused');state.session_id=11
+        runner.ledger['11']={'answers':{}}
+        runtime={'stream':BrowserAlignedStream(11,'client'),'head':'head','version':2,'lease':{},
+            'dto':{'assignment':{'attempt_id':21},'question':{'question_type':'true_false'},
+                'actions':{'submit_url':'/submit/'},'process':{'capture_bundle':{'enabled':True,'version':1}}}}
+        calls=[]
+        def post(_,__,body,metric):
+            self.assertNotIn('atomic_submission',body)
+            self.assertEqual(body['target_event_id'],'head')
+            self.assertEqual(calls,['save','checkpoint:commit','flush:submission_capture_drain'])
+            calls.append('submit')
+            return {'success':True,'status':'submitted','next_url':'/student/sessions/11/complete/'}
+        def read(_,path,metric):
+            calls.append(metric)
+            return {'session_id':11,'status':'completed','submission_count':20,'attempt_count':20}
+        with patch.object(runner,'_browser_ensure_lease'),patch.object(runner,'_browser_save',side_effect=lambda *a:calls.append('save')),patch.object(runner,'_browser_checkpoint',side_effect=lambda *a:calls.append('checkpoint:'+a[-1])),patch.object(runner,'_browser_flush',side_effect=lambda *a,**kw:calls.append('flush:'+kw['metric'])),patch.object(runner,'_browser_post',side_effect=post),patch.object(runner,'_browser_close',side_effect=lambda *a:calls.append('close')),patch.object(runner,'_browser_request',side_effect=read):
+            runner._submit_material(state,runtime,19,{'payload':{'after_state_hash':'hash'}},list(range(20)))
+        self.assertEqual(runner.ledger['11']['answers']['21']['response_version'],2)
+        self.assertEqual(calls[-5:],['flush:final_capture_drain','completion_shell','completion_auth','finish','task_recovery'])
+
+    def test_split_plan_accounts_for_the_twenty_final_saves_used_by_the_frontend(self):
+        from school_natural_load import natural_result
+        runner=self.runner()
+        result=natural_result(runner,[],0,'natural')
+        selected=[s for s in runner.plan['students'] if s['role']=='protocol']
+        self.assertEqual(result['full_operation_accounting']['save_draft']['planned_count'],
+            sum(48+len(s['modify_items']) for s in selected))
 
 class NaturalWriterLeaseTests(unittest.TestCase):
     def test_terminal_summary_waits_for_final_capture_drain_and_propagates_failure(self):
@@ -516,6 +570,26 @@ class ConfidenceOnlyWorkloadTests(unittest.TestCase):
         post.assert_not_called()
 
 class ConfidencePersistenceTests(unittest.TestCase):
+    def test_split_browser_confirmation_matches_the_actual_request_and_durable_head(self):
+        import os
+        from types import SimpleNamespace as Row
+        os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings')
+        sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
+        import django
+        django.setup()
+        from apps.experiments.management.commands.verify_school_browser_witness import split_submission_matches,js_digest
+        response={'status':'skipped','answer_event_id':'head'}
+        attempt=Row(status='submitted',submitted_at=1,submission_receipt={},submission_token='token',
+                    final_response_event_id='head',active_response_event_id='head')
+        request={'status':200,'receipt':{'status':'submitted'},'submission':{'token':'token','target_event_id':'head',
+            'material_sha256':js_digest({'atomic_submission':None,'target_event_id':'head','confidence':response})}}
+        self.assertTrue(split_submission_matches(attempt,request,response))
+        self.assertFalse(split_submission_matches(attempt,request,{'status':'committed','probability':73,'answer_event_id':'head'}))
+        request['receipt']['status']='draft'
+        self.assertFalse(split_submission_matches(attempt,request,response))
+        request['receipt']['status']='submitted';attempt.active_response_event_id='other'
+        self.assertFalse(split_submission_matches(attempt,request,response))
+
     def test_exact_confidence_value_head_receipt_and_unique_records_are_required(self):
         import os
         from types import SimpleNamespace as Row
@@ -545,6 +619,20 @@ class ConfidencePersistenceTests(unittest.TestCase):
             Row(attempt_id=8,event_type='confidence_committed',client_instance_id=None,payload={'confidence_assignment_id':'assignment','probability':73})]
         checks=confidence_persistence_checks(plan,ledger,[session],[attempt],[assigned],events)
         self.assertTrue(all(checks.values()))
+        from copy import deepcopy,copy
+        split_ledger=deepcopy(ledger)
+        split_ledger['source_config']={'runtime_contract':'capture-v2-split-v1'}
+        split_material=split_ledger['sessions']['77']['confidence']['8']
+        split_material.update(submission_receipt_sha256=None,submission_confirmation_profile='http-submitted-status-v1',
+                              submission_response_sha256='a'*64)
+        split_attempt=copy(attempt)
+        split_attempt.submission_receipt={};split_attempt.status='submitted';split_attempt.submitted_at=3
+        self.assertTrue(all(confidence_persistence_checks(plan,split_ledger,[session],[split_attempt],[assigned],events).values()))
+        del split_ledger['source_config']
+        self.assertFalse(all(confidence_persistence_checks(plan,split_ledger,[session],[split_attempt],[assigned],events).values()))
+        split_ledger['source_config']={'runtime_contract':'capture-v2-split-v1'}
+        split_attempt.status='draft'
+        self.assertFalse(all(confidence_persistence_checks(plan,split_ledger,[session],[split_attempt],[assigned],events).values()))
         assigned.probability=72
         self.assertFalse(all(confidence_persistence_checks(plan,ledger,[session],[attempt],[assigned],events).values()))
         assigned.probability=73

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
+from apps.assessment.models import ExperimentSession
 
 from apps.accounts.models import Course, ClassGroup, CourseEnrollment, CourseEnrollmentAccessPeriod, CourseSubject, User
 from apps.question_bank.models import Concept, Question, QuestionBank, QuestionConcept, QuestionOption
@@ -34,7 +35,7 @@ class Command(BaseCommand):
         if fixture.get('database') != 'kt_e2e' or len(fixture['usernames']) != 300 or fixture['item_count'] != 20:
             raise CommandError('Retained 300-student/20-question baseline required')
         original = ClassExperimentTask.objects.select_related('experiment__course', 'experiment__owner').get(pk=fixture['task_id'])
-        if original.sessions.exists():
+        if original.sessions.exclude(status=ExperimentSession.Status.PREPARED).exists():
             raise CommandError('Formal baseline task must remain cold')
         roster = User.objects.in_bulk(fixture['usernames'], field_name='username')
         if len(roster) != 300 or any(user.role != User.Role.STUDENT for user in roster.values()):

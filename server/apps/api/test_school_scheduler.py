@@ -31,9 +31,9 @@ class SchoolSchedulerTests(SimpleTestCase):
 class SchoolSchedulerFinishRaceTests(StudentApiFixtureMixin, TransactionTestCase):
     def test_expiry_rechecks_terminal_status_after_student_finish_commits(self):
         self.assertEqual(connections['default'].vendor, 'postgresql')
-        response = self.start()
-        self.assertEqual(response.status_code, 201)
-        session = ExperimentSession.objects.get(pk=domain_payload(response)['session_id'])
+        # Retain the expiry/finish race for historical records through domain services.
+        from apps.assessment.services import get_or_create_session
+        session = get_or_create_session(self.experiment, self.student, class_task=self.task)
         attempt = record_visit(session.pk, session.assignments.get().pk)
         save_draft(attempt.pk, 'B')
         ExperimentSession.objects.filter(pk=session.pk).update(deadline_at=timezone.now() - timedelta(seconds=1))

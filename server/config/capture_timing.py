@@ -1,30 +1,51 @@
-"""Timing boundaries for the explicitly isolated capture diagnostic run."""
+"""Request timing for isolated diagnostics and production slow requests."""
 import math
 import json
 import os
 import re
 import time
 from contextvars import ContextVar
+from contextlib import contextmanager
 
 
 TIMING_ENV_KEY = 'kt.capture_timing'
+SLOW_REQUEST_SECONDS = 1.0
 CLOCK_DISCONTINUITY_SECONDS = .05
 pending_timing = ContextVar('capture_request_timing', default=None)
 
 
 def diagnostics_enabled():
     if os.getenv('SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED') != '1':
-        return False
+        return os.getenv('ASSESSMENT_REQUEST_TIMING_ENABLED') == '1'
     if os.getenv('POSTGRES_DB') != 'kt_e2e':
         raise ValueError('Capture diagnostics requires the isolated kt_e2e database')
     return True
 
 
 def diagnostics_mode():
+    if os.getenv('SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED') != '1' and os.getenv('ASSESSMENT_REQUEST_TIMING_ENABLED') == '1':
+        return 'light'
     mode = os.getenv('SCHOOL_CAPTURE_DIAGNOSTICS_MODE', 'sql')
     if mode not in ('light', 'sql'):
         raise ValueError('Capture diagnostics mode must be light or sql')
     return mode
+
+
+def should_log_timing(seconds):
+    return os.getenv('SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED') == '1' or seconds >= SLOW_REQUEST_SECONDS
+
+
+@contextmanager
+def request_phase(request, name):
+    state = request.META.get(TIMING_ENV_KEY)
+    if state is None:
+        yield
+        return
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        state.setdefault('capture_metrics', {})[name + '_seconds'] = round(time.perf_counter() - started, 6)
 
 
 def sanitized_id(value):

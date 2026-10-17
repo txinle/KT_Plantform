@@ -87,6 +87,25 @@ describe('TeacherDataAdvanced', () => {
       failed_count: 0, updating_count: 0, stale: false, updated_at: null, oldest_pending_seconds: null }
   }
 
+  it('keeps all ended sessions visible in completeness counts even when readable data is stale or incomplete', async () => {
+    mocks.api.advanced.mockResolvedValue({ ...response(), preparation: {
+      ...preparation('updating', 7, 'v1'), total_count: 10, latest_complete_count: 2,
+      input_incomplete_count: 3, input_unverified_count: 1, stale_count: 2,
+      pending_count: 2, failed_count: 1, updating_count: 2,
+    } })
+    const wrapper = mount(TeacherDataAdvanced)
+    await flushPromises()
+    const counts = wrapper.get('[data-testid="preparation-counts"]').text()
+    expect(counts).toContain('已结束会话 10')
+    expect(counts).toContain('最新且材料完整 2')
+    expect(counts).toContain('材料不完整或待核验 3')
+    expect(counts).toContain('完整性未核验 1')
+    expect(counts).toContain('首次整理 2')
+    expect(counts).toContain('更新中 2')
+    expect(counts).toContain('整理失败 1')
+    expect(counts).toContain('以上状态可能重叠')
+  })
+
   it('checks only metadata at 5/15/30 seconds at most three times for the first empty result', async () => {
     vi.useFakeTimers()
     mocks.api.advanced.mockResolvedValue({ ...response(), preparation: preparation() })

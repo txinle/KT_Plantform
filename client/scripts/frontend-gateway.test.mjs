@@ -16,6 +16,11 @@ test('independent gateway serves only registered GET/HEAD pages and preserves AP
   await writeFile(join(directory, 'index.html'), '<html>client-owned-shell</html>')
   await writeFile(join(directory, 'assets/app.js'), 'client-owned-script')
   await writeFile(join(directory, 'capture-v2-offline-worker.js'), 'client-owned-worker')
+  const paperDir = join(directory, 'papers')
+  await mkdir(paperDir)
+  const digest = 'a'.repeat(64)
+  const sealed = '{"version":1,"nonce":"AA==","ciphertext":"encrypted-only","compression":"gzip"}'
+  await writeFile(join(paperDir, `${digest}.json`), sealed)
   const requests = []
   const upstream = createServer(async (req, res) => {
     let body = ''
@@ -26,7 +31,7 @@ test('independent gateway serves only registered GET/HEAD pages and preserves AP
   })
   await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise((resolve) => upstream.close(resolve)))
-  const gateway = createFrontendGateway({ frontendDir: directory, backendOrigin: `http://127.0.0.1:${upstream.address().port}`, routes: loadFrontendRoutes() })
+  const gateway = createFrontendGateway({ frontendDir: directory, paperDir, backendOrigin: `http://127.0.0.1:${upstream.address().port}`, routes: loadFrontendRoutes() })
   await new Promise((resolve) => gateway.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise((resolve) => gateway.close(resolve)))
   const origin = `http://127.0.0.1:${gateway.address().port}`
@@ -54,6 +59,18 @@ test('independent gateway serves only registered GET/HEAD pages and preserves AP
   assert.equal(worker.headers.get('service-worker-allowed'), '/student/sessions/')
   assert.equal(worker.headers.get('content-type'), 'application/javascript')
   assert.equal(await worker.text(), 'client-owned-worker')
+  const paper = await fetch(origin + `/assessment-content/${digest}.json`)
+  assert.equal(paper.status, 200)
+  assert.equal(paper.headers.get('content-type'), 'application/json')
+  assert.match(paper.headers.get('cache-control'), /public.*immutable/)
+  assert.equal(await paper.text(), sealed)
+  const paperHead = await fetch(origin + `/assessment-content/${digest}.json`, { method: 'HEAD' })
+  assert.equal(paperHead.status, 200)
+  assert.equal(await paperHead.text(), '')
+  assert.equal((await fetch(origin + `/assessment-content/${digest}.json`, { method: 'POST' })).status, 405)
+  for (const path of [`/assessment-content/${'b'.repeat(64)}.json`, '/assessment-content/plaintext.json', '/assessment-content/%2e%2e%2findex.html', `/assessment-content/${digest}.json/other`]) {
+    assert.equal((await fetch(origin + path)).status, 404, path)
+  }
   assert.equal(requests.length, 0, 'business HTML and client assets must never reach Django')
   const response = await fetch(origin + '/api/v1/student/attempts/4/draft/?x=1', { method: 'POST', headers: { Cookie: 'sessionid=original', 'Content-Type': 'application/json' }, body: '{"answer":"甲"}' })
   assert.equal(response.status, 201)

@@ -7,8 +7,8 @@ from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
-from django.db import DatabaseError, close_old_connections, connection
-from django.test import TestCase, TransactionTestCase
+from django.db import DatabaseError, close_old_connections, connection, transaction
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
@@ -17,6 +17,48 @@ from apps.api.test_support import domain_payload
 from apps.question_bank.models import Question
 from . import test_atomic_submission as fixtures
 from .models import AssessmentEvent, ClientCaptureCheckpoint, ResponseSnapshot
+from .test_student_api import StudentApiFixtureMixin
+
+
+class CaptureRequestValidationTests(StudentApiFixtureMixin, TestCase):
+    def test_request_facts_preserve_distinct_write_permissions_and_schedule_history(self):
+        from apps.experiments.models import ScheduleRevision, TaskManualClosure
+        from apps.experiments.services import _class_experiment_task_terminal_update_scope
+        from .services import (get_or_create_session, mutation_validation_context,
+            _validate_process_event_time, _validate_session_time)
+        from .recording_capture_services import validate_close_recording_time
+        closed_at = timezone.now() - timedelta(minutes=2)
+        self.task.refresh_from_db()
+        self.task.manual_closed_at = closed_at
+        with _class_experiment_task_terminal_update_scope():
+            self.task.save(update_fields=['manual_closed_at'])
+        TaskManualClosure.objects.create(class_task=self.task, closed_at=closed_at,
+            schedule_revision_no=1, created_by=self.teacher, reason='historical close')
+        ScheduleRevision.objects.create(class_task=self.task, revision_no=2, reopens_manual_close=True)
+        session = get_or_create_session(self.experiment, self.student, class_task=self.task)
+        session.assessment_flow_version = 1
+        attempt = session.attempts.get()
+        at = timezone.now()
+        with CaptureQueriesContext(connection) as queries:
+            context = mutation_validation_context(session, at)
+            self.assertIsNone(_validate_session_time(session, attempt,
+                request_received_at=at, validation_context=context))
+            attempt.current_effective_deadline_at = at - timedelta(seconds=1)
+            self.assertEqual(_validate_process_event_time(session, attempt,
+                request_received_at=at, validation_context=context), '作答时间已结束')
+            self.assertIsNone(validate_close_recording_time(session, attempt,
+                request_received_at=at, event_type='item_left', validation_context=context))
+            self.assertEqual(validate_close_recording_time(session, attempt,
+                request_received_at=at, event_type='response_transition', validation_context=context), '作答时间已结束')
+        for table in ('experiments_schedulerevision', 'experiments_taskmanualclosure'):
+            self.assertEqual(sum('FROM "' + table + '"' in row['sql'] for row in queries), 1)
+        self.assertFalse(hasattr(session.class_task, 'latest_schedule_revisions'))
+        ScheduleRevision.objects.create(class_task=self.task, revision_no=3,
+            closes_at=timezone.now() - timedelta(seconds=1), reopens_manual_close=True)
+        later = timezone.now()
+        next_context = mutation_validation_context(session, later)
+        self.assertEqual(_validate_process_event_time(session, None,
+            request_received_at=later, validation_context=next_context), '作答时间已结束')
 
 
 class CaptureBundleTests(TestCase):
@@ -29,6 +71,30 @@ class CaptureBundleTests(TestCase):
         bundle = submission['atomic_submission']
         bundle.pop('expected_version')
         return attempt, bundle
+
+    def test_capture_context_rejects_wrong_student_session_and_attempt_links(self):
+        from .capture_v2_services import ingest_capture_batch
+        from .event_batch_services import ProcessRequestError
+        attempt, bundle = self.capture()
+        document = {'client_instance_id': bundle['client_instance_id'], 'events': bundle['events']}
+        for broken in ('student', 'session', 'attempt'):
+            with self.subTest(broken=broken):
+                session = copy.copy(self.session)
+                current = copy.copy(attempt)
+                current._state = copy.copy(attempt._state)
+                current._state.fields_cache = dict(attempt._state.fields_cache)
+                sessions = {session.pk: session}
+                attempts = {current.pk: current}
+                if broken == 'student':
+                    session.student_id += 10000
+                elif broken == 'session':
+                    current.session_id += 10000
+                else:
+                    attempts = {current.pk + 10000: current}
+                with self.assertRaises(ProcessRequestError):
+                    ingest_capture_batch(student=self.student, document=document,
+                        locked_sessions=sessions, locked_attempts=attempts)
+        self.assertFalse(AssessmentEvent.objects.filter(event_type='response_transition').exists())
 
     def test_transport_rollback_keeps_original_receipt_recovery(self):
         from django.test import override_settings
@@ -81,6 +147,47 @@ class CaptureBundleTests(TestCase):
         self.assertEqual(ClientCaptureCheckpoint.objects.count(), 1)
         self.assertEqual(AssessmentEvent.objects.filter(event_type='response_transition').count(), 1)
 
+    def test_offline_reload_replays_original_stream_across_a_new_clock_origin(self):
+        attempt, initial = self.capture()
+        initial['events'][0]['client_monotonic_ms'] = 10000
+        original = self.assert_receipt(self.post('assessment_api:save_draft', self.draft_document(initial), attempt), initial)
+        self.assertEqual(original['response_version'], 1)
+        offline = self.transition(attempt, 'A', 'B', parent=initial['events'][0]['event_id'], sequence=2)
+        offline.update(client_monotonic_ms=10100, quality_flags=['offline_buffered', 'clock_unsynchronized'])
+        resumed = copy.deepcopy(offline)
+        resumed.update(event_id=str(uuid.uuid4()), event_type='pageshow', event_version=1, payload={'persisted': False},
+            client_sequence_no=3, client_monotonic_ms=50, client_time_origin=(timezone.now() + timedelta(seconds=1)).isoformat())
+        recovery = {**initial, 'events': [offline, resumed], 'event_boundary': 3, 'checkpoints': []}
+        frozen = copy.deepcopy(recovery)
+        batch = self.assert_receipt(self.post('assessment_process:capture_v2_batch', {'capture_bundle': recovery}), recovery)
+        self.assertEqual(self.assert_receipt(self.post('assessment_process:capture_v2_batch', {'capture_bundle': recovery}), recovery), batch)
+        document = {**self.draft_document(recovery), 'expected_version': 1}
+        saved = self.assert_receipt(self.post('assessment_api:save_draft', document, attempt), recovery)
+        self.assertEqual(self.assert_receipt(self.post('assessment_api:save_draft', document, attempt), recovery), saved)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.draft_answer, 'B')
+        self.assertEqual(str(attempt.active_response_event_id), offline['event_id'])
+        self.assertEqual(attempt.response_version, 2)
+        self.assertEqual(recovery, frozen)
+        rows = list(AssessmentEvent.objects.filter(client_instance_id=initial['client_instance_id']).order_by('client_sequence_no'))
+        self.assertEqual([str(row.pk) for row in rows], [initial['events'][0]['event_id'], offline['event_id'], resumed['event_id']])
+        self.assertEqual(rows[-1].interval_quality, 'degraded')
+        self.assertIsNone(rows[-1].time_sync_id)
+        self.assertIsNone(rows[-1].estimated_occurred_at_utc)
+        self.assertEqual(rows[1].payload['operation_id'], offline['payload']['operation_id'])
+
+    def test_same_clock_monotonic_regression_remains_rejected_and_atomic(self):
+        attempt, initial = self.capture()
+        initial['events'][0]['client_monotonic_ms'] = 10000
+        self.assert_receipt(self.post('assessment_process:capture_v2_batch', {'capture_bundle': initial}), initial)
+        regressed = self.transition(attempt, 'A', 'B', parent=initial['events'][0]['event_id'], sequence=2)
+        regressed['client_monotonic_ms'] = 50
+        recovery = {**initial, 'events': [regressed], 'event_boundary': 2, 'checkpoints': []}
+        response = self.post('assessment_process:capture_v2_batch', {'capture_bundle': recovery})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['error']['code'], 'invalid_event')
+        self.assertFalse(AssessmentEvent.objects.filter(pk=regressed['event_id']).exists())
+
     def test_batch_accepts_multiple_attempts_and_session_events_of_one_session(self):
         _, bundle = self.capture()
         second = self.transition(self.attempts[Question.Type.SHORT], '', 'A', sequence=2)
@@ -97,6 +204,23 @@ class CaptureBundleTests(TestCase):
         self.assertEqual(attempt.draft_answer, 'A')
         self.assertEqual(receipt['response_version'], 1)
         self.assertEqual(str(attempt.active_response_event_id), bundle['events'][0]['event_id'])
+
+    def test_draft_reuses_access_facts_only_within_one_request(self):
+        from apps.accounts.models import Course
+        from .capture_bundle_services import save_draft_capture_bundle
+        from .event_batch_services import ProcessConflictError
+        course = Course.objects.create(owner=self.teacher, name='capture', code='capture', term='2026')
+        experiment = self.version.experiment
+        experiment.course = course
+        experiment.save(update_fields=['course'])
+        attempt, bundle = self.capture()
+        document = self.draft_document(bundle)
+        with patch('apps.accounts.enrollment_access.has_course_access', return_value=True) as access:
+            save_draft_capture_bundle(student=self.student, attempt_id=attempt.pk, document=document)
+        self.assertEqual(access.call_count, 1)
+        with patch('apps.accounts.enrollment_access.has_course_access', return_value=False):
+            with self.assertRaises(ProcessConflictError):
+                save_draft_capture_bundle(student=self.student, attempt_id=attempt.pk, document=document)
 
     def test_tool_commits_capture_with_actual_authorized_action(self):
         attempt, bundle = self.capture()
@@ -202,15 +326,13 @@ class CaptureBundleTests(TestCase):
         self.assertNotIn('committed', domain_payload(response))
         self.assertEqual(len(domain_payload(response)['acknowledgements']), 1)
 
-    def test_capture_v2_runtime_declares_bounded_capability_only_when_authorized(self):
+    def test_unsupported_historical_runtime_cannot_advertise_a_writable_capture_capability(self):
         attempt, _ = self.capture()
         url = reverse('student-runtime-question', args=[self.session.pk, attempt.assignment_id])
         response = self.client.get(url)
-        self.assertEqual(response.status_code, 200, response.content)
-        self.assertEqual(domain_payload(response)['process']['capture_bundle'], {
-            'enabled': True, 'version': 1, 'max_events': 100,
-            'max_checkpoints': 100, 'max_bytes': 8388608, 'mutation_receipts': True,
-        })
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.json()['error']['code'], 'WHOLE_PAPER_UPGRADE_REQUIRED')
+        self.assertNotIn('process', domain_payload(response))
         from apps.accounts.models import User
         from .models import Attempt, ExperimentSession, StudentQuestionAssignment
         from .test_support import accept_research_consent
@@ -223,7 +345,10 @@ class CaptureBundleTests(TestCase):
             assigned_sequence_index=1)
         Attempt.objects.create(session=legacy, assignment=assignment)
         url = reverse('student-runtime-question', args=[legacy.pk, assignment.pk])
-        self.assertNotIn('capture_bundle', domain_payload(self.client.get(url))['process'])
+        rejected = self.client.get(url)
+        self.assertEqual(rejected.status_code, 409, rejected.content)
+        self.assertEqual(rejected.json()['error']['code'], 'WHOLE_PAPER_UPGRADE_REQUIRED')
+        self.assertNotIn('process', domain_payload(rejected))
 
     def test_capture_bundle_still_enforces_deadline_and_writer_lease(self):
         from .writer_lease_services import acquire_attempt_writer_lease
@@ -237,6 +362,37 @@ class CaptureBundleTests(TestCase):
         response = self.post('assessment_process:capture_v2_batch', {'capture_bundle': bundle})
         self.assertEqual(response.status_code, 409, response.content)
         self.assertFalse(ClientCaptureCheckpoint.objects.exists())
+
+
+class CanonicalRuntimeCaptureCapabilityTests(StudentApiFixtureMixin, TestCase):
+    prepared_paper_fixture = True
+
+    def test_published_canonical_runtime_advertises_bounded_capture_capability(self):
+        started = self.start()
+        self.assertEqual(started.status_code, 201, started.content)
+        from .models import ExperimentSession
+        session = ExperimentSession.objects.get(pk=domain_payload(started)['session_id'])
+        response = self.client.get(reverse('student-runtime-question',
+            args=[session.pk, session.assignments.get().pk]))
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(domain_payload(response)['assessment_flow_version'], 1)
+        self.assertEqual(domain_payload(response)['process']['capture_bundle'], {
+            'enabled': True, 'version': 1, 'max_events': 100, 'max_checkpoints': 100,
+            'max_bytes': 8388608, 'mutation_receipts': True, 'recovery_supported': True,
+        })
+
+    def test_canonical_paper_keeps_required_close_capability_when_the_legacy_flag_is_disabled(self):
+        started = self.start()
+        self.assertEqual(started.status_code, 201, started.content)
+        from .models import ExperimentSession
+        session = ExperimentSession.objects.get(pk=domain_payload(started)['session_id'])
+        with override_settings(CLOSE_BUNDLE_ENABLED=False):
+            response = self.client.get(reverse('student-runtime-question',
+                args=[session.pk, session.assignments.get().pk]))
+        self.assertEqual(response.status_code, 200, response.content)
+        process = domain_payload(response)['process']
+        self.assertTrue(process['close_bundle']['enabled'])
+        self.assertTrue(process['capture_bundle']['enabled'])
 
 
 class BatchContextQueryTests(TestCase):
@@ -303,6 +459,60 @@ class CaptureBundleCommitTests(TransactionTestCase):
     capture = CaptureBundleTests.capture
     draft_document = CaptureBundleTests.draft_document
     tool_document = CaptureBundleTests.tool_document
+
+    def test_session_lock_allows_independent_time_sync_foreign_key_commit(self):
+        from .capture_bundle_services import _locked_session
+        from .event_batch_services import batch_session_contexts
+        from .models import ClientTimeSync
+        from .time_sync_services import create_pending_time_sync
+
+        if connection.vendor != 'postgresql':
+            self.skipTest('Requires PostgreSQL row-lock and deferred foreign-key semantics')
+
+        def create_sample():
+            close_old_connections()
+            try:
+                with transaction.atomic():
+                    with connection.cursor() as cursor:
+                        cursor.execute("SET LOCAL lock_timeout = '500ms'")
+                    now = timezone.now()
+                    sample = create_pending_time_sync(session=self.session, client_instance_id=uuid.uuid4(),
+                        client_wall_time_utc=now, client_monotonic_ms=100, client_time_origin=now)
+                return sample.pk
+            finally:
+                close_old_connections()
+
+        for path in ('bundle', 'event_batch'):
+            with self.subTest(path=path), ThreadPoolExecutor(max_workers=1) as executor:
+                with transaction.atomic():
+                    if path == 'bundle':
+                        _locked_session(self.student, self.session.pk)
+                    else:
+                        batch_session_contexts(student=self.student,
+                            event_documents=[{'session_id': self.session.pk}], locked=True)
+                    sample_id = executor.submit(create_sample).result(timeout=10)
+                self.assertTrue(ClientTimeSync.objects.filter(pk=sample_id).exists())
+
+    def test_session_mutation_locks_still_exclude_another_writer(self):
+        from .capture_bundle_services import _locked_session
+
+        if connection.vendor != 'postgresql':
+            self.skipTest('Requires PostgreSQL row-lock semantics')
+
+        def second_writer():
+            close_old_connections()
+            try:
+                with transaction.atomic():
+                    with connection.cursor() as cursor:
+                        cursor.execute("SET LOCAL lock_timeout = '500ms'")
+                    _locked_session(self.student, self.session.pk)
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=1) as executor, transaction.atomic():
+            _locked_session(self.student, self.session.pk)
+            with self.assertRaisesMessage(DatabaseError, 'lock timeout'):
+                executor.submit(second_writer).result(timeout=10)
 
     def test_commit_failure_cannot_return_receipt_or_leave_partial_evidence(self):
         from .capture_bundle_services import ingest_capture_bundle

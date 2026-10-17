@@ -6,7 +6,7 @@ from pathlib import Path
 
 from config.capture_timing import (
     TIMING_ENV_KEY, coarse_path, diagnostics_enabled, diagnostics_mode, ingress_stamp,
-    emit_diagnostic, mark, pending_timing, sanitized_id, timing_fields,
+    emit_diagnostic, mark, pending_timing, sanitized_id, should_log_timing, timing_fields,
 )
 
 
@@ -95,6 +95,8 @@ def post_request(worker, req, environ, resp):
             return
         state.setdefault('nginx_ingress_at', ingress_stamp(headers.get('x-request-started-at')))
         ended_clock, ended_at = state['marks']['gunicorn_end']
+        if not should_log_timing(ended_clock - req.capture_started_clock):
+            return
         row = {'phase': 'gunicorn_request_complete', 'request_id': request_id,
             'operation_id': sanitized_id(headers.get('x-kt-operation-id')),
             'worker_pid': worker.pid, 'method': req.method, 'path': coarse_path(req.path),

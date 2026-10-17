@@ -18,13 +18,20 @@ class SessionContextSerializer(serializers.Serializer):
     user = ApiUserSerializer()
 
 
+class ClientNavigationSerializer(serializers.Serializer):
+    student_courses = serializers.BooleanField()
+    course_ids = serializers.ListField(child=serializers.CharField())
+
+
 class BootstrapContextSerializer(serializers.Serializer):
     csrf_token = serializers.CharField()
     user = ApiUserSerializer(allow_null=True)
+    client_navigation = ClientNavigationSerializer()
 
 
 class LoginContextSerializer(SessionContextSerializer):
     csrf_token = serializers.CharField()
+    client_navigation = ClientNavigationSerializer()
 
 
 class LoginRequestSerializer(serializers.Serializer):

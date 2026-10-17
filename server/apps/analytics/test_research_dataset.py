@@ -53,6 +53,18 @@ class ResearchDatasetTests(TestCase):
     def api(self, suffix):
         return f"/api/v1/teacher/courses/{self.course.pk}/data/{suffix}"
 
+    def test_unstarted_prepared_session_is_not_a_course_research_binding(self):
+        from .research_dataset import read_research_bundle
+        prepared, _ = self.another_session()
+        ExperimentSession.objects.filter(pk=prepared.pk).update(
+            status=ExperimentSession.Status.PREPARED, started_at=None, assessment_flow_version=1)
+        scope = DataScope.from_mapping(self.course, self.query)
+        bundle, _ = read_research_bundle(scope)
+        self.assertEqual(len(bundle['files']['session_bindings']), 1)
+        self.assertEqual(len(bundle['sessions']), 1)
+        prepared.refresh_from_db()
+        self.assertIsNone(prepared.started_at)
+
     def rows(self, table, **filters):
         preview = domain_payload(self.client.get(self.api("advanced/"), {**self.query, "table": table, **filters}))["preview"]
         return [dict(zip((column["name"] for column in preview["columns"]), row)) for row in preview["rows"]]

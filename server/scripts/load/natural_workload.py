@@ -8,8 +8,8 @@ SPEED_BOUNDS = {'fast': (35,55), 'medium': (45,75), 'slow': (65,95)}
 
 def build_workload(fixture, seed=20261013):
     n, names = fixture['student_count'], fixture['usernames']
-    if n not in (2,10,50,80,180) or len(names) != n or len(set(names)) != n or fixture['item_count'] !=20:
-        raise ValueError('Natural workload requires distinct 2/10/50/80/180 students and20 items')
+    if n not in (2,10,50,80,150,180) or len(names) != n or len(set(names)) != n or fixture['item_count'] !=20:
+        raise ValueError('Natural workload requires distinct 2/10/50/80/150/180 students and20 items')
     rng=random.Random(seed)
     raw=[n*.4,n*.45,n*.15]
     counts=[int(v) for v in raw]

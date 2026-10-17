@@ -1,4 +1,5 @@
 import importlib.util
+import re
 from pathlib import Path
 
 from django.conf import settings
@@ -140,20 +141,23 @@ class SchoolCapturePriorityTests(SimpleTestCase):
         body = yaml.load((Path(settings.REPOSITORY_DIR) / "deploy" / 'docker-compose.school.yml').read_text(), Loader=loader)
         services = body['services']
         self.assertEqual(services['web']['environment']['GUNICORN_WORKERS'], 1)
-        self.assertEqual(services['assessment']['environment']['GUNICORN_WORKERS'], 8)
+        for role, expected in (('assessment', 6), ('startup', 2)):
+            configured = str(services[role]['environment']['GUNICORN_WORKERS'])
+            default = re.fullmatch(r'\$\{[^:}]+:-(\d+)\}', configured)
+            self.assertEqual(int(default[1]) if default else int(configured), expected)
         self.assertEqual(services['student-read']['environment']['GUNICORN_WORKERS'], 2)
         self.assertEqual(services['teacher-read']['environment']['GUNICORN_WORKERS'], 1)
         self.assertEqual(services['analytics-worker']['deploy']['replicas'], 1)
         self.assertEqual(services['web']['cpus'], 0)
         self.assertEqual(services['db']['cpus'], 0)
         self.assertGreater(services['assessment']['cpu_shares'], services['teacher-read']['cpu_shares'])
-        for role in ('web', 'auth', 'assessment', 'capture', 'student-read', 'teacher-read',
-                     'analytics-worker', 'student-comparison-worker', 'publication-worker', 'export-worker'):
+        for role in ('web', 'auth', 'assessment', 'startup', 'capture', 'student-read', 'teacher-read',
+                     'analytics-worker', 'student-comparison-worker', 'publication-worker', 'export-worker', 'session-submission-worker'):
             self.assertIn('runtime_control:/runtime-control:ro', services[role]['volumes'])
             self.assertEqual(services[role]['environment']['SCHOOL_RUNTIME_PRESSURE_FILE'],
                              '/runtime-control/pressure.json' if role in (
                                  'teacher-read', 'analytics-worker', 'student-comparison-worker',
-                                 'publication-worker', 'export-worker') else '')
+                                 'publication-worker', 'export-worker', 'session-submission-worker') else '')
 
     def test_production_binding_requires_accepted_images_and_controller_hash(self):
         mod = self.module()

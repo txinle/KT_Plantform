@@ -1,3 +1,4 @@
+import { requestWholePaperSubmission } from './whole-paper'
 import { expect, test } from '@playwright/test'
 import { spawnSync } from 'node:child_process'
 import { requireServerPython, serverDir } from '../scripts/e2e-runtime.mjs'
@@ -40,7 +41,7 @@ function django(args: string[]) {
   return JSON.parse(result.stdout.trim().split('\n').at(-1)!)
 }
 
-test('initial-password reminder, pre-submit confidence and response-loss recovery preserve one formal answer', async ({ page, browser, browserName }, testInfo) => {
+test('initial-password reminder, inline confidence and lost whole-paper receipt preserve one final paper', async ({ page, browser, browserName }, testInfo) => {
   test.setTimeout(240_000)
   const runKey = `repair-${browserName}-${Date.now()}`
   const fixture = django(['seed_e2e_submission_repair', '--run-key', runKey])
@@ -97,50 +98,21 @@ test('initial-password reminder, pre-submit confidence and response-loss recover
   const radios = page.getByRole('radio')
   await expect(radios.first()).toBeEnabled()
   await radios.nth(0).check()
-  await page.locator('[data-submit-request]').click()
-  await expect(page.locator('[data-confidence-panel]')).toBeVisible()
-  await expect(page.locator('[data-confidence-submit]')).toBeDisabled()
-  await page.locator('[data-confidence-input]').press('End')
-  await page.locator('[data-confidence-input]').press('ArrowLeft')
-  await page.locator('[data-confidence-input]').press('ArrowLeft')
-  await expect(page.locator('[data-confidence-input]')).toHaveValue('98')
-  await expect(page.locator('[data-confidence-number]')).toHaveValue('98')
-  await page.locator('[data-confidence-submit]').click()
-  const confirmationDialog = page.getByRole('dialog', { name: '确认提交本题', exact: true })
-  await expect(confirmationDialog).toContainText('98%')
-  await confirmationDialog.locator('[data-return-answer]').click()
-  await expect(confirmationDialog).toHaveCount(0)
+  const confidence = page.locator('[data-inline-confidence]')
+  await expect(confidence).toHaveValue('')
+  await confidence.fill('98')
+  await expect(page.locator('[data-save-status]')).toHaveText('草稿已保存')
   await radios.nth(1).check()
-  await page.locator('[data-submit-request]').click()
-  await expect(page.locator('[data-confidence-submit]')).toBeDisabled()
+  await expect(confidence).toHaveValue('')
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 720, height: 450 }]) {
     await page.setViewportSize(viewport)
     await page.screenshot({ path: testInfo.outputPath(`confidence-${viewport.width}.png`), fullPage: true })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
   }
   await page.setViewportSize({ width: 1440, height: 900 })
-  await page.locator('[data-confidence-input]').press('End')
-  await page.locator('[data-confidence-input]').press('ArrowLeft')
-  await page.locator('[data-confidence-input]').press('ArrowLeft')
-  await page.locator('[data-confidence-submit]').click()
+  await confidence.fill('98')
+  await expect(page.locator('[data-save-status]')).toHaveText('草稿已保存')
   expect(django(['shell', '-c', `import json; from apps.assessment.models import SubmissionEvent; print(json.dumps(SubmissionEvent.objects.filter(attempt__session_id=${sessionId}).count()))`])).toBe(0)
-  let submitRequests = 0
-  const atomicSubmissions: boolean[] = []
-  await page.route('**/student/attempts/*/submit/', async route => {
-    submitRequests += 1
-    atomicSubmissions.push(route.request().postDataJSON().atomic_submission?.version === 1)
-    const response = await route.fetch()
-    expect(response.ok(), await response.text()).toBe(true)
-    await route.abort()
-  })
-  await page.locator('[data-submit-confirm]').click()
-  await expect(page).not.toHaveURL(new RegExp(`/questions/${single.id}/$`), { timeout: 15_000 })
-  await expect(page.locator('main[data-init-state="ready"]')).toBeVisible()
-  expect(submitRequests).toBe(1)
-  const formal = django(['shell', '-c', `import json; from apps.assessment.models import Attempt,SubmissionEvent,ConfidenceAssignment; a=Attempt.objects.get(session_id=${sessionId},assignment_id=${single.id}); c=ConfidenceAssignment.objects.get(attempt=a); print(json.dumps({'attempt_id':a.pk,'count':SubmissionEvent.objects.filter(attempt=a).count(),'status':a.status,'confidence':c.probability,'head':str(a.final_response_event_id)},ensure_ascii=False))`])
-  expect(formal).toMatchObject({ count: 1, status: 'submitted', confidence: 98 })
-  expect(formal.head).not.toBe('None')
-  await page.unroute('**/student/attempts/*/submit/')
 
   const short = rows.find(row => row.kind === 'short_answer')!
   const shortLink = page.locator(`[data-nav-assignment="${short.id}"]`)
@@ -180,25 +152,27 @@ test('initial-password reminder, pre-submit confidence and response-loss recover
   await startNetwork()
   await page.evaluate(() => dispatchEvent(new Event('online')))
   await expect(page.locator('[data-save-status]')).toHaveText('草稿已保存', { timeout: 45000 })
-  await page.route('**/student/attempts/*/submit/', async route => {
-    submitRequests += 1
-    atomicSubmissions.push(route.request().postDataJSON().atomic_submission?.version === 1)
+  const submittedTokens: string[] = []
+  await page.route('**/student/sessions/*/finish/', async route => {
+    submittedTokens.push(route.request().postDataJSON().submission_token)
     const response = await route.fetch()
-    expect(response.ok(), await response.text()).toBe(true)
+    expect(response.status(), await response.text()).toBe(202)
     await route.abort()
   })
-  await page.locator('[data-submit-request]').click()
-  await page.getByRole('button', { name: '跳过评价', exact: true }).click()
-  await page.route('**/recovery/**', route => route.abort())
-  await page.locator('[data-submit-confirm]').click()
-  await expect(page.locator('[data-recover-submit]')).toBeVisible()
-  await page.unroute('**/recovery/**')
+  const confirmation = await requestWholePaperSubmission(page)
+  await confirmation.locator('[data-paper-submit-confirm]').click()
+  await expect(page.locator('[data-paper-submission-retry]')).toBeVisible()
+  await expect(input).toBeDisabled()
+  await page.unroute('**/student/sessions/*/finish/')
+  page.on('request', request => {
+    if (/\/student\/sessions\/\d+\/finish\/$/.test(new URL(request.url()).pathname)) submittedTokens.push(request.postDataJSON().submission_token)
+  })
   await page.reload()
-  await expect(page).not.toHaveURL(new RegExp(`/questions/${short.id}/$`))
-  const evidence = django(['shell', '-c', `import json; from apps.assessment.models import SubmissionEvent,ConfidenceAssignment,ExperimentSession; print(json.dumps({'submissions':SubmissionEvent.objects.filter(attempt__session_id=${sessionId}).count(),'skip':ConfidenceAssignment.objects.get(attempt__session_id=${sessionId},attempt__assignment_id=${short.id}).response_status,'sessions':ExperimentSession.objects.filter(student__username='${username}').count()}))`])
-  expect(evidence).toEqual({ submissions: 2, skip: 'skipped', sessions: 1 })
-  expect(submitRequests).toBe(2)
-  expect(atomicSubmissions).toEqual(Array(2).fill(process.env.ATOMIC_SUBMISSION_ENABLED === '1'))
+  await expect(page).toHaveURL(new RegExp(`/sessions/${sessionId}/complete/$`), { timeout: 60_000 })
+  const evidence = django(['shell', '-c', `import json; from apps.assessment.models import SubmissionEvent,ConfidenceAssignment,ExperimentSession; from apps.assessment.session_submission_models import SessionSubmission; print(json.dumps({'submissions':SubmissionEvent.objects.filter(attempt__session_id=${sessionId}).count(),'skip':ConfidenceAssignment.objects.get(attempt__session_id=${sessionId},attempt__assignment_id=${short.id}).response_status,'single_confidence':ConfidenceAssignment.objects.get(attempt__session_id=${sessionId},attempt__assignment_id=${single.id}).probability,'sessions':ExperimentSession.objects.filter(student__username='${username}').count(),'receipts':SessionSubmission.objects.filter(session_id=${sessionId}).count()}))`])
+  expect(evidence).toEqual({ submissions: 2, skip: 'skipped', single_confidence: 98, sessions: 1, receipts: 1 })
+  expect(submittedTokens.length).toBeGreaterThanOrEqual(2)
+  expect(new Set(submittedTokens).size).toBe(1)
   expect(errors).toEqual([])
   const teacherContext = await browser.newContext({ baseURL: 'http://127.0.0.1:8127' })
   try {

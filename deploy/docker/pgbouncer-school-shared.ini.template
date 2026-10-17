@@ -1,0 +1,24 @@
+[databases]
+kt_core = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=1 min_pool_size=1 reserve_pool_size=0
+kt_entry = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=${ASSESSMENT_ENTRY_DB_CONNECTIONS} min_pool_size=${ASSESSMENT_ENTRY_DB_CONNECTIONS} reserve_pool_size=0
+kt_assessment = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=${ASSESSMENT_REMAINING_DB_CONNECTIONS} min_pool_size=${ASSESSMENT_REMAINING_DB_CONNECTIONS} reserve_pool_size=2
+kt_capture = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=${ASSESSMENT_CAPTURE_DB_CONNECTIONS} min_pool_size=${ASSESSMENT_CAPTURE_DB_CONNECTIONS} reserve_pool_size=1
+kt_teacher = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=1 min_pool_size=1 reserve_pool_size=0
+kt_background = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=2 min_pool_size=2 reserve_pool_size=0
+kt_submission = host=${PGBOUNCER_SERVER_HOST} port=5432 dbname=${POSTGRES_DB} user=${POSTGRES_USER} pool_size=1 min_pool_size=1 reserve_pool_size=0
+
+[pgbouncer]
+listen_addr = 0.0.0.0
+listen_port = 5432
+auth_type = scram-sha-256
+auth_file = /tmp/pgbouncer-school-users.txt
+stats_users = ${POSTGRES_USER}
+pool_mode = transaction
+max_client_conn = 200
+default_pool_size = 0
+reserve_pool_timeout = 3
+server_idle_timeout = 60
+server_reset_query = DISCARD ALL
+ignore_startup_parameters = extra_float_digits
+log_connections = 0
+log_disconnections = 0

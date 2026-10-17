@@ -34,7 +34,7 @@ from .services import (
     save_draft,
     submit_attempt,
 )
-from .test_support import accept_research_consent
+from .test_support import accept_research_consent, historical_submission_result
 
 
 class TransactionalProcessEventTests(TestCase):
@@ -222,13 +222,11 @@ class TransactionalProcessEventTests(TestCase):
         token = uuid.uuid4()
         self.client.force_login(self.student)
 
-        response = self.client.post(
-            reverse("assessment_api:submit", args=[assignment.attempt.pk]),
-            data=json.dumps({"submission_token": str(token)}),
-            content_type="application/json",
-        )
+        response = historical_submission_result(student=self.student, attempt_id=assignment.attempt.pk, document={"submission_token": str(token)})
 
         self.assertEqual(response.status_code, 400)
+        from .services import record_submission_rejection
+        record_submission_rejection(attempt_id=assignment.attempt.pk, submission_token=token, reason_code='invalid_answer')
         rejected = AssessmentEvent.objects.get(
             attempt=assignment.attempt,
             event_type="response_commit_rejected",

@@ -232,6 +232,9 @@ def _append_confidence_event(assignment, *, event_type, payload):
     attempt = assignment.attempt
     scale_version = _configuration(attempt).get("confidence_scale_version", "v1")
     event_version = (
+        3
+        if event_type == "confidence_skipped" and payload.get("reason_code") in {"optional_unfilled", "answer_changed"}
+        else
         2
         if (
             event_type == "confidence_skipped"
@@ -305,6 +308,8 @@ def mark_confidence_prompt_shown(*, attempt_id, student, request_received_at=Non
         student=student,
         request_received_at=request_received_at,
     )
+    if assignment.attempt.session.assessment_flow_version == 1:
+        raise ConfidenceFlowError('新流程通过内嵌采集记录评价显示，不使用弹窗接口。')
     if assignment.response_status in {
         ConfidenceAssignment.ResponseStatus.PROMPT_SHOWN,
         ConfidenceAssignment.ResponseStatus.COMMITTED,

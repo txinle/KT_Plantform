@@ -14,6 +14,27 @@ function jsonResponse(body: unknown, status = 200, raw = false) {
 }
 
 describe('API client', () => {
+  it.each([
+    ['2', 2],
+    ['Thu, 15 Oct 2026 00:00:04 GMT', 4],
+    ['Thu, 15 Oct 2026 00:00:00 GMT', 0],
+    ['invalid', undefined],
+    ['-1', undefined],
+    [null, undefined],
+  ])('retains Retry-After %s on structured rejection', async (value, expected) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-15T00:00:00Z'))
+    try {
+      const headers = new Headers({ 'Content-Type': 'application/json' })
+      if (value !== null) headers.set('Retry-After', value)
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ error: { code: 'LOGIN_BUSY' } }), { status: 429, headers }))
+      await expect(createApiClient({ fetchImpl }).mutate('/login/', { method: 'POST' })).rejects.toMatchObject({
+        status: 429, code: 'LOGIN_BUSY', retryAfterSeconds: expected,
+      })
+      expect(fetchImpl).toHaveBeenCalledOnce()
+    } finally { vi.useRealTimers() }
+  })
+
   it('downloads binary exports with repeated form fields, CSRF and server filename', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response('file-data', { headers: {
       'Content-Type': 'application/octet-stream', 'Content-Disposition': "attachment; filename*=UTF-8''%E6%8A%A5%E5%91%8A.xlsx",

@@ -1,6 +1,7 @@
 import { createApiClient } from '@/api/client'
 import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
+import type { PreparedPaper, PaperSubmissionIntent, PaperSubmissionResponse } from './prepared-paper'
 import type { WriterLeaseCredentials } from './writer-lease'
 import { currentAssessmentOperationId } from './operation-timing'
 import { currentAdmissionCredentials, readAdmissionCredentials } from './admission'
@@ -45,6 +46,7 @@ export interface SavedNavigationRequest {
   writer_client_instance_id?: string
   save_and_leave: AtomicSubmissionEnvelope
   next_entry?: NextEntryRequest
+  inline_confidence?: { probability: number | null; answer_event_id: string | null }
 }
 
 export interface SavedNavigationResponse extends SavedNavigationConfirmation {
@@ -57,6 +59,7 @@ export interface SavedNavigationResponse extends SavedNavigationConfirmation {
 }
 
 export interface NextEntryRequest {
+  client_instance_id?: string
   assignment_id: number
   reason: 'navigation_click' | 'resume'
   navigation_id: string
@@ -72,13 +75,20 @@ export type NextEntryOutcome = { committed: true; runtime: EnteredQuestion }
 export function nextEntryRequest(intent: NavigationClickContext & { assignmentId: number; reason: 'navigation_click' | 'resume' }): NextEntryRequest {
   return { assignment_id: intent.assignmentId, reason: intent.reason, navigation_id: intent.navigationId,
     client_occurred_at: intent.clientOccurredAt, client_monotonic_ms: intent.clientMonotonicMs.toFixed(3),
-    client_time_origin: intent.clientTimeOrigin }
+    client_time_origin: intent.clientTimeOrigin,
+    ...(intent.clientInstanceId ? { client_instance_id: intent.clientInstanceId } : {}) }
 }
 
 export type StudentRuntimeQuestionEntry = components['schemas']['StudentRuntimeQuestionEntry'] & {
+  assessment_flow_version?: number
+  response_write_allowed?: boolean
+  prepared_paper?: PreparedPaper
+  initial_writer_lease?: WriterLeaseCredentials & { expires_at: string }
+  inline_confidence?: { probability: number | null; answer_event_id: string | null }
   offline_recovery?: boolean
   research_tools?: StudentResearchToolConfiguration
   process: components['schemas']['StudentRuntimeProcess'] & {
+    paper_flow_version?: number
     transition_entry?: { enabled: boolean; version: number }
     capture_bundle?: CaptureBundleCapability
     close_bundle?: CaptureBundleCapability
@@ -88,6 +98,7 @@ export type StudentRuntimeQuestionEntry = components['schemas']['StudentRuntimeQ
 }
 
 export interface NavigationClickContext {
+  clientInstanceId?: string
   sessionId?: number
   navigationId: string
   clientOccurredAt: string
@@ -162,6 +173,8 @@ interface StudentAssessmentClient {
 
 export function createStudentAssessmentApi(client: StudentAssessmentClient) {
   return {
+    finishPaper: (url: string, body: PaperSubmissionIntent) => client.mutate<PaperSubmissionResponse>(url, { method: 'POST', body: { submission_token: body.submission_token, client_clicked_at: body.client_clicked_at, expected_versions: body.expected_versions } }),
+    paperSubmissionStatus: (url: string) => client.get<PaperSubmissionResponse>(url),
     saveAndLeave: (url: string, body: SavedNavigationRequest) => client.mutate<SavedNavigationResponse>(url, { method: 'POST', body }),
     recoverQuestion: (sessionId: number, assignmentId: number) => client.get<RecoveryState>(`/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/recovery/`),
     recover: (attemptId: number, token: string) => client.get<RecoveryState>(`/api/v1/student/attempts/${attemptId}/recovery/?submission_token=${encodeURIComponent(token)}`),
@@ -174,29 +187,16 @@ export function createStudentAssessmentApi(client: StudentAssessmentClient) {
       `/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/`, { method: 'POST', body: {
         reason, navigation_id: navigation.navigationId, client_occurred_at: navigation.clientOccurredAt,
         client_monotonic_ms: navigation.clientMonotonicMs.toFixed(3), client_time_origin: navigation.clientTimeOrigin,
+        ...(navigation.clientInstanceId ? { client_instance_id: navigation.clientInstanceId } : {}),
         ...admission,
       } })
     },
-    saveDraft: (url: string, answer: unknown, clientOccurredAt: string, target?: { target_event_id: string | null; expected_version: number; capture_bundle?: CaptureBundle; capture_operation_id?: string } & Partial<WriterLeaseCredentials>) => (
+    saveDraft: (url: string, answer: unknown, clientOccurredAt: string, target?: { target_event_id: string | null; expected_version: number; capture_bundle?: CaptureBundle; capture_operation_id?: string; inline_confidence?: { probability: number | null; answer_event_id: string | null } } & Partial<WriterLeaseCredentials>) => (
       client.mutate<DraftMutationResponse>(url, {
         method: 'POST',
         body: { answer, client_occurred_at: clientOccurredAt, ...target },
       })
     ),
-    submit: (url: string, submissionToken: string, clientClickedAt: string, targetEventId?: string | null, lease?: WriterLeaseCredentials, confidence?: SubmissionConfidence, atomicSubmission?: AtomicSubmissionEnvelope) => (
-      client.mutate<SubmissionResponse>(url, {
-        method: 'POST',
-        body: {
-          submission_token: submissionToken,
-          client_clicked_at: clientClickedAt,
-          ...lease,
-          ...(confidence ? { confidence } : {}),
-          ...(targetEventId ? { target_event_id: targetEventId } : {}),
-          ...(atomicSubmission ? { atomic_submission: atomicSubmission } : {}),
-        },
-      })
-    ),
-    skip: (url: string) => client.mutate<NavigationResponse>(url, { method: 'POST' }),
     post: <T = SubmissionResponse>(url: string, body: Record<string, unknown>, options: { keepalive?: boolean; timeoutMs?: number } = {}) => {
       const { timeoutMs, ...mutationOptions } = options
       return withTransportTimeout(signal => client.mutate<T>(url, {

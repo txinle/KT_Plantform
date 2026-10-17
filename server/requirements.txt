@@ -8,3 +8,4 @@ psycopg[binary]==3.2.10
 whitenoise==6.9.0
 jsonschema==4.26.0
 redis==6.4.0
+cryptography==50.0.2

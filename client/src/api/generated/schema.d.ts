@@ -427,7 +427,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Skip using the existing server-authorized attempt transition. */
+        /** @description Retired skip URL. Always rejects with WHOLE_SESSION_SUBMISSION_REQUIRED after ownership authorization. */
         post: operations["assessment_skip_api"];
         delete?: never;
         options?: never;
@@ -444,7 +444,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Submit the existing frozen response; optionally ingest the bounded atomic_submission evidence in the same durable transaction. submission_token/material replay preserves the original receipt. */
+        /** @description Retired per-item submission URL. Always rejects with WHOLE_SESSION_SUBMISSION_REQUIRED after ownership authorization. */
         post: operations["assessment_submit_api"];
         delete?: never;
         options?: never;
@@ -541,7 +541,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Finish the owned session using the existing domain service. */
+        /** @description Durable whole-paper acceptance only; frozen material is processed asynchronously. */
         post: operations["assessment_finish"];
         delete?: never;
         options?: never;
@@ -575,6 +575,22 @@ export interface paths {
         get: operations["student_sessions_questions_recovery_retrieve"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/student/sessions/{session_id}/submission/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["student_sessions_submission_retrieve"];
+        put?: never;
+        post: operations["student_sessions_submission_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2881,6 +2897,7 @@ export interface components {
         BootstrapContext: {
             csrf_token: string;
             user: components["schemas"]["ApiUser"] | null;
+            client_navigation: components["schemas"]["ClientNavigation"];
         };
         ClassAnalysisScope: {
             course_id: number;
@@ -2956,6 +2973,15 @@ export interface components {
          * @enum {string}
          */
         ClassificationEnum: "ready" | "draft" | "duplicate" | "invalid";
+        ClientNavigation: {
+            student_courses: boolean;
+            course_ids: string[];
+        };
+        /**
+         * @description * `submission_needs_verification` - submission_needs_verification
+         * @enum {string}
+         */
+        CodeEnum: "submission_needs_verification";
         CollectionParticipantChoice: {
             value: string;
             label: string;
@@ -3332,6 +3358,11 @@ export interface components {
             projection_version: string;
             stale: boolean;
             ready_count: number;
+            total_count: number;
+            latest_complete_count: number;
+            input_incomplete_count: number;
+            input_unverified_count: number;
+            stale_count: number;
             pending_count: number;
             failed_count: number;
             updating_count: number;
@@ -3448,6 +3479,12 @@ export interface components {
         ExpectedRevision: {
             expected_revision: number;
         };
+        ExpectedVersion: {
+            attempt_id: number;
+            response_version: number;
+            /** Format: uuid */
+            target_event_id: string | null;
+        };
         ExperimentManagementCapabilities: {
             can_manage: boolean;
         };
@@ -3548,6 +3585,7 @@ export interface components {
         LoginContext: {
             user: components["schemas"]["ApiUser"];
             csrf_token: string;
+            client_navigation: components["schemas"]["ClientNavigation"];
         };
         LoginRequest: {
             username: string;
@@ -4806,6 +4844,38 @@ export interface components {
         SessionContext: {
             user: components["schemas"]["ApiUser"];
         };
+        SessionSubmissionPublicError: {
+            code: components["schemas"]["CodeEnum"];
+            message: string;
+        };
+        SessionSubmissionReceipt: {
+            success: boolean;
+            /** Format: uuid */
+            submission_id: string;
+            status: components["schemas"]["SessionSubmissionReceiptStatusEnum"];
+            /** Format: date-time */
+            accepted_at: string;
+            /** Format: date-time */
+            completed_at: string | null;
+            error: components["schemas"]["SessionSubmissionPublicError"] | null;
+            status_url: string;
+            next_url: string;
+        };
+        /**
+         * @description * `queued` - 等待处理
+         *     * `running` - 处理中
+         *     * `completed` - 处理完成
+         *     * `failed` - 处理失败
+         * @enum {string}
+         */
+        SessionSubmissionReceiptStatusEnum: "queued" | "running" | "completed" | "failed";
+        SessionSubmissionRequest: {
+            /** Format: uuid */
+            submission_token: string;
+            /** Format: date-time */
+            client_clicked_at?: string | null;
+            expected_versions: components["schemas"]["ExpectedVersion"][];
+        };
         /**
          * @description * `empty` - empty
          *     * `incomplete` - incomplete
@@ -5001,9 +5071,12 @@ export interface components {
         /**
          * @description * `queued` - queued
          *     * `admitted` - admitted
+         *     * `executing` - executing
+         *     * `succeeded` - succeeded
+         *     * `failed` - failed
          * @enum {string}
          */
-        StudentAdmissionStatusResponseStatusEnum: "queued" | "admitted";
+        StudentAdmissionStatusResponseStatusEnum: "queued" | "admitted" | "executing" | "succeeded" | "failed";
         StudentCollection: {
             items: components["schemas"]["StudentSummaryRow"][];
             page: components["schemas"]["TeacherClassPageMetadata"];
@@ -5308,6 +5381,28 @@ export interface components {
             new_password1: string;
             new_password2: string;
         };
+        StudentPreparedStart: {
+            admission_token?: string;
+            /** Format: uuid */
+            client_instance_id?: string;
+            /** Format: uuid */
+            navigation_id?: string;
+            /** Format: date-time */
+            client_occurred_at?: string;
+            /** Format: decimal */
+            client_monotonic_ms?: string;
+            /** Format: date-time */
+            client_time_origin?: string;
+        };
+        StudentPreparedStartPending: {
+            status: components["schemas"]["StudentPreparedStartPendingStatusEnum"];
+            retry_after_seconds: number;
+        };
+        /**
+         * @description * `executing` - executing
+         * @enum {string}
+         */
+        StudentPreparedStartPendingStatusEnum: "executing";
         StudentProjectionStatus: {
             version: string;
             comparison_status?: components["schemas"]["ComparisonStatusEnum"];
@@ -5435,8 +5530,6 @@ export interface components {
             research_tools_url?: string;
             resolve_branch_url?: string;
             save_draft_url: string;
-            submit_url: string;
-            skip_url: string;
             finish_url: string;
         };
         StudentRuntimeAssignment: {
@@ -5475,6 +5568,7 @@ export interface components {
             text: string;
         };
         StudentRuntimeProcess: {
+            paper_flow_version?: number;
             transition_entry?: components["schemas"]["TransitionEntryCapability"];
             capture_bundle?: components["schemas"]["AtomicSubmissionCapability"];
             close_bundle?: components["schemas"]["AtomicSubmissionCapability"];
@@ -5525,13 +5619,20 @@ export interface components {
             client_monotonic_ms: string;
             /** Format: date-time */
             client_time_origin: string;
+            /** Format: uuid */
+            client_instance_id?: string;
             admission_token?: string;
             admission_action?: components["schemas"]["AdmissionActionEnum"];
         };
         StudentRuntimeQuestionEntry: {
+            assessment_flow_version?: number;
+            prepared_paper?: unknown;
+            initial_writer_lease?: unknown;
+            inline_confidence?: unknown;
             offline_authorization: components["schemas"]["StudentRuntimeOfflineAuthorization"];
             entry_receipt?: components["schemas"]["StudentRuntimeEntryReceipt"];
             entry_allowed: boolean;
+            response_write_allowed?: boolean;
             entry_denial_code: string;
             /** Format: date-time */
             presented_deadline_at?: string | null;
@@ -5557,6 +5658,9 @@ export interface components {
             question_url: string;
             readonly admission_token: string;
             readonly admission_action: string;
+            readonly runtime: unknown;
+            /** Format: uuid */
+            readonly admission_execution_id: string | null;
         };
         StudentSessionSummary: {
             session_id: number;
@@ -7702,6 +7806,11 @@ export interface operations {
                             event_id: string;
                             content_version: string;
                             text?: string;
+                            inline_confidence?: {
+                                probability: number | null;
+                                /** Format: uuid */
+                                answer_event_id: string | null;
+                            };
                             /** @enum {boolean} */
                             committed?: true;
                             acknowledgements?: {
@@ -9106,6 +9215,11 @@ export interface operations {
                     };
                     /** Format: uuid */
                     capture_operation_id?: string;
+                    inline_confidence?: {
+                        probability: number | null;
+                        /** Format: uuid */
+                        answer_event_id: string | null;
+                    };
                     /** Format: uuid */
                     writer_lease_token?: string | null;
                     /** Format: uuid */
@@ -9220,6 +9334,11 @@ export interface operations {
                          * @description Timezone-aware timestamp.
                          */
                         client_time_origin: string;
+                    };
+                    inline_confidence?: {
+                        probability: number | null;
+                        /** Format: uuid */
+                        answer_event_id: string | null;
                     };
                 };
             };
@@ -9477,24 +9596,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Confirmed domain response; wire envelope is added once by middleware. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: {
-                            /** @enum {boolean} */
-                            success: true;
-                            next_url: string;
-                        };
-                        meta: {
-                            request_id: string;
-                        };
-                    };
-                };
-            };
             /** @description Authentication required. */
             401: {
                 headers: {
@@ -9601,214 +9702,8 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": ({
-                    /** Format: uuid */
-                    submission_token: string;
-                    /** Format: uuid */
-                    target_event_id?: string | null;
-                    /**
-                     * Format: date-time
-                     * @description Timezone-aware timestamp.
-                     */
-                    client_clicked_at?: string | null;
-                    /** @description Only allowed for a server-assigned confidence prompt; probability uses its frozen scale. */
-                    confidence?: ({
-                        /** @enum {string} */
-                        status: "skipped";
-                        /** Format: uuid */
-                        answer_event_id?: string | null;
-                        /** @enum {unknown} */
-                        probability?: null;
-                    } | {
-                        /** @enum {string} */
-                        status: "committed";
-                        probability: number;
-                        /** Format: uuid */
-                        answer_event_id?: string | null;
-                    }) | null;
-                    /** Format: uuid */
-                    writer_lease_token?: string | null;
-                    /** Format: uuid */
-                    writer_client_instance_id?: string | null;
-                } & {
-                    [key: string]: unknown;
-                }) | {
-                    /** Format: uuid */
-                    submission_token: string;
-                    /** Format: uuid */
-                    target_event_id: string;
-                    /**
-                     * Format: date-time
-                     * @description Timezone-aware timestamp.
-                     */
-                    client_clicked_at?: string | null;
-                    /** @description Only allowed for a server-assigned confidence prompt; probability uses its frozen scale. */
-                    confidence?: ({
-                        /** @enum {string} */
-                        status: "skipped";
-                        /** Format: uuid */
-                        answer_event_id?: string | null;
-                        /** @enum {unknown} */
-                        probability?: null;
-                    } | {
-                        /** @enum {string} */
-                        status: "committed";
-                        probability: number;
-                        /** Format: uuid */
-                        answer_event_id?: string | null;
-                    }) | null;
-                    /** Format: uuid */
-                    writer_lease_token?: string | null;
-                    /** Format: uuid */
-                    writer_client_instance_id?: string | null;
-                    /** @description Bounded durable evidence bundle; complete mutation body at most 8388608 bytes. Event/session/attempt links, boundary and checkpoint counters are domain-validated. */
-                    atomic_submission: {
-                        /** @enum {integer} */
-                        version: 1;
-                        /** Format: uuid */
-                        client_instance_id: string;
-                        event_boundary: number;
-                        events: {
-                            /** Format: uuid */
-                            event_id?: string;
-                            /** @enum {string} */
-                            event_type: "activity_heartbeat" | "confidence_observed" | "document_hidden" | "document_visible" | "explanation_shown" | "feedback_exposure" | "feedback_shown" | "hint_closed" | "hint_opened" | "input_operation" | "item_left" | "item_rendered" | "legacy_session_end_observed" | "legacy_session_start_observed" | "network_offline" | "network_online" | "pagehide" | "pageshow" | "research_tool_observed" | "research_tool_requested" | "resource_closed" | "resource_opened" | "response_commit_requested" | "response_input_started" | "response_state_changed" | "response_transition" | "session_completed" | "session_expired" | "session_invalidated" | "session_reopened" | "session_started" | "simulation_error_returned" | "simulation_parameter_changed" | "simulation_run_completed" | "simulation_run_started" | "text_edit_observed" | "window_blurred" | "window_focused";
-                            event_version: number;
-                            session_id: number;
-                            attempt_id?: number | null;
-                            client_sequence_no: number;
-                            /** Format: uuid */
-                            correlation_id?: string | null;
-                            /**
-                             * Format: date-time
-                             * @description Timezone-aware timestamp.
-                             */
-                            client_wall_time_utc: string;
-                            /** @description Finite nonnegative decimal, validated by the existing domain parser. */
-                            client_monotonic_ms: number | string;
-                            /**
-                             * Format: date-time
-                             * @description Timezone-aware timestamp.
-                             */
-                            client_time_origin: string;
-                            /** Format: uuid */
-                            time_sync_id?: string | null;
-                            quality_flags: string[];
-                            app_version: string;
-                            /** @description Versioned payload validated by apps.assessment.event_schema_registry; the authoritative JSON schemas are assessment/event_schemas/<event_type>/v<event_version>.json. */
-                            payload: {
-                                [key: string]: unknown;
-                            };
-                        }[];
-                        checkpoints: {
-                            /** Format: uuid */
-                            checkpoint_id: string;
-                            session_id: number;
-                            /** Format: uuid */
-                            client_instance_id: string;
-                            highest_emitted_sequence_no: number;
-                            highest_acked_sequence_no: number;
-                            highest_contiguous_acked_sequence_no: number;
-                            pending_event_count: number;
-                            failed_event_count: number;
-                            missing_local_sequence_ranges: number[][];
-                            /** @description Finite nonnegative decimal, validated by the existing domain parser. */
-                            client_monotonic_ms: number | string;
-                            /**
-                             * Format: date-time
-                             * @description Timezone-aware timestamp.
-                             */
-                            client_wall_time_utc: string;
-                            /**
-                             * Format: date-time
-                             * @description Timezone-aware timestamp.
-                             */
-                            client_time_origin: string;
-                            /** Format: uuid */
-                            time_sync_id: string | null;
-                            /** @enum {string} */
-                            trigger: "heartbeat" | "navigation" | "commit" | "pagehide" | "resume" | "session_end" | "ack_progress";
-                            quality_flags: string[];
-                            app_version: string;
-                        }[];
-                        expected_version: number;
-                    };
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Confirmed domain response; wire envelope is added once by middleware. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: {
-                            /** @enum {boolean} */
-                            success: true;
-                            status: string;
-                            next_url: string;
-                            /** @enum {boolean} */
-                            confidence_required: false;
-                            feedback_mode: string;
-                            feedback_phase: string;
-                            is_correct?: boolean | null;
-                            /** @description Question-type response JSON; the frozen question domain validates its shape. */
-                            correct_answer?: unknown;
-                            explanation?: string;
-                        } | {
-                            /** @enum {boolean} */
-                            success: true;
-                            status: string;
-                            next_url: string;
-                            /** @enum {boolean} */
-                            confidence_required: false;
-                            feedback_mode: string;
-                            feedback_phase: string;
-                            is_correct?: boolean | null;
-                            /** @description Question-type response JSON; the frozen question domain validates its shape. */
-                            correct_answer?: unknown;
-                            explanation?: string;
-                            /** @enum {boolean} */
-                            committed: true;
-                            acknowledgements: {
-                                client_sequence_no: number;
-                                /** Format: uuid */
-                                event_id: string;
-                                server_ingest_sequence_no: number;
-                            }[];
-                            checkpoint_ids: string[];
-                            /** Format: uuid */
-                            final_response_event_id: string;
-                            response_version: number;
-                        };
-                        meta: {
-                            request_id: string;
-                        };
-                    };
-                };
-            };
-            /** @description Rejected by the existing domain contract. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        error: {
-                            code: string;
-                            message: string;
-                            fields: {
-                                [key: string]: unknown;
-                            };
-                            request_id: string;
-                        };
-                    };
-                };
-            };
             /** @description Authentication required. */
             401: {
                 headers: {
@@ -9883,24 +9778,6 @@ export interface operations {
             };
             /** @description Rejected by the existing domain contract. */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        error: {
-                            code: string;
-                            message: string;
-                            fields: {
-                                [key: string]: unknown;
-                            };
-                            request_id: string;
-                        };
-                    };
-                };
-            };
-            /** @description Rejected by the existing domain contract. */
-            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10073,10 +9950,28 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    submission_token: string;
+                    /**
+                     * Format: date-time
+                     * @description Timezone-aware timestamp.
+                     */
+                    client_clicked_at: string;
+                    expected_versions: {
+                        attempt_id: number;
+                        response_version: number;
+                        /** Format: uuid */
+                        target_event_id: string | null;
+                    }[];
+                };
+            };
+        };
         responses: {
-            /** @description Confirmed domain response; wire envelope is added once by middleware. */
-            200: {
+            /** @description Durable acceptance; not a claim of completed grading. */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10085,9 +9980,37 @@ export interface operations {
                         data: {
                             /** @enum {boolean} */
                             success: true;
+                            /** Format: uuid */
+                            submission_id: string;
+                            /** @enum {string} */
+                            status: "queued" | "running" | "completed" | "failed";
+                            /**
+                             * Format: date-time
+                             * @description Timezone-aware timestamp.
+                             */
+                            accepted_at: string;
+                            status_url: string;
                             next_url: string;
                         };
                         meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            /** @description Rejected by the existing domain contract. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
                             request_id: string;
                         };
                     };
@@ -10149,6 +10072,24 @@ export interface operations {
             };
             /** @description Only POST is allowed. */
             405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            /** @description Rejected by the existing domain contract. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10246,6 +10187,64 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["Recovery"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    student_sessions_submission_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["SessionSubmissionReceipt"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    student_sessions_submission_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionSubmissionRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["SessionSubmissionRequest"];
+                "multipart/form-data": components["schemas"]["SessionSubmissionRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["SessionSubmissionReceipt"];
                         meta: {
                             request_id: string;
                         };
@@ -10402,7 +10401,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["StudentPreparedStart"];
+                "application/x-www-form-urlencoded": components["schemas"]["StudentPreparedStart"];
+                "multipart/form-data": components["schemas"]["StudentPreparedStart"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -10429,6 +10434,26 @@ export interface operations {
                         };
                     };
                 };
+            };
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["StudentPreparedStartPending"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            /** @description START_BUSY; retry the same start intent after Retry-After. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

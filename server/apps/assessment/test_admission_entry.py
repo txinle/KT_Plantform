@@ -1,4 +1,4 @@
-"""A first-entry permit remains held until the database entry commits."""
+"""Question navigation never re-enters the retired activation-permit path."""
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -46,7 +46,7 @@ class AdmissionEntryTests(StudentApiFixtureMixin, TestCase):
             response = self.post_entry(session, assignment.pk, document)
         self.assertEqual(response.status_code, 409)
         coordinator.consume.assert_not_called()
-        self.assertFalse(AssessmentEvent.objects.filter(session=session, event_type='item_entered').exists())
+        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 1)
 
     def test_revoked_course_access_does_not_consume_permit(self):
         from apps.accounts.models import CourseEnrollment
@@ -57,29 +57,30 @@ class AdmissionEntryTests(StudentApiFixtureMixin, TestCase):
         self.assertEqual(response.status_code, 409)
         coordinator.consume.assert_not_called()
 
-    def test_successful_entry_consumes_only_after_commit_and_replay_needs_no_permit(self):
+    def test_navigation_and_replay_never_consume_an_activation_permit(self):
         session, assignment, document, coordinator = self.entry_fixture()
         with self.admission_settings(), patch('apps.assessment.api.views.AdmissionCoordinator', return_value=coordinator):
             with self.captureOnCommitCallbacks(execute=True) as callbacks:
                 response = self.post_entry(session, assignment.pk, document)
                 self.assertEqual(response.status_code, 200, response.content)
                 coordinator.consume.assert_not_called()
-            self.assertTrue(callbacks)
-            coordinator.consume.assert_called_once()
+            self.assertFalse(callbacks)
+            coordinator.consume.assert_not_called()
             replay = self.post_entry(session, assignment.pk,
                                      {key: value for key, value in document.items() if not key.startswith('admission_')})
         self.assertEqual(replay.status_code, 200, replay.content)
         self.assertEqual(response.json()['data']['entry_receipt'], replay.json()['data']['entry_receipt'])
-        coordinator.consume.assert_called_once()
+        coordinator.consume.assert_not_called()
+        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 2)
 
-    def test_queued_permit_cannot_enter_question(self):
+    def test_retired_queued_permit_has_no_authority_over_paper_navigation(self):
         session, assignment, document, coordinator = self.entry_fixture()
         coordinator.status.return_value = AdmissionResult('permit', 'queued', 3)
         with self.admission_settings(), patch('apps.assessment.api.views.AdmissionCoordinator', return_value=coordinator):
             response = self.post_entry(session, assignment.pk, document)
-        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.status_code, 200, response.content)
         coordinator.consume.assert_not_called()
-        self.assertFalse(AssessmentEvent.objects.filter(session=session, event_type='item_entered').exists())
+        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 2)
 
 
 class AdmissionEntryCommitTests(StudentApiFixtureMixin, TransactionTestCase):
@@ -87,15 +88,15 @@ class AdmissionEntryCommitTests(StudentApiFixtureMixin, TransactionTestCase):
     post_entry = AdmissionEntryTests.post_entry
     admission_settings = AdmissionEntryTests.admission_settings
 
-    def test_redis_failure_after_commit_replays_durable_entry_without_another_permit(self):
+    def test_navigation_and_replay_do_not_depend_on_the_retired_redis_permit(self):
         session, assignment, document, coordinator = self.entry_fixture()
         coordinator.consume.side_effect = AdmissionUnavailable
         with self.admission_settings(), patch('apps.assessment.api.views.AdmissionCoordinator', return_value=coordinator):
             response = self.post_entry(session, assignment.pk, document)
-            self.assertEqual(response.status_code, 503, response.content)
-            self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 1)
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 2)
             replay = self.post_entry(session, assignment.pk,
                                      {key: value for key, value in document.items() if not key.startswith('admission_')})
         self.assertEqual(replay.status_code, 200, replay.content)
-        coordinator.consume.assert_called_once()
-        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 1)
+        coordinator.consume.assert_not_called()
+        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 2)

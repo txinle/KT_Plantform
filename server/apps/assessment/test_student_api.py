@@ -1,6 +1,7 @@
 from apps.api.test_support import domain_payload
 import json
 import uuid
+from contextlib import nullcontext
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
@@ -20,6 +21,8 @@ from apps.experiments.publication_services import (
     get_or_create_publish_plan,
     save_plan_schedules,
     save_plan_selection,
+    append_schedule_revision,
+    manual_close_task,
 )
 from apps.question_bank.models import (
     Concept,
@@ -43,6 +46,7 @@ from .test_support import accept_research_consent
 
 class StudentApiFixtureMixin:
     feedback_mode = Experiment.Feedback.FULL
+    prepared_paper_fixture = False
 
     def setUp(self):
         self.teacher = User.objects.create_user(
@@ -182,11 +186,16 @@ class StudentApiFixtureMixin:
             expected_revision=plan.plan_revision,
         )
         plan.refresh_from_db()
-        task = commit_publish_plan(
-            plan,
-            self.teacher,
-            expected_revision=plan.plan_revision,
-        )[0]
+        # Domain regression tests can still construct historical frozen records;
+        # this fixture hook never re-enables their retired public entry path.
+        preparation = (nullcontext() if self.prepared_paper_fixture else
+            patch('apps.assessment.prepared_services.prepare_participant', return_value=None))
+        with preparation:
+            task = commit_publish_plan(
+                plan,
+                self.teacher,
+                expected_revision=plan.plan_revision,
+            )[0]
         return experiment, task
 
     def submit_attempt_without_finishing(self, session, *, answer="B", is_correct=True):
@@ -228,11 +237,18 @@ class StudentApiFixtureMixin:
         active_student = student or self.student
         accept_research_consent(active_student)
         self.client.force_login(active_student)
-        return self.client.post(
-            f"/api/v1/student/tasks/{(task or self.task).pk}/start/",
-            data={},
-            content_type="application/json",
-        )
+        active_task = task or self.task
+        if not ExperimentSession.objects.filter(class_task=active_task, student=active_student).exists():
+            from .prepared_services import prepare_participant
+            prepare_participant(active_task.participant_snapshots.get(student=active_student))
+        with override_settings(ASSESSMENT_ADMISSION_ENABLED=True,
+                               ASSESSMENT_ADMISSION_GLOBAL_ENABLED=True,
+                               ASSESSMENT_PREPARED_ADMISSION_MODE='postgres_transaction'):
+            return self.client.post(
+                f"/api/v1/student/tasks/{active_task.pk}/start/",
+                data={'client_instance_id': str(uuid.uuid4()), 'navigation_id': str(uuid.uuid4())},
+                content_type="application/json",
+            )
 
     def complete_session(self, session, *, answer="B", is_correct=True):
         now = timezone.now()
@@ -275,7 +291,7 @@ class StudentApiFixtureMixin:
 
 
 class StudentApiTestCase(StudentApiFixtureMixin, TestCase):
-    pass
+    prepared_paper_fixture = True
 
 
 class StudentTaskApiTests(StudentApiTestCase):
@@ -286,7 +302,7 @@ class StudentTaskApiTests(StudentApiTestCase):
         selects = [row['sql'] for row in queries if row['sql'].startswith('SELECT')]
         self.assertFalse(any('FROM "experiments_publishpreviewparticipant"' in sql for sql in selects))
         self.assertEqual(sum('FROM "experiments_questionsnapshot"' in sql for sql in selects), 1)
-        self.assertFalse(any('FROM "assessment_attempt"' in sql for sql in selects))
+        self.assertFalse(any('INSERT INTO "assessment_attempt"' in row["sql"] for row in queries))
         session = ExperimentSession.objects.get(pk=domain_payload(started)['session_id'])
         self.assertEqual(session.assignments.count(), 1)
         self.assertEqual(session.participant_snapshot.student_id, self.student.pk)
@@ -299,15 +315,16 @@ class StudentTaskApiTests(StudentApiTestCase):
         self.assertEqual(session.capture_contract.contract_version, 2)
 
     def test_enabling_all_courses_does_not_relabel_existing_v1_sessions(self):
-        with override_settings(CAPTURE_V2_ENABLED=False):
-            started = self.start()
-        self.assertEqual(started.status_code, 201, started.content)
-        session = ExperimentSession.objects.get(pk=domain_payload(started)['session_id'])
+        from .services import get_or_create_session
+        with patch('apps.assessment.prepared_services.prepare_participant', return_value=None), \
+             override_settings(CAPTURE_V2_ENABLED=False):
+            experiment, task = self.publish_task(name='历史 v1 任务', feedback_mode=self.feedback_mode)
+            session = get_or_create_session(experiment, self.student, class_task=task)
         original_contract = session.capture_contract_id
         with override_settings(CAPTURE_V2_ENABLED=True, CAPTURE_V2_COURSE_IDS=frozenset({'*'})):
-            resumed = self.start()
-        self.assertEqual(resumed.status_code, 200, resumed.content)
-        self.assertEqual(domain_payload(resumed)['session_id'], session.pk)
+            resumed = self.start(task=task)
+        self.assertEqual(resumed.status_code, 409, resumed.content)
+        self.assertEqual(resumed.json()['error']['code'], 'WHOLE_PAPER_UPGRADE_REQUIRED')
         session.refresh_from_db()
         self.assertEqual(session.capture_contract_id, original_contract)
         self.assertEqual(session.capture_contract.contract_version, 1)
@@ -326,6 +343,49 @@ class StudentTaskApiTests(StudentApiTestCase):
             self.assertEqual(response.status_code, 200, response.content)
 
         self.assertEqual(len(three_task_queries), len(one_task_queries))
+
+    def test_task_list_query_count_is_bounded_with_manual_closed_history(self):
+        self.client.force_login(self.student)
+        url = f"/api/v1/student/courses/{self.course.pk}/tasks/"
+        tasks = [self.task]
+        manual_close_task(self.task, self.teacher, reason='history')
+        counts = []
+        for count in (1, 3, 16):
+            while len(tasks) < count:
+                _, task = self.publish_task(name=f'历史任务 {len(tasks)}', feedback_mode=self.feedback_mode)
+                tasks.append(task)
+                if len(tasks) % 3:
+                    started = self.start(task=task)
+                    self.assertEqual(started.status_code, 201, started.content)
+                    session = ExperimentSession.objects.get(pk=domain_payload(started)['session_id'])
+                    if len(tasks) % 2 == 0:
+                        self.complete_session(session)
+                if len(tasks) % 2 == 0:
+                    manual_close_task(task, self.teacher, reason='history')
+            with CaptureQueriesContext(connection) as queries:
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 200, response.content)
+                self.assertEqual(len(domain_payload(response)['items']), count)
+            counts.append(len(queries))
+        self.assertEqual(counts, [counts[0]] * 3)
+
+    def test_task_list_reloads_close_reopen_and_second_close_each_request(self):
+        self.client.force_login(self.student)
+        url = f"/api/v1/student/courses/{self.course.pk}/tasks/"
+        def state():
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200, response.content)
+            return domain_payload(response)['items'][0]
+        self.assertEqual(state()['primary_action'], 'start')
+        manual_close_task(self.task, self.teacher, reason='first close')
+        self.assertEqual(state()['business_status'], 'manual_closed')
+        self.assertIsNone(state()['primary_action'])
+        append_schedule_revision(self.task, self.teacher, expected_revision=1,
+            reopen=True, closes_at=timezone.now() + timedelta(hours=1), reason='reopen')
+        self.assertEqual(state()['primary_action'], 'start')
+        manual_close_task(self.task, self.teacher, reason='second close')
+        self.assertEqual(state()['business_status'], 'manual_closed')
+        self.assertIsNone(state()['primary_action'])
 
     def test_course_collection_and_task_list_are_student_scoped_allow_lists(self):
         self.client.force_login(self.student)
@@ -435,11 +495,11 @@ class StudentTaskApiTests(StudentApiTestCase):
     def test_v1_start_is_post_only_and_binds_the_formal_task_with_legacy_write_retired(self):
         self.client.force_login(self.student)
         self.assertEqual(self.client.post(f"/student/experiments/{self.experiment.pk}/start/").status_code, 404)
-        self.assertFalse(ExperimentSession.objects.exists())
+        self.assertFalse(ExperimentSession.objects.exclude(started_at=None).exists())
         url = reverse("student-task-start", args=[self.task.pk])
 
         self.assertEqual(self.client.get(url).status_code, 405)
-        response = self.client.post(url)
+        response = self.start()
 
         self.assertEqual(response.status_code, 201, response.content)
         session = ExperimentSession.objects.get(student=self.student)
@@ -549,13 +609,13 @@ class StudentAssessmentApiTests(StudentApiTestCase):
         self.assertEqual(replay.status_code, 200, replay.content)
         process = first.json()["data"]["process"]
         self.assertEqual(process["navigation_id"], str(navigation_id))
-        self.assertEqual(process["visit_index"], 1)
+        self.assertEqual(process["visit_index"], 2)
         self.assertEqual(replay.json()["data"]["process"]["visit_id"], process["visit_id"])
         self.assertEqual(
             replay.json()["data"]["process"]["entry_event_id"],
             process["entry_event_id"],
         )
-        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 2)
         entered = AssessmentEvent.objects.get(pk=process["entry_event_id"])
         self.assertEqual(entered.correlation_id, navigation_id)
         self.assertEqual(entered.payload["visit_id"], process["visit_id"])
@@ -592,117 +652,59 @@ class StudentAssessmentApiTests(StudentApiTestCase):
         CAPTURE_V2_COURSE_IDS=frozenset(),
     )
     def test_question_entry_returns_only_authoritative_student_runtime_state(self):
+        from .prepared_content import read_display_content
         self.start()
-        session = ExperimentSession.objects.get(
-            class_task=self.task,
-            student=self.student,
-        )
-        self.assertEqual(session.capture_contract.contract_name, "capture-v1")
-        assignment = session.assignments.select_related("snapshot").get()
-
-        response = self.client.get(
-            f"/api/v1/student/sessions/{session.pk}/questions/{assignment.pk}/"
-        )
-
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()["data"]
-        self.assertEqual(
-            set(payload),
-            {
-                "offline_authorization",
-                "entry_allowed",
-                "entry_denial_code",
-                "task_id",
-                "session_id",
-                "session_status",
-                "experiment_name",
-                "assignment",
-                "progress",
-                "remaining_seconds",
-                "question",
-                "draft_answer",
-                "initial_response_state",
-                "pending_confidence",
-                "navigation",
-                "actions",
-                "process",
-            },
-        )
-        self.assertEqual(payload["task_id"], self.task.pk)
-        self.assertEqual(payload["session_id"], session.pk)
-        self.assertEqual(payload["session_status"], "in_progress")
-        self.assertEqual(payload["experiment_name"], self.experiment.name)
-        self.assertEqual(
-            payload["assignment"],
-            {
-                "assignment_id": assignment.pk,
-                "attempt_id": assignment.attempt.pk,
-                "status": "unvisited",
-                "sequence_index": 1,
-            },
-        )
-        self.assertEqual(payload["progress"], {"submitted": 0, "total": 1})
-        self.assertIsNone(payload["remaining_seconds"])
-        self.assertEqual(
-            payload["question"],
-            {
-                "snapshot_id": assignment.snapshot_id,
-                "stable_code": assignment.snapshot.stable_code,
-                "code": "STU-Q1",
-                "question_type": "single_choice",
-                "text": "2 + 2 等于多少？",
-                "primary_kc": "基础运算",
-                "options": [
-                    {"key": "A", "text": "3"},
-                    {"key": "B", "text": "4"},
-                ],
-            },
-        )
-        self.assertIsNone(payload["draft_answer"])
-        self.assertIsNone(payload["initial_response_state"])
-        self.assertIsNone(payload["pending_confidence"])
-        self.assertEqual(
-            payload["navigation"],
-            [
-                {
-                    "assignment_id": assignment.pk,
-                    "sequence_index": 1,
-                    "status": "unvisited",
-                    "url": reverse(
-                        "assessment:question",
-                        args=[session.pk, assignment.pk],
-                    ),
-                    "current": True,
-                }
-            ],
-        )
-        self.assertEqual(
-            payload["actions"],
-            {
-                "save_draft_url": reverse(
-                    "assessment_api:save_draft", args=[assignment.attempt.pk]
-                ),
-                "submit_url": reverse(
-                    "assessment_api:submit", args=[assignment.attempt.pk]
-                ),
-                "skip_url": reverse(
-                    "assessment_api:skip", args=[assignment.attempt.pk]
-                ),
-                "finish_url": reverse("assessment_api:finish", args=[session.pk]),
-            },
-        )
-        self.assertEqual(payload["process"]["session_id"], session.pk)
-        self.assertEqual(payload["process"]["attempt_id"], assignment.attempt.pk)
-        self.assertEqual(payload["process"]["app_version"], "2026.08.29.2")
-        self.assertEqual(payload["process"]["heartbeat_interval_seconds"], 30)
-        serialized = response.content.decode("utf-8")
-        for forbidden in ("correct_answer", "explanation", "is_correct", "score"):
-            self.assertNotIn(forbidden, serialized)
-
-        assignment.attempt.refresh_from_db()
-        self.assertEqual(assignment.attempt.visit_count, 0)
-        self.assertIsNone(assignment.attempt.first_opened_at)
-        self.assertIsNone(assignment.attempt.last_opened_at)
+        session = ExperimentSession.objects.get(class_task=self.task, student=self.student)
+        self.assertEqual(session.capture_contract.contract_name, 'capture-v2')
+        assignment = session.assignments.select_related('snapshot').get()
+        attempt = assignment.attempt
+        visits_before = attempt.visit_count
+        response = self.client.get(f'/api/v1/student/sessions/{session.pk}/questions/{assignment.pk}/')
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()['data']
+        self.assertEqual(set(payload), {
+            'assessment_flow_version', 'offline_authorization', 'entry_allowed', 'entry_denial_code',
+            'task_id', 'session_id', 'session_status', 'experiment_name', 'assignment', 'progress',
+            'remaining_seconds', 'question', 'draft_answer', 'initial_response_state', 'pending_confidence',
+            'inline_confidence', 'navigation', 'actions', 'process', 'research_tools', 'prepared_paper',
+            'response_write_allowed', 'presented_deadline_at',
+        })
+        self.assertEqual(payload['assessment_flow_version'], 1)
+        self.assertEqual(payload['task_id'], self.task.pk)
+        self.assertEqual(payload['session_id'], session.pk)
+        self.assertEqual(payload['session_status'], 'in_progress')
+        self.assertEqual(payload['experiment_name'], self.experiment.name)
+        self.assertEqual(payload['assignment'], {'assignment_id': assignment.pk,
+            'attempt_id': attempt.pk, 'status': 'visited', 'sequence_index': 1})
+        self.assertEqual(payload['progress'], {'submitted': 0, 'total': 1})
+        self.assertIsNone(payload['remaining_seconds'])
+        self.assertEqual(payload['question']['text'], '')
+        self.assertEqual(payload['question']['options'], [])
+        content = read_display_content(payload['prepared_paper']['question'])['question']
+        self.assertEqual(content['text'], '2 + 2 等于多少？')
+        self.assertEqual(content['options'], [{'key': 'A', 'text': '3'}, {'key': 'B', 'text': '4'}])
+        self.assertEqual(content['primary_kc'], '基础运算' if payload['research_tools']['kc_visible'] else '')
+        self.assertIsNone(payload['draft_answer'])
+        self.assertIsNone(payload['initial_response_state'])
+        self.assertIsNone(payload['pending_confidence'])
+        self.assertEqual(payload['navigation'], [])
+        manifest = read_display_content(payload['prepared_paper']['manifest'])
+        self.assertEqual(manifest['question_count'], 1)
+        self.assertEqual(manifest['navigation'][0]['assignment_id'], assignment.pk)
+        self.assertEqual(payload['actions']['save_draft_url'], reverse('assessment_api:save_draft', args=[attempt.pk]))
+        self.assertEqual(payload['actions']['finish_url'], reverse('assessment_api:finish', args=[session.pk]))
+        self.assertNotIn('submit_url', payload['actions'])
+        self.assertNotIn('skip_url', payload['actions'])
+        self.assertEqual(payload['process']['session_id'], session.pk)
+        self.assertEqual(payload['process']['attempt_id'], attempt.pk)
+        self.assertEqual(payload['process']['app_version'], 'prepared-paper-v1')
+        self.assertEqual(payload['process']['heartbeat_interval_seconds'], 30)
+        for document in (payload, content):
+            serialized = json.dumps(document)
+            for forbidden in ('correct_answer', 'explanation', 'is_correct', 'score'):
+                self.assertNotIn(forbidden, serialized)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.visit_count, visits_before)
 
     def test_question_entry_hides_another_students_session(self):
         self.start(student=self.peer)
@@ -1289,7 +1291,10 @@ class StudentLearningApiTests(StudentApiFixtureMixin, TransactionTestCase):
         from .capture_v2_services import ingest_capture_batch
         from .models import AssessmentEvent
         from .response_snapshot_services import ResponseState
-        from .services import save_draft, submit_attempt
+        from .services import save_draft
+        from .session_submission_services import (
+            accept_session_submission, claim_session_submission, run_session_submission,
+        )
 
         with override_settings(CAPTURE_V2_USER_IDS=frozenset({str(self.student.pk)})):
             started = self.start()
@@ -1334,17 +1339,19 @@ class StudentLearningApiTests(StudentApiFixtureMixin, TransactionTestCase):
             "ignored-by-capture-v2",
             target_event_id=str(transition_id),
             expected_version=0,
+            writer_lease_token=attempt.writer_lease_token,
+            writer_client_instance_id=attempt.writer_client_instance_id,
         )
-        final_attempt = submit_attempt(
-            attempt.pk,
-            uuid.uuid4(),
-            target_event_id=str(transition_id),
-        )
-        session.refresh_from_db()
-        session.status = ExperimentSession.Status.COMPLETED
-        session.completed_at = now
-        session.terminal_at = now
-        session.save(update_fields=["status", "completed_at", "terminal_at"])
+        attempt.refresh_from_db()
+        accept_session_submission(student=self.student, session_id=session.pk, document={
+            'submission_token': str(uuid.uuid4()), 'client_clicked_at': now.isoformat(),
+            'expected_versions': [{'attempt_id': attempt.pk, 'response_version': attempt.response_version,
+                                   'target_event_id': str(transition_id)}],
+        })
+        job = claim_session_submission(worker_id='student-learning-test')
+        self.assertIsNotNone(job)
+        self.assertEqual(run_session_submission(job).status, 'completed')
+        final_attempt = Attempt.objects.get(pk=attempt.pk)
 
         question = self.client.get(
             f"/api/v1/student/courses/{self.course.pk}/learning/"

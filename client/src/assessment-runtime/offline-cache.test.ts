@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const context = vi.hoisted(() => ({ userId: 3, buildVersion: 'a'.repeat(20) }))
+const context = vi.hoisted(() => ({ userId: 3, buildVersion: 'a'.repeat(20), runtimeLoaded: false }))
+vi.mock('./StudentAssessment.vue', () => { context.runtimeLoaded = true; return { default: {} } })
 vi.mock('@/app/bootstrap', () => ({
   getBootstrapContext: () => ({ csrf_token: 'csrf-token', user: { id: context.userId } }),
 }))
@@ -9,7 +10,7 @@ vi.mock('./build-version', () => ({
   get assessmentShellUrl() { return `/static/spa-assets/capture-shell-${context.buildVersion}.html` },
 }))
 
-import { clearOfflineAssessmentCache, prepareOfflineQuestion } from './offline-cache'
+import { clearOfflineAssessmentCache, prepareOfflineQuestion, prepareOfflineCommonResources } from './offline-cache'
 
 const state = {
   session_id: 7,
@@ -36,6 +37,25 @@ class TestMessageChannel {
 }
 
 describe('prepareOfflineQuestion', () => {
+  it('does not persist a live writer lease as reusable offline authority', async () => {
+    workerResponse = { ok: true, commonResourcesPrepared: true }
+    const input = { ...state as object, initial_writer_lease: { writer_lease_token: 'live-only',
+      writer_client_instance_id: 'client', expires_at: '2099-01-01T00:00:00Z' } }
+    await prepareOfflineQuestion(input as never)
+    expect(postedMessage?.state).not.toHaveProperty('initial_writer_lease')
+    expect(input).toHaveProperty('initial_writer_lease.writer_lease_token', 'live-only')
+  })
+  it('warms only public shell assets from the task list and deduplicates repeated warmups', async () => {
+    workerResponse = { ok: true, commonResourcesPrepared: true }
+    window.history.replaceState({}, '', '/student/courses/3/')
+    await Promise.all([prepareOfflineCommonResources(), prepareOfflineCommonResources()])
+    expect(context.runtimeLoaded).toBe(true)
+    expect(worker.postMessage).toHaveBeenCalledOnce()
+    expect(postedMessage).toMatchObject({ type: 'prepare-capture-v2-common', shell: expect.stringContaining('/static/'), buildVersion: context.buildVersion })
+    expect(postedMessage).not.toHaveProperty('bootstrap')
+    expect(postedMessage).not.toHaveProperty('state')
+    expect(postedMessage).not.toHaveProperty('api')
+  })
   beforeEach(() => {
     context.userId = 3
     context.buildVersion = 'a'.repeat(20)
@@ -68,6 +88,18 @@ describe('prepareOfflineQuestion', () => {
     } else {
       Reflect.deleteProperty(globalThis.navigator, 'serviceWorker')
     }
+  })
+
+  it('prepares through the activated assessment registration when router entry leaves document ready outside its scope', async () => {
+    workerResponse = { ok: true, commonResourcesPrepared: true }
+    window.history.replaceState({}, '', '/student/courses/3/')
+    window.history.pushState({}, '', '/student/sessions/7/questions/11/')
+    Object.defineProperty(globalThis.navigator, 'serviceWorker', { configurable: true, value: {
+      getRegistration, register, ready: new Promise(() => undefined),
+    } })
+    const result = await Promise.race([prepareOfflineQuestion(state).then(() => 'prepared'), new Promise(resolve => setTimeout(() => resolve('blocked'), 20))])
+    expect(result).toBe('prepared')
+    expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'prepare-capture-v2' }), expect.any(Array))
   })
 
   it('preserves an optional structured worker error code for technical diagnostics', async () => {

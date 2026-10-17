@@ -425,6 +425,12 @@ onBeforeUnmount(() => {
   <p v-else-if="loading" class="kt-research-loading" role="status" aria-busy="true">正在刷新研究数据…</p>
   <template v-else-if="data">
     <button type="button" class="kt-button" data-testid="refresh-research-data" @click="checkStatus(true)">刷新结果</button>
+    <p v-if="data.preparation" data-testid="preparation-counts" role="status">
+      已结束会话 {{ data.preparation.total_count }} · 最新且材料完整 {{ data.preparation.latest_complete_count }} ·
+      材料不完整或待核验 {{ data.preparation.input_incomplete_count }}（完整性未核验 {{ data.preparation.input_unverified_count }}）·
+      首次整理 {{ data.preparation.pending_count }} · 更新中 {{ data.preparation.updating_count }} ·
+      整理失败 {{ data.preparation.failed_count }}。以上状态可能重叠；评分状态另行展示。
+    </p>
     <Alert
       v-if="data.preparation && data.preparation.state !== 'ready'"
       :tone="data.preparation.state === 'failed' ? 'danger' : data.preparation.state === 'updating' ? 'info' : 'warning'"

@@ -4,6 +4,30 @@ export interface AdmissionCredentials {
   session_id?: number
 }
 
+export interface StartIntent {
+  client_instance_id: string
+  navigation_id: string
+  client_occurred_at: string
+  client_monotonic_ms: string
+  client_time_origin: string
+  reason: string
+}
+
+export function readStartIntent(taskId: number): StartIntent | undefined {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(`kt-assessment-start:${taskId}`) || 'null') as StartIntent | null
+    if (value && typeof value.client_instance_id === 'string' && typeof value.navigation_id === 'string') return value
+  } catch { /* private browsing */ }
+}
+
+export function writeStartIntent(taskId: number, value: StartIntent) {
+  try { sessionStorage.setItem(`kt-assessment-start:${taskId}`, JSON.stringify(value)) } catch { /* private browsing */ }
+}
+
+export function clearStartIntent(taskId: number) {
+  try { sessionStorage.removeItem(`kt-assessment-start:${taskId}`) } catch { /* private browsing */ }
+}
+
 function key(taskId: number) {
   return `kt-assessment-admission:${taskId}`
 }

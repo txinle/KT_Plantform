@@ -12,7 +12,7 @@ from .response_snapshot_services import (
 )
 
 
-def _checked_state(attempt, payload, side):
+def _checked_state(attempt, payload, side, *, batch_context=None):
     document = payload[f'{side}_state']
     kind = attempt.assignment.snapshot.question_type
     value = document['value']
@@ -30,35 +30,36 @@ def _checked_state(attempt, payload, side):
         raise ProcessRequestError('response_hash_mismatch')
     return create_response_snapshot(
         attempt=attempt, content=response_snapshot_content(value), response_state=state,
+        batch_context=batch_context,
     )
 
 
-def prepare_input_operation(parsed):
+def prepare_input_operation(parsed, *, batch_context=None):
     if not uses_capture_v2(parsed.session):
         raise ProcessRequestError('capture_contract_mismatch')
     parent_id = parsed.payload['parent_event_id']
-    if parent_id and not AssessmentEvent.objects.filter(
-        pk=parent_id, attempt=parsed.attempt, event_type='response_transition',
-    ).exists():
-        raise ProcessRequestError('parent_not_received', status=409)
+    if parent_id:
+        parent = (batch_context['parents'].get(str(parent_id)) if batch_context is not None else
+                  AssessmentEvent.objects.filter(pk=parent_id).first())
+        if parent is None or parent.attempt_id != parsed.attempt.pk or parent.event_type != 'response_transition':
+            raise ProcessRequestError('parent_not_received', status=409)
     return parsed.payload
 
 
-def prepare_transition(parsed):
+def prepare_transition(parsed, *, batch_context=None):
     """Validate references and materialize immutable bodies inside the batch transaction."""
     payload = deepcopy(parsed.payload)
     if not uses_capture_v2(parsed.session):
         raise ProcessRequestError('capture_contract_mismatch')
-    before = _checked_state(parsed.attempt, payload, 'before')
-    after = _checked_state(parsed.attempt, payload, 'after')
+    before = _checked_state(parsed.attempt, payload, 'before', batch_context=batch_context)
+    after = _checked_state(parsed.attempt, payload, 'after', batch_context=batch_context)
     if before.state_hash == after.state_hash:
         raise ProcessRequestError('unchanged_response')
     parent_id = payload['parent_event_id']
     if parent_id:
-        parent = AssessmentEvent.objects.filter(
-            pk=parent_id, attempt=parsed.attempt, event_type='response_transition',
-        ).first()
-        if parent is None:
+        parent = (batch_context['parents'].get(str(parent_id)) if batch_context is not None else
+                  AssessmentEvent.objects.filter(pk=parent_id).first())
+        if parent is None or parent.attempt_id != parsed.attempt.pk or parent.event_type != 'response_transition':
             raise ProcessRequestError('parent_not_received', status=409)
         if parent.payload['after_state_hash'] != before.state_hash:
             raise ProcessConflictError('response_parent_mismatch')
@@ -77,7 +78,7 @@ def prepare_transition(parsed):
 
 
 @transaction.atomic
-def ingest_capture_batch(*, student, document, request_received_at=None, locked_sessions=None, locked_attempts=None, recording_close=False):
+def ingest_capture_batch(*, student, document, request_received_at=None, locked_sessions=None, locked_attempts=None, recording_close=False, validation_contexts=None):
     # Session locks precede attempt/event locks throughout assessment writes.
     if not isinstance(document, dict) or not isinstance(document.get('events'), list):
         raise ProcessRequestError('invalid_request')
@@ -93,6 +94,7 @@ def ingest_capture_batch(*, student, document, request_received_at=None, locked_
         locked_sessions=sessions,
         locked_attempts=locked_attempts,
         recording_close=recording_close,
+        validation_contexts=validation_contexts,
     )
 
 

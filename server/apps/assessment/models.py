@@ -57,6 +57,16 @@ _RESPONSE_OBSERVATION_APPEND_ALLOWED = ContextVar(
     "response_observation_append_allowed",
     default=False,
 )
+_RESPONSE_SNAPSHOT_APPEND_ALLOWED = ContextVar('response_snapshot_append_allowed', default=False)
+
+
+@contextmanager
+def _response_snapshot_append_scope():
+    token = _RESPONSE_SNAPSHOT_APPEND_ALLOWED.set(True)
+    try:
+        yield
+    finally:
+        _RESPONSE_SNAPSHOT_APPEND_ALLOWED.reset(token)
 
 
 @contextmanager
@@ -122,6 +132,12 @@ class ImmutableArtifactQuerySet(models.QuerySet):
         raise AppendOnlyEventError("Event schema artifacts are immutable.")
 
     def bulk_create(self, objs, **kwargs):
+        if self.model is ResponseSnapshot and _RESPONSE_SNAPSHOT_APPEND_ALLOWED.get():
+            rows = list(objs)
+            if kwargs.get('ignore_conflicts') or kwargs.get('update_conflicts') or any(
+                    not isinstance(row, ResponseSnapshot) or not row._state.adding for row in rows):
+                raise AppendOnlyEventError('Response snapshot batches must append new validated rows.')
+            return super().bulk_create(rows, **kwargs)
         raise AppendOnlyEventError(
             "Immutable process records must use their validated create service."
         )
@@ -163,7 +179,9 @@ class CaptureContractArtifact(models.Model):
 
 class ExperimentSession(models.Model):
     class Status(models.TextChoices):
+        PREPARED = "prepared", "已预备未开始"
         IN_PROGRESS = "in_progress", "进行中"
+        SUBMITTING = "submitting", "已接收正在提交"
         COMPLETED = "completed", "已完成"
         EXPIRED = "expired", "已超时"
         INVALIDATED = "invalidated", "已作废"
@@ -200,7 +218,8 @@ class ExperimentSession(models.Model):
     class_snapshot_name = models.CharField(max_length=160, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.IN_PROGRESS)
     recovery_round = models.PositiveIntegerField(default=0)
-    started_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(default=timezone.now, null=True, blank=True)
+    assessment_flow_version = models.PositiveSmallIntegerField(default=0, db_default=0)
     last_activity_at = models.DateTimeField(auto_now=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     deadline_at = models.DateTimeField(null=True, blank=True)
@@ -251,20 +270,25 @@ class ExperimentSession(models.Model):
             ),
             models.CheckConstraint(
                 condition=(
-                    Q(status="in_progress", terminal_at__isnull=True)
+                    Q(status__in=("prepared", "in_progress"), terminal_at__isnull=True)
                     | Q(
-                        status__in=("completed", "expired", "invalidated"),
+                        status__in=("submitting", "completed", "expired", "invalidated"),
                         terminal_at__isnull=False,
                     )
                 ),
                 name="session_terminal_at_matches_status",
             ),
+            models.CheckConstraint(
+                condition=(Q(status="prepared", started_at__isnull=True)
+                           | (~Q(status="prepared") & Q(started_at__isnull=False))),
+                name="session_prepared_start_time",
+            ),
         ]
 
     def save(self, *args, **kwargs):
-        if self.status == self.Status.IN_PROGRESS and self.terminal_at is not None:
+        if self.status in (self.Status.PREPARED, self.Status.IN_PROGRESS) and self.terminal_at is not None:
             raise ValidationError("in-progress session cannot have terminal_at")
-        if self.status != self.Status.IN_PROGRESS and self.terminal_at is None:
+        if self.status not in (self.Status.PREPARED, self.Status.IN_PROGRESS) and self.terminal_at is None:
             self.terminal_at = self.completed_at or timezone.now()
             update_fields = kwargs.get("update_fields")
             if update_fields is not None:
@@ -1040,6 +1064,10 @@ class ConfidenceAssignment(models.Model):
         validators=[MinValueValidator(0), MaxValueValidator(100)],
     )
     committed_at = models.DateTimeField(null=True, blank=True)
+    draft_probability = models.PositiveSmallIntegerField(null=True, blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)])
+    draft_answer_event_id = models.UUIDField(null=True, blank=True)
+    draft_missing_reason = models.CharField(max_length=32, default='optional_unfilled')
 
     class Meta:
         ordering = ["attempt__session_id", "attempt_id"]
@@ -1337,3 +1365,9 @@ class AssessmentEvent(models.Model):
     @property
     def sequence(self):
         return self.client_sequence_no
+
+
+# These persistent products are separate from the append-only research facts.
+from .prepared_models import (PreparedActivationCancellation, PreparedAttemptProjection, PreparedContentObject,
+                              PreparedSessionArtifact, PreparedSessionRepair)  # noqa: E402,F401
+from .session_submission_models import SessionSubmission  # noqa: E402,F401

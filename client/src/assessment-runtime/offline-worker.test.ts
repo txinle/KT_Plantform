@@ -14,9 +14,16 @@ type WorkerEvent = { data?: Data; source?: { url: string; id: string }; ports?: 
 
 
 function enteredState(session: number, assignment: number, user: number) {
-  return { session_id: session, assignment: { assignment_id: assignment, attempt_id: 13 }, process: { visit_id: 41, entry_event_id: 'entry-event' },
+  return { assessment_flow_version: 1, session_id: session, assignment: { assignment_id: assignment, attempt_id: 13 }, process: { paper_flow_version: 1, visit_id: 41, entry_event_id: 'entry-event' },
     offline_authorization: { user_id: user, session_id: session, assignment_id: assignment },
     entry_receipt: { session_id: session, assignment_id: assignment, attempt_id: 13, visit_id: 41, entry_event_id: 'entry-event' } }
+}
+
+function preparedPaperState() {
+  const state = enteredState(7, 11, 3)
+  return { ...state, assessment_flow_version: 1,
+    process: { ...state.process, session_id: 7, attempt_id: 13, paper_flow_version: 1, navigation_id: 'navigation-one', visit_index: 1 },
+    entry_receipt: { ...state.entry_receipt, navigation_id: 'navigation-one', visit_index: 1, entered_at: '2026-10-15T00:00:00Z' } }
 }
 
 function harness(existingStores?: Map<string, Map<string, Response>>) {
@@ -80,6 +87,78 @@ function harness(existingStores?: Map<string, Map<string, Response>>) {
 }
 
 describe('capture-v2 offline worker resource preparation', () => {
+  it.each(['/student/courses/1/', '/login/', '/student/sessions/7/questions/11/'])('rejects retired per-item recovery from %s', async source => {
+    const worker = harness()
+    const paper = preparedPaperState()
+    const state = { ...paper, assessment_flow_version: 0, entry_allowed: true,
+      process: { ...paper.process, paper_flow_version: 0, capture_version: 'capture-v2' } }
+    expect(await worker.prepare([immutable], { state }, origin + source)).toMatchObject({ ok: false })
+    for (const invalid of [
+      { ...state, entry_allowed: false },
+      { ...state, process: { ...state.process, capture_version: 'v1' } },
+      { ...state, entry_receipt: { ...state.entry_receipt, navigation_id: 'foreign' } },
+      { ...state, process: { ...state.process, session_id: 99 } },
+    ]) expect(await worker.prepare([immutable], { state: invalid }, origin + source)).toMatchObject({ ok: false })
+    expect(await worker.prepare([immutable], { state }, `${origin}/teacher/`)).toMatchObject({ ok: false })
+  })
+  it('warms public resources from the task list without auth or question content and reuses them after activation', async () => {
+    const worker = harness()
+    expect(await worker.message({ type: 'prepare-capture-v2-common', buildVersion: 'shell-C0abc123.js', shell, resources: [immutable] }, `${origin}/student/courses/1/`)).toMatchObject({ ok: true })
+    expect(worker.fetch.mock.calls.map(([url]) => url)).toEqual([shell, immutable])
+    expect([...worker.stores.values()].flatMap(store => [...store.keys()]).some(url => url === api || url.includes('offline-identity'))).toBe(false)
+    await worker.prepare([immutable])
+    expect(worker.fetch.mock.calls.filter(([url]) => url === shell || url === immutable)).toHaveLength(2)
+    expect(worker.fetch.mock.calls.filter(([url]) => url === `${origin}/api/v1/auth/session/`)).toHaveLength(1)
+  })
+  it.each(['/student/courses/1/', '/login/'])('prepares a fully authorized flow-one receipt from a same-origin router document %s', async source => {
+    const worker = harness()
+    expect(await worker.prepare([immutable], { state: preparedPaperState() }, origin + source)).toMatchObject({ ok: true, commonResourcesPrepared: true })
+    expect(worker.fetch.mock.calls.filter(([url]) => url === `${origin}/api/v1/auth/session/`)).toHaveLength(1)
+    expect(worker.fetch.mock.calls.filter(([url]) => url === page || url === api)).toHaveLength(0)
+    worker.fetch.mockRejectedValue(new TypeError('offline'))
+    expect(await (await worker.request(api))?.json()).toMatchObject({ data: { assessment_flow_version: 1, offline_recovery: true } })
+  })
+
+  it('rejects foreign origins, foreign question sessions, missing receipts and mismatched flow-one receipts without replacing prior recovery', async () => {
+    const worker = harness()
+    await worker.prepare([immutable])
+    const keys = [...worker.stores.keys()]
+    const valid = preparedPaperState()
+    for (const [state, source] of [
+      [valid, 'https://other.test/login/'], [valid, `${origin}/student/sessions/99/questions/11/`],
+      [{ ...valid, entry_receipt: undefined }, `${origin}/login/`],
+      [{ ...valid, entry_receipt: { ...valid.entry_receipt, entry_event_id: 'forged' } }, `${origin}/login/`],
+      [{ ...valid, process: { ...valid.process, paper_flow_version: 0 } }, `${origin}/login/`],
+    ] as Array<[Data, string]>) {
+      expect(await worker.prepare([immutable], { state }, source)).toMatchObject({ ok: false })
+      expect([...worker.stores.keys()]).toEqual(keys)
+    }
+    worker.fetch.mockRejectedValue(new TypeError('offline'))
+    expect(await (await worker.request(api))?.json()).toMatchObject({ data: { session_id: 7, offline_recovery: true } })
+  })
+
+  it('continues to reject an authenticated account mismatch for a flow-one router document', async () => {
+    const worker = harness()
+    worker.switchUser(4)
+    expect(await worker.prepare([immutable], { state: preparedPaperState(), bootstrap: { version: 1, page_path: new URL(page).pathname, assessment_session_id: 7, assignment_id: 11, user: { id: 3 } } }, `${origin}/login/`)).toMatchObject({ ok: false })
+    expect([...worker.stores.values()].flatMap(store => [...store.keys()]).filter(url => url.includes('offline-envelope'))).toHaveLength(0)
+  })
+
+  it('does not let a router preparation restore cache after logout during its authentication check', async () => {
+    const worker = harness()
+    let authenticate!: (value: Response) => void
+    const pending = new Promise<Response>(resolve => { authenticate = resolve })
+    const original = worker.fetch.getMockImplementation()!
+    worker.fetch.mockImplementation(async url => String(url).endsWith('/api/v1/auth/session/') ? pending : original(url))
+    const preparing = worker.prepare([immutable], { state: preparedPaperState() }, `${origin}/login/`)
+    await Promise.resolve()
+    await worker.message({ type: 'clear-capture-v2' })
+    authenticate(Response.json({ data: { user: { id: 3 } } }))
+    expect(await preparing).toMatchObject({ ok: false })
+    worker.fetch.mockRejectedValue(new TypeError('offline'))
+    await expect(worker.request(api)).rejects.toThrow('offline')
+  })
+
   it('deduplicates resources and reuses completed common preparation in the same account session and build', async () => {
     const worker = harness()
     const mutable = `${origin}/static/js/assessment.js`

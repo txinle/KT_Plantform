@@ -6,7 +6,45 @@ const mocks = vi.hoisted(() => ({ post: vi.fn() }))
 vi.mock('./api', () => ({ getStudentAssessmentApi: () => ({ post: mocks.post }) }))
 import StudentResearchTools from './StudentResearchTools.vue'
 
-afterEach(() => vi.clearAllMocks())
+afterEach(() => { vi.clearAllMocks(); vi.useRealTimers() })
+
+it('keeps slow polling single flight and pauses while hidden or offline, recovering when visible', async () => {
+  vi.useFakeTimers()
+  let finish!: (value: object) => void
+  mocks.post.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  const wrapper = mount(StudentResearchTools, { props: { endpoint: '/tools/', runtime: runtime() as never, answerEventId: null, waitForCapture: async () => undefined } })
+  try {
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(mocks.post).toHaveBeenCalledTimes(1)
+    finish({ content_version: 'v1', rules: [], doubt_enabled: true })
+    await flushPromises()
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(mocks.post).toHaveBeenCalledTimes(1)
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    Object.defineProperty(navigator, 'onLine', { configurable: true, value: false })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(mocks.post).toHaveBeenCalledTimes(1)
+    Object.defineProperty(navigator, 'onLine', { configurable: true, value: true })
+    window.dispatchEvent(new Event('online'))
+    await flushPromises()
+    expect(mocks.post).toHaveBeenCalledTimes(2)
+  } finally {
+    wrapper.unmount()
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    Object.defineProperty(navigator, 'onLine', { configurable: true, value: true })
+  }
+})
+
+it('never queries an absent tools endpoint even with an empty frozen configuration', async () => {
+  vi.useFakeTimers()
+  const wrapper = mount(StudentResearchTools, { props: { endpoint: '', initialConfiguration: { rules: [] } as never, runtime: runtime() as never, answerEventId: null, waitForCapture: async () => undefined } })
+  await vi.advanceTimersByTimeAsync(30000)
+  expect(mocks.post).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
 
 function runtime() {
   const record = vi.fn().mockResolvedValue({})
@@ -218,6 +256,30 @@ it('uses the authorized question DTO for initial tools and still refreshes time-
   } finally { wrapper.unmount(); vi.useRealTimers() }
 })
 
+it('refreshes rules when a transition remounts tools instead of replaying a consumed initial DTO', async () => {
+  const toolsRuntime = runtime()
+  const initialConfiguration = toolsResponse({ rules: [
+    { id: 'hint-1', tool: 'hint', required: false, hint_id: 'h1' },
+  ] })
+  mockHints(toolsResponse(), { h1: '第一条提示' })
+  const props = { endpoint: '/tools/', answerEventId: null, waitForCapture: async () => undefined,
+    runtime: toolsRuntime, initialConfiguration }
+  const first = mount(StudentResearchTools, { props })
+  await flushPromises()
+  expect(hintRequests()).toEqual(['h1'])
+  await buttonWithText(first, '关闭提示').trigger('click')
+  await flushPromises()
+  first.unmount()
+
+  const restored = mount(StudentResearchTools, { props })
+  try {
+    await flushPromises()
+    expect(hintRequests()).toEqual(['h1'])
+    expect(mocks.post).toHaveBeenLastCalledWith('/tools/', {})
+    expect(restored.text()).not.toContain('第一条提示')
+  } finally { restored.unmount() }
+})
+
 it('restores marks and a previously presented required rule without requesting another occurrence', async () => {
   mocks.post.mockResolvedValue({ doubt_enabled: true, check_enabled: true, content_version: 'v1',
     state: { doubt: true, pending_check: true, checking: false, doubt_note: '核对定义' },
@@ -350,4 +412,21 @@ it('uses the frozen v2 scale and blocks invalid confidence input', async () => {
     stage: 'responded', data: expect.objectContaining({ probability: 58 }),
   }))
   wrapper.unmount()
+})
+
+it('emits inline confidence only from an actual confidence responded receipt, including zero', async () => {
+  const receipt = { probability: 0, answer_event_id: 'saved-head' }
+  mocks.post.mockResolvedValue({ event_id: 'tool-event', content_version: 'v1', inline_confidence: receipt })
+  const wrapper = mount(StudentResearchTools, { props: {
+    endpoint: '/tools/', answerEventId: 'saved-head', waitForCapture: async () => undefined, runtime: runtime(),
+    initialConfiguration: toolsResponse({ rules: [{ id: 'confidence-required', tool: 'confidence', required: true }] }),
+  } })
+  try {
+    await flushPromises()
+    expect(wrapper.emitted('inline-confidence')).toBeUndefined()
+    await wrapper.get('[data-tool-confidence-number]').setValue('0')
+    await buttonWithText(wrapper, '记录信心').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('inline-confidence')).toEqual([[receipt]])
+  } finally { wrapper.unmount() }
 })

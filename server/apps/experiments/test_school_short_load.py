@@ -206,58 +206,43 @@ class SchoolShortFixturePostgresTests(TestCase):
                            'output_dir': str(directory / 'shorts')}, sizes=(3, 50))
             smoke = json.loads((directory / 'shorts/short-3.json').read_text())
             self.assertEqual(ExperimentVersionParticipantSnapshot.objects.filter(class_task_id=smoke['task_id']).count(), 3)
-            self.verify_real_capture_then_reject_incomplete_class(directory, smoke)
+            self.verify_retired_protocol_cannot_open_session(smoke)
             short = json.loads((directory / 'shorts/short-50.json').read_text())
-            self.verify_real_capture_then_reject_incomplete_class(directory, short)
+            self.verify_retired_protocol_cannot_open_session(short)
         self.assertEqual(dict(User.objects.values_list('pk', 'password')), users)
         self.assertEqual(list(CourseEnrollment.objects.filter(pk__in=[row[0] for row in memberships]).values_list('pk', 'course_id', 'class_group_id', 'student_id')), memberships)
         self.assertNotEqual(ClassExperimentTask.objects.get(pk=short['task_id']).experiment.course_id, baseline.experiment.course_id)
         self.assertEqual(ExperimentVersionParticipantSnapshot.objects.filter(class_task_id=short['task_id']).count(), 50)
-        self.assertFalse(baseline.sessions.exists())
+        self.assertFalse(baseline.sessions.exclude(status='prepared').exists())
+        self.assertTrue(baseline.sessions.filter(status='prepared', started_at__isnull=True).exists())
 
-    def verify_real_capture_then_reject_incomplete_class(self, directory, short):
+    def verify_retired_protocol_cannot_open_session(self, short):
         import json
         import time
-        from django.db import connection
         from rest_framework.test import APIClient
         from apps.accounts.models import User
-        from apps.assessment.models import AssessmentEvent, Attempt
-        from apps.experiments.management.commands.verify_school_short_load import Command
+        from apps.assessment.models import AssessmentEvent, ExperimentSession
         sys.path.insert(0, str(Path(settings.BASE_DIR) / 'scripts/load'))
         import school_short_storm as load
+        student = User.objects.get(username=short['usernames'][0])
         client = APIClient()
-        client.force_login(User.objects.get(username=short['usernames'][0]))
-        state = load.StudentState(short['usernames'][0], 'Normal!fixture')
+        client.force_login(student)
+        state = load.StudentState(student.username, 'Normal!fixture')
         runner = load.ShortRunner('http://localhost', short['task_id'], 35)
         runner.released_at = time.perf_counter()
 
         def real_request(_, path, *, method='GET', body=None):
             response = client.generic(method, path, data=json.dumps(body).encode() if body is not None else b'', content_type='application/json', HTTP_ACCEPT='application/json')
-            while response.status_code in (301, 302, 303, 307, 308):
-                response = client.get(response.headers['Location'], HTTP_ACCEPT='application/json')
             if response.status_code >= 400:
                 raise RuntimeError(f'HTTP {response.status_code}')
-            return response.status_code, domain_payload(response) if 'json' in response.headers.get('Content-Type', '') else response.content, .001
+            return response.status_code, domain_payload(response), .001
 
+        # Retained legacy load parsers are historical evidence. Their old start
+        # document cannot activate or write through the canonical student API.
         with patch.object(load.Runner, 'request', side_effect=real_request):
-            runner.start(state)
-            runner.resume(state)
-            runner.answer(state)
-        row = runner.ledger[str(state.session_id)]
-        self.assertEqual(len(row['event_ids']), 20)
-        self.assertEqual(AssessmentEvent.objects.filter(event_id__in=row['event_ids']).count(), 20)
-        for event in AssessmentEvent.objects.filter(event_id__in=row['event_ids']):
-            self.assertEqual(load.payload_hash(event.payload), row['events'][str(event.event_id)]['payload_sha256'])
-            self.assertEqual(event.client_sequence_no, row['events'][str(event.event_id)]['client_sequence_no'])
-            self.assertTrue(row['events'][str(event.event_id)]['acknowledged'])
-        self.assertEqual(Attempt.objects.filter(session_id=state.session_id, submission_token__in=row['submission_tokens']).count(), 20)
-        path = directory / 'shorts' / f"short-{short['student_count']}.json"
-        path.with_suffix('.ledger.json').write_text(json.dumps({'task_id': short['task_id'], 'source_config': short['source_config'], 'sessions': runner.ledger}))
-        report = directory / f"persistence-{short['student_count']}.json"
-        with patch.dict(connection.settings_dict, NAME='kt_e2e'), self.assertRaisesRegex(CommandError, 'persistence'):
-            Command(stdout=StringIO()).handle(manifest=str(path), output=str(report), cold_manifest=[])
-        original = report.read_bytes()
-        self.assertFalse(json.loads(original)['passed'])
-        with patch.dict(connection.settings_dict, NAME='kt_e2e'), self.assertRaises(FileExistsError):
-            Command(stdout=StringIO()).handle(manifest=str(path), output=str(report), cold_manifest=[])
-        self.assertEqual(report.read_bytes(), original)
+            with self.assertRaisesRegex(RuntimeError, r'HTTP (409|503)'):
+                runner.start(state)
+        session = ExperimentSession.objects.get(class_task_id=short['task_id'], student=student)
+        self.assertEqual(session.status, 'prepared')
+        self.assertIsNone(session.started_at)
+        self.assertFalse(AssessmentEvent.objects.filter(session=session).exists())

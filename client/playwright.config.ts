@@ -15,10 +15,15 @@ const commonDjangoEnvironment = {
   STUDENT_LEARNING_ANALYTICS_ENABLED: '1',
   CAPTURE_V2_ENABLED: '1',
   CAPTURE_V2_COURSE_IDS: '*',
+  ASSESSMENT_PREPARED_ADMISSION_MODE: 'postgres_transaction',
+  ASSESSMENT_ADMISSION_ENABLED: '1',
+  ASSESSMENT_ADMISSION_GLOBAL_ENABLED: '1',
+  ASSESSMENT_ADMISSION_CAPACITY: '4',
 }
 
 export default defineConfig({
   testDir: './e2e',
+  testMatch: '**/*.spec.ts',
   testIgnore: ['capture-v2.spec.ts', 'capture-initialization.spec.ts', 'submission-repair.spec.ts'],
   outputDir: '.e2e-results',
   fullyParallel: false,

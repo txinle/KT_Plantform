@@ -1,4 +1,5 @@
 import importlib.util
+import re
 from pathlib import Path
 from django.conf import settings
 from django.test import SimpleTestCase
@@ -37,8 +38,13 @@ class FixedRuntimeTests(SimpleTestCase):
         loader.add_constructor('!override', lambda loader, node: loader.construct_sequence(node))
         loader.add_constructor('!reset', lambda loader, node: loader.construct_sequence(node))
         services = yaml.load((Path(settings.REPOSITORY_DIR) / "deploy" / 'docker-compose.school.yml').read_text(), Loader=loader)['services']
-        http = ('web', 'auth', 'assessment', 'capture', 'student-read', 'teacher-read')
-        self.assertEqual(sum(services[role]['environment']['GUNICORN_WORKERS'] for role in http), 20)
+        http = ('web', 'auth', 'assessment', 'startup', 'capture', 'student-read', 'teacher-read')
+        counts = []
+        for role in http:
+            configured = str(services[role]['environment']['GUNICORN_WORKERS'])
+            default = re.fullmatch(r'\$\{[^:}]+:-(\d+)\}', configured)
+            counts.append(int(default[1]) if default else int(configured))
+        self.assertEqual(sum(counts), 20)
         for role in (*http, 'db','nginx','pgbouncer'):
             self.assertEqual(services[role]['cpus'], 0)
         self.assertEqual(services['web']['environment']['SCHOOL_RUNTIME_PRESSURE_FILE'], '')

@@ -1,6 +1,5 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
@@ -263,18 +262,14 @@ class CaptureV2TextInputCoverageTests(SimpleTestCase):
                 capture_contract=SimpleNamespace(contract_name='capture-v2'),
             ),
         )
-        with patch(
-            'apps.analytics.recording_coverage.RecordingCoverageAttempt.objects.create',
-            side_effect=lambda **kwargs: SimpleNamespace(**kwargs),
-        ):
-            return _attempt_result(
-                run=SimpleNamespace(pk='coverage-run'),
-                attempt=attempt,
-                events=events,
-                session_reasons=[],
-                gap_count=0,
-                syncs=[],
-            )
+        return _attempt_result(
+            run=SimpleNamespace(pk='coverage-run'),
+            attempt=attempt,
+            events=events,
+            session_reasons=[],
+            gap_count=0,
+            syncs=[],
+        )
 
     def test_capture_v2_input_operations_complete_text_editing_for_text_questions(self):
         for question_type in ('short_answer', 'fill_blank', 'numeric'):

@@ -1,9 +1,14 @@
 import os
+import logging
 import time
+from contextlib import contextmanager
 
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.db import connection
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
@@ -27,13 +32,36 @@ class Command(BaseCommand):
         with connection.cursor() as cursor:
             cursor.execute("SELECT pg_advisory_unlock(%s)", [self.lock_id])
 
+    @contextmanager
+    def phase_timing(self, name):
+        started = time.monotonic()
+        status = 'failed'
+        try:
+            yield
+            status = 'completed'
+        finally:
+            duration_ms = (time.monotonic() - started) * 1000
+            self.stdout.write(f'scheduler_phase name={name} status={status} duration_ms={duration_ms:.3f}')
+
     def run_once(self):
-        call_command("expire_publish_plans")
-        call_command("expire_due_sessions")
-        call_command("run_student_import_jobs")
-        call_command("reconcile_research_materializations")
+        if (settings.ASSESSMENT_ADMISSION_GLOBAL_ENABLED
+                and settings.ASSESSMENT_PREPARED_ADMISSION_MODE == 'redis'):
+            from apps.assessment.admission_reconciliation import reconcile_admission_page
+            from apps.assessment.admission import AdmissionUnavailable
+            from django.db import DatabaseError
+            try:
+                with self.phase_timing('reconcile_admission'):
+                    result = reconcile_admission_page(cursor=getattr(self, '_admission_cursor', 0), limit=64)
+                    self._admission_cursor = result['cursor']
+            except (AdmissionUnavailable, DatabaseError):
+                logger.warning('Admission reconciliation unavailable; occupied executions retained')
+        phases = ['expire_publish_plans', 'expire_due_sessions',
+                  'run_student_import_jobs', 'reconcile_research_materializations']
         if os.getenv("RUN_SCHEDULER_EXPORT_JOBS", "1") == "1":
-            call_command("run_export_jobs")
+            phases.append('run_export_jobs')
+        for phase in phases:
+            with self.phase_timing(phase):
+                call_command(phase)
 
     def handle(self, *args, **options):
         if not self.try_acquire_lock():

@@ -5,7 +5,7 @@ from datetime import timedelta
 from django.contrib.postgres.aggregates import BitXor
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import connection, models, transaction
-from django.db.models import BigIntegerField, Count, F, Func, Max, Value
+from django.db.models import BigIntegerField, Count, Exists, F, Func, Max, OuterRef, Q, Value
 from django.db.models.functions import Cast, JSONObject
 from django.utils import timezone
 
@@ -41,7 +41,7 @@ from .quality_reports import build_quality_report
 from .research_dataset import read_research_bundle
 
 
-PROJECTION_VERSION = "research-session-v4"
+PROJECTION_VERSION = "research-session-v6"
 MAX_RETRIES = 3
 MAX_SOURCE_READ_ATTEMPTS = 3
 
@@ -281,15 +281,48 @@ def _scope_for_session(session):
 
 
 def _read_consistent_bundle(session):
+    from .recording_coverage import generate_session_coverage
+
     scope = _scope_for_session(session)
     for _attempt in range(MAX_SOURCE_READ_ATTEMPTS):
         before = _revision_marker(session.pk)
+        coverage_run = generate_session_coverage(session)
+        coverage = coverage_run.session_results.get(session_id=session.pk)
+        input_status = coverage.overall_status
+        attempts = coverage_run.attempt_results.annotate(
+            has_client_evidence=Exists(AssessmentEvent.objects.filter(
+                attempt_id=OuterRef("attempt_id"), actor_source="client",
+            )),
+            has_visit=Exists(QuestionVisitEvent.objects.filter(attempt_id=OuterRef("attempt_id"))),
+        )
+        required = (
+            Q(attempt__visit_count__gt=0) | Q(attempt__first_opened_at__isnull=False)
+            | Q(attempt__last_opened_at__isnull=False) | Q(has_visit=True) | Q(has_client_evidence=True)
+            | Q(attempt__active_response_event__isnull=False) | Q(attempt__final_response_event__isnull=False)
+            | Q(attempt__current_response_snapshot__isnull=False) | Q(attempt__final_response_snapshot__isnull=False)
+            | Q(attempt__response_version__gt=0) | Q(attempt__draft_saved_at__isnull=False)
+            | Q(attempt__submission_event__isnull=False) | Q(attempt__submitted_at__isnull=False)
+            | Q(attempt__status__in=(Attempt.Status.VISITED, Attempt.Status.DRAFT, Attempt.Status.SUBMITTED))
+        )
+        attempt_counts = attempts.aggregate(
+            total=Count("pk"), required=Count("pk", filter=required),
+            incomplete=Count("pk", filter=required & ~Q(overall_status__in=("complete", "not_applicable"))),
+        )
+        if input_status == "complete" and attempt_counts["incomplete"]:
+            input_status = "partial"
         bundle, cutoff = read_research_bundle(
             scope,
             include_course_catalog=False,
         )
         after = _revision_marker(session.pk)
         if before == after:
+            for summary in bundle.get("sessions", []):
+                summary["input_completeness"] = {
+                    "status": input_status,
+                    "coverage_run_id": str(coverage_run.pk),
+                    "required_attempt_count": attempt_counts["required"],
+                    "unobserved_attempt_count": attempt_counts["total"] - attempt_counts["required"],
+                }
             return bundle, cutoff, after
     raise RuntimeError("research source changed during materialization")
 

@@ -1,3 +1,4 @@
+from .test_support import historical_submission_result
 from apps.api.test_support import domain_payload
 import json
 import uuid
@@ -6,7 +7,7 @@ from datetime import timedelta
 from threading import Barrier
 from unittest import skipUnless
 
-from django.db import connection, connections
+from django.db import connection, connections, transaction
 from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -31,6 +32,46 @@ class CaptureV2WriterLeaseTests(TestCase):
 
     def test_legacy_attempt_without_a_lease_remains_writable(self):
         self.assertTrue(assert_attempt_writer_lease(self.attempt))
+
+    def test_locked_acquire_and_release_keep_the_same_object_current_without_selects(self):
+        from .writer_lease_services import _bind_locked_attempt
+        with transaction.atomic():
+            locked = type(self.attempt).objects.select_for_update().select_related('session').get(pk=self.attempt.pk)
+            _bind_locked_attempt(locked)
+            with self.assertNumQueries(3):  # nested savepoint, UPDATE, release savepoint
+                lease = acquire_attempt_writer_lease(locked, client_instance_id=self.client_instance_id,
+                                                     _locked_attempt=locked)
+            self.assertEqual(locked.writer_lease_token, lease.token)
+            with self.assertNumQueries(3):
+                release_attempt_writer_lease(locked, lease_token=lease.token,
+                    client_instance_id=self.client_instance_id, _locked_attempt=locked)
+            self.assertIsNone(locked.writer_lease_token)
+
+    def test_locked_lease_context_rejects_cross_links_and_completed_transaction(self):
+        from .writer_lease_services import _bind_locked_attempt
+        with transaction.atomic():
+            locked = type(self.attempt).objects.select_for_update().select_related('session').get(pk=self.attempt.pk)
+            _bind_locked_attempt(locked)
+            with self.assertRaises(WriterLeaseConflict):
+                acquire_attempt_writer_lease(self.attempts[Question.Type.SINGLE],
+                    client_instance_id=self.client_instance_id, _locked_attempt=locked)
+            original_student = locked.session.student_id
+            locked.session.student_id += 10000
+            with self.assertRaises(WriterLeaseConflict):
+                acquire_attempt_writer_lease(locked, client_instance_id=self.client_instance_id, _locked_attempt=locked)
+            locked.session.student_id = original_student
+            original_session = locked.session_id
+            original_session_object = locked.session
+            locked.session_id += 10000
+            with self.assertRaises(WriterLeaseConflict):
+                acquire_attempt_writer_lease(locked, client_instance_id=self.client_instance_id, _locked_attempt=locked)
+            locked.session = original_session_object
+            self.assertEqual(locked.session_id, original_session)
+        with self.assertRaises(WriterLeaseConflict):
+            acquire_attempt_writer_lease(locked, client_instance_id=self.client_instance_id, _locked_attempt=locked)
+        with self.assertRaises(WriterLeaseConflict):
+            release_attempt_writer_lease(locked, lease_token=uuid.uuid4(),
+                client_instance_id=self.client_instance_id, _locked_attempt=locked)
 
     def test_same_client_acquire_reuses_the_active_lease(self):
         now = timezone.now()
@@ -409,30 +450,17 @@ class CaptureV2WriterLeaseEndpointTests(TestCase):
             200,
         )
         submission_token = str(uuid.uuid4())
-        submit_url = reverse("assessment_api:submit", args=[self.attempt.pk])
-        submitted = self.client.post(
-            submit_url,
-            data=json.dumps(
-                {
+        submitted = historical_submission_result(student=self.student, attempt_id=self.attempt.pk, document={
                     "submission_token": submission_token,
                     "client_clicked_at": timezone.now().isoformat(),
                     "target_event_id": event["event_id"],
                     **self.credentials(lease),
-                }
-            ),
-            content_type="application/json",
-        )
-        replay = self.client.post(
-            submit_url,
-            data=json.dumps(
-                {
+                })
+        replay = historical_submission_result(student=self.student, attempt_id=self.attempt.pk, document={
                     "submission_token": submission_token,
                     "client_clicked_at": timezone.now().isoformat(),
                     "target_event_id": event["event_id"],
-                }
-            ),
-            content_type="application/json",
-        )
+                })
 
         self.assertEqual(submitted.status_code, 200)
         self.assertEqual(replay.status_code, 200)

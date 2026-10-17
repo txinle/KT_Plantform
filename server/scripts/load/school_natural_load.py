@@ -110,7 +110,10 @@ class LoadStopped(InternalBudgetExceeded):
 
 class NaturalRunner(Synchronized180Runner):
     def __init__(self,*args,plan,start_at,stop_file=None,total_budget_seconds=2700,
-                 authentication_profile='legacy',load_evidence_profile='legacy',**kwargs):
+                 authentication_profile='legacy',load_evidence_profile='legacy',runtime_contract='student-slice-v1',**kwargs):
+        if runtime_contract not in ('student-slice-v1','capture-v2-split-v1'):
+            raise ValueError('Unsupported runtime contract')
+        self.runtime_contract=runtime_contract
         if authentication_profile not in ('legacy', 'bootstrap-v1'):
             raise ValueError('Unsupported authentication profile')
         self.authentication_profile = authentication_profile
@@ -123,7 +126,7 @@ class NaturalRunner(Synchronized180Runner):
         self.confidence_only = plan.get('scenario') == CONFIDENCE_ONLY
         self.budget_deadline=time.monotonic()+max(0,start_at-time.time())+total_budget_seconds
         self.internal_budget_seconds=total_budget_seconds
-        self.require_student_slice_capabilities=True
+        self.require_student_slice_capabilities=runtime_contract=='student-slice-v1'
         self.students=[]
         self.identity_progress_path=None
         self.identity_outcomes=[]
@@ -288,21 +291,33 @@ class NaturalRunner(Synchronized180Runner):
         self._browser_ensure_lease(state,runtime)
         body={'submission_token':token,'target_event_id':runtime['head'],'client_clicked_at':commit['client_wall_time_utc'],**runtime['lease']}
         if confidence: body['confidence']=confidence
-        stream.checkpoint('commit')
-        body['atomic_submission']={'version':1,'client_instance_id':stream.client_instance_id,'event_boundary':stream.sequence,
-            'events':stream.pending_events(),'checkpoints':self._browser_freeze_bundle(runtime)['checkpoints'],'expected_version':runtime['version']}
+        atomic=self.runtime_contract=='student-slice-v1'
+        if atomic:
+            stream.checkpoint('commit')
+            body['atomic_submission']={'version':1,'client_instance_id':stream.client_instance_id,'event_boundary':stream.sequence,
+                'events':stream.pending_events(),'checkpoints':self._browser_freeze_bundle(runtime)['checkpoints'],'expected_version':runtime['version']}
+        else:
+            self._browser_save(state,runtime,commit)
+            self._browser_checkpoint(state,runtime,'commit')
+            self._browser_flush(state,runtime,metric='submission_capture_drain')
+            self._browser_ensure_lease(state,runtime)
+            body.update(runtime['lease'])
         result=self._browser_post(state,dto['actions']['submit_url'],body,'submit_item')
-        if result.get('status')!='submitted' or result.get('committed') is not True or result.get('final_response_event_id')!=runtime['head']:
-            raise RuntimeError('Atomic submission receipt mismatch')
+        if result.get('status')!='submitted' or (atomic and (
+                result.get('committed') is not True or result.get('final_response_event_id')!=runtime['head'])):
+            raise RuntimeError('Submission confirmation mismatch')
         if self.confidence_only:
             state.natural_submission_ack_at=time.perf_counter()
             with self.lock:
                 self.ledger[str(state.session_id)]['confidence'][str(attempt)].update(acknowledged=True,
                     submission_token=token, submission_receipt_sha256=digest({key:result[key] for key in
-                        ('committed','acknowledgements','checkpoint_ids','final_response_event_id','response_version')}))
-        stream.accept_acknowledgements(result['acknowledgements'])
-        stream.acked_checkpoint_ids.update(result['checkpoint_ids'])
-        self._browser_checkpoint(state,runtime,'ack_progress')
+                        ('committed','acknowledgements','checkpoint_ids','final_response_event_id','response_version')}) if atomic else None,
+                    submission_confirmation_profile='atomic-receipt-v1' if atomic else 'http-submitted-status-v1',
+                    submission_response_sha256=digest(result))
+        if atomic:
+            stream.accept_acknowledgements(result['acknowledgements'])
+            stream.acked_checkpoint_ids.update(result['checkpoint_ids'])
+            self._browser_checkpoint(state,runtime,'ack_progress')
         stream.event(attempt,'feedback_shown',{'feedback_mode':result.get('feedback_mode','none'),
             'included_correctness':'is_correct' in result,'included_correct_answer':'correct_answer' in result,
             'included_explanation':bool(result.get('explanation'))})
@@ -546,7 +561,7 @@ def natural_result(runner,states,started,mode):
     if mode!='login-only':
         planned.update(start_to_first_question_ready=n,navigation_next_ready=sum(len(s['excursion_items']) for s in selected),
             navigation_return_ready=sum(len(s['excursion_items']) for s in selected),submit_next_ready=n*20,finish_ready=n,
-            save_draft=sum(28+len(s['modify_items']) for s in selected))
+            save_draft=sum(28+(20 if runner.runtime_contract=='capture-v2-split-v1' else 0)+len(s['modify_items']) for s in selected))
         if runner.confidence_only:
             planned.update(submit_next_ready=n*19, submit_ack=n*19, submit_ack_to_next_ready=n*19,
                 finish_submit_ack=n,finish_ack_to_terminal_ready=n,
@@ -581,7 +596,7 @@ def natural_result(runner,states,started,mode):
         checks['login_send_window_within_one_second']=send_window is not None and send_window<=1
         checks['all_first_login_posts_successful']=sum(row['successful'] for row in login_attempts)==n
     protocol=runner.protocol_summary()
-    return {'workload_version':NATURAL_WORKLOAD,'mode':mode,'student_count':n,'total_students':runner.plan['total_students'],
+    return {'workload_version':NATURAL_WORKLOAD,'runtime_contract':runner.runtime_contract,'mode':mode,'student_count':n,'total_students':runner.plan['total_students'],
         **({'scenario':CONFIDENCE_ONLY,'synthetic_confidence':True} if runner.confidence_only else {}),
         'task_id':runner.task_id,'plan_sha256':digest(runner.plan),'start_at':runner.start_at,'started':started,'ended':time.time(),
         'students':runner.identity_outcomes,'metrics':{k:summary(v) for k,v in runner.metrics.items()},'operation_latency':latency,
@@ -650,7 +665,8 @@ def main():
     plan=validate_workload(fixture,json.loads(Path(args.plan).read_text(encoding='utf-8-sig')))
     runner=NaturalRunner(args.base_url,fixture['task_id'],args.timeout,plan=plan,start_at=args.start_at,stop_file=args.stop_file,
         authentication_profile='bootstrap-v1' if fixture.get('source_config', {}).get('pool_profile') == 'six-pools-180-v1' else 'legacy',
-        load_evidence_profile=fixture.get('source_config', {}).get('load_evidence_profile', 'legacy'))
+        load_evidence_profile=fixture.get('source_config', {}).get('load_evidence_profile', 'legacy'),
+        runtime_contract=fixture.get('source_config', {}).get('runtime_contract', 'student-slice-v1'))
     runner.browser_shell_url=fixture['source_config']['shell_url']
     runner.protocol_course_id,runner.protocol_experiment_id=fixture['course_id'],fixture['experiment_id']
     runner.identity_progress_path = Path(args.output).with_suffix('.students.json')

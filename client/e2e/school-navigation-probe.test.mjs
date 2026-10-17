@@ -154,8 +154,8 @@ test('confidence actual UI honors planned fill and skip without counting its thi
     })
     assert.equal(calls[0][0], 'think')
     assert.ok(!calls.some(call => /submit_ack|submit_next_ready|finish_ready/.test(String(call[1]))))
-    if (action === 'fill') assert.deepEqual(calls.slice(2), [['fill', '[data-confidence-number]', '57'], ['click', '[data-confidence-submit]']])
-    else assert.deepEqual(calls.slice(2), [['click', '跳过评价']])
+    if (action === 'fill') assert.deepEqual(calls.slice(2), [['fill', '[data-inline-confidence]', '57']])
+    else assert.deepEqual(calls.slice(2), [['fill', '[data-inline-confidence]', '']])
   }
 })
 
@@ -163,7 +163,7 @@ test('confidence thought records actual wall time before UI resolution and retai
   for (const interrupted of [false, true]) {
     let wall = 100
     const waits = []
-    const page = { getByRole: () => ({ click: async () => { wall += 5 } }) }
+    const page = { locator: () => ({ fill: async () => { wall += 5 } }) }
     const operation = probe.resolvePlannedConfidence(page, { action: 'skip', value: null, thinkSeconds: 2 }, {
       now: () => wall, recordThink: row => waits.push(row),
       pause: async () => { wall += interrupted ? 1 : 3; if (interrupted) throw new Error('explicit stop') },
@@ -422,6 +422,27 @@ test('browser architecture answers require an observed final ACK and retain witn
   assert.equal(sessions['7'].answers['9'].target_event_id, 'event')
   report.probes[0].protocol_witness.requests[0].acknowledgements = []
   assert.equal(Object.keys(probe.buildBrowserArchitectureSessions(report, [{ username: 'one' }])['7'].answers).length, 0)
+})
+
+test('split browser submissions require a prior acknowledged saved head and observed submitted status', () => {
+  const report = { probes: [{ completed: true, response_states: [{ client_instance_id: 'client', client_sequence_no: 1,
+    question_type: 'short_answer', state_sha256: 'a'.repeat(64) }], protocol_witness: { session_ids: [7], requests: [
+    { client_instance_id: 'client', acknowledgements: [{ client_sequence_no: 1, event_id: 'event' }] },
+    { path: '/api/v1/student/attempts/9/draft/', status: 200, receipt: { active_response_event_id: 'event', response_version: 3 } },
+    { path: '/api/v1/student/attempts/9/submit/', status: 200, submission: { token: 'token', target_event_id: 'event' },
+      receipt: { committed: false, status: 'submitted' } },
+  ] } }] }
+  assert.equal(Object.keys(probe.buildBrowserArchitectureSessions(report, [{ username: 'one' }])['7'].answers).length, 0)
+  const answer = probe.buildBrowserArchitectureSessions(report, [{ username: 'one' }], 'capture-v2-split-v1')['7'].answers['9']
+  assert.equal(answer.state_sha256, 'a'.repeat(64))
+  assert.equal(answer.target_event_id, 'event')
+  assert.equal(answer.response_version, 3)
+  const requests = report.probes[0].protocol_witness.requests
+  requests[1].receipt.active_response_event_id = 'foreign'
+  assert.equal(Object.keys(probe.buildBrowserArchitectureSessions(report, [{ username: 'one' }], 'capture-v2-split-v1')['7'].answers).length, 0)
+  requests[1].receipt.active_response_event_id = 'event'
+  requests[2].receipt.status = 'draft'
+  assert.equal(Object.keys(probe.buildBrowserArchitectureSessions(report, [{ username: 'one' }], 'capture-v2-split-v1')['7'].answers).length, 0)
 })
 
 test('navigation waits for href restoration when a busy anchor has lost its link role', async () => {
@@ -760,17 +781,60 @@ test('extension zoom requires getZoom confirmation as well as independent window
   assert.deepEqual(factors, [1, 2])
 })
 
-test('natural visual precheck captures one real 200 percent screenshot and restores zoom', async () => {
+test('natural visual precheck captures real 200 percent artifact and viewport screenshots then restores zoom', async () => {
   let factor = 1
   const shots = []
   const page = { setViewportSize: async () => {}, evaluate: async () => ({ device_pixel_ratio: factor,
     inner_width: 1440 / factor, inner_height: 900 / factor, viewport_width: 1440 / factor,
     document_width: 1440 / factor, overflow: false }), screenshot: async options => shots.push(options.path) }
-  const visual = await captureVisualLayouts(page, 'unused', async zoom => { factor = zoom; return factor }, { onlyZoom: true })
+  const visual = await captureVisualLayouts(page, 'unused', async zoom => { factor = zoom; return factor }, { onlyZoom: true, captureViewport: async (_page, path) => shots.push(path) })
   assert.equal(visual.passed, true)
-  assert.equal(shots.length, 1)
+  assert.equal(shots.length, 2)
   assert.equal(visual.layouts[0].label, 'zoom200')
   assert.equal(factor, 1)
+})
+
+test('real zoom keeps uncropped viewport evidence through the bottom and labels fullPage as artifact only', async () => {
+  let factor = 1
+  let scrollY = 0
+  const screenshots = []
+  const page = {
+    setViewportSize: async () => {},
+    evaluate: async (_read, position) => {
+      if (typeof position === 'number') scrollY = Math.min(position, 800 - 900 / factor)
+      return { device_pixel_ratio: factor, inner_width: 1440 / factor, inner_height: 900 / factor,
+        viewport_width: 1440 / factor, viewport_height: 900 / factor,
+        document_width: 1440 / factor, document_height: 800, scroll_y: scrollY, overflow: false }
+    },
+    screenshot: async options => { screenshots.push(options) },
+  }
+  const visual = await captureVisualLayouts(page, 'unused', async zoom => { factor = zoom; return factor }, { onlyZoom: true, captureViewport: async (_page, path) => screenshots.push({ path, fullPage: false, scale: 'device' }) })
+  assert.equal(visual.passed, true)
+  assert.equal(visual.passed_scope, 'dom_layout_and_zoom_only')
+  assert.equal(visual.layouts[0].visual_evidence, 'artifact_only_zoom_fullPage_may_crop')
+  assert.equal(visual.full_page_zoom_visual_verified, false)
+  assert.equal(visual.viewport_captures[0].scroll_y, 0)
+  assert.equal(visual.viewport_captures.at(-1).scroll_y, 350)
+  assert(visual.viewport_captures.every(row => row.full_page === false && row.device_pixel_ratio === 2))
+  assert.equal(screenshots.filter(row => row.fullPage === false).length, 2)
+  assert(screenshots.filter(row => row.fullPage === false).every(row => row.scale === 'device'))
+  assert.equal(factor, 1)
+})
+
+test('native viewport capture avoids zoomed document clips and detaches its CDP session', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'kt-native-viewport-'))
+  const calls = []
+  const page = { context: () => ({ newCDPSession: async () => ({
+    send: async (method, parameters) => { calls.push({ method, parameters }); return { data: 'cG5n' } },
+    detach: async () => calls.push({ detached: true }),
+  }) }) }
+  try {
+    await probe.captureBrowserViewport(page, join(directory, 'viewport.png'))
+    assert.deepEqual(calls, [{ method: 'Page.captureScreenshot', parameters: {
+      format: 'png', fromSurface: true, captureBeyondViewport: false,
+    } }, { detached: true }])
+    assert.equal(readFileSync(join(directory, 'viewport.png'), 'utf8'), 'png')
+  } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 
 test('visual extension capture confirms real zoom then restores the original browser factor', async () => {
@@ -784,12 +848,12 @@ test('visual extension capture confirms real zoom then restores the original bro
       document_width: viewport.width / factor, overflow: false }),
     screenshot: async options => { screenshots.push(options.path) },
   }
-  const visual = await captureVisualLayouts(page, 'unused', async zoom => { factor = zoom; return factor })
+  const visual = await captureVisualLayouts(page, 'unused', async zoom => { factor = zoom; return factor }, { captureViewport: async (_page, path) => screenshots.push(path) })
   assert.equal(visual.passed, true)
   assert.equal(visual.zoom.status, 'verified')
   assert.equal(visual.zoom.reset_status, 'verified')
   assert.equal(visual.layouts.at(-1).viewport_width, 720)
-  assert.equal(screenshots.length, 3)
+  assert.equal(screenshots.length, 4)
   assert.equal(factor, 1)
   assert.deepEqual(viewport, { width: 1440, height: 900 })
 })
@@ -827,4 +891,44 @@ test('natural login waits for the authorized home course before the fixture navi
     await page.setContent('<a href="/student/courses/42/">Course</a>')
     await wait; assert.equal(completed, true)
   } finally { await browser.close() }
+})
+
+
+test('whole-paper probe always confirms once and accepts a real 202 session receipt', async () => {
+  const calls = []
+  const receipt = { success: true, submission_id: 'receipt', status: 'queued',
+    status_url: '/api/v1/student/sessions/7/submission/', next_url: '/student/sessions/7/complete/' }
+  const page = { url: () => 'http://host/student/sessions/7/questions/9/',
+    locator: selector => ({ isVisible: async () => true, click: async () => calls.push(selector) }),
+    waitForResponse: async predicate => {
+      assert.equal(predicate({ request: () => ({ method: () => 'POST' }), url: () => 'http://host/api/v1/student/attempts/9/submit/' }), false)
+      assert.equal(predicate({ request: () => ({ method: () => 'POST' }), url: () => 'http://host/api/v1/student/sessions/7/finish/' }), true)
+      return { status: () => 202, json: async () => ({ data: receipt }) }
+    } }
+  assert.deepEqual(await probe.submitWholePaperReceipt(page), receipt)
+  assert.deepEqual(calls, ['[data-finish-request]', '[data-paper-submit-confirm]'])
+})
+
+
+test('whole-paper architecture requires frozen accepted pointers, saved ACKs and terminal completion', () => {
+  const token = '00000000-0000-4000-8000-000000000001'
+  const head = '00000000-0000-4000-8000-000000000002'
+  const material = probe.wholePaperRequestMaterial('/api/v1/student/sessions/7/finish/', {
+    submission_token: token, expected_versions: [{ attempt_id: 9, response_version: 3, target_event_id: head }], private_answer: 'NEVER RETAIN' })
+  assert.ok(!JSON.stringify(material).includes('NEVER RETAIN'))
+  const row = { completed: true, session_completed: true, operation_protocol: 'whole-paper-v1',
+    paper_submission_intent: material, session_submission: { submission_id: 'receipt', status: 'queued' },
+    response_states: [{ client_instance_id: 'client', client_sequence_no: 1, question_type: 'short_answer', state_sha256: 'a'.repeat(64) }],
+    protocol_witness: { session_ids: [7], requests: [
+      { client_instance_id: 'client', acknowledgements: [{ client_sequence_no: 1, event_id: head }] },
+      { path: '/api/v1/student/attempts/9/draft/', status: 200, receipt: { active_response_event_id: head, response_version: 3 } },
+    ] } }
+  const answers = () => probe.buildBrowserArchitectureSessions({ probes: [row] }, [{ username: 'one' }])['7'].answers
+  assert.equal(answers()['9'].target_event_id, head)
+  assert.equal(answers()['9'].submission_token, token)
+  row.session_completed = false
+  assert.deepEqual(answers(), {})
+  row.session_completed = true
+  row.paper_submission_intent.expected_versions[0].response_version = 4
+  assert.deepEqual(answers(), {})
 })

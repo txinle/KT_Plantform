@@ -24,7 +24,8 @@ class SchoolRuntimeTests(SimpleTestCase):
                     'analytics-worker': ['python', 'manage.py', 'run_research_materializations'],
                     'student-comparison-worker': ['python', 'manage.py', 'run_student_comparisons'],
                     'publication-worker': ['python', 'manage.py', 'run_publication_jobs'],
-                    'export-worker': ['docker/export-worker.sh']}
+                    'export-worker': ['docker/export-worker.sh'],
+                    'session-submission-worker': ['python', 'manage.py', 'run_session_submissions']}
         for role, command in expected.items():
             section = re.split(r'\n  [a-z][a-z-]*:', config.split('\n  ' + role + ':\n', 1)[1], maxsplit=1)[0]
             row = re.search(r'^    command: (\[.*\])$', section, re.M)
@@ -66,7 +67,7 @@ class SchoolRuntimeTests(SimpleTestCase):
         self.assertTrue((Path(settings.REPOSITORY_DIR) / "deploy" / "nginx/kt-school.conf").exists(), "School routing config missing")
         config = (Path(settings.REPOSITORY_DIR) / "deploy" / "nginx/kt-school.conf").read_text()
         # Evaluate the actual map's regex rows, then verify each business path in Django.
-        rows = re.findall(r'~(\^[^\s]+)\s+(auth|assessment|capture|student_read|teacher_read);', config)
+        rows = re.findall(r'~(\^[^\s]+)\s+(auth|assessment|startup|capture|student_read|teacher_read);', config)
         self.assertTrue(rows)
         cases = {
             "/api/v1/student/courses/1/learning/": "student_read",
@@ -75,6 +76,8 @@ class SchoolRuntimeTests(SimpleTestCase):
             "/api/v1/teacher/courses/1/data/overview/": "teacher_read",
             "/api/v1/teacher/courses/1/data/advanced/": "teacher_read",
             "/api/v1/student/tasks/1/start/": "core",
+            "/api/v1/student/tasks/1/resume/": "core",
+            "/api/v1/student/tasks/1/admission/status/": "core",
             "/api/v1/student/sessions/1/questions/2/": "core",
             "/api/v1/student/attempts/1/draft/": "core",
             "/api/v1/teacher/courses/1/data/export-jobs/": "core",
@@ -89,7 +92,9 @@ class SchoolRuntimeTests(SimpleTestCase):
                         target = pool
                         break
                 post_expected='teacher_read' if path=='/api/v1/teacher/courses/1/data/export-jobs/' else 'core'
-                if path in ('/api/v1/student/tasks/1/start/', '/api/v1/student/sessions/1/questions/2/', '/api/v1/student/attempts/1/draft/'):
+                if path in ('/api/v1/student/tasks/1/start/', '/api/v1/student/tasks/1/resume/', '/api/v1/student/tasks/1/admission/status/'):
+                    post_expected = 'startup'
+                elif path in ('/api/v1/student/sessions/1/questions/2/', '/api/v1/student/attempts/1/draft/'):
                     post_expected = 'assessment'
                 self.assertEqual(target, expected if method != "POST" else post_expected, (method, path))
         self.assertIn('default "http";', config)
@@ -98,7 +103,7 @@ class SchoolRuntimeTests(SimpleTestCase):
 
     def test_exact_teacher_status_and_export_create_use_teacher_pool(self):
         config=(Path(settings.REPOSITORY_DIR) / "deploy" / 'nginx/kt-school.conf').read_text()
-        rows=re.findall(r'~(\^[^\s]+)\s+(auth|assessment|capture|student_read|teacher_read);',config)
+        rows=re.findall(r'~(\^[^\s]+)\s+(auth|assessment|startup|capture|student_read|teacher_read);',config)
         job='/api/v1/teacher/courses/2/data/export-jobs/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/'
         for method,path,expected in (
             ('GET','/api/v1/teacher/courses/2/data/advanced/status/','teacher_read'),
@@ -106,7 +111,9 @@ class SchoolRuntimeTests(SimpleTestCase):
             ('POST','/api/v1/teacher/courses/2/data/export-jobs/','teacher_read'),
             ('POST',job,'core'),('DELETE',job,'core'),
             ('POST','/api/v1/teacher/courses/2/classes/','core'),
-            ('POST','/api/v1/student/tasks/2/start/','assessment'),
+            ('POST','/api/v1/student/tasks/2/start/','startup'),
+            ('POST','/api/v1/student/tasks/2/resume/','startup'),
+            ('POST','/api/v1/student/tasks/2/admission/status/','startup'),
             ('POST','/api/v1/student/sessions/2/questions/3/','assessment'),
             ('POST','/api/v1/teacher/courses/2/data/advanced/status/','core')):
             resolve(path)
@@ -138,21 +145,48 @@ class SchoolRuntimeTests(SimpleTestCase):
         loader.add_constructor("!override", lambda loader, node: loader.construct_sequence(node))
         loader.add_constructor('!reset', lambda loader, node: loader.construct_sequence(node))
         services = yaml.load((Path(settings.REPOSITORY_DIR) / "deploy" / "docker-compose.school.yml").read_text(), Loader=loader)["services"]
+        worker_counts = []
         for name, workers, alias in (("web", 1, "kt_core"), ("auth", 4, "kt_auth"),
-                                     ("assessment", 8, "kt_assessment"), ("capture", 4, "kt_capture"),
+                                     ("assessment", 6, "kt_assessment"), ("startup", 2, "kt_startup"), ("capture", 4, "kt_capture"),
                                      ("student-read", 2, "kt_student"), ("teacher-read", 1, "kt_teacher")):
-            self.assertEqual(str(services[name]["environment"]["GUNICORN_WORKERS"]), str(workers))
+            configured = str(services[name]["environment"]["GUNICORN_WORKERS"])
+            default = re.fullmatch(r'\$\{[^:}]+:-(\d+)\}', configured)
+            count = int(default[1]) if default else int(configured)
+            self.assertEqual(count, workers)
+            worker_counts.append(count)
             self.assertEqual(services[name]["environment"]["POSTGRES_POOL_ALIAS"], alias)
             self.assertIn("mem_limit", services[name])
             self.assertNotIn("ports", services[name])
+        self.assertEqual(sum(worker_counts), 20)
         self.assertEqual(services["nginx"]["ports"], ["127.0.0.1:${SCHOOL_HTTP_PORT:-8080}:80"])
         self.assertEqual(services["scheduler"]["environment"]["POSTGRES_HOST"], "db")
         self.assertEqual(services["analytics-worker"]["deploy"]["replicas"], 1)
         self.assertEqual(services["student-comparison-worker"]["deploy"]["replicas"], 1)
         template = (Path(settings.REPOSITORY_DIR) / "deploy" / "docker/pgbouncer-school.ini.template").read_text()
-        for alias, size, reserve in (("kt_core", 1, 0), ("kt_auth", 4, 0), ("kt_assessment", 8, 2),
-                                     ("kt_capture", 4, 1), ("kt_student", 2, 0), ("kt_teacher", 1, 0), ("kt_background", 3, 0)):
-            self.assertRegex(template, rf'{alias} = .*dbname=\$\{{POSTGRES_DB\}}.*pool_size={size} min_pool_size={size} reserve_pool_size={reserve}')
+        import configparser
+        pools = configparser.ConfigParser(interpolation=None)
+        pools.read_string(template)
+        expected = {'kt_core': (1, 0), 'kt_auth': (4, 0), 'kt_assessment': (6, 2), 'kt_startup': (2, 0),
+                    'kt_capture': (4, 1), 'kt_student': (2, 0), 'kt_teacher': (1, 0),
+                    'kt_background': (2, 0), 'kt_submission': (1, 0)}
+        self.assertEqual(set(pools['databases']), set(expected))
+        defaults = {'${ASSESSMENT_AUTH_WORKERS}': '4', '${ASSESSMENT_CAPTURE_WORKERS}': '4',
+                    '${ASSESSMENT_STUDENT_READ_WORKERS}': '2',
+                    '${ASSESSMENT_REMAINING_DB_CONNECTIONS}': '6', '${ASSESSMENT_STARTUP_DB_CONNECTIONS}': '2'}
+        sizes, reserves = [], []
+        for alias, (size, reserve) in expected.items():
+            row = dict(part.split('=', 1) for part in pools['databases'][alias].split())
+            actual_size = int(defaults.get(row['pool_size'], row['pool_size']))
+            actual_reserve = int(row['reserve_pool_size'])
+            self.assertEqual(row['dbname'], '${POSTGRES_DB}')
+            self.assertEqual(row['user'], '${POSTGRES_USER}')
+            self.assertEqual(actual_size, size)
+            self.assertEqual(int(defaults.get(row['min_pool_size'], row['min_pool_size'])), size)
+            self.assertEqual(actual_reserve, reserve)
+            sizes.append(actual_size)
+            reserves.append(actual_reserve)
+        self.assertEqual(sum(sizes), 23)
+        self.assertEqual(sum(reserves), 3)
         self.assertNotIn("kt_password", template)
 
 

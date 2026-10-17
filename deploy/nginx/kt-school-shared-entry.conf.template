@@ -1,0 +1,161 @@
+# Isolated shared-entry-v1 only. Render the three ASSESSMENT_ENTRY_*_LIMIT variables.
+include /etc/nginx/frontend-pages.conf;
+# Only the outer TLS Nginx can connect to the loopback published port.
+map $http_x_forwarded_proto $public_scheme {
+    default "http";
+    https "https";
+}
+map "$request_method:$uri" $school_pool {
+    default core;
+    ~^(GET|HEAD):/api/v1/auth/(bootstrap|csrf|session)/$ entry;
+    ~^POST:/api/v1/auth/(login|logout|research-consent|password/change|password/reminder-shown)/$ entry;
+    ~^POST:/api/v1/student/tasks/[0-9]+/(start|resume|admission/status)/$ entry;
+    ~^(GET|HEAD):/api/v1/student/tasks/[0-9]+/recovery/$ assessment;
+    ~^(GET|HEAD):/api/v1/student/attempts/[0-9]+/recovery/$ assessment;
+    ~^(GET|HEAD):/api/v1/student/sessions/[0-9]+/questions/[0-9]+/recovery/$ assessment;
+    ~^POST:/api/v1/student/sessions/[0-9]+/questions/[0-9]+/$ assessment;
+    ~^POST:/api/v1/student/attempts/[0-9]+/(draft|submit|skip)/$ assessment;
+    ~^POST:/api/v1/student/sessions/[0-9]+/finish/$ assessment;
+    ~^POST:/api/v1/student/sessions/[0-9]+/submission/$ assessment;
+    ~^(GET|HEAD):/api/v1/student/sessions/[0-9]+/submission/$ entry;
+    ~^POST:/api/v1/assessment/process/attempts/[0-9]+/(writer-lease/(acquire|renew|release)|confidence/(prompt-shown|commit|skip))/$ assessment;
+    ~^POST:/api/v1/assessment/process/capture-v2/attempts/[0-9]+/(tools|resolve)/$ assessment;
+    ~^POST:/api/v1/assessment/process/((events|capture-v2)/batch|capture-checkpoints|time-sync/(create|finalize))/$ capture;
+    ~^(GET|HEAD):/api/v1/student/courses/([0-9]+/tasks/)?$ entry;
+    ~^(GET|HEAD):/api/v1/student/sessions/[0-9]+/summary/$ entry;
+    ~^(GET|HEAD):/student/(courses/[0-9]+/|sessions/[0-9]+/complete/)?$ entry;
+    ~^(GET|HEAD):/(api/v1/)?student/courses/[0-9]+/learning/(experiments/[0-9]+/(questions/[0-9]+/)?)?$ entry;
+    ~^(GET|HEAD):/api/v1/student/tasks/[0-9]+/results/$ entry;
+    ~^(GET|HEAD):/teacher/courses/[0-9]+/data/(teaching/|exports?/|quality/|exports/history/|advanced/|tables/)?$ teacher_read;
+    ~^(GET|HEAD):/api/v1/teacher/courses/[0-9]+/data/(scope/|overview/|teaching/|exports/|quality/|exports/history/|advanced/|advanced/status/|advanced/students/)$ teacher_read;
+    ~^(GET|HEAD):/api/v1/teacher/courses/[0-9]+/data/export-jobs/[0-9a-f-]+/$ teacher_read;
+    ~^POST:/api/v1/teacher/courses/[0-9]+/data/export-jobs/$ teacher_read;
+    ~^(GET|HEAD):/api/v1/teacher/courses/[0-9]+/data/export-jobs/[0-9a-f-]+/download/$ teacher_read;
+}
+map "$request_method:$uri" $prepared_start_key {
+    default "";
+    ~^POST:/api/v1/student/tasks/[0-9]+/start/$ "global-start";
+}
+limit_req_zone $prepared_start_key zone=prepared_start:1m rate=64r/s;
+map "$request_method:$uri" $entry_login_key {
+    default "";
+    ~^POST:/api/v1/auth/login/$ "login";
+}
+map "$request_method:$uri" $entry_startup_key {
+    default "";
+    ~^POST:/api/v1/student/tasks/[0-9]+/(start|resume|admission/status)/$ "startup";
+}
+map "$entry_login_key:$entry_startup_key" $entry_heavy_key {
+    default "";
+    "login:" "entry-heavy";
+    ":startup" "entry-heavy";
+}
+map $entry_login_key $entry_busy_code {
+    default START_BUSY;
+    login LOGIN_BUSY;
+}
+map $entry_login_key $entry_busy_message {
+    default "启动入口繁忙，请稍后重试。";
+    login "登录入口繁忙，正在等待可用处理能力。";
+}
+limit_conn_zone $entry_login_key zone=entry_login:1m;
+limit_conn_zone $entry_startup_key zone=entry_startup:1m;
+limit_conn_zone $entry_heavy_key zone=entry_heavy:1m;
+upstream entry { server entry:8000; }
+upstream core { server web:8000; }
+upstream assessment { server assessment:8000; }
+upstream capture { server capture:8000; }
+upstream teacher_read { server teacher-read:8000; }
+map $http_x_request_id $capture_request_id {
+    default $request_id;
+    "~^[a-f0-9]{32}$" $http_x_request_id;
+}
+map "$request_method:$uri" $capture_operation {
+    default other;
+    ~^(GET|HEAD):/api/v1/auth/(bootstrap|csrf|session)/$ auth_context;
+    ~^POST:/api/v1/auth/login/$ login;
+    ~^POST:/api/v1/auth/logout/$ logout;
+    ~^POST:/api/v1/student/tasks/[0-9]+/start/$ start;
+    ~^POST:/api/v1/student/tasks/[0-9]+/resume/$ resume;
+    ~^POST:/api/v1/student/tasks/[0-9]+/admission/status/$ admission_status;
+    ~^POST:/api/v1/student/sessions/[0-9]+/questions/[0-9]+/$ enter_item;
+    ~^POST:/api/v1/student/attempts/[0-9]+/draft/$ save;
+    ~^POST:/api/v1/assessment/process/(events|capture-v2)/batch/$ events;
+    ~^POST:/api/v1/student/attempts/[0-9]+/submit/$ submit;
+    ~^POST:/api/v1/student/sessions/[0-9]+/finish/$ finish;
+    ~^POST:/api/v1/student/sessions/[0-9]+/submission/$ finish;
+    ~^(GET|HEAD):/api/v1/student/sessions/[0-9]+/submission/$ submission_status;
+    ~^(GET|HEAD):/api/v1/student/(tasks|attempts)/[0-9]+/recovery/$ recovery;
+    ~^(GET|HEAD):/api/v1/student/sessions/[0-9]+/questions/[0-9]+/recovery/$ recovery;
+    ~^POST:/api/v1/assessment/process/attempts/[0-9]+/writer-lease/(acquire|renew|release)/$ lease;
+    ~^POST:/api/v1/assessment/process/capture-checkpoints/$ checkpoint;
+    ~^POST:/api/v1/assessment/process/time-sync/(create|finalize)/$ time_sync;
+}
+# No user identity, query string, request body or token in pressure metrics.
+log_format school_pressure escape=json '{"operation":"$capture_operation",'
+    '"request_id":"$capture_request_id","at":$msec,'
+    '"pool":"$school_pool","ingress_conn":"$limit_conn_status","ingress_rate":"$limit_req_status","status":$status,"request_time":$request_time,'
+    '"upstream_time":"$upstream_response_time","connect_time":"$upstream_connect_time",'
+    '"header_time":"$upstream_header_time","application_time":"$upstream_http_x_capture_seconds"}';
+server {
+    listen 80;
+    set $capture_ingress_at $msec;
+    access_log /dev/stdout school_pressure;
+    server_name _;
+    client_max_body_size 20M;
+    limit_req zone=prepared_start burst=8 nodelay;
+    limit_req_status 429;
+    limit_conn_status 429;
+    limit_conn entry_login ${ASSESSMENT_ENTRY_LOGIN_LIMIT};
+    limit_conn entry_startup ${ASSESSMENT_ENTRY_STARTUP_LIMIT};
+    limit_conn entry_heavy ${ASSESSMENT_ENTRY_HEAVY_LIMIT};
+    error_page 429 = @prepared_start_busy;
+    location @prepared_start_busy {
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
+        add_header Retry-After 1 always;
+        add_header X-Request-ID $capture_request_id always;
+        return 429 '{"error":{"code":"$entry_busy_code","message":"$entry_busy_message","fields":{},"request_id":"$capture_request_id"}}';
+    }
+    if ($frontend_page) { rewrite ^ /__frontend/index.html last; }
+    location = /assessment/process/capture-v2/offline-worker.js {
+        alias /static/spa-assets/capture-v2-offline-worker.js;
+        add_header Service-Worker-Allowed "/student/sessions/";
+        add_header Cache-Control "no-cache";
+    }
+    location = /__frontend/index.html {
+        internal;
+        alias /static/spa-assets/index.html;
+        add_header Cache-Control "no-store" always;
+    }
+    location = /__frontend/capture-v2.html {
+        internal;
+        alias /static/spa-assets/index.html;
+        add_header X-Capture-Contract "capture-v2";
+        add_header Cache-Control "no-store" always;
+    }
+    location ~ "^/static/spa-assets/(capture-shell-[a-f0-9]{20}\.html)$" {
+        alias /static/spa-assets/assets/shells/$1;
+        add_header Cache-Control "public, max-age=604800, immutable";
+    }
+    location /static/spa-assets/ { alias /static/spa-assets/; expires 7d; }
+    location /static/js/ { alias /static/js/; expires 7d; }
+    location /static/ { alias /backend-static/; expires 7d; }
+    location ^~ /media/exports/ { return 404; }
+    location ^~ /media/research-assets/ { return 404; }
+    location ^~ /assessment-content/ {
+        alias /media/assessment-papers/;
+        add_header Cache-Control "private, max-age=604800, immutable";
+        add_header X-Content-Type-Options "nosniff";
+    }
+    location /media/ { alias /media/; expires 1d; }
+    location / {
+        proxy_pass http://$school_pool;
+        proxy_set_header Host $host;
+        proxy_set_header X-Request-ID $capture_request_id;
+        proxy_set_header X-Request-Started-At $capture_ingress_at;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $public_scheme;
+    }
+}

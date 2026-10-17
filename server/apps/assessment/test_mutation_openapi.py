@@ -47,6 +47,12 @@ def json_schema(schema):
 
 
 class MutationOpenApiTests(SimpleTestCase):
+    def test_runtime_actions_do_not_advertise_retired_writes(self):
+        from .api.serializers import StudentRuntimeActionsSerializer
+        fields = StudentRuntimeActionsSerializer().fields
+        self.assertNotIn('submit_url', fields)
+        self.assertNotIn('skip_url', fields)
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -80,10 +86,9 @@ class MutationOpenApiTests(SimpleTestCase):
                         else:
                             self.assertEqual(schema['required'], ['error'])
 
-    def test_draft_and_submit_document_the_actual_bundle_and_receipt_fields(self):
+    def test_draft_documents_the_actual_bundle_and_receipt_fields(self):
         for action, bundle_name, receipt_fields in [
             ('draft', 'save_and_leave', {'navigation_token', 'writer_lease_released', 'to_assignment_id'}),
-            ('submit', 'atomic_submission', {'final_response_event_id', 'response_version'}),
         ]:
             operation = self.operation('/api/v1/student/', 'attempts/{attempt_id}/' + action + '/')
             request = operation['requestBody']['content']['application/json']['schema']
@@ -112,17 +117,16 @@ class MutationOpenApiTests(SimpleTestCase):
         self.assertIn('413', operation['responses'])
         self.assertIn('415', operation['responses'])
 
-    def test_submit_confidence_documents_the_response_event_binding(self):
-        operation = self.operation('/api/v1/student/', 'attempts/{attempt_id}/submit/')
-        body = operation['requestBody']['content']['application/json']['schema']
-        atomic = next(row for row in body['oneOf'] if 'atomic_submission' in row['properties'])
-        for status in ('skipped', 'committed'):
-            confidence = {'status': status, 'answer_event_id': str(uuid.uuid4())}
-            if status == 'committed':
-                confidence['probability'] = 80
-            Draft4Validator(json_schema(atomic['properties']['confidence'])).validate(confidence)
-        self.assertFalse(Draft4Validator(json_schema(atomic['properties']['confidence'])).is_valid(
-            {'status': 'committed', 'probability': 0.8, 'answer_event_id': str(uuid.uuid4())}))
+    def test_retired_submission_and_skip_have_no_success_or_request_body(self):
+        for action in ('submit', 'skip'):
+            operation = self.operation('/api/v1/student/', 'attempts/{attempt_id}/' + action + '/')
+            self.assertNotIn('requestBody', operation)
+            self.assertFalse(any(code.startswith('2') for code in operation['responses']))
+            self.assertIn('409', operation['responses'])
+        finish = self.operation('/api/v1/student/', 'sessions/{session_id}/finish/')
+        self.assertTrue(finish['requestBody']['required'])
+        self.assertNotIn('200', finish['responses'])
+        self.assertIn('202', finish['responses'])
 
     def test_json_process_bodies_are_required_and_obsolete_confidence_has_no_success(self):
         for suffix in PROCESS_PATHS:
@@ -190,11 +194,11 @@ class MutationAdapterHttpTests(TestCase):
             with self.subTest(name=name):
                 self.assertEqual(self.post(name, {}, args, client).status_code, 403)
                 response = self.post(name, {}, args, client, HTTP_X_CSRFTOKEN=token)
-                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.status_code, 409 if name == 'assessment_api:submit' else 400)
                 self.assertEqual(set(response.json()), {'error'})
 
     def test_non_atomic_flags_and_no_csrf_exemption_survive_adapter(self):
-        for name in ('save_draft', 'submit'):
+        for name in ('save_draft',):
             callback = resolve(reverse('assessment_api:' + name, args=[1])).func
             self.assertEqual(callback._non_atomic_requests, {'default'})
             self.assertFalse(getattr(callback, 'csrf_exempt', False))
@@ -209,18 +213,16 @@ class MutationAdapterHttpTests(TestCase):
                 with self.subTest(name=name, method=method):
                     self.assertEqual(getattr(self.client, method)(reverse(name, args=args)).status_code, 405)
 
-    def test_skip_and_finish_keep_original_owned_domain_transitions(self):
+    def test_skip_and_legacy_finish_are_retired_without_domain_transitions(self):
         self.client.force_login(self.student)
         attempt = self.attempts[Question.Type.SINGLE]
-        skipped = self.post('assessment_api:skip', {}, [attempt.pk])
-        self.assertEqual(skipped.status_code, 200, skipped.content)
-        self.assertEqual(set(skipped.json()), {'data', 'meta'})
-        self.assertEqual(set(skipped.json()['data']), {'success', 'next_url'})
-        completed = self.post('assessment_api:finish', {}, [self.session.pk])
-        self.assertEqual(completed.status_code, 200, completed.content)
-        self.assertEqual(set(completed.json()), {'data', 'meta'})
+        for name, identity in [('skip', attempt.pk), ('finish', self.session.pk)]:
+            response = self.post('assessment_api:' + name, {}, [identity])
+            self.assertEqual(response.status_code, 409, response.content)
+            self.assertEqual(set(response.json()), {'error'})
+            self.assertEqual(response.json()['error']['code'], 'WHOLE_SESSION_SUBMISSION_REQUIRED')
         self.session.refresh_from_db()
-        self.assertEqual(self.session.status, 'completed')
+        self.assertEqual(self.session.status, 'in_progress')
 
     def test_process_content_type_errors_match_existing_endpoint_statuses(self):
         self.client.force_login(self.student)
@@ -264,14 +266,11 @@ class MutationAdapterHttpTests(TestCase):
         self.assertTrue(first.json()['data']['writer_lease_released'])
         self.validate_example('draft', navigation, first)
 
-    def test_atomic_submission_preserves_real_receipt_and_replay(self):
+    def test_old_atomic_submission_is_rejected_without_ingesting_material(self):
         self.client.force_login(self.student)
         attempt, submission = atomic_fixtures.AtomicSubmissionTests.bundle(self)
-        self.validate_example('submit', submission)
-        first = self.post('assessment_api:submit', submission, [attempt.pk])
-        self.assertEqual(first.status_code, 200, first.content)
-        replay = self.post('assessment_api:submit', submission, [attempt.pk])
-        self.assertEqual(replay.json()['data'], first.json()['data'])
-        self.assertTrue(first.json()['data']['committed'])
-        self.assertNotIn('data', first.json()['data'])
-        self.validate_example('submit', submission, first)
+        before = AssessmentEvent.objects.count()
+        response = self.post('assessment_api:submit', submission, [attempt.pk])
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.json()['error']['code'], 'WHOLE_SESSION_SUBMISSION_REQUIRED')
+        self.assertEqual(AssessmentEvent.objects.count(), before)

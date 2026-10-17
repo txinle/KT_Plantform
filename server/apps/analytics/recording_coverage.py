@@ -9,6 +9,7 @@ from collections import defaultdict
 from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 
 from apps.assessment.models import (
@@ -28,6 +29,7 @@ from .models import (
     RecordingCoverageAttempt,
     RecordingCoverageRun,
     RecordingCoverageSession,
+    _recording_coverage_result_append_scope,
 )
 
 
@@ -856,21 +858,14 @@ def _attempt_result(*, run, attempt, events, session_reasons, gap_count, syncs):
     )
     effective_grade_exists = bool(
         submission
-        and GradeRecord.objects.filter(
-            submission=submission,
-            status=GradeRecord.Status.COMPLETED,
-            validity_status=GradeRecord.ValidityStatus.EFFECTIVE,
-        ).exists()
+        and attempt._has_effective_grade
     )
     grading_pending = bool(
         submission
         and not effective_grade_exists
         and (
             submission.grading_status == SubmissionEvent.GradingStatus.PENDING
-            or GradeRecord.objects.filter(
-                submission=submission,
-                status=GradeRecord.Status.PENDING,
-            ).exists()
+            or attempt._has_pending_grade
         )
     )
     if authoritative_reasons:
@@ -1092,9 +1087,9 @@ def _attempt_result(*, run, attempt, events, session_reasons, gap_count, syncs):
             status=overall,
         ),
     }
-    return RecordingCoverageAttempt.objects.create(
-        run=run,
-        attempt=attempt,
+    return RecordingCoverageAttempt(
+        run_id=run.pk,
+        attempt_id=attempt.pk,
         overall_status=overall,
         enter_status=enter_status,
         render_status=render_status,
@@ -1286,7 +1281,7 @@ def _materialize_session_result(
             status=("complete" if overall == "complete" else overall),
         ),
     }
-    RecordingCoverageSession.objects.create(
+    session_result = RecordingCoverageSession(
         run=run,
         session=session,
         overall_status=overall,
@@ -1315,7 +1310,7 @@ def _materialize_session_result(
         analysis_eligibility=session_eligibility,
     )
 
-    for attempt in attempts:
+    attempt_results = [
         _attempt_result(
             run=run,
             attempt=attempt,
@@ -1324,6 +1319,9 @@ def _materialize_session_result(
             gap_count=sequence_gap_count,
             syncs=syncs,
         )
+        for attempt in attempts
+    ]
+    return session_result, attempt_results
 
 
 @transaction.atomic
@@ -1348,7 +1346,6 @@ def generate_scope_coverage(
             session_id__in=session_ids,
             server_received_at__lte=source_cutoff_at,
         )
-        .select_related("attempt", "time_sync")
         .order_by("session_id", "server_ingest_sequence_no", "event_id")
     )
     checkpoints = list(
@@ -1374,6 +1371,21 @@ def generate_scope_coverage(
             "final_response_snapshot",
             "assignment__snapshot",
             "submission_event__final_response_snapshot",
+        )
+        .annotate(
+            _has_effective_grade=Exists(
+                GradeRecord.objects.filter(
+                    submission__attempt_id=OuterRef("pk"),
+                    status=GradeRecord.Status.COMPLETED,
+                    validity_status=GradeRecord.ValidityStatus.EFFECTIVE,
+                )
+            ),
+            _has_pending_grade=Exists(
+                GradeRecord.objects.filter(
+                    submission__attempt_id=OuterRef("pk"),
+                    status=GradeRecord.Status.PENDING,
+                )
+            ),
         )
         .order_by("session_id", "pk")
     )
@@ -1461,8 +1473,10 @@ def generate_scope_coverage(
     attempts_by_session = defaultdict(list)
     for attempt in attempts:
         attempts_by_session[attempt.session_id].append(attempt)
+    session_results = []
+    attempt_results = []
     for session in sessions:
-        _materialize_session_result(
+        session_result, session_attempt_results = _materialize_session_result(
             run=run,
             session=session,
             events=events_by_session[session.pk],
@@ -1470,6 +1484,11 @@ def generate_scope_coverage(
             syncs=syncs_by_session[session.pk],
             attempts=attempts_by_session[session.pk],
         )
+        session_results.append(session_result)
+        attempt_results.extend(session_attempt_results)
+    with _recording_coverage_result_append_scope(run):
+        RecordingCoverageSession.objects.bulk_create(session_results)
+        RecordingCoverageAttempt.objects.bulk_create(attempt_results)
     return run
 
 

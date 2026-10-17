@@ -33,14 +33,12 @@ class UnifiedMutationAuthorityTests(TestCase):
         CaptureV2Tests.setUp(self)
         self.client.force_login(self.student)
 
-    def test_finish_confirms_domain_result_without_html_redirect(self):
+    def test_legacy_finish_requires_whole_paper_without_html_redirect(self):
         response = self.client.post(reverse('assessment_api:finish', args=[self.session.pk]), '{}', content_type='application/json')
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()['data'], {
-            'success': True, 'next_url': reverse('assessment:complete', args=[self.session.pk]),
-        })
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['error']['code'], 'WHOLE_SESSION_SUBMISSION_REQUIRED')
         self.session.refresh_from_db()
-        self.assertIsNotNone(self.session.completed_at)
+        self.assertIsNone(self.session.completed_at)
 
     def test_missing_csrf_rejects_capture_before_writing(self):
         client = Client(enforce_csrf_checks=True)

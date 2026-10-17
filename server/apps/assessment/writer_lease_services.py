@@ -14,6 +14,28 @@ class WriterLeaseConflict(RuntimeError):
     """Another client currently owns the attempt writer lease."""
 
 
+def _bind_locked_attempt(attempt):
+    """Bind an internally locked row to the block that acquired its locks."""
+    connection = transaction.get_connection(attempt._state.db)
+    if not connection.in_atomic_block:
+        raise WriterLeaseConflict('writer lease context requires an active transaction')
+    attempt._writer_lock_context = (connection, connection.atomic_blocks[-1], attempt.pk,
+                                    attempt.session_id, attempt.session.student_id)
+    return attempt
+
+
+def _validated_locked_attempt(attempt, current):
+    context = getattr(current, '_writer_lock_context', None)
+    connection = transaction.get_connection(current._state.db)
+    session = current._state.fields_cache.get('session')
+    if (context is None or context[0] is not connection or context[1] not in connection.atomic_blocks
+            or current is not attempt or session is None
+            or (current.pk, current.session_id, session.student_id) != context[2:]
+            or session.pk != current.session_id):
+        raise WriterLeaseConflict('writer lease locked context does not match')
+    return current
+
+
 def assert_attempt_writer_lease(
     attempt,
     *,
@@ -46,11 +68,13 @@ class WriterLease:
     expires_at: object
 
 
-def acquire_attempt_writer_lease(attempt, *, client_instance_id, now=None, duration=LEASE_DURATION):
+def acquire_attempt_writer_lease(attempt, *, client_instance_id, now=None, duration=LEASE_DURATION,
+                                 _locked_attempt=None):
     now = now or timezone.now()
     client_instance_id = uuid.UUID(str(client_instance_id))
     with transaction.atomic():
-        current = Attempt.objects.select_for_update().get(pk=attempt.pk)
+        current = (_validated_locked_attempt(attempt, _locked_attempt) if _locked_attempt is not None
+                   else Attempt.objects.select_for_update().get(pk=attempt.pk))
         active = current.writer_lease_expires_at and current.writer_lease_expires_at > now
         if active:
             if current.writer_client_instance_id != client_instance_id:
@@ -93,9 +117,8 @@ def release_attempt_writer_lease(
     now = now or timezone.now()
     token = uuid.UUID(str(lease_token)); client = uuid.UUID(str(client_instance_id))
     with transaction.atomic():
-        current = _locked_attempt if _locked_attempt is not None else Attempt.objects.select_for_update().get(pk=attempt.pk)
-        if current.pk != attempt.pk:
-            raise WriterLeaseConflict('writer lease attempt does not match')
+        current = (_validated_locked_attempt(attempt, _locked_attempt) if _locked_attempt is not None
+                   else Attempt.objects.select_for_update().get(pk=attempt.pk))
         active = (
             current.writer_lease_expires_at
             and current.writer_lease_expires_at > now

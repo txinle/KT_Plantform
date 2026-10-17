@@ -16,7 +16,7 @@ function routePattern(path) {
   return new RegExp(`^/${parts.map((part) => part.startsWith('<int:') ? '[0-9]+' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('')}$`)
 }
 
-export function createFrontendGateway({ frontendDir = resolve(clientDir, 'dist/spa-assets'), backendOrigin = 'http://127.0.0.1:8001', routes = loadFrontendRoutes() } = {}) {
+export function createFrontendGateway({ frontendDir = resolve(clientDir, 'dist/spa-assets'), paperDir = resolve(clientDir, '../server/media/assessment-papers'), backendOrigin = 'http://127.0.0.1:8001', routes = loadFrontendRoutes() } = {}) {
   const pages = routes.map((route) => routePattern(route.path))
   return createServer(async (incoming, outgoing) => {
     const url = new URL(incoming.url, 'http://gateway.local')
@@ -25,7 +25,10 @@ export function createFrontendGateway({ frontendDir = resolve(clientDir, 'dist/s
     const page = pages.some((pattern) => pattern.test(pathname))
     let file
     const worker = pathname === '/assessment/process/capture-v2/offline-worker.js'
-    if (worker) file = resolve(frontendDir, 'capture-v2-offline-worker.js')
+    const paper = /^\/assessment-content\/[a-f0-9]{64}\.json$/.test(pathname)
+    if (paper) file = resolve(paperDir, pathname.slice('/assessment-content/'.length))
+    else if (pathname.startsWith('/assessment-content/')) { outgoing.writeHead(404).end(); return }
+    else if (worker) file = resolve(frontendDir, 'capture-v2-offline-worker.js')
     else if (page) file = resolve(frontendDir, 'index.html')
     else if (pathname.startsWith('/static/spa-assets/')) {
       file = resolve(frontendDir, pathname.slice('/static/spa-assets/'.length))
@@ -38,7 +41,7 @@ export function createFrontendGateway({ frontendDir = resolve(clientDir, 'dist/s
       try {
         const info = await stat(file)
         if (!info.isFile()) { outgoing.writeHead(404).end(); return }
-        outgoing.writeHead(200, { 'Content-Type': worker ? 'application/javascript' : contentTypes[extname(file)] || 'application/octet-stream', 'Content-Length': info.size, 'Cache-Control': 'no-cache', ...(worker ? { 'Service-Worker-Allowed': '/student/sessions/' } : {}) })
+        outgoing.writeHead(200, { 'Content-Type': worker ? 'application/javascript' : contentTypes[extname(file)] || 'application/octet-stream', 'Content-Length': info.size, 'Cache-Control': paper ? 'public, max-age=31536000, immutable' : 'no-cache', ...(worker ? { 'Service-Worker-Allowed': '/student/sessions/' } : {}) })
         if (incoming.method === 'HEAD') outgoing.end()
         else createReadStream(file).on('error', () => outgoing.destroy()).pipe(outgoing)
       } catch { outgoing.writeHead(404).end() }
@@ -58,7 +61,7 @@ export function createFrontendGateway({ frontendDir = resolve(clientDir, 'dist/s
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const port = Number(process.env.KT_GATEWAY_PORT || '8000')
-  const server = createFrontendGateway({ backendOrigin: process.env.KT_BACKEND_ORIGIN || 'http://127.0.0.1:8001' })
+  const server = createFrontendGateway({ backendOrigin: process.env.KT_BACKEND_ORIGIN || 'http://127.0.0.1:8001', ...(process.env.KT_PAPER_ROOT ? { paperDir: process.env.KT_PAPER_ROOT } : {}) })
   server.listen(port, process.env.KT_GATEWAY_HOST || '127.0.0.1', () => process.stdout.write(`Frontend gateway: http://127.0.0.1:${port}\n`))
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close(() => process.exit(0)))
 }

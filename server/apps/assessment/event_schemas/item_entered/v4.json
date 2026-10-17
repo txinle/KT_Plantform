@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "entry_reason": {"type": "string"},
+    "from_assignment_id": {"type": ["integer", "null"]},
+    "visit_id": {"type": "integer", "minimum": 1},
+    "client_instance_id": {"type": "string", "format": "uuid"}
+  },
+  "required": ["entry_reason", "from_assignment_id", "visit_id", "client_instance_id"],
+  "additionalProperties": false
+}

@@ -1,0 +1,131 @@
+# Apply LAST to a NEW isolated school-test project. Install ktconcurrency.slice
+# first and verify Docker uses the systemd cgroup driver. No external DB/volumes.
+# A: auth/startup/assessment/capture/student = 4/4/6/3/1
+# B: 4/6/4/3/1; C: 6/4/4/3/1. All retain 20 HTTP + 3 background DB slots.
+x-budget: &budget
+  cgroup_parent: ktconcurrency.slice
+  cpus: 0
+x-candidate-env: &candidate-env
+  ASSESSMENT_PREPARED_ADMISSION_MODE: postgres_transaction
+  SCHOOL_REDIS_SESSION_ENABLED: "0"
+  ASSESSMENT_AUTH_WORKERS: ${ASSESSMENT_AUTH_WORKERS:-4}
+  ASSESSMENT_CAPTURE_WORKERS: ${ASSESSMENT_CAPTURE_WORKERS:-3}
+  ASSESSMENT_STUDENT_READ_WORKERS: ${ASSESSMENT_STUDENT_READ_WORKERS:-1}
+  ASSESSMENT_STARTUP_WORKERS: ${ASSESSMENT_STARTUP_WORKERS:-4}
+  ASSESSMENT_REMAINING_WORKERS: ${ASSESSMENT_REMAINING_WORKERS:-6}
+  ASSESSMENT_STARTUP_DB_CONNECTIONS: ${ASSESSMENT_STARTUP_WORKERS:-4}
+  ASSESSMENT_REMAINING_DB_CONNECTIONS: ${ASSESSMENT_REMAINING_WORKERS:-6}
+  ASSESSMENT_ADMISSION_CAPACITY: ${ASSESSMENT_STARTUP_WORKERS:-4}
+  ASSESSMENT_ADMISSION_RATE_PER_SECOND: "64"
+
+services:
+  db:
+    <<: *budget
+    mem_limit: 3G
+    cpu_shares: 3072
+    command: !override ["postgres", "-c", "max_connections=64", "-c", "shared_buffers=768MB",
+      "-c", "effective_cache_size=2GB", "-c", "work_mem=4MB", "-c", "maintenance_work_mem=64MB",
+      "-c", "autovacuum_work_mem=64MB", "-c", "max_wal_size=2GB", "-c", "checkpoint_completion_target=0.9",
+      "-c", "fsync=on", "-c", "synchronous_commit=on", "-c", "full_page_writes=on"]
+  pgbouncer:
+    <<: *budget
+    mem_limit: 128M
+    cpu_shares: 1024
+    environment:
+      <<: *candidate-env
+  redis-admission:
+    <<: *budget
+    mem_limit: 256M
+    profiles: [student-concurrency-legacy-redis]
+  redis-session:
+    profiles: [student-concurrency-legacy-redis]
+  migrate:
+    <<: *budget
+    mem_limit: 512M
+    environment:
+      <<: *candidate-env
+  web:
+    <<: *budget
+    mem_limit: 256M
+    environment:
+      <<: *candidate-env
+      GUNICORN_WORKERS: 1
+    depends_on:
+      redis-admission: {condition: service_healthy, required: false}
+  auth:
+    <<: *budget
+    mem_limit: 1536M
+    cpu_shares: 2048
+    environment:
+      <<: *candidate-env
+      GUNICORN_WORKERS: ${ASSESSMENT_AUTH_WORKERS:-4}
+    depends_on:
+      redis-admission: {condition: service_healthy, required: false}
+  startup:
+    <<: *budget
+    mem_limit: 1536M
+    cpu_shares: 2048
+    environment:
+      <<: *candidate-env
+      GUNICORN_WORKERS: ${ASSESSMENT_STARTUP_WORKERS:-4}
+    depends_on:
+      redis-admission: {condition: service_healthy, required: false}
+  assessment:
+    <<: *budget
+    mem_limit: 2G
+    cpu_shares: 4096
+    environment:
+      <<: *candidate-env
+      GUNICORN_WORKERS: ${ASSESSMENT_REMAINING_WORKERS:-6}
+    depends_on:
+      redis-admission: {condition: service_healthy, required: false}
+  capture:
+    <<: *budget
+    mem_limit: 1280M
+    cpu_shares: 3072
+    environment:
+      <<: *candidate-env
+      GUNICORN_WORKERS: ${ASSESSMENT_CAPTURE_WORKERS:-3}
+    depends_on:
+      redis-admission: {condition: service_healthy, required: false}
+  student-read:
+    <<: *budget
+    mem_limit: 384M
+    cpu_shares: 512
+    environment:
+      <<: *candidate-env
+      GUNICORN_WORKERS: ${ASSESSMENT_STUDENT_READ_WORKERS:-1}
+    depends_on:
+      redis-admission: {condition: service_healthy, required: false}
+  teacher-read:
+    <<: *budget
+    mem_limit: 256M
+    cpu_shares: 128
+    environment:
+      <<: *candidate-env
+      GUNICORN_WORKERS: 1
+    depends_on:
+      redis-admission: {condition: service_healthy, required: false}
+  nginx:
+    <<: *budget
+    mem_limit: 128M
+    cpu_shares: 1024
+    ports: !override ["127.0.0.1:${STUDENT_CONCURRENCY_HTTP_PORT:-18082}:80"]
+  scheduler:
+    <<: *budget
+    mem_limit: 256M
+    environment:
+      <<: *candidate-env
+  session-submission-worker:
+    <<: *budget
+    mem_limit: 256M
+    environment:
+      <<: *candidate-env
+  analytics-worker:
+    profiles: [student-concurrency-nonurgent]
+  student-comparison-worker:
+    profiles: [student-concurrency-nonurgent]
+  publication-worker:
+    profiles: [student-concurrency-nonurgent]
+  export-worker:
+    profiles: [student-concurrency-nonurgent]

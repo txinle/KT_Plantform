@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.utils import timezone
 from apps.experiments.models import (
     ClassExperimentTask,
@@ -163,6 +163,8 @@ def _commit_attempt_submission(
     client_time=None,
     terminal_at=None,
     close_reason=None,
+    submission_context=None,
+    server_received_at=None,
 ):
     """Persist the shared authoritative submission and audit projections."""
     session.submission_count += 1
@@ -190,9 +192,10 @@ def _commit_attempt_submission(
         "capture_contract_id": str(session.capture_contract_id) if session.capture_contract_id else None,
         "active_response_event_id": str(attempt.active_response_event_id) if attempt.active_response_event_id else None,
         "response_version": attempt.response_version,
-        "server_ingest_sequence_no": session.assessment_events.aggregate(
-            maximum=Max("server_ingest_sequence_no")
-        )["maximum"] or 0,
+        "server_ingest_sequence_no": (
+            submission_context['last_ingest_sequence_no'] if submission_context is not None else
+            session.assessment_events.aggregate(maximum=Max("server_ingest_sequence_no"))["maximum"] or 0
+        ),
         "student_id": session.student_id,
     }
     attempt.submitted_at = now
@@ -214,7 +217,8 @@ def _commit_attempt_submission(
             max(0, (duration_end - attempt.last_opened_at).total_seconds() * 1000)
         )
     attempt.save()
-    session.save(update_fields=["submission_count", "last_activity_at"])
+    if submission_context is None:
+        session.save(update_fields=["submission_count", "last_activity_at"])
     submission = SubmissionEvent.objects.create(
         attempt=attempt,
         submission_token=token_value,
@@ -224,7 +228,7 @@ def _commit_attempt_submission(
         is_correct=correct,
         score=score,
         client_clicked_at=client_time,
-        server_received_at=now,
+        server_received_at=server_received_at if server_received_at is not None else now,
         committed_at=now,
     )
     GradeRecord.objects.create(
@@ -374,6 +378,20 @@ def _auto_submit_saved_attempt_for_deadline(session, attempt, *, terminal_at):
             ConfidenceAssignment.ResponseStatus.PROMPT_SHOWN,
             ConfidenceAssignment.ResponseStatus.UPLOAD_FAILED,
         }:
+            if session.assessment_flow_version == 1:
+                from .session_submission_services import _commit_frozen_confidence
+
+                attempt.session = session
+                bound = confidence.draft_answer_event_id == attempt.final_response_event_id
+                _commit_frozen_confidence(attempt, {
+                    "confidence_assignment_id": str(confidence.pk),
+                    "confidence_probability": confidence.draft_probability if bound else None,
+                    "confidence_missing_reason": (
+                        "answer_changed" if confidence.draft_probability is not None and not bound
+                        else confidence.draft_missing_reason
+                    ),
+                }, now, {attempt.pk: confidence})
+                return True
             confidence.response_status = ConfidenceAssignment.ResponseStatus.SKIPPED
             confidence.save(update_fields=["response_status"])
             _append_confidence_event(
@@ -635,7 +653,8 @@ def resume_task_session(task, student, *, request_received_at=None):
     if session is None:
         raise ExperimentSession.DoesNotExist
     _validate_course_access(session, request_received_at=request_received_at)
-    if session.status in (ExperimentSession.Status.COMPLETED, ExperimentSession.Status.INVALIDATED):
+    if session.status in (ExperimentSession.Status.PREPARED, ExperimentSession.Status.SUBMITTING,
+                          ExperimentSession.Status.COMPLETED, ExperimentSession.Status.INVALIDATED):
         raise ValidationError("该实验会话已结束，不能继续作答")
     schedule = DeadlineDecisionService.schedule_at(task, request_received_at)
     if schedule is None or DeadlineDecisionService.get_task_state(task, at=request_received_at) != "open":
@@ -651,7 +670,8 @@ def resume_task_session(task, student, *, request_received_at=None):
     )
     if not decision.allowed:
         raise ValidationError("当前班级任务已结束，不能继续作答")
-    materialize_confidence_assignments(session)
+    if session.assessment_flow_version == 0:
+        materialize_confidence_assignments(session)
     return session
 
 
@@ -666,10 +686,10 @@ def can_recover_session(task, session, *, at=None):
         return False
     if session.status == ExperimentSession.Status.IN_PROGRESS:
         return True
-    pending = [attempt for attempt in session.attempts.all() if attempt.status in (
+    pending = session.attempts.filter(status__in=(
         Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED
-    )]
-    if not pending:
+    ))
+    if not pending.exists():
         return False
     mode = session.version.configuration.get("time_mode")
     if mode == "total":
@@ -683,12 +703,12 @@ def can_recover_session(task, session, *, at=None):
         new_limit = schedule.per_question_time_limit_seconds or int(
             session.version.configuration.get("per_question_time_limit_seconds") or 0
         )
-        return any(
-            attempt.first_opened_at is None
-            or new_limit > (attempt.per_item_time_limit_seconds or 0)
-            or bool(attempt.item_deadline_at and session.terminal_at and attempt.item_deadline_at > session.terminal_at)
-            for attempt in pending
-        )
+        recoverable = Q(first_opened_at__isnull=True) | Q(per_item_time_limit_seconds__lt=new_limit)
+        if new_limit > 0:
+            recoverable |= Q(per_item_time_limit_seconds__isnull=True)
+        if session.terminal_at:
+            recoverable |= Q(item_deadline_at__gt=session.terminal_at)
+        return pending.filter(recoverable).exists()
     return True
 
 
@@ -849,7 +869,7 @@ def _close_previous(session, now):
     if not previous: return
     attempt = Attempt.objects.select_for_update().get(assignment=previous)
     if attempt.status in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}: return
-    if session.timer_semantics_version == "continuous_wall_clock_v2":
+    if session.timer_semantics_version == "continuous_wall_clock_v2" or session.assessment_flow_version == 1:
         return
     if attempt.last_opened_at:
         elapsed = max(0, int((now - attempt.last_opened_at).total_seconds()))
@@ -863,7 +883,32 @@ def _close_previous(session, now):
             _append_attempt_closed(attempt, close_reason="timed_out")
 
 
-def _validate_course_access(session, *, request_received_at=None):
+@dataclass(frozen=True)
+class MutationValidationContext:
+    session: ExperimentSession
+    received_at: object
+    task: object
+
+
+def mutation_validation_context(session, request_received_at):
+    """Read authorization facts once after this request acquired the session lock."""
+    from copy import copy
+    _validate_course_access(session, request_received_at=request_received_at)
+    task = copy(session.class_task) if session.class_task_id else None
+    if task is not None:
+        task.latest_schedule_revisions = list(task.schedule_revisions.filter(
+            created_at__lte=request_received_at).order_by('-revision_no')[:1])
+        task.current_manual_closures = (list(task.manual_closures.filter(
+            closed_at__lte=request_received_at).order_by('-closed_at')[:1])
+            if task.manual_closed_at is not None else [])
+    return MutationValidationContext(session, request_received_at, task)
+
+
+def _validate_course_access(session, *, request_received_at=None, validation_context=None):
+    if validation_context is not None:
+        if validation_context.session is not session or validation_context.received_at != request_received_at:
+            raise ValueError('Mutation validation context does not match the locked request.')
+        return
     experiment = session.version.experiment
     if experiment.course_id is None:
         return
@@ -986,11 +1031,11 @@ def _terminate_for_deadline(session, *, now, reason, attempt=None):
     bump_result_revision(session, increment=1 + auto_submissions)
 
 
-def _validate_session_time(session, attempt=None, *, request_received_at=None):
+def _validate_session_time(session, attempt=None, *, request_received_at=None, validation_context=None):
     now = request_received_at or timezone.now()
-    _validate_course_access(session, request_received_at=now)
+    _validate_course_access(session, request_received_at=now, validation_context=validation_context)
     if session.class_task_id:
-        task = session.class_task
+        task = validation_context.task if validation_context is not None else session.class_task
     if session.status != ExperimentSession.Status.IN_PROGRESS:
         raise ValidationError("当前会话不可继续作答")
     if session.class_task_id:
@@ -1035,12 +1080,12 @@ def _validate_session_time(session, attempt=None, *, request_received_at=None):
     return None
 
 
-def _validate_process_event_time(session, attempt=None, *, request_received_at=None):
+def _validate_process_event_time(session, attempt=None, *, request_received_at=None, validation_context=None):
     """Authorize capture writes without treating a completed answer as a closed task."""
     now = request_received_at or timezone.now()
-    _validate_course_access(session, request_received_at=now)
+    _validate_course_access(session, request_received_at=now, validation_context=validation_context)
     if session.class_task_id:
-        task = session.class_task
+        task = validation_context.task if validation_context is not None else session.class_task
         decision = DeadlineDecisionService.can_write_response(task, session, attempt, now)
         if not decision.allowed:
             return (
@@ -1124,6 +1169,7 @@ def _record_visit_transaction(
     navigation_id=None,
     client_monotonic_ms=None,
     client_time_origin=None,
+    entry_client_instance_id=None,
 ):
     session = ExperimentSession.objects.select_for_update(of=("self",)).select_related(
         "version__experiment__course", "class_task", "schedule_revision", "capture_contract"
@@ -1156,6 +1202,12 @@ def _record_visit_transaction(
     attempt = Attempt.objects.select_for_update(of=("self",)).select_related("current_response_snapshot").get(assignment=assignment)
     attempt.session = session
     attempt.assignment = assignment
+    if session.assessment_flow_version == 1 and attempt.status not in {
+            Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
+        _validate_session_time(session, attempt, request_received_at=request_received_at)
+        session.refresh_from_db(fields=['next_ingest_sequence_no'])
+        attempt.refresh_from_db()
+        attempt.session, attempt.assignment = session, assignment
     attempt.visit_count += 1
     if attempt.status not in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
         if attempt.first_opened_at is None:
@@ -1194,7 +1246,7 @@ def _record_visit_transaction(
     session.save(update_fields=["current_assignment", "first_open_count", "visit_event_count", "last_activity_at"])
     entry_event = append_assessment_event(
         event_type="item_entered",
-        event_version=3,
+        event_version=4 if entry_client_instance_id is not None else 3,
         event_domain="assessment",
         actor_source="server",
         session=session,
@@ -1208,6 +1260,7 @@ def _record_visit_transaction(
                 from_assignment.pk if from_assignment is not None else None
             ),
             "visit_id": visit.pk,
+            **({'client_instance_id': str(entry_client_instance_id)} if entry_client_instance_id is not None else {}),
         },
         correlation_id=navigation_id,
         client_wall_time_utc=client_time,
@@ -1235,6 +1288,7 @@ def record_visit_entry(
     navigation_id=None,
     client_monotonic_ms=None,
     client_time_origin=None,
+    entry_client_instance_id=None,
 ):
     entry, time_error = _record_visit_transaction(
         session_id,
@@ -1245,6 +1299,7 @@ def record_visit_entry(
         navigation_id,
         client_monotonic_ms,
         client_time_origin,
+        entry_client_instance_id,
     )
     if time_error:
         raise ValidationError(time_error)
@@ -1272,6 +1327,8 @@ def _save_draft_transaction(
     expected_version=None,
     branch_resolution=None,
     locked_attempt=None,
+    inline_confidence=None,
+    validation_context=None,
 ):
     if locked_attempt is None:
         session_id = Attempt.objects.filter(pk=attempt_id).values_list(
@@ -1299,6 +1356,7 @@ def _save_draft_transaction(
         session,
         attempt,
         request_received_at=request_received_at or timezone.now(),
+        validation_context=validation_context,
     )
     if time_error:
         return None, time_error
@@ -1313,9 +1371,13 @@ def _save_draft_transaction(
             if prior is not None:
                 if prior.attempt_id != attempt.pk or prior.payload != branch_resolution:
                     raise ValidationError('冲突处理标识已被不同操作使用。')
+                from .prepared_services import save_inline_confidence
+                save_inline_confidence(attempt, inline_confidence)
                 return attempt, None
         target = select_response_target(attempt, target_event_id, expected_version, branch_resolution)
         if attempt.active_response_event_id == target.pk and branch_resolution is None:
+            from .prepared_services import save_inline_confidence
+            save_inline_confidence(attempt, inline_confidence)
             return attempt, None
         attempt.active_response_event = target
         attempt.response_version += 1
@@ -1327,6 +1389,8 @@ def _save_draft_transaction(
                                     'draft_answer', 'draft_saved_at', 'status'])
         DraftSaveEvent.objects.create(attempt=attempt, answer_hash=target.payload['after_state_hash'],
                                      client_occurred_at=client_time)
+        from .prepared_services import save_inline_confidence
+        save_inline_confidence(attempt, inline_confidence)
         return attempt, None
     attempt.draft_answer = answer; attempt.draft_saved_at = timezone.now(); attempt.status = Attempt.Status.DRAFT
     # Clear stale pointer before creating a replacement snapshot.  The whole
@@ -1347,6 +1411,8 @@ def _save_draft_transaction(
         # Choice state is derived from durable draft_answer; no second mutable
         # response-state column is maintained.
         canonical_choice_response_state(question_type, answer)
+    from .prepared_services import save_inline_confidence
+    save_inline_confidence(attempt, inline_confidence)
     return attempt, None
 
 
@@ -1361,6 +1427,8 @@ def save_draft(
     target_event_id=None,
     expected_version=None,
     _locked_attempt=None,
+    inline_confidence=None,
+    _validation_context=None,
 ):
     attempt, time_error = _save_draft_transaction(
         attempt_id,
@@ -1372,6 +1440,8 @@ def save_draft(
         target_event_id,
         expected_version,
         locked_attempt=_locked_attempt,
+        inline_confidence=inline_confidence,
+        validation_context=_validation_context,
     )
     if time_error:
         raise ValidationError(time_error)

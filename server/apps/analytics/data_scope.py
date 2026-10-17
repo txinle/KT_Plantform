@@ -396,7 +396,7 @@ class DataScope:
             filters["started_at__gte"] = self.started_from_utc
         if self.started_before_utc is not None:
             filters["started_at__lt"] = self.started_before_utc
-        queryset = ExperimentSession.objects.filter(**filters)
+        queryset = ExperimentSession.objects.filter(**filters, started_at__isnull=False)
         if self.search or self.session_ref:
             references = self.session_references()
             selected = []
@@ -417,7 +417,7 @@ class DataScope:
 
         return {
             str(pk): f"S{started.astimezone(ZoneInfo('Asia/Shanghai')):%Y%m%d}_{pk:04d}"
-            for pk, started in ExperimentSession.objects.filter(version__experiment__course=self.course)
+            for pk, started in ExperimentSession.objects.filter(version__experiment__course=self.course, started_at__isnull=False)
             .values_list("pk", "started_at")
         }
 

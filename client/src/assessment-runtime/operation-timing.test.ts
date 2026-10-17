@@ -4,6 +4,18 @@ import * as timing from './operation-timing'
 afterEach(() => { timing.finishAssessmentOperation(); vi.unstubAllGlobals() })
 
 describe('confirmed material timing', () => {
+  it('records each acknowledged event age and excludes foreign clock origins', () => {
+    const measure = vi.fn()
+    vi.stubGlobal('performance', { now: () => 1000, timeOrigin: Date.parse('2026-10-16T00:00:00Z'), measure })
+    timing.measureConfirmedMaterial({ event_boundary: 4, events: [
+      { event_id: 'A', client_sequence_no: 1, client_monotonic_ms: 100, client_time_origin: '2026-10-16T00:00:00Z' },
+      { event_id: 'B', client_sequence_no: 2, client_monotonic_ms: 200, client_time_origin: '2026-10-16T00:00:00Z' },
+      { event_id: 'old', client_sequence_no: 3, client_monotonic_ms: 50, client_time_origin: '2026-10-15T00:00:00Z' },
+    ], checkpoints: [] }, 'save')
+    const events = measure.mock.calls.filter(row => row[0] === 'kt-assessment:event_confirmation')
+    expect(events.map(row => [row[1].detail.event_id, row[1].duration])).toEqual([['A', 900], ['B', 800]])
+    expect(events[0]![1].detail).toMatchObject({ operation_id: 'save', client_sequence_no: 1, outcome: 'success' })
+  })
   it('measures original emission to matching ACK independently of the current UI operation', () => {
     const measure = vi.fn()
     const origin = Date.parse('2026-10-13T00:00:00Z')

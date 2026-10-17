@@ -115,7 +115,7 @@ class AssessmentFlowTests(TestCase):
         )
 
 
-    def test_returning_to_saved_draft_exposes_previous_response_state(self):
+    def test_retired_historical_entry_preserves_the_previous_saved_response_state(self):
         session = get_or_create_session(self.experiment, self.student)
         assignment = session.assignments.get()
         attempt = record_visit(session.id, assignment.id)
@@ -126,6 +126,9 @@ class AssessmentFlowTests(TestCase):
             f"/api/v1/student/sessions/{session.pk}/questions/{assignment.pk}/"
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(domain_payload(response)["draft_answer"], "B")
-        self.assertEqual(domain_payload(response)["initial_response_state"], "B")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['error']['code'], 'WHOLE_PAPER_UPGRADE_REQUIRED')
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.draft_answer, 'B')
+        from .api.views import _runtime_initial_response_state
+        self.assertEqual(_runtime_initial_response_state(attempt), 'B')

@@ -235,7 +235,20 @@ def natural_behavior_matches(probe, attempts, events):
     return _safe_match(matches)
 
 
-def browser_confidence_checks(plan, report, sessions, attempts, confidence, events):
+def split_submission_matches(attempt, request, confidence_response):
+    material, receipt = request.get('submission', {}), request.get('receipt', {})
+    target = str(attempt.final_response_event_id)
+    successful = type(request.get('status')) is int and 200 <= request['status'] < 300
+    return (attempt.status == 'submitted' and attempt.submitted_at is not None and attempt.submission_receipt == {}
+        and str(attempt.active_response_event_id) == target and material.get('target_event_id') == target
+        and material.get('token') == str(attempt.submission_token)
+        and (not successful or receipt.get('status') == 'submitted')
+        and material.get('material_sha256') == js_digest({'atomic_submission':None,
+            'target_event_id':target,'confidence':confidence_response}))
+
+
+def browser_confidence_checks(plan, report, sessions, attempts, confidence, events, runtime_contract='student-slice-v1'):
+    split = runtime_contract == 'capture-v2-split-v1'
     """Reconcile the two browser students with frozen choices and actual durable evidence."""
     checks = {key: True for key in ('browser_confidence_evidence_binding',
         'browser_confidence_exact_frozen_decisions_and_final_heads',
@@ -297,8 +310,10 @@ def browser_confidence_checks(plan, report, sessions, attempts, confidence, even
                 requests = [request for request in probe['protocol_witness']['requests'] if request.get('submission')
                     and request['path'] == f'/api/v1/student/attempts/{attempt.pk}/submit/']
                 confirmed = [request for request in requests if type(request.get('status')) is int
-                    and 200 <= request['status'] < 300 and request.get('receipt', {}).get('committed') is True]
-                checks['browser_confidence_acknowledged_receipts_match'] &= bool(confirmed) and all(
+                    and 200 <= request['status'] < 300 and (request.get('receipt', {}).get('status') == 'submitted'
+                        if split else request.get('receipt', {}).get('committed') is True)]
+                checks['browser_confidence_acknowledged_receipts_match'] &= (bool(confirmed) and all(
+                    split_submission_matches(attempt, request, decision) for request in requests)) if split else bool(confirmed) and all(
                     request['submission']['token'] == str(attempt.submission_token)
                     and request['submission']['target_event_id'] == str(attempt.final_response_event_id)
                     and request['submission']['material_sha256'] == attempt.submission_fingerprint for request in requests) and all(
@@ -495,6 +510,7 @@ def verify_witness(fixture, report, *, task, sessions, events, checkpoints, atte
                    assignments=None, plan=None, confidence=None, mutations=None):
     """No writes or repair. Missing unacknowledged facts remain unknown."""
     checks = {}
+    split = fixture.get('source_config', {}).get('runtime_contract') == 'capture-v2-split-v1'
     session_map = {row.pk: row for row in sessions}
     attempt_map = {row.pk: row for row in attempts}
     assignment_session = ({row.pk: row.session_id for row in assignments} if assignments is not None
@@ -598,7 +614,8 @@ def verify_witness(fixture, report, *, task, sessions, events, checkpoints, atte
                         observations[kind][key].append((session, request, material))
                         receipt = request.get('entry_receipt' if kind == 'entry' else 'receipt')
                         if receipt and 200 <= request.get('status', 0) < 300:
-                            if kind != 'entry' and receipt.get('committed') is not True:
+                            if kind != 'entry' and receipt.get('committed') is not True and not (
+                                    split and kind == 'submission' and receipt.get('status') == 'submitted'):
                                 raise ValueError('Noncommitted receipt')
                             known.add(key)
         except (KeyError, IndexError, TypeError, ValueError, AttributeError):
@@ -745,6 +762,15 @@ def verify_witness(fixture, report, *, task, sessions, events, checkpoints, atte
         def matches_submission(session, request, material):
             attempt = attempt_map[stored.attempt_id]
             target = _uuid(material['target_event_id'])
+            if split:
+                decision = None
+                if plan and plan.get('scenario') == 'confidence-only-v1':
+                    student = next(row for row in plan['students'] if row['username'] == session.student.username)
+                    decision = confidence_decision(student, attempt.assignment.assigned_sequence_index - 1,
+                        plan['confidence_scale'], str(attempt.final_response_event_id))
+                return (attempt.session_id == session.pk and int(ATTEMPT_PATH.fullmatch(request['path'])[1]) == attempt.pk
+                    and target in all_events and all_events[target].attempt_id == attempt.pk
+                    and split_submission_matches(attempt, request, decision))
             return (attempt.session_id == session.pk and int(ATTEMPT_PATH.fullmatch(request['path'])[1]) == attempt.pk
                 and _uuid(attempt.submission_token) == key and attempt.status == 'submitted'
                 and _uuid(attempt.final_response_event_id) == target and _uuid(attempt.active_response_event_id) == target
@@ -774,7 +800,8 @@ def verify_witness(fixture, report, *, task, sessions, events, checkpoints, atte
     counts['local_intents_unknown_material'] = unknown_intents
     counts['local_record_count'] = local_record_count
     if plan is not None and plan.get('scenario') == 'confidence-only-v1':
-        checks.update(browser_confidence_checks(plan, report, sessions, attempts, confidence or [], events))
+        checks.update(browser_confidence_checks(plan, report, sessions, attempts, confidence or [], events,
+            fixture.get('source_config', {}).get('runtime_contract', 'student-slice-v1')))
         counts['browser_confidence_assignments'] = len(confidence or [])
     binding_keys = ('fixture_task_course_class_binding', 'three_independent_fixture_sessions_students',
         'real_nonempty_candidate_bound_probes', 'request_and_ack_shapes_and_session_ownership',

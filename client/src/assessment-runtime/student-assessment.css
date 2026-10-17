@@ -5,6 +5,43 @@
   padding: 0 24px 32px;
 }
 
+.kt-assessment-focus .kt-assessment-paper-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.kt-assessment-focus .kt-assessment-inline-confidence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.kt-assessment-focus .kt-assessment-inline-confidence input {
+  min-height: 44px;
+  width: 84px;
+  border: 1px solid var(--kt-border);
+  border-radius: 6px;
+  background: var(--kt-surface);
+  color: var(--kt-ink);
+  padding: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.kt-assessment-focus .kt-assessment-inline-confidence input:focus-visible {
+  outline: 2px solid var(--kt-color-primary);
+  outline-offset: 2px;
+}
+
+@media (max-width: 600px) {
+  .kt-assessment-focus .kt-assessment-inline-confidence { width: 100%; order: -1; }
+}
+
 .kt-assessment-capability {
   max-width: 44rem;
   margin: 8vh auto;

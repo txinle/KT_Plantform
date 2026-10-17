@@ -1,11 +1,13 @@
 """The content read must not establish a formal question entry."""
 import uuid
+from unittest.mock import patch
 from datetime import timedelta
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from apps.question_bank.models import Question, QuestionConcept, QuestionOption
+from apps.api.test_support import domain_payload
 
 from .models import AssessmentEvent, Attempt, ExperimentSession, QuestionVisitEvent, SubmissionEvent
 from .test_student_api import StudentApiFixtureMixin
@@ -80,11 +82,90 @@ class StudentQuestionContentReadTests(StudentApiFixtureMixin, TestCase):
 
 
 class StudentQuestionFormalEntryTests(StudentApiFixtureMixin, TestCase):
+    def test_legacy_capture_v1_entry_is_rejected_without_acquiring_a_lease_or_recording_a_visit(self):
+        from .services import get_or_create_session
+        with patch('apps.assessment.prepared_services.prepare_participant', return_value=None), \
+             override_settings(CAPTURE_V2_ENABLED=False):
+            experiment, task = self.publish_task(name='历史capture-v1任务', feedback_mode=self.feedback_mode)
+            session = get_or_create_session(experiment, self.student, class_task=task)
+        self.client.force_login(self.student)
+        assignment = session.assignments.get()
+        now = timezone.now().isoformat()
+        response = self.post_entry(f'/api/v1/student/sessions/{session.pk}/questions/{assignment.pk}/', {
+            'reason': 'resume', 'navigation_id': str(uuid.uuid4()), 'client_instance_id': str(uuid.uuid4()),
+            'client_occurred_at': now, 'client_time_origin': now, 'client_monotonic_ms': 0,
+        })
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.json()['error']['code'], 'WHOLE_PAPER_UPGRADE_REQUIRED')
+        self.assertFalse(QuestionVisitEvent.objects.filter(session=session).exists())
+        self.assertIsNone(Attempt.objects.get(assignment=assignment).writer_lease_token)
+
+    @override_settings(CAPTURE_V2_ENABLED=True, CAPTURE_V2_COURSE_IDS=frozenset({'*'}))
+    def test_entry_returns_client_bound_lease_and_replay_never_resurrects_it(self):
+        session, assignment, url, document = self.entry()
+        client_id = str(uuid.uuid4())
+        document['client_instance_id'] = client_id
+        first = self.post_entry(url, document)
+        self.assertEqual(first.status_code, 200, first.content)
+        lease = first.json()['data']['initial_writer_lease']
+        self.assertEqual(lease['writer_client_instance_id'], client_id)
+        replay = self.post_entry(url, document)
+        self.assertEqual(replay.json()['data']['initial_writer_lease'], lease)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 2)
+        for change in (
+            {'writer_lease_expires_at': timezone.now() - timedelta(seconds=1)},
+            {'writer_lease_token': None, 'writer_client_instance_id': None, 'writer_lease_expires_at': None},
+            {'writer_lease_token': uuid.uuid4(), 'writer_client_instance_id': uuid.uuid4(),
+             'writer_lease_expires_at': timezone.now() + timedelta(seconds=30)},
+        ):
+            with self.subTest(change=change):
+                Attempt.objects.filter(assignment=assignment).update(**change)
+                before = Attempt.objects.filter(assignment=assignment).values().get()
+                replay = self.post_entry(url, document)
+                self.assertEqual(replay.status_code, 200, replay.content)
+                self.assertNotIn('initial_writer_lease', replay.json()['data'])
+                self.assertEqual(Attempt.objects.filter(assignment=assignment).values().get(), before)
+                self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 2)
+
+    @override_settings(CAPTURE_V2_ENABLED=True, CAPTURE_V2_COURSE_IDS=frozenset({'*'}))
+    def test_entry_client_identity_conflict_and_other_client_lease_are_rejected(self):
+        session, assignment, url, document = self.entry()
+        document['client_instance_id'] = str(uuid.uuid4())
+        self.assertEqual(self.post_entry(url, document).status_code, 200)
+        changed = {**document, 'client_instance_id': str(uuid.uuid4())}
+        conflict = self.post_entry(url, changed)
+        self.assertEqual(conflict.status_code, 409, conflict.content)
+        conflict = self.post_entry(url, {**changed, 'navigation_id': str(uuid.uuid4())})
+        self.assertEqual(conflict.status_code, 409, conflict.content)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 2)
+
+    @override_settings(CAPTURE_V2_ENABLED=True, CAPTURE_V2_COURSE_IDS=frozenset({'*'}))
+    def test_submitted_and_ended_entry_replay_never_returns_write_credentials(self):
+        session, assignment, url, document = self.entry()
+        document['client_instance_id'] = str(uuid.uuid4())
+        self.assertEqual(self.post_entry(url, document).status_code, 200)
+        attempt = self.submit_attempt_without_finishing(session)
+        review = self.post_entry(url, {**document, 'navigation_id': str(uuid.uuid4())})
+        self.assertEqual(review.status_code, 200, review.content)
+        self.assertNotIn('initial_writer_lease', review.json()['data'])
+        for status in (ExperimentSession.Status.IN_PROGRESS, ExperimentSession.Status.COMPLETED):
+            ExperimentSession.objects.filter(pk=session.pk).update(status=status,
+                terminal_at=timezone.now() if status == ExperimentSession.Status.COMPLETED else None)
+            response = self.post_entry(url, document)
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertNotIn('initial_writer_lease', response.json()['data'])
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, Attempt.Status.SUBMITTED)
+
     def entry(self, *, task=None):
         started = self.start(task=task)
         self.assertEqual(started.status_code, 201, started.content)
         session = ExperimentSession.objects.get(class_task=task or self.task, student=self.student)
         assignment = session.assignments.order_by('assigned_sequence_index').first()
+        from .writer_lease_services import release_attempt_writer_lease
+        initial = domain_payload(started)['runtime']['initial_writer_lease']
+        release_attempt_writer_lease(assignment.attempt, lease_token=initial['writer_lease_token'],
+            client_instance_id=initial['writer_client_instance_id'])
         clicked_at = timezone.now() - timedelta(seconds=1)
         document = {'reason': 'navigation_click', 'navigation_id': str(uuid.uuid4()),
                     'client_occurred_at': clicked_at.isoformat(), 'client_monotonic_ms': '20000.500',
@@ -94,10 +175,56 @@ class StudentQuestionFormalEntryTests(StudentApiFixtureMixin, TestCase):
     def post_entry(self, url, document):
         return self.client.post(url, data=document, content_type='application/json')
 
+    def test_submitted_question_can_be_reviewed_and_replayed_without_reopening_answer(self):
+        session, assignment, url, document = self.entry()
+        first = self.post_entry(url, document)
+        self.assertEqual(first.status_code, 200, first.content)
+        attempt = self.submit_attempt_without_finishing(session)
+        original = (attempt.final_answer, attempt.submitted_at, attempt.last_opened_at)
+        for response in (
+            self.client.get(url),
+            self.post_entry(url, document),
+            self.post_entry(url, {**document, 'navigation_id': str(uuid.uuid4())}),
+        ):
+            self.assertEqual(response.status_code, 200, response.content)
+            payload = response.json()['data']
+            self.assertTrue(payload['entry_allowed'], payload)
+            self.assertEqual(payload['entry_denial_code'], '')
+            self.assertEqual(payload['assignment']['status'], 'submitted')
+        attempt.refresh_from_db()
+        self.assertEqual((attempt.final_answer, attempt.submitted_at, attempt.last_opened_at), original)
+        draft = self.client.post(f'/api/v1/student/attempts/{attempt.pk}/draft/',
+                                 data={'answer': 'A'}, content_type='application/json')
+        self.assertEqual(draft.status_code, 409, draft.content)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.final_answer, original[0])
+
+    def test_submitted_question_review_still_obeys_session_deadline(self):
+        session, assignment, url, document = self.entry()
+        self.post_entry(url, document)
+        self.submit_attempt_without_finishing(session)
+        ExperimentSession.objects.filter(pk=session.pk).update(deadline_at=timezone.now() - timedelta(seconds=1))
+        for response in (self.client.get(url), self.post_entry(url, document)):
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertFalse(response.json()['data']['entry_allowed'])
+            self.assertEqual(response.json()['data']['entry_denial_code'], 'DEADLINE_EXPIRED')
+
+    def test_review_uses_session_time_instead_of_the_submitted_item_deadline(self):
+        session, assignment, url, document = self.entry()
+        self.post_entry(url, document)
+        attempt = self.submit_attempt_without_finishing(session)
+        ExperimentSession.objects.filter(pk=session.pk).update(deadline_at=timezone.now() + timedelta(minutes=5))
+        Attempt.objects.filter(pk=attempt.pk).update(current_effective_deadline_at=timezone.now() - timedelta(seconds=1))
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.json()['data']['entry_allowed'])
+        self.assertGreater(response.json()['data']['remaining_seconds'], 290)
+
     def test_same_navigation_token_and_material_replays_stable_receipt_once(self):
         session, assignment, url, document = self.entry()
         first = self.post_entry(url, document)
         self.assertEqual(first.status_code, 200, first.content)
+        self.assertNotIn('initial_writer_lease', first.json()['data'])
         first_receipt = first.json()['data']['entry_receipt']
         self.assertEqual(set(first_receipt), {'navigation_id', 'session_id', 'assignment_id', 'attempt_id',
                                              'visit_id', 'visit_index', 'entry_event_id', 'entered_at'})
@@ -106,8 +233,8 @@ class StudentQuestionFormalEntryTests(StudentApiFixtureMixin, TestCase):
         replay = self.post_entry(url, document)
         self.assertEqual(replay.status_code, 200, replay.content)
         self.assertEqual(replay.json()['data']['entry_receipt'], first_receipt)
-        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
-        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 1)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 2)
+        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 2)
         self.assertEqual(Attempt.objects.filter(assignment=assignment).values().get(), before_attempt)
         self.assertEqual(ExperimentSession.objects.filter(pk=session.pk).values().get(), before_session)
 
@@ -125,8 +252,8 @@ class StudentQuestionFormalEntryTests(StudentApiFixtureMixin, TestCase):
                 changed = self.post_entry(url, {**document, field: value})
                 self.assertEqual(changed.status_code, 409, changed.content)
                 self.assertEqual(changed.json()['error']['code'], 'ENTRY_MATERIAL_CONFLICT')
-                self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
-                self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 1)
+                self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 2)
+                self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 2)
                 self.assertEqual(Attempt.objects.filter(assignment=assignment).values().get(), before_attempt)
                 self.assertEqual(ExperimentSession.objects.filter(pk=session.pk).values().get(), before_session)
 
@@ -145,7 +272,7 @@ class StudentQuestionFormalEntryTests(StudentApiFixtureMixin, TestCase):
         conflict = self.post_entry(other_url, document)
         self.assertEqual(conflict.status_code, 409, conflict.content)
         self.assertEqual(conflict.json()['error']['code'], 'ENTRY_MATERIAL_CONFLICT')
-        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 2)
         self.assertEqual(Attempt.objects.get(assignment=other).status, Attempt.Status.UNVISITED)
 
     def test_formal_entry_requires_navigation_id_and_complete_clock_group(self):
@@ -155,36 +282,41 @@ class StudentQuestionFormalEntryTests(StudentApiFixtureMixin, TestCase):
                 incomplete = {key: value for key, value in document.items() if key != field}
                 response = self.post_entry(url, incomplete)
                 self.assertEqual(response.status_code, 400, response.content)
-                self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 0)
-                self.assertEqual(Attempt.objects.get(assignment=assignment).status, Attempt.Status.UNVISITED)
+                self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+                self.assertEqual(Attempt.objects.get(assignment=assignment).status, Attempt.Status.VISITED)
 
-    def test_new_formal_entry_after_deadline_is_rejected_without_opening_attempt(self):
+    def test_new_formal_entry_after_session_deadline_is_rejected_without_adding_a_visit(self):
         session, assignment, url, document = self.entry()
         ExperimentSession.objects.filter(pk=session.pk).update(deadline_at=timezone.now() - timedelta(seconds=1))
         response = self.post_entry(url, document)
         self.assertEqual(response.status_code, 409, response.content)
-        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 0)
-        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 0)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+        self.assertEqual(AssessmentEvent.objects.filter(session=session, event_type='item_entered').count(), 1)
 
-    def test_expired_item_content_and_original_receipt_are_read_only_and_new_entry_is_denied(self):
+    def test_expired_item_can_be_reviewed_without_reopening_answer_writes(self):
         session, assignment, url, document = self.entry()
         first = self.post_entry(url, document)
         self.assertEqual(first.status_code, 200, first.content)
         receipt = first.json()['data']['entry_receipt']
         Attempt.objects.filter(assignment=assignment).update(
             current_effective_deadline_at=timezone.now() - timedelta(seconds=1))
-        before_attempt = Attempt.objects.filter(assignment=assignment).values().get()
-        content = self.client.get(url)
-        self.assertEqual(content.status_code, 200, content.content)
-        self.assertFalse(content.json()['data']['entry_allowed'])
+        original = Attempt.objects.get(assignment=assignment)
+        for response in (self.client.get(url), self.post_entry(url, document)):
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertTrue(response.json()['data']['entry_allowed'])
+            self.assertFalse(response.json()['data']['response_write_allowed'])
         replay = self.post_entry(url, document)
-        self.assertEqual(replay.status_code, 200, replay.content)
         self.assertEqual(replay.json()['data']['entry_receipt'], receipt)
-        self.assertFalse(replay.json()['data']['entry_allowed'])
-        rejected = self.post_entry(url, {**document, 'navigation_id': str(uuid.uuid4())})
-        self.assertEqual(rejected.status_code, 409, rejected.content)
-        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
-        self.assertEqual(Attempt.objects.filter(assignment=assignment).values().get(), before_attempt)
+        reviewed = self.post_entry(url, {**document, 'navigation_id': str(uuid.uuid4())})
+        self.assertEqual(reviewed.status_code, 200, reviewed.content)
+        self.assertFalse(reviewed.json()['data']['response_write_allowed'])
+        self.assertNotIn('initial_writer_lease', reviewed.json()['data'])
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 3)
+        current = Attempt.objects.get(assignment=assignment)
+        self.assertEqual(current.active_response_event_id, original.active_response_event_id)
+        self.assertEqual(current.draft_answer, original.draft_answer)
+        self.assertEqual(current.response_version, original.response_version)
+        self.assertIn(current.status, (Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED))
 
     def test_successful_entry_replay_after_deadline_confirms_receipt_with_read_only_dto(self):
         session, assignment, url, document = self.entry()
@@ -199,7 +331,7 @@ class StudentQuestionFormalEntryTests(StudentApiFixtureMixin, TestCase):
         self.assertFalse(replay.json()['data']['entry_allowed'])
         self.assertEqual(replay.json()['data']['entry_denial_code'], 'DEADLINE_EXPIRED')
         self.assertEqual(ExperimentSession.objects.filter(pk=session.pk).values().get(), before_session)
-        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 2)
 
     def test_successful_token_cannot_replay_question_after_enrollment_revocation(self):
         from apps.accounts.models import CourseEnrollment
@@ -213,4 +345,4 @@ class StudentQuestionFormalEntryTests(StudentApiFixtureMixin, TestCase):
         response = self.post_entry(url, document)
         self.assertEqual(response.status_code, 409, response.content)
         self.assertNotIn('question', response.json())
-        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 1)
+        self.assertEqual(QuestionVisitEvent.objects.filter(session=session).count(), 2)

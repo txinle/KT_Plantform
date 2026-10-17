@@ -66,6 +66,7 @@ class TeachingScope:
     def sessions(self):
         sessions = ExperimentSession.objects.filter(
             version__experiment__course=self.course,
+            started_at__isnull=False,
         )
         if self.experiment_id is not None:
             sessions = sessions.filter(version__experiment_id=self.experiment_id)

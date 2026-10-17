@@ -1,6 +1,7 @@
 from apps.api.test_support import domain_payload
 from datetime import timedelta
 from unittest.mock import patch
+from uuid import uuid4
 
 from django.db import connection
 from django.test import TestCase, override_settings
@@ -102,6 +103,7 @@ class AdvancedMaterializedApiTests(TestCase):
         from .research_materialization import PROJECTION_VERSION
 
         summary = _fallback_session_summary(session)
+        summary["input_completeness"] = {"status": "complete"}
         now = timezone.now()
         return ResearchSessionMaterialization.objects.create(
             session=session,
@@ -114,6 +116,195 @@ class AdvancedMaterializedApiTests(TestCase):
             session_summary=summary,
             session_row=_fallback_session_row(summary),
         )
+
+    def test_readable_old_projection_is_not_latest_complete(self):
+        current = self._mark_ready(self.session)
+        current.session_summary["input_completeness"] = {"status": "complete"}
+        current.save(update_fields=["session_summary"])
+        ExperimentSession.objects.filter(pk=self.session.pk).update(
+            research_source_revision=current.source_revision + 1,
+        )
+        preparation = domain_payload(self.client.get(self.api("advanced/status/"), self._query()))["preparation"]
+        self.assertEqual(preparation["ready_count"], 1)
+        self.assertEqual(preparation["total_count"], 1)
+        self.assertEqual(preparation["latest_complete_count"], 0)
+        self.assertEqual(preparation["stale_count"], 1)
+
+    def test_latest_complete_requires_current_revision_and_verified_capture(self):
+        current = self._mark_ready(self.session)
+        current.session_summary["input_completeness"] = {"status": "complete"}
+        current.save(update_fields=["session_summary"])
+        preparation = domain_payload(self.client.get(self.api("advanced/status/"), self._query()))["preparation"]
+        self.assertEqual(preparation["latest_complete_count"], 1)
+        self.assertEqual(preparation["input_incomplete_count"], 0)
+        self.assertEqual(preparation["input_unverified_count"], 0)
+
+    def test_missing_compact_coverage_is_unverified_instead_of_complete(self):
+        current = self._mark_ready(self.session)
+        current.session_summary.pop("input_completeness")
+        current.save(update_fields=["session_summary"])
+        preparation = domain_payload(self.client.get(self.api("advanced/status/"), self._query()))["preparation"]
+        self.assertEqual(preparation["latest_complete_count"], 0)
+        self.assertEqual(preparation["input_incomplete_count"], 1)
+        self.assertEqual(preparation["input_unverified_count"], 1)
+        self.assertEqual(preparation["state"], "incomplete")
+
+    def test_fresh_projection_does_not_hide_incomplete_or_unverified_capture(self):
+        current = self._mark_ready(self.session)
+        for status, unverified in (("partial", 0), ("legacy_unknown", 1)):
+            with self.subTest(status=status):
+                current.session_summary["input_completeness"] = {"status": status}
+                current.save(update_fields=["session_summary"])
+                with CaptureQueriesContext(connection) as queries:
+                    preparation = domain_payload(self.client.get(self.api("advanced/status/"), self._query()))["preparation"]
+                self.assertEqual(preparation["state"], "incomplete")
+                self.assertEqual(preparation["ready_count"], 1)
+                self.assertEqual(preparation["latest_complete_count"], 0)
+                self.assertEqual(preparation["input_incomplete_count"], 1)
+                self.assertEqual(preparation["input_unverified_count"], unverified)
+                sql = "\n".join(query["sql"] for query in queries.captured_queries)
+                for table in ("assessment_assessmentevent", "assessment_clientcapturecheckpoint", "analytics_recordingcoveragesession"):
+                    self.assertNotIn(table, sql)
+
+    def test_materialization_records_existing_coverage_verdict_without_claiming_collection_complete(self):
+        current = self._materialize()
+        self.assertEqual(current.session_summary["input_completeness"]["status"], "legacy_unknown")
+        preparation = domain_payload(self.client.get(self.api("advanced/status/"), self._query()))["preparation"]
+        self.assertEqual(preparation["state"], "incomplete")
+        self.assertEqual(preparation["latest_complete_count"], 0)
+
+    def _complete_capture_with_unvisited_attempt(self):
+        from apps.assessment.event_services import append_assessment_event
+        from apps.assessment.models import Attempt, StudentQuestionAssignment
+        from apps.assessment.recording_capture_services import ensure_capture_contract_v1, record_client_capture_checkpoint
+        from apps.assessment.response_snapshot_services import create_response_snapshot
+        from apps.assessment.time_sync_services import create_pending_time_sync, finalize_time_sync
+        from apps.experiments.models import QuestionSnapshot
+        from apps.experiments.presentation_instances import get_or_create_default_item_instance
+
+        contract = ensure_capture_contract_v1()
+        ExperimentSession.objects.filter(pk=self.session.pk).update(capture_contract=contract)
+        self.session.refresh_from_db()
+        now, client = timezone.now(), uuid4()
+        sample = create_pending_time_sync(session=self.session, client_instance_id=client,
+            client_wall_time_utc=now, client_time_origin=now, client_monotonic_ms=0)
+        finalize_time_sync(time_sync_id=sample.pk, client_instance_id=client,
+            client_received_wall_time_utc=now + timedelta(milliseconds=100), client_received_monotonic_ms=100)
+        snapshot = create_response_snapshot(attempt=self.attempt, content="答案")
+        events = [
+            ("session_started", 2, "assessment", {"capture_contract_id": str(contract.pk), "capture_contract_sha256": contract.schema_sha256}, None),
+            ("document_visible", 1, "telemetry", {}, None),
+            ("window_focused", 1, "telemetry", {}, None),
+            ("item_entered", 2, "assessment", {"entry_reason": "session_start", "from_assignment_id": None}, self.attempt),
+            ("item_rendered", 1, "assessment", {"presentation_state": "interactive"}, self.attempt),
+            ("response_state_changed", 1, "assessment", {"question_type": "short_answer", "response_state_before": None,
+                "response_state_after": {"snapshot_id": str(snapshot.pk), "state_hash": snapshot.state_hash, "content_length": snapshot.content_length}, "change_source": "student"}, self.attempt),
+            ("item_left", 1, "assessment", {"leave_reason": "finish"}, self.attempt),
+            ("session_completed", 2, "assessment", {"completion_reason": "student", "terminal_at": now.isoformat()}, None),
+        ]
+        for sequence, (kind, version, domain, payload, attempt) in enumerate(events, 1):
+            append_assessment_event(event_type=kind, event_version=version, event_domain=domain,
+                actor_source="client", session=self.session, attempt=attempt, payload=payload,
+                client_instance_id=client, client_sequence_no=sequence,
+                client_wall_time_utc=now, client_time_origin=now, client_monotonic_ms=sequence * 100)
+        record_client_capture_checkpoint(student=self.student, document={
+            "checkpoint_id": str(uuid4()), "session_id": self.session.pk, "client_instance_id": str(client),
+            "highest_emitted_sequence_no": len(events), "highest_acked_sequence_no": len(events),
+            "highest_contiguous_acked_sequence_no": len(events), "pending_event_count": 0,
+            "failed_event_count": 0, "missing_local_sequence_ranges": [], "client_monotonic_ms": "900",
+            "client_wall_time_utc": now.isoformat(), "client_time_origin": now.isoformat(),
+            "time_sync_id": str(sample.pk), "trigger": "navigation", "quality_flags": [], "app_version": "test",
+        })
+        self.attempt.first_opened_at = now
+        self.attempt.visit_count = 1
+        self.attempt.save(update_fields=["first_opened_at", "visit_count"])
+        source = self.attempt.assignment.snapshot.source_question
+        unseen_question = type(source).objects.create(bank=source.bank, sequence=2,
+            question_type="short_answer", text="未访问题目", correct_answer="答案")
+        unseen_snapshot = QuestionSnapshot.objects.create(version=self.version, source_question=unseen_question, source_sequence=2,
+            code="UNSEEN", question_type="short_answer", text="未访问题目", correct_answer="答案")
+        assignment = StudentQuestionAssignment.objects.create(session=self.session, snapshot=unseen_snapshot,
+            item_instance=get_or_create_default_item_instance(unseen_snapshot), assigned_sequence_index=2)
+        return Attempt.objects.create(session=self.session, assignment=assignment, status=Attempt.Status.UNANSWERED)
+
+    def test_never_observed_unanswered_attempt_is_not_missing_expected_capture(self):
+        unseen = self._complete_capture_with_unvisited_attempt()
+        current = self._materialize()
+        from .models import RecordingCoverageRun
+        summary = current.session_summary["input_completeness"]
+        coverage = RecordingCoverageRun.objects.get(pk=summary["coverage_run_id"])
+        self.assertEqual(coverage.session_results.get().overall_status, "complete")
+        self.assertEqual(coverage.attempt_results.get(attempt=unseen).overall_status, "insufficient")
+        self.assertEqual(summary["status"], "complete")
+        self.assertEqual(summary["required_attempt_count"], 1)
+        self.assertEqual(summary["unobserved_attempt_count"], 1)
+
+    def test_observed_unanswered_attempt_still_requires_its_capture(self):
+        unseen = self._complete_capture_with_unvisited_attempt()
+        unseen.first_opened_at = timezone.now()
+        unseen.save(update_fields=["first_opened_at"])
+        current = self._materialize()
+        summary = current.session_summary["input_completeness"]
+        self.assertEqual(summary["status"], "partial")
+        self.assertEqual(summary["required_attempt_count"], 2)
+        self.assertEqual(summary["unobserved_attempt_count"], 0)
+
+    def test_late_checkpoint_only_write_marks_projection_stale_and_reconciliation_recovers_queue_failure(self):
+        from apps.assessment.recording_capture_services import record_client_capture_checkpoint
+        from .research_materialization_jobs import reconcile_session_materializations
+
+        current = self._materialize()
+        now = timezone.now()
+        document = {
+            "checkpoint_id": str(uuid4()), "session_id": self.session.pk,
+            "client_instance_id": str(uuid4()), "highest_emitted_sequence_no": 0,
+            "highest_acked_sequence_no": 0, "highest_contiguous_acked_sequence_no": 0,
+            "pending_event_count": 0, "failed_event_count": 0,
+            "missing_local_sequence_ranges": [], "client_monotonic_ms": "0",
+            "client_wall_time_utc": now.isoformat(), "client_time_origin": now.isoformat(),
+            "time_sync_id": None, "trigger": "navigation", "quality_flags": [], "app_version": "test",
+        }
+        with patch("apps.analytics.research_materialization_jobs._enqueue_if_eligible", side_effect=RuntimeError("queue unavailable")):
+            with self.captureOnCommitCallbacks(execute=True):
+                record_client_capture_checkpoint(student=self.student, document=document)
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.research_source_revision, current.source_revision + 1)
+        self.assertEqual(reconcile_session_materializations(limit=10)["enqueued"], 1)
+        version = self.session.research_source_revision
+        with self.captureOnCommitCallbacks(execute=True):
+            record_client_capture_checkpoint(student=self.student, document=document)
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.research_source_revision, version)
+
+    def test_session_time_sync_creation_and_finalization_refresh_projection_once_each(self):
+        from apps.assessment.time_sync_services import create_pending_time_sync, finalize_time_sync
+
+        current = self._materialize()
+        now = timezone.now()
+        client_id = uuid4()
+        with self.captureOnCommitCallbacks(execute=True):
+            sample = create_pending_time_sync(
+                session=self.session, client_instance_id=client_id,
+                client_wall_time_utc=now, client_time_origin=now,
+                client_monotonic_ms=0,
+            )
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.research_source_revision, current.source_revision + 1)
+        current = self._materialize()
+        values = {
+            "time_sync_id": sample.pk, "client_instance_id": client_id,
+            "client_received_wall_time_utc": now + timedelta(milliseconds=100),
+            "client_received_monotonic_ms": 100,
+        }
+        with self.captureOnCommitCallbacks(execute=True):
+            finalize_time_sync(**values)
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.research_source_revision, current.source_revision + 1)
+        version = self.session.research_source_revision
+        with self.captureOnCommitCallbacks(execute=True):
+            finalize_time_sync(**values)
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.research_source_revision, version)
 
     def test_current_projection_query_is_lazy_and_filters_expected_version(self):
         from django.db.models import QuerySet
@@ -288,7 +479,7 @@ class AdvancedMaterializedApiTests(TestCase):
         self.assertEqual(response.status_code, 200, response.content[:300])
         payload = domain_payload(response)
         self.assertEqual(payload["preview"]["page"]["total_items"], 1)
-        self.assertEqual(payload["preparation"]["state"], "ready")
+        self.assertEqual(payload["preparation"]["state"], "incomplete")
         version = payload['preparation']['result_version']
         self.assertRegex(version, r'^[0-9a-f]{32}$')
         metadata = domain_payload(self.client.get(self.api('advanced/status/'), self._query()))
@@ -315,7 +506,7 @@ class AdvancedMaterializedApiTests(TestCase):
         self.assertEqual(response.status_code, 200, response.content[:300])
         payload = domain_payload(response)
         self.assertEqual(payload["page"]["total_items"], 5)
-        self.assertEqual(payload["preparation"]["state"], "ready")
+        self.assertEqual(payload["preparation"]["state"], "incomplete")
         self.assertEqual(payload["preparation"]["ready_count"], 1)
         self.assertEqual({item["question_code"] for item in payload["items"]}, {"Q001"})
 

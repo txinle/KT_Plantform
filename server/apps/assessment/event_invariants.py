@@ -163,7 +163,7 @@ def _require_attempt_links(
 
 
 def _validate_payload_links(
-    *, event_type, payload, session, attempt, question_snapshot
+    *, event_type, payload, session, attempt, question_snapshot, confidence_assignments=None
 ):
     if event_type == "item_entered" and payload["from_assignment_id"] is not None:
         if not StudentQuestionAssignment.objects.filter(
@@ -221,8 +221,10 @@ def _validate_payload_links(
                         "Multiple-choice response must be an ordered unique option set."
                     )
     if event_type in CONFIDENCE_EVENTS:
-        assignment = ConfidenceAssignment.objects.filter(attempt=attempt).first()
-        if assignment is None or str(assignment.pk) != payload["confidence_assignment_id"]:
+        assignment = (ConfidenceAssignment.objects.filter(attempt=attempt).first()
+                      if confidence_assignments is None else confidence_assignments.get(attempt.pk))
+        if (assignment is None or assignment.attempt_id != attempt.pk
+                or str(assignment.pk) != payload["confidence_assignment_id"]):
             raise EventInvariantError(
                 "Confidence event does not match the attempt assignment."
             )
@@ -364,6 +366,7 @@ def validate_event_invariants(
     attempt,
     question_snapshot,
     item_instance,
+    confidence_assignments=None,
 ):
     expected_domain = "telemetry" if event_type in TELEMETRY_EVENTS else "assessment"
     if event_domain != expected_domain:
@@ -398,6 +401,7 @@ def validate_event_invariants(
         session=session,
         attempt=attempt,
         question_snapshot=question_snapshot,
+        confidence_assignments=confidence_assignments,
     )
     _validate_submission_invariants(
         event_type=event_type,

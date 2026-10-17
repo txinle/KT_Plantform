@@ -2,6 +2,7 @@ from apps.api.test_support import domain_payload
 import importlib.util
 import json
 import tempfile
+import uuid
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -128,6 +129,9 @@ from apps.assessment.test_student_api import StudentApiFixtureMixin
                    STUDENT_SHARED_RESULTS_COURSE_IDS=frozenset({'*'}),
                    CLASS_CENTER_ENABLED=True, STUDENT_LEARNING_ANALYTICS_ENABLED=True)
 class SchoolPostFormalOwnResultsSQLTests(StudentApiFixtureMixin, TransactionTestCase):
+    prepared_paper_fixture = True
+
+    @override_settings(ASSESSMENT_ADMISSION_ENABLED=True, ASSESSMENT_ADMISSION_GLOBAL_ENABLED=True, ASSESSMENT_PREPARED_ADMISSION_MODE="postgres_transaction")
     def test_real_cookie_full_snapshot_results_and_question_rollback(self):
         from django.test import Client
         from apps.assessment.models import ExperimentSession
@@ -139,11 +143,36 @@ class SchoolPostFormalOwnResultsSQLTests(StudentApiFixtureMixin, TransactionTest
             'username': self.student.username, 'password': 'test-password'}), content_type='application/json',
             HTTP_X_CSRFTOKEN=token).status_code, 200)
         token = client.cookies['csrftoken'].value
-        started = client.post(f'/api/v1/student/tasks/{self.task.pk}/start/', data='{}',
+        self.stream = uuid.uuid4()
+        started = client.post(f'/api/v1/student/tasks/{self.task.pk}/start/', data=json.dumps({'client_instance_id': str(self.stream), 'navigation_id': str(uuid.uuid4())}),
                               content_type='application/json', HTTP_X_CSRFTOKEN=token)
         self.assertEqual(started.status_code, 201)
         session = ExperimentSession.objects.get(pk=domain_payload(started)['session_id'])
-        self.complete_session(session)
+        self.session = session
+        attempt = session.attempts.get()
+        from apps.assessment.test_capture_v2 import CaptureV2Tests
+        from django.urls import reverse
+        from django.utils import timezone
+        from apps.assessment.session_submission_services import claim_session_submission, run_session_submission
+        event = CaptureV2Tests.transition(self, attempt, None, 'B')
+        captured = client.post(reverse('assessment_process:capture_v2_batch'), data=json.dumps({
+            'client_instance_id': str(self.stream), 'events': [event]}), content_type='application/json', HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(captured.status_code, 200, captured.content)
+        lease = domain_payload(started)['runtime']['initial_writer_lease']
+        saved = client.post(reverse('assessment_api:save_draft', args=[attempt.pk]), data=json.dumps({
+            'answer': 'B', 'target_event_id': event['event_id'], 'expected_version': 0,
+            'writer_lease_token': lease['writer_lease_token'], 'writer_client_instance_id': str(self.stream)}),
+            content_type='application/json', HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(saved.status_code, 200, saved.content)
+        attempt.refresh_from_db()
+        accepted = client.post(reverse('assessment_api:finish', args=[session.pk]), data=json.dumps({
+            'submission_token': str(uuid.uuid4()), 'client_clicked_at': timezone.now().isoformat(),
+            'expected_versions': [{'attempt_id': attempt.pk, 'response_version': attempt.response_version,
+                'target_event_id': str(attempt.active_response_event_id)}]}), content_type='application/json', HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(accepted.status_code, 202, accepted.content)
+        claimed = claim_session_submission(worker_id='post-formal-sql-test')
+        self.assertEqual(str(claimed.pk), domain_payload(accepted)['submission_id'])
+        self.assertEqual(run_session_submission(claimed).status, 'completed')
         detail = f'/api/v1/student/courses/{self.course.pk}/learning/experiments/{self.experiment.pk}/'
         paths = [detail, f'/api/v1/student/tasks/{self.task.pk}/results/',
                  detail + f'questions/{session.attempts.first().assignment.snapshot_id}/']

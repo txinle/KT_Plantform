@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import process from 'node:process'
+import { Buffer } from 'node:buffer'
 import { chromium, expect as baseExpect } from '@playwright/test'
 import { observeBrowserProtocol } from './browser-network-witness.mjs'
 import { captureBrowserStorage } from './browser-storage-witness.mjs'
@@ -174,10 +175,36 @@ export async function resolvePlannedConfidence(page, selection, { pause, timed, 
   }
   await timed(selection.action === 'fill' ? 'confidence_input_ready' : 'confidence_skip_ready', async () => {
     if (selection.action === 'fill') {
-      await page.locator('[data-confidence-number]').fill(String(selection.value))
-      await page.locator('[data-confidence-submit]').click()
-    } else await page.getByRole('button', { name: '跳过评价', exact: true }).click()
+      await page.locator('[data-inline-confidence]').fill(String(selection.value))
+    } else await page.locator('[data-inline-confidence]').fill('')
   })
+}
+
+export async function submitWholePaperReceipt(page, timeoutMs = 35000) {
+  const origin = new globalThis.URL(page.url())
+  const session = origin.pathname.match(/^\/student\/sessions\/(\d+)\/questions\/\d+\/$/)?.[1]
+  if (!session) throw new Error('Whole-paper submission requires the current authorized session')
+  const desktop = page.locator('[data-finish-request]')
+  if (await desktop.isVisible()) await desktop.click()
+  else {
+    await page.locator('[data-mobile-navigation-trigger]').click()
+    await page.locator('#assessment-mobile-navigation').getByRole('button', { name: '提交试卷', exact: true }).click()
+  }
+  const accepted = page.waitForResponse(response => response.request().method() === 'POST'
+    && new globalThis.URL(response.url()).origin === origin.origin
+    && new globalThis.URL(response.url()).pathname.endsWith(`/student/sessions/${session}/finish/`), { timeout: timeoutMs })
+  void accepted.catch(() => undefined)
+  await page.locator('[data-paper-submit-confirm]').click()
+  const response = await accepted
+  const receipt = (await response.json()).data
+  if (response.status() !== 202 || receipt?.success !== true || !receipt.submission_id
+    || !['queued', 'running', 'completed'].includes(receipt.status)) throw new Error('Whole-paper receipt was not durably accepted')
+  for (const [field, path] of [['status_url', `/api/v1/student/sessions/${session}/submission/`],
+    ['next_url', `/student/sessions/${session}/complete/`]]) {
+    const target = new globalThis.URL(receipt[field], origin)
+    if (target.origin !== origin.origin || target.pathname !== path) throw new Error('Whole-paper receipt scope differs')
+  }
+  return receipt
 }
 
 export async function performSubmissionPhases({ ack, ready, timed, last, timeoutMs = 35000, now = () => globalThis.performance.now() }) {
@@ -264,7 +291,19 @@ export function browserResponseStates(body) {
       question_type: event.payload.after_state.question_type, state_sha256: event.payload.after_state_hash }))
 }
 
-export function buildBrowserArchitectureSessions(report, accounts) {
+export function wholePaperRequestMaterial(path, body) {
+  const session = /^\/(?:api\/v1\/)?student\/sessions\/(\d+)\/finish\/$/.exec(path)?.[1]
+  const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+  if (!session || !uuid(body?.submission_token) || !Array.isArray(body.expected_versions)
+    || body.expected_versions.some(row => !Number.isInteger(row.attempt_id) || row.attempt_id <= 0
+      || !Number.isInteger(row.response_version) || row.response_version < 0
+      || (row.target_event_id !== null && !uuid(row.target_event_id)))) return null
+  return { session_id: Number(session), submission_token: body.submission_token, material_sha256: digest(body),
+    expected_versions: body.expected_versions.map(row => ({ attempt_id: row.attempt_id,
+      response_version: row.response_version, target_event_id: row.target_event_id })) }
+}
+
+export function buildBrowserArchitectureSessions(report, accounts, runtimeContract = 'student-slice-v1') {
   const sessions = {}
   report.probes.forEach((probe, index) => {
     const evidence = probe.protocol_witness
@@ -276,13 +315,34 @@ export function buildBrowserArchitectureSessions(report, accounts) {
       if (state) acknowledged.set(ack.event_id, state)
     }
     const answers = {}
+    const saved = new Map()
     for (const request of evidence.requests) {
+      const draft = /^\/api\/v1\/student\/attempts\/(\d+)\/draft\/$/.exec(request.path || '')
+      if (draft && request.status >= 200 && request.status < 300 && request.receipt?.active_response_event_id
+        && Number.isInteger(request.receipt.response_version)) saved.set(draft[1], request.receipt)
+      if (probe.operation_protocol === 'whole-paper-v1') continue
       const attempt = /^\/api\/v1\/student\/attempts\/(\d+)\/submit\/$/.exec(request.path || '')
-      const state = acknowledged.get(request.receipt?.final_response_event_id)
-      if (!attempt || !state || !request.receipt?.committed || request.status < 200 || request.status >= 300) continue
+      const split = runtimeContract === 'capture-v2-split-v1'
+      const head = split ? request.submission?.target_event_id : request.receipt?.final_response_event_id
+      const state = acknowledged.get(head)
+      const prior = attempt ? saved.get(attempt[1]) : null
+      const confirmed = split ? request.receipt?.status === 'submitted' && prior?.active_response_event_id === head : request.receipt?.committed
+      if (!attempt || !state || !confirmed || request.status < 200 || request.status >= 300) continue
       answers[attempt[1]] = { question_type: state.question_type, state_sha256: state.state_sha256,
-        target_event_id: request.receipt.final_response_event_id, submission_token: request.submission.token,
-        response_version: request.receipt.response_version }
+        target_event_id: head, submission_token: request.submission.token,
+        response_version: split ? prior.response_version : request.receipt.response_version }
+    }
+    if (probe.operation_protocol === 'whole-paper-v1' && probe.completed === true && probe.session_completed === true
+      && probe.session_submission?.submission_id && ['queued', 'running', 'completed'].includes(probe.session_submission.status)
+      && probe.paper_submission_intent?.session_id === evidence.session_ids[0]) {
+      for (const pointer of probe.paper_submission_intent.expected_versions) {
+        const state = acknowledged.get(pointer.target_event_id)
+        const prior = saved.get(String(pointer.attempt_id))
+        if (!state || prior?.active_response_event_id !== pointer.target_event_id || prior.response_version !== pointer.response_version) continue
+        answers[String(pointer.attempt_id)] = { question_type: state.question_type, state_sha256: state.state_sha256,
+          target_event_id: pointer.target_event_id, response_version: pointer.response_version,
+          submission_token: probe.paper_submission_intent.submission_token }
+      }
     }
     sessions[String(evidence.session_ids[0])] = { username_sha256: digest(accounts[index].username), complete: probe.completed === true, answers }
   })
@@ -486,13 +546,27 @@ export async function captureFirstReadyLayout(page, outputDirectory, index, view
     captured_at: started, passed: !layout.overflow && layout.viewport_width === viewport.width }
 }
 
-export async function captureVisualLayouts(page, outputDirectory, setZoom, { onlyZoom = false } = {}) {
+export async function captureBrowserViewport(page, path) {
+  const session = await page.context().newCDPSession(page)
+  try {
+    // Playwright's document clip is offset incorrectly after scrolling at native browser zoom.
+    const { data } = await session.send('Page.captureScreenshot', {
+      format: 'png', fromSurface: true, captureBeyondViewport: false,
+    })
+    writeFileSync(path, Buffer.from(data, 'base64'))
+  } finally { await session.detach() }
+}
+
+export async function captureVisualLayouts(page, outputDirectory, setZoom, { onlyZoom = false, captureViewport = captureBrowserViewport } = {}) {
   const rows = []
+  const viewportCaptures = []
   let zoom
   const layoutMetrics = () => page.evaluate(() => {
     globalThis.scrollTo(0, 0)
     const documentWidth = Math.max(globalThis.document.documentElement.scrollWidth, globalThis.document.body.scrollWidth)
-    return { viewport_width: globalThis.innerWidth, document_width: documentWidth, overflow: documentWidth > globalThis.innerWidth + 1 }
+    return { viewport_width: globalThis.innerWidth, document_width: documentWidth,
+      document_height: Math.max(globalThis.document.documentElement.scrollHeight, globalThis.document.body.scrollHeight),
+      overflow: documentWidth > globalThis.innerWidth + 1 }
   })
   try {
     for (const viewport of (onlyZoom ? [] : [
@@ -510,8 +584,25 @@ export async function captureVisualLayouts(page, outputDirectory, setZoom, { onl
     if (zoom.status === 'verified') {
       const layout = await layoutMetrics()
       const filename = 'probe-1-active-zoom200.png'
+      rows.push({ label: 'zoom200', width: 1440, height: 900, ...layout, filename, status: 'captured',
+        visual_evidence: 'artifact_only_zoom_fullPage_may_crop' })
+      const maximumScroll = Math.max(0, (layout.document_height || zoom.after.inner_height) - zoom.after.inner_height)
+      const positions = [0]
+      while (positions.at(-1) < maximumScroll) positions.push(Math.min(maximumScroll, positions.at(-1) + zoom.after.inner_height))
+      for (const [index, position] of positions.entries()) {
+        const viewport = await page.evaluate(async y => {
+          globalThis.scrollTo(0, y)
+          await new Promise(resolveFrame => globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(resolveFrame)))
+          return { viewport_width: globalThis.innerWidth, viewport_height: globalThis.innerHeight,
+            device_pixel_ratio: globalThis.devicePixelRatio, scroll_y: globalThis.scrollY }
+        }, position)
+        const label = index === 0 ? 'top' : position === maximumScroll ? 'bottom' : `scroll-${index + 1}`
+        const filename = `probe-1-active-zoom200-viewport-${label}.png`
+        await captureViewport(page, join(outputDirectory, filename))
+        viewportCaptures.push({ label, filename, full_page: false, method: 'CDP native viewport without document clip', ...viewport })
+      }
+      await page.evaluate(() => globalThis.scrollTo(0, 0))
       await page.screenshot({ path: join(outputDirectory, filename), fullPage: true, animations: 'disabled' })
-      rows.push({ label: 'zoom200', width: 1440, height: 900, ...layout, filename, status: 'captured' })
     } else rows.push({ label: 'zoom200', status: 'unsupported', reason: zoom.reason })
   } finally {
     if (zoom) {
@@ -524,6 +615,7 @@ export async function captureVisualLayouts(page, outputDirectory, setZoom, { onl
       catch { zoom.reset_status = 'unsupported' }
     }
     await page.setViewportSize({ width: 1440, height: 900 })
+    if (zoom) await page.evaluate(() => globalThis.scrollTo(0, 0))
     if (zoom?.before && !zoom.reset_status) {
       const restored = await zoomMetrics(page)
       zoom.reset_status = Math.abs(restored.device_pixel_ratio / zoom.before.device_pixel_ratio - 1) <= 0.05
@@ -531,7 +623,8 @@ export async function captureVisualLayouts(page, outputDirectory, setZoom, { onl
     }
   }
   return { passed: rows.every(row => !row.overflow) && zoom.status === 'verified' && zoom.reset_status === 'verified',
-    layouts: rows, zoom_method: zoom.method, zoom }
+    passed_scope: 'dom_layout_and_zoom_only', full_page_zoom_visual_verified: false,
+    layouts: rows, viewport_captures: viewportCaptures, zoom_method: zoom.method, zoom }
 }
 
 export async function waitForSessionCompletion(page, taskId, waitForSummary = async (locator, timeout) => { await expect(locator).toBeVisible({ timeout }) }, timeoutMs = 35000) {
@@ -599,7 +692,9 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
         if (!entry.name.startsWith('kt-assessment:')) continue
         const detail = entry.detail || {}
         void globalThis.__ktProbeTiming({ stage: detail.stage, operation_id: detail.operation_id,
-          outcome: detail.outcome, start_ms: entry.startTime, duration_ms: entry.duration })
+          outcome: detail.outcome, start_ms: entry.startTime, duration_ms: entry.duration,
+          ...(detail.event_id ? { event_id: detail.event_id, client_sequence_no: detail.client_sequence_no,
+            client_time_origin: detail.client_time_origin } : {}) })
       }
     }).observe({ type: 'measure', buffered: true })
   })
@@ -612,6 +707,8 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
     let body
     try { body = request.postDataJSON() } catch { return }
     report.response_states.push(...browserResponseStates(body))
+    const paper = wholePaperRequestMaterial(new globalThis.URL(request.url()).pathname, body)
+    if (paper) report.paper_submission_intent = paper
   })
   async function ready(timeoutMs = 35000) {
     const started = globalThis.performance.now()
@@ -649,6 +746,8 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
       return report
     }
     if (natural) await pause(Math.max(0, natural.startAt + natural.plan.arrival_offset_seconds - Date.now() / 1000))
+    report.assessment_flow_version = 1
+    report.operation_protocol = 'whole-paper-v1'
     report.started_at = Date.now() / 1000
     await timed('login', 0, async () => {
       await page.goto('/login/')
@@ -743,42 +842,33 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
         })
       }
       if (natural?.scenario === 'confidence-only-v1') {
-        await timed('submit_request_confidence_ready', item + 1, async () => {
-          await page.locator('[data-submit-request]').click()
-          await expect(page.locator('[data-confidence-panel]')).toBeVisible()
-        })
         await resolvePlannedConfidence(page, { action: natural.plan.confidence_actions[item],
           value: natural.plan.confidence_values[item], thinkSeconds: natural.plan.confidence_think_seconds[item] }, {
           pause: async seconds => { stage = 'confidence_think'; await pause(seconds) },
           recordThink: row => { (report.confidence_think_waits ||= []).push({ item, ...row }) },
-          timed: (action, operation) => timed(action, item + 1, async () => {
-            await operation()
-            await expect(page.locator('[data-submit-confirm]')).toBeVisible()
-          }),
+          timed: (action, operation) => timed(action, item + 1, operation),
         })
-      } else await timed('submit_confirmation_ready', item + 1, async () => {
-        await page.locator('[data-submit-request]').click()
-        if (await page.locator('[data-confidence-panel]').isVisible()) await page.getByRole('button', { name: '跳过评价', exact: true }).click()
-        await expect(page.locator('[data-submit-confirm]')).toBeVisible()
-      })
-      await performSubmissionPhases({ last: item + 1 === itemLimit,
-        timed: (action, operation) => action === 'submit_next_ready' || action === 'finish_ready'
+      }
+      await expect(page.locator('[data-save-status]')).toHaveText('草稿已保存')
+      report.drafted_count = item + 1
+      if (item + 1 < itemLimit) {
+        await navigation('navigation_next_ready', item + 1, links[item + 1].id, `${sessionPath}questions/${links[item + 1].id}/`)
+        continue
+      }
+      await performSubmissionPhases({ last: true,
+        timed: (action, operation) => action === 'finish_ready'
           ? timed(action, item + 1, operation)
           : timedProbeAction(report, origin, action, item + 1, operation),
         ack: async () => {
-        const submitted = page.waitForResponse((response) => response.url().endsWith('/submit/') && response.request().method() === 'POST')
-        await page.locator('[data-submit-confirm]').click()
-        const response = await submitted
-        if (!response.ok()) throw new Error('Fixture submission failed')
-        const result = (await response.json()).data
-        if (result.success !== true || result.status !== 'submitted') throw new Error('Fixture submission was not confirmed')
-        report.submitted_count++
-        return result
-        }, ready: async (result, remaining) => {
-        await waitForSubmittedDestination(page, new globalThis.URL(result.next_url, page.url()).pathname, async budget => {
-          if (item + 1 < itemLimit) await ready(budget)
-          else report.session_completed = await waitForSessionCompletion(page, account.taskId, undefined, budget)
-        }, { report, sequence: item + 1, stopFile: natural?.stopFile, timeoutMs: remaining })
+          const receipt = await submitWholePaperReceipt(page)
+          report.session_submission = { submission_id: receipt.submission_id, accepted_at: receipt.accepted_at, status: receipt.status }
+          return receipt
+        },
+        ready: async (result, remaining) => {
+          await waitForSubmittedDestination(page, new globalThis.URL(result.next_url, page.url()).pathname, async budget => {
+            report.session_completed = await waitForSessionCompletion(page, account.taskId, undefined, budget)
+          }, { report, sequence: item + 1, stopFile: natural?.stopFile, timeoutMs: remaining })
+          report.submitted_count = itemLimit
         },
       })
     }
@@ -799,7 +889,7 @@ async function runAccount(browser, account, baseURL, index, itemLimit, visualOut
         tag: node.tagName, type: node.getAttribute('type'), disabled: node.disabled,
       })),
       retry_close_present: Boolean(globalThis.document.querySelector('[data-retry-close]')),
-      submit_disabled: globalThis.document.querySelector('[data-submit-request]')?.disabled ?? null,
+      submit_disabled: globalThis.document.querySelector('[data-finish-request]')?.disabled ?? null,
       submitted_notice_present: globalThis.document.body.textContent.includes('本题已提交并锁定'),
     })).catch(() => ({ observed: false }))
     if (visualOutput) await page.screenshot({ path: join(visualOutput, `probe-${index + 1}-failure.png`), fullPage: true }).catch(() => undefined)
@@ -873,7 +963,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const probes = await Promise.all(accounts.map((account, index) => runAccount(browser, account, values['base-url'], index, Number(values.items), values['visual-output'], manifest.source_config,
       plans ? { plan: plans[index], scenario: workload.scenario, mode: values.mode, startAt, stopFile: values['stop-file'], publish } : null, prepared[index] || null)))
     const report = { phase: values.phase, mode: values.mode, completed: probes.every((probe) => probe.completed), probes }
-    if (values.mode !== 'login-only') report.architecture_sessions = buildBrowserArchitectureSessions(report, accounts)
+    if (values.mode !== 'login-only') report.architecture_sessions = buildBrowserArchitectureSessions(report, accounts,
+      manifest.source_config?.runtime_contract || 'student-slice-v1')
     if (plans) { report.workload_version = 'natural-180-v1'; report.start_at = startAt }
     writeFileSync(values.output, JSON.stringify(report, null, 2), { flag: 'wx', mode: 0o600 })
     globalThis.console.log(JSON.stringify({ completed: probes.every((probe) => probe.completed), actions: probes.map((probe) => probe.actions.length), output: values.output }))

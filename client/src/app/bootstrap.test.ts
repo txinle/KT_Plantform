@@ -36,6 +36,42 @@ function installValidOfflineBootstrap() {
 }
 
 describe('bootstrap initialization', () => {
+  it('reactively installs login/CSRF changes and clears identity on logout', async () => {
+    const bootstrap = await loadBootstrap()
+    const { watch } = await import('vue')
+    installValidOfflineBootstrap()
+    const envelope = JSON.parse(document.getElementById('kt-offline-bootstrap')!.textContent!)
+    const observed: Array<number | undefined> = []
+    const stop = watch(() => bootstrap.getAuthenticationGeneration(), () => {
+      try { observed.push(bootstrap.getBootstrapContext().user.id) } catch { observed.push(undefined) }
+    }, { flush: 'sync' })
+    bootstrap.acceptBootstrapContext(envelope)
+    bootstrap.acceptBootstrapContext({ ...envelope, csrf_token: 'rotated', user: { ...envelope.user, id: 8 } })
+    expect(bootstrap.getCsrfToken()).toBe('rotated')
+    bootstrap.clearBootstrapContext()
+    expect(observed).toEqual([7, 8, undefined])
+    stop()
+  })
+
+  it('does not let an old bootstrap response replace a newer login or revive a logged-out user', async () => {
+    const bootstrap = await loadBootstrap()
+    installValidOfflineBootstrap()
+    const envelope = JSON.parse(document.getElementById('kt-offline-bootstrap')!.textContent!)
+    let resolve!: (value: Response) => void
+    const pending = bootstrap.initializeBootstrapContext({ fetchImpl: vi.fn(() => new Promise(done => { resolve = done })) as typeof fetch })
+    bootstrap.acceptBootstrapContext({ ...envelope, csrf_token: 'new-login', user: { ...envelope.user, id: 9 } })
+    resolve(jsonResponse({ ...envelope, csrf_token: 'old-response' }))
+    await pending
+    expect(bootstrap.getBootstrapContext().user.id).toBe(9)
+    expect(bootstrap.getCsrfToken()).toBe('new-login')
+    const second = bootstrap.initializeBootstrapContext({ force: true, fetchImpl: vi.fn(() => new Promise(done => { resolve = done })) as typeof fetch })
+    bootstrap.clearBootstrapContext()
+    resolve(jsonResponse(envelope))
+    await second
+    expect(() => bootstrap.getBootstrapContext()).toThrow('not authenticated')
+    expect(() => bootstrap.getCsrfToken()).toThrow('missing')
+  })
+
   it('clears assessment recovery caches after live authentication is lost', async () => {
     const postMessage = vi.fn((_message, ports: MessagePort[]) => ports[0]?.postMessage({ ok: true }))
     const original = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker')

@@ -6,7 +6,8 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from . import test_capture_v2 as capture_fixtures
-from .models import AssessmentEvent
+from .models import AssessmentEvent, ExperimentSession
+from .test_student_api import StudentApiFixtureMixin
 from apps.question_bank.models import Question
 
 
@@ -99,17 +100,21 @@ class ResearchToolTests(TestCase):
         self.assertEqual(attempt.confidence_assignment.probability, 57)
 
 
-class ResearchToolProjectionTests(TestCase):
+class ResearchToolProjectionTests(StudentApiFixtureMixin, TestCase):
+    prepared_paper_fixture = True
+
     def setUp(self):
-        ResearchToolTests.setUp(self)
-        base = self.version.configuration['research_tools']['rules'][0]
-        rules = [{**base, 'id': f'check{index}', 'max_exposures': 2, 'required': index == 1}
-                 for index in range(1, 4)]
-        self.version.configuration['research_tools']['rules'] = rules
-        self.version.save(update_fields=['configuration'])
-        self.attempt = self.attempts[Question.Type.SINGLE]
-        self.attempt.session.version = self.version
-        self.client.force_login(self.student)
+        super().setUp()
+        rules = [{'id': f'check{index}', 'tool': 'check', 'trigger': 'item_enter',
+            'question_code': '', 'after_seconds': 0, 'max_exposures': 2,
+            'required': index == 1, 'hint_id': ''} for index in range(1, 4)]
+        self.experiment, self.task = self.publish_task(name='整卷研究工具投影', feedback_mode=self.feedback_mode,
+            research_tools={'check_enabled': True, 'doubt_enabled': True, 'rules': rules})
+        started = self.start(task=self.task)
+        self.assertEqual(started.status_code, 201, started.content)
+        self.session = ExperimentSession.objects.get(class_task=self.task, student=self.student)
+        self.version = self.session.version
+        self.attempt = self.session.attempts.get()
         self.url = f'/api/v1/student/sessions/{self.session.pk}/questions/{self.attempt.assignment_id}/'
 
     def action(self, stage, rule_id):

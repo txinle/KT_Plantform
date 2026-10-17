@@ -1,3 +1,4 @@
+import { submitWholePaper } from './whole-paper'
 import { expect, test, type Page } from '@playwright/test'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -133,17 +134,6 @@ async function setAnswer(page: Page, kind: string) {
   await expect(page.locator('[data-save-status]')).toHaveText('草稿已保存')
 }
 
-async function submitAnswer(page: Page) {
-  await page.locator('[data-submit-request]').click()
-  if (await page.locator('[data-confidence-panel]').isVisible()) await page.getByRole('button', { name: '跳过评价', exact: true }).click()
-  const submitted = page.waitForResponse((response) => response.url().endsWith('/submit/'))
-  await page.locator('[data-submit-confirm]').click()
-  const response = await submitted
-  const body = (await response.json()).data
-  expect(response.ok(), JSON.stringify(body)).toBe(true)
-  await expect(page).toHaveURL((url) => url.pathname === new URL(body.next_url, page.url()).pathname)
-  if (new URL(page.url()).pathname.includes('/questions/')) expect(new URL(page.url()).searchParams.get('reason')).toBe('submit_next')
-}
 
 async function login(page: Page, username: string, password: string) {
   const bootstrapSession = page.waitForResponse((response) => (
@@ -172,7 +162,7 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
     if (/^\/api\/v1\/student\/sessions\/\d+\/questions\/\d+\/$/.test(path)) questionApiRequests += 1
     if (path.includes('process-event-collector')) collectorRequests += 1
     if (path.endsWith('/draft/')) draftRequests += 1
-    if (path.endsWith('/submit/')) submitRequests += 1
+    if (path.endsWith('/finish/')) submitRequests += 1
   })
 
   await login(page, fixture.student.username, fixture.student.password)
@@ -226,13 +216,12 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
     expect(injectedFailure).toBe(true)
     expect(workerPreparationRequests).toBe(1)
     await expect(page.locator('[name=answer]').first()).toBeDisabled()
-    await expect(page.locator('[data-submit-request]')).toBeDisabled()
-    await expect(page.locator('[data-skip-request]')).toBeDisabled()
+    await expect(page.locator('[data-next-question]')).toBeDisabled()
     await expect(page.locator('[data-finish-request]')).toBeDisabled()
     await expect(page.locator('[data-nav-assignment]').first()).toHaveAttribute('aria-disabled', 'true')
     await expect(page.locator('[data-nav-assignment]').first()).not.toHaveAttribute('href', /.+/)
     await expect(page.locator('[data-init-return]')).toHaveAttribute('href', '/student/')
-    expect(questionApiRequests).toBe(1)
+    expect(questionApiRequests).toBe(0)
     expect(collectorRequests).toBe(0)
     expect(draftRequests).toBe(0)
     expect(submitRequests).toBe(0)
@@ -284,7 +273,7 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
   }
   await expect(page.locator('main[data-init-state="ready"]')).toBeVisible()
   await expect(page.locator('[name=answer]').first()).toBeEnabled()
-  expect(questionApiRequests).toBe(1)
+  expect(questionApiRequests).toBe(0)
   expect(collectorRequests).toBe(0)
   expect(await page.locator('script[data-kt-collector]').count()).toBe(0)
 
@@ -303,7 +292,7 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
     await expect(page.locator('main[data-init-state="ready"]')).toBeVisible()
     await setAnswer(page, row.kind)
     if (index === 0) {
-      expect(questionApiRequests).toBe(1)
+      expect(questionApiRequests).toBe(0)
       expect(eventCounts(sessionId, firstAssignmentId)).toEqual({ item_entered: 1, item_rendered: 1, visits: 1 })
     }
     if (row.kind === 'short_answer') {
@@ -421,10 +410,14 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
       expect(response.ok(), await response.text()).toBe(true)
       await expect(page.locator('[data-save-status]')).toHaveText('草稿已保存')
     }
-    await submitAnswer(page)
+    if (index < rows.length - 1) {
+      const destination = `/student/sessions/${sessionId}/questions/${rows[index + 1]!.assignment_id}/`
+      await page.locator('[data-next-question]').click()
+      await expect(page).toHaveURL(url => url.pathname === destination)
+    } else await submitWholePaper(page)
   }
 
   expect(draftRequests).toBeGreaterThanOrEqual(7)
-  expect(submitRequests).toBe(6)
+  expect(submitRequests).toBe(1)
   expect(await page.locator('script[data-kt-collector]').count()).toBeLessThanOrEqual(1)
 })

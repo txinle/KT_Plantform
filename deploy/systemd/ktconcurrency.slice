@@ -1,0 +1,11 @@
+[Unit]
+Description=Isolated KT student concurrency candidate budget
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+# The acceptance budget is the physical 16-core / 16-GB host, including its OS
+# and existing deployment. Do not impose the former extra 14-core / 12-GiB cap.
+CPUQuota=infinity
+MemoryMax=infinity
+TasksMax=4096

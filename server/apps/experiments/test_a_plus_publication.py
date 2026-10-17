@@ -8,7 +8,7 @@ from unittest.mock import patch
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.db.models import QuerySet
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
@@ -374,6 +374,7 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
         self.assertTrue(excluded_projection["can_preview"])
         self.assertEqual(excluded_projection["student_inventory"]["participant_count"], 1)
 
+    @patch("apps.assessment.prepared_services.prepare_participant", new=lambda *_args, **_kwargs: None)
     def test_closed_task_snapshot_is_history_without_a_session_and_unresolved_blocks(self):
         prior_plan = get_or_create_publish_plan(self.experiment, self.teacher)
         PublishPlanClass.objects.create(
@@ -809,7 +810,9 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
         )
         plan.refresh_from_db()
 
-        with CaptureQueriesContext(connection) as queries:
+        # This ceiling measures the atomic frozen release/task core. Per-student
+        # paper preparation is separately covered by prepared publication tests.
+        with patch("apps.assessment.prepared_services.prepare_participant", return_value=None), CaptureQueriesContext(connection) as queries:
             commit_publish_plan(
                 plan,
                 self.teacher,
@@ -1189,6 +1192,7 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
             session.pk,
         )
 
+    @patch("apps.assessment.prepared_services.prepare_participant", new=lambda *_args, **_kwargs: None)
     def test_new_course_short_answer_submission_starts_pending(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)
         PublishPlanClass.objects.create(
@@ -1789,7 +1793,8 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
             mapping.question_release_fingerprint,
         )
 
-    def test_a_plus_task_preserves_the_student_start_draft_submit_contract(self):
+    @override_settings(ASSESSMENT_ADMISSION_ENABLED=True, ASSESSMENT_ADMISSION_GLOBAL_ENABLED=True, ASSESSMENT_PREPARED_ADMISSION_MODE="postgres_transaction")
+    def test_a_plus_task_preserves_canonical_start_draft_and_whole_paper_contract(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)
         PublishPlanClass.objects.create(
             publish_plan=plan,
@@ -1809,50 +1814,45 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
         self.client.force_login(self.student)
 
         task = ClassExperimentTask.objects.get(experiment=self.experiment)
-        start = self.client.post(f"/api/v1/student/tasks/{task.pk}/start/")
-        self.assertEqual(start.status_code, 201)
-        attempt = Attempt.objects.get(session__student=self.student, session__class_task=task)
-        entry = self.client.post(
-            f"/api/v1/student/sessions/{attempt.session_id}/questions/{attempt.assignment_id}/",
-            data=json.dumps({"navigation_id": str(uuid.uuid4()), "reason": "navigation_click",
-                "client_occurred_at": timezone.now().isoformat(), "client_monotonic_ms": 100.0,
-                "client_time_origin": (timezone.now() - timedelta(milliseconds=100)).isoformat()}),
-            content_type="application/json",
-        )
-        self.assertEqual(entry.status_code, 200)
-        question = self.client.get(
-            f"/api/v1/student/sessions/{attempt.session_id}/questions/"
-            f"{attempt.assignment_id}/"
-        )
-        self.assertEqual(question.status_code, 200)
-        self.assertEqual(domain_payload(question)["question"]["text"], "发布预览题")
-
-        draft = self.client.post(
-            reverse("assessment_api:save_draft", args=[attempt.pk]),
-            data=json.dumps({"answer": "答案"}),
-            content_type="application/json",
-        )
-        self.assertEqual(draft.status_code, 200)
-        self.assertTrue(domain_payload(draft)["success"])
-        self.assertIn("response_snapshot_id", domain_payload(draft))
-
-        submitted = self.client.post(
-            reverse("assessment_api:submit", args=[attempt.pk]),
-            data=json.dumps({"submission_token": str(uuid.uuid4())}),
-            content_type="application/json",
-        )
-        self.assertEqual(submitted.status_code, 200)
-        self.assertTrue(domain_payload(submitted)["success"])
-        self.assertEqual(domain_payload(submitted)["status"], "submitted")
-        event_types = set(
-            AssessmentEvent.objects.filter(session=attempt.session).values_list(
-                "event_type", flat=True
-            )
-        )
-        self.assertTrue(
-            {"session_started", "item_entered", "response_committed", "attempt_closed"}
-            <= event_types
-        )
+        self.stream = uuid.uuid4()
+        start = self.client.post(f"/api/v1/student/tasks/{task.pk}/start/",
+            data=json.dumps({'client_instance_id': str(self.stream), 'navigation_id': str(uuid.uuid4())}), content_type='application/json')
+        self.assertEqual(start.status_code, 201, start.content)
+        payload = domain_payload(start)
+        self.session = ExperimentSession.objects.get(pk=payload['session_id'])
+        attempt = Attempt.objects.get(session=self.session)
+        self.assertEqual(payload['runtime']['assessment_flow_version'], 1)
+        from apps.assessment.prepared_content import read_display_content
+        self.assertEqual(read_display_content(payload['runtime']['prepared_paper']['question'])['question']['text'], '发布预览题')
+        question = self.client.get(f'/api/v1/student/sessions/{self.session.pk}/questions/{attempt.assignment_id}/')
+        self.assertEqual(question.status_code, 200, question.content)
+        from apps.assessment.test_capture_v2 import CaptureV2Tests
+        event = CaptureV2Tests.transition(self, attempt, '', '答案')
+        captured = self.client.post(reverse('assessment_process:capture_v2_batch'),
+            data=json.dumps({'client_instance_id': str(self.stream), 'events': [event]}), content_type='application/json')
+        self.assertEqual(captured.status_code, 200, captured.content)
+        lease = payload['runtime']['initial_writer_lease']
+        draft = self.client.post(reverse('assessment_api:save_draft', args=[attempt.pk]),
+            data=json.dumps({'answer': '答案', 'target_event_id': event['event_id'], 'expected_version': 0,
+                'writer_lease_token': lease['writer_lease_token'], 'writer_client_instance_id': str(self.stream)}), content_type='application/json')
+        self.assertEqual(draft.status_code, 200, draft.content)
+        self.assertIn('response_snapshot_id', domain_payload(draft))
+        attempt.refresh_from_db()
+        submitted = self.client.post(reverse('assessment_api:finish', args=[self.session.pk]),
+            data=json.dumps({'submission_token': str(uuid.uuid4()), 'client_clicked_at': timezone.now().isoformat(),
+                'expected_versions': [{'attempt_id': attempt.pk, 'response_version': attempt.response_version,
+                    'target_event_id': str(attempt.active_response_event_id)}]}), content_type='application/json')
+        self.assertEqual(submitted.status_code, 202, submitted.content)
+        from apps.assessment.session_submission_services import claim_session_submission, run_session_submission
+        claimed = claim_session_submission(worker_id='a-plus-contract-test')
+        self.assertEqual(str(claimed.pk), domain_payload(submitted)['submission_id'])
+        result = run_session_submission(claimed)
+        self.assertEqual(result.status, 'completed')
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, 'submitted')
+        self.assertEqual(attempt.final_answer, '答案')
+        event_types = set(AssessmentEvent.objects.filter(session=self.session).values_list('event_type', flat=True))
+        self.assertTrue({'session_started', 'item_entered', 'response_committed', 'attempt_closed'} <= event_types)
 
     def test_same_stable_student_cannot_be_previewed_for_a_second_class_task(self):
         first = get_or_create_publish_plan(self.experiment, self.teacher)
@@ -1878,6 +1878,7 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
 
         self.assertEqual(raised.exception.code, "PARTICIPANT_ALREADY_ASSIGNED")
 
+    @patch("apps.assessment.prepared_services.prepare_participant", new=lambda *_args, **_kwargs: None)
     def test_submission_received_before_manual_close_is_allowed_to_finish(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)
         PublishPlanClass.objects.create(
@@ -1908,6 +1909,7 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
 
         self.assertEqual(submitted.status, Attempt.Status.SUBMITTED)
 
+    @patch("apps.assessment.prepared_services.prepare_participant", new=lambda *_args, **_kwargs: None)
     def test_process_event_batch_uses_request_arrival_time_after_manual_close(self):
         CourseEnrollment.objects.filter(
             course=self.course,

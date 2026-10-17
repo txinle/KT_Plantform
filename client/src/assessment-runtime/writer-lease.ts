@@ -37,6 +37,7 @@ export interface CreateWriterLeaseOptions {
   renewUrl: string
   releaseUrl: string
   now?: () => number
+  initialLease?: WriterLeaseCredentials & { expires_at: string }
   renewBeforeMs?: number
 }
 
@@ -80,7 +81,7 @@ function cacheLease(response: WriterLeaseResponse, clientInstanceId: string): Ca
 export function createWriterLease(options: CreateWriterLeaseOptions): WriterLease {
   const now = options.now || (() => Date.now())
   const renewBeforeMs = options.renewBeforeMs ?? DEFAULT_RENEW_BEFORE_MS
-  let cached: CachedWriterLease | undefined
+  let cached: CachedWriterLease | undefined = options.initialLease ? cacheLease({ success: true, lease_token: options.initialLease.writer_lease_token, client_instance_id: options.initialLease.writer_client_instance_id, expires_at: options.initialLease.expires_at }, options.clientInstanceId) : undefined
   let pending: Promise<CachedWriterLease> | undefined
   let releasePending: Promise<void> | undefined
 

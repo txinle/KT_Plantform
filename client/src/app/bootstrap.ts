@@ -1,4 +1,5 @@
 import { unwrapApiData } from '@/api/client'
+import { readonly, ref, shallowRef } from 'vue'
 export interface AuthenticatedUser {
   id: number
   role: string
@@ -15,6 +16,7 @@ export interface AuthenticatedUser {
 export interface BootstrapContext {
   csrf_token: string
   user: AuthenticatedUser
+  client_navigation?: { student_courses: boolean; course_ids: string[] }
 }
 
 export interface OfflineBootstrapEnvelope extends BootstrapContext {
@@ -37,7 +39,10 @@ class BootstrapNetworkError extends Error {
   }
 }
 
-let cachedContext: BootstrapContext | undefined
+const contextState = shallowRef<BootstrapContext | null>(null)
+export const bootstrapContext = readonly(contextState)
+const authenticationGeneration = ref(0)
+let initializationSequence = 0
 let offlineRecoveryPagePath: string | undefined
 let csrfToken: string | undefined
 let pendingInitialization: Promise<BootstrapContext | null> | undefined
@@ -96,31 +101,42 @@ async function jsonResponse(fetchImpl: typeof fetch, path: string): Promise<Resp
   }
 }
 
-async function initializeLiveBootstrap(fetchImpl: typeof fetch): Promise<BootstrapContext | null> {
+async function initializeLiveBootstrap(fetchImpl: typeof fetch): Promise<{ csrf_token: string; user: AuthenticatedUser | null; client_navigation?: BootstrapContext['client_navigation'] }> {
   const response = await jsonResponse(fetchImpl, '/api/v1/auth/bootstrap/')
   if (!response.ok) throw new Error(`Authentication bootstrap failed with status ${response.status}.`)
-  const context = unwrapApiData<{ csrf_token?: unknown, user?: unknown }>(await response.json())
+  const context = unwrapApiData<{ csrf_token?: unknown, user?: unknown; client_navigation?: unknown }>(await response.json())
   if (typeof context.csrf_token !== 'string' || !context.csrf_token
     || (context.user !== null && !isAuthenticatedUser(context.user))) {
     throw new Error('Authentication bootstrap response is invalid.')
   }
-  csrfToken = context.csrf_token
-  return context.user === null ? null : { csrf_token: csrfToken, user: context.user }
+  const navigation = context.client_navigation as BootstrapContext['client_navigation']
+  if (navigation !== undefined && (!navigation || typeof navigation.student_courses !== 'boolean'
+    || !Array.isArray(navigation.course_ids) || !navigation.course_ids.every(value => typeof value === 'string'))) {
+    throw new Error('Authentication navigation context is invalid.')
+  }
+  return { csrf_token: context.csrf_token, user: context.user as AuthenticatedUser | null,
+    ...(navigation === undefined ? {} : { client_navigation: navigation }) }
 }
 
 export function acceptBootstrapContext(context: BootstrapContext): BootstrapContext {
   if (typeof context.csrf_token !== 'string' || !context.csrf_token || !isAuthenticatedUser(context.user)) {
     throw new Error('Authentication bootstrap response is invalid.')
   }
-  cachedContext = context
+  initializationSequence += 1
+  contextState.value = context
   csrfToken = context.csrf_token
   offlineRecoveryPagePath = undefined
+  authenticationGeneration.value += 1
   return context
 }
 
 export function getBootstrapContext(): BootstrapContext {
-  if (!cachedContext) throw new Error('Vue bootstrap context is not authenticated.')
-  return cachedContext
+  if (!contextState.value) throw new Error('Vue bootstrap context is not authenticated.')
+  return contextState.value
+}
+
+export function getAuthenticationGeneration(): number {
+  return authenticationGeneration.value
 }
 
 export function isOfflineBootstrapRecovery(pagePath = window.location.pathname): boolean {
@@ -133,41 +149,50 @@ export function getCsrfToken(): string {
 }
 
 export function clearBootstrapContext() {
-  cachedContext = undefined
+  initializationSequence += 1
+  contextState.value = null
   offlineRecoveryPagePath = undefined
   csrfToken = undefined
   pendingInitialization = undefined
+  authenticationGeneration.value += 1
 }
 
 export async function initializeBootstrapContext(
   options: BootstrapInitializationOptions = {},
 ): Promise<BootstrapContext | null> {
-  if (!options.force && cachedContext) return cachedContext
+  if (!options.force && contextState.value) return contextState.value
   if (!options.force && pendingInitialization) return pendingInitialization
 
   const fetchImpl = options.fetchImpl || globalThis.fetch.bind(globalThis)
   const offlineContext = offlineBootstrapContext()
   if (offlineContext && !navigator.onLine) {
-    cachedContext = offlineContext
+    acceptBootstrapContext(offlineContext)
     offlineRecoveryPagePath = window.location.pathname
     csrfToken = offlineContext.csrf_token
     return offlineContext
   }
 
+  const sequence = ++initializationSequence
   const operation = (async () => {
     try {
-      const context = await initializeLiveBootstrap(fetchImpl)
-      const previousUserId = cachedContext?.user.id ?? offlineContext?.user.id
+      const live = await initializeLiveBootstrap(fetchImpl)
+      if (sequence !== initializationSequence) return contextState.value
+      const context = live.user === null ? null : { ...live, user: live.user }
+      const previousUserId = contextState.value?.user.id ?? offlineContext?.user.id
       if (!context || (previousUserId !== undefined && previousUserId !== context.user.id)) {
         const { clearOfflineAssessmentCache } = await import('@/assessment-runtime/offline-cache')
         await clearOfflineAssessmentCache()
       }
-      cachedContext = context || undefined
+      if (sequence !== initializationSequence) return contextState.value
+      contextState.value = context
+      csrfToken = live.csrf_token
       offlineRecoveryPagePath = undefined
+      authenticationGeneration.value += 1
       return context
     } catch (error) {
+      if (sequence !== initializationSequence) return contextState.value
       if (error instanceof BootstrapNetworkError && offlineContext) {
-        cachedContext = offlineContext
+        acceptBootstrapContext(offlineContext)
         offlineRecoveryPagePath = window.location.pathname
         csrfToken = offlineContext.csrf_token
         return offlineContext

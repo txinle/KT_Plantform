@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createApiClient } from '@/api/client'
 import * as assessmentApi from './api'
-import { createSessionController } from './session-controller'
+import { createSessionController, assessmentClientInstanceId } from './session-controller'
 import { MemoryOutbox } from './fact-store'
 import { ProcessEventCollector } from './process-sender'
 import type { EnteredQuestion, NextEntryOutcome } from './api'
@@ -22,8 +22,123 @@ function enteredQuestion(intent: EntryIntent): EnteredQuestion {
 }
 
 describe('source close and target entry confirmation', () => {
+  it('does not upload a second copy of evidence while its draft bundle awaits confirmation', async () => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      return new Response(JSON.stringify({ data: { committed: true,
+        acknowledgements: body.capture_bundle.events.map((row: { event_id: string; client_sequence_no: number }) => ({ ...row, server_ingest_sequence_no: row.client_sequence_no })),
+        checkpoint_ids: body.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id),
+      }, meta: { request_id: 'flush' } }))
+    })
+    let confirm!: (value: never) => void
+    const send = vi.fn((body: Record<string, unknown>) => { void body; return new Promise<never>(resolve => { confirm = resolve }) })
+    try {
+      const clientId = await assessmentClientInstanceId(store)
+      const runtime = await controller.activate({ ...process, capture_bundle: { enabled: true, version: 1,
+        max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true } }, 'visited', {
+        writer_lease_token: 'initial', writer_client_instance_id: clientId, expires_at: new Date(Date.now() + 60000).toISOString(),
+      })
+      await runtime.record('response_input_started', { question_type: 'single_choice' }, { eventId: crypto.randomUUID() })
+      const mutation = runtime.captureMutation!('/draft/', { target_event_id: 'answer-head', expected_version: 0 }, send)
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce())
+      const frozen = send.mock.calls[0]![0] as unknown as { capture_bundle: { events: Array<{ event_id: string; client_sequence_no: number }>; checkpoints: Array<{ checkpoint_id: string }> } }
+      const flush = runtime.sender.flush({ ignoreVisibility: true })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(fetch).not.toHaveBeenCalled()
+      confirm({ committed: true, response_version: 1, active_response_event_id: 'answer-head',
+        acknowledgements: frozen.capture_bundle.events.map(row => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+        checkpoint_ids: frozen.capture_bundle.checkpoints.map(row => row.checkpoint_id),
+      } as never)
+      await mutation
+      expect(await flush).toBe(true)
+      expect(fetch).not.toHaveBeenCalled()
+    } finally { controller.dispose(); fetch.mockRestore() }
+  })
+  it('freezes the sender identity before entry and reuses it after controller recovery', async () => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', tabId: 'f4', autoSchedule: false })
+    const intent = await controller.freezeEntry(7, 14, 'navigation_click')
+    expect(intent.clientInstanceId).toBe(await assessmentClientInstanceId(store))
+    const next = assessmentApi.nextEntryRequest(intent)
+    expect(next.client_instance_id).toBe(intent.clientInstanceId)
+    controller.dispose()
+    const recovered = createSessionController({ store, csrfToken: 'csrf', tabId: 'f4', autoSchedule: false })
+    try { expect(await recovered.freezeEntry(7, 14, 'navigation_click')).toEqual(intent) }
+    finally { recovered.dispose() }
+  })
+  it('persists resume locally and starts no upload or clock request before the UI becomes operable', async () => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf' })
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise(() => undefined))
+    try {
+      const pending = controller.activate({ ...process, checkpoint_url: '/checkpoint/', time_sync_create_url: '/clock/', time_sync_finalize_url: '/clock/finalize/' }, 'visited')
+      const result = await Promise.race([pending, new Promise(resolve => setTimeout(() => resolve('blocked'), 30))])
+      expect(result).not.toBe('blocked')
+      expect(fetch).not.toHaveBeenCalled()
+      expect((await store.pendingCheckpoints()).some(row => row.trigger === 'resume')).toBe(true)
+    } finally { controller.dispose(); fetch.mockRestore() }
+  })
+
+  it('refuses activation when the local resume checkpoint cannot be persisted', async () => {
+    const store = new MemoryOutbox()
+    vi.spyOn(store, 'enqueueCheckpoint').mockRejectedValue(new Error('local checkpoint failed'))
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    try { await expect(controller.activate({ ...process, checkpoint_url: '/checkpoint/' }, 'visited')).rejects.toThrow('local checkpoint failed') }
+    finally { controller.dispose() }
+  })
+
+  it('refuses activation when the local lifecycle event fails even without a checkpoint endpoint', async () => {
+    const store = new MemoryOutbox()
+    vi.spyOn(store, 'enqueue').mockRejectedValue(new Error('local lifecycle failed'))
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    try { await expect(controller.activate(process, 'visited')).rejects.toThrow('local lifecycle failed') }
+    finally { controller.dispose() }
+  })
+
+  it('starts automatic capture only after readiness and keeps forced flush available beforehand', async () => {
+    vi.useFakeTimers()
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf' })
+    try {
+      const runtime = await controller.activate(process, 'visited')
+      const flush = vi.spyOn(runtime.sender, 'flush').mockResolvedValue(true)
+      const sync = vi.spyOn(runtime.sender, 'synchronizeClock').mockResolvedValue(null)
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(flush).not.toHaveBeenCalled()
+      runtime.startBackgroundCapture!()
+      runtime.startBackgroundCapture!()
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(flush).toHaveBeenCalledOnce()
+      expect(sync).toHaveBeenCalledOnce()
+      runtime.dispose()
+      await runtime.flushConfirmed({ timeoutMs: 1000 })
+      expect(flush).toHaveBeenCalledTimes(2)
+    } finally { controller.dispose(); vi.useRealTimers() }
+  })
+
   const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true }
   const denied: NextEntryOutcome = { committed: false, error: { code: 'ENTRY_DENIED', message: 'target denied' } }
+
+  it('consumes an activation receipt without a second entry and primes the same durable sender lease', async () => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const intent = { assignmentId: 14, reason: 'navigation_click' as const, navigationId: crypto.randomUUID(), clientOccurredAt: new Date().toISOString(), clientMonotonicMs: performance.now(), clientTimeOrigin: new Date(performance.timeOrigin).toISOString() }
+    const dto = enteredQuestion(intent)
+    await controller.primeStart(dto)
+    const pending = await controller.freezeEntry(7, 14, 'navigation_click')
+    expect(controller.takeEnteredQuestion(7, pending)).toEqual(dto)
+    const clientId = await assessmentClientInstanceId(store)
+    const post = vi.fn()
+    const api = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+    try {
+      const runtime = await controller.activate(dto.process, 'visited', { writer_lease_token: 'primed', writer_client_instance_id: clientId, expires_at: new Date(Date.now() + 60000).toISOString() })
+      expect(runtime.sender.clientInstanceId).toBe(clientId)
+      expect(await runtime.writerLease!.beforePointerWrite()).toEqual({ writer_lease_token: 'primed', writer_client_instance_id: clientId })
+      expect(post).not.toHaveBeenCalled()
+    } finally { controller.dispose(); api.mockRestore() }
+  })
 
   it('retains a matched target DTO only once in the live controller and never persists it', async () => {
     const store = new MemoryOutbox()
@@ -690,4 +805,27 @@ it('serializes concurrent initialization so physical page facts keep their first
   await expect(a.record('response_input_started', { question_type: 'single_choice' })).rejects.toThrow()
   expect(b.sender.attemptId).toBe(14)
   controller.dispose()
+})
+
+it('records a real leave from a flow-one read-only view while legacy closed attempts stay closed', async () => {
+  const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true }
+  const store = new MemoryOutbox()
+  const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+  const post = vi.fn(async (_url, body) => body.capture_bundle ? { committed: true, writer_lease_released: true, capture_operation_id: body.capture_operation_id,
+    acknowledgements: body.capture_bundle.events.map((event: { event_id: string; client_sequence_no: number }) => ({ event_id: event.event_id || crypto.randomUUID(), client_sequence_no: event.client_sequence_no, server_ingest_sequence_no: event.client_sequence_no })), checkpoint_ids: body.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id) }
+    : { success: true, lease_token: '00000000-0000-4000-8000-000000000002', client_instance_id: body.client_instance_id, expires_at: new Date(Date.now() + 60000).toISOString() })
+  const api = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+  try {
+    const runtime = await controller.activate({ ...process, paper_flow_version: 1, capture_bundle: capability, close_bundle: capability } as never, 'timed_out')
+    await runtime.closeAttempt('navigation', 14)
+    const close = post.mock.calls.find(call => call[1].capture_bundle)
+    expect(close?.[1].capture_bundle.events.filter((event: { event_type: string }) => event.event_type === 'item_left')).toHaveLength(1)
+  } finally { controller.dispose(); api.mockRestore() }
+  const legacyStore = new MemoryOutbox()
+  const legacy = createSessionController({ store: legacyStore, csrfToken: 'csrf', autoSchedule: false })
+  try {
+    const runtime = await legacy.activate(process as never, 'timed_out')
+    await runtime.closeAttempt('navigation', 14)
+    expect(legacyStore.records.filter(row => row.event.event_type === 'item_left')).toHaveLength(0)
+  } finally { legacy.dispose() }
 })

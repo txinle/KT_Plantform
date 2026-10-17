@@ -406,6 +406,12 @@ def _preparation(session_queryset, current):
         source_stale=Exists(current.filter(
             session_id=OuterRef("pk"), source_revision__lt=F("session__research_source_revision")
         )),
+        source_fresh=Exists(current.filter(
+            session_id=OuterRef("pk"), source_revision=OuterRef("research_source_revision"),
+        )),
+        input_status=Subquery(current.filter(
+            session_id=OuterRef("pk"), source_revision=OuterRef("research_source_revision"),
+        ).values("session_summary__input_completeness__status")[:1]),
     )
     failed = Q(latest_materialization_status=ResearchSessionMaterialization.Status.FAILED)
     pending = Q(has_current=False) & (Q(latest_materialization_status__isnull=True) | ~failed)
@@ -414,11 +420,17 @@ def _preparation(session_queryset, current):
             ResearchSessionMaterialization.Status.QUEUED, ResearchSessionMaterialization.Status.RUNNING,
         ))
     )
+    input_complete = Q(input_status="complete")
+    input_unverified = Q(input_status__isnull=True) | Q(input_status="legacy_unknown")
+    fresh_input = Q(source_fresh=True)
     totals = sessions.aggregate(
         total=Count("pk"), ready_count=Count("pk", filter=Q(has_current=True)),
         failed_count=Count("pk", filter=failed), pending_count=Count("pk", filter=pending),
         updating_count=Count("pk", filter=updating), stale_count=Count("pk", filter=Q(source_stale=True)),
         oldest_pending_at=Min("latest_materialization_created_at", filter=pending),
+        latest_complete_count=Count("pk", filter=fresh_input & input_complete),
+        input_incomplete_count=Count("pk", filter=fresh_input & (Q(input_status__isnull=True) | ~input_complete)),
+        input_unverified_count=Count("pk", filter=fresh_input & input_unverified),
     )
     failed_count, pending_count, updating_count = (
         totals["failed_count"], totals["pending_count"], totals["updating_count"]
@@ -435,6 +447,9 @@ def _preparation(session_queryset, current):
     elif updating_count:
         state = "updating"
         message = f"{updating_count} 名学生已有数据可查看，数据有更新，正在等待后台整理新版本。"
+    elif totals["input_incomplete_count"]:
+        state = "incomplete"
+        message = f"当前数据版本已整理；{totals['input_incomplete_count']} 个会话的采集材料不完整或完整性待核验。缺失材料未被补造，评分状态另行展示。"
     else:
         state = "ready"
         message = "研究数据已整理完成。" if totals["total"] else "当前范围暂无已完成学生数据。"
@@ -450,6 +465,11 @@ def _preparation(session_queryset, current):
         "projection_version": PROJECTION_VERSION,
         "stale": bool(totals["stale_count"] or updating_count),
         "ready_count": totals["ready_count"], "pending_count": pending_count,
+        "total_count": totals["total"],
+        "latest_complete_count": totals["latest_complete_count"],
+        "input_incomplete_count": totals["input_incomplete_count"],
+        "input_unverified_count": totals["input_unverified_count"],
+        "stale_count": totals["stale_count"],
         "failed_count": failed_count, "updating_count": updating_count,
         "oldest_pending_seconds": oldest_pending_seconds,
     }

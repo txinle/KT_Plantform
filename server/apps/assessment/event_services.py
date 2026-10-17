@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import timedelta
+from types import SimpleNamespace
 import time
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import IntegrityError, transaction
+from django.db.models import Max
 from django.utils import timezone
 
-from .event_invariants import validate_event_invariants, validate_response_state_chain
+from .event_invariants import interval_quality as classify_interval_quality, validate_event_invariants, validate_response_state_chain
 from .event_schema_registry import (
     event_schema_sha256,
     get_event_schema,
@@ -25,6 +29,25 @@ from .models import (
 
 
 TIME_SYNC_VALIDITY_WINDOW_MS = 20 * 60 * 1000
+_session_event_sequence = ContextVar('session_submission_event_sequence', default=None)
+
+
+@contextmanager
+def session_event_sequence_context(session, *, confidence_assignments):
+    """Reuse the paper transaction's locked session; its caller saves the counter."""
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError('Session event sequence context requires a locked transaction.')
+    context = {
+        'session': session,
+        'confidence_assignments': confidence_assignments,
+        'last_ingest_sequence_no': session.assessment_events.aggregate(
+            maximum=Max('server_ingest_sequence_no'))['maximum'] or 0,
+    }
+    token = _session_event_sequence.set(context)
+    try:
+        yield context
+    finally:
+        _session_event_sequence.reset(token)
 
 
 class EventIdempotencyConflict(RuntimeError):
@@ -198,7 +221,18 @@ def append_assessment_event(
     server_ingest_sequence_no=None,
     session_lock_held=False,
     identity_context=None,
+    batch_context=None,
 ) -> AssessmentEvent:
+    sequence_context = _session_event_sequence.get()
+    if sequence_context is not None:
+        if sequence_context['session'].pk != session.pk:
+            sequence_context = None
+        elif sequence_context['session'] is not session:
+            raise EventLinkageError('Paper events must reuse the locked session instance.')
+        else:
+            session_lock_held = True
+    invariant_context = ({'confidence_assignments': sequence_context['confidence_assignments']}
+                         if sequence_context is not None else {})
     # v2 envelope names are accepted alongside the historical names.
     if version is not None:
         event_version = version
@@ -209,7 +243,11 @@ def append_assessment_event(
     processing_started = time.perf_counter()
     received_at = timezone.now()
     validate_event_payload(event_type, event_version, payload)
-    _register_schema_artifact(event_type, event_version)
+    schema_key = (event_type, event_version)
+    if batch_context is None:
+        _register_schema_artifact(event_type, event_version)
+    elif schema_key not in batch_context['schema_artifacts']:
+        batch_context['schema_artifacts'][schema_key] = _register_schema_artifact(event_type, event_version)
     if (client_instance_id is None) != (client_sequence_no is None):
         raise ValueError(
             "client_instance_id and client_sequence_no must be supplied together."
@@ -244,6 +282,7 @@ def append_assessment_event(
         attempt=attempt,
         question_snapshot=question_snapshot,
         item_instance=item_instance,
+        **invariant_context,
     )
     # State-chain continuity is a coverage conclusion, not an ingestion gate.
     # A legal observation after a missing event must remain appendable so the
@@ -301,13 +340,19 @@ def append_assessment_event(
 
     interval_quality = "unknown"
     if client_instance_id is not None and client_sequence_no is not None:
-        previous = AssessmentEvent.objects.filter(
-            session_id=session.pk,
-            client_instance_id=client_instance_id,
-            client_sequence_no__lt=client_sequence_no,
-        ).order_by("-client_sequence_no").first()
+        if batch_context is None:
+            previous = AssessmentEvent.objects.filter(
+                session_id=session.pk,
+                client_instance_id=client_instance_id,
+                client_sequence_no__lt=client_sequence_no,
+            ).order_by("-client_sequence_no").first()
+        else:
+            candidates = batch_context['predecessors'].get(session.pk, {})
+            previous_sequence = max((number for number in candidates if number < client_sequence_no), default=None)
+            previous = candidates.get(previous_sequence)
         if (
             previous is not None
+            and previous.client_time_origin == client_time_origin
             and client_monotonic_ms is not None
             and previous.client_monotonic_ms is not None
             and client_monotonic_ms < previous.client_monotonic_ms
@@ -316,8 +361,12 @@ def append_assessment_event(
                 "client_monotonic_ms must not move backwards within a client instance."
             )
         if previous is not None:
-            interval_quality = "synchronized_estimate" if sync_is_valid else "exact_monotonic"
-        elif AssessmentEvent.objects.filter(session_id=session.pk).exists():
+            interval_quality = classify_interval_quality(previous, SimpleNamespace(
+                client_instance_id=client_instance_id, client_time_origin=client_time_origin,
+                estimated_occurred_at_utc=estimated_occurred_at_utc,
+            ))
+        elif (session.pk in batch_context['nonempty_sessions'] if batch_context is not None
+              else AssessmentEvent.objects.filter(session_id=session.pk).exists()):
             interval_quality = "degraded"
     elif sync_is_valid:
         interval_quality = "synchronized_estimate"
@@ -374,6 +423,7 @@ def append_assessment_event(
             attempt=attempt,
             question_snapshot=question_snapshot,
             item_instance=item_instance,
+            **invariant_context,
         )
         replay = _resolve_idempotent_replay(
             client_instance_id=client_instance_id,
@@ -388,10 +438,13 @@ def append_assessment_event(
         if server_ingest_sequence_no is None:
             next_ingest_sequence = locked_session.next_ingest_sequence_no
             locked_session.next_ingest_sequence_no += 1
-            locked_session.save(update_fields=["next_ingest_sequence_no"])
+            if sequence_context is None:
+                locked_session.save(update_fields=["next_ingest_sequence_no"])
             session.next_ingest_sequence_no = locked_session.next_ingest_sequence_no
         else:
             next_ingest_sequence = server_ingest_sequence_no
+        if sequence_context is not None:
+            sequence_context['last_ingest_sequence_no'] = next_ingest_sequence
         write_sampled_at = timezone.now()
         event = AssessmentEvent(
             **values,
@@ -409,9 +462,12 @@ def append_assessment_event(
             validate_constraints=False,
         )
         try:
-            with transaction.atomic():
-                with _assessment_event_append_scope():
-                    event.save(force_insert=True)
+            if batch_context is not None and 'new_events' in batch_context:
+                batch_context['new_events'].append(event)
+            else:
+                with transaction.atomic():
+                    with _assessment_event_append_scope():
+                        event.save(force_insert=True)
         except IntegrityError:
             # A different session can win a globally unique identity after prefetch.
             # Recover outside the failed insert savepoint using a fresh database read.

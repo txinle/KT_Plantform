@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from apps.assessment.event_invariants import ResponseStateChainError, validate_response_state_chain
-from apps.assessment.models import AssessmentEvent, SubmissionEvent
+from apps.assessment.models import AssessmentEvent
 
 
 class EvaluationState(StrEnum):
@@ -123,7 +123,7 @@ def _submission_row(attempt):
             "submission", EvaluationState.NOT_APPLICABLE, attempt.pk,
             reason_code="attempt_not_submitted",
         )
-    submission = SubmissionEvent.objects.filter(attempt=attempt).first()
+    submission = getattr(attempt, "submission_event", None)
     if submission is None:
         return QualityReportRow(
             "submission", EvaluationState.FAIL, attempt.pk, "已提交作答缺少 Submission",
@@ -192,7 +192,9 @@ def _provenance_row(attempt):
 def build_quality_report(scope):
     rows = []
     attempts = list(
-        scope.attempts().select_related("assignment__snapshot", "assignment__item_instance")
+        scope.attempts().select_related(
+            "assignment__snapshot", "assignment__item_instance", "submission_event"
+        )
     )
     events_by_attempt = {}
     for event in scope.events().filter(attempt__isnull=False).order_by(

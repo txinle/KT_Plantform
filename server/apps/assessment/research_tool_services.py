@@ -16,6 +16,11 @@ def tool_configuration(attempt):
     return attempt.session.version.configuration.get('research_tools', {}) if uses_capture_v2(attempt.session) else {}
 
 
+def has_research_tools(attempt):
+    config = tool_configuration(attempt)
+    return any(config.get(key) for key in ('doubt_enabled', 'check_enabled', 'hints', 'rules'))
+
+
 def content_version(attempt):
     return hashlib.sha256(json.dumps(tool_configuration(attempt), ensure_ascii=False,
                                     sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -152,7 +157,7 @@ def record_tool_action(*, student, attempt_id, tool, stage, operation_id, data=N
             mark_confidence_prompt_shown,
             validate_confidence_probability,
         )
-        if stage == 'presented':
+        if stage == 'presented' and session.assessment_flow_version == 0:
             mark_confidence_prompt_shown(
                 attempt_id=attempt.pk,
                 student=student,
@@ -161,9 +166,14 @@ def record_tool_action(*, student, attempt_id, tool, stage, operation_id, data=N
         if stage == 'responded':
             probability = data.get('probability')
             validate_confidence_probability(attempt, probability)
-            from .confidence_services import ensure_confidence_assignment
-            assignment = ensure_confidence_assignment(attempt)
-            if assignment.response_status != assignment.ResponseStatus.COMMITTED:
+            if session.assessment_flow_version == 1:
+                from .prepared_services import save_inline_confidence
+                save_inline_confidence(attempt, {'probability': probability,
+                    'answer_event_id': str(attempt.active_response_event_id) if attempt.active_response_event_id else None})
+            else:
+                from .confidence_services import ensure_confidence_assignment
+                assignment = ensure_confidence_assignment(attempt)
+            if session.assessment_flow_version == 0 and assignment.response_status != assignment.ResponseStatus.COMMITTED:
                 commit_confidence(
                     attempt_id=attempt.pk,
                     student=student,
@@ -180,11 +190,18 @@ def _tool_result(attempt, event):
     result = {'event_id': str(event.pk), 'content_version': event.payload['content_version']}
     if event.payload['tool'] == 'hint' and event.payload['stage'] == 'requested':
         result['text'] = _hint(attempt, event.payload['data'].get('hint_id'))['text']
+    if (attempt.session.assessment_flow_version == 1 and event.payload['tool'] == 'confidence'
+            and event.payload['stage'] == 'responded'):
+        from .models import ConfidenceAssignment
+        assignment = ConfidenceAssignment.objects.get(attempt=attempt)
+        result['inline_confidence'] = {'probability': assignment.draft_probability,
+            'answer_event_id': str(assignment.draft_answer_event_id) if assignment.draft_answer_event_id else None}
     return result
 
 
-def eligible_rules(attempt):
-    elapsed = max(0, (timezone.now() - attempt.session.started_at).total_seconds())
+def eligible_rules(attempt, *, elapsed=None):
+    if elapsed is None:
+        elapsed = max(0, (timezone.now() - attempt.session.started_at).total_seconds())
     result = []
     for rule in tool_configuration(attempt).get('rules', []):
         if rule['tool'] == 'confidence':
@@ -200,10 +217,10 @@ def eligible_rules(attempt):
     return result
 
 
-def due_rules(attempt, *, events=None):
-    if attempt.status in {'submitted', 'timed_out', 'unanswered'} or attempt.session.status != 'in_progress':
+def due_rules(attempt, *, events=None, initial_prepared=False):
+    if attempt.status in {'submitted', 'timed_out', 'unanswered'} or (attempt.session.status != 'in_progress' and not initial_prepared):
         return []
-    rules = eligible_rules(attempt)
+    rules = eligible_rules(attempt, elapsed=0 if initial_prepared else None)
     if not rules:
         return []
     if events is None:

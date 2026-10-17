@@ -125,6 +125,7 @@ def build_research_bundle(captured, *, scope, include_course_catalog=True):
         files["course_students"] = [[course.name, item["student_number"], item["name"]] for item in students.values()]
         refs = scope.session_references()
         all_sessions = list(ExperimentSession.objects.filter(version__experiment__course=course)
+            .exclude(status=ExperimentSession.Status.PREPARED)
             .select_related("student", "version__experiment").order_by("pk"))
         for session in all_sessions:
             if session.student_id not in students:

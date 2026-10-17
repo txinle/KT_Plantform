@@ -3,7 +3,7 @@ from datetime import timezone as datetime_timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import uuid
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -262,19 +262,23 @@ def batch_session_contexts(*, student, event_documents, locked=False):
         'version__experiment__course', 'capture_contract', 'class_task',
     ).filter(pk__in=session_ids, student=student).order_by('pk')
     if locked:
-        sessions = sessions.select_for_update(of=('self',))
+        sessions = sessions.select_for_update(of=('self',), no_key=True)
     return {session.pk: session for session in sessions}
 
 
 def _batch_contexts(*, student, client_instance_id, event_documents, sessions=None, attempts=None):
     sessions = sessions if sessions is not None else batch_session_contexts(
         student=student, event_documents=event_documents)
+    if any(key != session.pk or session.student_id != student.pk for key, session in sessions.items()):
+        raise ProcessRequestError('invalid_event_link')
     attempt_ids = {row.get('attempt_id') for row in event_documents
                    if isinstance(row, dict) and type(row.get('attempt_id')) is int}
     attempts = attempts if attempts is not None else {attempt.pk: attempt for attempt in Attempt.objects.select_related(
         'assignment__snapshot', 'assignment__item_instance',
     ).filter(pk__in=attempt_ids, session_id__in=sessions)}
-    for attempt in attempts.values():
+    for key, attempt in attempts.items():
+        if key != attempt.pk or attempt.session_id not in sessions:
+            raise ProcessRequestError('invalid_event_link')
         attempt.session = sessions[attempt.session_id]
     sync_ids = {parse_uuid(row['time_sync_id'], code='invalid_event') for row in event_documents
                 if isinstance(row, dict) and row.get('time_sync_id') is not None}
@@ -311,9 +315,42 @@ def parse_event_batch(*, student, document, sessions=None, attempts=None):
     return client_instance_id, tuple(parsed)
 
 
+def _capture_batch_context(events, sessions, client_instance_id):
+    """Bound reference reads by this batch, never by a student's history size."""
+    from django.db.models import Subquery
+    from .models import ResponseSnapshot
+
+    parent_ids = {row.payload.get('parent_event_id') for row in events
+                  if row.event_type in ('response_transition', 'input_operation')}
+    parent_ids.discard(None)
+    parents = {str(row.pk): row for row in AssessmentEvent.objects.filter(pk__in=parent_ids)}
+    predecessor_query = Q(pk__in=[])
+    for row in events:
+        previous_id = AssessmentEvent.objects.filter(
+            session_id=row.session.pk, client_instance_id=client_instance_id,
+            client_sequence_no__lt=row.client_sequence_no,
+        ).order_by('-client_sequence_no').values('pk')[:1]
+        predecessor_query |= Q(pk=Subquery(previous_id))
+    predecessors = {}
+    for row in AssessmentEvent.objects.filter(predecessor_query).only(
+            'event_id', 'session_id', 'client_instance_id', 'client_sequence_no',
+            'client_time_origin', 'client_monotonic_ms', 'estimated_occurred_at_utc'):
+        predecessors.setdefault(row.session_id, {})[row.client_sequence_no] = row
+    snapshot_query = Q(pk__in=[])
+    for row in events:
+        if row.event_type == 'response_transition':
+            snapshot_query |= Q(attempt_id=row.attempt.pk, state_hash__in=[
+                row.payload['before_state_hash'], row.payload['after_state_hash']])
+    snapshots = {(row.attempt_id, row.state_hash): row
+                 for row in ResponseSnapshot.objects.filter(snapshot_query)}
+    return {'schema_artifacts': {}, 'parents': parents, 'predecessors': predecessors,
+            'snapshots': snapshots, 'nonempty_sessions': set(AssessmentEvent.objects.filter(
+                session_id__in=sessions).values_list('session_id', flat=True).distinct())}
+
+
 @coalesce_session_materializations()
 @transaction.atomic
-def append_event_batch(*, student, document, request_received_at=None, locked_sessions=None, locked_attempts=None, recording_close=False):
+def append_event_batch(*, student, document, request_received_at=None, locked_sessions=None, locked_attempts=None, recording_close=False, validation_contexts=None):
     require_exact_mapping(document, allowed=BATCH_FIELDS)
     if not isinstance(document['events'], list) or not 1 <= len(document['events']) <= MAX_BATCH_EVENTS:
         raise ProcessRequestError('invalid_batch_size')
@@ -328,25 +365,33 @@ def append_event_batch(*, student, document, request_received_at=None, locked_se
     from .services import _validate_process_event_time
 
     request_received_at = request_received_at or timezone.now()
+    from .services import mutation_validation_context
+    try:
+        validation_contexts = validation_contexts if validation_contexts is not None else {
+            key: mutation_validation_context(session, request_received_at) for key, session in sessions.items()}
+    except ValidationError as error:
+        raise ProcessConflictError('course_access_revoked') from error
     validated = set()
     for parsed in events:
         validation_key = (
             parsed.session.pk,
             getattr(parsed.attempt, "pk", None),
-            parsed.event_type if recording_close else None,
+            parsed.event_type if recording_close or parsed.session.assessment_flow_version == 1 else None,
         )
         if validation_key in validated:
             continue
         try:
-            if recording_close:
+            if recording_close or parsed.session.assessment_flow_version == 1:
                 from .recording_capture_services import validate_close_recording_time
                 time_error = validate_close_recording_time(parsed.session, parsed.attempt,
-                    request_received_at=request_received_at, event_type=parsed.event_type)
+                    request_received_at=request_received_at, event_type=parsed.event_type,
+                    validation_context=validation_contexts[parsed.session.pk])
             else:
                 time_error = _validate_process_event_time(
                     parsed.session,
                     parsed.attempt,
                     request_received_at=request_received_at,
+                    validation_context=validation_contexts[parsed.session.pk],
                 )
         except ValidationError as exc:
             raise ProcessConflictError("course_access_revoked") from exc
@@ -358,6 +403,31 @@ def append_event_batch(*, student, document, request_received_at=None, locked_se
             )
             raise ProcessConflictError(code)
         validated.add(validation_key)
+    original_sequences = {key: session.next_ingest_sequence_no for key, session in sessions.items()}
+    try:
+        with transaction.atomic():
+            return _append_parsed_events(events, sessions, client_instance_id, bulk=True)
+    except IntegrityError:
+        # A global identity can race with another session after prefetch. Roll
+        # back the whole staged batch, then use the exact row conflict checks.
+        for key, session in sessions.items():
+            session.next_ingest_sequence_no = original_sequences[key]
+        return _append_parsed_events(events, sessions, client_instance_id, bulk=False)
+
+
+def _flush_capture_writes(context):
+    from .models import ResponseSnapshot, _assessment_event_append_scope, _response_snapshot_append_scope
+    if context.get('new_snapshots'):
+        with _response_snapshot_append_scope():
+            ResponseSnapshot.objects.bulk_create(context['new_snapshots'])
+        context['new_snapshots'].clear()
+    if context.get('new_events'):
+        with _assessment_event_append_scope():
+            AssessmentEvent.objects.bulk_create(context['new_events'])
+        context['new_events'].clear()
+
+
+def _append_parsed_events(events, sessions, client_instance_id, *, bulk):
     acknowledgements = []
     # Both identities are global uniqueness keys; keep foreign-session collisions
     # visible to the original exact material comparison rather than filtering them out.
@@ -369,19 +439,28 @@ def append_event_batch(*, student, document, request_received_at=None, locked_se
     for event in existing:
         identity_context['by_sequence'][(event.client_instance_id, event.client_sequence_no)] = event
         identity_context['by_event_id'][event.event_id] = event
+    batch_context = _capture_batch_context(events, sessions, client_instance_id)
+    if bulk:
+        batch_context.update(new_snapshots=[], new_events=[])
+    observations = []
     next_sequences = {
         session_id: session.next_ingest_sequence_no
         for session_id, session in sessions.items()
     }
     try:
         for parsed in events:
+            # These validators read preceding facts through domain queries.
+            # Flush the current segment before evaluating their dependencies.
+            if parsed.event_type in {'research_tool_observed', 'confidence_observed',
+                    'feedback_exposure', 'research_tool_requested'}:
+                _flush_capture_writes(batch_context)
             payload = parsed.payload
             if parsed.event_type == 'input_operation':
                 from .capture_v2_services import prepare_input_operation
-                payload = prepare_input_operation(parsed)
+                payload = prepare_input_operation(parsed, batch_context=batch_context)
             if parsed.event_type == "response_transition":
                 from .capture_v2_services import prepare_transition
-                payload = prepare_transition(parsed)
+                payload = prepare_transition(parsed, batch_context=batch_context)
             if parsed.event_type == 'research_tool_observed':
                 from .research_tool_services import prepare_tool_observation
                 payload = prepare_tool_observation(parsed)
@@ -425,7 +504,11 @@ def append_event_batch(*, student, document, request_received_at=None, locked_se
                 server_ingest_sequence_no=next_sequences[parsed.session.pk],
                 session_lock_held=True,
                 identity_context=identity_context,
+                batch_context=batch_context,
             )
+            batch_context['parents'][str(event.pk)] = event
+            batch_context['predecessors'].setdefault(event.session_id, {})[event.client_sequence_no] = event
+            batch_context['nonempty_sessions'].add(event.session_id)
             if event.server_ingest_sequence_no == next_sequences[parsed.session.pk]:
                 next_sequences[parsed.session.pk] += 1
             acknowledgements.append(
@@ -436,36 +519,10 @@ def append_event_batch(*, student, document, request_received_at=None, locked_se
                 }
             )
             if parsed.event_type == "text_edit_observed":
-                observation = parsed.payload
-                record_stable_input_observation(
-                    attempt=parsed.attempt,
-                    source_event=event,
-                    client_instance_id=client_instance_id,
-                    client_sequence_no=parsed.client_sequence_no,
-                    client_monotonic_ms=parsed.client_monotonic_ms,
-                    # v1 outbox rows predate stable batch boundaries.  Keep
-                    # accepting them without inventing timestamps; v2 rows
-                    # are schema-required to carry both boundaries.
-                    batch_start_client_monotonic_ms=None
-                    if observation.get("batch_start_client_monotonic_ms") is None
-                    else parse_finite_decimal(
-                        observation["batch_start_client_monotonic_ms"], code="invalid_event"
-                    ),
-                    batch_end_client_monotonic_ms=None
-                    if observation.get("batch_end_client_monotonic_ms") is None
-                    else parse_finite_decimal(
-                        observation["batch_end_client_monotonic_ms"], code="invalid_event"
-                    ),
-                    edit_operation=observation["edit_operation"],
-                    content_hash_before=observation["content_hash_before"],
-                    content_hash_after=observation["content_hash_after"],
-                    content_length_before=observation["content_length_before"],
-                    content_length_after=observation["content_length_after"],
-                    input_method=observation["input_method"],
-                    is_ime=observation.get(
-                        "is_ime", observation.get("input_method") == "ime"
-                    ),
-                )
+                observations.append((parsed, event))
+        _flush_capture_writes(batch_context)
+        for parsed, event in observations:
+            _record_text_observation(parsed, event, client_instance_id)
         changed_sessions = [session for session_id, session in sessions.items()
                             if session.next_ingest_sequence_no != next_sequences[session_id]]
         for session in changed_sessions:
@@ -480,3 +537,36 @@ def append_event_batch(*, student, document, request_received_at=None, locked_se
     except (ValueError, ValidationError) as error:
         raise ProcessRequestError("invalid_event") from error
     return acknowledgements
+
+
+def _record_text_observation(parsed, event, client_instance_id):
+    observation = parsed.payload
+    record_stable_input_observation(
+        attempt=parsed.attempt,
+        source_event=event,
+        client_instance_id=client_instance_id,
+        client_sequence_no=parsed.client_sequence_no,
+        client_monotonic_ms=parsed.client_monotonic_ms,
+        # v1 outbox rows predate stable batch boundaries.  Keep
+        # accepting them without inventing timestamps; v2 rows
+        # are schema-required to carry both boundaries.
+        batch_start_client_monotonic_ms=None
+        if observation.get("batch_start_client_monotonic_ms") is None
+        else parse_finite_decimal(
+            observation["batch_start_client_monotonic_ms"], code="invalid_event"
+        ),
+        batch_end_client_monotonic_ms=None
+        if observation.get("batch_end_client_monotonic_ms") is None
+        else parse_finite_decimal(
+            observation["batch_end_client_monotonic_ms"], code="invalid_event"
+        ),
+        edit_operation=observation["edit_operation"],
+        content_hash_before=observation["content_hash_before"],
+        content_hash_after=observation["content_hash_after"],
+        content_length_before=observation["content_length_before"],
+        content_length_after=observation["content_length_after"],
+        input_method=observation["input_method"],
+        is_ime=observation.get(
+            "is_ime", observation.get("input_method") == "ime"
+        ),
+    )

@@ -1,3 +1,4 @@
+import { submitWholePaper } from './whole-paper'
 import { expect, test, type Page } from '@playwright/test'
 import { acceptResearchConsentIfRequired } from './research-consent'
 
@@ -41,12 +42,10 @@ async function answerCurrentQuestion(page: Page) {
     await answer.fill(inputMode === 'decimal' ? '3.14' : '知识追踪')
   }
   await draftSaved
-  await page.getByRole('button', { name: '确认提交本题' }).click()
-  const currentUrl = page.url()
-  await Promise.all([
-    page.waitForURL((url) => url.toString() !== currentUrl),
-    page.getByRole('dialog').getByRole('button', { name: '提交并锁定' }).click(),
-  ])
+  const next = page.locator('[data-next-question]')
+  if (await next.textContent() === '下一题') await next.click()
+  else await submitWholePaper(page)
+
 }
 
 test('student courses, task cards, and learning cards mount on their business URLs', async ({ page }) => {

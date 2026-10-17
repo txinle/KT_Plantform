@@ -25,12 +25,82 @@ def next_entry_material(assignment_id):
             'client_monotonic_ms': '123.456', 'client_time_origin': '2026-10-13T00:00:00Z'}
 
 
+class CanonicalTransitionFixture(StudentApiFixtureMixin):
+    """Real published projections; initialize only the entry primitive under test."""
+    prepared_paper_fixture = True
+
+    def setUp(self):
+        super().setUp()
+        from apps.question_bank.models import QuestionConcept, QuestionOption
+        for sequence, kind in enumerate((Question.Type.SHORT, Question.Type.FILL_BLANK,
+                Question.Type.NUMERIC, Question.Type.MULTIPLE, Question.Type.TRUE_FALSE), 2):
+            question = Question.objects.create(bank=self.bank, sequence=sequence,
+                code=f'TRANSITION-{sequence}', question_type=kind, text=f'{kind} entry fixture',
+                correct_answer=['A', 'B'] if kind == Question.Type.MULTIPLE else
+                    (True if kind == Question.Type.TRUE_FALSE else ('2' if kind == Question.Type.NUMERIC else 'A')))
+            if kind == Question.Type.MULTIPLE:
+                for index, key in enumerate(('A', 'B')):
+                    QuestionOption.objects.create(question=question, key=key, text=key, display_order=index)
+            QuestionConcept.objects.create(question=question, concept=self.question.primary_concept, is_primary=True)
+        self.experiment, self.task = self.publish_task(name='整卷切题事务', feedback_mode=self.feedback_mode)
+        self.session = ExperimentSession.objects.get(class_task=self.task, student=self.student)
+        # Activation/start is covered independently. These tests begin before
+        # any item entry so every asserted target visit is caused by this request.
+        self.session.status = ExperimentSession.Status.IN_PROGRESS
+        self.session.started_at = timezone.now()
+        self.session.schedule_revision = self.task.schedule_revisions.order_by('-revision_no').first()
+        self.session.save(update_fields=['status', 'started_at', 'schedule_revision'])
+        self.version = self.session.version
+        self.attempts = {row.assignment.snapshot.question_type: row for row in
+            self.session.attempts.select_related('assignment__snapshot', 'assignment__item_instance')}
+        self.client.force_login(self.student)
+
+
 @override_settings(SAVE_AND_LEAVE_ENABLED=True, SAVE_AND_LEAVE_USER_IDS=frozenset({'*'}))
-class SavedTransitionEntryTests(TestCase):
-    setUp = navigation_fixtures.SavedNavigationTests.setUp
+class SavedTransitionEntryTests(CanonicalTransitionFixture, TestCase):
     transition = navigation_fixtures.SavedNavigationTests.transition
     bundle = navigation_fixtures.SavedNavigationTests.bundle
     post = navigation_fixtures.SavedNavigationTests.post
+
+    def test_target_entry_lease_supports_first_save_without_acquire_request(self):
+        attempt, document = self.document()
+        client_id = document['save_and_leave']['client_instance_id']
+        document['next_entry']['client_instance_id'] = client_id
+        response = self.post(attempt, document)
+        self.assertEqual(response.status_code, 200, response.content)
+        runtime = domain_payload(response)['next_entry']['runtime']
+        lease = runtime['initial_writer_lease']
+        target = Attempt.objects.get(pk=runtime['assignment']['attempt_id'])
+        self.assertEqual(str(target.writer_lease_token), lease['writer_lease_token'])
+        from .capture_v2_services import ingest_capture_batch
+        event = self.transition(target, '', 'first answer', sequence=3)
+        ingest_capture_batch(student=self.student, document={'client_instance_id': client_id, 'events': [event]})
+        saved = self.client.post(runtime['actions']['save_draft_url'], data=json.dumps({
+            'answer': 'first answer', 'target_event_id': event['event_id'], 'expected_version': 0, **{
+                key: lease[key] for key in ('writer_lease_token', 'writer_client_instance_id')},
+        }), content_type='application/json')
+        self.assertEqual(saved.status_code, 200, saved.content)
+        target.refresh_from_db()
+        self.assertEqual(target.draft_answer, 'first answer')
+        replay = domain_payload(self.post(attempt, document))
+        self.assertEqual(replay['next_entry']['runtime']['initial_writer_lease'], lease)
+        self.assertEqual(QuestionVisitEvent.objects.filter(attempt=target).count(), 1)
+
+    def test_target_lease_conflict_cannot_rollback_source_save(self):
+        attempt, document = self.document()
+        document['next_entry']['client_instance_id'] = document['save_and_leave']['client_instance_id']
+        target = Attempt.objects.get(assignment_id=document['to_assignment_id'])
+        Attempt.objects.filter(pk=target.pk).update(writer_lease_token=uuid.uuid4(),
+            writer_client_instance_id=uuid.uuid4(), writer_lease_expires_at=timezone.now() + timedelta(seconds=30))
+        response = self.post(attempt, document)
+        self.assertEqual(response.status_code, 200, response.content)
+        receipt = domain_payload(response)
+        self.assertTrue(receipt['committed'])
+        self.assertFalse(receipt['next_entry']['committed'])
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.draft_answer, 'A')
+        self.assertEqual(attempt.response_version, 1)
+        self.assertFalse(QuestionVisitEvent.objects.filter(attempt=target).exists())
 
     def document(self):
         attempt, document = self.bundle()
@@ -160,8 +230,7 @@ class SavedTransitionEntryTests(TestCase):
 
 
 @override_settings(CLOSE_BUNDLE_ENABLED=True, CAPTURE_BUNDLE_ENABLED=True)
-class ClosedTransitionEntryTests(TestCase):
-    setUp = close_fixtures.CloseCaptureBundleTests.setUp
+class ClosedTransitionEntryTests(CanonicalTransitionFixture, TestCase):
     transition = close_fixtures.CloseCaptureBundleTests.transition
     bundle = close_fixtures.CloseCaptureBundleTests.bundle
     capture = close_fixtures.CloseCaptureBundleTests.capture
@@ -212,19 +281,20 @@ class TransitionProtocolTests(StudentApiFixtureMixin, TestCase):
             self.assertEqual(domain_payload(self.client.get(url))['process']['transition_entry'],
                              {'enabled': True, 'version': 1})
 
-    def test_disabled_or_not_allowlisted_new_session_keeps_existing_protocol(self):
+    def test_disabled_legacy_rollout_flag_cannot_disable_canonical_transition_protocol(self):
         with override_settings(ASSESSMENT_TRANSITION_ENABLED=False):
             self.assertEqual(self.start().status_code, 201)
         session = ExperimentSession.objects.get(student=self.student, class_task=self.task)
-        self.assertEqual(session.transition_protocol_version, 0)
+        self.assertEqual(session.transition_protocol_version, 1)
         url = reverse('student-runtime-question', args=[session.pk, session.assignments.get().pk])
-        self.assertNotIn('transition_entry', domain_payload(self.client.get(url))['process'])
+        self.assertEqual(domain_payload(self.client.get(url))['process']['transition_entry'],
+                         {'enabled': True, 'version': 1})
 
     @override_settings(ASSESSMENT_TRANSITION_USER_IDS=frozenset())
-    def test_new_session_outside_allowlist_keeps_existing_protocol(self):
+    def test_legacy_allowlist_cannot_disable_a_canonical_paper_transition_protocol(self):
         self.assertEqual(self.start().status_code, 201)
         session = ExperimentSession.objects.get(student=self.student, class_task=self.task)
-        self.assertEqual(session.transition_protocol_version, 0)
+        self.assertEqual(session.transition_protocol_version, 1)
 
     def test_pinned_protocol_cannot_change_after_start(self):
         self.assertEqual(self.start().status_code, 201)
@@ -235,12 +305,14 @@ class TransitionProtocolTests(StudentApiFixtureMixin, TestCase):
 
 
 @override_settings(SAVE_AND_LEAVE_ENABLED=True, SAVE_AND_LEAVE_USER_IDS=frozenset({'*'}))
-class TransitionTransactionTests(TransactionTestCase):
-    setUp = navigation_fixtures.SavedNavigationTests.setUp
+class TransitionTransactionTests(CanonicalTransitionFixture, TransactionTestCase):
     transition = navigation_fixtures.SavedNavigationTests.transition
     bundle = navigation_fixtures.SavedNavigationTests.bundle
     post = navigation_fixtures.SavedNavigationTests.post
-    document = SavedTransitionEntryTests.document
+    def document(self):
+        attempt, document = SavedTransitionEntryTests.document(self)
+        document['next_entry']['client_instance_id'] = document['save_and_leave']['client_instance_id']
+        return attempt, document
 
     def test_source_is_durable_before_target_entry_transaction_begins(self):
         from .api.views import StudentRuntimeQuestionEntryView
@@ -290,9 +362,11 @@ class TransitionTransactionTests(TransactionTestCase):
         self.assertEqual(receipt['next_entry']['error']['code'], 'ENTRY_OUTCOME_UNKNOWN')
         self.assertEqual(QuestionVisitEvent.objects.filter(session=self.session).count(), 1)
         target = Attempt.objects.get(assignment_id=document['to_assignment_id'])
+        original_lease = target.writer_lease_token
         first_opened_at = target.first_opened_at
         recovered = domain_payload(self.post(attempt, document))
         self.assertTrue(recovered['next_entry']['committed'])
+        self.assertEqual(recovered['next_entry']['runtime']['initial_writer_lease']['writer_lease_token'], str(original_lease))
         self.assertEqual(QuestionVisitEvent.objects.filter(session=self.session).count(), 1)
         target.refresh_from_db()
         self.assertEqual(target.first_opened_at, first_opened_at)
@@ -312,12 +386,14 @@ class TransitionTransactionTests(TransactionTestCase):
             try:
                 barrier.wait(timeout=5)
                 _, receipt = save_and_leave_attempt(student=self.student, attempt_id=attempt.pk, document=document)
-                return append_next_entry(SimpleNamespace(user=self.student), attempt.pk, document, receipt)
+                return append_next_entry(SimpleNamespace(user=self.student, META={}), attempt.pk, document, receipt)
             finally:
                 close_old_connections()
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(lambda _: replay(), range(2)))
         self.assertTrue(all(row['next_entry']['committed'] for row in results))
+        self.assertEqual(results[0]['next_entry']['runtime']['initial_writer_lease'],
+                         results[1]['next_entry']['runtime']['initial_writer_lease'])
         self.assertEqual(NavigationReceipt.objects.filter(attempt=attempt).count(), 1)
         self.assertEqual(QuestionVisitEvent.objects.filter(session=self.session).count(), 1)
         self.assertEqual(Attempt.objects.get(pk=attempt.pk).response_version, 1)

@@ -1,7 +1,12 @@
+<script lang="ts">
+// A transition can remount this panel while retaining the same question DTO.
+const initializedToolRuntimes = new WeakSet<object>()
+</script>
+
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { getStudentAssessmentApi } from './api'
-import type { StudentResearchToolConfiguration } from './api'
+import type { StudentResearchToolConfiguration, StudentRuntimeQuestionEntry } from './api'
 import type { StudentProcessRuntime } from './session-controller'
 import type { ToolRule } from '@/features/teacher-experiments/research-tools'
 import type { ProcessConfirmation } from './capture-contract'
@@ -14,7 +19,7 @@ const props = defineProps<{
   waitForCapture: () => Promise<unknown>
   initialConfiguration?: StudentResearchToolConfiguration
 }>()
-const emit = defineEmits<{ interaction: []; pending: [value: boolean] }>()
+const emit = defineEmits<{ interaction: []; pending: [value: boolean]; 'inline-confidence': [value: NonNullable<StudentRuntimeQuestionEntry['inline_confidence']>] }>()
 interface ConfidenceScale {
   scale_version: string
   minimum: number
@@ -44,7 +49,8 @@ const hint = shallowRef<{ text: string; source: ToolResponse; data: Record<strin
 const error = ref('')
 const contentVersion = ref('')
 let timer: ReturnType<typeof setInterval> | undefined
-interface ToolResponse extends ProcessConfirmation { event_id: string; content_version: string; text?: string }
+let refreshFlight: Promise<void> | undefined
+interface ToolResponse extends ProcessConfirmation { event_id: string; content_version: string; text?: string; inline_confidence?: StudentRuntimeQuestionEntry['inline_confidence'] }
 type DueRule = ToolRule & { pending_request?: ToolResponse; already_presented?: boolean }
 type QueuedHint = { id: string; rule?: DueRule }
 const queuedHints: QueuedHint[] = []
@@ -74,9 +80,14 @@ function action(tool: string, stage: string, data: Record<string, unknown> = {},
       answer_event_id: answerEventId, initiation_type: initiation,
     };
     const send = (frozen: Record<string, unknown>) => timedAssessmentStage('tools', () => getStudentAssessmentApi(operationId).post<ToolResponse>(props.endpoint, frozen), operationId);
-    if (props.runtime.captureMutation) return props.runtime.captureMutation(props.endpoint, body, send, operationId);
-    if (await props.runtime.flushConfirmed() === false) throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。')
-    return send(body);
+    let response: ToolResponse
+    if (props.runtime.captureMutation) response = await props.runtime.captureMutation(props.endpoint, body, send, operationId);
+    else {
+      if (await props.runtime.flushConfirmed() === false) throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。')
+      response = await send(body);
+    }
+    if (!unmounted && tool === 'confidence' && stage === 'responded' && response.inline_confidence) emit('inline-confidence', response.inline_confidence)
+    return response;
   })
   changePending(1)
   return sending.finally(() => changePending(-1))
@@ -194,11 +205,16 @@ function selectConfidenceFromNumber(event: Event) {
   probabilityTouched.value = true
 }
 
-async function refresh() {
-  if (unmounted || !navigator.onLine) return
-  const response = await getStudentAssessmentApi().post<StudentResearchToolConfiguration>(props.endpoint, {})
-  await applyConfiguration(response)
+function refresh() {
+  if (unmounted || !props.endpoint || !navigator.onLine || document.visibilityState === 'hidden') return Promise.resolve()
+  if (!refreshFlight) refreshFlight = (async () => {
+    const response = await getStudentAssessmentApi().post<StudentResearchToolConfiguration>(props.endpoint, {})
+    await applyConfiguration(response)
+  })().finally(() => { refreshFlight = undefined })
+  return refreshFlight
 }
+
+function recoverPolling() { void run(refresh, false) }
 
 async function applyConfiguration(response: StudentResearchToolConfiguration) {
   if (unmounted) return
@@ -237,14 +253,22 @@ async function applyConfiguration(response: StudentResearchToolConfiguration) {
   }
 }
 onMounted(() => {
-  void run(() => props.initialConfiguration && Array.isArray(props.initialConfiguration.rules)
+  const firstMount = !initializedToolRuntimes.has(props.runtime)
+  initializedToolRuntimes.add(props.runtime)
+  void run(() => firstMount && props.initialConfiguration && Array.isArray(props.initialConfiguration.rules)
     ? applyConfiguration(props.initialConfiguration) : refresh(), false)
-  timer = setInterval(() => { void run(refresh, false) }, 10000)
+  if (props.endpoint) {
+    timer = setInterval(recoverPolling, 10000)
+    document.addEventListener('visibilitychange', recoverPolling)
+    window.addEventListener('online', recoverPolling)
+  }
 })
 onBeforeUnmount(() => {
   unmounted = true
   queuedHints.length = 0
   if (timer) clearInterval(timer)
+  document.removeEventListener('visibilitychange', recoverPolling)
+  window.removeEventListener('online', recoverPolling)
 })
 </script>
 

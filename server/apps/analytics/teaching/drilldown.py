@@ -321,7 +321,7 @@ def _cohort_context(class_group, task):
             class_snapshot_id=task.class_snapshot_id,
             student_id__in=eligible_ids,
         )
-        .exclude(status=ExperimentSession.Status.INVALIDATED)
+        .exclude(status__in=(ExperimentSession.Status.INVALIDATED, ExperimentSession.Status.PREPARED))
         .select_related("student")
     )
     return participants, eligible_ids, current_ids, sessions
@@ -863,7 +863,7 @@ def _class_student_fact_rows(class_group, tasks):
         for session in ExperimentSession.objects.filter(
             version_id__in={task.release_snapshot_id for task in tasks},
             student_id__in=roster_ids,
-        ).only("id", "version_id", "class_snapshot_id", "student_id", "status")
+        ).exclude(status=ExperimentSession.Status.PREPARED).only("id", "version_id", "class_snapshot_id", "student_id", "status")
         if (session.version_id, session.class_snapshot_id) in task_by_pair
         and (session.version_id, session.student_id) in eligible_pairs
         and session.status != ExperimentSession.Status.INVALIDATED

@@ -1,4 +1,5 @@
 import type { StudentRuntimeQuestionEntry, SubmissionConfidence, SubmissionResponse, NavigationClickContext, EntryReceipt, NextEntryRequest, NextEntryOutcome, EnteredQuestion } from './api'
+import { getBootstrapContext } from '@/app/bootstrap'
 import { defaultOutbox } from './fact-store'
 import { ProcessEventCollector } from './process-sender'
 import { bindLifecycle } from './session-lifecycle'
@@ -11,6 +12,7 @@ type RuntimeProcess = StudentRuntimeQuestionEntry['process']
 type VisitFields = 'visit_id' | 'visit_index' | 'entry_event_id' | 'navigation_id'
 type ProcessState = Omit<RuntimeProcess, VisitFields> & Partial<Pick<RuntimeProcess, VisitFields>>
 export interface StudentProcessRuntime {
+  startBackgroundCapture?(): void
   restoredClosure?: SubmissionResponse | null
   saveClosureIntent?(intent: SubmissionResponse | null): Promise<void>
   closesWriterLease?: boolean
@@ -114,6 +116,15 @@ export class SessionController {
     this.tabId = options.tabId || sessionStorage.getItem(key) || crypto.randomUUID()
     sessionStorage.setItem(key, this.tabId)
   }
+  async primeStart(dto: EnteredQuestion) {
+    const receipt = dto.entry_receipt
+    const intent = await this.freezeEntry(dto.session_id, dto.assignment.assignment_id, 'navigation_click', {
+      navigationId: receipt.navigation_id, clientOccurredAt: receipt.entered_at,
+      clientMonotonicMs: performance.now(), clientTimeOrigin: new Date(performance.timeOrigin).toISOString(),
+    })
+    this.validateEntry(dto.session_id, intent, dto)
+    this.enteredQuestion = { sessionId: dto.session_id, request: nextEntryRequest(intent), dto }
+  }
   async freezeEntry(sessionId: number, assignmentId: number, reason: EntryIntent['reason'], click?: NavigationClickContext, source?: { sourceAssignmentId: number; targetUrl: string }): Promise<EntryIntent> {
     if (this.disposed) throw new Error('会话控制器已关闭。')
     if (this.store.isFallback) throw new Error('本地持久化不可用，不能可靠记录答案轨迹。请释放存储空间后重试。')
@@ -135,7 +146,8 @@ export class SessionController {
       }
     }
     const intent: EntryIntent = { ...(click || { navigationId: crypto.randomUUID(), clientOccurredAt: new Date().toISOString(),
-      clientMonotonicMs: Math.round(performance.now() * 1000) / 1000, clientTimeOrigin: new Date(performance.timeOrigin).toISOString() }), assignmentId, reason, ...source }
+      clientMonotonicMs: Math.round(performance.now() * 1000) / 1000, clientTimeOrigin: new Date(performance.timeOrigin).toISOString() }),
+      clientInstanceId: await assessmentClientInstanceId(this.store), assignmentId, reason, ...source }
     await this.store.writeMetadata(key, intent)
     return intent
   }
@@ -247,12 +259,12 @@ export class SessionController {
     await this.store.saveSubmissionIntent(process.session_id, process.attempt_id, null)
     return recovered.result
   }
-  activate(process: ProcessState, attemptStatus: string): Promise<StudentProcessRuntime> {
-    const pending = this.activationQueue.then(() => this.install(process, attemptStatus))
+  activate(process: ProcessState, attemptStatus: string, initialLease?: StudentRuntimeQuestionEntry['initial_writer_lease']): Promise<StudentProcessRuntime> {
+    const pending = this.activationQueue.then(() => this.install(process, attemptStatus, initialLease))
     this.activationQueue = pending.catch(() => undefined)
     return pending
   }
-  private async install(process: ProcessState, attemptStatus: string): Promise<StudentProcessRuntime> {
+  private async install(process: ProcessState, attemptStatus: string, initialLease?: StudentRuntimeQuestionEntry['initial_writer_lease']): Promise<StudentProcessRuntime> {
     await this.pointerQueue
     if (this.disposed) throw new Error('会话控制器已关闭。')
     if (this.sessionId !== undefined && this.sessionId !== process.session_id) throw new Error('Session controller cannot change session identity.')
@@ -263,10 +275,13 @@ export class SessionController {
     const syncUrls = { createUrl: process.time_sync_create_url, finalizeUrl: process.time_sync_finalize_url }
     if (this.disposed) throw new Error('会话控制器已关闭。')
     const first = !this.sender
+    const clientInstanceId = await assessmentClientInstanceId(this.store)
     if (!this.sender) this.sender = new ProcessEventCollector({ sessionId: process.session_id, attemptId: process.attempt_id,
       endpoint: process.event_batch_url, checkpointEndpoint: process.checkpoint_url, csrfToken: this.options.csrfToken,
-      appVersion: process.app_version, correlationId: process.navigation_id, outbox: this.store, autoSchedule: this.options.autoSchedule })
+      appVersion: process.app_version, correlationId: process.navigation_id, outbox: this.store, uuid: () => clientInstanceId, autoSchedule: false })
     const sender = this.sender
+    sender.autoSchedule = false
+    sender.dispose()
     await sender.recordQueue
     if (this.disposed) throw new Error('会话控制器已关闭。')
     sender.attemptId = process.attempt_id
@@ -275,21 +290,19 @@ export class SessionController {
     sender.checkpointEndpoint = process.checkpoint_url
     sender.captureBundle = process.capture_bundle
     sender.setOperationId(currentAssessmentOperationId())
-    const open = !['submitted', 'timed_out', 'unanswered'].includes(attemptStatus)
+    const open = process.paper_flow_version === 1 || !['submitted', 'timed_out', 'unanswered'].includes(attemptStatus)
     if (!this.lifecycle) {
       this.lifecycle = bindLifecycle(sender, { deferRendered: true, heartbeatIntervalSeconds: process.heartbeat_interval_seconds,
         attemptOpen: open, pendingNavigation: restoredNavigation, onlineOptions: { syncUrls } })
       await this.lifecycle.ready
       if (this.disposed) throw new Error('会话控制器已关闭。')
-      void sender.synchronizeClock(syncUrls).then(() => sender.flush()).catch(() => undefined)
-      sender.startSynchronization(syncUrls, DEFAULT_SYNC_INTERVAL_MS, false)
     } else this.lifecycle.activate(open, restoredNavigation)
     const lifecycle = this.lifecycle
     const generation = ++this.generation
     const assertActive = () => { if (generation !== this.generation) throw new Error('题目已经切换，旧操作不能写入新题目。') }
     const lease = process.writer_lease_acquire_url && process.writer_lease_renew_url && process.writer_lease_release_url
       ? createWriterLease({ client: { post: (url, body, options) => getStudentAssessmentApi().post(url, body, { ...options, timeoutMs: 30000 }) }, clientInstanceId: sender.clientInstanceId, acquireUrl: process.writer_lease_acquire_url,
-        renewUrl: process.writer_lease_renew_url, releaseUrl: process.writer_lease_release_url }) : undefined
+        renewUrl: process.writer_lease_renew_url, releaseUrl: process.writer_lease_release_url, initialLease }) : undefined
     const restored = await this.store.restoreResponse(process.session_id, process.attempt_id)
     if (this.disposed) throw new Error('会话控制器已关闭。')
     let closeFlight: Promise<boolean> | undefined;
@@ -423,7 +436,15 @@ export class SessionController {
         if (!closeFlight) closeFlight = close().finally(() => { closeFlight = undefined; });
         return closeFlight;
       },
-      dispose: () => { if (generation === this.generation) this.generation++ },
+      startBackgroundCapture: () => {
+        assertActive()
+        if (this.options.autoSchedule === false || sender.autoSchedule) return
+        sender.autoSchedule = true
+        sender.scheduleUpload(250 + Math.floor(Math.random() * 500))
+        sender.startSynchronization(syncUrls, DEFAULT_SYNC_INTERVAL_MS, false)
+        sender.setTimeout(() => { if (generation === this.generation) void sender.synchronizeClock(syncUrls) }, 250 + Math.floor(Math.random() * 500))
+      },
+      dispose: () => { if (generation === this.generation) { this.generation++; sender.autoSchedule = false; sender.dispose() } },
     }
     if (!process.capture_bundle?.enabled || process.capture_bundle.version !== 1 || process.capture_bundle.mutation_receipts !== true) runtime.captureMutation = undefined;
     if (!first && this.active?.writerLease) this.active.writerLease.invalidate()
@@ -437,13 +458,16 @@ const sessions = new Map<number, Promise<SessionController>>()
 export function getSessionController(sessionId: number, csrfToken: string): Promise<SessionController> {
   let pending = sessions.get(sessionId)
   if (!pending) {
-    pending = defaultOutbox().then(store => createSessionController({ store, csrfToken }))
+    pending = defaultOutbox().then(async store => {
+      await assessmentClientInstanceId(store)
+      return createSessionController({ store, csrfToken })
+    })
     sessions.set(sessionId, pending)
   }
   return pending
 }
-export async function createProcessRuntime(process: ProcessState, status: string, csrfToken: string): Promise<StudentProcessRuntime> {
-  return (await getSessionController(process.session_id, csrfToken)).activate(process, status)
+export async function createProcessRuntime(process: ProcessState, status: string, csrfToken: string, initialLease?: StudentRuntimeQuestionEntry['initial_writer_lease']): Promise<StudentProcessRuntime> {
+  return (await getSessionController(process.session_id, csrfToken)).activate(process, status, initialLease)
 }
 export function disposeSessionController(sessionId: number) {
   const pending = sessions.get(sessionId)
@@ -453,4 +477,54 @@ export function disposeSessionController(sessionId: number) {
 
 export function disposeAllSessionControllers() {
   for (const sessionId of sessions.keys()) disposeSessionController(sessionId)
+}
+
+const identityFlights = new Map<number, Promise<string>>()
+let documentTabFlight: Promise<string> | undefined
+
+async function holdDocumentTabId(tabId: string): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    void navigator.locks.request(`kt-assessment-tab:${tabId}`, { mode: 'exclusive', ifAvailable: true }, async lock => {
+      if (!lock) { resolve(false); return }
+      let release!: () => void
+      const lifetime = new Promise<void>(done => { release = done })
+      window.addEventListener('pagehide', () => {
+        release()
+        documentTabFlight = undefined
+        identityFlights.clear()
+      }, { once: true })
+      resolve(true)
+      await lifetime
+    }).catch(reject)
+  })
+}
+
+function ownedDocumentTabId(): Promise<string> {
+  if (!documentTabFlight) documentTabFlight = (async () => {
+    const tabKey = 'kt-assessment-tab-id'
+    let tabId = sessionStorage.getItem(tabKey) || crypto.randomUUID()
+    while (!await holdDocumentTabId(tabId)) tabId = crypto.randomUUID()
+    sessionStorage.setItem(tabKey, tabId)
+    return tabId
+  })().catch(error => { documentTabFlight = undefined; throw error })
+  return documentTabFlight
+}
+
+export function assessmentClientInstanceId(store?: CaptureStore): Promise<string> {
+  const userId = getBootstrapContext().user?.id || 0
+  const pending = identityFlights.get(userId)
+  if (pending) return pending
+  const identity = (async () => {
+    // Without document ownership, retain a fresh legacy identity instead of sharing a lease from copied storage.
+    if (!navigator.locks) return crypto.randomUUID()
+    const capture = store || await defaultOutbox()
+    const tabId = await ownedDocumentTabId()
+    const key = `assessment-client:${userId}:${tabId}`
+    const saved = await capture.readMetadata<string>(key)
+    const id = saved || crypto.randomUUID()
+    if (!saved) await capture.writeMetadata(key, id)
+    return id
+  })().catch(error => { identityFlights.delete(userId); throw error })
+  identityFlights.set(userId, identity)
+  return identity
 }

@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
+import * as bootstrap from './bootstrap'
+import * as offlineCache from '@/assessment-runtime/offline-cache'
+import * as sessionControllers from '@/assessment-runtime/session-controller'
 
 import {
   authenticatedEntryRedirect,
@@ -16,6 +19,142 @@ function jsonResponse(body: unknown, status = 200) {
     headers: { 'Content-Type': 'application/json' },
   })
 }
+
+describe('bounded login retries', () => {
+  const context = {
+    csrf_token: 'rotated-csrf',
+    user: { id: 8, role: 'student', display_name: '学生', username: 'S001', student_number: 'S001',
+      home_url: '/student/', uses_initial_password: false, initial_password_reminder_pending: false,
+      research_consent_required: false, research_consent_version: '2026-09-14' },
+  }
+  function busy(seconds = '1') {
+    return new Response(JSON.stringify({ error: { code: 'LOGIN_BUSY' } }), {
+      status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': seconds },
+    })
+  }
+  function apiFor(fetchImpl: typeof fetch) {
+    return createAuthenticationApi({ fetchImpl, getCsrfToken: () => 'csrf',
+      refreshBootstrapContext: vi.fn(), clearBootstrapContext: vi.fn() })
+  }
+  beforeEach(() => {
+    vi.useFakeTimers()
+    bootstrap.clearBootstrapContext()
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    vi.spyOn(offlineCache, 'clearOfflineAssessmentCache').mockResolvedValue()
+    vi.spyOn(sessionControllers, 'disposeAllSessionControllers')
+    vi.spyOn(bootstrap, 'acceptBootstrapContext')
+  })
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); bootstrap.clearBootstrapContext() })
+
+  it('shares a single flow with fixed credentials and additive capped jitter, accepting success once', async () => {
+    const times: number[] = []
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
+      times.push(Date.now())
+      return times.length <= 6 ? busy() : jsonResponse(context)
+    })
+    const store = vi.spyOn(Storage.prototype, 'setItem')
+    const api = apiFor(fetchImpl)
+    const first = api.login('S001', 'original-password')
+    const duplicate = api.login('changed-account', 'changed-password')
+    expect(duplicate).toBe(first)
+    await vi.advanceTimersByTimeAsync(15000)
+    await expect(first).resolves.toEqual(context)
+    expect(times.slice(1).map((time, index) => time - times[index]!)).toEqual([1125, 1250, 1500, 2000, 2000, 2000])
+    expect(fetchImpl.mock.calls.every(([, options]) => options?.body === JSON.stringify({ username: 'S001', password: 'original-password' }))).toBe(true)
+    expect(offlineCache.clearOfflineAssessmentCache).toHaveBeenCalledOnce()
+    expect(sessionControllers.disposeAllSessionControllers).toHaveBeenCalledOnce()
+    expect(bootstrap.acceptBootstrapContext).toHaveBeenCalledOnce()
+    expect(store).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('cancels a busy wait without replaying or accepting context', async () => {
+    const controller = new AbortController()
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(busy())
+    const pending = apiFor(fetchImpl).login('S001', 'password', { signal: controller.signal })
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.advanceTimersByTimeAsync(100)
+    controller.abort()
+    await rejected
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(bootstrap.acceptBootstrapContext).not.toHaveBeenCalled()
+    expect(offlineCache.clearOfflineAssessmentCache).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('cancels an in-flight request and allows a later independent login', async () => {
+    const controller = new AbortController()
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementationOnce((_path, options) => new Promise((_resolve, reject) => {
+      options!.signal!.addEventListener('abort', () => reject(options!.signal!.reason), { once: true })
+    })).mockResolvedValueOnce(jsonResponse(context))
+    const api = apiFor(fetchImpl)
+    const pending = api.login('S001', 'password', { signal: controller.signal })
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    controller.abort()
+    await rejected
+    expect(fetchImpl.mock.calls[0]![1]!.signal!.aborted).toBe(true)
+    await expect(api.login('S001', 'password')).resolves.toEqual(context)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(bootstrap.acceptBootstrapContext).toHaveBeenCalledOnce()
+  })
+
+  it('does not send a request for an already cancelled login', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(context))
+    await expect(apiFor(fetchImpl).login('S001', 'password', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('aborts a later attempt at the original thirty-second deadline using only its remaining time', async () => {
+    const times: number[] = []
+    const started = Date.now()
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementationOnce(async () => {
+      times.push(Date.now())
+      await new Promise(resolve => setTimeout(resolve, 25000))
+      return busy()
+    }).mockImplementationOnce((_path, options) => {
+      times.push(Date.now())
+      return new Promise((_resolve, reject) => options!.signal!.addEventListener('abort', () => reject(options!.signal!.reason), { once: true }))
+    })
+    const pending = apiFor(fetchImpl).login('S001', 'password')
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' })
+    await vi.advanceTimersByTimeAsync(30000)
+    await rejected
+    expect(times.map(time => time - started)).toEqual([0, 26125])
+    expect(fetchImpl.mock.calls[1]![1]!.signal!.aborted).toBe(true)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(bootstrap.acceptBootstrapContext).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('does not schedule a retry which cannot fit in the total budget', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(busy('30'))
+    await expect(apiFor(fetchImpl).login('S001', 'password')).rejects.toMatchObject({ status: 429, code: 'LOGIN_BUSY' })
+    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([
+    [400, 'VALIDATION_ERROR'], [403, 'CSRF_FAILED'], [429, 'REQUEST_REJECTED'],
+    [429, 'START_BUSY'], [503, 'LOGIN_BUSY'],
+  ])('never replays rejected credentials or other status/code combinations (%s %s)', async (status, code) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ error: { code } }, status))
+    await expect(apiFor(fetchImpl).login('S001', 'password')).rejects.toMatchObject({ status, code })
+    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(bootstrap.acceptBootstrapContext).not.toHaveBeenCalled()
+  })
+
+  it.each(['network', 'malformed-success'])('never replays an unknown %s outcome', async (failure) => {
+    const fetchImpl = vi.fn<typeof fetch>()
+    if (failure === 'network') fetchImpl.mockRejectedValue(new TypeError('network'))
+    else fetchImpl.mockResolvedValue(new Response('{"user": {"id": 8}}'))
+    await expect(apiFor(fetchImpl).login('S001', 'password')).rejects.toMatchObject({ name: 'MutationOutcomeUnknownError' })
+    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(bootstrap.acceptBootstrapContext).not.toHaveBeenCalled()
+  })
+})
 
 describe('authentication API', () => {
   it('clears cached assessment pages after logout without touching the process outbox', async () => {

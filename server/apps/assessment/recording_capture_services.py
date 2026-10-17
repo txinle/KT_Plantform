@@ -143,12 +143,20 @@ def capture_checkpoint_context(*, student, bundle, session):
     }
 
 
-def validate_close_recording_time(session, attempt=None, *, request_received_at, event_type=None):
+def validate_close_recording_time(session, attempt=None, *, request_received_at, event_type=None, validation_context=None):
     """Allow terminal recording facts within the frozen grace, never response writes."""
     from .event_invariants import SESSION_ONLY_EVENTS, TELEMETRY_EVENTS
     from .services import _validate_process_event_time
     now = request_received_at
-    error = _validate_process_event_time(session, attempt, request_received_at=now)
+    recording_events = SESSION_ONLY_EVENTS | TELEMETRY_EVENTS | {
+        'item_left', 'item_rendered', 'feedback_exposure', 'feedback_shown', 'explanation_shown',
+    }
+    # A real return view may occur long after an item's response deadline. Its
+    # recording permission follows the active paper; response facts retain the item boundary.
+    if (session.assessment_flow_version == 1 and session.status == ExperimentSession.Status.IN_PROGRESS
+            and (event_type is None or event_type in recording_events)):
+        return _validate_process_event_time(session, None, request_received_at=now, validation_context=validation_context)
+    error = _validate_process_event_time(session, attempt, request_received_at=now, validation_context=validation_context)
     if error == '班级任务已结束' or session.status == ExperimentSession.Status.INVALIDATED:
         return '班级任务已结束'
     boundaries = [session.terminal_at, session.authoritative_terminal_at, session.deadline_at]
@@ -157,7 +165,8 @@ def validate_close_recording_time(session, attempt=None, *, request_received_at,
             attempt.current_effective_deadline_at or attempt.initial_effective_deadline_at])
     if session.class_task_id:
         from .deadline_services import DeadlineDecisionService
-        schedule = DeadlineDecisionService.schedule_at(session.class_task, now)
+        task = validation_context.task if validation_context is not None else session.class_task
+        schedule = DeadlineDecisionService.schedule_at(task, now)
         if schedule is not None:
             boundaries.append(schedule.closes_at)
     reached = [boundary for boundary in boundaries if boundary is not None and boundary <= now]
@@ -171,9 +180,6 @@ def validate_close_recording_time(session, attempt=None, *, request_received_at,
     grace = contract['parameters']['terminal_grace_seconds']
     if now >= min(reached) + timedelta(seconds=grace):
         return '作答时间已结束'
-    recording_events = SESSION_ONLY_EVENTS | TELEMETRY_EVENTS | {
-        'item_left', 'item_rendered', 'feedback_exposure', 'feedback_shown', 'explanation_shown',
-    }
     if event_type is not None and event_type not in recording_events:
         return '作答时间已结束'
     return None
@@ -314,6 +320,9 @@ def record_client_capture_checkpoint(*, student, document, context=None):
         with transaction.atomic():
             checkpoint = ClientCaptureCheckpoint(**values)
             checkpoint.save(force_insert=True, _validated_links=context is not None)
+            from apps.analytics.research_materialization_jobs import schedule_session_materialization
+
+            schedule_session_materialization(checkpoint.session_id)
             if context is not None:
                 context['checkpoints'][checkpoint_id] = checkpoint
             return checkpoint

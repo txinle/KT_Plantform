@@ -12,6 +12,59 @@ import { backoffDelay, sanitizePayload } from './process-types';
 
 const INSTANCE_A = '11111111-1111-4111-8111-111111111111';
 
+test('uses the browser monotonic clock origin rather than estimating it from wall time', () => {
+  const origin = 1792108800000.5;
+  vi.stubGlobal('performance', { timeOrigin: origin, now: () => 123.4 });
+  const wall = vi.spyOn(Date, 'now').mockReturnValue(origin + 999999);
+  const sender = new ProcessEventCollector(eventPayload({ outbox: new MemoryOutbox(), autoSchedule: false, timeOrigin: undefined }));
+  try { assert.equal(sender.timeOrigin, new Date(origin).toISOString()); }
+  finally { sender.dispose(); wall.mockRestore(); vi.unstubAllGlobals(); }
+});
+
+test('draft freezing waits for an earlier raw upload and does not copy its reserved events', async () => {
+  const store = new MemoryOutbox();
+  let confirm;
+  let sent;
+  const gate = new Promise(resolve => { confirm = resolve; });
+  const sender = new ProcessEventCollector(eventPayload({ sessionId: 7, attemptId: 13, outbox: store,
+    autoSchedule: false, clientInstanceId: INSTANCE_A, isOnline: () => true, isVisible: () => true,
+    captureBundle: { enabled: true, version: 1, ingest_url: '/capture/', max_events: 100, max_checkpoints: 100, max_bytes: 8388608 },
+    fetch: async (_url, options) => {
+      sent = JSON.parse(options.body);
+      await gate;
+      return okResponse({ success: true, committed: true,
+        acknowledgements: sent.capture_bundle.events.map(row => ({ event_id: row.event_id,
+          client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+        checkpoint_ids: sent.capture_bundle.checkpoints.map(row => row.checkpoint_id) });
+    },
+  }));
+  try {
+    await sender.record('response_input_started', { question_type: 'single_choice' }, { eventId: globalThis.crypto.randomUUID() });
+    const upload = sender.flush({ ignoreVisibility: true });
+    await vi.waitFor(() => assert.ok(sent));
+    let frozen = false;
+    const mutation = sender.freezeCaptureMutation('/draft/', { target_event_id: 'latest' }).then(value => { frozen = true; return value; });
+    await new Promise(resolve => globalThis.setTimeout(resolve, 0));
+    assert.equal(frozen, false);
+    confirm();
+    assert.equal(await upload, true);
+    assert.equal((await mutation).processSnapshot.events.length, 0);
+  } finally { confirm(); sender.dispose(); }
+});
+
+test('an unknown raw packet remains frozen and blocks a newer draft reservation', async () => {
+  const store = new MemoryOutbox();
+  const original = { url: '/capture/', processSnapshot: { version: 1, client_instance_id: INSTANCE_A,
+    event_boundary: 1, events: [{ event_id: globalThis.crypto.randomUUID(), client_sequence_no: 1 }], checkpoints: [] } };
+  await store.writeMetadata('capture-flush:7', original);
+  const sender = new ProcessEventCollector(eventPayload({ sessionId: 7, attemptId: 13, outbox: store, autoSchedule: false }));
+  try {
+    await assert.rejects(sender.freezeCaptureMutation('/draft/', { target_event_id: 'newer' }), /先前轨迹上传尚未确认/);
+    assert.deepEqual(await store.readMetadata('capture-flush:7'), original);
+    assert.equal(await store.readMetadata('capture-mutation:7:13'), null);
+  } finally { sender.dispose(); }
+});
+
 test('background confirmation keeps the frozen upload operation when another question becomes active', async () => {
   const measure = vi.fn();
   const origin = Date.parse('2026-10-13T00:00:00Z');
@@ -253,7 +306,7 @@ function eventPayload(overrides = {}) {
   const transport = overrides.fetch;
   if (transport) overrides = { ...overrides, fetch: async (...args) => {
     const response = await transport(...args);
-    return { ...response, status: response.status ?? (response.ok ? 200 : 503),
+    return { ...response, status: response.status ?? (response.ok ? 200 : 503), headers: new globalThis.Headers(response.headers),
       json: async () => { const body = await response.json(); return response.ok ? { data: body, meta: { request_id: 'test-request' } } : body; } };
   } };
   return {
@@ -765,6 +818,7 @@ test('lifecycle capture emits approved events and heartbeat stops after close', 
     record: async (eventType, payload) => { records.push({ eventType, payload }); },
     flush: async () => true,
     checkpoint: async (trigger) => { checkpoints.push(trigger); },
+    recordCheckpoint: async (trigger) => { checkpoints.push(trigger); },
   };
 
   const lifecycle = bindLifecycle(collector, {

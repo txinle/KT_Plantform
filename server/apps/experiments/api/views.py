@@ -241,7 +241,7 @@ def _task_available_actions(task, *, now=None):
         schedule is not None
         and schedule.opens_at is not None
         and now < schedule.opens_at
-        and not task.sessions.exists()
+        and not task.sessions.exclude(status=ExperimentSession.Status.PREPARED).exists()
     ):
         actions.extend(("revise_schedule", "cancel"))
     actions.append("manual_close")
@@ -1083,18 +1083,19 @@ class TeacherClassTaskProgressView(TeacherClassTaskMixin, APIView):
         task = self.get_task()
         counts = {
             status: count
-            for status, count in task.sessions.values_list("status").annotate(
+            for status, count in task.sessions.filter(started_at__isnull=False).values_list("status").annotate(
                 count=Count("pk")
             )
         }
         total = task.participant_snapshots.count()
-        started = sum(counts.values())
+        started = sum(count for status, count in counts.items() if status != ExperimentSession.Status.PREPARED)
         return Response(
             {
                 "task_id": task.pk,
                 "total_participants": total,
                 "not_started": max(0, total - started),
-                "in_progress": counts.get(ExperimentSession.Status.IN_PROGRESS, 0),
+                "in_progress": (counts.get(ExperimentSession.Status.IN_PROGRESS, 0)
+                                + counts.get(ExperimentSession.Status.SUBMITTING, 0)),
                 "completed": counts.get(ExperimentSession.Status.COMPLETED, 0),
                 "expired": counts.get(ExperimentSession.Status.EXPIRED, 0),
                 "invalidated": counts.get(ExperimentSession.Status.INVALIDATED, 0),

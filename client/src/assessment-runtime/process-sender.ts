@@ -45,9 +45,9 @@ export class ProcessEventCollector {
     }
     this.wallNow = options.wallNow || (() => new Date());
     this.monotonicNow = options.monotonicNow || (() => globalThis.performance.now());
-    this.timeOrigin = options.timeOrigin || new Date(
-      Date.now() - (globalThis.performance?.now?.() || 0),
-    ).toISOString();
+    const browserTimeOrigin = globalThis.performance?.timeOrigin;
+    this.timeOrigin = options.timeOrigin || new Date(Number.isFinite(browserTimeOrigin)
+      ? browserTimeOrigin : Date.now() - (globalThis.performance?.now?.() || 0)).toISOString();
     this.isOnline = options.isOnline || (() => globalThis.navigator?.onLine !== false);
     this.isVisible = options.isVisible || (() => globalThis.document?.visibilityState !== 'hidden');
     this.setTimeout = options.setTimeout || globalThis.setTimeout?.bind(globalThis);
@@ -455,6 +455,7 @@ export class ProcessEventCollector {
     const operationId = this.operationId;
     const pending = this.recordQueue.then(() => this._createCheckpoint(trigger, operationId ?? null));
     this.recordQueue = pending.then(() => undefined);
+    void this.recordQueue.catch(() => {});
     return pending;
   }
 
@@ -579,9 +580,14 @@ export class ProcessEventCollector {
 
   freezeCaptureMutation(url: string, body: Record<string, unknown>, operationId: string | null = this.operationId ?? null): Promise<CaptureMutation> {
     const recordFence = this.recordQueue;
+    const earlierUpload = this.flushPromise;
     const sessionId = this.sessionId;
     const attemptId = this.attemptId;
     const frozen = recordFence.then(async () => {
+      if (earlierUpload) await earlierUpload;
+      if (await this.outbox.readMetadata(`capture-flush:${sessionId}`)) {
+        throw new Error('先前轨迹上传尚未确认，请恢复原上传后再保存草稿。');
+      }
       const key = `capture-mutation:${sessionId}:${attemptId}`;
       const saved = await this.outbox.readMetadata<CaptureMutation>(key);
       if (saved) {

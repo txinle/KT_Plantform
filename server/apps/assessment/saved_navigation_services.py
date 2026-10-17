@@ -10,19 +10,20 @@ from .atomic_submission_services import MAX_BYTES, MAX_CHECKPOINTS, MAX_EVENTS, 
 from .capture_v2_services import ingest_capture_batch, uses_capture_v2
 from .event_batch_services import ProcessRequestError, parse_uuid, require_exact_mapping
 from .models import AssessmentEvent, Attempt, ExperimentSession, NavigationReceipt
-from .recording_capture_services import record_client_capture_checkpoint
+from .recording_capture_services import capture_checkpoint_context, record_client_capture_checkpoint
 from .services import _validate_course_access, _validate_process_event_time, save_draft
-from .writer_lease_services import WriterLeaseConflict, acquire_attempt_writer_lease, assert_attempt_writer_lease, release_attempt_writer_lease
+from .writer_lease_services import WriterLeaseConflict, _bind_locked_attempt, acquire_attempt_writer_lease, assert_attempt_writer_lease, release_attempt_writer_lease
 
 FIELDS = frozenset({'navigation_token', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'client_clicked_at',
-                    'writer_lease_token', 'writer_client_instance_id', 'save_and_leave', 'next_entry'})
+                    'writer_lease_token', 'writer_client_instance_id', 'save_and_leave', 'next_entry', 'inline_confidence'})
 
 
 def saved_navigation_capability(attempt):
     allowed = ('*' in settings.SAVE_AND_LEAVE_USER_IDS or '*' in settings.SAVE_AND_LEAVE_COURSE_IDS
                or str(attempt.session.student_id) in settings.SAVE_AND_LEAVE_USER_IDS
                or str(attempt.session.version.experiment.course_id) in settings.SAVE_AND_LEAVE_COURSE_IDS)
-    return {'enabled': bool(settings.SAVE_AND_LEAVE_ENABLED and allowed and uses_capture_v2(attempt.session)),
+    return {'enabled': bool(uses_capture_v2(attempt.session) and
+            (attempt.session.assessment_flow_version == 1 or settings.SAVE_AND_LEAVE_ENABLED and allowed)),
             'version': 1, 'max_events': MAX_EVENTS, 'max_checkpoints': MAX_CHECKPOINTS, 'max_bytes': MAX_BYTES}
 
 
@@ -60,8 +61,11 @@ def _save_and_leave_attempt(*, student, attempt_id, document, request_received_a
         session = ExperimentSession.objects.select_for_update(of=('self',)).select_related(
             'version__experiment__course', 'capture_contract', 'class_task',
         ).get(pk=session_id, student=student)
-        attempt = Attempt.objects.select_for_update(of=('self',)).get(pk=attempt_id, session=session)
+        attempt = Attempt.objects.select_for_update(of=('self',)).select_related(
+            'assignment__snapshot', 'assignment__item_instance', 'current_response_snapshot',
+        ).get(pk=attempt_id, session=session)
         attempt.session = session
+        _bind_locked_attempt(attempt)
         from .transition_entry_services import validate_next_entry
         validate_next_entry(attempt, document, destination_id=destination_id)
         bundle = validate_process_bundle(attempt, document['save_and_leave'])
@@ -98,17 +102,20 @@ def _save_and_leave_attempt(*, student, attempt_id, document, request_received_a
                                            client_instance_id=client_id)
                 lease_token = document['writer_lease_token']
             else:
-                lease_token = acquire_attempt_writer_lease(attempt, client_instance_id=client_id).token
+                lease_token = acquire_attempt_writer_lease(attempt, client_instance_id=client_id,
+                                                          _locked_attempt=attempt).token
             acknowledgements = ingest_capture_batch(student=student, document={
                 'client_instance_id': bundle['client_instance_id'], 'events': bundle['events'],
-            }, request_received_at=request_received_at) if bundle['events'] else []
+            }, request_received_at=request_received_at, locked_sessions={session.pk: session},
+                locked_attempts={attempt.pk: attempt}) if bundle['events'] else []
             left = AssessmentEvent.objects.filter(pk=leave_id, attempt=attempt, event_type='item_left',
                                                   client_instance_id=client_id, correlation_id=token).first()
             if (left is None or left.client_sequence_no > bundle['event_boundary']
                     or left.payload != {'leave_reason': 'navigation', 'to_assignment_id': destination_id}):
                 raise ProcessRequestError('invalid_navigation_leave_event')
             try:
-                checkpoint_ids = [str(record_client_capture_checkpoint(student=student, document=row).pk)
+                context = capture_checkpoint_context(student=student, bundle=bundle, session=session)
+                checkpoint_ids = [str(record_client_capture_checkpoint(student=student, document=row, context=context).pk)
                                   for row in bundle['checkpoints']]
             except ValidationError as error:
                 raise ProcessRequestError('invalid_capture_checkpoint') from error
@@ -119,13 +126,18 @@ def _save_and_leave_attempt(*, student, attempt_id, document, request_received_a
                 if target is not None:
                     attempt = save_draft(attempt.pk, None, client_time, target_event_id=target,
                         expected_version=bundle['expected_version'], writer_lease_token=lease_token,
-                        writer_client_instance_id=client_id, request_received_at=request_received_at)
+                        writer_client_instance_id=client_id, request_received_at=request_received_at,
+                        _locked_attempt=attempt,
+                        inline_confidence=document.get('inline_confidence'))
                 elif attempt.active_response_event_id is not None:
                     raise ProcessRequestError('missing_navigation_response_target')
+                else:
+                    from .prepared_services import save_inline_confidence
+                    save_inline_confidence(attempt, document.get('inline_confidence'))
             elif (str(attempt.active_response_event_id) if attempt.active_response_event_id else None) != target:
                 raise ProcessRequestError('navigation_response_conflict', status=409)
-            release_attempt_writer_lease(attempt, lease_token=lease_token, client_instance_id=client_id)
-            attempt.refresh_from_db()
+            release_attempt_writer_lease(attempt, lease_token=lease_token, client_instance_id=client_id,
+                                         _locked_attempt=attempt)
             receipt = {'success': True, 'committed': True, 'navigation_token': str(token),
                        'acknowledgements': acknowledgements, 'checkpoint_ids': checkpoint_ids,
                        'response_version': attempt.response_version,

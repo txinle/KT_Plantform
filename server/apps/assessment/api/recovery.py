@@ -12,7 +12,6 @@ from apps.accounts.models import CourseEnrollment
 from ..deadline_services import DeadlineDecisionService
 from ..feedback_services import frozen_feedback_payload
 from ..models import Attempt, ExperimentSession, SubmissionEvent
-from ..views import _next_url_after_attempt
 from .views import StudentApiMixin, _student_task, _entry_projection
 
 
@@ -60,7 +59,9 @@ class StudentAttemptRecoveryView(StudentApiMixin, APIView):
         if submission is not None and attempt.status == Attempt.Status.SUBMITTED:
             result = {
                 'success': True, 'status': attempt.status, 'confidence_required': False,
-                'next_url': _next_url_after_attempt(attempt, finish_if_last=False),
+                'next_url': reverse('assessment:complete', args=[attempt.session_id])
+                    if attempt.session.status == ExperimentSession.Status.COMPLETED else
+                    reverse('assessment:question', args=[attempt.session_id, attempt.assignment_id]),
                 **frozen_feedback_payload(attempt),
             }
             if str(submission.submission_token) == request.query_params.get('submission_token'):
@@ -81,7 +82,7 @@ class StudentTaskRecoveryView(StudentApiMixin, APIView):
         session = ExperimentSession.objects.select_related('version__experiment__course', 'student', 'class_task').filter(
             class_task=task, participant_snapshot__student=request.user,
         ).first()
-        if session is None:
+        if session is None or session.status == ExperimentSession.Status.PREPARED:
             return Response({'status': 'not_started', 'code': 'SESSION_NOT_STARTED', 'can_continue': False, 'question_url': None})
         allowed, code = recovery_permission(session)
         return Response({'status': session.status, 'code': code, 'can_continue': allowed,

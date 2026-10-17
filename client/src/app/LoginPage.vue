@@ -1,23 +1,36 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { onBeforeUnmount, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import { ApiError } from '@/api/client'
+import { beginAssessmentOperation, finishAssessmentOperation, timedAssessmentStage } from '@/assessment-runtime/operation-timing'
 
 import { login, loginDestination } from './auth'
+import { canNavigateStudentCourse } from './student-navigation'
 
 const route = useRoute()
+const router = useRouter()
 const credentials = reactive({ username: '', password: '' })
 const error = ref('')
 const submitting = ref(false)
+const controller = new AbortController()
+
+onBeforeUnmount(() => controller.abort())
 
 async function submit() {
+  if (submitting.value || controller.signal.aborted) return
   submitting.value = true
   error.value = ''
+  beginAssessmentOperation('login')
   try {
-    const context = await login(credentials.username, credentials.password)
-    window.location.assign(loginDestination(context.user, route.query.next))
+    const context = await timedAssessmentStage('login_remote', () => login(credentials.username, credentials.password, { signal: controller.signal }))
+    if (controller.signal.aborted) return
+    const destination = loginDestination(context.user, route.query.next)
+    if (canNavigateStudentCourse(context, destination)) await router.push(destination)
+    else window.location.assign(destination)
   } catch (caught) {
+    finishAssessmentOperation(false)
+    if (controller.signal.aborted) return
     const credentialError = caught instanceof ApiError ? caught.fields.non_field_errors : undefined
     const message = Array.isArray(credentialError) ? credentialError[0] : credentialError
     error.value = caught instanceof ApiError || caught instanceof Error

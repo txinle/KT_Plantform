@@ -3,12 +3,14 @@ from apps.api.test_support import domain_payload
 from copy import deepcopy
 import json
 import uuid
+from time import perf_counter
 from datetime import timedelta
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event
 
 from django.db import DatabaseError, close_old_connections, connection
+from django.test.utils import CaptureQueriesContext
 from django.core.exceptions import ValidationError
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
@@ -17,6 +19,7 @@ from django.utils import timezone
 from apps.question_bank.models import Question
 from . import test_capture_v2 as capture_fixtures
 from . import test_atomic_submission as atomic_fixtures
+from .test_student_api import StudentApiFixtureMixin
 from .models import AssessmentEvent, Attempt, ClientCaptureCheckpoint, NavigationReceipt, SubmissionEvent
 
 
@@ -68,6 +71,38 @@ class SavedNavigationTests(TestCase):
         self.assertFalse(AssessmentEvent.objects.filter(attempt__assignment_id=document['to_assignment_id'],
                                                        event_type='item_entered').exists())
         self.assertIsNone(attempt.writer_lease_token)
+
+    def test_navigation_reuses_each_locked_row_and_returns_current_receipt_fields(self):
+        from .saved_navigation_services import save_and_leave_attempt
+        attempt, document = self.bundle()
+        sql_seconds = 0
+
+        def measure(execute, sql, params, many, context):
+            nonlocal sql_seconds
+            started = perf_counter()
+            try:
+                return execute(sql, params, many, context)
+            finally:
+                sql_seconds += perf_counter() - started
+
+        started = perf_counter()
+        with connection.execute_wrapper(measure), CaptureQueriesContext(connection) as queries:
+            saved, receipt = save_and_leave_attempt(student=self.student, attempt_id=attempt.pk, document=document)
+        elapsed = perf_counter() - started
+        print(f'F3_DIAGNOSTIC queries={len(queries)} sql_ms={sql_seconds * 1000:.3f} '
+              f'application_ms={(elapsed - sql_seconds) * 1000:.3f} total_ms={elapsed * 1000:.3f}')
+        for table in ('assessment_experimentsession', 'assessment_attempt'):
+            locks = [row['sql'] for row in queries if f'FROM "{table}"' in row['sql']
+                     and ('FOR UPDATE' in row['sql'] or 'FOR NO KEY UPDATE' in row['sql'])]
+            self.assertEqual(len(locks), 1, '\n'.join(locks))
+        self.assertEqual(receipt['response_version'], saved.response_version)
+        self.assertEqual(receipt['active_response_event_id'], str(saved.active_response_event_id))
+        self.assertEqual(receipt['saved_at'], saved.draft_saved_at.isoformat())
+        self.assertEqual(receipt['status'], saved.status)
+        self.assertIsNone(saved.writer_lease_token)
+        saved.refresh_from_db()
+        self.assertEqual(receipt['response_version'], saved.response_version)
+        self.assertEqual(receipt['saved_at'], saved.draft_saved_at.isoformat())
 
     def test_lost_response_replays_original_receipt_after_later_draft_changes(self):
         attempt, document = self.bundle()
@@ -199,6 +234,42 @@ class SavedNavigationCommitTests(TransactionTestCase):
     transition = capture_fixtures.CaptureV2Tests.transition
     bundle = SavedNavigationTests.bundle
 
+    def test_navigation_racing_formal_submission_never_overwrites_the_final_response(self):
+        from .capture_v2_services import ingest_capture_batch
+        from .saved_navigation_services import save_and_leave_attempt
+        from .services import save_draft, submit_attempt
+        attempt, document = self.bundle()
+        stream = document['save_and_leave']['client_instance_id']
+        ingest_capture_batch(student=self.student, document={'client_instance_id': stream,
+            'events': [document['save_and_leave']['events'][0]]})
+        save_draft(attempt.pk, None, target_event_id=document['target_event_id'], expected_version=0)
+        document['save_and_leave']['expected_version'] = 1
+        barrier = Barrier(2)
+
+        def mutate(navigation):
+            close_old_connections()
+            try:
+                barrier.wait(timeout=10)
+                if navigation:
+                    return save_and_leave_attempt(student=self.student, attempt_id=attempt.pk,
+                        document=deepcopy(document))[1]
+                return submit_attempt(attempt.pk, uuid.uuid4(), target_event_id=document['target_event_id'])
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            saved = executor.submit(mutate, True)
+            submitted = executor.submit(mutate, False)
+            receipt = saved.result(timeout=30)
+            submitted.result(timeout=30)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, Attempt.Status.SUBMITTED)
+        self.assertEqual(str(attempt.final_response_event_id), document['target_event_id'])
+        self.assertEqual(attempt.response_version, 1)
+        self.assertEqual(receipt['response_version'], 1)
+        self.assertEqual(SubmissionEvent.objects.filter(attempt=attempt).count(), 1)
+        self.assertEqual(NavigationReceipt.objects.filter(attempt=attempt).count(), 1)
+
     def test_commit_failure_has_no_success_receipt_or_confirmed_rejection(self):
         from .saved_navigation_services import save_and_leave_attempt
         attempt, document = self.bundle()
@@ -240,3 +311,91 @@ class SavedNavigationCommitTests(TransactionTestCase):
         self.assertEqual(NavigationReceipt.objects.filter(attempt=attempt).count(), 1)
         attempt.refresh_from_db()
         self.assertEqual(attempt.response_version, 1)
+
+
+@override_settings(SAVE_AND_LEAVE_ENABLED=True, SAVE_AND_LEAVE_USER_IDS=frozenset({'*'}),
+                   CAPTURE_V2_ENABLED=True, CAPTURE_V2_COURSE_IDS=frozenset({'*'}),
+                   ASSESSMENT_TRANSITION_ENABLED=False)
+class SavedNavigationTeacherCloseRaceTests(StudentApiFixtureMixin, TransactionTestCase):
+    transition = capture_fixtures.CaptureV2Tests.transition
+    bundle = SavedNavigationTests.bundle
+
+    def setUp(self):
+        super().setUp()
+        from apps.question_bank.models import QuestionConcept
+        from .services import get_or_create_session, record_visit
+        destination = Question.objects.create(bank=self.bank, sequence=2, code='NAV-DESTINATION',
+            question_type=Question.Type.SHORT, text='下一题', correct_answer='答案')
+        QuestionConcept.objects.create(question=destination, concept=self.question.primary_concept, is_primary=True)
+        self.experiment, self.task = self.publish_task(name='导航关闭竞争', feedback_mode=self.feedback_mode)
+        self.session = get_or_create_session(self.experiment, self.student, class_task=self.task)
+        self.attempts = {assignment.snapshot.question_type: record_visit(self.session.pk, assignment.pk)
+                         for assignment in self.session.assignments.select_related('snapshot')}
+
+    def test_preclose_navigation_commits_while_teacher_close_commits_and_replays_afterward(self):
+        if connection.vendor != 'postgresql':
+            self.skipTest('Requires PostgreSQL concurrent transactions')
+        from apps.experiments.publication_services import database_now, manual_close_task
+        from .saved_navigation_services import save_and_leave_attempt
+        from .services import _validate_process_event_time
+        attempt, document = self.bundle()
+        arrived_at = database_now()
+        navigation_locked = Event()
+        teacher_closed = Event()
+
+        def wait_for_teacher_close(*args, **kwargs):
+            # The navigation transaction already holds its session and attempt locks.
+            navigation_locked.set()
+            self.assertTrue(teacher_closed.wait(timeout=10), 'Teacher close could not commit during navigation')
+            return _validate_process_event_time(*args, **kwargs)
+
+        def navigate():
+            close_old_connections()
+            try:
+                return save_and_leave_attempt(student=self.student, attempt_id=attempt.pk,
+                    document=deepcopy(document), request_received_at=arrived_at)[1]
+            finally:
+                close_old_connections()
+
+        def close_task():
+            close_old_connections()
+            try:
+                self.assertTrue(navigation_locked.wait(timeout=10), 'Navigation did not reach its locked transaction')
+                closed = manual_close_task(self.task, self.teacher, reason='teacher_ended')
+                # manual_close_task's atomic transaction has committed before navigation proceeds.
+                teacher_closed.set()
+                return closed.manual_closed_at
+            finally:
+                close_old_connections()
+
+        with patch('apps.assessment.saved_navigation_services._validate_process_event_time', wait_for_teacher_close):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                saved = pool.submit(navigate)
+                closed = pool.submit(close_task)
+                receipt = saved.result(timeout=30)
+                closed_at = closed.result(timeout=30)
+        self.assertLess(arrived_at, closed_at)
+        self.assertTrue(receipt['committed'])
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.draft_answer, 'A')
+        self.assertEqual(attempt.response_version, 1)
+        self.assertIsNone(attempt.writer_lease_token)
+        original_events = list(AssessmentEvent.objects.filter(pk__in=[
+            row['event_id'] for row in document['save_and_leave']['events']]).values_list('pk', 'payload'))
+        self.assertEqual(len(original_events), 2)
+        self.assertEqual(ClientCaptureCheckpoint.objects.filter(session=self.session).count(), 1)
+        self.assertFalse(SubmissionEvent.objects.filter(attempt=attempt).exists())
+        _, replay = save_and_leave_attempt(student=self.student, attempt_id=attempt.pk,
+            document=deepcopy(document), request_received_at=database_now())
+        self.assertEqual(replay, receipt)
+
+        later = deepcopy(document)
+        later['navigation_token'] = str(uuid.uuid4())
+        later['save_and_leave']['events'][-1]['correlation_id'] = later['navigation_token']
+        with self.assertRaisesMessage(ValidationError, '班级任务已结束') as rejected:
+            save_and_leave_attempt(student=self.student, attempt_id=attempt.pk,
+                document=later, request_received_at=database_now())
+        self.assertEqual(rejected.exception.navigation_rejection_token, later['navigation_token'])
+        self.assertEqual(NavigationReceipt.objects.filter(attempt=attempt).count(), 1)
+        self.assertEqual(list(AssessmentEvent.objects.filter(pk__in=[row[0] for row in original_events])
+            .values_list('pk', 'payload')), original_events)

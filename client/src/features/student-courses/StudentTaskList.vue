@@ -1,15 +1,22 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, inject, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import type { StudentTask, StudentTaskCollection } from './api'
+import { beginAssessmentOperation } from '@/assessment-runtime/operation-timing'
+import { markPreparedStartupPhase } from '@/assessment-runtime/prepared-paper'
+import { prepareOfflineCommonResources } from '@/assessment-runtime/offline-cache'
+import { getSessionController } from '@/assessment-runtime/session-controller'
+import { getBootstrapContext } from '@/app/bootstrap'
+import type { StudentTask } from './api'
 import { getStudentCourseApi } from './api'
+import { studentTaskContext } from './task-context'
 
 const route = useRoute()
 const router = useRouter()
-const courseId = Number(route.params.courseId)
-const response = ref<StudentTaskCollection>()
-const loading = ref(true)
+const courseId = computed(() => Number(route.params.courseId))
+const tasks = inject(studentTaskContext)
+if (!tasks) throw new Error('StudentTaskList requires its course layout.')
+const { response, loading, reload } = tasks
 const error = ref('')
 const pendingTaskId = ref<number>()
 
@@ -24,16 +31,22 @@ function statusLabel(status: string) {
 async function runAction(task: StudentTask) {
   if (!task.primary_action) return
   if (task.primary_action === 'view_result') {
-    await router.push(`/student/courses/${courseId}/learning/experiments/${task.experiment_id}/`)
+    await router.push(`/student/courses/${courseId.value}/learning/experiments/${task.experiment_id}/`)
     return
   }
+  beginAssessmentOperation('entry')
+  markPreparedStartupPhase('click')
   pendingTaskId.value = task.task_id
   error.value = ''
   try {
     const entry = task.primary_action === 'resume'
       ? await getStudentCourseApi().resume(task.task_id)
       : await getStudentCourseApi().start(task.task_id)
-    globalThis.location.assign(entry.question_url)
+    if (entry.runtime) {
+      const controller = await getSessionController(entry.session_id, getBootstrapContext().csrf_token)
+      await controller.primeStart(entry.runtime)
+    }
+    await router.push(entry.question_url)
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '任务操作失败。'
   } finally {
@@ -41,14 +54,8 @@ async function runAction(task: StudentTask) {
   }
 }
 
-onMounted(async () => {
-  try {
-    response.value = await getStudentCourseApi().tasks(courseId)
-  } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '任务加载失败。'
-  } finally {
-    loading.value = false
-  }
+onMounted(() => {
+  void prepareOfflineCommonResources().catch(() => undefined)
 })
 </script>
 
@@ -61,6 +68,7 @@ onMounted(async () => {
         <p>{{ response?.course.course_name || '正在读取课程作业。' }}</p>
       </div>
       <p v-if="response?.course.class_name" class="kt-student-page-heading__context">{{ response.course.class_name }}</p>
+      <button class="kt-button kt-button--secondary" type="button" data-refresh-tasks :disabled="loading" @click="reload">刷新</button>
     </header>
     <p v-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
     <p v-if="loading" role="status">正在加载任务…</p>

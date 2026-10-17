@@ -57,7 +57,9 @@ class ResearchDeletionTests(TestCase):
             PublishPlanClass.objects.create(publish_plan=plan, class_group=class_group)
         generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
         plan.refresh_from_db()
-        tasks = commit_publish_plan(plan, self.teacher, expected_revision=plan.plan_revision)
+        # Reconstruct historical records for deletion/locking tests without student activation.
+        with patch('apps.assessment.prepared_services.prepare_participant', return_value=None):
+            tasks = commit_publish_plan(plan, self.teacher, expected_revision=plan.plan_revision)
         experiment.refresh_from_db()
         return sorted(tasks, key=lambda item: item.class_group_id)
 

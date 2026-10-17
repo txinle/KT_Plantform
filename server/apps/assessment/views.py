@@ -1,5 +1,5 @@
 import json
-from django.core.exceptions import RequestDataTooBig, ValidationError
+from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 from django.db import transaction
 from django.shortcuts import get_object_or_404
@@ -12,18 +12,10 @@ from .models import (
     Attempt,
     ExperimentSession,
 )
-from .confidence_services import frozen_feedback_payload
 from .writer_lease_services import WriterLeaseConflict
-from .atomic_submission_services import MAX_BYTES, submit_attempt_bundle
+from .atomic_submission_services import MAX_BYTES
 from .event_batch_services import ProcessRequestError
-from .services import (
-    SubmissionValidationError,
-    finish_session,
-    mark_skipped,
-    record_submission_rejection,
-    save_draft,
-    submit_attempt,
-)
+from .services import save_draft
 
 
 def _client_time(value):
@@ -35,47 +27,6 @@ def _json(request):
         return json.loads(request.body or "{}")
     except json.JSONDecodeError:
         return {}
-
-
-def _next_assignment(session, current_id=None):
-    candidates = list(session.assignments.select_related("attempt").order_by("assigned_sequence_index"))
-    current = next((item for item in candidates if item.id == current_id), None)
-    if current:
-        after = [item for item in candidates if item.assigned_sequence_index > current.assigned_sequence_index]
-        before = [item for item in candidates if item.assigned_sequence_index <= current.assigned_sequence_index]
-        candidates = after + before
-    for item in candidates:
-        if item.id != current_id and item.attempt.status not in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}:
-            return item
-    return None
-
-
-def _next_url_after_attempt(attempt, *, finish_if_last):
-    next_assignment = _next_assignment(attempt.session, attempt.assignment_id)
-    if next_assignment:
-        return reverse(
-            "assessment:question",
-            args=[attempt.session_id, next_assignment.id],
-        )
-    if finish_if_last:
-        finish_session(attempt.session_id)
-    return reverse("assessment:complete", args=[attempt.session_id])
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @role_required("student")
@@ -112,6 +63,7 @@ def save_draft_api(request, attempt_id):
                 expected_version=data.get('expected_version'),
                 writer_lease_token=data.get('writer_lease_token'),
                 writer_client_instance_id=data.get('writer_client_instance_id'),
+                inline_confidence=data.get('inline_confidence'),
             )
         from .capture_bundle_services import draft_response
         return JsonResponse(draft_response(attempt))
@@ -143,106 +95,38 @@ def _navigation_rejection_fields(error):
     return {'navigation_rejected': True, 'navigation_token': token} if token else {}
 
 
+def _whole_paper_required():
+    return JsonResponse({'success': False, 'error': {
+        'code': 'WHOLE_SESSION_SUBMISSION_REQUIRED',
+        'message': '请保存草稿，通过提交试卷完成作答。',
+    }}, status=409)
+
+
 @role_required("student")
 @require_POST
-@transaction.non_atomic_requests
 def submit_api(request, attempt_id):
-    request_received_at = timezone.now()
-    attempt = get_object_or_404(Attempt, pk=attempt_id, session__student=request.user)
-    try:
-        body_size = len(request.body)
-    except RequestDataTooBig:
-        body_size = MAX_BYTES + 1
-    if body_size > MAX_BYTES:
-        return JsonResponse({'success': False, 'error': {'code': 'atomic_submission_too_large'}}, status=413)
-    data = _json(request)
-    if not isinstance(data, dict):
-        return JsonResponse({'success': False, 'error': {'code': 'invalid_request'}}, status=400)
-    try:
-        receipt = {}
-        if 'atomic_submission' in data:
-            attempt, receipt = submit_attempt_bundle(
-                student=request.user, attempt_id=attempt.id, document=data,
-                request_received_at=request_received_at,
-            )
-        else:
-            attempt = submit_attempt(
-                attempt.id,
-                data.get("submission_token"),
-                _client_time(data.get("client_clicked_at")),
-                request_received_at=request_received_at,
-                target_event_id=data.get('target_event_id'),
-                writer_lease_token=data.get('writer_lease_token'),
-                writer_client_instance_id=data.get('writer_client_instance_id'),
-                confidence_response=data.get('confidence'),
-            )
-        response = {
-            "success": True,
-            "status": attempt.status,
-            "next_url": _next_url_after_attempt(attempt, finish_if_last='atomic_submission' not in data),
-            "confidence_required": False,
-            **receipt,
-            **frozen_feedback_payload(attempt),
-        }
-        return JsonResponse(response)
-    except ProcessRequestError as exc:
-        record_submission_rejection(
-            attempt_id=attempt.pk, submission_token=data.get('submission_token'),
-            reason_code='conflict' if exc.status == 409 else 'invalid_answer',
-            preserve_first_rejection=True,
-        )
-        return JsonResponse({'success': False, 'error': {'code': exc.code}}, status=exc.status)
-    except WriterLeaseConflict:
-        if 'atomic_submission' in data:
-            record_submission_rejection(
-                attempt_id=attempt.pk, submission_token=data.get('submission_token'), reason_code='conflict',
-                preserve_first_rejection=True,
-            )
-        return JsonResponse({'success': False, 'error': {'code': 'writer_lease_conflict', 'message': '另一设备正在保存此题，请稍后重试；本机轨迹仍保留。'}}, status=409)
-    except SubmissionValidationError as exc:
-        record_submission_rejection(
-            attempt_id=attempt.pk,
-            submission_token=data.get("submission_token"),
-            reason_code=exc.reason_code,
-            preserve_first_rejection='atomic_submission' in data,
-        )
-        return JsonResponse(
-            {
-                "success": False,
-                "error": "; ".join(exc.messages),
-                "code": exc.reason_code.upper(),
-            },
-            status=409 if exc.reason_code == "task_terminated" else 400,
-        )
-    except ValidationError as exc:
-        if 'atomic_submission' in data:
-            record_submission_rejection(
-                attempt_id=attempt.pk, submission_token=data.get('submission_token'), reason_code='invalid_answer',
-                preserve_first_rejection=True,
-            )
-        return JsonResponse({"success": False, "error": "; ".join(exc.messages)}, status=400)
+    get_object_or_404(Attempt, pk=attempt_id, session__student=request.user)
+    return _whole_paper_required()
 
 
 @role_required("student")
 @require_POST
 def skip_api(request, attempt_id):
-    attempt = get_object_or_404(Attempt, pk=attempt_id, session__student=request.user)
-    try:
-        mark_skipped(attempt.id)
-        next_assignment = _next_assignment(attempt.session, attempt.assignment_id)
-        if next_assignment:
-            next_url = reverse("assessment:question", args=[attempt.session_id, next_assignment.id])
-        else:
-            finish_session(attempt.session_id)
-            next_url = reverse("assessment:complete", args=[attempt.session_id])
-        return JsonResponse({"success": True, "next_url": next_url})
-    except ValidationError as exc:
-        return JsonResponse({"success": False, "error": "; ".join(exc.messages)}, status=409)
+    get_object_or_404(Attempt, pk=attempt_id, session__student=request.user)
+    return _whole_paper_required()
 
 
 @role_required("student")
 @require_POST
 def finish(request, session_id):
     session = get_object_or_404(ExperimentSession, pk=session_id, student=request.user)
-    finish_session(session.id)
-    return JsonResponse({'success': True, 'next_url': reverse('assessment:complete', args=[session.id])})
+    if session.assessment_flow_version != 1:
+        return _whole_paper_required()
+    from .session_submission_services import accept_session_submission, submission_receipt
+    try:
+        job = accept_session_submission(student=request.user, session_id=session_id,
+            document=json.loads(request.body or b'{}'), request_received_at=timezone.now())
+        return JsonResponse(submission_receipt(job), status=202)
+    except (ValidationError, ValueError) as error:
+        return JsonResponse({'success': False, 'code': getattr(error, 'code', 'SESSION_SUBMISSION_INVALID'),
+                             'message': str(error)}, status=getattr(error, 'status', 409))
