@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import { routeLocationKey } from 'vue-router'
 
 import App from './app/App.vue'
 
@@ -7,6 +8,7 @@ describe('App', () => {
   it('provides the Vue module mount boundary', () => {
     const wrapper = mount(App, {
       global: {
+        provide: { [routeLocationKey as symbol]: { path: '/student/' } },
         stubs: { RouterView: true },
       },
     })

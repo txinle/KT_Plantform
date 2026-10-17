@@ -22,6 +22,46 @@ function enteredQuestion(intent: EntryIntent): EnteredQuestion {
 }
 
 describe('source close and target entry confirmation', () => {
+  it.each([true, false])('confirms older-attempt facts before freezing navigation and preserves its leave fact on retry: %s', async succeedsInitially => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    let succeeds = succeedsInitially
+    const sent: Array<{ capture_bundle: { events: import('./capture-contract').CaptureEvent[]; checkpoints: Array<{ checkpoint_id: string }> } }> = []
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      sent.push(body)
+      if (!succeeds) throw new Error('lost raw response')
+      return new Response(JSON.stringify({ data: { success: true, committed: true,
+        acknowledgements: body.capture_bundle.events.map((row: { event_id?: string; client_sequence_no: number }) => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+        checkpoint_ids: body.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id),
+      }, meta: { request_id: 'flush' } }))
+    })
+    const capability = { enabled: true, version: 1 as const, recovery_supported: true, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true }
+    try {
+      const source = await controller.activate({ ...process, capture_bundle: capability }, 'visited')
+      await source.record('response_input_started', { question_type: 'single_choice' }, { eventId: crypto.randomUUID() })
+      const runtime = await controller.activate({ ...process, attempt_id: 14, capture_bundle: capability }, 'visited')
+      const token = crypto.randomUUID()
+      const left = await runtime.prepareNavigation!(token, 99)
+      const original = await store.pendingEvents(runtime.clientInstanceId!, Number.MAX_SAFE_INTEGER)
+      const intent = { token, clickedAt: new Date().toISOString(), toAssignmentId: 99, leaveEventId: left.event_id, head: null, expectedResponseVersion: 0 }
+      if (!succeedsInitially) {
+        await expect(runtime.freezeNavigationSnapshot!(intent)).rejects.toThrow()
+        expect(await store.restoreNavigationIntent(7, 14)).toBeNull()
+        expect(await store.pendingEvents(runtime.clientInstanceId!, Number.MAX_SAFE_INTEGER)).toEqual(original)
+        expect(await runtime.prepareNavigation!(token, 99)).toEqual(left)
+        succeeds = true
+      }
+      const frozen = await runtime.freezeNavigationSnapshot!(intent)
+      expect(sent.length).toBeGreaterThan(0)
+      expect(sent[0]!.capture_bundle.events).toEqual(original)
+      if (!succeedsInitially) expect(sent[1]).toEqual(sent[0])
+      expect(frozen).toMatchObject(intent)
+      expect(frozen.processSnapshot!.events.every(event => event.attempt_id === 14 || event.attempt_id === null)).toBe(true)
+      expect(await store.captureState(runtime.clientInstanceId!)).toMatchObject({ pending: 0, failed: 0 })
+    } finally { controller.dispose(); fetch.mockRestore() }
+  })
+
   it('does not upload a second copy of evidence while its draft bundle awaits confirmation', async () => {
     const store = new MemoryOutbox()
     const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
@@ -126,10 +166,13 @@ describe('source close and target entry confirmation', () => {
     const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
     const intent = { assignmentId: 14, reason: 'navigation_click' as const, navigationId: crypto.randomUUID(), clientOccurredAt: new Date().toISOString(), clientMonotonicMs: performance.now(), clientTimeOrigin: new Date(performance.timeOrigin).toISOString() }
     const dto = enteredQuestion(intent)
-    await controller.primeStart(dto)
-    const pending = await controller.freezeEntry(7, 14, 'navigation_click')
-    expect(controller.takeEnteredQuestion(7, pending)).toEqual(dto)
     const clientId = await assessmentClientInstanceId(store)
+    dto.initial_writer_lease = { writer_lease_token: 'primed', writer_client_instance_id: clientId, expires_at: new Date(Date.now() + 60000).toISOString() }
+    await controller.primeStart(dto)
+    expect([...store.metadata.keys()]).toEqual([])
+    expect(controller.takeStartedQuestion(7, 99)).toBeUndefined()
+    expect(controller.takeStartedQuestion(7, 14)).toEqual(dto)
+    expect(controller.takeStartedQuestion(7, 14)).toBeUndefined()
     const post = vi.fn()
     const api = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
     try {
@@ -138,6 +181,37 @@ describe('source close and target entry confirmation', () => {
       expect(await runtime.writerLease!.beforePointerWrite()).toEqual({ writer_lease_token: 'primed', writer_client_instance_id: clientId })
       expect(post).not.toHaveBeenCalled()
     } finally { controller.dispose(); api.mockRestore() }
+  })
+
+  it('freezes a real first resume instead of replaying synthetic start clocks', async () => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+    const dto = enteredQuestion({ assignmentId: 14, navigationId: crypto.randomUUID() } as EntryIntent)
+    dto.initial_writer_lease = { writer_lease_token: 'primed', writer_client_instance_id: await assessmentClientInstanceId(store), expires_at: new Date(Date.now() + 60000).toISOString() }
+    await controller.primeStart(dto)
+    controller.takeStartedQuestion(7, 14)
+    await controller.confirmEntry(7, 14)
+    controller.dispose()
+    const reloaded = createSessionController({ store, csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+    try {
+      const resume = await reloaded.freezeEntry(7, 14, 'resume')
+      expect(resume.reason).toBe('resume')
+      expect(resume.navigationId).not.toBe(dto.entry_receipt.navigation_id)
+      await reloaded.confirmEntry(7, 14)
+      expect(await reloaded.freezeEntry(7, 14, 'resume')).toEqual(resume)
+    } finally { reloaded.dispose() }
+  })
+
+  it('rejects activation receipts bound to another sender or inconsistent assignment', async () => {
+    const controller = createSessionController({ store: new MemoryOutbox(), csrfToken: 'csrf', autoSchedule: false })
+    const dto = enteredQuestion({ assignmentId: 14, navigationId: crypto.randomUUID() } as EntryIntent)
+    dto.initial_writer_lease = { writer_lease_token: 'wrong', writer_client_instance_id: crypto.randomUUID(), expires_at: new Date(Date.now() + 60000).toISOString() }
+    try {
+      await expect(controller.primeStart(dto)).rejects.toThrow()
+      dto.initial_writer_lease.writer_client_instance_id = await assessmentClientInstanceId()
+      await expect(controller.primeStart({ ...dto, session_id: 8 })).rejects.toThrow()
+      await expect(controller.primeStart({ ...dto, assignment: { ...dto.assignment, assignment_id: 99 } })).rejects.toThrow()
+    } finally { controller.dispose() }
   })
 
   it('retains a matched target DTO only once in the live controller and never persists it', async () => {
@@ -792,6 +866,28 @@ it('restores a source entry without consuming the unknown target entry after a r
   await reloaded.confirmLeave(7, b.navigationId)
   expect(await reloaded.pendingEntry(7)).toMatchObject({ ...b, leaveConfirmed: true })
   expect(await reloaded.freezeEntry(7, 14, 'navigation_click')).toMatchObject({ navigationId: b.navigationId, clientOccurredAt: b.clientOccurredAt, clientMonotonicMs: b.clientMonotonicMs, clientTimeOrigin: b.clientTimeOrigin })
+})
+
+it('freezes source resume independently when navigation from the activation visit lost its response', async () => {
+  const store = new MemoryOutbox()
+  const controller = createSessionController({ store, csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+  const target = await controller.freezeEntry(7, 14, 'navigation_click', undefined, { sourceAssignmentId: 13, targetUrl: '/student/sessions/7/questions/14/' })
+  const navigation = { token: target.navigationId, toAssignmentId: 14, leaveEventId: 'original-leave', head: 'original-head', expectedResponseVersion: 2 }
+  await store.saveNavigationIntent(7, 13, navigation)
+  const reloaded = createSessionController({ store, csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+  const source = await reloaded.freezeEntry(7, 13, 'resume')
+  expect(source.reason).toBe('resume')
+  expect(source.assignmentId).toBe(13)
+  expect(source.navigationId).not.toBe(target.navigationId)
+  expect(await reloaded.pendingEntry(7)).toEqual(target)
+  expect(await reloaded.freezeEntry(7, 13, 'resume')).toEqual(source)
+  await reloaded.confirmEntry(7, 13)
+  expect(await reloaded.pendingEntry(7)).toEqual(target)
+  expect(await store.restoreNavigationIntent(7, 13)).toEqual(navigation)
+  expect(await reloaded.freezeEntry(7, 13, 'resume')).toEqual(source)
+  expect(await reloaded.freezeEntry(7, 14, 'navigation_click')).toEqual(target)
+  controller.dispose()
+  reloaded.dispose()
 })
 
 

@@ -223,9 +223,16 @@ test('five short-response types retain trajectories through offline reload, IME 
   await page.locator('[data-paper-submit-confirm]').click()
   const receipt = (await (await accepted).json()).data
   expect(receipt.status).toBe('queued')
-  // Process exactly this isolated receipt; never consume another student's job.
-  const worker = django(['shell', '-c', `import json; from apps.assessment.session_submission_models import SessionSubmission; from apps.assessment.session_submission_services import claim_session_submission,run_session_submission; assert not SessionSubmission.objects.filter(status__in=['queued','running']).exclude(session_id=${sessionId}).exists(); job=claim_session_submission(worker_id='capture-e2e'); assert job and job.session_id==${sessionId}; result=run_session_submission(job); print(json.dumps({'status':result.status}))`])
-  expect(worker.status).toBe('completed')
+  expect(receipt.status_url).toBe(`/api/v1/student/sessions/${sessionId}/submission/`)
+  // The E2E backend runs the real worker; observe only this accepted submission.
+  await expect.poll(async () => {
+    const response = await page.request.get(receipt.status_url)
+    expect(response.ok()).toBe(true)
+    const status = (await response.json()).data
+    expect(status.submission_id).toBe(receipt.submission_id)
+    return status.status
+  }, { timeout: 45_000 }).toBe('completed')
+  expect(django(['shell', '-c', `import json; from apps.assessment.session_submission_models import SessionSubmission; print(json.dumps(list(SessionSubmission.objects.filter(session_id=${sessionId}).values_list('id',flat=True)),default=str))`])).toEqual([receipt.submission_id])
   await expect(page).toHaveURL(new RegExp(`/student/sessions/${sessionId}/complete/`))
   const single = fixture.question_refs.find((row: { question_type: string }) => row.question_type === 'single_choice')
   const learningResponse = await page.request.get(`/api/v1/student/courses/${fixture.course.id}/learning/experiments/${fixture.tasks[0].experiment_id}/`)
@@ -356,18 +363,12 @@ test('ordinary navigation confirms one durable save and replays a lost response 
   expect(final.left).toBe(2)
 })
 
-for (const bundled of [false, true]) test(`capture pointer writes require ${bundled ? 'an atomic bundle' : 'a prior acknowledgement'} under delayed upload`, async ({ page }) => {
-  const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-wait-delayed-${Date.now()}'; command.handle()`])
+for (const bundled of [false, true]) test(`capture pointer writes preserve ${bundled ? 'atomic capture receipts' : 'a prior acknowledgement'} under delayed upload`, async ({ page }) => {
+  const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; from apps.experiments.models import Experiment; command=Command(); command.course_term+='-wait-delayed-${Date.now()}'; command.confidence_mode=Experiment.ConfidenceMode.ALL; command.handle()`])
   const witness = await captureProtocol(page)
   witnesses.set(page, witness)
-  if (!bundled) await page.route('**/api/v1/student/sessions/*/questions/*/', async route => {
-    if (route.request().method() !== 'POST') return route.continue()
-    const response = await route.fetch()
-    const body = await response.json()
-    body.data.process.capture_bundle.enabled = false
-    await route.fulfill({ response, json: body })
-  })
   const earlyPointers: string[] = []
+  const previouslyAcknowledged = new Set<string>()
   await page.route('**/api/v1/assessment/process/capture-v2/batch/', async (route) => {
     const body = route.request().postDataJSON()
     if ((body.capture_bundle?.events ?? body.events)?.some((row: { event_type: string }) => row.event_type === 'response_transition')) {
@@ -379,6 +380,7 @@ for (const bundled of [false, true]) test(`capture pointer writes require ${bund
     if (!request.url().endsWith('/draft/') || request.method() !== 'POST') return
     const body = request.postDataJSON()
     const confirmed = witness.clientAcknowledgements.flatMap((row: { acknowledgements: { event_id: string }[] }) => row.acknowledgements.map(ack => ack.event_id))
+    if (confirmed.includes(body.target_event_id)) previouslyAcknowledged.add(body.target_event_id)
     const inlineTarget = body.capture_bundle?.events?.some((event: { event_id: string }) => event.event_id === body.target_event_id)
     if (body.target_event_id && !confirmed.includes(body.target_event_id) && !inlineTarget) earlyPointers.push(body.target_event_id)
   })
@@ -394,16 +396,34 @@ for (const bundled of [false, true]) test(`capture pointer writes require ${bund
   await expect(page.locator('[name=answer]').first()).toBeEnabled()
   const response = page.waitForResponse((row) => row.url().endsWith('/draft/'))
   await page.getByRole('radio').first().check()
-  const saved = await response
+  let saved = await response
+  if (!bundled) {
+    const target = saved.request().postDataJSON().target_event_id
+    await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
+    await expect.poll(() => witness.clientAcknowledgements.flatMap((row: { acknowledgements: { event_id: string }[] }) => row.acknowledgements.map(ack => ack.event_id))).toContain(target)
+    const confidenceSave = page.waitForResponse((row) => row.url().endsWith('/draft/') && row.request().postDataJSON().inline_confidence?.probability === 50)
+    await page.locator('[data-inline-confidence]').fill('50')
+    saved = await confidenceSave
+  }
   expect(earlyPointers).toEqual([])
   expect(saved.status()).toBe(200)
   const request = saved.request().postDataJSON()
   const receipt = (await saved.json()).data
   expect(receipt.active_response_event_id).toBe(request.target_event_id)
-  if (bundled) {
-    expect(request.capture_bundle.events.map((event: { event_id: string }) => event.event_id)).toContain(request.target_event_id)
-    expect(receipt.acknowledgements.map((ack: { event_id: string }) => ack.event_id)).toContain(request.target_event_id)
-  } else expect(request.capture_bundle).toBeUndefined()
+  expect(request.capture_bundle.version).toBe(1)
+  const bundledEvents = request.capture_bundle.events.map((event: { event_id?: string }) => event.event_id)
+  expect(bundledEvents.includes(request.target_event_id) || previouslyAcknowledged.has(request.target_event_id)).toBe(true)
+  for (const event of request.capture_bundle.events as { event_id?: string; client_sequence_no: number }[]) {
+    const ack = receipt.acknowledgements.find((row: { client_sequence_no: number }) => row.client_sequence_no === event.client_sequence_no)
+    expect(ack?.event_id).toEqual(expect.any(String))
+    if (event.event_id) expect(ack.event_id).toBe(event.event_id)
+  }
+  expect(receipt.checkpoint_ids).toEqual(expect.arrayContaining(request.capture_bundle.checkpoints.map((checkpoint: { checkpoint_id: string }) => checkpoint.checkpoint_id)))
+  if (!bundled) {
+    expect(previouslyAcknowledged.has(request.target_event_id)).toBe(true)
+    expect(bundledEvents).not.toContain(request.target_event_id)
+    expect(receipt.inline_confidence.probability).toBe(50)
+  }
   await expect.poll(() => witness.clientAcknowledgements.flatMap((row: { acknowledgements: { event_id: string }[] }) => row.acknowledgements.map(ack => ack.event_id))).toContain(request.target_event_id)
 })
 

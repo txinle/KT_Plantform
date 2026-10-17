@@ -6,6 +6,7 @@ import { connect, createServer, type Server, type Socket } from 'node:net'
 import { requireIsolatedPostgres } from '../scripts/e2e-database.mjs'
 import { openLoginPage } from './login-navigation'
 import { acceptResearchConsentIfRequired } from './research-consent'
+import type { StudentSessionEntry } from '../src/features/student-courses/api'
 
 const root = serverDir
 const python = requireServerPython()
@@ -81,16 +82,31 @@ test('initial-password reminder, inline confidence and lost whole-paper receipt 
   await expect(page.getByRole('heading', { name: '我的课程', exact: true })).toBeVisible()
   expect((await (await page.request.get('/api/v1/auth/session/')).json()).data.user.uses_initial_password).toBe(false)
 
+  const startReceipts: StudentSessionEntry[] = []
   await page.route('**/api/v1/student/tasks/*/start/', async route => {
     const response = await route.fetch()
     expect(response.ok()).toBe(true)
-    await route.abort()
+    startReceipts.push((await response.json()).data)
+    if (startReceipts.length === 1) await route.abort()
+    else await route.fulfill({ response })
   })
   await page.goto(`/student/courses/${fixture.course.id}/`)
   await page.getByRole('button', { name: '开始作业', exact: true }).click()
   await expect(page.locator('[name=answer]').first()).toBeEnabled()
   await page.unroute('**/api/v1/student/tasks/*/start/')
   const sessionId = Number(page.url().match(/sessions\/(\d+)/)![1])
+  expect(startReceipts).toHaveLength(2)
+  const initialRuntime = startReceipts[0]!.runtime!
+  expect(initialRuntime.entry_receipt).toBeDefined()
+  expect(initialRuntime.initial_writer_lease).toBeDefined()
+  expect(startReceipts[1]).toMatchObject({ session_id: sessionId, runtime: {
+    entry_receipt: initialRuntime.entry_receipt,
+    initial_writer_lease: {
+      writer_lease_token: initialRuntime.initial_writer_lease!.writer_lease_token,
+      writer_client_instance_id: initialRuntime.initial_writer_lease!.writer_client_instance_id,
+    },
+  } })
+  expect(startReceipts[0]!.session_id).toBe(sessionId)
   const rows: Array<{ id: number; kind: string }> = django(['shell', '-c',
     `import json; from apps.assessment.models import Attempt; print(json.dumps([{'id':a.assignment_id,'kind':a.assignment.snapshot.question_type} for a in Attempt.objects.filter(session_id=${sessionId}).select_related('assignment__snapshot')]))`])
   const single = rows.find(row => row.kind === 'single_choice')!

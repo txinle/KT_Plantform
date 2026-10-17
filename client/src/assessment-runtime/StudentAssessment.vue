@@ -1193,6 +1193,8 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
       return
     }
     let loadedState = await timedAssessmentStage('question_entry', async () => {
+      const started = controller.takeStartedQuestion(sessionId, assignmentId)
+      if (started) return started
       if (!navigator.onLine || (!state.value && isOfflineBootstrapRecovery(`/student/sessions/${sessionId}/questions/${assignmentId}/`))) {
         const dto = await getStudentAssessmentApi().question(sessionId, assignmentId)
         if (dto.offline_recovery) {

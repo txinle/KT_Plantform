@@ -343,16 +343,6 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
         // Cut TCP and use a page-initiated reload instead (microsoft/playwright#42273).
         await page.evaluate(() => globalThis.dispatchEvent(new Event('offline')))
         await webkitProxy!.stop()
-        const offlineFetch = await page.evaluate(async () => {
-          const response = await fetch(location.href, { cache: 'reload' })
-          const html = await response.text()
-          return {
-            ok: response.ok,
-            contract: response.headers.get('X-Capture-Contract'),
-            bootstrap: html.includes('id="kt-offline-bootstrap"'),
-          }
-        })
-        expect(offlineFetch).toEqual({ ok: true, contract: 'capture-v2', bootstrap: true })
         const networkFailure = await page.evaluate(async () => {
           try {
             await fetch(`/api/v1/auth/csrf/?offline-probe=${crypto.randomUUID()}`, { cache: 'no-store' })
@@ -393,6 +383,18 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
       }
       await expect(page.locator('main[data-init-state="ready"]')).toBeVisible({ timeout: 20_000 })
       expect(await page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true)
+      if (browserName === 'webkit') {
+        const offlineFetch = await page.evaluate(async () => {
+          const response = await fetch(location.href, { cache: 'reload' })
+          const html = await response.text()
+          return {
+            ok: response.ok,
+            contract: response.headers.get('X-Capture-Contract'),
+            bootstrap: html.includes('id="kt-offline-bootstrap"'),
+          }
+        })
+        expect(offlineFetch).toEqual({ ok: true, contract: 'capture-v2', bootstrap: true })
+      }
       await expect(input).toHaveValue('离线简答甲乙')
       const reconnectedDraft = page.waitForResponse(
         (response) => response.url().endsWith('/draft/'),

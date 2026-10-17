@@ -65,6 +65,72 @@ test('an unknown raw packet remains frozen and blocks a newer draft reservation'
   } finally { sender.dispose(); }
 });
 
+test('a later explicit-boundary upload cannot overtake a queued draft reservation', async () => {
+  const store = new MemoryOutbox();
+  const fetch = vi.fn(async (_url, options) => {
+    const body = JSON.parse(options.body);
+    return okResponse({ success: true, committed: true,
+      acknowledgements: body.capture_bundle.events.map(row => ({ event_id: row.event_id,
+        client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+      checkpoint_ids: body.capture_bundle.checkpoints.map(row => row.checkpoint_id) });
+  });
+  const sender = new ProcessEventCollector(eventPayload({ sessionId: 7, attemptId: 13, outbox: store, fetch,
+    captureBundle: { enabled: true, version: 1, recovery_supported: true, max_events: 100, max_checkpoints: 100, max_bytes: 8388608 } }));
+  let release;
+  try {
+    const event = await sender.record('response_input_started', { question_type: 'single_choice' }, { eventId: globalThis.crypto.randomUUID() });
+    sender.recordQueue = new Promise(resolve => { release = resolve; });
+    const mutation = sender.freezeCaptureMutation('/draft/', { target_event_id: event.event_id });
+    void mutation.catch(() => undefined);
+    const upload = sender.flush({ boundary: { [INSTANCE_A]: 1 } });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fetch.mock.calls.length, 0);
+    release();
+    assert.deepEqual((await mutation).processSnapshot.events.map(row => row.event_id), [event.event_id]);
+    assert.equal(await upload, true);
+    assert.equal(fetch.mock.calls.length, 0);
+  } finally { release?.(); sender.dispose(); }
+});
+
+test.each([true, false])('draft recovery replays the original raw packet and requires its ACK: %s', async confirmed => {
+  const store = new MemoryOutbox();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const sent = [];
+  const sender = new ProcessEventCollector(eventPayload({ sessionId: 7, attemptId: 13, outbox: store,
+    captureBundle: { enabled: true, version: 1, recovery_supported: true, max_events: 100, max_checkpoints: 100, max_bytes: 8388608 },
+    fetch: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      sent.push(body);
+      await gate;
+      return okResponse({ success: true, committed: true,
+        acknowledgements: confirmed ? body.capture_bundle.events.map(row => ({ event_id: row.event_id,
+          client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })) : [], checkpoint_ids: [] });
+    },
+  }));
+  try {
+    const event = await sender.record('response_input_started', { question_type: 'single_choice' }, { eventId: globalThis.crypto.randomUUID() });
+    const original = { processSnapshot: { version: 1, client_instance_id: INSTANCE_A, event_boundary: 1, events: [event], checkpoints: [] } };
+    await store.writeMetadata('capture-flush:7', original);
+    let frozen = false;
+    const mutation = sender.freezeCaptureMutation('/draft/', { target_event_id: event.event_id }).then(value => { frozen = true; return value; });
+    void mutation.catch(() => undefined);
+    await vi.waitFor(() => assert.deepEqual(sent, [{ capture_bundle: original.processSnapshot }]));
+    assert.equal(frozen, false);
+    assert.deepEqual(await store.readMetadata('capture-flush:7'), original);
+    assert.equal(await store.readMetadata('capture-mutation:7:13'), null);
+    release();
+    if (confirmed) {
+      assert.equal((await mutation).processSnapshot.events.length, 0);
+      assert.equal(await store.readMetadata('capture-flush:7'), null);
+    } else {
+      await assert.rejects(mutation, /先前轨迹上传尚未确认/);
+      assert.deepEqual(await store.readMetadata('capture-flush:7'), original);
+      assert.equal(await store.readMetadata('capture-mutation:7:13'), null);
+    }
+  } finally { release(); sender.dispose(); }
+});
+
 test('background confirmation keeps the frozen upload operation when another question becomes active', async () => {
   const measure = vi.fn();
   const origin = Date.parse('2026-10-13T00:00:00Z');

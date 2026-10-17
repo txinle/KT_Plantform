@@ -317,7 +317,7 @@ export class ProcessEventCollector {
 
   flush(options: FlushOptions = {}) {
     if (this.flushPromise) return this.flushPromise;
-    const boundary = options.boundary ? Promise.resolve(options.boundary) : this._freezeBoundary();
+    const boundary = options.boundary ? this.recordQueue.then(() => options.boundary!) : this._freezeBoundary();
     const operationId = options.operationId ?? this.operationId;
     this.flushPromise = boundary.then((frozen) => this._flushLoop({ ...options, boundary: frozen, operationId })).finally(() => {
       this.flushPromise = null;
@@ -559,6 +559,9 @@ export class ProcessEventCollector {
         throw Object.assign(new Error('Navigation evidence has a rejected event or local sequence gap.'), { code: 'navigation_snapshot_gap' });
       }
       const events = await this.outbox.pendingEvents(this.clientInstanceId, sequence);
+      if (events.some(event => event.attempt_id !== null && event.attempt_id !== this.attemptId)) {
+        throw Object.assign(new Error('Earlier question evidence must be confirmed before navigation.'), { code: 'navigation_snapshot_backlog' });
+      }
       if (events.length > MAX_BATCH_SIZE) {
         throw Object.assign(new Error('Navigation snapshot exceeds the bounded event limit.'), { code: 'navigation_snapshot_too_large' });
       }
@@ -586,7 +589,11 @@ export class ProcessEventCollector {
     const frozen = recordFence.then(async () => {
       if (earlierUpload) await earlierUpload;
       if (await this.outbox.readMetadata(`capture-flush:${sessionId}`)) {
-        throw new Error('先前轨迹上传尚未确认，请恢复原上传后再保存草稿。');
+        if (this.captureBundle?.version !== 1 || this.captureBundle.recovery_supported !== true
+          || !await this._flushBundleLoop({ ignoreVisibility: true, operationId: operationId ?? undefined }, true)
+          || await this.outbox.readMetadata(`capture-flush:${sessionId}`)) {
+          throw new Error('先前轨迹上传尚未确认，请恢复原上传后再保存草稿。');
+        }
       }
       const key = `capture-mutation:${sessionId}:${attemptId}`;
       const saved = await this.outbox.readMetadata<CaptureMutation>(key);

@@ -108,6 +108,7 @@ export class SessionController {
   private activationQueue: Promise<unknown> = Promise.resolve()
   private pointerQueue: Promise<unknown> = Promise.resolve()
   private sessionId?: number
+  private startedQuestion?: EnteredQuestion
   private enteredQuestion?: { sessionId: number; request: NextEntryRequest; dto: EnteredQuestion }
   private readonly tabId: string
   constructor(private readonly options: ControllerOptions) {
@@ -118,25 +119,35 @@ export class SessionController {
   }
   async primeStart(dto: EnteredQuestion) {
     const receipt = dto.entry_receipt
-    const intent = await this.freezeEntry(dto.session_id, dto.assignment.assignment_id, 'navigation_click', {
-      navigationId: receipt.navigation_id, clientOccurredAt: receipt.entered_at,
-      clientMonotonicMs: performance.now(), clientTimeOrigin: new Date(performance.timeOrigin).toISOString(),
-    })
-    this.validateEntry(dto.session_id, intent, dto)
-    this.enteredQuestion = { sessionId: dto.session_id, request: nextEntryRequest(intent), dto }
+    if (this.disposed) throw new Error('会话控制器已关闭。')
+    if (this.store.isFallback) throw new Error('本地持久化不可用，不能可靠记录答案轨迹。请释放存储空间后重试。')
+    if (dto.initial_writer_lease && dto.initial_writer_lease.writer_client_instance_id !== await assessmentClientInstanceId(this.store)) throw new Error('进入回执与本次客户端不一致。')
+    this.validateEntry(dto.session_id, { assignmentId: dto.assignment.assignment_id, navigationId: receipt.navigation_id }, dto)
+    // Activation has its own server entry and cannot be replayed as question navigation.
+    this.startedQuestion = dto
+  }
+  takeStartedQuestion(sessionId: number, assignmentId: number): EnteredQuestion | undefined {
+    const cached = this.startedQuestion
+    if (!cached || cached.session_id !== sessionId || cached.assignment.assignment_id !== assignmentId) return undefined
+    this.startedQuestion = undefined
+    return cached
   }
   async freezeEntry(sessionId: number, assignmentId: number, reason: EntryIntent['reason'], click?: NavigationClickContext, source?: { sourceAssignmentId: number; targetUrl: string }): Promise<EntryIntent> {
     if (this.disposed) throw new Error('会话控制器已关闭。')
     if (this.store.isFallback) throw new Error('本地持久化不可用，不能可靠记录答案轨迹。请释放存储空间后重试。')
-    const key = `entry-intent:${sessionId}:${this.tabId}`
+    let key = `entry-intent:${sessionId}:${this.tabId}`
     const saved = await this.store.readMetadata<EntryIntent>(key)
     if (saved) {
       if (saved.assignmentId !== assignmentId) {
         const prior = await this.store.readMetadata<EntryIntent>(`confirmed-entry:${sessionId}:${this.tabId}`)
         if (saved.sourceAssignmentId === assignmentId && prior?.assignmentId === assignmentId && (reason === 'resume' || click?.navigationId === prior.navigationId)) return prior
-        throw new Error('上一次进入结果尚未确认，请先核验原题目。')
+        if (saved.sourceAssignmentId !== assignmentId || reason !== 'resume') throw new Error('上一次进入结果尚未确认，请先核验原题目。')
+        key = `source-resume:${sessionId}:${this.tabId}`
+        const resume = await this.store.readMetadata<EntryIntent>(key)
+        if (resume?.assignmentId === assignmentId) return resume
+      } else {
+        return saved
       }
-      return saved
     }
     if (reason === 'resume') {
       const prior = await this.store.readMetadata<EntryIntent>(`confirmed-entry:${sessionId}:${this.tabId}`)
@@ -151,7 +162,7 @@ export class SessionController {
     await this.store.writeMetadata(key, intent)
     return intent
   }
-  validateEntry(sessionId: number, intent: EntryIntent, dto: StudentRuntimeQuestionEntry & { entry_receipt: EntryReceipt }) {
+  validateEntry(sessionId: number, intent: Pick<EntryIntent, 'assignmentId' | 'navigationId'>, dto: StudentRuntimeQuestionEntry & { entry_receipt: EntryReceipt }) {
     const receipt = dto?.entry_receipt
     if (!receipt || !dto.assignment || !dto.process
       || !Number.isSafeInteger(receipt.attempt_id) || receipt.attempt_id <= 0
@@ -204,7 +215,15 @@ export class SessionController {
   async confirmEntry(sessionId: number, assignmentId?: number) {
     const key = `entry-intent:${sessionId}:${this.tabId}`
     const intent = await this.store.readMetadata<EntryIntent>(key)
-    if (assignmentId !== undefined && intent?.assignmentId !== assignmentId) return
+    if (assignmentId !== undefined && intent?.assignmentId !== assignmentId) {
+      const resumeKey = `source-resume:${sessionId}:${this.tabId}`
+      const resume = await this.store.readMetadata<EntryIntent>(resumeKey)
+      if (intent?.sourceAssignmentId === assignmentId && resume?.assignmentId === assignmentId) {
+        await this.store.writeMetadata(`confirmed-entry:${sessionId}:${this.tabId}`, resume)
+        await this.store.writeMetadata(resumeKey, null)
+      }
+      return
+    }
     if (this.enteredQuestion?.sessionId === sessionId && (assignmentId === undefined || this.enteredQuestion.request.assignment_id === assignmentId)) this.enteredQuestion = undefined
     if (intent) await this.store.writeMetadata(`confirmed-entry:${sessionId}:${this.tabId}`, intent)
     await this.store.writeMetadata(key, null)
@@ -399,7 +418,17 @@ export class SessionController {
         return { event_id: event.event_id }
       }) },
       cancelNavigation: token => { assertActive(); lifecycle.cancelNavigation(token) },
-      freezeNavigationSnapshot: intent => { assertActive(); return sender.freezeNavigationSnapshot(intent) },
+      freezeNavigationSnapshot: async intent => {
+        assertActive()
+        const operationId = sender.operationId
+        try { return await sender.freezeNavigationSnapshot(intent) }
+        catch (error) {
+          if ((error as { code?: string }).code !== 'navigation_snapshot_backlog'
+            || !await sender.flushConfirmed({ ignoreVisibility: true, operationId })) throw error
+          assertActive()
+          return sender.freezeNavigationSnapshot(intent)
+        }
+      },
       acknowledgeNavigation: (snapshot, receipt) => sender.acknowledgeNavigation(snapshot, receipt),
       freezeSubmissionSnapshot: intent => { assertActive(); return sender.freezeSubmissionSnapshot(intent) },
       acknowledgeSubmission: (snapshot, receipt) => sender.acknowledgeSubmission(snapshot, receipt),
@@ -451,7 +480,7 @@ export class SessionController {
     this.active = runtime
     return runtime
   }
-  dispose() { this.disposed = true; this.enteredQuestion = undefined; this.generation++; this.lifecycle?.dispose(); this.sender?.dispose() }
+  dispose() { this.disposed = true; this.startedQuestion = undefined; this.enteredQuestion = undefined; this.generation++; this.lifecycle?.dispose(); this.sender?.dispose() }
 }
 export const createSessionController = (options: ControllerOptions) => new SessionController(options)
 const sessions = new Map<number, Promise<SessionController>>()

@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  rememberEnteredQuestion: vi.fn(), takeEnteredQuestion: vi.fn(),
+  rememberEnteredQuestion: vi.fn(), takeEnteredQuestion: vi.fn(), takeStartedQuestion: vi.fn(),
   pendingEntry: vi.fn(), confirmLeave: vi.fn(), recoverClosedSubmission: vi.fn(), confirmEntry: vi.fn(), offlineBootstrapRecovery: false,
   metadata: new Map<string, unknown>(),
   preparedManifest: undefined as undefined | import('./prepared-paper').PreparedManifest,
@@ -87,7 +87,7 @@ vi.mock('./session-controller', () => ({
   disposeSessionController: vi.fn(),
   getSessionController: async () => ({ store: { readMetadata: async (key: string) => mocks.metadata.get(key), writeMetadata: async (key: string, value: unknown) => { mocks.metadata.set(key, structuredClone(value)) } }, freezeEntry: async (_session: number, assignmentId: number, reason: string, click?: unknown) => ({ assignmentId, reason,
     navigationId: crypto.randomUUID(), clientOccurredAt: new Date().toISOString(), clientMonotonicMs: performance.now(), clientTimeOrigin: new Date(performance.timeOrigin).toISOString(), ...(click as object || {}) }), pendingEntry: mocks.pendingEntry, confirmLeave: mocks.confirmLeave, recoverClosedSubmission: mocks.recoverClosedSubmission, validateEntry: vi.fn(), confirmEntry: mocks.confirmEntry, cancelEntry: vi.fn(),
-    rememberEnteredQuestion: mocks.rememberEnteredQuestion, takeEnteredQuestion: mocks.takeEnteredQuestion }),
+    rememberEnteredQuestion: mocks.rememberEnteredQuestion, takeEnteredQuestion: mocks.takeEnteredQuestion, takeStartedQuestion: mocks.takeStartedQuestion }),
 }))
 vi.mock('./prepared-paper', async (original) => {
   const actual = await original<typeof import('./prepared-paper')>()
@@ -200,6 +200,7 @@ describe('StudentAssessment', () => {
     mocks.pendingEntry.mockResolvedValue(null)
     mocks.rememberEnteredQuestion.mockResolvedValue(true)
     mocks.takeEnteredQuestion.mockReturnValue(undefined)
+    mocks.takeStartedQuestion.mockReturnValue(undefined)
     mocks.beforeRouteUpdate = undefined
     mocks.beforeRouteLeave = undefined
     mocks.afterRouteEach = undefined
@@ -436,6 +437,21 @@ describe('StudentAssessment', () => {
       expect(mocks.api.saveDraft.mock.calls.map(call => call[1])).toEqual(['A', 'A'])
       expect(mocks.api.saveDraft.mock.calls[0]![3].target_event_id).not.toBe(mocks.api.saveDraft.mock.calls[1]![3].target_event_id)
       expect(wrapper.get('[data-save-status]').text()).toBe('草稿已保存')
+    } finally { wrapper.unmount() }
+  })
+
+  it('consumes the activation DTO once without a question-entry POST, then enters on a real reload', async () => {
+    mocks.takeStartedQuestion.mockReturnValueOnce(captureV2Question())
+    let wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(wrapper.get('[name="answer"]').attributes('disabled')).toBeUndefined()
+      expect(mocks.takeStartedQuestion).toHaveBeenCalledWith(7, 11)
+      expect(mocks.api.question).not.toHaveBeenCalled()
+      wrapper.unmount()
+      wrapper = mount(StudentAssessment)
+      await flushPromises()
+      expect(mocks.api.question).toHaveBeenCalledOnce()
     } finally { wrapper.unmount() }
   })
 
