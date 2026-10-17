@@ -158,7 +158,7 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: client/package-lock.json
-      - run: python -m venv server/.venv && server/.venv/bin/python -m pip install -r server/requirements.txt
+      - run: python -m venv .venv && .venv/bin/python -m pip install -r server/requirements.txt
       - run: npm ci
         working-directory: client
       - run: npx playwright install --with-deps chromium firefox webkit

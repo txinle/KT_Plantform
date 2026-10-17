@@ -12,7 +12,7 @@ async function prepare(bootstrap = authorizedBootstrap, {
   failCacheWrite = false,
   sourcePage = page,
   api = '/api/v1/student/sessions/7/questions/13/',
-  messageState = { session_id: 7, assignment: { assignment_id: 13, attempt_id: 21 }, process: { visit_id: 41, entry_event_id: 'entry-event' }, offline_authorization: { user_id: 2, session_id: 7, assignment_id: 13 }, entry_receipt: { session_id: 7, assignment_id: 13, attempt_id: 21, visit_id: 41, entry_event_id: 'entry-event' } },
+  messageState = { assessment_flow_version: 1, session_id: 7, assignment: { assignment_id: 13, attempt_id: 21 }, process: { paper_flow_version: 1, visit_id: 41, entry_event_id: 'entry-event' }, offline_authorization: { user_id: 2, session_id: 7, assignment_id: 13 }, entry_receipt: { session_id: 7, assignment_id: 13, attempt_id: 21, visit_id: 41, entry_event_id: 'entry-event' } },
 } = {}) {
   const listeners = {}, cache = new Map();
   let offline = false;

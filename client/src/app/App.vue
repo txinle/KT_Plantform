@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 
 import { bootstrapContext, getAuthenticationGeneration } from './bootstrap'
 import ResearchConsentDialog from './ResearchConsentDialog.vue'
 import SiteRegistrationFooter from './SiteRegistrationFooter.vue'
 
-const consentRequired = computed(() => bootstrapContext.value?.user.role === 'student'
+const route = useRoute()
+const consentRequired = computed(() => route.path !== '/login/'
+  && bootstrapContext.value?.user.role === 'student'
   && bootstrapContext.value.user.research_consent_required)
 </script>
 

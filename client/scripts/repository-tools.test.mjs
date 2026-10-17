@@ -19,7 +19,7 @@ test('CI separates backend and client checks and uses the isolated server E2E en
   assert.ok(!client.steps.some(step => step.uses?.startsWith('actions/setup-python')))
   assert.ok(client.steps.some(step => step.run === 'npm run test:scripts' && step['working-directory'] === 'client'))
   assert.equal(e2e.env.POSTGRES_DB, 'kt_e2e')
-  assert.ok(e2e.steps.some(step => step.run?.includes('python -m venv server/.venv') && step.run.includes('server/.venv/bin/python -m pip')))
+  assert.ok(e2e.steps.some(step => step.run?.includes('python -m venv .venv') && step.run.includes('.venv/bin/python -m pip')))
   assert.ok(e2e.steps.some(step => step.run?.includes('npm run build:check')))
 })
 
@@ -43,7 +43,7 @@ test('portable package preserves server/client/contracts and launchers while exc
     for (const file of ['create_portable_package.ps1', 'create_portable_archive.py', 'run_dev.py']) {
       copyFileSync(join(repositoryDir, 'server', 'scripts', file), join(scripts, file))
     }
-    const archivePython = join(repositoryDir, 'server', '.venv', 'Scripts', 'python.exe')
+    const archivePython = join(repositoryDir, '.venv', 'Scripts', 'python.exe')
     put('server/scripts/find_python.ps1', `[Console]::Out.WriteLine('${archivePython.replaceAll("'", "''")}'); exit 0\n`)
     const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(scripts, 'create_portable_package.ps1'), '-OutputRoot', join(temporary, 'output')], { encoding: 'utf8', timeout: 60000 })
     assert.equal(result.status, 0, result.stderr || result.stdout)

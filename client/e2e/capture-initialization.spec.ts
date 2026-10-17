@@ -176,12 +176,14 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
 
   let injectedFailure = false
   let workerPreparationRequests = 0
+  let allowValidShell = false
   if (browserName === 'chromium') {
     await context.route(/\/static\/spa-assets\/capture-shell-[a-f0-9]+\.html$/, async (route) => {
       if (route.request().serviceWorker()) {
-        workerPreparationRequests += 1
-        if (!injectedFailure) {
-          injectedFailure = true
+        const enteringQuestion = /^\/student\/sessions\/\d+\/questions\/\d+\/$/.test(new URL(page.url()).pathname)
+        if (enteringQuestion) workerPreparationRequests += 1
+        if (!allowValidShell) {
+          if (enteringQuestion) injectedFailure = true
           await route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>header fault</title>' })
           return
         }
@@ -191,15 +193,8 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
   }
 
   await page.goto(`/student/courses/${fixture.course.id}/`)
-  const captureDocument = page.waitForResponse((response) => (
-    response.request().isNavigationRequest()
-    && /^\/student\/sessions\/\d+\/questions\/\d+\/$/.test(new URL(response.url()).pathname)
-  ))
   await page.getByRole('article').filter({ has: page.getByRole('heading', { name: fixture.experiment_name, exact: true }) })
     .getByRole('button', { name: '开始作业', exact: true }).click()
-  const documentResponse = await captureDocument
-  expect(documentResponse.status()).toBe(200)
-  expect(await documentResponse.text()).toContain('id="kt-app"')
   await expect(page).toHaveURL(/\/student\/sessions\/\d+\/questions\/\d+\/$/)
   const sessionMatch = page.url().match(/sessions\/(\d+)\/questions\/(\d+)/)
   expect(sessionMatch).not.toBeNull()
@@ -207,6 +202,9 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
   const firstAssignmentId = Number(sessionMatch![2])
   const questionPath = new URL(page.url()).pathname
   const origin = new URL(page.url()).origin
+  const documentResponse = await page.request.get(questionPath)
+  expect(documentResponse.status()).toBe(200)
+  expect(await documentResponse.text()).toContain('id="kt-app"')
   await expect.poll(() => page.locator('main').getAttribute('data-init-state')).toMatch(/^(failed|ready)$/)
   const failed = await page.locator('main[data-init-state="failed"]').isVisible()
   if (browserName === 'chromium') expect(failed).toBe(true)
@@ -269,6 +267,7 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
     } finally {
       forcePasswordChange(false)
     }
+    allowValidShell = true
     await page.locator('[data-init-retry]').click()
   }
   await expect(page.locator('main[data-init-state="ready"]')).toBeVisible()
@@ -312,7 +311,6 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
         const rawEnvelope = Boolean(envelope && shellResponse)
         const user = envelope?.user as Record<string, unknown> | undefined
         return {
-          controlled: Boolean(navigator.serviceWorker.controller),
           pageCached: Boolean(pageResponse),
           bootstrapCached: Boolean(rawEnvelope),
           apiCached: Boolean(apiResponse),
@@ -335,7 +333,6 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
         }
       }, { sessionId, assignmentId: row.assignment_id })
       expect(offlinePreparation).toEqual({
-        controlled: true,
         pageCached: true,
         bootstrapCached: true,
         apiCached: true,
@@ -395,6 +392,7 @@ test('capture-v2 initializes once, recovers safely, and preserves all six respon
         await page.reload({ waitUntil: 'commit' })
       }
       await expect(page.locator('main[data-init-state="ready"]')).toBeVisible({ timeout: 20_000 })
+      expect(await page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true)
       await expect(input).toHaveValue('离线简答甲乙')
       const reconnectedDraft = page.waitForResponse(
         (response) => response.url().endsWith('/draft/'),

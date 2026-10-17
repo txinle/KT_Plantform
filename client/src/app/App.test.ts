@@ -1,9 +1,14 @@
-import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { describe, expect, it, vi } from 'vitest'
+import { createMemoryHistory, createRouter, routeLocationKey } from 'vue-router'
 
 import App from './App.vue'
+import LoginPage from './LoginPage.vue'
+import * as authentication from './auth'
 import { acceptBootstrapContext, clearBootstrapContext } from './bootstrap'
 import { afterEach } from 'vitest'
+
+const routeProvider = { [routeLocationKey as symbol]: { path: '/student/' } }
 
 function context(researchConsentRequired: boolean) {
   return {
@@ -26,9 +31,36 @@ function context(researchConsentRequired: boolean) {
 describe('App research consent gate', () => {
   afterEach(() => clearBootstrapContext())
 
+  it('finishes login navigation before gating the destination without mounting its protected content', async () => {
+    clearBootstrapContext()
+    const protectedSetup = vi.fn(() => ({}))
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/login/', component: LoginPage },
+      { path: '/student/', component: { setup: protectedSetup, template: '<div data-protected-content />' } },
+    ] })
+    await router.push('/login/')
+    await router.isReady()
+    const login = vi.spyOn(authentication, 'login').mockImplementationOnce(async () => acceptBootstrapContext({
+      ...context(true), client_navigation: { student_courses: true, course_ids: ['*'] },
+    }))
+    const wrapper = mount(App, { global: { plugins: [router],
+      stubs: { ResearchConsentDialog: { template: '<div data-research-consent-gate />' } } } })
+    try {
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      expect(router.currentRoute.value.path).toBe('/student/')
+      expect(wrapper.find('[data-research-consent-gate]').exists()).toBe(true)
+      expect(wrapper.find('[data-protected-content]').exists()).toBe(false)
+      expect(protectedSetup).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      login.mockRestore()
+    }
+  })
+
   it('rechecks consent when a new student logs in after the app mounted anonymously', async () => {
     clearBootstrapContext()
-    const wrapper = mount(App, { global: { stubs: { RouterView: { template: '<div data-route-content />' } } } })
+    const wrapper = mount(App, { global: { provide: routeProvider, stubs: { RouterView: { template: '<div data-route-content />' } } } })
     acceptBootstrapContext(context(true))
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-research-consent-gate]').exists()).toBe(true)
@@ -43,7 +75,7 @@ describe('App research consent gate', () => {
   it('renders the site registration footer', () => {
     acceptBootstrapContext(context(false))
     const wrapper = mount(App, {
-      global: { stubs: { RouterView: { template: '<div data-route-content />' } } },
+      global: { provide: routeProvider, stubs: { RouterView: { template: '<div data-route-content />' } } },
     })
 
     const footer = wrapper.get('[data-site-registration-footer]')
@@ -62,7 +94,7 @@ describe('App research consent gate', () => {
   it('does not mount the requested route while consent is required', () => {
     acceptBootstrapContext(context(true))
     const wrapper = mount(App, {
-      global: { stubs: { RouterView: { template: '<div data-route-content />' } } },
+      global: { provide: routeProvider, stubs: { RouterView: { template: '<div data-route-content />' } } },
     })
 
     expect(wrapper.find('[data-research-consent-gate]').exists()).toBe(true)
@@ -72,7 +104,7 @@ describe('App research consent gate', () => {
   it('mounts the requested route after the consent gate is cleared', async () => {
     acceptBootstrapContext(context(true))
     const wrapper = mount(App, {
-      global: { stubs: { RouterView: { template: '<div data-route-content />' } } },
+      global: { provide: routeProvider, stubs: { RouterView: { template: '<div data-route-content />' } } },
     })
 
     acceptBootstrapContext(context(false))
