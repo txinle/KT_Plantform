@@ -6,18 +6,20 @@ from contextlib import ExitStack, contextmanager
 
 from django.core import signing
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import OperationalError, connection, transaction
 from django.db.models import Count, F, Q
 from django.utils import timezone
 
-from apps.accounts.course_access import lock_writable_course, require_course_manager
+from apps.accounts.course_access import require_writable_course, require_course_manager
 from apps.accounts.models import ClassGroup, CourseEnrollment, User
 from apps.analytics.models import (
     ExportJob,
+    ExportSnapshot,
     RecordingCoverageAttempt,
     RecordingCoverageRun,
     RecordingCoverageSession,
     ResearchSessionBehavior,
+    ResearchSessionQuality,
     ResearchSessionMaterialization,
     ResearchSessionResponse,
     ResearchSessionVisit,
@@ -36,7 +38,23 @@ TOKEN_SALT = "research-domain-deletion-v1"
 
 
 class DeletionConflict(ValidationError):
-    pass
+    def __init__(self, message, *, code='DELETION_SCOPE_CHANGED'):
+        super().__init__(message, code=code)
+
+
+@contextmanager
+def _deletion_transaction():
+    try:
+        with transaction.atomic():
+            if connection.vendor == 'postgresql':
+                with connection.cursor() as cursor:
+                    cursor.execute("SET LOCAL lock_timeout = '1000ms'")
+            yield
+    except OperationalError as error:
+        sqlstate = getattr(error.__cause__, 'sqlstate', None)
+        if sqlstate == '55P03':
+            raise DeletionConflict('相关数据正在处理，请稍后重新核对并删除。', code='DELETION_BUSY') from error
+        raise
 
 
 def class_sessions(class_id):
@@ -110,21 +128,38 @@ def _scope_fingerprint(course, action, object_id, class_id, rows, sessions, snap
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
 
 
-def deletion_preview(*, course, action, actor, experiment=None, class_group=None):
+def _deletion_selection(*, course, action, experiment=None, class_group=None):
+    objects = list(class_experiments(class_group).order_by('pk')) if action == 'delete_class' else [experiment]
+    experiment_ids = [item.pk for item in objects]
+    sessions = assessment.ExperimentSession.objects.filter(version__experiment_id__in=experiment_ids)
+    tasks = experiments.ClassExperimentTask.objects.filter(experiment_id__in=experiment_ids)
+    participants = experiments.ExperimentVersionParticipantSnapshot.objects.filter(version__experiment_id__in=experiment_ids)
+    if class_group:
+        sessions = sessions.filter(pk__in=class_sessions(class_group.pk))
+        tasks = tasks.filter(class_group=class_group)
+        participants = participants.filter(Q(class_task__in=tasks) | Q(class_snapshot__source_class_group=class_group))
+    session_ids = list(sessions.order_by('pk').values_list('pk', flat=True))
+    coverage_run_ids = _coverage_runs(session_ids)
+    snapshots = affected_export_snapshots(course_id=course.pk, experiment_ids=experiment_ids,
+        class_id=class_group.pk if class_group else None, coverage_run_ids=coverage_run_ids) if objects else ExportSnapshot.objects.none()
+    return {'objects': objects, 'sessions': sessions, 'session_ids': session_ids,
+            'task_ids': list(tasks.order_by('pk').values_list('pk', flat=True)),
+            'participant_ids': list(participants.order_by('pk').values_list('pk', flat=True)),
+            'coverage_run_ids': coverage_run_ids, 'snapshots': snapshots}
+
+
+def deletion_preview(*, course, action, actor, experiment=None, class_group=None, _selection=None):
     require_course_manager(course, actor)
+    selection = _selection or _deletion_selection(course=course, action=action, experiment=experiment, class_group=class_group)
     if action == "delete_class":
-        objects = list(class_experiments(class_group).order_by("pk"))
+        objects = selection['objects']
         object_id, object_name = class_group.pk, str(class_group)
     else:
         objects = [experiment]
         object_id, object_name = experiment.pk, experiment.name
     class_id = class_group.pk if class_group else None
     rows = [_experiment_row(item, class_id) for item in objects]
-    sessions = assessment.ExperimentSession.objects.filter(version__experiment_id__in=[row["id"] for row in rows])
-    if class_id:
-        sessions = sessions.filter(pk__in=class_sessions(class_id))
-    snapshots = affected_export_snapshots(course_id=course.pk, experiment_ids=[row["id"] for row in rows],
-                                          class_id=class_id) if rows else affected_export_snapshots(course_id=course.pk).none()
+    sessions, snapshots = selection['sessions'], selection['snapshots']
     blocked_reason = CLASS_BLOCKED if action == "delete_class" and rows else ""
     if action == "remove_class_experiment" and unattributed_sessions(course.pk).filter(version__experiment=experiment).exists():
         blocked_reason = "该实验存在无法确定所属班级的历史 Session，请使用“删除实验”清理整个实验。"
@@ -132,12 +167,16 @@ def deletion_preview(*, course, action, actor, experiment=None, class_group=None
     if not allowed and not blocked_reason:
         blocked_reason = "课程已归档，不能执行删除。"
     fingerprint = _scope_fingerprint(course, action, object_id, class_id, rows, sessions, snapshots, class_group)
+    fingerprint = hashlib.sha256(json.dumps([fingerprint, selection['task_ids'], selection['participant_ids'],
+        sorted(map(str, selection['coverage_run_ids']))], sort_keys=True).encode()).hexdigest()
     token = signing.dumps({"course_id": course.pk, "action": action, "object_id": object_id,
                            "class_id": class_id, "actor_id": actor.pk, "fingerprint": fingerprint}, salt=TOKEN_SALT, compress=True)
     return {"action": action, "object_id": object_id, "object_name": object_name,
             "allowed": allowed, "blocked_reason": blocked_reason, "experiments": rows,
             "counts": {"class_count": 1 if class_id else len({item["id"] for row in rows for item in row["classes"]}),
                        "session_count": sessions.count(), "export_count": ExportJob.objects.filter(snapshot__in=snapshots).count(),
+                       "coverage_run_count": len(selection['coverage_run_ids']),
+                       "coverage_session_count": RecordingCoverageSession.objects.filter(run_id__in=selection['coverage_run_ids']).count(),
                        "member_count": CourseEnrollment.objects.filter(class_group=class_group).count() if class_group else 0},
             "confirmation_token": token}
 
@@ -174,9 +213,16 @@ def _purge_sessions(session_ids, counts, coverage_run_ids):
     # All incoming runtime references are explicitly scoped to these sessions or
     # attempts. Shared schema/contract artifacts and student identities survive.
     querysets = [
+        assessment.PreparedSessionArtifact.objects.filter(session_id__in=session_ids),
+        assessment.PreparedAttemptProjection.objects.filter(attempt_id__in=attempt_ids),
+        assessment.PreparedActivationCancellation.objects.filter(session_id__in=session_ids),
+        assessment.SessionSubmission.objects.filter(session_id__in=session_ids),
+        assessment.NavigationReceipt.objects.filter(attempt_id__in=attempt_ids),
+        assessment.CaptureMutationReceipt.objects.filter(attempt_id__in=attempt_ids),
         ResearchSessionResponse.objects.filter(materialization__session_id__in=session_ids),
         ResearchSessionVisit.objects.filter(materialization__session_id__in=session_ids),
         ResearchSessionBehavior.objects.filter(materialization__session_id__in=session_ids),
+        ResearchSessionQuality.objects.filter(materialization__session_id__in=session_ids),
         ResearchSessionMaterialization.objects.filter(session_id__in=session_ids),
         RecordingCoverageAttempt.objects.filter(run_id__in=coverage_run_ids),
         RecordingCoverageSession.objects.filter(run_id__in=coverage_run_ids),
@@ -227,7 +273,9 @@ def _purge_experiment_relations(experiment, counts, class_group=None):
         removed_students.update(CourseEnrollment.objects.filter(class_group=class_group).values_list("student_id", flat=True))
     comparisons = StudentClassTaskComparison.objects.filter(class_task_id__in=task_ids)
     list(comparisons.select_for_update().order_by("pk").values_list("pk", flat=True))
-    for queryset in [StudentTaskComparisonMember.objects.filter(comparison__in=comparisons), comparisons,
+    for queryset in [assessment.PreparedSessionRepair.objects.filter(participant__in=participants),
+                     experiments.TaskManualClosure.objects.filter(class_task_id__in=task_ids),
+                     StudentTaskComparisonMember.objects.filter(comparison__in=comparisons), comparisons,
                      participants, experiments.ScheduleRevision.objects.filter(class_task_id__in=task_ids), task_query, class_snapshots]:
         _raw_remove(queryset, counts)
     preview_results = experiments.PublishPreviewClassResult.objects.filter(
@@ -272,34 +320,48 @@ def _lock_export_generations(*, course, experiment, class_group):
 
     with ExitStack() as locks:
         if experiment is not None:
-            snapshots = affected_export_snapshots(course_id=course.pk, experiment_ids=[experiment.pk],
-                class_id=class_group.pk if class_group else None)
+            selection = _deletion_selection(course=course, action='remove_class_experiment' if class_group else 'delete_experiment',
+                experiment=experiment, class_group=class_group)
+            snapshots = selection['snapshots']
             job_ids = list(ExportJob.objects.filter(snapshot__in=snapshots).order_by("pk")
                            .values_list("pk", flat=True))
             # Exporters need the course lock to finalize; wait before taking it,
             # leaving their lease rows writable by the heartbeat thread.
             # The confirmation fingerprint rechecks the export set after waiting.
             for job_id in job_ids:
-                locks.enter_context(_export_file_lock(job_id))
+                try:
+                    locks.enter_context(_export_file_lock(job_id, blocking=False))
+                except BlockingIOError as error:
+                    raise DeletionConflict('研究导出正在生成，请稍后重新核对并删除。', code='DELETION_BUSY') from error
         yield
 
 
 def execute_deletion(*, request, course, action, confirmation_token, experiment=None, class_group=None):
     actor = request.user
-    with _lock_export_generations(course=course, experiment=experiment, class_group=class_group), transaction.atomic():
-        course = lock_writable_course(course.pk)
+    with _lock_export_generations(course=course, experiment=experiment, class_group=class_group), _deletion_transaction():
+        course = require_writable_course(type(course).objects.select_for_update(nowait=True).get(pk=course.pk))
         require_course_manager(course, actor)
         ids = list(class_experiments(class_group).values_list("pk", flat=True)) if action == "delete_class" else [experiment.pk]
-        locked = list(experiments.Experiment.objects.select_for_update().filter(pk__in=ids).order_by("pk"))
+        locked = list(experiments.Experiment.objects.select_for_update(nowait=True).filter(pk__in=ids).order_by("pk"))
         if experiment:
             if not locked:
                 raise DeletionConflict("实验已被删除，请刷新列表。")
             experiment = locked[0]
         if class_group:
-            class_group = ClassGroup.objects.select_for_update().get(pk=class_group.pk, course=course)
-        tasks = experiments.ClassExperimentTask.objects.select_for_update().filter(experiment_id__in=ids).order_by("pk")
-        list(tasks)
-        preview = deletion_preview(course=course, action=action, actor=actor, experiment=experiment, class_group=class_group)
+            class_group = ClassGroup.objects.select_for_update(nowait=True).get(pk=class_group.pk, course=course)
+        selection = _deletion_selection(course=course, action=action, experiment=experiment, class_group=class_group)
+        for queryset in [experiments.ClassExperimentTask.objects.filter(pk__in=selection['task_ids']),
+                         experiments.ExperimentVersionParticipantSnapshot.objects.filter(pk__in=selection['participant_ids']),
+                         assessment.ExperimentSession.objects.filter(pk__in=selection['session_ids']),
+                         assessment.PreparedSessionRepair.objects.filter(participant_id__in=selection['participant_ids']),
+                         assessment.SessionSubmission.objects.filter(session_id__in=selection['session_ids']),
+                         ResearchSessionMaterialization.objects.filter(session_id__in=selection['session_ids']),
+                         assessment.Attempt.objects.filter(session_id__in=selection['session_ids'])]:
+            list(queryset.select_for_update(nowait=True).order_by('pk').values_list('pk', flat=True))
+        if (assessment.SessionSubmission.objects.filter(session_id__in=selection['session_ids'], status='running').exists()
+                or ResearchSessionMaterialization.objects.filter(session_id__in=selection['session_ids'], status='running').exists()):
+            raise DeletionConflict('交卷或研究整理任务正在执行，请稍后重新核对并删除。', code='DELETION_BUSY')
+        preview = deletion_preview(course=course, action=action, actor=actor, experiment=experiment, class_group=class_group, _selection=selection)
         if not preview["allowed"]:
             raise DeletionConflict(preview["blocked_reason"])
         try:
@@ -317,8 +379,8 @@ def execute_deletion(*, request, course, action, confirmation_token, experiment=
             sessions = assessment.ExperimentSession.objects.filter(version__experiment=experiment)
             if class_group:
                 sessions = sessions.filter(pk__in=class_sessions(class_group.pk))
-            session_ids = list(sessions.select_for_update().order_by("pk").values_list("pk", flat=True))
-            coverage_run_ids = _coverage_runs(session_ids)
+            session_ids = selection['session_ids']
+            coverage_run_ids = selection['coverage_run_ids']
             blobs = list(assessment.SimulationSnapshot.objects.filter(attempt__session_id__in=session_ids)
                          .values_list("blob_storage_key", flat=True))
             shared_blobs = set(assessment.SimulationSnapshot.objects.exclude(attempt__session_id__in=session_ids)

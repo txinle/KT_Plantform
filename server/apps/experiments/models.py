@@ -9,6 +9,7 @@ from django.db import models, router, transaction
 from django.db.models import Q
 
 from .confidence_scales import CONFIDENCE_SCALE_CHOICES
+from .deletion_models import ResearchDeletionOperation  # noqa: F401
 
 
 def canonical_presentation_hash(

@@ -157,6 +157,11 @@ services:
     environment:
       <<: *shared-environment
       DATABASE_CONN_MAX_AGE: 0
+  artifact-cleanup-worker:
+    cpus: 0
+    environment:
+      <<: *shared-environment
+      DATABASE_CONN_MAX_AGE: 0
   analytics-worker:
     cpuset: ${ASSESSMENT_ANALYTICS_CPUSET:-}
     mem_limit: ${ASSESSMENT_ANALYTICS_MEMORY_LIMIT:-1G}

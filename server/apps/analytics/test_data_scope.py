@@ -1,6 +1,10 @@
 from datetime import timedelta
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.accounts.models import ClassGroup, Course, User
@@ -99,6 +103,50 @@ class DataScopeTests(TestCase):
             assigned_sequence_index=1,
         )
         self.attempt = Attempt.objects.create(session=self.session, assignment=self.assignment)
+
+    def reference(self, session=None):
+        session = session or self.session
+        return f"S{session.started_at.astimezone(ZoneInfo('Asia/Shanghai')):%Y%m%d}_{session.pk:04d}"
+
+    def test_session_reference_does_not_enumerate_course_history(self):
+        with patch.object(DataScope, "session_references", side_effect=AssertionError("full-course scan")):
+            scope = DataScope.from_mapping(self.course, {"session_ref": self.reference()})
+            self.assertEqual(list(scope.sessions().values_list("pk", flat=True)), [self.session.pk])
+
+    def test_search_formats_only_sessions_in_the_filtered_queryset(self):
+        scope = DataScope.from_mapping(self.course, {
+            "experiment_id": self.experiment.pk, "search": self.reference().lower(),
+        })
+        with patch.object(DataScope, "session_references", side_effect=AssertionError("full-course scan")):
+            self.assertEqual(list(scope.sessions().values_list("pk", flat=True)), [self.session.pk])
+
+    def test_session_reference_requires_canonical_date_and_course(self):
+        for reference in (f"S19000101_{self.session.pk:04d}", f"S20261018_{self.session.pk}", "not-a-reference"):
+            with self.subTest(reference=reference), self.assertRaises(ScopeNotFound):
+                DataScope.from_mapping(self.course, {"session_ref": reference})
+        with self.assertRaises(ScopeNotFound):
+            DataScope.from_mapping(self.other_course, {"session_ref": self.reference()})
+
+    def test_session_reference_rejects_overlong_primary_key(self):
+        for digits in (20, 4300, 4301):
+            with self.subTest(digits=digits), self.assertNumQueries(0):
+                with self.assertRaises(ScopeNotFound):
+                    DataScope.from_mapping(self.course, {
+                        "session_ref": "S20261018_" + "9" * digits,
+                    })
+
+    def test_session_reference_rejects_conflicting_session_or_experiment(self):
+        other = ExperimentSession.objects.create(version=self.other_version, student=self.other_student)
+        for values in ({"session_id": other.pk}, {"experiment_id": self.other_experiment.pk}):
+            with self.subTest(values=values), self.assertRaises(ScopeValidationError):
+                DataScope.from_mapping(self.course, {"session_ref": self.reference(), **values})
+
+    def test_experiment_list_validation_uses_one_query_and_rejects_missing_ids(self):
+        with CaptureQueriesContext(connection) as queries:
+            DataScope.from_mapping(self.course, {"experiment_ids": f"{self.experiment.pk},{self.other_experiment.pk}"})
+        self.assertEqual(len(queries), 1)
+        with self.assertRaises(ScopeNotFound):
+            DataScope.from_mapping(self.course, {"experiment_ids": f"{self.experiment.pk},99999999"})
 
     def test_live_class_scope_intersects_all_matching_published_snapshots(self):
         version_two = ExperimentVersion.objects.create(

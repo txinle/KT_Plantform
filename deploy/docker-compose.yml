@@ -102,6 +102,33 @@ services:
       pgbouncer:
         condition: service_healthy
 
+  artifact-cleanup-worker:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+      target: analytics-worker
+    env_file: ../server/.env
+    restart: unless-stopped
+    command: ["python", "manage.py", "run_research_artifact_cleanups"]
+    environment:
+      POSTGRES_HOST: pgbouncer
+      DATABASE_APPLICATION_NAME: kt-artifact-cleanup
+      DATABASE_CONN_MAX_AGE: 0
+      DJANGO_DEBUG: 0
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+
   analytics-worker:
     build:
       context: ..

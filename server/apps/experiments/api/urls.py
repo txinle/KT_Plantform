@@ -3,6 +3,8 @@ from django.urls import include, path
 from .deletion_views import (
     TeacherClassExperimentRemoveView,
     TeacherDeletionCleanupView,
+    TeacherDeletionOperationCollectionView,
+    TeacherDeletionOperationDetailView,
     TeacherExperimentDeletionView,
 )
 
@@ -46,6 +48,8 @@ from .standalone_views import (
 
 
 urlpatterns = [
+    path('courses/<int:course_id>/deletion-operations/', TeacherDeletionOperationCollectionView.as_view(), name='teacher-deletion-operation-list'),
+    path('courses/<int:course_id>/deletion-operations/<uuid:operation_id>/', TeacherDeletionOperationDetailView.as_view(), name='teacher-deletion-operation-detail'),
     path('', include('apps.experiments.api.download_urls')),
     path("courses/<int:course_id>/experiments/<int:experiment_id>/deletion/",
          TeacherExperimentDeletionView.as_view(), name="teacher-experiment-deletion"),

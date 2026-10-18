@@ -1,0 +1,80 @@
+KT Plantform 登录容量 教师预览与实验删除 Codex 任务说明
+
+下面的文字可独立复制为新的实现任务。它描述待做的工作；本次审计没有修改仓库、执行应用测试、发起登录或生产负载，也没有执行删除。
+
+请在 KT_Plantform 仓库中完成登录容量、教师预览与实验删除的最小修复。审计基线为 main 提交 4dd346dcb736755ddbcf4539854a349f2a60289b。开始前核对当前分支和工作区；如果 main 已变化，先逐项检查相关行为是否仍存在，保留用户已有改动，不要回退或覆盖。先交付分 PR 计划、证据和测试设计，再按任务明确允许的本地或隔离测试范围实施。
+
+目标与不可改变的语义
+
+目标是让约 180 名学生集中进场时的登录与首屏请求有可解释的预算，让教师预览和搜索减少重复或不必要工作，并修复实验删除中的关系完整性和错误反馈问题。180 人表示用户数量；请分别建模 60 秒、30 秒、10 秒进入，极端同点突发另列，不能直接写成 180 RPS。
+
+必须保留认证强度、用户隔离、权限范围、真实数据新鲜度、删除确认和并发阻断规则。不能降低密码哈希成本换取性能；不能缓存共享的认证结果、用户作答或跨教师权限的数据；不能以延长所有 TTL 掩盖失效问题；不能通过吞异常、假成功、关闭外键或绕过事务解决删除失败。
+
+学生切题、保存与交卷另有独立任务书。本任务只处理与共享资源竞争和删除引用完整性直接相关的依赖。不要顺手重构作答状态机、导航幂等、交卷快照或无关 UI。保留现有行为已正确的限流重试、防抖、取消和状态轮询上限。
+
+需要实现的具体批次
+
+1. 删除正确性先行。research_deletion.py 的 _raw_remove/_purge_sessions/_purge_experiment_relations 使用手工原始删除，遗漏 PreparedSessionArtifact、PreparedAttemptProjection、PreparedSessionRepair、PreparedActivationCancellation、SessionSubmission、NavigationReceipt、CaptureMutationReceipt、TaskManualClosure 的相关引用。先在真实 PostgreSQL 事务提交中用未 mock prepare_participant 的发布 fixture 固定失败，再逐项定义阻塞、保留或经确认删除。协调活动 worker，避免删除后重建。保留 course、用户、其他班级/实验和共享资源。不要改 PROTECT 为全面 CASCADE 或关闭外键。独立实验 DELETE 走另一旧服务，本批不要混改。
+
+2. 教师状态修复。TeacherDataAdvanced.vue 的 checkStatus 仅 state===ready 时加载，而 schedulePoll 在 ready_count>0 停止，导致部分就绪仍空表；缓存命中分支又在 abort/请求代际递增之前返回，旧慢页可覆盖当前页。为每次完整路由意图建立代际，status 触发重载同样核对最新 query。保留 250ms 防抖、8 项缓存、3 次 status、隐藏停止和同请求合并；首次非空可读版本最多追加一次加载。
+
+3. 后台时间口径。当前 oldest_pending_seconds 是当前投影/来源修订匹配的最新 pending job 中，最早 created_at 到本次查询的年龄，包含排队、执行和重试；并非 ETA 或纯执行时间。显示明确口径及新增 status_checked_at，状态快照与结果缓存分离，不能拿 successful updated_at 代替采样时间。保持有界轮询，拒绝用额外无限查询修正文案。用可控时钟覆盖 running 跨修订、重试、failed/pending 混合、updating、缺 job、最老 job 完成与缓存返回。
+
+4. 登录观测。RequestIdMiddleware 的 ASSESSMENT_PATHS 不含 auth，导致登录 SQL/connection/commit 观测缺口和响应请求 ID 与入站 ID 不一致；已有 WSGI/Gunicorn 登录阶段计时应保留。将观测范围和自动连接重试范围分离，补真实 middleware 路径测试，禁止仅扩大集合意外改重试行为。日志不能含凭证、Cookie、token、账号、学生答案。
+
+5. 教师后端成本。DataScope 的 session_ref 校验与 sessions() 会重复枚举全课程引用，需改为保留全部授权与范围约束的直接查找，批量校验 experiment_ids；q 建议搜索不要带入无关 session_ref/search/student_id。复用同请求 Count/Sum/Max，overview 不加载无用 workspace。以固定 fixture 记录核心 SQL 口径，当前非空 sessions overview 12 个核心 ORM 求值可设建议预算≤8，权限/scope 另计；status 保持2项核心聚合且不读原始明细。
+
+6. 行为游标锁单独 PR。_behavior_page 第一页持全局 advisory lock 做 COUNT/分页/EXISTS，_store_success 共用该锁。缩短稳定 cutoff 临界区，不能直接删锁；隔离 PostgreSQL 并发测试保证新发布时旧 cursor 跨页不重不漏、原版本可读、跨 scope 拒绝，保留来源修订保护。
+
+7. 教师读取与目录缓存。advanced/search 当前 502/503/504 会立即再试一次；改为最多2次、遵守 Retry-After、轻微抖动、取消可中断的限定读策略，status 继续不自动 retry。目录来源 Question/Concept 与研究 result_version 不同，手动刷新目录需实际更新或采用独立修订，不把所有页面改成每次全刷。
+
+8. 登录容量按证据择一。默认 DB session 与已有30秒条件续期、登录 single-flight、仅 LOGIN_BUSY 的30秒有界随机退让均保留。C4是隔离样例：entry15worker/14DB，login12、startup8、heavy总14属于同一entry；不能相加或当线上配置。先测 hash CPU、entry队列、DB连接/commit、session与首屏扇出，再一次改变一个维度。Redis session只在允许的隔离候选下评估，不默认启用，不减少哈希强度。
+
+9. 删除错误与恢复。区分 transport、HTTP和2xx契约解析失败；409应保留具体原因。未知结果暂停重复POST，不能从404推断成功；已有cleanup_id只查询清理。先将on_commit直接文件清理改为真正持久可恢复后台任务；如果数据库删树本身仍超预算，另提operation/202/幂等回执契约，受理与执行都绑定用户确认的不可扩张范围，范围改变重新确认。
+
+固定证据入口
+
+- 删除闭包与事务
+https://github.com/txinle/KT_Plantform/blob/4dd346dcb736755ddbcf4539854a349f2a60289b/server/apps/experiments/research_deletion.py#L156-L339；被 mock 的发布 fixture
+https://github.com/txinle/KT_Plantform/blob/4dd346dcb736755ddbcf4539854a349f2a60289b/server/apps/experiments/test_research_deletion.py#L54-L64。
+- 教师请求与状态
+https://github.com/txinle/KT_Plantform/blob/4dd346dcb736755ddbcf4539854a349f2a60289b/client/src/features/teacher-data-center/TeacherDataAdvanced.vue#L198-L288；等待年龄计算
+https://github.com/txinle/KT_Plantform/blob/4dd346dcb736755ddbcf4539854a349f2a60289b/server/apps/analytics/advanced_materialized.py#L397-L475。
+- DataScope 枚举
+https://github.com/txinle/KT_Plantform/blob/4dd346dcb736755ddbcf4539854a349f2a60289b/server/apps/analytics/data_scope.py#L375-L422；行为分页锁
+https://github.com/txinle/KT_Plantform/blob/4dd346dcb736755ddbcf4539854a349f2a60289b/server/apps/analytics/advanced_materialized.py#L307-L373。
+- 登录客户端
+https://github.com/txinle/KT_Plantform/blob/4dd346dcb736755ddbcf4539854a349f2a60289b/client/src/app/auth.ts#L52-L98；观测路由与 ID
+https://github.com/txinle/KT_Plantform/blob/4dd346dcb736755ddbcf4539854a349f2a60289b/server/apps/api/middleware.py#L18-L48；C4 资源预算
+https://github.com/txinle/KT_Plantform/blob/4dd346dcb736755ddbcf4539854a349f2a60289b/deploy/student-capacity-c4.json#L14-L58。
+- 最新历史 C4 与 r8 记录
+https://github.com/txinle/KT_Plantform/blob/4dd346dcb736755ddbcf4539854a349f2a60289b/docs/superpowers/plans/2026-10-17-student-capacity-resume-50-180.md#L171-L232。r8只有源码包与镜像标识，未证实与当前Git SHA完全一致，不能当当前复测。
+
+必须覆盖的合成测试与预算
+
+先运行聚焦回归，再按仓库现有流程做类型/API schema、lint、单元、PostgreSQL事务并发及构建检查；实际运行范围以新任务授权为准。使用180个独立合成账号、独立cookie jar和真实安全密码hasher，不用force_login或MD5替代容量认证。分开记录事先bootstrap、冷首屏、10/30/60秒进入与同点极端场景。
+
+正常独立教师页首载≤3个成功GET；初次空结果status≤3次；首次转为可读最多再1次advanced；已有可读或ready后空闲60秒不增加自动status；缓存命中0HTTP但旧响应不得覆盖。快输入只发最终搜索，慢输入单列；502/503/504重试预算单列。3位教师各2页为一次生命周期最多42个成功GET的示例，不是42RPS。
+
+固定当前180会话，课程历史分别180/1800/18000，检查session_ref成本不再随范围外历史枚举增长。加入6个教师页与学生负载、物化发布与行为第一页并行。可讨论的教师目标为status P95≤300ms、搜索≤500ms、第一页≤1s，混合负载学生关键请求P95增幅≤10%；这些仅是候选目标，先记录基线并由负责人确认，不可降低正确性去达标。
+
+删除覆盖空、prepared未开始/已开始、QUEUED/RUNNING/COMPLETED/FAILED提交、repair、两类receipt、manual closure、附件和共享资源；在真正COMMIT检查约束。注入文件错误、锁等待、提交前后响应丢失、重复请求、worker中断与重启，验证数据库原子性、可恢复性、明确busy及不越权。前端覆盖2xx坏JSON、缺信封、401/403/404/409、JSON/HTML500和502/504、abort及旧目标响应。
+
+等待时间用created12:00/started12:02/now12:05验证任务年龄300秒、执行时间180秒分开；旧交卷26天/新job120秒、自动与强制重试、跨修订、混合失败、缓存返回和停止查询后的采样时间都要覆盖。不要把900秒租约写成15分钟完成保证。
+
+历史v3目标可作为候选：登录P95≤10秒、P99≤20秒，协议整体预算30秒；真实浏览器另记从点击到可操作列表。协议Actor的30秒含后续course/task，Vue登录30秒不完全同口径。全体180为分母，失败、缺失、超时与867次之类重试数量必须保留。不能把179完成或监测缺失称为通过，至少用同最终代码/配置的重复完整轮次建立结论。
+
+
+实施方式
+
+每个 PR 都要写明确认的问题、具体修改点、预期可观测变化、必须保留的语义、测试、回滚方法和剩余未知。先用失败用例固定 bug，再做最小修复。若确实必须迁移数据或改变 API 契约，单独说明，不把它藏在性能重构里。
+
+所有运行验证只能使用可丢弃的合成账号、独立 PostgreSQL、隔离缓存和独立文件目录。没有明确的新增授权时，不接触生产账号、真实课堂数据、生产数据库或公网生产端点；不部署，不恢复此前停止的动态验证，不执行真实删除。不得把未执行的测试写成已通过。
+
+交付与验收格式
+
+交付每个 PR 的文件清单和关键 diff、行为解释、实际执行的测试命令与结果、未运行原因、候选配置和测量表。记录基线与修复后的同一 SHA 系列、合成数据规模、到达分布、缓存冷热状态和请求总数。量化 P50/P95/P99、样本数、错误率、429 的最终完成率、DB 连接/锁等待、SQL 总时间、缓存重建和教师接口响应体大小。
+
+验收先看正确性：没有越权或跨用户缓存，没有范围外删除，没有半删数据库树；教师部分就绪能展示，旧页面响应不能覆盖当前页面，查询与分页语义不变。容量验收必须建立在同配置、同数据、同负载分布的测量上，不能凭 worker 数、缓存存在或一次单人测试宣布支持 180 人。
+
+最后分别列出已修复、已验证、尚未测量、需要部署负责人确认四类结果。若无法继续，报告具体动作、目标、风险和所缺授权，不自行改走生产路线。

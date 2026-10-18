@@ -33,7 +33,7 @@ from .publication_services import commit_publish_plan, generate_preview, get_or_
 from . import test_a_plus_publication as publication_fixtures
 
 
-class ResearchDeletionTests(TestCase):
+class ResearchDeletionTests(TransactionTestCase):
     def setUp(self):
         publication_fixtures.APlusPreviewAndCommitTests.setUp(self)
         self.client.force_login(self.teacher)
@@ -80,10 +80,18 @@ class ResearchDeletionTests(TestCase):
 
     def execute(self, url, preview=None):
         preview = preview or self.preview(url)
-        with self.captureOnCommitCallbacks(execute=True):
-            return self.client.post(url, json.dumps({
-                "confirmation": "delete", "confirmation_token": preview["confirmation_token"],
-            }), content_type="application/json")
+        operation_id = str(uuid.uuid4())
+        admitted = self.client.post(f'/api/v1/teacher/courses/{self.course.pk}/deletion-operations/', json.dumps({
+            'operation_id': operation_id, 'action': preview['action'], 'object_id': preview['object_id'],
+            'class_id': self.class_group.pk if preview['action'] == 'remove_class_experiment' else None,
+            'confirmation_token': preview['confirmation_token'],
+        }), content_type='application/json')
+        if admitted.status_code not in (200, 201):
+            return admitted
+        return self.client.post(url, json.dumps({
+            'operation_id': operation_id,
+            "confirmation": "delete", "confirmation_token": preview["confirmation_token"],
+        }), content_type="application/json")
 
     def export(self, experiments, *, class_id=None):
         snapshot = ExportSnapshot.objects.create(course=self.course, created_by=self.teacher,
@@ -121,6 +129,10 @@ class ResearchDeletionTests(TestCase):
         ResearchSessionBehavior.objects.create(materialization=materialization, ordinal=1)
         result = self.execute(self.url())
         self.assertEqual(result.status_code, 200, result.content)
+        self.assertTrue(domain_payload(result)['cleanup_pending'])
+        self.assertTrue(path.exists(), 'commit must leave file I/O to the durable worker')
+        from apps.analytics.research_deletion import retry_artifact_cleanups
+        self.assertEqual(retry_artifact_cleanups(course_id=self.course.pk), 1)
         self.assertTrue(domain_payload(result)["deleted"])
         self.assertFalse(Experiment.objects.filter(pk=self.experiment.pk).exists())
         self.assertFalse(ClassExperimentTask.objects.exists())
@@ -146,6 +158,8 @@ class ResearchDeletionTests(TestCase):
         remaining_session = self.sessions[1]
         result = self.execute(self.url("remove"))
         self.assertEqual(result.status_code, 200, result.content)
+        from apps.analytics.research_deletion import retry_artifact_cleanups
+        self.assertEqual(retry_artifact_cleanups(course_id=self.course.pk), 1)
         self.assertTrue(Experiment.objects.filter(pk=self.experiment.pk).exists())
         self.assertFalse(ExperimentSession.objects.filter(pk=self.sessions[0].pk).exists())
         self.assertTrue(ExperimentSession.objects.filter(pk=remaining_session.pk).exists())
@@ -238,6 +252,8 @@ class ResearchDeletionTests(TestCase):
         kept, kept_path = self.export([other])
         result = self.execute(self.url())
         self.assertEqual(result.status_code, 200, result.content)
+        from apps.analytics.research_deletion import retry_artifact_cleanups
+        self.assertEqual(retry_artifact_cleanups(course_id=self.course.pk), 1)
         self.assertFalse(mixed_path.exists())
         self.assertFalse(ExportJob.objects.filter(pk=mixed.pk).exists())
         self.assertTrue(kept_path.exists())
@@ -262,10 +278,14 @@ class ResearchDeletionTests(TestCase):
         job, path = self.export([self.experiment])
         with patch.object(Path, "unlink", side_effect=PermissionError("file is locked")):
             result = self.execute(self.url())
+            self.assertEqual(retry_artifact_cleanups(course_id=self.course.pk), 0)
         self.assertEqual(result.status_code, 200)
         self.assertTrue(domain_payload(result)["cleanup_pending"])
         self.assertFalse(ExportJob.objects.filter(pk=job.pk).exists())
         self.assertTrue(path.exists())
+        from apps.analytics.models import ResearchArtifactCleanupJob
+        from django.utils import timezone
+        ResearchArtifactCleanupJob.objects.filter(cleanup__purge_request_id=domain_payload(result)['cleanup_id']).update(next_attempt_at=timezone.now())
         self.assertEqual(retry_artifact_cleanups(course_id=self.course.pk), 1)
         self.assertFalse(path.exists())
         status = self.client.get(f"/api/v1/teacher/courses/{self.course.pk}/deletion-cleanups/{domain_payload(result)['cleanup_id']}/")
@@ -276,6 +296,8 @@ class ResearchDeletionTests(TestCase):
         job, path = self.export([self.experiment])
         _ = job.snapshot
         self.assertEqual(self.execute(self.url()).status_code, 200)
+        from apps.analytics.research_deletion import retry_artifact_cleanups
+        self.assertEqual(retry_artifact_cleanups(course_id=self.course.pk), 1)
         from apps.analytics.models import ResearchExportAsset
         files_before = {item for item in Path(self.media.name).rglob('*') if item.is_file()}
         assets_before = ResearchExportAsset.objects.count()
@@ -336,7 +358,198 @@ class ResearchDeletionTests(TestCase):
                       runtime.GradeRecord, runtime.SimulationSnapshot, runtime.ConfidenceAssignment,
                       runtime.DraftSaveEvent, runtime.QuestionVisitEvent, RecordingCoverageRun]:
             self.assertFalse(model.objects.exists(), model.__name__)
+        from apps.analytics.research_deletion import retry_artifact_cleanups
+        self.assertEqual(retry_artifact_cleanups(course_id=self.course.pk), 1)
         self.assertFalse(default_storage.exists(key))
+
+
+@skipUnlessDBFeature("has_select_for_update")
+class PreparedResearchDeletionCommitTests(TransactionTestCase):
+    """Exercise real publication products and the database's final FK checks."""
+
+    def setUp(self):
+        publication_fixtures.APlusPreviewAndCommitTests.setUp(self)
+        self.media = tempfile.TemporaryDirectory()
+        self.addCleanup(self.media.cleanup)
+        override = override_settings(MEDIA_ROOT=Path(self.media.name))
+        override.enable()
+        self.addCleanup(override.disable)
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        for group in (self.class_group, self.class_group_b):
+            PublishPlanClass.objects.create(publish_plan=plan, class_group=group)
+        generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
+        plan.refresh_from_db()
+        self.tasks = commit_publish_plan(plan, self.teacher, expected_revision=plan.plan_revision)
+        self.experiment.refresh_from_db()
+
+    def delete(self, *, class_group=None):
+        from .research_deletion import deletion_preview, execute_deletion
+        request = RequestFactory().post('/')
+        request.user = self.teacher
+        context = dict(course=self.course, experiment=self.experiment, class_group=class_group,
+                       action='remove_class_experiment' if class_group else 'delete_experiment')
+        preview = deletion_preview(actor=self.teacher, **context)
+        return execute_deletion(request=request, confirmation_token=preview['confirmation_token'], **context)
+
+    def test_real_prepared_tree_can_commit_deletion_without_removing_shared_content(self):
+        from apps.assessment.prepared_models import PreparedContentObject, PreparedSessionArtifact
+        self.assertEqual(PreparedSessionArtifact.objects.count(), 2)
+        shared = set(PreparedContentObject.objects.values_list('pk', flat=True))
+        self.assertTrue(self.delete()['deleted'])
+        self.assertFalse(ExperimentSession.objects.exists())
+        self.assertEqual(set(PreparedContentObject.objects.values_list('pk', flat=True)), shared)
+        self.assertTrue(User.objects.filter(pk=self.student.pk).exists())
+
+    def test_removing_one_class_keeps_other_prepared_tree(self):
+        from apps.assessment.prepared_models import PreparedSessionArtifact
+        other = ExperimentSession.objects.get(class_task__class_group=self.class_group_b)
+        self.assertTrue(self.delete(class_group=self.class_group)['deleted'])
+        self.assertTrue(PreparedSessionArtifact.objects.filter(session_id=other.pk).exists())
+        self.assertTrue(ExperimentSession.objects.filter(pk=other.pk).exists())
+
+    def test_all_runtime_references_are_removed_on_commit(self):
+        from django.utils import timezone
+        from apps.assessment.models import NavigationReceipt, CaptureMutationReceipt
+        from apps.assessment.prepared_models import PreparedSessionRepair, PreparedActivationCancellation
+        from apps.assessment.session_submission_models import SessionSubmission
+        from apps.analytics.models import ResearchSessionQuality
+        from .models import TaskManualClosure
+        session = ExperimentSession.objects.first()
+        attempt = session.attempts.first()
+        NavigationReceipt.objects.create(attempt=attempt, token=uuid.uuid4(), material_fingerprint='a' * 64, receipt={})
+        CaptureMutationReceipt.objects.create(attempt=attempt, token=uuid.uuid4(), kind='draft', material_fingerprint='b' * 64, receipt={})
+        PreparedSessionRepair.objects.create(participant=session.participant_snapshot, preparation_version='test')
+        PreparedActivationCancellation.objects.create(execution_id=uuid.uuid4(), session=session, admission_token='test')
+        SessionSubmission.objects.create(session=session, submission_token=uuid.uuid4(), material_fingerprint='c' * 64, manifest={})
+        materialization = ResearchSessionMaterialization.objects.create(session=session)
+        ResearchSessionQuality.objects.create(materialization=materialization, ordinal=1, rule='test', state='test')
+        TaskManualClosure.objects.create(class_task=session.class_task, closed_at=timezone.now(), schedule_revision_no=1, created_by=self.teacher, reason='test')
+        self.assertTrue(self.delete()['deleted'])
+        self.assertFalse(NavigationReceipt.objects.exists())
+        self.assertFalse(SessionSubmission.objects.exists())
+        self.assertFalse(ResearchSessionQuality.objects.exists())
+
+    def test_running_submission_blocks_and_preserves_the_tree(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from apps.assessment.session_submission_models import SessionSubmission
+        from .research_deletion import DeletionConflict
+        session = ExperimentSession.objects.first()
+        SessionSubmission.objects.create(session=session, submission_token=uuid.uuid4(), material_fingerprint='c' * 64,
+            manifest={}, status='running', lease_token=uuid.uuid4(), lease_expires_at=timezone.now() + timedelta(seconds=90))
+        with self.assertRaises(DeletionConflict) as caught:
+            self.delete()
+        self.assertEqual(caught.exception.code, 'DELETION_BUSY')
+        self.assertTrue(ExperimentSession.objects.filter(pk=session.pk).exists())
+
+    def test_running_materialization_blocks_and_preserves_the_tree(self):
+        from .research_deletion import DeletionConflict
+        session = ExperimentSession.objects.first()
+        ResearchSessionMaterialization.objects.create(session=session, status='running')
+        with self.assertRaises(DeletionConflict) as caught:
+            self.delete()
+        self.assertEqual(caught.exception.code, 'DELETION_BUSY')
+        self.assertTrue(ExperimentSession.objects.filter(pk=session.pk).exists())
+
+    def test_stale_participant_cannot_enqueue_repair_after_delete(self):
+        from .models import ExperimentVersionParticipantSnapshot
+        from apps.assessment.prepared_services import enqueue_preparation_repair
+        participant = ExperimentSession.objects.first().participant_snapshot
+        self.delete()
+        with self.assertRaises(ExperimentVersionParticipantSnapshot.DoesNotExist):
+            enqueue_preparation_repair(participant)
+
+
+@skipUnlessDBFeature("has_select_for_update")
+class PreparedDeletionWorkerConcurrencyTests(TransactionTestCase):
+    setUp = PreparedResearchDeletionCommitTests.setUp
+    delete = PreparedResearchDeletionCommitTests.delete
+
+    def _worker(self, action, errors):
+        def run():
+            close_old_connections()
+            try:
+                action()
+            except Exception as error:
+                errors.put(error)
+            finally:
+                close_old_connections()
+        thread = Thread(target=run)
+        thread.start()
+        return thread
+
+    def test_materialization_job_lock_returns_busy_then_allows_complete_deletion(self):
+        from django.db import transaction
+        from apps.analytics.models import ResearchSessionQuality
+        from .research_deletion import DeletionConflict
+        session = ExperimentSession.objects.first()
+        item = ResearchSessionMaterialization.objects.create(session=session)
+        entered, release = Event(), Event()
+        errors = Queue()
+
+        def publish():
+            with transaction.atomic():
+                current = ResearchSessionMaterialization.objects.select_for_update().get(pk=item.pk)
+                entered.set()
+                if not release.wait(10):
+                    raise TimeoutError('release materialization publisher')
+                ResearchSessionQuality.objects.create(materialization=current, ordinal=1, rule='test', state='test')
+
+        worker = self._worker(publish, errors)
+        try:
+            self.assertTrue(entered.wait(10))
+            with self.assertRaises(DeletionConflict) as caught:
+                self.delete()
+            self.assertEqual(caught.exception.code, 'DELETION_BUSY')
+            self.assertTrue(ExperimentSession.objects.filter(pk=session.pk).exists())
+            self.assertTrue(ResearchSessionMaterialization.objects.filter(pk=item.pk).exists())
+        finally:
+            release.set()
+            worker.join(10)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(errors.empty(), list(errors.queue))
+        self.assertTrue(ResearchSessionQuality.objects.filter(materialization=item).exists())
+        self.assertTrue(self.delete()['deleted'])
+        self.assertFalse(ExperimentSession.objects.exists())
+        self.assertFalse(ResearchSessionMaterialization.objects.exists())
+        self.assertFalse(ResearchSessionQuality.objects.exists())
+
+    def test_repair_worker_lock_returns_busy_and_does_not_recreate_deleted_tree(self):
+        from apps.assessment import prepared_services
+        from apps.assessment.prepared_models import PreparedSessionArtifact, PreparedSessionRepair
+        from .research_deletion import DeletionConflict
+        session = ExperimentSession.objects.first()
+        repair = PreparedSessionRepair.objects.create(participant=session.participant_snapshot, preparation_version='test')
+        entered, release = Event(), Event()
+        errors = Queue()
+        original = prepared_services.prepare_participant
+
+        def prepare(participant):
+            entered.set()
+            if not release.wait(10):
+                raise TimeoutError('release preparation repair')
+            return original(participant)
+
+        with patch.object(prepared_services, 'prepare_participant', side_effect=prepare):
+            worker = self._worker(prepared_services.run_preparation_repair, errors)
+            try:
+                self.assertTrue(entered.wait(10))
+                with self.assertRaises(DeletionConflict) as caught:
+                    self.delete()
+                self.assertEqual(caught.exception.code, 'DELETION_BUSY')
+                self.assertTrue(PreparedSessionArtifact.objects.filter(session=session).exists())
+                self.assertTrue(PreparedSessionRepair.objects.filter(pk=repair.pk).exists())
+            finally:
+                release.set()
+                worker.join(10)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(errors.empty(), list(errors.queue))
+        repair.refresh_from_db()
+        self.assertEqual(repair.status, 'completed')
+        self.assertTrue(self.delete()['deleted'])
+        self.assertFalse(ExperimentSession.objects.exists())
+        self.assertFalse(PreparedSessionRepair.objects.exists())
+        self.assertFalse(PreparedSessionArtifact.objects.exists())
 
 
 @skipUnlessDBFeature("has_select_for_update")
@@ -369,7 +582,7 @@ class ResearchDeletionConcurrencyTests(TransactionTestCase):
         thread.start()
         return thread
 
-    def test_export_materialization_finishes_before_confirmed_deletion_cleans_its_file(self):
+    def test_active_export_returns_busy_without_blocking_its_heartbeat(self):
         from apps.analytics.services import _finalize_export_job, renew_export_job_lease, run_export_job
         job, path = self.export([self.experiment])
         token = self.preview(self.url())["confirmation_token"]
@@ -393,7 +606,7 @@ class ResearchDeletionConcurrencyTests(TransactionTestCase):
             try:
                 self.assertTrue(entered.wait(10))
                 deleter = self._start(lambda: self._delete(token), errors, deleted)
-                self.assertFalse(deleted.wait(.2), "deletion must wait for the running export")
+                self.assertTrue(deleted.wait(2), "deletion must return busy without waiting for the running export")
                 self.assertTrue(path.exists())
                 heartbeat = self._start(renew, errors, renewed)
                 self.assertTrue(renewed.wait(2), "waiting deletion must not block the export heartbeat")
@@ -404,10 +617,14 @@ class ResearchDeletionConcurrencyTests(TransactionTestCase):
                     deleter.join(10)
                 if "heartbeat" in locals():
                     heartbeat.join(10)
-        self.assertTrue(errors.empty(), list(errors.queue))
+        from .research_deletion import DeletionConflict
+        self.assertEqual(errors.qsize(), 1, list(errors.queue))
+        busy = errors.get()
+        self.assertIsInstance(busy, DeletionConflict)
+        self.assertEqual(busy.code, 'DELETION_BUSY')
         self.assertTrue(deleted.is_set())
-        self.assertFalse(ExportJob.objects.filter(pk=job.pk).exists())
-        self.assertFalse(path.exists())
+        self.assertTrue(ExportJob.objects.filter(pk=job.pk).exists())
+        self.assertTrue(path.exists())
 
     def test_student_write_cannot_create_rows_after_locked_session_is_deleted(self):
         from django.core.exceptions import ObjectDoesNotExist

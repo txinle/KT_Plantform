@@ -3,6 +3,7 @@ import { nextTick, reactive } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
+  operationId: '',
   api: {
     detail: vi.fn(),
     readiness: vi.fn(),
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => ({
     previewExperiment: vi.fn(), deleteExperiment: vi.fn(),
     previewClassExperiment: vi.fn(), removeClassExperiment: vi.fn(),
     previewClass: vi.fn(), deleteClass: vi.fn(), cleanup: vi.fn(),
+    registerOperation: vi.fn(), operation: vi.fn(),
   },
   push: vi.fn(),
   replace: vi.fn(),
@@ -35,6 +37,11 @@ vi.mock('vue-router', () => ({
 
 vi.mock('./api', () => ({ getTeacherExperimentApi: () => mocks.api }))
 vi.mock('@/features/teacher-deletion/api', () => ({ getTeacherDeletionApi: () => mocks.deletion }))
+vi.mock('@/app/bootstrap', () => ({
+  getBootstrapContext: () => ({ csrf_token: 'csrf-token', user: { id: 71, role: 'teacher' } }),
+  bootstrapContext: { value: { user: { id: 71, role: 'teacher' } } },
+  getAuthenticationGeneration: () => 0,
+}))
 
 import TeacherExperimentDetail from './TeacherExperimentDetail.vue'
 
@@ -73,6 +80,13 @@ function collectionResult(displayName: string, query: string) {
 describe('TeacherExperimentDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    sessionStorage.clear()
+    mocks.operationId = ''
+    mocks.deletion.registerOperation.mockImplementation(async (...args: [number, { operation_id: string }]) => {
+      mocks.operationId = args[1].operation_id
+      return { operation_id: mocks.operationId, state: 'pending', result: null }
+    })
+    mocks.deletion.operation.mockImplementation(async () => ({ operation_id: mocks.operationId, state: 'pending', result: null }))
     mocks.api.collectionParticipants.mockReset()
     mocks.route.query = reactive({})
     mocks.api.detail.mockResolvedValue({
@@ -119,7 +133,7 @@ describe('TeacherExperimentDetail', () => {
       action: 'delete_experiment', object_id: 11, object_name: '认知诊断实验', allowed: true, blocked_reason: '',
       experiments: [], counts: { class_count: 0, session_count: 0, export_count: 0, member_count: 0 }, confirmation_token: 'token-11',
     })
-    mocks.deletion.deleteExperiment.mockResolvedValue({ deleted: true, cleanup_pending: false, cleanup_id: null })
+    mocks.deletion.deleteExperiment.mockImplementation(async () => ({ deleted: true, cleanup_pending: false, cleanup_id: null, operation_id: mocks.operationId }))
   })
 
   it('renders authoritative readiness and resumes the server publish plan', async () => {
@@ -184,7 +198,7 @@ describe('TeacherExperimentDetail', () => {
     await wrapper.get('[data-deletion-confirm]').trigger('click')
     await flushPromises()
 
-    expect(mocks.deletion.deleteExperiment).toHaveBeenCalledWith(7, 11, 'token-11')
+    expect(mocks.deletion.deleteExperiment).toHaveBeenCalledWith(7, 11, 'token-11', mocks.operationId)
     expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/')
   })
 

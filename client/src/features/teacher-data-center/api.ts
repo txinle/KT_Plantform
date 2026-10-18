@@ -85,6 +85,7 @@ export interface ResearchBehavior {
 }
 
 export interface ResearchPreparation {
+  status_checked_at: string
   retry_after_seconds?: number
   state: 'ready' | 'preparing' | 'updating' | 'failed' | 'incomplete'
   message: string
@@ -162,6 +163,12 @@ type ApiClient = ReturnType<typeof createApiClient>
 type QueryValue = string | number | null | undefined | (string | null)[]
 export type DataQuery = Record<string, QueryValue>
 
+const STUDENT_SEARCH_PARAMETERS = new Set([
+  'scope_version', 'experiment_id', 'experiment_ids', 'version_mode', 'version_id',
+  'class_id', 'class_snapshot_id', 'condition_id', 'session_status', 'attempt_status',
+  'started_from_utc', 'started_before_utc', 'q', 'limit',
+])
+
 export function routeQuery(query: Record<string, unknown>): DataQuery {
   const result: DataQuery = {}
   for (const [key, value] of Object.entries(query)) {
@@ -205,13 +212,14 @@ export function createTeacherDataCenterApi(client: ApiClient) {
       return client.get<DataCenterExportHistoryCollection>(`/api/v1/teacher/courses/${courseId}/data/exports/history/${queryString(query)}`)
     },
     advanced(courseId: number, query: DataQuery = {}, signal?: AbortSignal) {
-      return client.get<DataCenterAdvanced>(`/api/v1/teacher/courses/${courseId}/data/advanced/${queryString(query)}`, { signal })
+      return client.get<DataCenterAdvanced>(`/api/v1/teacher/courses/${courseId}/data/advanced/${queryString(query)}`, { signal, retryPolicy: 'teacher-read' })
     },
     advancedStatus(courseId: number, query: DataQuery = {}, signal?: AbortSignal) {
       return client.get<{ preparation: ResearchPreparation }>(`/api/v1/teacher/courses/${courseId}/data/advanced/status/${queryString(query)}`, { signal, retry: false })
     },
     advancedStudents(courseId: number, query: DataQuery = {}, signal?: AbortSignal) {
-      return client.get<ResearchStudentSearch>(`/api/v1/teacher/courses/${courseId}/data/advanced/students/${queryString(query)}`, { signal })
+      const scope = Object.fromEntries(Object.entries(query).filter(([key]) => STUDENT_SEARCH_PARAMETERS.has(key)))
+      return client.get<ResearchStudentSearch>(`/api/v1/teacher/courses/${courseId}/data/advanced/students/${queryString(scope)}`, { signal, retryPolicy: 'teacher-read' })
     },
     createExport(courseId: number, input: { package: string; confirm_identified: true; scope: Record<string, unknown> }) {
       return client.mutate<DataCenterExportJobMutation>(`/api/v1/teacher/courses/${courseId}/data/export-jobs/`, {

@@ -311,6 +311,7 @@ class DataCenterOverviewActionsSerializer(serializers.Serializer):
 
 
 class DataCenterPreparationSerializer(serializers.Serializer):
+    status_checked_at = serializers.DateTimeField()
     retry_after_seconds = serializers.IntegerField(min_value=5, max_value=30, required=False)
     state = serializers.CharField()
     message = serializers.CharField()

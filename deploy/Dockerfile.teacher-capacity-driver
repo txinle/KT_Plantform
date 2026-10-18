@@ -1,0 +1,11 @@
+FROM python:3.13.5-bookworm AS python-runtime
+FROM node:24.20.0-bookworm
+COPY --from=python-runtime /usr/local/ /usr/local/
+WORKDIR /capacity
+COPY client/package.json client/package-lock.json ./
+RUN npm ci && npx playwright install --with-deps chromium webkit
+COPY server/scripts/load/ server/scripts/load/
+COPY client/e2e/ client/e2e/
+COPY deploy/student-capacity-c4.json deploy/student-capacity-c4.json
+ENV PYTHONUNBUFFERED=1
+ENTRYPOINT ["python", "server/scripts/load/run_teacher_capacity_v4.py"]

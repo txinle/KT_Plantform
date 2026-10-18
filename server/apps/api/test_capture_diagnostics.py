@@ -12,6 +12,30 @@ from .middleware import RequestIdMiddleware
 
 
 class CaptureDiagnosticGuardTests(SimpleTestCase):
+    @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=False, ASSESSMENT_REQUEST_TIMING_ENABLED=True,
+                       ASSESSMENT_CONNECT_RETRY_ENABLED=True)
+    def test_auth_and_teacher_observation_does_not_enable_connection_retry(self):
+        for path in ("/api/v1/auth/login/", "/api/v1/teacher/courses/17/data/advanced/",
+                     "/api/v1/teacher/courses/17/data/advanced/status/",
+                     "/api/v1/teacher/courses/17/data/advanced/students/",
+                     "/api/v1/teacher/courses/17/experiments/12/deletion/",
+                     "/api/v1/teacher/accounts/courses/17/classes/12/delete/"):
+            with self.subTest(path=path):
+                request = RequestFactory().post(path, HTTP_X_REQUEST_ID="a" * 32)
+                def view(request):
+                    connection.get_new_connection({})
+                    return JsonResponse({"ok": True})
+                with patch.object(connection, "get_new_connection", side_effect=OperationalError("PRIVATE PASSWORD")) as connect, \
+                        patch("apps.api.middleware.SLOW_REQUEST_SECONDS", 0), \
+                        self.assertLogs("kt.capture_diagnostics", level="WARNING") as logs:
+                    with self.assertRaises(OperationalError):
+                        RequestIdMiddleware(view)(request)
+                self.assertEqual(connect.call_count, 1)
+                row = json.loads(logs.records[-1].getMessage())
+                self.assertEqual(row["request_id"], "a" * 32)
+                self.assertEqual(row["connection_count"], 1)
+                self.assertNotIn("PRIVATE", json.dumps(row))
+
     @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=False, ASSESSMENT_REQUEST_TIMING_ENABLED=True)
     def test_production_timing_records_slow_requests_without_sql_text_or_answers(self):
         fake = Mock(vendor='postgresql', in_atomic_block=True)
@@ -182,6 +206,30 @@ class CaptureDiagnosticSQLTests(TestCase):
 
 @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=True)
 class CaptureDiagnosticCommitTests(TransactionTestCase):
+    @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=False, ASSESSMENT_REQUEST_TIMING_ENABLED=True)
+    def test_real_login_middleware_chain_records_hash_session_and_matching_request_id(self):
+        from apps.accounts.models import User
+        User.objects.create_user(username="timed-login", password="PRIVATE PASSWORD", role=User.Role.TEACHER)
+        with patch("apps.api.middleware.SLOW_REQUEST_SECONDS", 0), \
+                self.assertLogs("kt.capture_diagnostics", level="WARNING") as logs:
+            response = self.client.post("/api/v1/auth/login/", json.dumps({
+                "username": "timed-login", "password": "PRIVATE PASSWORD",
+            }), content_type="application/json", HTTP_X_REQUEST_ID="b" * 32)
+        self.assertEqual(response.status_code, 200)
+        row = json.loads(logs.records[-1].getMessage())
+        self.assertEqual(row["path"], "/api/v1/auth/login/")
+        self.assertEqual(row["request_id"], "b" * 32)
+        self.assertEqual(response["X-Request-ID"], "b" * 32)
+        self.assertEqual(response.json()["meta"]["request_id"], "b" * 32)
+        for phase in ("login_authenticate_seconds", "login_session_seconds", "session_save_seconds"):
+            self.assertGreaterEqual(row[phase], 0)
+        self.assertEqual(row["password_check_count"], 1)
+        self.assertGreaterEqual(row["password_check_seconds"], 0)
+        self.assertGreater(row["sql_count"], 0)
+        self.assertGreater(row["commit_count"], 0)
+        self.assertNotIn("PRIVATE", json.dumps(row))
+        self.assertNotIn("timed-login", json.dumps(row))
+
     def test_session_response_save_is_inside_full_diagnostic_and_nested_timings(self):
         from apps.accounts.session_middleware import SessionMiddleware
         from django.contrib.sessions.backends.db import SessionStore

@@ -121,6 +121,11 @@ services:
     mem_limit: 256M
     environment:
       <<: *candidate-env
+  artifact-cleanup-worker:
+    <<: *budget
+    mem_limit: 256M
+    environment:
+      <<: *candidate-env
   analytics-worker:
     profiles: [student-concurrency-nonurgent]
   student-comparison-worker:

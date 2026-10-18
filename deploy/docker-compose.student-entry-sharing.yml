@@ -75,6 +75,9 @@ services:
   scheduler:
     environment:
       <<: *shared-environment
+  artifact-cleanup-worker:
+    environment:
+      <<: *shared-environment
   session-submission-worker:
     environment:
       <<: *shared-environment

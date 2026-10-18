@@ -60,6 +60,24 @@ class PreparedFixtureGuardTests(SimpleTestCase):
                 Command().handle(run_id='shared-guard', scenario='same-task', questions=20,
                                  output=str(Path(directory) / 'fixture.json'))
 
+    @override_settings(SCHOOL_POOL_PROFILE='shared-entry-v3', ASSESSMENT_ADMISSION_CAPACITY=8,
+                       ASSESSMENT_ENTRY_WORKERS=15, ASSESSMENT_ENTRY_DB_CONNECTIONS=14,
+                       ASSESSMENT_ENTRY_STARTUP_LIMIT=8, ASSESSMENT_STARTUP_WORKERS=6,
+                       ASSESSMENT_STARTUP_DB_CONNECTIONS=6)
+    def test_v3_fixture_guard_uses_shared_entry_instead_of_retired_startup_budget(self):
+        from .management.commands.seed_prepared_startup_load import Command
+        module = 'apps.assessment.management.commands.seed_prepared_startup_load.'
+        with tempfile.TemporaryDirectory() as directory, patch(module + 'connection') as db, \
+                patch(module + 'User') as users, patch(module + 'Course') as courses, \
+                patch(module + '_private_stream', side_effect=RuntimeError('capacity guard passed')):
+            db.settings_dict = {'NAME': 'kt_e2e'}
+            db.vendor = 'postgresql'
+            users.objects.filter.return_value.exists.return_value = False
+            courses.objects.filter.return_value.exists.return_value = False
+            with self.assertRaisesRegex(RuntimeError, 'capacity guard passed'):
+                Command().handle(run_id='v3-guard', scenario='same-task', questions=20,
+                                 output=str(Path(directory) / 'fixture.json'))
+
     def test_production_database_is_rejected_before_any_write(self):
         from .management.commands.seed_prepared_startup_load import Command
         for database in ('kt_platform', 'school-production', 'kt_e2e_backup', 'sqlite'):

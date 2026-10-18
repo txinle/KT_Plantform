@@ -10,12 +10,21 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import OperationalError, connection
 
-from config.capture_timing import SLOW_REQUEST_SECONDS, TIMING_ENV_KEY, coarse_path, diagnostics_mode, emit_diagnostic, finish_interval, interval_union_seconds, mark, timing_fields
+from config.capture_timing import SLOW_REQUEST_SECONDS, TIMING_ENV_KEY, coarse_path, diagnostics_mode, emit_diagnostic, finish_interval, interval_union_seconds, mark, pending_timing, timing_fields
 
 
 logger = logging.getLogger('kt.capture_diagnostics')
 connection_logger = logging.getLogger('kt.assessment_connection')
-ASSESSMENT_PATHS = ('/api/v1/student/', '/api/v1/assessment/process/', '/student/sessions/', '/assessment/process/capture-v2/offline-worker.js')
+CONNECT_RETRY_PATHS = ('/api/v1/student/', '/api/v1/assessment/process/', '/student/sessions/', '/assessment/process/capture-v2/offline-worker.js')
+TIMING_PATHS = CONNECT_RETRY_PATHS + (
+    '/api/v1/auth/',
+    '/api/v1/teacher/courses/:id/data/advanced/',
+    '/api/v1/teacher/courses/:id/experiments/:id/deletion/',
+    '/api/v1/teacher/courses/:id/classes/:id/experiments/:id/remove/',
+    '/api/v1/teacher/accounts/courses/:id/classes/:id/delete/',
+    '/api/v1/teacher/courses/:id/deletion-cleanups/',
+    '/api/v1/teacher/courses/:id/deletion-operations/',
+)
 
 
 class RequestIdMiddleware:
@@ -32,18 +41,23 @@ class RequestIdMiddleware:
             raise ImproperlyConfigured(str(error)) from error
 
     def __call__(self, request):
-        if self.capture_diagnostics and request.path.startswith(ASSESSMENT_PATHS):
+        timed_request = self.capture_diagnostics and coarse_path(request.path).startswith(TIMING_PATHS)
+        if timed_request:
             state = request.META.get(TIMING_ENV_KEY)
             if state is None:
                 state = {}
                 request.META[TIMING_ENV_KEY] = state
             mark(state, 'middleware_start')
         request.request_id = uuid.uuid4().hex
-        if self.capture_diagnostics and request.path.startswith(ASSESSMENT_PATHS):
+        if timed_request:
             supplied = request.headers.get('X-Request-ID', '')
             if re.fullmatch('[a-f0-9]{32}', supplied):
                 request.request_id = supplied
-            response = self.profile_capture(request)
+            token = pending_timing.set(state)
+            try:
+                response = self.profile_capture(request)
+            finally:
+                pending_timing.reset(token)
         else:
             response = self.assessment_response(request)
         return response
@@ -57,7 +71,7 @@ class RequestIdMiddleware:
         return response
 
     def assessment_response(self, request):
-        if not getattr(settings, 'ASSESSMENT_CONNECT_RETRY_ENABLED', False) or not request.path.startswith(ASSESSMENT_PATHS):
+        if not getattr(settings, 'ASSESSMENT_CONNECT_RETRY_ENABLED', False) or not request.path.startswith(CONNECT_RETRY_PATHS):
             return self.finalize_response(request, self.get_response(request))
         original_connect = connection.get_new_connection
         remaining = 1
@@ -76,7 +90,7 @@ class RequestIdMiddleware:
                 connection_logger.warning(json.dumps({
                     'request_id': request.request_id,
                     'operation_id': operation_id if re.fullmatch('[a-f0-9]{32}', operation_id) else None,
-                    'path': re.sub(r'/\d+(?=/|$)', '/:id', request.path),
+                    'path': coarse_path(request.path),
                     'method': request.method, 'retry_limit': 1,
                     'error_type': type(error).__name__, 'sqlstate': sqlstate,
                     'failed_connect_seconds': round(time.perf_counter() - started, 6),

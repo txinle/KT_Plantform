@@ -2,11 +2,13 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
+  operationId: '',
   api: { list: vi.fn(), create: vi.fn() },
   deletion: {
     previewExperiment: vi.fn(), deleteExperiment: vi.fn(),
     previewClassExperiment: vi.fn(), removeClassExperiment: vi.fn(),
     previewClass: vi.fn(), deleteClass: vi.fn(), cleanup: vi.fn(),
+    registerOperation: vi.fn(), operation: vi.fn(),
   },
   push: vi.fn(),
 }))
@@ -19,7 +21,9 @@ vi.mock('vue-router', () => ({
 vi.mock('./api', () => ({ getTeacherClassApi: () => mocks.api }))
 vi.mock('@/features/teacher-deletion/api', () => ({ getTeacherDeletionApi: () => mocks.deletion }))
 vi.mock('@/app/bootstrap', () => ({
-  getBootstrapContext: () => ({ csrf_token: 'csrf-token' }),
+  getBootstrapContext: () => ({ csrf_token: 'csrf-token', user: { id: 71, role: 'teacher' } }),
+  bootstrapContext: { value: { user: { id: 71, role: 'teacher' } } },
+  getAuthenticationGeneration: () => 0,
 }))
 
 import TeacherClassList from './TeacherClassList.vue'
@@ -27,6 +31,13 @@ import TeacherClassList from './TeacherClassList.vue'
 describe('TeacherClassList', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    sessionStorage.clear()
+    mocks.operationId = ''
+    mocks.deletion.registerOperation.mockImplementation(async (...args: [number, { operation_id: string }]) => {
+      mocks.operationId = args[1].operation_id
+      return { operation_id: mocks.operationId, state: 'pending', result: null }
+    })
+    mocks.deletion.operation.mockImplementation(async () => ({ operation_id: mocks.operationId, state: 'pending', result: null }))
     mocks.api.list.mockResolvedValue({
       course: { id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' },
       capabilities: { can_create: true, can_manage: true },
@@ -44,7 +55,7 @@ describe('TeacherClassList', () => {
       action: 'delete_class', object_id: 11, object_name: '实验一班', allowed: true, blocked_reason: '',
       experiments: [], counts: { class_count: 1, session_count: 0, export_count: 0, member_count: 0 }, confirmation_token: 'class-token',
     })
-    mocks.deletion.deleteClass.mockResolvedValue({ deleted: true, cleanup_pending: false, cleanup_id: null })
+    mocks.deletion.deleteClass.mockImplementation(async () => ({ deleted: true, cleanup_pending: false, cleanup_id: null, operation_id: mocks.operationId }))
   })
 
   it('renders the paged class facts and creates a class through the JSON API', async () => {
@@ -100,8 +111,8 @@ describe('TeacherClassList', () => {
     await wrapper.get('[data-deletion-confirm]').trigger('click')
     await flushPromises()
 
-    expect(mocks.deletion.previewClass).toHaveBeenCalledWith(7, 11)
-    expect(mocks.deletion.deleteClass).toHaveBeenCalledWith(7, 11, 'class-token')
+    expect(mocks.deletion.previewClass).toHaveBeenCalledWith(7, 11, expect.any(AbortSignal))
+    expect(mocks.deletion.deleteClass).toHaveBeenCalledWith(7, 11, 'class-token', mocks.operationId)
     expect(mocks.api.list).toHaveBeenCalledTimes(2)
   })
 

@@ -55,6 +55,8 @@ services:
     <<: *test-env
   teacher-read:
     <<: *test-env
+  artifact-cleanup-worker:
+    <<: *test-env
   analytics-worker:
     <<: *test-env
   student-comparison-worker:

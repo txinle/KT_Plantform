@@ -260,7 +260,9 @@ def ensure_canonical_paper_session(session):
     return session
 
 
+@transaction.atomic
 def enqueue_preparation_repair(participant):
+    participant = ExperimentVersionParticipantSnapshot.objects.select_for_update().get(pk=participant.pk)
     job = PreparedSessionRepair.objects.get_or_create(
         participant=participant, preparation_version=f'{PREPARATION_VERSION}:{participant.version_id}')[0]
     if job.status == 'completed' and not PreparedSessionArtifact.objects.filter(

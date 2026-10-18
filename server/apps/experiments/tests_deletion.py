@@ -1,4 +1,6 @@
 from apps.api.test_support import domain_payload
+import json
+from uuid import uuid4
 from django.test import Client, TestCase
 from unittest.mock import patch
 from django.urls import reverse
@@ -47,6 +49,20 @@ class ExperimentDeletionTests(TestCase):
             configuration={},
         )
 
+    def _confirmed_delete(self, url):
+        token = domain_payload(self.client.get(url))["confirmation_token"]
+        operation_id = str(uuid4())
+        registered = self.client.post(
+            f"/api/v1/teacher/courses/{self.course.pk}/deletion-operations/",
+            json.dumps({"operation_id": operation_id, "action": "delete_experiment",
+                        "object_id": self.experiment.pk, "class_id": None,
+                        "confirmation_token": token}),
+            content_type="application/json",
+        )
+        self.assertEqual(registered.status_code, 201)
+        return self.client.post(url, {"operation_id": operation_id,
+                                     "confirmation": "delete", "confirmation_token": token})
+
     def test_delete_requires_explicit_second_confirmation(self):
         self.client.force_login(self.owner)
         url = reverse("teacher-experiment-deletion", args=[self.course.pk, self.experiment.pk])
@@ -90,7 +106,7 @@ class ExperimentDeletionTests(TestCase):
         )
         url = reverse("teacher-experiment-deletion", args=[self.course.pk, self.experiment.pk])
 
-        response = self.client.post(url, {"confirmation": "delete", "confirmation_token": domain_payload(self.client.get(url))["confirmation_token"]})
+        response = self._confirmed_delete(url)
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(Experiment.objects.filter(pk=self.experiment.pk).exists())
@@ -145,7 +161,7 @@ class ExperimentDeletionTests(TestCase):
 
         with patch("apps.experiments.research_deletion.log_action", side_effect=RuntimeError("audit unavailable")):
             with self.assertRaises(RuntimeError):
-                self.client.post(url, {"confirmation": "delete", "confirmation_token": domain_payload(self.client.get(url))["confirmation_token"]})
+                self._confirmed_delete(url)
 
         self.assertTrue(Experiment.objects.filter(pk=self.experiment.pk).exists())
         self.assertTrue(ExperimentVersion.objects.filter(pk=self.version.pk).exists())

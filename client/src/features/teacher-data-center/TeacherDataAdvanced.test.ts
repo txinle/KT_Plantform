@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clearBootstrapContext } from '@/app/bootstrap'
 
 const mocks = vi.hoisted(() => ({
   api: { advanced: vi.fn(), advancedStatus: vi.fn(), advancedStudents: vi.fn() },
@@ -10,11 +11,13 @@ const mocks = vi.hoisted(() => ({
     query: { view: 'overview', experiment_ids: '3,5', class_id: '4', table: 'sessions' } as Record<string, string | undefined>,
   },
   applyRouteQuery: vi.fn(),
+  applyRouteCourse: vi.fn(),
 }))
 vi.mock('vue-router', async () => {
   const { reactive } = await import('vue')
   const route = reactive(mocks.route)
   mocks.applyRouteQuery.mockImplementation((query: Record<string, string | undefined>) => { route.query = query })
+  mocks.applyRouteCourse.mockImplementation((course: string) => { route.params.courseId = course })
   return {
     useRoute: () => route,
     useRouter: () => ({
@@ -76,6 +79,7 @@ function response(view = mocks.route.query.view || 'overview') {
 describe('TeacherDataAdvanced', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.applyRouteCourse('7')
     mocks.applyRouteQuery({ view: 'overview', experiment_ids: '3,5', class_id: '4', table: 'sessions' })
     mocks.api.advanced.mockImplementation(async () => response())
     mocks.api.advancedStudents.mockResolvedValue({ items: [{ id: 31, student_number: '20231001', name: '张同学' }], limit: 20 })
@@ -104,6 +108,31 @@ describe('TeacherDataAdvanced', () => {
     expect(counts).toContain('更新中 2')
     expect(counts).toContain('整理失败 1')
     expect(counts).toContain('以上状态可能重叠')
+  })
+
+  it('shows the actual status sample time without inventing a new sample when idle', async () => {
+    vi.useFakeTimers()
+    mocks.api.advanced.mockResolvedValue({ ...response(), preparation: {
+      ...preparation('updating', 1, 'v1'), status_checked_at: '2026-10-18T04:05:00Z',
+    } })
+    const wrapper = mount(TeacherDataAdvanced)
+    await flushPromises()
+    const before = wrapper.get('[data-testid="preparation-sampled-at"]').text()
+    expect(before).toContain('截至')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(wrapper.get('[data-testid="preparation-sampled-at"]').text()).toBe(before)
+    expect(mocks.api.advancedStatus).not.toHaveBeenCalled()
+  })
+
+  it('explicitly restarts the first page for an incompatible behavior cursor', async () => {
+    const { ApiError } = await import('@/api/client')
+    mocks.applyRouteQuery({ view: 'overview', experiment_ids: '3,5', class_id: '4', table: 'behavior_events', cursor: 'old-v1', page: '2' })
+    mocks.api.advanced.mockRejectedValueOnce(new ApiError(409, { error: { code: 'BEHAVIOR_CURSOR_VERSION_CHANGED', message: '版本变化' } }))
+    const wrapper = mount(TeacherDataAdvanced)
+    await flushPromises()
+    expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ query: expect.objectContaining({ cursor: undefined, page: undefined }) }))
+    expect(wrapper.text()).toContain('分页版本已更新')
+    expect(mocks.api.advanced).toHaveBeenCalledTimes(2)
   })
 
   it('checks only metadata at 5/15/30 seconds at most three times for the first empty result', async () => {
@@ -137,6 +166,149 @@ describe('TeacherDataAdvanced', () => {
     expect(mocks.api.advancedStatus).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(90000)
     expect(mocks.api.advanced).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['preparing', 'failed'])('loads the first readable partial result even when metadata is %s', async (state) => {
+    vi.useFakeTimers()
+    mocks.api.advanced.mockResolvedValueOnce({ ...response(), preparation: preparation() })
+      .mockResolvedValue({ ...response(), preparation: { ...preparation(state, 1, 'partial'), pending_count: 2, failed_count: 1 } })
+    mocks.api.advancedStatus.mockResolvedValue({ preparation: { ...preparation(state, 1, 'partial'), pending_count: 2, failed_count: 1 } })
+    mount(TeacherDataAdvanced)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(mocks.api.advanced).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(90000)
+    expect(mocks.api.advancedStatus).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancels a slow page before applying a cached page and ignores its late rejection', async () => {
+    mocks.api.advanced.mockResolvedValueOnce({ ...response(), preparation: preparation('ready', 1, 'v1') })
+    const wrapper = mount(TeacherDataAdvanced)
+    await flushPromises()
+    let reject!: (error: Error) => void
+    mocks.api.advanced.mockReturnValueOnce(new Promise((_, fail) => { reject = fail }))
+    mocks.applyRouteQuery({ ...mocks.route.query, page: '2' })
+    await flushPromises()
+    const signal = mocks.api.advanced.mock.calls.at(-1)?.[2] as AbortSignal
+    mocks.applyRouteQuery({ ...mocks.route.query, page: undefined })
+    await flushPromises()
+    expect(signal.aborted).toBe(true)
+    expect(wrapper.text()).not.toContain('正在刷新研究数据')
+    reject(new Error('obsolete page failure'))
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('obsolete page failure')
+    expect(wrapper.text()).toContain('S-001')
+  })
+
+  it('invalidates metadata when only the table changes and never mutates its cached page', async () => {
+    vi.useFakeTimers()
+    const original = { ...response(), preparation: preparation() }
+    mocks.api.advanced.mockResolvedValue(original)
+    let resolve!: (value: { preparation: ReturnType<typeof preparation> }) => void
+    mocks.api.advancedStatus.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    mount(TeacherDataAdvanced)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(5000)
+    const signal = mocks.api.advancedStatus.mock.calls[0]?.[2] as AbortSignal
+    mocks.api.advanced.mockResolvedValueOnce({ ...response(), preparation: preparation('ready', 1, 'v1') })
+    mocks.applyRouteQuery({ ...mocks.route.query, table: 'questions' })
+    await flushPromises()
+    expect(signal.aborted).toBe(true)
+    resolve({ preparation: preparation('ready', 1, 'obsolete') })
+    await flushPromises()
+    expect(mocks.api.advanced).toHaveBeenCalledTimes(2)
+    expect(original.preparation.result_version).toBeNull()
+  })
+
+  it('forces directory refresh when the research result version is unchanged', async () => {
+    mocks.applyRouteQuery({ ...mocks.route.query, table: 'questions' })
+    mocks.api.advanced.mockResolvedValue({ ...response(), selected_table: tables[1], preparation: preparation('ready', 1, 'v1') })
+    const wrapper = mount(TeacherDataAdvanced)
+    await flushPromises()
+    await wrapper.get('[data-testid="refresh-research-data"]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.advanced).toHaveBeenCalledTimes(2)
+    expect(mocks.api.advancedStatus).not.toHaveBeenCalled()
+  })
+
+  it('updates the course reactively and invalidates cached data on authentication changes', async () => {
+    mocks.api.advanced.mockResolvedValue({ ...response(), preparation: preparation('ready', 1, 'v1') })
+    mount(TeacherDataAdvanced)
+    await flushPromises()
+    mocks.applyRouteCourse('8')
+    await flushPromises()
+    expect(mocks.api.advanced).toHaveBeenLastCalledWith(8, expect.any(Object), expect.any(AbortSignal))
+    clearBootstrapContext()
+    await flushPromises()
+    expect(mocks.api.advanced).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps an eight-entry LRU and promotes cached pages on access', async () => {
+    mocks.api.advanced.mockResolvedValue({ ...response(), preparation: preparation('ready', 1, 'v1') })
+    mount(TeacherDataAdvanced)
+    await flushPromises()
+    for (let page = 2; page <= 8; page += 1) {
+      mocks.applyRouteQuery({ ...mocks.route.query, page: String(page) })
+      await flushPromises()
+    }
+    mocks.applyRouteQuery({ ...mocks.route.query, page: undefined })
+    await flushPromises()
+    expect(mocks.api.advanced).toHaveBeenCalledTimes(8)
+    mocks.applyRouteQuery({ ...mocks.route.query, page: '9' })
+    await flushPromises()
+    mocks.applyRouteQuery({ ...mocks.route.query, page: '2' })
+    await flushPromises()
+    expect(mocks.api.advanced).toHaveBeenCalledTimes(10)
+    mocks.applyRouteQuery({ ...mocks.route.query, page: undefined })
+    await flushPromises()
+    expect(mocks.api.advanced).toHaveBeenCalledTimes(10)
+  })
+
+  it('ignores a stale advanced finally while the new intent is loading', async () => {
+    let rejectOld!: (error: Error) => void
+    let resolveCurrent!: (value: ReturnType<typeof response>) => void
+    mocks.api.advanced.mockReturnValueOnce(new Promise((_, reject) => { rejectOld = reject }))
+      .mockReturnValueOnce(new Promise(resolve => { resolveCurrent = resolve }))
+    const wrapper = mount(TeacherDataAdvanced)
+    await flushPromises()
+    mocks.applyRouteQuery({ ...mocks.route.query, table: 'questions' })
+    await flushPromises()
+    rejectOld(new Error('old failure'))
+    await flushPromises()
+    expect(wrapper.text()).toContain('正在加载研究数据')
+    expect(wrapper.text()).not.toContain('old failure')
+    resolveCurrent(response())
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('正在加载研究数据')
+  })
+
+  it('keeps metadata snapshots separate from the cached response', async () => {
+    const original = { ...response(), preparation: preparation('ready', 1, 'v1') }
+    mocks.api.advanced.mockResolvedValue(original)
+    mocks.api.advancedStatus.mockResolvedValue({ preparation: { ...original.preparation, message: 'new sample' } })
+    const wrapper = mount(TeacherDataAdvanced)
+    await flushPromises()
+    await wrapper.get('[data-testid="refresh-research-data"]').trigger('click')
+    await flushPromises()
+    expect(original.preparation.message).toBe('后台整理')
+  })
+
+  it('invalidates pending student suggestions on route change and ignores their late result', async () => {
+    vi.useFakeTimers()
+    let resolve!: (value: { items: { id: number; name: string; student_number: string }[] }) => void
+    mocks.api.advancedStudents.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    const wrapper = mount(TeacherDataAdvanced)
+    await flushPromises()
+    await wrapper.get('input[aria-label="按学生姓名或学号搜索"]').setValue('旧')
+    await vi.advanceTimersByTimeAsync(250)
+    const signal = mocks.api.advancedStudents.mock.calls[0]?.[2] as AbortSignal
+    mocks.applyRouteQuery({ ...mocks.route.query, table: 'questions' })
+    await flushPromises()
+    expect(signal.aborted).toBe(true)
+    resolve({ items: [{ id: 90, name: '旧响应', student_number: '999' }] })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('旧响应')
+    expect(wrapper.text()).not.toContain('正在搜索学生')
   })
 
   it('keeps compatible updating rows without any automatic check', async () => {

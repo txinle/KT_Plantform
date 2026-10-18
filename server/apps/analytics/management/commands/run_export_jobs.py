@@ -13,9 +13,7 @@ class Command(BaseCommand):
         parser.add_argument("--once", action="store_true")
 
     def handle(self, *args, **options):
-        from apps.analytics.research_deletion import retry_artifact_cleanups
         from apps.analytics.runtime_pressure import runtime_pressure
-        retry_artifact_cleanups()
         worker_id = f"{socket.gethostname()}:{id(self)}"
         count = 0
         while True:

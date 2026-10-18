@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
-from datetime import datetime
 from math import ceil
 from urllib.parse import urlencode
 
@@ -18,6 +17,7 @@ from django.db.models.fields.json import KeyTextTransform
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
+from apps.api.exceptions import ApiBusinessError
 from apps.accounts.models import CourseEnrollment, User
 from apps.assessment.models import ExperimentSession
 from apps.question_bank.models import Concept, Question
@@ -27,6 +27,7 @@ from apps.question_bank.services.question_kc_mapping import (
 )
 
 from .models import (
+    ResearchPublicationClock,
     ResearchSessionBehavior,
     ResearchSessionMaterialization,
     ResearchSessionResponse,
@@ -40,7 +41,8 @@ from .runtime_pressure import runtime_pressure
 
 
 PAGE_SIZE = 20
-CURSOR_SALT = "analytics.advanced-behavior.v1"
+CURSOR_SALT = "analytics.advanced-behavior.v2"
+LEGACY_CURSOR_SALT = "analytics.advanced-behavior.v1"
 HEADERS = {item["key"]: item["headers"] for item in FILES}
 SESSION_HEADERS = "sessionID 学号 姓名 课程 实验名称 开始时间 结束时间 时长(分钟)".split()
 QUESTION_HEADERS = "题号 题干 选项 答案 解析 难度".split()
@@ -73,6 +75,7 @@ def _columns(headers):
 
 def _scope_signature(scope, params):
     body = {
+        "course_id": scope.course.pk,
         "scope": scope.serialize(),
         "question_ref": params.get("question_ref") or "",
         "visit": params.get("visit") or "",
@@ -88,18 +91,42 @@ def _decode_cursor(value, *, signature):
     try:
         payload = signing.loads(value, salt=CURSOR_SALT)
     except signing.BadSignature as error:
-        raise ValidationError({"cursor": ["行为记录游标无效，请从第一页重新打开。"]}) from error
+        try:
+            signing.loads(value, salt=LEGACY_CURSOR_SALT)
+        except signing.BadSignature:
+            raise ValidationError({"cursor": ["行为记录游标无效，请从第一页重新打开。"]}) from error
+        raise ApiBusinessError(
+            "行为记录分页版本已更新，请从第一页重新打开。",
+            code="BEHAVIOR_CURSOR_VERSION_CHANGED",
+        ) from error
+    if not isinstance(payload, dict):
+        raise ValidationError({"cursor": ["行为记录游标无效，请从第一页重新打开。"]})
+    if payload.get("version") != 2:
+        raise ApiBusinessError(
+            "行为记录分页版本已更新，请从第一页重新打开。",
+            code="BEHAVIOR_CURSOR_VERSION_CHANGED",
+        )
+    if (
+        any(type(payload.get(key)) is not int for key in ("cutoff_revision", "session_id", "ordinal", "page"))
+        or payload["cutoff_revision"] < 0
+        or payload["session_id"] < 1
+        or payload["ordinal"] < 1
+        or payload["page"] < 1
+        or payload.get("direction") not in {"previous", "next"}
+    ):
+        raise ValidationError({"cursor": ["行为记录游标无效，请从第一页重新打开。"]})
     if payload.get("scope") != signature:
         raise ValidationError({"cursor": ["行为记录游标与当前数据范围不一致。"]})
     return payload
 
 
 def _encode_cursor(
-    *, cutoff, signature, direction, session_id, ordinal, page
+    *, cutoff_revision, signature, direction, session_id, ordinal, page
 ):
     return signing.dumps(
         {
-            "cutoff": cutoff.isoformat(),
+            "version": 2,
+            "cutoff_revision": cutoff_revision,
             "scope": signature,
             "direction": direction,
             "session_id": session_id,
@@ -182,14 +209,14 @@ def _current_materializations(session_queryset):
     ).order_by("session_id")
 
 
-def _table_catalog(course, session_queryset, current):
+def _table_catalog(course, session_queryset, current, preparation=None):
     question_count = Question.objects.filter(bank__course=course).count()
     row_counts = current.aggregate(
         responses=Coalesce(Sum(Cast(KeyTextTransform("responses", "row_counts"), BigIntegerField())), 0),
         behavior=Coalesce(Sum(Cast(KeyTextTransform("behavior", "row_counts"), BigIntegerField())), 0),
     )
     totals = {
-        "sessions": current.count(),
+        "sessions": preparation['ready_count'] if preparation is not None else current.count(),
         "questions": question_count,
         "knowledge_points": Concept.objects.filter(course=course).count(),
         "question_kc_mapping": question_count,
@@ -268,10 +295,10 @@ def _library_page(course, key, page):
     return HEADERS["course_mapping"], rows, total, page
 
 
-def _standard_preview(course, scope, session_queryset, current, key, params):
+def _standard_preview(course, scope, session_queryset, current, key, params, totals=None):
     page = _page_number(params.get("page"))
     if key == "sessions":
-        total = session_queryset.count()
+        total = totals['sessions'] if totals is not None else session_queryset.count()
         page = _page_payload(page, total)["number"]
         start = (page - 1) * PAGE_SIZE
         rows = list(current.values_list("session_row", flat=True)[start : start + PAGE_SIZE])
@@ -295,26 +322,27 @@ def _standard_preview(course, scope, session_queryset, current, key, params):
     }
 
 
-def _fixed_materializations(session_queryset, cutoff):
+def _fixed_materializations(session_queryset, cutoff_revision):
     return ResearchSessionMaterialization.objects.filter(
         session__in=session_queryset,
         status=ResearchSessionMaterialization.Status.SUCCEEDED,
         projection_version=PROJECTION_VERSION,
-        activated_at__lte=cutoff,
-    ).filter(Q(superseded_at__isnull=True) | Q(superseded_at__gt=cutoff)).order_by("session_id")
+        activated_revision__lte=cutoff_revision,
+    ).filter(Q(superseded_revision__isnull=True) | Q(superseded_revision__gt=cutoff_revision)).order_by("session_id")
 
 
-@transaction.atomic
 def _behavior_page(scope, session_queryset, params):
     signature = _scope_signature(scope, params)
     decoded = _decode_cursor(params.get("cursor"), signature=signature)
     if decoded:
-        cutoff = datetime.fromisoformat(decoded["cutoff"])
+        cutoff_revision = decoded["cutoff_revision"]
     else:
-        lock_research_activation()
-        cutoff = timezone.now()
-    materializations = _fixed_materializations(session_queryset, cutoff)
-    result_version = hashlib.sha256(f"{signature}:{cutoff.isoformat()}:{PROJECTION_VERSION}".encode()).hexdigest()[:24]
+        # Durable prevents an outer request transaction from extending this lock.
+        with transaction.atomic(durable=True):
+            lock_research_activation()
+            cutoff_revision = ResearchPublicationClock.objects.filter(pk=1).values_list("revision", flat=True).first() or 0
+    materializations = _fixed_materializations(session_queryset, cutoff_revision)
+    result_version = hashlib.sha256(f"{signature}:{cutoff_revision}:{PROJECTION_VERSION}".encode()).hexdigest()[:24]
     base = ResearchSessionBehavior.objects.filter(materialization__in=materializations)
     if params.get("question_ref"):
         base = base.filter(question_ref=params["question_ref"])
@@ -350,7 +378,7 @@ def _behavior_page(scope, session_queryset, params):
             ).exists()
             if exists:
                 value = _encode_cursor(
-                    cutoff=cutoff, signature=signature,
+                    cutoff_revision=cutoff_revision, signature=signature,
                     direction="previous" if comparison == "lt" else "next",
                     session_id=session_id, ordinal=row["ordinal"],
                     page=max(1, number - 1) if comparison == "lt" else number + 1,
@@ -395,6 +423,7 @@ def _selected_session(session_queryset, scope, limit=50):
 
 
 def _preparation(session_queryset, current):
+    checked_at = timezone.now()
     latest = ResearchSessionMaterialization.objects.filter(
         session_id=OuterRef("pk"), projection_version=PROJECTION_VERSION,
         source_revision=OuterRef("research_source_revision"),
@@ -436,13 +465,14 @@ def _preparation(session_queryset, current):
         totals["failed_count"], totals["pending_count"], totals["updating_count"]
     )
     oldest_pending_at = totals["oldest_pending_at"]
-    oldest_pending_seconds = max(0, int((timezone.now() - oldest_pending_at).total_seconds())) if oldest_pending_at else None
+    oldest_pending_seconds = max(0, int((checked_at - oldest_pending_at).total_seconds())) if oldest_pending_at else None
     if failed_count:
         state = "failed"
         message = f"{failed_count} 名已结束学生的数据整理失败；已有兼容版本仍可查看，缺失的数据暂不显示。"
     elif pending_count:
         state = "preparing"
-        wait_note = f"最早已等待 {oldest_pending_seconds} 秒。" if oldest_pending_seconds is not None else "等待任务调度。"
+        wait_note = (f"最早未就绪整理任务的年龄为 {oldest_pending_seconds} 秒，包含排队、处理和重试。"
+                     if oldest_pending_seconds is not None else "等待任务调度。")
         message = f"{pending_count} 名已结束学生的数据正在后台整理，完成后可刷新查看。{wait_note}"
     elif updating_count:
         state = "updating"
@@ -458,7 +488,7 @@ def _preparation(session_queryset, current):
         updated_at=Max('finished_at'),
     )
     return {
-        "state": state, "message": message,
+        "state": state, "message": message, "status_checked_at": checked_at,
         "retry_after_seconds": runtime_pressure()["retry_after_seconds"],
         "updated_at": current_version['updated_at'],
         "result_version": current_version['version'],
@@ -526,7 +556,8 @@ def materialized_advanced_payload(course, scope, params):
     )
     current = _current_materializations(terminal_session_queryset)
     session_queryset = terminal_session_queryset.filter(pk__in=current.values("session_id"))
-    tables = _table_catalog(course, session_queryset, current)
+    preparation = _preparation(terminal_session_queryset, current)
+    tables = _table_catalog(course, session_queryset, current, preparation)
     selected = next((item for item in tables if item["key"] == selected_key), tables[0])
     selected_key = selected["key"]
     preview = None
@@ -536,10 +567,11 @@ def materialized_advanced_payload(course, scope, params):
             preview, behavior_payloads = _behavior_page(scope, session_queryset, params)
         else:
             preview = _standard_preview(
-                course, scope, session_queryset, current, selected_key, params
+                course, scope, session_queryset, current, selected_key, params,
+                totals={item['key']: item['total_items'] for item in tables},
             )
 
-    selected_session, visible_sessions = _selected_session(
+    selected_session, visible_sessions = (None, []) if view == 'overview' else _selected_session(
         session_queryset, scope, limit=50 if view == "student" else 20 if scope.student_id else 1
     )
     visible_ids = [item.pk for item in visible_sessions]
@@ -616,7 +648,7 @@ def materialized_advanced_payload(course, scope, params):
         for item in visible_sessions[:20]
     ] if scope.student_id else []
     experiment = course.experiments.filter(pk=scope.experiment_id).first() if scope.experiment_id else None
-    generated_at = current.aggregate(value=Max("finished_at"))["value"] or timezone.now()
+    generated_at = preparation['updated_at'] or preparation['status_checked_at']
     return {
         "course": {
             "id": course.pk,
@@ -633,7 +665,7 @@ def materialized_advanced_payload(course, scope, params):
                     for key, value in scope.serialize().items()
                 }
             ),
-            "display": scope_label(scope),
+            "display": scope_label(scope, experiment=experiment),
             "is_single_version": scope.is_single_version,
             "is_complete": scope.is_complete,
         },
@@ -649,7 +681,7 @@ def materialized_advanced_payload(course, scope, params):
         "preview": preview,
         "view": view,
         "workspace": workspace,
-        "preparation": _preparation(terminal_session_queryset, current),
+        "preparation": preparation,
     }
 
 

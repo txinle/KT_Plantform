@@ -74,7 +74,33 @@ class AdvancedMaterializedApiTests(TestCase):
         preparation = domain_payload(response)["preparation"]
         self.assertEqual(preparation["pending_count"], 1)
         self.assertEqual(preparation["oldest_pending_seconds"], 120)
-        self.assertIn("最早已等待 120 秒", preparation["message"])
+        self.assertIn("年龄为 120 秒", preparation["message"])
+
+    def test_status_sample_reports_job_age_including_queue_and_execution(self):
+        now = timezone.now()
+        job = ResearchSessionMaterialization.objects.create(session=self.session, status='running',
+            projection_version=PROJECTION_VERSION, source_revision=self.session.research_source_revision,
+            started_at=now - timedelta(seconds=180))
+        ResearchSessionMaterialization.objects.filter(pk=job.pk).update(created_at=now - timedelta(seconds=300))
+        with patch('apps.analytics.advanced_materialized.timezone.now', return_value=now):
+            preparation = domain_payload(self.client.get(self.api('advanced/status/'), self._query()))['preparation']
+        from django.utils.dateparse import parse_datetime
+        self.assertEqual(parse_datetime(preparation['status_checked_at']), now)
+        self.assertEqual(preparation['oldest_pending_seconds'], 300)
+        self.assertIsNone(preparation['updated_at'])
+        self.assertIn('排队、处理和重试', preparation['message'])
+
+    def test_overview_does_not_read_selected_workspace_and_reuses_aggregates(self):
+        from .advanced_materialized import materialized_advanced_payload
+        from .data_scope import DataScope
+        self._mark_ready(self.session)
+        scope = DataScope.from_mapping(self.course, self._query())
+        with patch('apps.analytics.advanced_materialized._selected_session', side_effect=AssertionError('unused overview workspace')):
+            with CaptureQueriesContext(connection) as queries:
+                result = materialized_advanced_payload(self.course, scope, {'view': 'overview', 'table': 'sessions'})
+        self.assertLessEqual(len(queries), 8, [item['sql'] for item in queries])
+        self.assertIsNone(result['workspace']['session'])
+        self.assertEqual(len(result['preview']['rows']), 1)
 
     def test_missing_current_projection_job_does_not_claim_historical_wait(self):
         now = timezone.now()

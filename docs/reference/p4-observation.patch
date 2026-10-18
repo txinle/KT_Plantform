@@ -1,0 +1,160 @@
+diff --git a/server/apps/api/middleware.py b/server/apps/api/middleware.py
+index 521f1c2..8414280 100644
+--- a/server/apps/api/middleware.py
++++ b/server/apps/api/middleware.py
+@@ -10,12 +10,21 @@ from django.conf import settings
+ from django.core.exceptions import ImproperlyConfigured
+ from django.db import OperationalError, connection
+ 
+-from config.capture_timing import SLOW_REQUEST_SECONDS, TIMING_ENV_KEY, coarse_path, diagnostics_mode, emit_diagnostic, finish_interval, interval_union_seconds, mark, timing_fields
++from config.capture_timing import SLOW_REQUEST_SECONDS, TIMING_ENV_KEY, coarse_path, diagnostics_mode, emit_diagnostic, finish_interval, interval_union_seconds, mark, pending_timing, timing_fields
+ 
+ 
+ logger = logging.getLogger('kt.capture_diagnostics')
+ connection_logger = logging.getLogger('kt.assessment_connection')
+-ASSESSMENT_PATHS = ('/api/v1/student/', '/api/v1/assessment/process/', '/student/sessions/', '/assessment/process/capture-v2/offline-worker.js')
++CONNECT_RETRY_PATHS = ('/api/v1/student/', '/api/v1/assessment/process/', '/student/sessions/', '/assessment/process/capture-v2/offline-worker.js')
++TIMING_PATHS = CONNECT_RETRY_PATHS + (
++    '/api/v1/auth/',
++    '/api/v1/teacher/courses/:id/data/advanced/',
++    '/api/v1/teacher/courses/:id/experiments/:id/deletion/',
++    '/api/v1/teacher/courses/:id/classes/:id/experiments/:id/remove/',
++    '/api/v1/teacher/accounts/courses/:id/classes/:id/delete/',
++    '/api/v1/teacher/courses/:id/deletion-cleanups/',
++    '/api/v1/teacher/courses/:id/deletion-operations/',
++)
+ 
+ 
+ class RequestIdMiddleware:
+@@ -32,18 +41,23 @@ class RequestIdMiddleware:
+             raise ImproperlyConfigured(str(error)) from error
+ 
+     def __call__(self, request):
+-        if self.capture_diagnostics and request.path.startswith(ASSESSMENT_PATHS):
++        timed_request = self.capture_diagnostics and coarse_path(request.path).startswith(TIMING_PATHS)
++        if timed_request:
+             state = request.META.get(TIMING_ENV_KEY)
+             if state is None:
+                 state = {}
+                 request.META[TIMING_ENV_KEY] = state
+             mark(state, 'middleware_start')
+         request.request_id = uuid.uuid4().hex
+-        if self.capture_diagnostics and request.path.startswith(ASSESSMENT_PATHS):
++        if timed_request:
+             supplied = request.headers.get('X-Request-ID', '')
+             if re.fullmatch('[a-f0-9]{32}', supplied):
+                 request.request_id = supplied
+-            response = self.profile_capture(request)
++            token = pending_timing.set(state)
++            try:
++                response = self.profile_capture(request)
++            finally:
++                pending_timing.reset(token)
+         else:
+             response = self.assessment_response(request)
+         return response
+@@ -57,7 +71,7 @@ class RequestIdMiddleware:
+         return response
+ 
+     def assessment_response(self, request):
+-        if not getattr(settings, 'ASSESSMENT_CONNECT_RETRY_ENABLED', False) or not request.path.startswith(ASSESSMENT_PATHS):
++        if not getattr(settings, 'ASSESSMENT_CONNECT_RETRY_ENABLED', False) or not request.path.startswith(CONNECT_RETRY_PATHS):
+             return self.finalize_response(request, self.get_response(request))
+         original_connect = connection.get_new_connection
+         remaining = 1
+@@ -76,7 +90,7 @@ class RequestIdMiddleware:
+                 connection_logger.warning(json.dumps({
+                     'request_id': request.request_id,
+                     'operation_id': operation_id if re.fullmatch('[a-f0-9]{32}', operation_id) else None,
+-                    'path': re.sub(r'/\d+(?=/|$)', '/:id', request.path),
++                    'path': coarse_path(request.path),
+                     'method': request.method, 'retry_limit': 1,
+                     'error_type': type(error).__name__, 'sqlstate': sqlstate,
+                     'failed_connect_seconds': round(time.perf_counter() - started, 6),
+diff --git a/server/apps/api/test_capture_diagnostics.py b/server/apps/api/test_capture_diagnostics.py
+index c32984a..c6d4a25 100644
+--- a/server/apps/api/test_capture_diagnostics.py
++++ b/server/apps/api/test_capture_diagnostics.py
+@@ -12,6 +12,30 @@ from .middleware import RequestIdMiddleware
+ 
+ 
+ class CaptureDiagnosticGuardTests(SimpleTestCase):
++    @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=False, ASSESSMENT_REQUEST_TIMING_ENABLED=True,
++                       ASSESSMENT_CONNECT_RETRY_ENABLED=True)
++    def test_auth_and_teacher_observation_does_not_enable_connection_retry(self):
++        for path in ("/api/v1/auth/login/", "/api/v1/teacher/courses/17/data/advanced/",
++                     "/api/v1/teacher/courses/17/data/advanced/status/",
++                     "/api/v1/teacher/courses/17/data/advanced/students/",
++                     "/api/v1/teacher/courses/17/experiments/12/deletion/",
++                     "/api/v1/teacher/accounts/courses/17/classes/12/delete/"):
++            with self.subTest(path=path):
++                request = RequestFactory().post(path, HTTP_X_REQUEST_ID="a" * 32)
++                def view(request):
++                    connection.get_new_connection({})
++                    return JsonResponse({"ok": True})
++                with patch.object(connection, "get_new_connection", side_effect=OperationalError("PRIVATE PASSWORD")) as connect, \
++                        patch("apps.api.middleware.SLOW_REQUEST_SECONDS", 0), \
++                        self.assertLogs("kt.capture_diagnostics", level="WARNING") as logs:
++                    with self.assertRaises(OperationalError):
++                        RequestIdMiddleware(view)(request)
++                self.assertEqual(connect.call_count, 1)
++                row = json.loads(logs.records[-1].getMessage())
++                self.assertEqual(row["request_id"], "a" * 32)
++                self.assertEqual(row["connection_count"], 1)
++                self.assertNotIn("PRIVATE", json.dumps(row))
++
+     @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=False, ASSESSMENT_REQUEST_TIMING_ENABLED=True)
+     def test_production_timing_records_slow_requests_without_sql_text_or_answers(self):
+         fake = Mock(vendor='postgresql', in_atomic_block=True)
+@@ -182,6 +206,30 @@ class CaptureDiagnosticSQLTests(TestCase):
+ 
+ @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=True)
+ class CaptureDiagnosticCommitTests(TransactionTestCase):
++    @override_settings(SCHOOL_CAPTURE_DIAGNOSTICS_ENABLED=False, ASSESSMENT_REQUEST_TIMING_ENABLED=True)
++    def test_real_login_middleware_chain_records_hash_session_and_matching_request_id(self):
++        from apps.accounts.models import User
++        User.objects.create_user(username="timed-login", password="PRIVATE PASSWORD", role=User.Role.TEACHER)
++        with patch("apps.api.middleware.SLOW_REQUEST_SECONDS", 0), \
++                self.assertLogs("kt.capture_diagnostics", level="WARNING") as logs:
++            response = self.client.post("/api/v1/auth/login/", json.dumps({
++                "username": "timed-login", "password": "PRIVATE PASSWORD",
++            }), content_type="application/json", HTTP_X_REQUEST_ID="b" * 32)
++        self.assertEqual(response.status_code, 200)
++        row = json.loads(logs.records[-1].getMessage())
++        self.assertEqual(row["path"], "/api/v1/auth/login/")
++        self.assertEqual(row["request_id"], "b" * 32)
++        self.assertEqual(response["X-Request-ID"], "b" * 32)
++        self.assertEqual(response.json()["meta"]["request_id"], "b" * 32)
++        for phase in ("login_authenticate_seconds", "login_session_seconds", "session_save_seconds"):
++            self.assertGreaterEqual(row[phase], 0)
++        self.assertEqual(row["password_check_count"], 1)
++        self.assertGreaterEqual(row["password_check_seconds"], 0)
++        self.assertGreater(row["sql_count"], 0)
++        self.assertGreater(row["commit_count"], 0)
++        self.assertNotIn("PRIVATE", json.dumps(row))
++        self.assertNotIn("timed-login", json.dumps(row))
++
+     def test_session_response_save_is_inside_full_diagnostic_and_nested_timings(self):
+         from apps.accounts.session_middleware import SessionMiddleware
+         from django.contrib.sessions.backends.db import SessionStore
+diff --git a/server/apps/api/test_capture_timing.py b/server/apps/api/test_capture_timing.py
+index 861f4a2..4a55ad2 100644
+--- a/server/apps/api/test_capture_timing.py
++++ b/server/apps/api/test_capture_timing.py
+@@ -3,10 +3,15 @@ from unittest.mock import Mock, patch
+ 
+ from django.test import SimpleTestCase
+ 
+-from config.capture_timing import TIMING_ENV_KEY, WSGICaptureTiming, mark, should_log_timing, timing_fields
++from config.capture_timing import TIMING_ENV_KEY, WSGICaptureTiming, coarse_path, mark, should_log_timing, timing_fields
+ 
+ 
+ class WSGICaptureTimingTests(SimpleTestCase):
++    def test_teacher_routes_redact_numeric_ids_uuid_and_query_values(self):
++        self.assertEqual(coarse_path(
++            "/api/v1/teacher/courses/31/deletion-operations/26d4ccae-b915-419e-ab86-4c87844fe34b/?token=PRIVATE"
++        ), "/api/v1/teacher/courses/:id/deletion-operations/:id/")
++
+     def test_production_timing_forces_light_mode_and_preserves_response(self):
+         environ = {'PATH_INFO': '/api/v1/student/tasks/35/start/'}
+         start_response = Mock()

@@ -1077,7 +1077,7 @@ def _csv_table_from_bytes(body):
 
 
 @contextmanager
-def _export_file_lock(job_id):
+def _export_file_lock(job_id, *, blocking=True):
     root = os.path.join(settings.MEDIA_ROOT, 'exports', str(job_id))
     os.makedirs(root, exist_ok=True)
     with open(os.path.join(root, '.generation.lock'), 'a+b') as handle:
@@ -1087,10 +1087,15 @@ def _export_file_lock(job_id):
                 handle.write(b'0')
                 handle.flush()
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+            except OSError as error:
+                if not blocking and error.errno in (11, 13):
+                    raise BlockingIOError(error.errno, 'export generation lock is held') from error
+                raise
         else:
             import fcntl
-            fcntl.flock(handle, fcntl.LOCK_EX)
+            fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         try:
             yield
         finally:

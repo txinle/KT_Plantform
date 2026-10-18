@@ -1,6 +1,7 @@
 from apps.api.test_support import domain_payload
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from uuid import uuid4
 
 from django.contrib import admin
 from django.contrib.auth.models import AnonymousUser
@@ -917,9 +918,20 @@ class ClassStudentAnalyticsPolicyDeletionIntegrationTests(TestCase):
         policy_pk = class_group.student_analytics_policy.pk
 
         self.client.force_login(collaborator)
+        delete_url = reverse("teacher-course-class-delete", args=[course.pk, class_group.pk])
+        preview = domain_payload(self.client.get(delete_url))
+        operation_id = str(uuid4())
+        registered = self.client.post(
+            f"/api/v1/teacher/courses/{course.pk}/deletion-operations/",
+            {"operation_id": operation_id, "action": "delete_class",
+             "object_id": class_group.pk, "class_id": class_group.pk,
+             "confirmation_token": preview["confirmation_token"]},
+        )
+        self.assertEqual(registered.status_code, 201)
         response = self.client.post(
-            reverse("teacher-course-class-delete", args=[course.pk, class_group.pk]),
-            {"confirmation": "delete", "confirmation_token": domain_payload(self.client.get(reverse("teacher-course-class-delete", args=[course.pk, class_group.pk])))["confirmation_token"]},
+            delete_url,
+            {"operation_id": operation_id, "confirmation": "delete",
+             "confirmation_token": preview["confirmation_token"]},
         )
 
         self.assertEqual(response.status_code, 200)

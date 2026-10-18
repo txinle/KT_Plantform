@@ -3,3 +3,5 @@
 openapi-schema.yml text eol=lf
 frontend/src/api/generated/schema.d.ts text eol=lf
 client/src/api/generated/schema.d.ts text eol=lf
+docs/reference/p4-observation.patch text eol=lf whitespace=-blank-at-eol
+docs/reference/2026-10-18-teacher-capacity/*.txt -text

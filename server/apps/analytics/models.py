@@ -7,6 +7,8 @@ from django.db import models
 from django.db.models.functions import Now
 from django.utils import timezone
 
+from .artifact_cleanup_models import ResearchArtifactCleanupJob
+
 
 class ExportSnapshot(models.Model):
     snapshot_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -451,6 +453,14 @@ class RecordingCoverageAttempt(models.Model):
         raise ValueError("RecordingCoverageAttempt rows are immutable")
 
 
+class ResearchPublicationClock(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    revision = models.PositiveBigIntegerField(default=0)
+
+    class Meta:
+        constraints = [models.CheckConstraint(condition=models.Q(pk=1), name="analytics_publication_clock_singleton")]
+
+
 class ResearchSessionMaterialization(models.Model):
     class Status(models.TextChoices):
         QUEUED = "queued", "排队中"
@@ -482,6 +492,8 @@ class ResearchSessionMaterialization(models.Model):
     finished_at = models.DateTimeField(null=True, blank=True)
     activated_at = models.DateTimeField(null=True, blank=True)
     superseded_at = models.DateTimeField(null=True, blank=True)
+    activated_revision = models.PositiveBigIntegerField(null=True, blank=True)
+    superseded_revision = models.PositiveBigIntegerField(null=True, blank=True)
     error = models.TextField(blank=True, default="")
     session_summary = models.JSONField(default=dict)
     session_row = models.JSONField(default=list)
@@ -505,6 +517,10 @@ class ResearchSessionMaterialization(models.Model):
             models.Index(
                 fields=["status", "activated_at", "superseded_at"],
                 name="analytics_result_window_idx",
+            ),
+            models.Index(
+                fields=["status", "activated_revision", "superseded_revision"],
+                name="analytics_result_revision_idx",
             ),
         ]
         constraints = [

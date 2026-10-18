@@ -257,6 +257,27 @@ services:
     mem_limit: 1G
     cpus: 0.75
     cpu_shares: 256
+  artifact-cleanup-worker:
+    build:
+      dockerfile: deploy/Dockerfile.school
+    volumes:
+      - media_data:/app/media
+      - runtime_control:/runtime-control:ro
+    entrypoint: ["docker/school-entrypoint.sh"]
+    command: ["python", "manage.py", "run_research_artifact_cleanups"]
+    environment:
+      <<: *school-environment
+      POSTGRES_POOL_ALIAS: kt_background
+      DATABASE_APPLICATION_NAME: kt-school-artifact-cleanup
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+    mem_limit: 256M
+    cpus: 0.25
+    cpu_shares: 128
   student-comparison-worker:
     build:
       context: ..

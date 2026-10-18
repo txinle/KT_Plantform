@@ -31,6 +31,7 @@ from .models import (
     RecordingCoverageAttempt,
     RecordingCoverageRun,
     RecordingCoverageSession,
+    ResearchPublicationClock,
     ResearchSessionBehavior,
     ResearchSessionMaterialization,
     ResearchSessionQuality,
@@ -622,7 +623,11 @@ def _store_success(
     published_at = requested_now or timezone.now()
     if item.lease_expires_at <= published_at:
         raise ValueError("research materialization lease expired before publish")
-    previous.update(is_current=False, superseded_at=published_at)
+    ResearchPublicationClock.objects.get_or_create(pk=1)
+    clock = ResearchPublicationClock.objects.select_for_update().get(pk=1)
+    clock.revision += 1
+    clock.save(update_fields=["revision"])
+    previous.update(is_current=False, superseded_at=published_at, superseded_revision=clock.revision)
     item.status = item.Status.SUCCEEDED
     item.is_current = True
     item.source_cutoff_at = cutoff
@@ -637,6 +642,8 @@ def _store_success(
     item.finished_at = published_at
     item.activated_at = published_at
     item.superseded_at = None
+    item.activated_revision = clock.revision
+    item.superseded_revision = None
     item.error = ""
     item.session_summary = sessions[0]
     item.session_row = session_rows[0]

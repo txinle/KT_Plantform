@@ -102,7 +102,7 @@ class Command(BaseCommand):
                 'ASSESSMENT_PREPARED_ENABLED', 'ASSESSMENT_ADMISSION_ENABLED', 'ASSESSMENT_ADMISSION_GLOBAL_ENABLED')):
             raise CommandError('Prepared and experimental global admission must be explicitly configured')
         startup_budgets = (settings.ASSESSMENT_ENTRY_WORKERS, settings.ASSESSMENT_ENTRY_DB_CONNECTIONS,
-                           settings.ASSESSMENT_ENTRY_STARTUP_LIMIT) if settings.SCHOOL_POOL_PROFILE in ('shared-entry-v1', 'shared-entry-v2') else (
+                           settings.ASSESSMENT_ENTRY_STARTUP_LIMIT) if settings.SCHOOL_POOL_PROFILE in ('shared-entry-v1', 'shared-entry-v2', 'shared-entry-v3') else (
                            settings.ASSESSMENT_STARTUP_WORKERS, settings.ASSESSMENT_STARTUP_DB_CONNECTIONS)
         if not 1 <= settings.ASSESSMENT_ADMISSION_CAPACITY <= min(startup_budgets):
             raise CommandError('Global C must fit the configured startup worker and database budgets')

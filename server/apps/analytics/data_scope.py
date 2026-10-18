@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone as datetime_timezone
+import re
 from typing import Mapping
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -230,21 +232,29 @@ class DataScope:
         ):
             raise ScopeValidationError("开始时间范围不能为空或倒置")
 
-        experiment = self._course_experiment(self.experiment_id)
-        for experiment_id in self.experiment_ids:
-            self._course_experiment(experiment_id)
+        experiment_ids = set(self.experiment_ids)
+        if self.experiment_id is not None:
+            experiment_ids.add(self.experiment_id)
+        experiments = {
+            experiment.pk: experiment
+            for experiment in Experiment.objects.filter(course=self.course, pk__in=experiment_ids)
+        } if experiment_ids else {}
+        if experiments.keys() != experiment_ids:
+            raise ScopeNotFound("实验不属于当前课程")
+        experiment = experiments.get(self.experiment_id)
         version = self._course_version(self.version_id)
         class_group = self._course_class_group(self.class_id)
         class_snapshot = self._course_class_snapshot(self.class_snapshot_id)
         condition = self._course_condition(self.condition_id)
         session = self._course_session(self.session_id)
         if self.session_ref:
-            referenced_id = next((pk for pk, reference in self.session_references().items() if reference == self.session_ref), None)
-            if referenced_id is None:
+            referenced_id = self._referenced_session_id()
+            referenced = session if session and session.pk == referenced_id else self._course_session(referenced_id)
+            if referenced.started_at is None or self._session_reference(referenced.pk, referenced.started_at) != self.session_ref:
                 raise ScopeNotFound("会话不属于当前课程")
-            if session and str(session.pk) != referenced_id:
+            if session and session.pk != referenced_id:
                 raise ScopeValidationError("会话编号与会话标识不一致")
-            session = self._course_session(int(referenced_id))
+            session = referenced
         self._validate_course_student(self.student_id)
 
         if self.experiment_ids:
@@ -285,14 +295,6 @@ class DataScope:
                 raise ScopeValidationError("学生与会话不属于同一范围")
             if condition and session.condition_id != condition.pk:
                 raise ScopeValidationError("条件与会话不属于同一范围")
-
-    def _course_experiment(self, experiment_id):
-        if experiment_id is None:
-            return None
-        experiment = Experiment.objects.select_related("course").filter(pk=experiment_id).first()
-        if experiment is None or experiment.course_id != self.course.pk:
-            raise ScopeNotFound("实验不属于当前课程")
-        return experiment
 
     def _course_version(self, version_id):
         if version_id is None:
@@ -342,8 +344,8 @@ class DataScope:
         if session_id is None:
             return None
         session = (
-            ExperimentSession.objects.select_related("version__experiment")
-            .filter(pk=session_id)
+            ExperimentSession.objects.select_related("version__experiment", "class_snapshot")
+            .filter(pk=session_id, version__experiment__course=self.course)
             .first()
         )
         if session is None or session.version.experiment.course_id != self.course.pk:
@@ -388,6 +390,8 @@ class DataScope:
             filters["student_id"] = self.student_id
         if self.session_id is not None:
             filters["pk"] = self.session_id
+        if self.session_ref:
+            filters["pk"] = self._referenced_session_id()
         if self.condition_id is not None:
             filters["condition_id"] = self.condition_id
         if self.session_status is not None:
@@ -397,14 +401,11 @@ class DataScope:
         if self.started_before_utc is not None:
             filters["started_at__lt"] = self.started_before_utc
         queryset = ExperimentSession.objects.filter(**filters, started_at__isnull=False)
-        if self.search or self.session_ref:
-            references = self.session_references()
+        if self.search:
             selected = []
             for session in queryset.select_related("student"):
-                reference = references.get(str(session.pk), "")
-                if self.session_ref and reference != self.session_ref:
-                    continue
-                if self.search and self.search.casefold() not in " ".join(
+                reference = self._session_reference(session.pk, session.started_at)
+                if self.search.casefold() not in " ".join(
                     (session.student.student_number or "", session.student.shown_name, reference)
                 ).casefold():
                     continue
@@ -413,13 +414,21 @@ class DataScope:
         return queryset
 
     def session_references(self):
-        from zoneinfo import ZoneInfo
-
         return {
-            str(pk): f"S{started.astimezone(ZoneInfo('Asia/Shanghai')):%Y%m%d}_{pk:04d}"
+            str(pk): self._session_reference(pk, started)
             for pk, started in ExperimentSession.objects.filter(version__experiment__course=self.course, started_at__isnull=False)
             .values_list("pk", "started_at")
         }
+
+    @staticmethod
+    def _session_reference(pk, started):
+        return f"S{started.astimezone(ZoneInfo('Asia/Shanghai')):%Y%m%d}_{pk:04d}"
+
+    def _referenced_session_id(self):
+        match = re.fullmatch(r"S\d{8}_([0-9]{4,19})", str(self.session_ref))
+        if match is None or int(match[1]) <= 0:
+            raise ScopeNotFound("会话不属于当前课程")
+        return int(match[1])
 
     @property
     def is_complete(self):

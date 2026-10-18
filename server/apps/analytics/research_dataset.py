@@ -33,9 +33,9 @@ def table_catalog(dataset=None):
     ]
 
 
-def scope_label(scope):
+def scope_label(scope, *, experiment=None):
     parts = []
-    experiment = scope.course.experiments.filter(pk=scope.experiment_id).first() if scope.experiment_id else None
+    experiment = experiment or (scope.course.experiments.filter(pk=scope.experiment_id).first() if scope.experiment_id else None)
     if experiment:
         parts.append(experiment.name)
     elif scope.experiment_ids:

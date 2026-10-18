@@ -67,6 +67,7 @@ interface ClientOptions {
 interface GetOptions {
   signal?: AbortSignal
   retry?: boolean
+  retryPolicy?: 'teacher-read'
 }
 
 interface MutationOptions<TState> {
@@ -108,6 +109,22 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError'
 }
 
+function retryAfterSeconds(response: Response) {
+  const value = response.headers.get('Retry-After')
+  const seconds = value === null ? NaN : /^\d+$/.test(value) ? Number(value)
+    : /^[A-Za-z]{3}, /.test(value) ? Math.max(0, (Date.parse(value) - Date.now()) / 1000) : NaN
+  return Number.isFinite(seconds) ? seconds : undefined
+}
+
+function abortibleDelay(milliseconds: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) { reject(signal.reason); return }
+    const aborted = () => { clearTimeout(timer); reject(signal.reason) }
+    const timer = setTimeout(() => { signal.removeEventListener('abort', aborted); resolve() }, milliseconds)
+    signal.addEventListener('abort', aborted, { once: true })
+  })
+}
+
 export function createApiClient(options: ClientOptions = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch.bind(globalThis)
   const getCsrfToken = options.getCsrfToken || (() => '')
@@ -127,10 +144,7 @@ export function createApiClient(options: ClientOptions = {}) {
     options.onResponse?.(response)
     const body = await responseBody(response)
     if (!response.ok) {
-      const retryAfter = response.headers.get('Retry-After')
-      const seconds = retryAfter === null ? NaN : /^\d+$/.test(retryAfter) ? Number(retryAfter)
-        : /^[A-Za-z]{3}, /.test(retryAfter) ? Math.max(0, (Date.parse(retryAfter) - Date.now()) / 1000) : NaN
-      const apiError = new ApiError(response.status, (body || {}) as ApiErrorBody, Number.isFinite(seconds) ? seconds : undefined)
+      const apiError = new ApiError(response.status, (body || {}) as ApiErrorBody, retryAfterSeconds(response))
       if (response.status === 401) {
         const currentPage = `${window.location.pathname}${window.location.search}${window.location.hash}`
         onAuthenticationRequired(`/login/?next=${encodeURIComponent(currentPage)}`)
@@ -138,6 +152,57 @@ export function createApiClient(options: ClientOptions = {}) {
       throw apiError
     }
     return response.status === 204 ? undefined as T : unwrapApiData<T>(body)
+  }
+
+  async function teacherRead<T>(path: string, requestOptions: GetOptions): Promise<T> {
+    const controller = new AbortController()
+    const deadline = Date.now() + 30000
+    const callerAborted = () => controller.abort(requestOptions.signal?.reason)
+    requestOptions.signal?.addEventListener('abort', callerAborted, { once: true })
+    if (requestOptions.signal?.aborted) callerAborted()
+    const timer = setTimeout(() => controller.abort(new DOMException('研究数据读取超过30秒，请稍后重试。', 'TimeoutError')), 30000)
+    let rejectAborted: (() => void) | undefined
+    const aborted = new Promise<never>((_, reject) => {
+      rejectAborted = () => reject(controller.signal.reason)
+      if (controller.signal.aborted) rejectAborted()
+      else controller.signal.addEventListener('abort', rejectAborted, { once: true })
+    })
+    const attempts = requestOptions.retry === false ? 1 : 2
+    const operation = async () => {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        controller.signal.throwIfAborted()
+        let response: Response
+        try {
+          response = await fetchImpl(path, {
+            method: 'GET', credentials: 'same-origin',
+            headers: { Accept: 'application/json', ...correlationHeaders() }, signal: controller.signal,
+          })
+        } catch (caught) {
+          controller.signal.throwIfAborted()
+          if (isAbortError(caught)) throw caught
+          if (attempt + 1 === attempts) throw new Error('无法连接服务器，请检查网络后重试。', { cause: caught })
+          await abortibleDelay(200 + Math.floor(Math.random() * 201), controller.signal)
+          continue
+        }
+        controller.signal.throwIfAborted()
+        if (attempt + 1 < attempts && [502, 503, 504].includes(response.status)) {
+          const seconds = retryAfterSeconds(response)
+          const delay = seconds === undefined ? 200 + Math.floor(Math.random() * 201) : seconds * 1000
+          if (Date.now() + delay >= deadline) return parse<T>(response)
+          await abortibleDelay(delay, controller.signal)
+          continue
+        }
+        // Parsing is deliberately outside the transport retry catch.
+        return parse<T>(response)
+      }
+      throw new Error('无法连接服务器，请检查网络后重试。')
+    }
+    try { return await Promise.race([operation(), aborted]) }
+    finally {
+      clearTimeout(timer)
+      requestOptions.signal?.removeEventListener('abort', callerAborted)
+      if (rejectAborted) controller.signal.removeEventListener('abort', rejectAborted)
+    }
   }
 
   return {
@@ -154,6 +219,7 @@ export function createApiClient(options: ClientOptions = {}) {
       return { blob: await response.blob(), filename }
     },
     async get<T>(path: string, requestOptions: GetOptions = {}): Promise<T> {
+      if (requestOptions.retryPolicy === 'teacher-read') return teacherRead<T>(path, requestOptions)
       let lastError: unknown
       const attempts = requestOptions.retry === false ? 1 : 2
       for (let attempt = 0; attempt < attempts; attempt += 1) {

@@ -14,6 +14,103 @@ function jsonResponse(body: unknown, status = 200, raw = false) {
 }
 
 describe('API client', () => {
+  it.each(['2', 'Thu, 15 Oct 2026 00:00:02 GMT'])('waits for teacher Retry-After %s before the sole retry', async (retryAfter) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-15T00:00:00Z'))
+    try {
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response('{}', { status: 503, headers: { 'Retry-After': retryAfter } }))
+        .mockResolvedValueOnce(jsonResponse({ ok: true }))
+      const result = createApiClient({ fetchImpl }).get('/teacher/read/', { retryPolicy: 'teacher-read' })
+      await vi.advanceTimersByTimeAsync(1999)
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(result).resolves.toEqual({ ok: true })
+      expect(fetchImpl).toHaveBeenCalledTimes(2)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('uses bounded jitter without a valid teacher Retry-After and never makes a third attempt', async () => {
+    vi.useFakeTimers()
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    try {
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', { status: 502, headers: { 'Retry-After': 'invalid' } }))
+      const result = createApiClient({ fetchImpl }).get('/teacher/read/', { retryPolicy: 'teacher-read' })
+      const rejected = expect(result).rejects.toMatchObject({ status: 502 })
+      await vi.advanceTimersByTimeAsync(299)
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      await rejected
+      expect(fetchImpl).toHaveBeenCalledTimes(2)
+    } finally { random.mockRestore(); vi.useRealTimers() }
+  })
+
+  it('aborts a teacher retry wait without sending another fetch', async () => {
+    vi.useFakeTimers()
+    try {
+      const controller = new AbortController()
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', { status: 504, headers: { 'Retry-After': '2' } }))
+      const result = createApiClient({ fetchImpl }).get('/teacher/read/', { retryPolicy: 'teacher-read', signal: controller.signal })
+      const rejected = expect(result).rejects.toMatchObject({ name: 'AbortError' })
+      await vi.advanceTimersByTimeAsync(1)
+      controller.abort()
+      await rejected
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('shares the teacher thirty-second budget across transport failure, wait and second fetch', async () => {
+    vi.useFakeTimers()
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    try {
+      let rejectFirst!: (error: Error) => void
+      const fetchImpl = vi.fn<typeof fetch>().mockReturnValueOnce(new Promise((_, reject) => { rejectFirst = reject }))
+        .mockImplementation(() => new Promise(() => {}))
+      const result = createApiClient({ fetchImpl }).get('/teacher/read/', { retryPolicy: 'teacher-read' })
+      const rejected = expect(result).rejects.toMatchObject({ name: 'TimeoutError' })
+      await vi.advanceTimersByTimeAsync(20000)
+      rejectFirst(new TypeError('network'))
+      await vi.advanceTimersByTimeAsync(299)
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(fetchImpl).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(9700)
+      await rejected
+      expect((fetchImpl.mock.calls[1]?.[1]?.signal as AbortSignal).aborted).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { random.mockRestore(); vi.useRealTimers() }
+  })
+
+  it('limits the entire teacher fetch chain to thirty seconds and skips an excessive Retry-After', async () => {
+    vi.useFakeTimers()
+    try {
+      let signal: AbortSignal | null | undefined
+      const stalled = vi.fn<typeof fetch>().mockImplementation((_, options) => { signal = options?.signal; return new Promise(() => {}) })
+      const result = createApiClient({ fetchImpl: stalled }).get('/teacher/read/', { retryPolicy: 'teacher-read' })
+      const rejected = expect(result).rejects.toMatchObject({ name: 'TimeoutError' })
+      await vi.advanceTimersByTimeAsync(30000)
+      await rejected
+      expect(signal?.aborted).toBe(true)
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', { status: 503, headers: { 'Retry-After': '31' } }))
+      await expect(createApiClient({ fetchImpl }).get('/teacher/read/', { retryPolicy: 'teacher-read' })).rejects.toMatchObject({ status: 503 })
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
+
+  it.each(['invalid-json', 'missing-envelope'])('never retries teacher response contract failure: %s', async (kind) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => kind === 'invalid-json'
+      ? new Response('not json') : jsonResponse({ value: 1 }, 200, true))
+    await expect(createApiClient({ fetchImpl }).get('/teacher/read/', { retryPolicy: 'teacher-read' })).rejects.toBeInstanceOf(Error)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([401, 403, 404, 409, 500])('does not retry teacher HTTP %s', async (status) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ error: { code: 'REJECTED' } }, status))
+    await expect(createApiClient({ fetchImpl, onAuthenticationRequired: vi.fn() }).get('/teacher/read/', { retryPolicy: 'teacher-read' })).rejects.toMatchObject({ status })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
   it.each([
     ['2', 2],
     ['Thu, 15 Oct 2026 00:00:04 GMT', 4],

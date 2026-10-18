@@ -12289,6 +12289,109 @@ paths:
                       request_id:
                         type: string
           description: ''
+  /api/v1/teacher/courses/{course_id}/deletion-operations/:
+    post:
+      operationId: teacher_courses_deletion_operations_create
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResearchDeletionOperationInput'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResearchDeletionOperationInput'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResearchDeletionOperationInput'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ResearchDeletionOperation'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ResearchDeletionOperation'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+  /api/v1/teacher/courses/{course_id}/deletion-operations/{operation_id}/:
+    get:
+      operationId: teacher_courses_deletion_operations_retrieve
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: operation_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ResearchDeletionOperation'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
   /api/v1/teacher/courses/{course_id}/experiments/:
     get:
       operationId: teacher_experiment_list
@@ -15426,6 +15529,16 @@ components:
       description: |-
         * `create` - create
         * `reuse` - reuse
+    Action4a1Enum:
+      enum:
+      - delete_experiment
+      - remove_class_experiment
+      - delete_class
+      type: string
+      description: |-
+        * `delete_experiment` - delete_experiment
+        * `remove_class_experiment` - remove_class_experiment
+        * `delete_class` - delete_class
     ActionA44Enum:
       enum:
       - start
@@ -16932,6 +17045,9 @@ components:
     DataCenterPreparation:
       type: object
       properties:
+        status_checked_at:
+          type: string
+          format: date-time
         retry_after_seconds:
           type: integer
           maximum: 30
@@ -16996,6 +17112,7 @@ components:
       - stale
       - stale_count
       - state
+      - status_checked_at
       - total_count
       - updated_at
       - updating_count
@@ -17232,8 +17349,14 @@ components:
           type: integer
         member_count:
           type: integer
+        coverage_run_count:
+          type: integer
+        coverage_session_count:
+          type: integer
       required:
       - class_count
+      - coverage_run_count
+      - coverage_session_count
       - export_count
       - member_count
       - session_count
@@ -18945,7 +19068,7 @@ components:
           pattern: ^-?\d{0,12}(?:\.\d{0,8})?$
           nullable: true
         state:
-          $ref: '#/components/schemas/StateEnum'
+          $ref: '#/components/schemas/MetricValueStateEnum'
         sample_size:
           type: integer
           minimum: 0
@@ -18959,6 +19082,18 @@ components:
       - ratio
       - sample_size
       - state
+    MetricValueStateEnum:
+      enum:
+      - available
+      - no_data
+      - partial
+      - conflict
+      type: string
+      description: |-
+        * `available` - available
+        * `no_data` - no_data
+        * `partial` - partial
+        * `conflict` - conflict
     Mode567Enum:
       enum:
       - default
@@ -19259,8 +19394,9 @@ components:
           default: exclude_previous
         review_count:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -19284,13 +19420,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'
@@ -20713,10 +20851,38 @@ components:
           $ref: '#/components/schemas/ResearchDeletionCleanupStatusEnum'
         error:
           type: string
+        state:
+          $ref: '#/components/schemas/ResearchDeletionCleanupStateEnum'
+        attempts:
+          type: integer
+          minimum: 0
+        next_retry_at:
+          type: string
+          format: date-time
+          nullable: true
+        retained_count:
+          type: integer
+          minimum: 0
       required:
+      - attempts
       - cleanup_pending
       - error
+      - next_retry_at
+      - retained_count
+      - state
       - status
+    ResearchDeletionCleanupStateEnum:
+      enum:
+      - pending
+      - running
+      - completed
+      - failed
+      type: string
+      description: |-
+        * `pending` - pending
+        * `running` - running
+        * `completed` - completed
+        * `failed` - failed
     ResearchDeletionCleanupStatusEnum:
       enum:
       - pending
@@ -20728,6 +20894,9 @@ components:
     ResearchDeletionInput:
       type: object
       properties:
+        operation_id:
+          type: string
+          format: uuid
         confirmation:
           $ref: '#/components/schemas/ConfirmationF49Enum'
         confirmation_token:
@@ -20735,11 +20904,70 @@ components:
       required:
       - confirmation
       - confirmation_token
+    ResearchDeletionOperation:
+      type: object
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        state:
+          $ref: '#/components/schemas/ResearchDeletionOperationStateEnum'
+        execute_before:
+          type: string
+          format: date-time
+        result:
+          allOf:
+          - $ref: '#/components/schemas/ResearchDeletionResult'
+          nullable: true
+        error_code:
+          type: string
+        message:
+          type: string
+      required:
+      - error_code
+      - execute_before
+      - message
+      - operation_id
+      - result
+      - state
+    ResearchDeletionOperationInput:
+      type: object
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        action:
+          $ref: '#/components/schemas/Action4a1Enum'
+        object_id:
+          type: integer
+          minimum: 1
+        class_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        confirmation_token:
+          type: string
+      required:
+      - action
+      - class_id
+      - confirmation_token
+      - object_id
+      - operation_id
+    ResearchDeletionOperationStateEnum:
+      enum:
+      - pending
+      - succeeded
+      - rejected
+      type: string
+      description: |-
+        * `pending` - pending
+        * `succeeded` - succeeded
+        * `rejected` - rejected
     ResearchDeletionPreview:
       type: object
       properties:
         action:
-          $ref: '#/components/schemas/ResearchDeletionPreviewActionEnum'
+          $ref: '#/components/schemas/Action4a1Enum'
         object_id:
           type: integer
         object_name:
@@ -20765,19 +20993,12 @@ components:
       - experiments
       - object_id
       - object_name
-    ResearchDeletionPreviewActionEnum:
-      enum:
-      - delete_experiment
-      - remove_class_experiment
-      - delete_class
-      type: string
-      description: |-
-        * `delete_experiment` - delete_experiment
-        * `remove_class_experiment` - remove_class_experiment
-        * `delete_class` - delete_class
     ResearchDeletionResult:
       type: object
       properties:
+        operation_id:
+          type: string
+          format: uuid
         deleted:
           type: boolean
         cleanup_pending:
@@ -20790,6 +21011,7 @@ components:
       - cleanup_id
       - cleanup_pending
       - deleted
+      - operation_id
     ResultStateEnum:
       enum:
       - correct
@@ -21403,18 +21625,6 @@ components:
             minimum: 1
       required:
       - student_ids
-    StateEnum:
-      enum:
-      - available
-      - no_data
-      - partial
-      - conflict
-      type: string
-      description: |-
-        * `available` - available
-        * `no_data` - no_data
-        * `partial` - partial
-        * `conflict` - conflict
     Status525Enum:
       enum:
       - not_started
@@ -23962,8 +24172,9 @@ components:
           default: exclude_previous
         review_count:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         ordering_mode:
           $ref: '#/components/schemas/OrderingModeEnum'
         ordering_mode_label:
@@ -23987,13 +24198,15 @@ components:
           readOnly: true
         total_time_limit_minutes:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         per_question_time_limit_seconds:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
           nullable: true
         resume_mode:
           $ref: '#/components/schemas/ResumeModeEnum'

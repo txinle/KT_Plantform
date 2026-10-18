@@ -3,10 +3,15 @@ from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase
 
-from config.capture_timing import TIMING_ENV_KEY, WSGICaptureTiming, mark, should_log_timing, timing_fields
+from config.capture_timing import TIMING_ENV_KEY, WSGICaptureTiming, coarse_path, mark, should_log_timing, timing_fields
 
 
 class WSGICaptureTimingTests(SimpleTestCase):
+    def test_teacher_routes_redact_numeric_ids_uuid_and_query_values(self):
+        self.assertEqual(coarse_path(
+            "/api/v1/teacher/courses/31/deletion-operations/26d4ccae-b915-419e-ab86-4c87844fe34b/?token=PRIVATE"
+        ), "/api/v1/teacher/courses/:id/deletion-operations/:id/")
+
     def test_production_timing_forces_light_mode_and_preserves_response(self):
         environ = {'PATH_INFO': '/api/v1/student/tasks/35/start/'}
         start_response = Mock()

@@ -18,8 +18,41 @@ class DeploymentContractTests(TestCase):
     def test_compose_injects_application_environment_and_supports_host_proxy_port(self):
         compose = (ROOT.parent / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")
 
-        self.assertEqual(compose.count("env_file: ../server/.env"), 5)
+        self.assertEqual(compose.count("env_file: ../server/.env"), 6)
         self.assertIn('"${HTTP_PORT:-80}:80"', compose)
+
+    def test_artifact_cleanup_has_a_dedicated_persistent_worker_in_every_runtime(self):
+        import yaml
+        loader = type("CleanupComposeLoader", (yaml.SafeLoader,), {})
+        def tagged(loader, node):
+            if isinstance(node, yaml.MappingNode):
+                return loader.construct_mapping(node, deep=True)
+            return loader.construct_sequence(node, deep=True)
+        for tag in ("!override", "!reset"):
+            loader.add_constructor(tag, tagged)
+        def compose(name):
+            return yaml.load((ROOT.parent / "deploy" / name).read_text(encoding="utf-8"), Loader=loader)["services"]
+        base = yaml.safe_load((ROOT.parent / "deploy/docker-compose.yml").read_text(encoding="utf-8"))["services"]
+        worker = base["artifact-cleanup-worker"]
+        self.assertEqual(worker["command"], ["python", "manage.py", "run_research_artifact_cleanups"])
+        self.assertIn("media_data:/app/media", worker["volumes"])
+        self.assertEqual(worker["env_file"], "../server/.env")
+        self.assertEqual(worker["restart"], "unless-stopped")
+        school = compose("docker-compose.school.yml")["artifact-cleanup-worker"]
+        self.assertEqual(school["environment"]["POSTGRES_POOL_ALIAS"], "kt_background")
+        self.assertEqual(school["mem_limit"], "256M")
+        self.assertEqual(school["deploy"]["replicas"], 1)
+        self.assertIn("media_data:/app/media", school["volumes"])
+        test_env = compose("docker-compose.school-test.yml")["artifact-cleanup-worker"]
+        self.assertEqual(test_env["env_file"], ["school-test.env"])
+        self.assertEqual(test_env["environment"]["POSTGRES_DB"], "kt_e2e")
+        bounded = compose("docker-compose.student-concurrency.yml")["artifact-cleanup-worker"]
+        self.assertEqual(bounded["cgroup_parent"], "ktconcurrency.slice")
+        for name in ("docker-compose.student-entry-sharing.yml", "docker-compose.student-capacity.yml"):
+            service = compose(name)["artifact-cleanup-worker"]
+            environment = worker["environment"] | school["environment"] | service["environment"]
+            self.assertEqual(environment["DATABASE_CONN_MAX_AGE"], 0)
+            self.assertIn("SCHOOL_POOL_PROFILE", environment)
 
     def test_scheduler_and_web_share_persistent_export_storage(self):
         compose = (ROOT.parent / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")

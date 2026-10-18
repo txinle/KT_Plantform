@@ -8,11 +8,13 @@ from rest_framework.views import APIView
 
 from apps.accounts.course_access import accessible_courses, require_course_manager, require_writable_course
 from apps.accounts.models import DataPurgeRequest, User
-from apps.analytics.research_deletion import ARTIFACT_CLEANUP_SCOPE
+from apps.analytics.research_deletion import ARTIFACT_CLEANUP_SCOPE, cleanup_state
 from apps.api.exceptions import ApiConflict
 from apps.api.permissions import RolePermission
 
 from ..research_deletion import DeletionConflict, deletion_preview, execute_deletion
+from ..deletion_operations import execute_registered_deletion, operation_payload, register_deletion_operation
+from ..models import ResearchDeletionOperation
 
 
 class DeletionClassSerializer(serializers.Serializer):
@@ -37,6 +39,8 @@ class DeletionCountsSerializer(serializers.Serializer):
     session_count = serializers.IntegerField()
     export_count = serializers.IntegerField()
     member_count = serializers.IntegerField()
+    coverage_run_count = serializers.IntegerField()
+    coverage_session_count = serializers.IntegerField()
 
 
 class ResearchDeletionPreviewSerializer(serializers.Serializer):
@@ -51,11 +55,13 @@ class ResearchDeletionPreviewSerializer(serializers.Serializer):
 
 
 class ResearchDeletionInputSerializer(serializers.Serializer):
+    operation_id = serializers.UUIDField(required=False)
     confirmation = serializers.ChoiceField(choices=["delete"])
     confirmation_token = serializers.CharField()
 
 
 class ResearchDeletionResultSerializer(serializers.Serializer):
+    operation_id = serializers.UUIDField()
     deleted = serializers.BooleanField()
     cleanup_pending = serializers.BooleanField()
     cleanup_id = serializers.UUIDField(allow_null=True)
@@ -65,6 +71,10 @@ class ResearchDeletionCleanupSerializer(serializers.Serializer):
     cleanup_pending = serializers.BooleanField()
     status = serializers.ChoiceField(choices=["pending", "completed"])
     error = serializers.CharField(allow_blank=True)
+    state = serializers.ChoiceField(choices=['pending', 'running', 'completed', 'failed'])
+    attempts = serializers.IntegerField(min_value=0)
+    next_retry_at = serializers.DateTimeField(allow_null=True)
+    retained_count = serializers.IntegerField(min_value=0)
 
 
 class ResearchDeletionView(APIView):
@@ -86,17 +96,75 @@ class ResearchDeletionView(APIView):
 
     @extend_schema(request=ResearchDeletionInputSerializer, responses=ResearchDeletionResultSerializer)
     def post(self, request, **kwargs):
-        context = self.context(request, **kwargs)
-        require_writable_course(context["course"])
+        course = get_object_or_404(accessible_courses(request.user), pk=kwargs['course_id'])
+        require_course_manager(course, request.user)
         serializer = ResearchDeletionInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if 'operation_id' not in serializer.validated_data:
+            raise ApiConflict('请刷新页面并重新预览确认删除范围。', code='DELETION_PREVIEW_REQUIRED')
         try:
-            data = execute_deletion(request=request, confirmation_token=serializer.validated_data["confirmation_token"], **context)
+            data = execute_registered_deletion(request=request, course=course, action=self.action,
+                object_id=kwargs.get('experiment_id') or kwargs.get('class_id'), class_id=kwargs.get('class_id'),
+                **{key: serializer.validated_data[key] for key in ('operation_id', 'confirmation_token')})
         except DeletionConflict as exc:
-            raise ApiConflict("；".join(exc.messages), code="DELETION_SCOPE_CHANGED") from exc
+            raise ApiConflict("；".join(exc.messages), code=exc.code) from exc
         except DjangoValidationError as exc:
             raise ValidationError(exc.messages) from exc
         return Response(ResearchDeletionResultSerializer(data).data)
+
+
+class ResearchDeletionOperationInputSerializer(serializers.Serializer):
+    operation_id = serializers.UUIDField()
+    action = serializers.ChoiceField(choices=['delete_experiment', 'remove_class_experiment', 'delete_class'])
+    object_id = serializers.IntegerField(min_value=1)
+    class_id = serializers.IntegerField(min_value=1, allow_null=True)
+    confirmation_token = serializers.CharField()
+
+    def validate(self, attrs):
+        if attrs['action'] == 'delete_class' and attrs['class_id'] not in (None, attrs['object_id']):
+            raise serializers.ValidationError({'class_id': '班级与删除目标不一致。'})
+        if attrs['action'] == 'remove_class_experiment' and attrs['class_id'] is None:
+            raise serializers.ValidationError({'class_id': '请选择班级。'})
+        if attrs['action'] == 'delete_experiment' and attrs['class_id'] is not None:
+            raise serializers.ValidationError({'class_id': '删除整个实验不能限定班级。'})
+        return attrs
+
+
+class ResearchDeletionOperationSerializer(serializers.Serializer):
+    operation_id = serializers.UUIDField()
+    state = serializers.ChoiceField(choices=['pending', 'succeeded', 'rejected'])
+    execute_before = serializers.DateTimeField()
+    result = ResearchDeletionResultSerializer(allow_null=True)
+    error_code = serializers.CharField(allow_blank=True)
+    message = serializers.CharField(allow_blank=True)
+
+
+class TeacherDeletionOperationCollectionView(APIView):
+    permission_classes = [RolePermission]
+    allowed_roles = (User.Role.TEACHER, User.Role.ADMIN)
+
+    @extend_schema(request=ResearchDeletionOperationInputSerializer, responses={200: ResearchDeletionOperationSerializer, 201: ResearchDeletionOperationSerializer})
+    def post(self, request, course_id):
+        course = get_object_or_404(accessible_courses(request.user), pk=course_id)
+        serializer = ResearchDeletionOperationInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            operation, created = register_deletion_operation(course=course, actor=request.user, **serializer.validated_data)
+        except DeletionConflict as error:
+            raise ApiConflict('；'.join(error.messages), code=error.code) from error
+        return Response(ResearchDeletionOperationSerializer(operation_payload(operation)).data, status=201 if created else 200)
+
+
+class TeacherDeletionOperationDetailView(APIView):
+    permission_classes = [RolePermission]
+    allowed_roles = (User.Role.TEACHER, User.Role.ADMIN)
+
+    @extend_schema(responses=ResearchDeletionOperationSerializer)
+    def get(self, request, course_id, operation_id):
+        course = get_object_or_404(accessible_courses(request.user), pk=course_id)
+        require_course_manager(course, request.user)
+        operation = get_object_or_404(ResearchDeletionOperation, pk=operation_id, course=course, actor=request.user)
+        return Response(ResearchDeletionOperationSerializer(operation_payload(operation)).data)
 
 
 class TeacherExperimentDeletionView(ResearchDeletionView):
@@ -121,6 +189,6 @@ class TeacherDeletionCleanupView(APIView):
         require_course_manager(course, request.user)
         cleanup = get_object_or_404(DataPurgeRequest, purge_request_id=cleanup_id,
             scope_type=ARTIFACT_CLEANUP_SCOPE, scope_definition__course_id=course_id)
-        pending = cleanup.status != DataPurgeRequest.Status.EXECUTED
-        return Response(ResearchDeletionCleanupSerializer({"cleanup_pending": pending,
-            "status": "pending" if pending else "completed", "error": cleanup.result_counts.get("error", "")}).data)
+        state = cleanup_state(cleanup.purge_request_id)
+        return Response(ResearchDeletionCleanupSerializer({**state,
+            'status': 'pending' if state['cleanup_pending'] else 'completed'}).data)

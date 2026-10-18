@@ -1,6 +1,7 @@
 from apps.api.test_support import domain_payload
 from django.test import Client, TestCase
 from django.urls import reverse
+from uuid import uuid4
 
 from apps.audit.models import AuditLog
 
@@ -23,6 +24,19 @@ class ClassDeletionTests(TestCase):
             course=self.course, owner=self.owner, name="空班级", academic_year="2026"
         )
 
+    def _confirmed_delete(self, url):
+        token = domain_payload(self.client.get(url))["confirmation_token"]
+        operation_id = str(uuid4())
+        registered = self.client.post(
+            f"/api/v1/teacher/courses/{self.course.pk}/deletion-operations/",
+            {"operation_id": operation_id, "action": "delete_class",
+             "object_id": self.class_group.pk, "class_id": self.class_group.pk,
+             "confirmation_token": token},
+        )
+        self.assertEqual(registered.status_code, 201)
+        return self.client.post(url, {"operation_id": operation_id,
+                                     "confirmation": "delete", "confirmation_token": token})
+
     def test_delete_requires_explicit_second_confirmation(self):
         self.client.force_login(self.owner)
         url = reverse("teacher-course-class-delete", args=[self.course.pk, self.class_group.pk])
@@ -36,7 +50,7 @@ class ClassDeletionTests(TestCase):
         self.client.force_login(self.collaborator)
         url = reverse("teacher-course-class-delete", args=[self.course.pk, self.class_group.pk])
 
-        response = self.client.post(url, {"confirmation": "delete", "confirmation_token": domain_payload(self.client.get(url))["confirmation_token"]})
+        response = self._confirmed_delete(url)
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(ClassGroup.objects.filter(pk=self.class_group.pk).exists())
@@ -56,7 +70,7 @@ class ClassDeletionTests(TestCase):
         self.client.force_login(self.owner)
         url = reverse("teacher-course-class-delete", args=[self.course.pk, self.class_group.pk])
 
-        response = self.client.post(url, {"confirmation": "delete", "confirmation_token": domain_payload(self.client.get(url))["confirmation_token"]})
+        response = self._confirmed_delete(url)
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(ClassGroup.objects.filter(pk=self.class_group.pk).exists())

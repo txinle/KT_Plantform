@@ -2122,6 +2122,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/deletion-operations/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_courses_deletion_operations_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/deletion-operations/{operation_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_courses_deletion_operations_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/experiments/": {
         parameters: {
             query?: never;
@@ -2791,6 +2823,13 @@ export interface components {
          */
         AccountActionEnum: "create" | "reuse";
         /**
+         * @description * `delete_experiment` - delete_experiment
+         *     * `remove_class_experiment` - remove_class_experiment
+         *     * `delete_class` - delete_class
+         * @enum {string}
+         */
+        Action4a1Enum: "delete_experiment" | "remove_class_experiment" | "delete_class";
+        /**
          * @description * `start` - start
          *     * `resume` - resume
          * @enum {string}
@@ -3349,6 +3388,8 @@ export interface components {
             history_url: string;
         };
         DataCenterPreparation: {
+            /** Format: date-time */
+            status_checked_at: string;
             retry_after_seconds?: number;
             state: string;
             message: string;
@@ -3453,6 +3494,8 @@ export interface components {
             session_count: number;
             export_count: number;
             member_count: number;
+            coverage_run_count: number;
+            coverage_session_count: number;
         };
         DeletionExperiment: {
             id: number;
@@ -4106,10 +4149,18 @@ export interface components {
             denominator: string;
             /** Format: decimal */
             ratio: string | null;
-            state: components["schemas"]["StateEnum"];
+            state: components["schemas"]["MetricValueStateEnum"];
             sample_size: number | null;
             percent_display: string;
         };
+        /**
+         * @description * `available` - available
+         *     * `no_data` - no_data
+         *     * `partial` - partial
+         *     * `conflict` - conflict
+         * @enum {string}
+         */
+        MetricValueStateEnum: "available" | "no_data" | "partial" | "conflict";
         /**
          * @description * `default` - default
          *     * `custom` - custom
@@ -4237,6 +4288,7 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label?: string;
@@ -4247,7 +4299,9 @@ export interface components {
             readonly feedback_release_policy_label?: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label?: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label?: string;
@@ -4756,7 +4810,20 @@ export interface components {
             cleanup_pending: boolean;
             status: components["schemas"]["ResearchDeletionCleanupStatusEnum"];
             error: string;
+            state: components["schemas"]["ResearchDeletionCleanupStateEnum"];
+            attempts: number;
+            /** Format: date-time */
+            next_retry_at: string | null;
+            retained_count: number;
         };
+        /**
+         * @description * `pending` - pending
+         *     * `running` - running
+         *     * `completed` - completed
+         *     * `failed` - failed
+         * @enum {string}
+         */
+        ResearchDeletionCleanupStateEnum: "pending" | "running" | "completed" | "failed";
         /**
          * @description * `pending` - pending
          *     * `completed` - completed
@@ -4764,11 +4831,38 @@ export interface components {
          */
         ResearchDeletionCleanupStatusEnum: "pending" | "completed";
         ResearchDeletionInput: {
+            /** Format: uuid */
+            operation_id?: string;
             confirmation: components["schemas"]["ConfirmationF49Enum"];
             confirmation_token: string;
         };
+        ResearchDeletionOperation: {
+            /** Format: uuid */
+            operation_id: string;
+            state: components["schemas"]["ResearchDeletionOperationStateEnum"];
+            /** Format: date-time */
+            execute_before: string;
+            result: components["schemas"]["ResearchDeletionResult"] | null;
+            error_code: string;
+            message: string;
+        };
+        ResearchDeletionOperationInput: {
+            /** Format: uuid */
+            operation_id: string;
+            action: components["schemas"]["Action4a1Enum"];
+            object_id: number;
+            class_id: number | null;
+            confirmation_token: string;
+        };
+        /**
+         * @description * `pending` - pending
+         *     * `succeeded` - succeeded
+         *     * `rejected` - rejected
+         * @enum {string}
+         */
+        ResearchDeletionOperationStateEnum: "pending" | "succeeded" | "rejected";
         ResearchDeletionPreview: {
-            action: components["schemas"]["ResearchDeletionPreviewActionEnum"];
+            action: components["schemas"]["Action4a1Enum"];
             object_id: number;
             object_name: string;
             allowed: boolean;
@@ -4777,14 +4871,9 @@ export interface components {
             counts: components["schemas"]["DeletionCounts"];
             confirmation_token: string;
         };
-        /**
-         * @description * `delete_experiment` - delete_experiment
-         *     * `remove_class_experiment` - remove_class_experiment
-         *     * `delete_class` - delete_class
-         * @enum {string}
-         */
-        ResearchDeletionPreviewActionEnum: "delete_experiment" | "remove_class_experiment" | "delete_class";
         ResearchDeletionResult: {
+            /** Format: uuid */
+            operation_id: string;
             deleted: boolean;
             cleanup_pending: boolean;
             /** Format: uuid */
@@ -5046,14 +5135,6 @@ export interface components {
         StandaloneStudentAssignmentInput: {
             student_ids: number[];
         };
-        /**
-         * @description * `available` - available
-         *     * `no_data` - no_data
-         *     * `partial` - partial
-         *     * `conflict` - conflict
-         * @enum {string}
-         */
-        StateEnum: "available" | "no_data" | "partial" | "conflict";
         /**
          * @description * `not_started` - 未开始
          *     * `in_progress` - 进行中
@@ -6068,6 +6149,7 @@ export interface components {
             sampling?: components["schemas"]["SamplingDefinition"];
             /** @default exclude_previous */
             cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            /** Format: int64 */
             review_count?: number;
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             readonly ordering_mode_label: string;
@@ -6078,7 +6160,9 @@ export interface components {
             readonly feedback_release_policy_label: string;
             time_mode?: components["schemas"]["TimeModeEnum"];
             readonly time_mode_label: string;
+            /** Format: int64 */
             total_time_limit_minutes?: number | null;
+            /** Format: int64 */
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
             readonly resume_mode_label: string;
@@ -14111,6 +14195,78 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["ResearchDeletionCleanup"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_courses_deletion_operations_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchDeletionOperationInput"];
+                "application/x-www-form-urlencoded": components["schemas"]["ResearchDeletionOperationInput"];
+                "multipart/form-data": components["schemas"]["ResearchDeletionOperationInput"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ResearchDeletionOperation"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ResearchDeletionOperation"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_courses_deletion_operations_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ResearchDeletionOperation"];
                         meta: {
                             request_id: string;
                         };

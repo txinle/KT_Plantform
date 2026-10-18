@@ -2,6 +2,7 @@ from apps.api.test_support import domain_payload
 import json
 from io import BytesIO
 from unittest.mock import patch
+from uuid import uuid4
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
@@ -479,12 +480,21 @@ class TeacherAccountManagementApiTests(TestCase):
         self.assertTrue(ClassStudentAnalyticsPolicy.objects.filter(pk=policy_pk).exists())
 
         preview = domain_payload(self.client.get(delete_url))
+        operation_id = str(uuid4())
+        registered = self.post_json(
+            f"/api/v1/teacher/courses/{self.course.pk}/deletion-operations/",
+            {"operation_id": operation_id, "action": "delete_class",
+             "object_id": self.other_class.pk, "class_id": self.other_class.pk,
+             "confirmation_token": preview["confirmation_token"]},
+        )
+        self.assertEqual(registered.status_code, 201)
         deleted = self.post_json(delete_url, {
+            "operation_id": operation_id,
             "confirmation": "delete", "confirmation_token": preview["confirmation_token"],
         })
 
         self.assertEqual(deleted.status_code, 200)
-        self.assertEqual(domain_payload(deleted), {"deleted": True, "cleanup_pending": False, "cleanup_id": None})
+        self.assertEqual(domain_payload(deleted), {"operation_id": operation_id, "deleted": True, "cleanup_pending": False, "cleanup_id": None})
         self.assertFalse(ClassGroup.objects.filter(pk=self.other_class.pk).exists())
         self.assertFalse(ClassStudentAnalyticsPolicy.objects.filter(pk=policy_pk).exists())
         self.assertTrue(AuditLog.objects.filter(action="class.delete").exists())

@@ -776,6 +776,11 @@ class TeacherDataCenterAdvancedView(APIView):
 
 
 class TeacherDataCenterAdvancedStudentSearchView(APIView):
+    scope_keys = (
+        "scope_version", "experiment_id", "experiment_ids", "version_mode", "version_id",
+        "class_id", "class_snapshot_id", "class_name", "condition_id", "session_status",
+        "attempt_status", "status", "started_from_utc", "started_before_utc",
+    )
     @extend_schema(
         operation_id="teacher_data_center_advanced_students_list",
         parameters=[
@@ -788,7 +793,7 @@ class TeacherDataCenterAdvancedStudentSearchView(APIView):
     )
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
-        scope = _scope_from_request(request, course)
+        scope = _scope_from_request(request, course, scope_keys=self.scope_keys)
         payload = materialized_student_search(course, scope, request.query_params.get("q"))
         return Response(DataCenterStudentSearchSerializer(payload).data)
 

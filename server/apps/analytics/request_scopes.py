@@ -31,8 +31,10 @@ _DATA_SCOPE_KEYS = (
 _LEGACY_SCOPE_KEYS = ("class_name", "student_number", "status")
 
 
-def _saved_scope(request, course, session_prefix, scope_type):
+def _saved_scope(request, course, session_prefix, scope_type, scope_keys=None):
     values = request.session.get(f"{session_prefix}:{course.pk}", {})
+    if scope_keys is not None:
+        values = {key: value for key, value in values.items() if key in scope_keys}
     if values:
         try:
             return scope_type.from_mapping(course, values)
@@ -43,14 +45,14 @@ def _saved_scope(request, course, session_prefix, scope_type):
                 request.session.pop(f"{prefix}:{course.pk}", None)
     return None
 
-def _scope_from_request(request, course):
+def _scope_from_request(request, course, *, scope_keys=None):
     temporary_values = {
         key: request.GET.get(key)
-        for key in (*_DATA_SCOPE_KEYS, *_LEGACY_SCOPE_KEYS)
+        for key in (scope_keys if scope_keys is not None else (*_DATA_SCOPE_KEYS, *_LEGACY_SCOPE_KEYS))
         if request.GET.get(key) not in (None, "")
     }
     if not temporary_values or set(temporary_values) <= {"search", "session_ref", "student_id", "session_id"}:
-        saved = _saved_scope(request, course, _DATA_SCOPE_SESSION_KEY, DataScope)
+        saved = _saved_scope(request, course, _DATA_SCOPE_SESSION_KEY, DataScope, scope_keys)
         if saved is None:
             teaching = _saved_scope(request, course, _TEACHING_SCOPE_SESSION_KEY, TeachingScope)
             saved = _research_scope_for_teaching(teaching) if teaching else DataScope.from_mapping(course, {})

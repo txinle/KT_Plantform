@@ -336,7 +336,7 @@ async function settleDurableEvidence(current) {
   throw new Error('Browser event, checkpoint or clock confirmation remains incomplete')
 }
 
-async function cleanupRuntime(current) {
+export async function cleanupRuntime(current) {
   if(current.row.role==='login' || current.record.final_status==='completed') return settleDurableEvidence(current)
   // Ordinary UI navigation runs the application close guard and its capture/lease protocol.
   await settleDurableEvidence(current)
@@ -373,7 +373,7 @@ async function setAnswer(page,value) {
   } else await input.fill(value??'')
 }
 
-async function login(current) {
+export async function login(current) {
   const began=current.clock(),clockDelta=began-performance.now()
   current.record.login_actual_monotonic_ms=began
   try {
@@ -390,7 +390,7 @@ async function login(current) {
   } finally {current.record.login_ms=current.clock()-current.record.login_actual_monotonic_ms}
 }
 
-async function startup(current) {
+export async function startup(current) {
   const began=current.clock()
   await current.start();current.record.startup_ms=current.clock()-began
   await current.settle()
@@ -399,7 +399,7 @@ async function startup(current) {
   current.record.manifest_verified=true
 }
 
-async function driveSchedule(current,plan,{preparation=false}={}) {
+export async function driveSchedule(current,plan,{preparation=false}={}) {
   const start=current.clock()
   if(preparation) current.record.preparation_save_samples=true
   const base=preparation || current.row.role==='full-flow'?start:current.release.release_monotonic*1000

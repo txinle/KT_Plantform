@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { getAuthenticationGeneration } from '@/app/bootstrap'
+import { ApiError } from '@/api/client'
 
 import Alert from '@/design-system/components/Alert.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
@@ -22,16 +24,18 @@ import {
   type DataQuery,
   type ResearchSession,
   type ResearchStudent,
+  type ResearchPreparation,
 } from './api'
 
 const route = useRoute()
 const router = useRouter()
-const courseId = Number(route.params.courseId)
+const courseId = computed(() => Number(route.params.courseId))
 const api = getTeacherDataCenterApi()
 const scopeRefresh = inject<Ref<number>>('teacher-data-scope-refresh', ref(0))
 
 const data = ref<DataCenterAdvanced>()
 const error = ref('')
+const cursorNotice = ref('')
 const loading = ref(false)
 const studentSearch = ref('')
 const showSuggestions = ref(false)
@@ -58,9 +62,65 @@ let statusInflight: { key: string; request: number; promise: Promise<void> } | u
 let statusController: AbortController | undefined
 let latestStatusRequest = 0
 const pages = new Map<string, DataCenterAdvanced>()
+const preparationSnapshots = new Map<string, ResearchPreparation>()
+let intent: { key: string; generation: number; query: DataQuery; courseId: number; reloaded: boolean } | undefined
+let generation = 0
 
 function queryKey(query: DataQuery) {
-  return JSON.stringify(Object.entries(query).filter(([, value]) => value != null).sort(([a], [b]) => a.localeCompare(b)))
+  return JSON.stringify(Object.entries(query).map(([key, raw]) => [key, Array.isArray(raw) ? raw[0] : raw])
+    .filter(([, value]) => value != null && value !== '').map(([key, value]) => [String(key), String(value)] as const)
+    .sort(([a], [b]) => a.localeCompare(b)))
+}
+
+function currentIntent(captured: NonNullable<typeof intent>) {
+  return !disposed && captured.generation === intent?.generation
+    && captured.key === `${getAuthenticationGeneration()}:${courseId.value}:` + queryKey(routeQuery(route.query))
+}
+
+function clearPages() {
+  pages.clear()
+  preparationSnapshots.clear()
+}
+
+function cancelStudentSearch() {
+  latestStudentRequest += 1
+  if (studentTimer) clearTimeout(studentTimer)
+  studentTimer = undefined
+  studentController?.abort()
+  studentSearchLoading.value = false
+  studentSearchError.value = ''
+  remoteStudents.value = []
+}
+
+function enterIntent(query: DataQuery) {
+  const namespace = `${getAuthenticationGeneration()}:${courseId.value}:`
+  const key = namespace + queryKey(query)
+  if (intent?.key === key) return intent
+  latestRequest += 1
+  latestStatusRequest += 1
+  dataController?.abort()
+  statusController?.abort()
+  dataInflight = undefined
+  statusInflight = undefined
+  cancelStudentSearch()
+  if (pollTimer) clearTimeout(pollTimer)
+  pollTimer = undefined
+  pollAttempts = 0
+  pollStartedAt = undefined
+  pollingStopped = false
+  const scope = namespace + scopeKey(query)
+  if (loadedScope !== scope) {
+    loadedScope = scope
+    loadedVersion = undefined
+    clearPages()
+    data.value = undefined
+    pendingStudent.value = undefined
+    studentSearch.value = ''
+  }
+  loading.value = false
+  error.value = ''
+  intent = { key, query: { ...query }, generation: ++generation, courseId: courseId.value, reloaded: false }
+  return intent
 }
 
 function scopeKey(query: DataQuery) {
@@ -196,25 +256,18 @@ function applyData(result: DataCenterAdvanced) {
 }
 
 function load(query = routeQuery(route.query), force = false): Promise<void> {
-  const key = queryKey(query)
-  const scope = scopeKey(query)
+  const captured = enterIntent(query)
+  const key = captured.key
   if (dataInflight?.key === key) return dataInflight.promise
   if (pollTimer) clearTimeout(pollTimer)
   pollTimer = undefined
-  if (loadedScope !== scope) {
-    loadedScope = scope
-    loadedVersion = undefined
-    pages.clear()
-    data.value = undefined
-    pollAttempts = 0
-    pollStartedAt = undefined
-    pollingStopped = false
-    latestStatusRequest += 1
-    statusController?.abort()
-  }
   const cached = pages.get(key)
-  if (!force && cached && cached.preparation?.result_version === loadedVersion) {
-    applyData(cached)
+  if (!force && cached && (query.cursor ? !!cached.preview?.cursor?.result_version : cached.preparation?.result_version === loadedVersion)) {
+    pages.delete(key)
+    pages.set(key, cached)
+    applyData(preparationSnapshots.has(key) ? { ...cached, preparation: preparationSnapshots.get(key) } : cached)
+    loading.value = false
+    schedulePoll()
     return Promise.resolve()
   }
   const request = ++latestRequest
@@ -225,22 +278,33 @@ function load(query = routeQuery(route.query), force = false): Promise<void> {
   loading.value = true
   const promise = (async () => {
     try {
-      const result = await api.advanced(courseId, query, signal)
-      if (disposed || request !== latestRequest) return
+      const result = await api.advanced(captured.courseId, captured.query, signal)
+      if (!currentIntent(captured) || request !== latestRequest) return
       if (loadedVersion && result.preparation?.result_version !== loadedVersion && Number(query.page || 1) > 1 && !query.cursor) {
-        pages.clear()
+        clearPages()
         loadedVersion = result.preparation?.result_version
         await go({ page: undefined, cursor: undefined })
         return
       }
-      if (loadedVersion !== result.preparation?.result_version) pages.clear()
+      if (loadedVersion !== result.preparation?.result_version && !query.cursor) clearPages()
+      preparationSnapshots.delete(key)
       applyData(result)
       pages.set(key, result)
-      if (pages.size > 8) pages.delete(pages.keys().next().value!)
+      if (pages.size > 8) {
+        const oldest = pages.keys().next().value!
+        pages.delete(oldest)
+        preparationSnapshots.delete(oldest)
+      }
     } catch (caught) {
-      if (request === latestRequest && !isAbortError(caught)) error.value = caught instanceof Error ? caught.message : '研究数据预览加载失败。'
+      if (currentIntent(captured) && request === latestRequest && query.cursor
+          && caught instanceof ApiError && caught.code === 'BEHAVIOR_CURSOR_VERSION_CHANGED') {
+        cursorNotice.value = '行为分页版本已更新，已返回第一页，请重新选择分页。'
+        await go({ cursor: undefined, page: undefined })
+        return
+      }
+      if (currentIntent(captured) && request === latestRequest && !isAbortError(caught)) error.value = caught instanceof Error ? caught.message : '研究数据预览加载失败。'
     } finally {
-      if (request === latestRequest) {
+      if (currentIntent(captured) && request === latestRequest) {
         loading.value = false
         schedulePoll()
       }
@@ -253,7 +317,17 @@ function load(query = routeQuery(route.query), force = false): Promise<void> {
 
 function checkStatus(manual = false): Promise<void> {
   const query = routeQuery(route.query)
-  const key = queryKey(query)
+  const captured = enterIntent(query)
+  const key = captured.key
+  if (manual && ['questions', 'knowledge_points', 'question_kc_mapping'].includes(String(query.table || data.value?.selected_table.key))) {
+    for (const [cacheKey, page] of pages) {
+      if (page.course.id === captured.courseId && ['questions', 'knowledge_points', 'question_kc_mapping'].includes(page.selected_table.key)) {
+        pages.delete(cacheKey)
+        preparationSnapshots.delete(cacheKey)
+      }
+    }
+    return load(query, true)
+  }
   if (statusInflight?.key === key) return statusInflight.promise
   if (!data.value?.preparation) return manual ? load(query, true) : Promise.resolve()
   const request = ++latestStatusRequest
@@ -263,25 +337,30 @@ function checkStatus(manual = false): Promise<void> {
   error.value = ''
   const promise = (async () => {
     try {
-      const result = await api.advancedStatus(courseId, query, signal)
-      if (disposed || request !== latestStatusRequest || scopeKey(query) !== loadedScope || (!manual && pollingStopped)) return
-      if (data.value) data.value.preparation = result.preparation
-      if (result.preparation.state === 'failed') { stopPolling(); return }
-      if ((manual && result.preparation.result_version !== loadedVersion) || (!manual && result.preparation.state === 'ready')) {
-        pages.clear()
+      const result = await api.advancedStatus(captured.courseId, captured.query, signal)
+      if (!currentIntent(captured) || request !== latestStatusRequest || (!manual && pollingStopped)) return
+      const hadReadable = !!loadedVersion && (data.value?.preparation?.ready_count || 0) > 0
+      preparationSnapshots.set(key, result.preparation)
+      if (data.value) data.value = { ...data.value, preparation: result.preparation }
+      const firstReadable = !hadReadable && result.preparation.ready_count > 0 && !!result.preparation.result_version && !captured.reloaded
+      if ((manual && result.preparation.result_version !== loadedVersion) || (!manual && firstReadable)) {
+        captured.reloaded = true
+        stopPolling()
+        clearPages()
         if (Number(query.page || 1) > 1 || query.cursor) {
           loadedVersion = result.preparation.result_version
           await go({ page: undefined, cursor: undefined })
         } else await load(query, true)
       }
+      if (result.preparation.state === 'failed' || result.preparation.ready_count > 0) stopPolling()
     } catch (caught) {
-      if (request === latestStatusRequest && !isAbortError(caught)) {
+      if (currentIntent(captured) && request === latestStatusRequest && !isAbortError(caught)) {
         error.value = caught instanceof Error ? caught.message : '研究数据状态查询失败。'
         stopPolling()
       }
     } finally {
       if (statusInflight?.request === request) statusInflight = undefined
-      if (request === latestStatusRequest && !manual) schedulePoll()
+      if (currentIntent(captured) && request === latestStatusRequest && !manual) schedulePoll()
     }
   })()
   statusInflight = { key, request, promise }
@@ -293,6 +372,8 @@ function isAbortError(caught: unknown) {
 }
 
 async function searchStudents(search: string) {
+  const captured = intent
+  if (!captured) return
   const request = ++latestStudentRequest
   studentController?.abort()
   studentController = new AbortController()
@@ -300,18 +381,18 @@ async function searchStudents(search: string) {
   studentSearchLoading.value = true
   try {
     const result = await api.advancedStudents(
-      courseId,
-      { ...routeQuery(route.query), q: search },
+      captured.courseId,
+      { ...captured.query, q: search },
       studentController.signal,
     )
-    if (request === latestStudentRequest) remoteStudents.value = result.items
+    if (currentIntent(captured) && request === latestStudentRequest) remoteStudents.value = result.items
   } catch (caught) {
-    if (request === latestStudentRequest && !isAbortError(caught)) {
+    if (currentIntent(captured) && request === latestStudentRequest && !isAbortError(caught)) {
       remoteStudents.value = []
       studentSearchError.value = caught instanceof Error ? caught.message : '学生搜索失败。'
     }
   } finally {
-    if (request === latestStudentRequest) studentSearchLoading.value = false
+    if (currentIntent(captured) && request === latestStudentRequest) studentSearchLoading.value = false
   }
 }
 
@@ -328,9 +409,7 @@ function scheduleStudentSearch() {
 }
 
 async function selectStudent(student: ResearchStudent) {
-  latestStudentRequest += 1
-  if (studentTimer) clearTimeout(studentTimer)
-  studentController?.abort()
+  cancelStudentSearch()
   pendingStudent.value = student
   studentSearch.value = studentLabel(student)
   showSuggestions.value = false
@@ -398,8 +477,8 @@ watch(
 )
 
 watch(
-  () => route.query,
-  (query) => { void load(routeQuery(query)) },
+  () => [route.params.courseId, getAuthenticationGeneration(), route.query] as const,
+  () => { void load(routeQuery(route.query)) },
   { deep: true, immediate: true },
 )
 
@@ -420,6 +499,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <Alert v-if="cursorNotice" tone="info">{{ cursorNotice }}</Alert>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <p v-if="loading && !data" class="kt-research-loading" role="status">正在加载研究数据…</p>
   <p v-else-if="loading" class="kt-research-loading" role="status" aria-busy="true">正在刷新研究数据…</p>
@@ -438,6 +518,7 @@ onBeforeUnmount(() => {
     >
       <strong>研究数据状态：</strong>{{ data.preparation.message }}
     </Alert>
+    <p v-if="data.preparation?.status_checked_at" data-testid="preparation-sampled-at">截至 {{ formatTime(data.preparation.status_checked_at) }} 的状态快照。</p>
     <header v-if="view === 'overview'" class="kt-research-heading">
       <div>
         <p class="kt-research-kicker">实验数据</p>
