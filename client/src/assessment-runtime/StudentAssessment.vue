@@ -1594,15 +1594,12 @@ onBeforeUnmount(() => {
         <div class="kt-assessment-topbar__countdown" data-assessment-countdown>
           <span v-if="secondsRemaining !== null" role="timer" aria-live="off">剩余 {{ timerLabel(secondsRemaining) }}</span>
           <span v-else>不限时</span>
+          <p class="kt-assessment-save-status" role="status" data-save-status>{{ saveStatus }}</p>
         </div>
         <div class="kt-assessment-topbar__status">
           <div class="kt-assessment-topbar__student" data-assessment-student>
             <strong>姓名：{{ assessmentUser?.display_name || '未提供' }}</strong>
             <span>学号：{{ assessmentUser?.student_number || '未提供' }}</span>
-          </div>
-          <div class="kt-assessment-topbar__meta">
-            <a href="/password/change/">修改密码</a>
-            <p class="kt-assessment-save-status" role="status" data-save-status>{{ saveStatus }}</p>
           </div>
         </div>
       </header>

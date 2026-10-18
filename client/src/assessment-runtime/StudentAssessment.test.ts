@@ -198,6 +198,8 @@ describe('StudentAssessment', () => {
       const header = wrapper.get('[data-assessment-topbar]')
       expect(header.get('[data-assessment-student]').text()).toContain('测试学生')
       expect(header.get('[data-assessment-student]').text()).toContain('20260001')
+      expect(header.find('a[href="/password/change/"]').exists()).toBe(false)
+      expect(header.get('[data-assessment-countdown] [data-save-status]').text()).toBe('尚未保存')
       expect(header.get('[data-assessment-countdown] [role="timer"]').text()).toContain('10:00')
       await vi.advanceTimersByTimeAsync(1000)
       expect(header.get('[data-assessment-countdown] [role="timer"]').text()).toContain('09:59')
@@ -217,7 +219,7 @@ describe('StudentAssessment', () => {
     const wrapper = mount(StudentAssessment)
     try {
       await flushPromises()
-      expect(wrapper.get('[data-assessment-countdown]').text()).toBe('不限时')
+      expect(wrapper.get('[data-assessment-countdown] > span').text()).toBe('不限时')
       expect(wrapper.find('[role="timer"]').exists()).toBe(false)
       expect(wrapper.get('[data-assessment-student]').text()).toContain('学号：未提供')
       expect(wrapper.get('[data-assessment-student]').text()).not.toContain('not-a-student-number')
