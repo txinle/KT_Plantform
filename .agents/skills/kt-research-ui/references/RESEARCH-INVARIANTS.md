@@ -7,6 +7,7 @@ Read this file before changing UI code that can affect navigation, drafts, submi
 - `last_opened_at` is the server time of the last successful entry before formal submission.
 - Draft autosave must never create a formal submission.
 - Raw behavioral evidence is append-only; draft saving, content reuse and conflict resolution cannot replace or delete transitions. Capture-v2 records each confirmed state, including empty states, before asynchronous transport.
+- Sessions bound to `capture-v2-stable-input-v1` record text states after 1000 ms without input or at an explicit boundary, with one linked burst-summary input operation per transition. Continuous input has no periodic state snapshots. Empty states and returns to earlier content remain separate transitions. Existing `capture-v2` sessions keep every confirmed-transition semantics; an unopened prepared session is already bound and must not switch contracts.
 - Rendering, first interaction, first nonempty answer, formal submission and feedback exposure are distinct observations. Initialization and restored state are not student actions.
 - `submitted_at` is the server time at which the database transaction succeeds.
 - Lock answers after formal submission.

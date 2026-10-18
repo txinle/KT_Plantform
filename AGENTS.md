@@ -3,11 +3,11 @@
 ## Product and architecture boundaries
 
 - For UI audits or interface changes, use `$kt-research-ui` from `.agents/skills/kt-research-ui/` first. Treat `.agents/skills/kt-research-ui/references/RESEARCH-INVARIANTS.md` as mandatory.
-- The target architecture is a Django 5.2 modular monolith with DRF plus a progressive Vue 3 + TypeScript + Vite frontend. Keep authoritative domain logic in Django services.
-- Migrate modules on their existing business URLs. Use server-side module kill switches and Course/User allowlists; do not create a permanent `/app` route or an Nginx SPA fallback.
-- Vue Router may handle only migrated module routes. Navigation to an unmigrated page must perform a normal document navigation to Django.
-- Do not introduce microservices, JWT, GraphQL, Kubernetes, Tailwind, or a full-site SPA rewrite without an approved product need.
-- Preserve Django Templates, Bootstrap 5.3, native CSS/JavaScript, and existing URLs until each migrated module satisfies its explicit legacy-exit criteria.
+- The current architecture is a Django 5.2 modular monolith with DRF in `server/` and an independently built Vue 3 + TypeScript + Vite frontend in `client/`. Keep authoritative domain logic in Django services. Follow the independent frontend section in README and `contracts/frontend-routes.json`.
+- Preserve existing business URLs. The local Node gateway and production Nginx serve frontend HTML only for registered GET/HEAD page routes. APIs, authentication writes, downloads, and `/admin/` remain with Django. Unknown API and page paths must not receive frontend HTML; do not introduce a permanent `/app` route or a blanket SPA fallback.
+- Implement business-page navigation in Vue using registered page routes. Django retains page URL names for reverse resolution, not business-page rendering. Use document navigation for backend downloads and `/admin/`; do not restore mixed Vue/template navigation.
+- Do not introduce microservices, JWT, GraphQL, Kubernetes, or Tailwind without an approved product need.
+- Business templates, legacy form entrypoints, and page-rendering feature flags are retired; do not recreate template fallbacks or duplicate UI implementations. Preserve assessment contracts, historical hashed assets, versioned assessment shells, and unconfirmed browser materials during frontend updates and rollback.
 
 ## A+ experiment invariants
 
