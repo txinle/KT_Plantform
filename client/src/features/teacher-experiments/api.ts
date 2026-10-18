@@ -133,6 +133,12 @@ export function createTeacherExperimentApi(client: ApiClient) {
         { method: 'POST' },
       )
     },
+    restore(courseId: number, experimentId: number) {
+      return client.mutate<TeacherExperiment>(
+        `/api/v1/teacher/courses/${courseId}/experiments/${experimentId}/restore/`,
+        { method: 'POST' },
+      )
+    },
     detail(courseId: number, experimentId: number) {
       return client.get<TeacherExperiment>(
         `/api/v1/teacher/courses/${courseId}/experiments/${experimentId}/`,

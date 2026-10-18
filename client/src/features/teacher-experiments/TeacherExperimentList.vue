@@ -27,6 +27,7 @@ const deletionTarget = ref<DeletionTarget>()
 const archiveTarget = ref<TeacherExperiment>()
 const archiving = ref(false)
 const archiveError = ref('')
+const restoringId = ref<number>()
 const canManage = computed(() => collection.value?.capabilities.can_manage === true)
 
 function statusTone(status: string) {
@@ -79,6 +80,18 @@ async function afterDeletion() {
   }
 }
 
+async function restore(experiment: TeacherExperiment) {
+  if (restoringId.value !== undefined) return
+  restoringId.value = experiment.id
+  error.value = ''
+  try {
+    await api.restore(courseId, experiment.id)
+    await navigate(1)
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '恢复失败，请重试。'
+  } finally { restoringId.value = undefined }
+}
+
 onMounted(() => load())
 </script>
 
@@ -123,6 +136,7 @@ onMounted(() => load())
             <td>{{ new Date(experiment.updated_at).toLocaleString('zh-CN') }}</td>
             <td v-if="canManage">
               <div class="kt-inline-actions">
+                <button v-if="experiment.can_restore" class="kt-text-button" type="button" :data-restore-experiment="experiment.id" :disabled="restoringId !== undefined" @click="restore(experiment)">{{ restoringId === experiment.id ? '恢复中…' : '恢复' }}</button>
                 <button v-if="experiment.can_archive" class="kt-text-button" type="button" :data-archive-experiment="experiment.id" @click="requestArchive(experiment)">归档</button>
                 <button class="kt-text-button kt-text-button--danger" type="button" :data-delete-experiment="experiment.id" @click="deletionTarget = { kind: 'experiment', experimentId: experiment.id }">删除</button>
               </div>
@@ -145,6 +159,7 @@ onMounted(() => load())
           <div><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}</dd></div>
         </dl>
         <div v-if="canManage" class="kt-inline-actions">
+          <button v-if="experiment.can_restore" class="kt-text-button" type="button" :data-restore-experiment="experiment.id" :disabled="restoringId !== undefined" @click="restore(experiment)">{{ restoringId === experiment.id ? '恢复中…' : '恢复实验' }}</button>
           <button v-if="experiment.can_archive" class="kt-text-button" type="button" :data-archive-experiment="experiment.id" @click="requestArchive(experiment)">归档实验</button>
           <button class="kt-text-button kt-text-button--danger" type="button" :data-delete-experiment="experiment.id" @click="deletionTarget = { kind: 'experiment', experimentId: experiment.id }">删除实验</button>
         </div>

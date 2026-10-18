@@ -12780,6 +12780,44 @@ paths:
                       request_id:
                         type: string
           description: ''
+  /api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/restore/:
+    post:
+      operationId: teacher_courses_experiments_restore_create
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/TeacherExperiment'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
   /api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/results/resolve/:
     get:
       operationId: teacher_courses_experiments_results_resolve_retrieve
@@ -19499,6 +19537,9 @@ components:
         can_archive:
           type: boolean
           readOnly: true
+        can_restore:
+          type: boolean
+          readOnly: true
         created_at:
           type: string
           format: date-time
@@ -24277,6 +24318,9 @@ components:
         can_archive:
           type: boolean
           readOnly: true
+        can_restore:
+          type: boolean
+          readOnly: true
         created_at:
           type: string
           format: date-time
@@ -24289,6 +24333,7 @@ components:
       - can_archive
       - can_edit
       - can_manage
+      - can_restore
       - confidence_mode_label
       - confidence_sampling_unit_label
       - created_at

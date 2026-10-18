@@ -128,6 +128,51 @@ class TeacherExperimentArchiveApiTests(TestCase):
         accept_research_consent(student)
         return task, student
 
+    def test_restore_returns_draft_to_its_previous_status_once(self):
+        self.assertEqual(self.client.post(self.url).status_code, 200)
+        restore_url = self.url.replace('/archive/', '/restore/')
+        response = self.client.post(restore_url)
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = domain_payload(response)
+        self.assertEqual(payload['status'], Experiment.Status.DRAFT)
+        self.assertFalse(payload['can_restore'])
+        self.assertTrue(payload['can_archive'])
+        self.experiment.refresh_from_db()
+        restored_at = self.experiment.updated_at
+        self.assertEqual(self.client.post(restore_url).status_code, 200)
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.updated_at, restored_at)
+        self.assertEqual(AuditLog.objects.filter(action='experiment.restore', object_id=str(self.experiment.pk)).count(), 1)
+
+    @patch('apps.assessment.prepared_services.prepare_participant', new=lambda *_args, **_kwargs: None)
+    def test_restore_preserves_frozen_release_and_class_task_facts(self):
+        task, _student = self.publish_fixture()
+        self.experiment.refresh_from_db()
+        original_status = self.experiment.status
+        version_id = self.experiment.frozen_release_snapshot_id
+        task_before = ClassExperimentTask.objects.filter(pk=task.pk).values().get()
+        self.assertEqual(self.client.post(self.url).status_code, 200)
+        self.assertTrue(domain_payload(self.client.get(self.url.removesuffix('archive/')))['can_restore'])
+        response = self.client.post(self.url.replace('/archive/', '/restore/'))
+        self.assertEqual(response.status_code, 200, response.content)
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.status, original_status)
+        self.assertEqual(self.experiment.frozen_release_snapshot_id, version_id)
+        self.assertEqual(ClassExperimentTask.objects.filter(pk=task.pk).values().get(), task_before)
+
+    def test_restore_respects_course_permissions_and_read_only_course(self):
+        self.assertEqual(self.client.post(self.url).status_code, 200)
+        restore_url = self.url.replace('/archive/', '/restore/')
+        stranger = User.objects.create_user(username='restore-stranger', role=User.Role.TEACHER)
+        self.client.force_login(stranger)
+        self.assertEqual(self.client.post(restore_url).status_code, 404)
+        self.client.force_login(self.teacher)
+        self.course.status = Course.Status.ARCHIVED
+        self.course.save(update_fields=['status'])
+        self.assertEqual(self.client.post(restore_url).status_code, 409)
+        self.experiment.refresh_from_db()
+        self.assertEqual(self.experiment.status, Experiment.Status.ARCHIVED)
+
     @patch("apps.assessment.prepared_services.prepare_participant", new=lambda *_args, **_kwargs: None)
     def test_frozen_archive_preserves_evidence_schedule_and_active_session_resume(self):
         task, student = self.publish_fixture()

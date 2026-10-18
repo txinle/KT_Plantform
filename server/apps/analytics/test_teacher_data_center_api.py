@@ -130,6 +130,22 @@ class TeacherDataCenterApiTests(TestCase):
         ))
         self.assertNotIn("password", str(payload))
 
+    def test_archived_experiments_are_hidden_from_data_scope_choices_and_return_after_restore(self):
+        from apps.experiments.services import archive_experiment
+        archive_experiment(course=self.course, experiment_id=self.experiment.pk, actor=self.teacher)
+        response = self.client.get(self.api('scope/'))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(self.experiment.pk, [item['id'] for item in domain_payload(response)['experiments']])
+        exports = self.client.get(self.api('exports/'))
+        self.assertEqual(exports.status_code, 200, exports.content)
+        self.assertNotIn(self.experiment.pk, [item['id'] for item in domain_payload(exports)['experiments']])
+        response = self.client.post(f'/api/v1/teacher/courses/{self.course.pk}/experiments/{self.experiment.pk}/restore/')
+        self.assertEqual(response.status_code, 200, response.content)
+        response = self.client.get(self.api('scope/'))
+        self.assertIn(self.experiment.pk, [item['id'] for item in domain_payload(response)['experiments']])
+        exports = self.client.get(self.api('exports/'))
+        self.assertIn(self.experiment.pk, [item['id'] for item in domain_payload(exports)['experiments']])
+
     def test_overview_accepts_click_selected_experiment_ids_and_preserves_multi_scope(self):
         other = Experiment.objects.create(course=self.course, created_by=self.teacher,
             question_bank=self.experiment.question_bank, name="另一实验")

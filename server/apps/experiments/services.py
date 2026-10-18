@@ -105,6 +105,32 @@ def archive_experiment(*, course, experiment_id, actor):
     return experiment
 
 
+@transaction.atomic
+def restore_experiment(*, course, experiment_id, actor):
+    course = lock_course(course.pk)
+    if not course.can_manage(actor, lock_teacher_link=True):
+        raise PermissionDenied
+    if course.status != Course.Status.ACTIVE:
+        raise ValidationError("课程已归档，不能恢复实验。", code="COURSE_READ_ONLY")
+    experiment = get_object_or_404(
+        Experiment.objects.select_for_update(), pk=experiment_id, course=course,
+    )
+    experiment.course = course
+    if experiment.status != Experiment.Status.ARCHIVED:
+        return experiment
+    archive = AuditLog.objects.filter(action='experiment.archive', object_type='Experiment',
+        object_id=str(experiment.pk)).order_by('-created_at', '-pk').first()
+    previous_status = archive.details.get('previous_status') if archive else None
+    if previous_status not in {value for value, _label in Experiment.Status.choices} - {Experiment.Status.ARCHIVED}:
+        previous_status = (Experiment.Status.FROZEN if experiment.frozen_release_snapshot_id
+                           or experiment.versions.exists() else Experiment.Status.DRAFT)
+    experiment.status = previous_status
+    experiment.save(update_fields=['status', 'updated_at'])
+    AuditLog.objects.create(actor=actor, action='experiment.restore', object_type='Experiment',
+        object_id=str(experiment.pk), details={'course_id': course.pk, 'restored_status': previous_status})
+    return experiment
+
+
 def delete_experiment(experiment):
     """Delete an experiment and its immutable research tree in dependency order."""
 

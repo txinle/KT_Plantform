@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const route = { params: { courseId: '7' }, query: { page: '2' } as Record<string, string> }
 const mocks = vi.hoisted(() => ({
   operationId: '',
-  api: { list: vi.fn(), archive: vi.fn() },
+  api: { list: vi.fn(), archive: vi.fn(), restore: vi.fn() },
   deletion: {
     previewExperiment: vi.fn(), deleteExperiment: vi.fn(),
     previewClassExperiment: vi.fn(), removeClassExperiment: vi.fn(),
@@ -135,5 +135,37 @@ describe('TeacherExperimentList deletion', () => {
     await flushPromises()
     expect(mocks.api.list).toHaveBeenLastCalledWith(7, 1)
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it('restores archived experiments through the server and returns to the first archived page', async () => {
+    route.query = { archived: '1', page: '2' }
+    mocks.api.list.mockResolvedValueOnce(collection([{ ...experiment, status: 'archived', can_restore: true }]))
+      .mockResolvedValueOnce(collection([], 1, 1))
+    mocks.api.restore.mockResolvedValue({ ...experiment, status: 'draft' })
+    const wrapper = mount(TeacherExperimentList)
+    await flushPromises()
+    expect(wrapper.findAll('[data-restore-experiment="13"]')).toHaveLength(2)
+    await wrapper.findAll('[data-restore-experiment="13"]')[0]!.trigger('click')
+    await flushPromises()
+    expect(mocks.api.restore).toHaveBeenCalledWith(7, 13)
+    expect(mocks.push).toHaveBeenCalledWith({ query: { archived: '1' } })
+    expect(mocks.api.list).toHaveBeenLastCalledWith(7, 1, true)
+    expect(mocks.deletion.deleteExperiment).not.toHaveBeenCalled()
+  })
+
+  it('keeps restoration failures visible and does not offer restoration without permission', async () => {
+    const wrapper = mount(TeacherExperimentList)
+    await flushPromises()
+    expect(wrapper.find('[data-restore-experiment]').exists()).toBe(false)
+    wrapper.unmount()
+    route.query = { archived: '1' }
+    mocks.api.list.mockResolvedValue(collection([{ ...experiment, status: 'archived', can_restore: true }]))
+    mocks.api.restore.mockRejectedValue(new Error('恢复失败，请重试'))
+    const archived = mount(TeacherExperimentList)
+    await flushPromises()
+    await archived.findAll('[data-restore-experiment="13"]')[0]!.trigger('click')
+    await flushPromises()
+    expect(archived.get('[role="alert"]').text()).toContain('恢复失败')
+    expect(mocks.api.list).toHaveBeenLastCalledWith(7, 1, true)
   })
 })

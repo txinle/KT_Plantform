@@ -2250,6 +2250,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/restore/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_courses_experiments_restore_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/results/resolve/": {
         parameters: {
             query?: never;
@@ -4327,6 +4343,7 @@ export interface components {
             readonly can_edit?: boolean;
             readonly can_manage?: boolean;
             readonly can_archive?: boolean;
+            readonly can_restore?: boolean;
             /** Format: date-time */
             readonly created_at?: string;
             /** Format: date-time */
@@ -6186,6 +6203,7 @@ export interface components {
             readonly can_edit: boolean;
             readonly can_manage: boolean;
             readonly can_archive: boolean;
+            readonly can_restore: boolean;
             /** Format: date-time */
             readonly created_at: string;
             /** Format: date-time */
@@ -14554,6 +14572,33 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["TeacherExperimentReadiness"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_courses_experiments_restore_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["TeacherExperiment"];
                         meta: {
                             request_id: string;
                         };

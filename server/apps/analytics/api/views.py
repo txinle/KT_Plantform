@@ -25,6 +25,7 @@ from apps.accounts.forms import ClassGroupForm
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.api.pagination import FixedPageNumberPagination
 from apps.assessment.models import AssessmentEvent, ExperimentSession, SubmissionEvent
+from apps.experiments.models import Experiment
 from apps.question_bank.models import Concept, Question
 from apps.audit.services import log_action
 
@@ -222,7 +223,7 @@ class TeacherDataCenterScopeView(APIView):
     def _payload(request, course, *, scope=None):
         scope = scope or _scope_from_request(request, course)
         experiments = list(
-            course.experiments.prefetch_related("versions").order_by("name", "pk")
+            course.experiments.exclude(status=Experiment.Status.ARCHIVED).prefetch_related("versions").order_by("name", "pk")
         )
         classes = course.classes.filter(is_active=True).order_by(
             "academic_year", "name", "pk"
@@ -563,7 +564,7 @@ class TeacherDataCenterExportCatalogView(APIView):
                 "scope": scope_payload,
                 "experiments": [
                     {"id": item.pk, "name": item.name}
-                    for item in course.experiments.order_by("name", "pk")
+                    for item in course.experiments.exclude(status=Experiment.Status.ARCHIVED).order_by("name", "pk")
                 ],
                 "class_choices": [
                     {

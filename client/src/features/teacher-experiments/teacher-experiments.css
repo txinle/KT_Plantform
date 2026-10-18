@@ -932,20 +932,6 @@
 }
 
 @media (min-width: 64rem) {
-  .kt-teacher-experiments .kt-workspace { --kt-workspace-header: 48px; --kt-workspace-sidebar: 164px; }
-  .kt-teacher-experiments .kt-workspace > .kt-app-header,
-  .kt-teacher-experiments .kt-workspace > .kt-app-header .kt-app-header__inner { height: 48px; min-height: 48px; }
-  .kt-teacher-experiments .kt-workspace > .kt-app-header .kt-app-header__inner { padding-inline: 18px; }
-  .kt-teacher-experiments .kt-workspace .kt-brand-mark { width: 28px; height: 28px; }
-  .kt-teacher-experiments .kt-workspace .kt-wordmark { font-size: 16px; }
-  .kt-teacher-experiments .kt-workspace .kt-logout-button { min-height: 34px; }
-  .kt-teacher-experiments .kt-workspace-sidebar { padding: 18px 10px; }
-  .kt-teacher-experiments .kt-workspace-context { gap: 5px; padding: 0 10px 18px; }
-  .kt-teacher-experiments .kt-workspace-emblem { width: 40px; height: 40px; font-size: 18px; }
-  .kt-teacher-experiments .kt-workspace-context strong { font-size: 14px; }
-  .kt-teacher-experiments .kt-workspace-navigation > a { min-height: 37px; gap: 11px; padding: 7px 12px; font-size: 13px; }
-  .kt-teacher-experiments .kt-workspace-navigation-icon { width: 18px; height: 18px; flex-basis: 18px; }
-  .kt-teacher-experiments .kt-workspace-main { padding: 8px 34px 14px 18px; }
   .kt-teacher-experiments .kt-experiment-page-header:has(.kt-experiment-back-button) { align-items: center; justify-content: flex-start; gap: 16px; min-height: 31px; margin-bottom: 10px; }
   .kt-teacher-experiments .kt-step-one-grid textarea { height: 60px; }
   .kt-teacher-experiments .kt-quota-panel { grid-template-columns: 120px minmax(0, 1fr); gap: 10px; }

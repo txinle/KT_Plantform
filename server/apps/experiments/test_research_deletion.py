@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections
+from django.utils import timezone
 from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings, skipUnlessDBFeature
 
 from apps.accounts.models import ClassGroup, CourseEnrollment, User
@@ -119,6 +120,14 @@ class ResearchDeletionTests(TransactionTestCase):
                          {self.class_group.pk, self.class_group_b.pk})
 
     def test_confirmed_global_delete_removes_formal_tree_and_keeps_course_resources(self):
+        from apps.analytics.models import StudentExperimentResultSnapshot
+        from .services import archive_experiment
+        for task, student in zip(self.tasks, [self.student, self.student_b]):
+            StudentExperimentResultSnapshot.objects.create(
+                class_task=task, student=student, source_signature='snapshot',
+                payload={'answer': '已提交'}, generated_at=timezone.now(),
+            )
+        archive_experiment(course=self.course, experiment_id=self.experiment.pk, actor=self.teacher)
         job, path = self.export([self.experiment])
         snapshot_id = job.snapshot_id
         materialization = ResearchSessionMaterialization.objects.create(
@@ -138,6 +147,7 @@ class ResearchDeletionTests(TransactionTestCase):
         self.assertFalse(ClassExperimentTask.objects.exists())
         self.assertFalse(ExperimentSession.objects.exists())
         self.assertFalse(ResearchSessionMaterialization.objects.exists())
+        self.assertFalse(StudentExperimentResultSnapshot.objects.exists())
         self.assertFalse(ResponseSnapshot.objects.exists())
         self.assertFalse(QuestionSnapshot.objects.exists())
         self.assertFalse(ExportJob.objects.filter(pk=job.pk).exists())
@@ -150,6 +160,11 @@ class ResearchDeletionTests(TransactionTestCase):
         self.assertEqual(QuestionConcept.objects.count(), 1)
 
     def test_remove_only_this_class_preserves_other_class_and_shared_release(self):
+        from apps.analytics.models import StudentExperimentResultSnapshot
+        result_snapshots = [StudentExperimentResultSnapshot.objects.create(
+            class_task=task, student=student, source_signature='snapshot',
+            payload={'answer': '保留其他班级'}, generated_at=timezone.now(),
+        ) for task, student in zip(self.tasks, [self.student, self.student_b])]
         comparisons = [StudentClassTaskComparison.objects.create(class_task=task) for task in self.tasks]
         members = [StudentTaskComparisonMember.objects.create(comparison=comparison, student=student)
                    for comparison, student in zip(comparisons, [self.student, self.student_b])]
@@ -169,6 +184,8 @@ class ResearchDeletionTests(TransactionTestCase):
         self.assertFalse(StudentTaskComparisonMember.objects.filter(pk=members[0].pk).exists())
         self.assertTrue(StudentClassTaskComparison.objects.filter(pk=comparisons[1].pk).exists())
         self.assertTrue(StudentTaskComparisonMember.objects.filter(pk=members[1].pk).exists())
+        self.assertFalse(StudentExperimentResultSnapshot.objects.filter(pk=result_snapshots[0].pk).exists())
+        self.assertTrue(StudentExperimentResultSnapshot.objects.filter(pk=result_snapshots[1].pk).exists())
         self.assertTrue(QuestionSnapshot.objects.filter(version__experiment=self.experiment).exists())
         self.assertFalse(ExportJob.objects.filter(pk=shared_job.pk).exists())
         self.assertFalse(shared_path.exists())
@@ -233,6 +250,11 @@ class ResearchDeletionTests(TransactionTestCase):
         self.assertEqual(ExperimentSession.objects.count(), 2)
 
     def test_audit_failure_rolls_back_database_and_keeps_export_file(self):
+        from apps.analytics.models import StudentExperimentResultSnapshot
+        cached_result = StudentExperimentResultSnapshot.objects.create(
+            class_task=self.tasks[0], student=self.student, source_signature='snapshot',
+            payload={'answer': '回滚后仍保留'}, generated_at=timezone.now(),
+        )
         job, path = self.export([self.experiment])
         preview = self.preview(self.url())
         with patch("apps.experiments.research_deletion.log_action", side_effect=RuntimeError("audit failed")):
@@ -242,6 +264,8 @@ class ResearchDeletionTests(TransactionTestCase):
         self.assertEqual(ExperimentSession.objects.count(), 2)
         self.assertTrue(ExportJob.objects.filter(pk=job.pk).exists())
         self.assertTrue(path.exists())
+
+        self.assertTrue(StudentExperimentResultSnapshot.objects.filter(pk=cached_result.pk).exists())
 
     def test_mixed_export_is_removed_but_other_experiment_and_session_survive(self):
         other = Experiment.objects.create(course=self.course, created_by=self.teacher,

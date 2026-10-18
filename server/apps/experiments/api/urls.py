@@ -1,6 +1,6 @@
 from django.urls import include, path
 
-from .archive_views import TeacherExperimentArchiveView
+from .archive_views import TeacherExperimentArchiveView, TeacherExperimentRestoreView
 from .deletion_views import (
     TeacherClassExperimentRemoveView,
     TeacherDeletionCleanupView,
@@ -49,6 +49,8 @@ from .standalone_views import (
 
 
 urlpatterns = [
+    path("courses/<int:course_id>/experiments/<int:experiment_id>/restore/",
+         TeacherExperimentRestoreView.as_view(), name="teacher-experiment-restore"),
     path("courses/<int:course_id>/experiments/<int:experiment_id>/archive/",
          TeacherExperimentArchiveView.as_view(), name="teacher-experiment-archive"),
     path('courses/<int:course_id>/deletion-operations/', TeacherDeletionOperationCollectionView.as_view(), name='teacher-deletion-operation-list'),

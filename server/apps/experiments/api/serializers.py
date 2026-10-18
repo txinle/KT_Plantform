@@ -133,6 +133,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
     can_edit = serializers.SerializerMethodField()
     can_manage = serializers.SerializerMethodField()
     can_archive = serializers.SerializerMethodField()
+    can_restore = serializers.SerializerMethodField()
 
     class Meta:
         model = Experiment
@@ -178,6 +179,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "can_edit",
             "can_manage",
             "can_archive",
+            "can_restore",
             "created_at",
             "updated_at",
         )
@@ -205,6 +207,9 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
 
     def get_can_archive(self, experiment) -> bool:
         return self.get_can_manage(experiment) and experiment.status != Experiment.Status.ARCHIVED
+
+    def get_can_restore(self, experiment) -> bool:
+        return self.get_can_manage(experiment) and experiment.status == Experiment.Status.ARCHIVED
 
     @extend_schema_field(QuestionBankReferenceSerializer(many=True))
     def get_question_banks(self, experiment):
