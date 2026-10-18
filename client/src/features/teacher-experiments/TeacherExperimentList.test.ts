@@ -120,4 +120,20 @@ describe('TeacherExperimentList deletion', () => {
     expect(authorized.get('[role="alert"]').text()).toContain('归档失败')
     expect(authorized.find('[role="dialog"]').exists()).toBe(true)
   })
+
+  it('returns to the first page after archiving the last experiment on a later page', async () => {
+    mocks.api.list.mockResolvedValueOnce(collection([{ ...experiment, can_archive: true }]))
+      .mockImplementation(async (_course, page) => {
+        if (page !== 1) throw new Error('分页不存在')
+        return collection([], 1, 1)
+      })
+    mocks.api.archive.mockResolvedValue({ ...experiment, status: 'archived' })
+    const wrapper = mount(TeacherExperimentList)
+    await flushPromises()
+    await wrapper.findAll('[data-archive-experiment="13"]')[0]!.trigger('click')
+    await wrapper.get('[data-archive-confirm]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.list).toHaveBeenLastCalledWith(7, 1)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
 })

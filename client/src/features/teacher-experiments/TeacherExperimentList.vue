@@ -64,7 +64,7 @@ async function confirmArchive() {
   try {
     await api.archive(courseId, archiveTarget.value.id)
     archiveTarget.value = undefined
-    await afterDeletion()
+    await navigate(1)
   } catch (caught) {
     archiveError.value = caught instanceof Error ? caught.message : '归档失败，请重试。'
   } finally { archiving.value = false }
