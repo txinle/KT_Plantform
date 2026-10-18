@@ -47,7 +47,7 @@ describe('Stage C question entry contract', () => {
   it('posts the original frozen click material to the same business endpoint for formal entry', async () => {
     const { client, entry } = fixture()
     await entry.enterQuestion(7, 11, 'navigation_click', click)
-    expect(client.mutate).toHaveBeenCalledExactlyOnceWith(path, { method: 'POST', body: material })
+    expect(client.mutate).toHaveBeenCalledExactlyOnceWith(path, { method: 'POST', body: material, signal: expect.any(AbortSignal) })
     expect(client.get).not.toHaveBeenCalled()
   })
 
@@ -65,8 +65,8 @@ describe('Stage C question entry contract', () => {
     await expect(entry.enterQuestion(7, 11, 'navigation_click', click)).rejects.toThrow('Network response unavailable')
     await entry.enterQuestion(7, 11, 'navigation_click', click)
     expect(client.mutate.mock.calls).toEqual([
-      [path, { method: 'POST', body: material }],
-      [path, { method: 'POST', body: material }],
+      [path, { method: 'POST', body: material, signal: expect.any(AbortSignal) }],
+      [path, { method: 'POST', body: material, signal: expect.any(AbortSignal) }],
     ])
   })
 

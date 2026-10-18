@@ -3552,6 +3552,12 @@ export interface components {
          * @enum {string}
          */
         HistoryRoleEnum: "review" | "new" | "unrestricted";
+        /**
+         * @description * `stable-input-v1` - stable-input-v1
+         *     * `confirmed-transition-v1` - confirmed-transition-v1
+         * @enum {string}
+         */
+        IdEnum: "stable-input-v1" | "confirmed-transition-v1";
         ImportConfirmRequest: {
             /** Format: uuid */
             batch_id: string;
@@ -4270,6 +4276,16 @@ export interface components {
             time_source: string;
             interval_ms: number | null;
         };
+        /**
+         * @description * `queued` - queued
+         *     * `running` - running
+         *     * `retrying` - retrying
+         *     * `recovering` - recovering
+         *     * `completed` - completed
+         *     * `failed` - failed
+         * @enum {string}
+         */
+        ProcessingStateEnum: "queued" | "running" | "retrying" | "recovering" | "completed" | "failed";
         PublishOperationJob: {
             /** Format: uuid */
             job_id: string;
@@ -4853,6 +4869,8 @@ export interface components {
             /** Format: uuid */
             submission_id: string;
             status: components["schemas"]["SessionSubmissionReceiptStatusEnum"];
+            processing_state: components["schemas"]["ProcessingStateEnum"];
+            worker: components["schemas"]["SubmissionWorkerStatus"];
             /** Format: date-time */
             accepted_at: string;
             /** Format: date-time */
@@ -5568,6 +5586,7 @@ export interface components {
             text: string;
         };
         StudentRuntimeProcess: {
+            text_capture_policy?: components["schemas"]["TextCapturePolicy"];
             paper_flow_version?: number;
             transition_entry?: components["schemas"]["TransitionEntryCapability"];
             capture_bundle?: components["schemas"]["AtomicSubmissionCapability"];
@@ -5743,6 +5762,18 @@ export interface components {
             /** @default longitudinal */
             package: string;
         };
+        SubmissionWorkerStatus: {
+            status: components["schemas"]["SubmissionWorkerStatusStatusEnum"];
+            /** Format: date-time */
+            observed_at: string;
+        };
+        /**
+         * @description * `connected` - connected
+         *     * `not_connected` - not_connected
+         *     * `unknown` - unknown
+         * @enum {string}
+         */
+        SubmissionWorkerStatusStatusEnum: "connected" | "not_connected" | "unknown";
         TaskReason: {
             reason?: string;
         };
@@ -6305,6 +6336,10 @@ export interface components {
         TeachingLegacyTiming: {
             display_duration_ms: number | null;
             display_label: string;
+        };
+        TextCapturePolicy: {
+            id: components["schemas"]["IdEnum"];
+            idle_ms: number;
         };
         /**
          * @description * `none` - 无时限
@@ -9361,6 +9396,12 @@ export interface operations {
                                 server_ingest_sequence_no: number;
                             }[];
                             checkpoint_ids?: string[];
+                            /** @enum {integer} */
+                            receipt_version?: 2;
+                            /** Format: uuid */
+                            capture_operation_id?: string;
+                            attempt_id?: number;
+                            material_fingerprint?: string;
                             /** @enum {boolean} */
                             success: true;
                             /**
@@ -9380,6 +9421,8 @@ export interface operations {
                                 [key: string]: unknown;
                             } | null;
                         } | {
+                            /** @enum {integer} */
+                            receipt_version?: 2;
                             /** @enum {boolean} */
                             success: true;
                             /** @enum {boolean} */
@@ -9982,6 +10025,17 @@ export interface operations {
                             success: true;
                             /** Format: uuid */
                             submission_id: string;
+                            /** @enum {string} */
+                            processing_state?: "queued" | "running" | "retrying" | "recovering" | "completed" | "failed";
+                            worker?: {
+                                /** @enum {string} */
+                                status: "connected" | "not_connected" | "unknown";
+                                /**
+                                 * Format: date-time
+                                 * @description Timezone-aware timestamp.
+                                 */
+                                observed_at: string;
+                            };
                             /** @enum {string} */
                             status: "queued" | "running" | "completed" | "failed";
                             /**

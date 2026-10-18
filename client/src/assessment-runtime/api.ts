@@ -12,7 +12,7 @@ import type { SavedNavigationConfirmation } from './session-controller'
 export async function withTransportTimeout<T>(send: (signal?: AbortSignal) => Promise<T>, timeoutMs?: number): Promise<T> {
   if (timeoutMs === undefined) return send()
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(new DOMException('收尾请求等待超时，结果尚待核验。', 'TimeoutError')), timeoutMs)
+  const timer = setTimeout(() => controller.abort(new DOMException('请求等待超时，结果尚待核验。', 'TimeoutError')), timeoutMs)
   try { return await send(controller.signal) }
   finally { clearTimeout(timer) }
 }
@@ -167,23 +167,26 @@ export interface NavigationResponse {
 }
 
 interface StudentAssessmentClient {
-  get<T>(path: string): Promise<T>
-  mutate<T>(path: string, mutation: { method: 'POST'; body?: unknown; keepalive?: boolean }): Promise<T>
+  get<T>(path: string, options?: { signal?: AbortSignal; retry?: boolean }): Promise<T>
+  mutate<T>(path: string, mutation: { method: 'POST'; body?: unknown; keepalive?: boolean; signal?: AbortSignal }): Promise<T>
 }
 
 export function createStudentAssessmentApi(client: StudentAssessmentClient) {
+  const mutate = <T>(path: string, mutation: { method: 'POST'; body?: unknown; keepalive?: boolean }) =>
+    withTransportTimeout(signal => client.mutate<T>(path, { ...mutation, signal }), 30000)
+  const recover = <T>(path: string) => withTransportTimeout(signal => client.get<T>(path, { signal, retry: false }), 30000)
   return {
-    finishPaper: (url: string, body: PaperSubmissionIntent) => client.mutate<PaperSubmissionResponse>(url, { method: 'POST', body: { submission_token: body.submission_token, client_clicked_at: body.client_clicked_at, expected_versions: body.expected_versions } }),
-    paperSubmissionStatus: (url: string) => client.get<PaperSubmissionResponse>(url),
-    saveAndLeave: (url: string, body: SavedNavigationRequest) => client.mutate<SavedNavigationResponse>(url, { method: 'POST', body }),
-    recoverQuestion: (sessionId: number, assignmentId: number) => client.get<RecoveryState>(`/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/recovery/`),
-    recover: (attemptId: number, token: string) => client.get<RecoveryState>(`/api/v1/student/attempts/${attemptId}/recovery/?submission_token=${encodeURIComponent(token)}`),
+    finishPaper: (url: string, body: PaperSubmissionIntent) => mutate<PaperSubmissionResponse>(url, { method: 'POST', body: { submission_token: body.submission_token, client_clicked_at: body.client_clicked_at, expected_versions: body.expected_versions } }),
+    paperSubmissionStatus: (url: string) => recover<PaperSubmissionResponse>(url),
+    saveAndLeave: (url: string, body: SavedNavigationRequest) => mutate<SavedNavigationResponse>(url, { method: 'POST', body }),
+    recoverQuestion: (sessionId: number, assignmentId: number) => recover<RecoveryState>(`/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/recovery/`),
+    recover: (attemptId: number, token: string) => recover<RecoveryState>(`/api/v1/student/attempts/${attemptId}/recovery/?submission_token=${encodeURIComponent(token)}`),
     question: (sessionId: number, assignmentId: number) => client.get<StudentRuntimeQuestionEntry>(`/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/`),
     enterQuestion: (sessionId: number, assignmentId: number, reason: string, navigation: NavigationClickContext, taskId?: number) => {
       const saved = taskId ? readAdmissionCredentials(taskId) : currentAdmissionCredentials(sessionId)?.credentials
       const admission = saved?.session_id === sessionId
         ? { admission_token: saved.admission_token, admission_action: saved.admission_action } : {}
-      return client.mutate<StudentRuntimeQuestionEntry & { entry_receipt: EntryReceipt }>(
+      return mutate<StudentRuntimeQuestionEntry & { entry_receipt: EntryReceipt }>(
       `/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/`, { method: 'POST', body: {
         reason, navigation_id: navigation.navigationId, client_occurred_at: navigation.clientOccurredAt,
         client_monotonic_ms: navigation.clientMonotonicMs.toFixed(3), client_time_origin: navigation.clientTimeOrigin,
@@ -192,7 +195,7 @@ export function createStudentAssessmentApi(client: StudentAssessmentClient) {
       } })
     },
     saveDraft: (url: string, answer: unknown, clientOccurredAt: string, target?: { target_event_id: string | null; expected_version: number; capture_bundle?: CaptureBundle; capture_operation_id?: string; inline_confidence?: { probability: number | null; answer_event_id: string | null } } & Partial<WriterLeaseCredentials>) => (
-      client.mutate<DraftMutationResponse>(url, {
+      mutate<DraftMutationResponse>(url, {
         method: 'POST',
         body: { answer, client_occurred_at: clientOccurredAt, ...target },
       })

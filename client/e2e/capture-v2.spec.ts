@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { spawnSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { requireServerPython, serverDir } from '../scripts/e2e-runtime.mjs'
@@ -7,7 +7,67 @@ import { acceptResearchConsentIfRequired } from './research-consent'
 import { captureProtocol, digest, projectPayload } from './capture-protocol-witness.mjs'
 
 const witnesses = new WeakMap<object, Awaited<ReturnType<typeof captureProtocol>>>()
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    // Observe full request material without retaining answers or lease credentials.
+    const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
+      : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort()
+        .map(key => [key, canonical((value as Record<string, unknown>)[key])])) : value
+    const originalFetch = globalThis.fetch.bind(globalThis)
+    globalThis.fetch = async (input, options) => {
+      if (typeof options?.body === 'string') {
+        let document: Record<string, unknown> | undefined
+        try { document = JSON.parse(options.body) } catch { /* Non-JSON requests are outside this witness. */ }
+        if (document?.save_and_leave && document.navigation_token) {
+          const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(canonical(document))))
+          const sha256 = [...new Uint8Array(hash)].map(value => value.toString(16).padStart(2, '0')).join('')
+          const requests = JSON.parse(sessionStorage.getItem('kt-e2e-navigation-material') || '[]')
+          requests.push({ navigation_token: document.navigation_token, sha256 })
+          sessionStorage.setItem('kt-e2e-navigation-material', JSON.stringify(requests))
+        }
+      }
+      return originalFetch(input, options)
+    }
+    addEventListener('pagehide', () => {
+      const stages = performance.getEntriesByType('measure').filter(row => row.name.startsWith('kt-assessment:')).map(row => {
+        const detail = (row as PerformanceMeasure).detail || {}
+        return { name: row.name, start_ms: row.startTime, duration_ms: row.duration,
+          operation_id: detail.operation_id, stage: detail.stage, outcome: detail.outcome,
+          event_count: detail.event_count, checkpoint_count: detail.checkpoint_count }
+      })
+      if (stages.length) sessionStorage.setItem('kt-e2e-last-document-stages', JSON.stringify(stages))
+    })
+  })
+})
 test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status !== testInfo.expectedStatus && !page.isClosed()) {
+    const owners = await page.evaluate(async () => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const opened = indexedDB.open('kt-process-events-v1', 2)
+        opened.onsuccess = () => resolve(opened.result)
+        opened.onerror = () => reject(opened.error)
+      })
+      try {
+        if (!database.objectStoreNames.contains('meta')) return []
+        const rows = await new Promise<Array<{ key: string; value: { phase?: string; sessionId?: number; attemptId?: number; url?: string;
+          body?: Record<string, unknown>; processSnapshot?: { events?: unknown[]; checkpoints?: unknown[] } } }>>((resolve, reject) => {
+          const request = database.transaction('meta', 'readonly').objectStore('meta').getAll()
+          request.onsuccess = () => resolve(request.result)
+          request.onerror = () => reject(request.error)
+        })
+        return rows.filter(row => /capture-(mutation|flush)|close-intent/.test(row.key)).map(({ key, value }) => ({
+          key, phase: value.phase, session_id: value.sessionId, attempt_id: value.attemptId, url: value.url,
+          operation_id: value.body?.capture_operation_id || value.body?.operation_id,
+          has_leave: Boolean(value.body?.leave_event_id), target_event_id: value.body?.target_event_id,
+          body_fields: Object.keys(value.body || {}), event_count: value.processSnapshot?.events?.length,
+          checkpoint_count: value.processSnapshot?.checkpoints?.length,
+        }))
+      } finally { database.close() }
+    }).catch(error => ({ diagnostic_error: error instanceof Error ? error.name : 'unknown' }))
+    const path = testInfo.outputPath('safe-capture-owner-diagnostic.json')
+    writeFileSync(path, JSON.stringify(owners, null, 2))
+    await testInfo.attach('safe-capture-owner-diagnostic', { path, contentType: 'application/json' })
+  }
   const witness = witnesses.get(page)
   if (!witness) return
   await witness.settle()
@@ -24,6 +84,25 @@ function django(args: string[]) {
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(result.stderr || result.stdout)
   return JSON.parse(result.stdout.trim().split('\n').at(-1)!)
+}
+
+async function attachStageTimings(page: Page, testInfo: TestInfo, phase: string) {
+  const stages = await page.evaluate(() => {
+    const current = performance.getEntriesByType('measure')
+    .filter(row => row.name.startsWith('kt-assessment:')).map(row => {
+      const detail = (row as PerformanceMeasure).detail || {}
+      return { name: row.name, start_ms: row.startTime, duration_ms: row.duration,
+        operation_id: detail.operation_id, stage: detail.stage, outcome: detail.outcome,
+        event_count: detail.event_count, checkpoint_count: detail.checkpoint_count }
+    })
+    return current.length ? current : JSON.parse(sessionStorage.getItem('kt-e2e-last-document-stages') || '[]')
+  })
+  const path = testInfo.outputPath(`safe-stage-timings-${phase}.json`)
+  writeFileSync(path, JSON.stringify(stages, null, 2))
+  await testInfo.attach(`safe-stage-timings-${phase}`, { path, contentType: 'application/json' })
+  if (phase.endsWith('completed')) expect(stages).toEqual(expect.arrayContaining([
+    expect.objectContaining({ name: 'kt-assessment:submit', outcome: 'success' }),
+  ]))
 }
 
 test('saved questions stay editable until the whole paper is submitted', async ({ page }, testInfo) => {
@@ -137,7 +216,17 @@ test('five short-response types retain trajectories through offline reload, IME 
   test.skip(browserName !== 'chromium', 'Chromium provides the CDP IME controls used by this capture journey.')
   const run = process.env.E2E_CAPTURE_RUN_ID
   if (run && !/^[a-z0-9-]{1,24}$/.test(run)) throw new Error('Invalid capture fixture run identifier')
-  const fixture = run ? django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-${run}'; command.handle()`]) : django(['seed_e2e_capture_v2'])
+  // This journey asserts the original per-transition measurement protocol.
+  // Bind that artifact while creating the paper; never mutate an existing session's contract.
+  const fixture = django(['shell', '-c', [
+    'from unittest.mock import patch',
+    'from apps.accounts.management.commands.seed_e2e_capture_v2 import Command',
+    'from apps.assessment.recording_capture_services import ensure_capture_contract_v2',
+    'command=Command()',
+    `command.course_term+='-legacy-${run || Date.now()}'`,
+    "binding=patch('apps.assessment.recording_capture_services.ensure_capture_contract_v2_stable_input',return_value=ensure_capture_contract_v2())",
+    'binding.start()', 'command.handle()', 'binding.stop()',
+  ].join('; ')])
   const witness = await captureProtocol(page)
   witnesses.set(page, witness)
   const pageErrors: string[] = []
@@ -307,9 +396,9 @@ test('five short-response types retain trajectories through offline reload, IME 
   expect(witness.requests.some((request) => request.path.endsWith('/writer-lease/acquire/') && [200, 201].includes(request.status))).toBe(true)
 })
 
-test('ordinary navigation confirms one durable save and replays a lost response after reload', async ({ page }) => {
+test('navigation drains more than 100 offline transitions and replays a lost response after reload', async ({ page, context }, testInfo) => {
   test.setTimeout(120_000)
-  const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-wait-navigation-${Date.now()}'; command.handle()`])
+  const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-wait-navigation-${Date.now()}'; command._research_tools=lambda questions: {}; command.handle()`])
   const witness = await captureProtocol(page)
   witnesses.set(page, witness)
   await page.goto('/login/')
@@ -326,24 +415,46 @@ test('ordinary navigation confirms one durable save and replays a lost response 
   const firstId = Number(page.url().match(/questions\/(\d+)/)![1])
   await page.getByRole('radio').first().check()
   await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
+  await context.setOffline(true)
+  // Choices retain every confirmed transition under both contracts. Build a real
+  // local backlog through the same controls a student uses, without editing IndexedDB.
+  for (let index = 0; index < 130; index++) await page.getByRole('radio').nth(index % 2 === 0 ? 1 : 0).check()
+  const localTransitionIds = await page.evaluate(async (session) => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const opened = indexedDB.open('kt-process-events-v1', 2)
+      opened.onsuccess = () => resolve(opened.result)
+      opened.onerror = () => reject(opened.error)
+    })
+    try {
+      const pending = await new Promise<Array<{ event: { session_id: number; event_type: string; event_id: string } }>>((resolve, reject) => {
+        const request = database.transaction('events', 'readonly').objectStore('events').getAll()
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })
+      return pending.filter(row => row.event.session_id === session && row.event.event_type === 'response_transition').map(row => row.event.event_id)
+    } finally { database.close() }
+  }, sessionId)
+  expect(localTransitionIds.length).toBeGreaterThan(100)
   const nav = page.locator('[data-nav-assignment]').filter({ hasNot: page.locator('[aria-current=page]') })
   const nextId = await nav.evaluateAll((nodes, current) => Number(nodes.find((node) => Number(node.getAttribute('data-nav-assignment')) !== current)?.getAttribute('data-nav-assignment')), firstId)
-  const envelopes: unknown[] = []
+  let originalNavigationToken: string | undefined
   let drop = true
   await page.route('**/api/v1/student/attempts/*/draft/', async (route) => {
     const body = route.request().postDataJSON()
     if (!body.save_and_leave) { await route.continue(); return }
-    envelopes.push(body)
     if (drop) {
       drop = false
+      originalNavigationToken = body.navigation_token
       const committed = await route.fetch()
       expect(committed.status()).toBe(200)
       await route.abort('failed')
     } else await route.continue()
   })
+  await context.setOffline(false)
   await expect(page.locator(`[data-nav-assignment="${nextId}"]`)).toHaveAttribute('href', `/student/sessions/${sessionId}/questions/${nextId}/`)
   await page.locator(`[data-nav-assignment="${nextId}"]`).click()
-  await expect(page.locator('[data-navigation-retry]')).toBeVisible()
+  // Drain and the lost-response outcome may span multiple bounded requests.
+  await expect(page.locator('[data-navigation-retry]')).toBeVisible({ timeout: 45_000 })
   await expect(page.locator('[name=answer]').first()).toBeDisabled()
   const persisted = django(['shell', '-c', `import json; from apps.assessment.models import Attempt,NavigationReceipt,SubmissionEvent; a=Attempt.objects.get(session_id=${sessionId},assignment_id=${firstId}); print(json.dumps({'status':a.status,'answer':a.draft_answer,'receipts':NavigationReceipt.objects.filter(attempt=a).count(),'submissions':SubmissionEvent.objects.filter(attempt=a).count()}))`])
   expect(persisted).toEqual({ status: 'draft', answer: 'A', receipts: 1, submissions: 0 })
@@ -352,7 +463,12 @@ test('ordinary navigation confirms one durable save and replays a lost response 
   await page.locator('[data-navigation-retry]').click()
   await expect(page).toHaveURL(new RegExp(`/questions/${nextId}/`))
   await expect(page.locator('[name=answer]').first()).toBeEnabled()
-  expect(envelopes[1]).toEqual(envelopes[0])
+  const replayed: Array<{ navigation_token: string; sha256: string }> = await page.evaluate(() =>
+    JSON.parse(sessionStorage.getItem('kt-e2e-navigation-material') || '[]'))
+  const originalRequests = replayed.filter(row => row.navigation_token === originalNavigationToken)
+  expect(originalNavigationToken).toEqual(expect.any(String))
+  expect(originalRequests.length).toBeGreaterThanOrEqual(2)
+  expect(new Set(originalRequests.map(row => row.sha256)).size).toBe(1)
   await expect(page.locator(`[data-nav-assignment="${firstId}"]`)).toHaveAttribute('href', `/student/sessions/${sessionId}/questions/${firstId}/`)
   await page.locator(`[data-nav-assignment="${firstId}"]`).click()
   await expect(page).toHaveURL(new RegExp(`/questions/${firstId}/`))
@@ -361,6 +477,152 @@ test('ordinary navigation confirms one durable save and replays a lost response 
   expect(final.receipts).toBe(2)
   expect(final.submissions).toBe(0)
   expect(final.left).toBe(2)
+  const transitions: string[] = django(['shell', '-c', `import json; from apps.assessment.models import AssessmentEvent; print(json.dumps(list(AssessmentEvent.objects.filter(session_id=${sessionId},event_type='response_transition').values_list('event_id',flat=True)),default=str))`])
+  expect(transitions).toHaveLength(131)
+  expect(transitions).toEqual(expect.arrayContaining(localTransitionIds))
+  const packets = witness.requests.filter(request => request.events.length > 0)
+  expect(packets.length).toBeGreaterThan(1)
+  expect(packets.every(request => request.events.length <= 100)).toBe(true)
+  expect(packets.some(request => request.status === 400 || request.status === 413)).toBe(false)
+  await attachStageTimings(page, testInfo, 'backlog-navigation-recovery')
+})
+
+test('stable input records one settled text answer then navigates and completes the paper', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  const fixture = django(['shell', '-c', [
+    'from apps.accounts.management.commands.seed_e2e_capture_v2 import Command',
+    'command=Command()', `command.course_term+='-stable-${Date.now()}'`,
+    'command.source_types=(Command.source_types[-1],Command.source_types[0])',
+    "command.leaf_codes=('KC5','KC2')", 'command._research_tools=lambda questions: {}', 'command.handle()',
+  ].join('; ')])
+  const witness = await captureProtocol(page)
+  witnesses.set(page, witness)
+  await page.goto('/login/')
+  await page.getByLabel('账号或学号').fill('S002')
+  await page.getByLabel('密码').fill('student123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
+  await page.goto(`/student/courses/${fixture.course.id}/`)
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'E2E Capture V2 五题回放', exact: true }) })
+    .getByRole('button', { name: '开始作业' }).click()
+  await expect(page.locator('[name=answer]').first()).toBeEnabled()
+  const sessionId = Number(page.url().match(/sessions\/(\d+)/)![1])
+  const rows: Array<{ assignment_id: number; attempt_id: number; kind: string }> = django(['shell', '-c',
+    `import json; from apps.assessment.models import Attempt; print(json.dumps([{'assignment_id':a.assignment_id,'attempt_id':a.pk,'kind':a.assignment.snapshot.question_type} for a in Attempt.objects.filter(session_id=${sessionId}).select_related('assignment__snapshot')]))`])
+  const short = rows.find(row => row.kind === 'short_answer')!
+  if (!page.url().includes(`/questions/${short.assignment_id}/`)) await page.locator(`[data-nav-assignment="${short.assignment_id}"]:visible`).click()
+  const input = page.locator('textarea[name=answer]')
+  await expect(input).toBeEnabled()
+  const responseEvents = (kind: string) => new Set(witness.requests.flatMap(request => request.events)
+    .filter(event => event.attempt_id === short.attempt_id && event.event_type === kind).map(event => event.event_id))
+  await input.pressSequentially('stable ', { delay: 80 })
+  expect(responseEvents('response_transition').size).toBe(0)
+  expect(responseEvents('input_operation').size).toBe(0)
+  await input.pressSequentially('answer', { delay: 80 })
+  expect(responseEvents('response_transition').size).toBe(0)
+  expect(responseEvents('input_operation').size).toBe(0)
+  await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  expect(responseEvents('response_transition').size).toBe(1)
+  expect(responseEvents('input_operation').size).toBe(1)
+  await attachStageTimings(page, testInfo, 'stable-input')
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+    const path = testInfo.outputPath(`stable-input-${viewport.width}.png`)
+    await page.screenshot({ path, fullPage: true })
+    await testInfo.attach(`stable-input-${viewport.width}`, { path, contentType: 'image/png' })
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.evaluate(() => { document.documentElement.style.zoom = '2' })
+  const zoomPath = testInfo.outputPath('stable-input-zoom200.png')
+  await page.screenshot({ path: zoomPath, fullPage: true })
+  await testInfo.attach('stable-input-zoom200', { path: zoomPath, contentType: 'image/png' })
+  await page.evaluate(() => { document.documentElement.style.zoom = '' })
+  const destination = rows.find(row => row.assignment_id !== short.assignment_id)!
+  await page.locator(`[data-nav-assignment="${destination.assignment_id}"]:visible`).click()
+  await expect(page).toHaveURL(new RegExp(`/questions/${destination.assignment_id}/`))
+  await expect(page.locator('[name=answer]').first()).toBeEnabled()
+  await attachStageTimings(page, testInfo, 'stable-navigation')
+  const accepted = page.waitForResponse(response => response.url().endsWith(`/sessions/${sessionId}/finish/`) && response.status() === 202)
+  await page.locator('[data-finish-request]:visible').click()
+  await page.locator('[data-paper-submit-confirm]').click()
+  const receipt = (await (await accepted).json()).data
+  await expect.poll(async () => {
+    const response = await page.request.get(receipt.status_url)
+    expect(response.ok()).toBe(true)
+    return (await response.json()).data.status
+  }, { timeout: 45_000 }).toBe('completed')
+  await expect(page).toHaveURL(new RegExp(`/student/sessions/${sessionId}/complete/`))
+  await attachStageTimings(page, testInfo, 'finish-completed')
+  const evidence = django(['shell', '-c', `import json; from apps.assessment.models import AssessmentEvent,Attempt,ExperimentSession; a=Attempt.objects.get(pk=${short.attempt_id}); events=AssessmentEvent.objects.filter(attempt=a); print(json.dumps({'contract':ExperimentSession.objects.get(pk=${sessionId}).capture_contract.contract_name,'states':list(events.filter(event_type='response_transition').values_list('payload__after_state__value',flat=True)),'operations':events.filter(event_type='input_operation').count(),'status':a.status,'answer':a.final_answer}))`])
+  expect(evidence).toEqual({ contract: 'capture-v2-stable-input-v1', states: ['stable answer'], operations: 1, status: 'submitted', answer: 'stable answer' })
+})
+
+test('twenty questions navigate forward and back with stable text on question six before one paper submission', async ({ page, browserName }, testInfo) => {
+  test.skip(browserName !== 'chromium', 'The stable/backlog cases separately cover both browser engines.')
+  test.setTimeout(240_000)
+  // A separate fixture keeps the historical five-type trajectory journey intact.
+  const fixture = django(['shell', '-c', [
+    'from apps.accounts.management.commands.seed_e2e_capture_v2 import Command',
+    'from apps.question_bank.models import Question',
+    'from apps.question_bank.services.question_kc_mapping import replace_question_kc_mapping',
+    'class Paper20(Command):',
+    '    source_types=(Command.source_types[-1],)',
+    "    leaf_codes=('KC5',)",
+    '    def _questions(self,bank,root,leaves):',
+    '        rows=super()._questions(bank,root,leaves)',
+    '        source=rows[0]',
+    '        for number in range(2,21):',
+    "            question=Question.objects.create(bank=bank,sequence=source.sequence+number,code=f'E2E20-{number:02}',question_type=source.question_type,text=f'第 {number} 题：简述 EDA 应用。',correct_answer='A')",
+    "            replace_question_kc_mapping(question,root_kc_code=root.code,nodes=[{'kc_code':root.code,'parent_kc_code':None,'order':1},{'kc_code':leaves['KC5'].code,'parent_kc_code':root.code,'order':1}])",
+    '            rows.append(question)',
+    '        return rows',
+    '    @staticmethod',
+    '    def _research_tools(questions): return {}',
+    `command=Paper20(); command.course_term+='-paper20-${Date.now()}'; command.handle()`,
+  ].join('\n')])
+  await page.goto('/login/')
+  await page.getByLabel('账号或学号').fill('S002')
+  await page.getByLabel('密码').fill('student123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
+  await page.goto(`/student/courses/${fixture.course.id}/`)
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'E2E Capture V2 五题回放', exact: true }) })
+    .getByRole('button', { name: '开始作业' }).click()
+  await expect(page.locator('[name=answer]').first()).toBeEnabled()
+  const sessionId = Number(page.url().match(/sessions\/(\d+)/)![1])
+  const assignments: number[] = django(['shell', '-c', `import json; from apps.assessment.models import StudentQuestionAssignment; print(json.dumps(list(StudentQuestionAssignment.objects.filter(session_id=${sessionId}).order_by('assigned_sequence_index').values_list('pk',flat=True))))`])
+  expect(assignments).toHaveLength(20)
+  for (let index = 0; index < assignments.length; index++) {
+    await expect(page).toHaveURL(new RegExp(`/questions/${assignments[index]}/`))
+    await expect(page.locator('textarea[name=answer]')).toBeEnabled()
+    if (index === 5) {
+      await page.locator('textarea[name=answer]').pressSequentially('Q6 stable answer', { delay: 40 })
+      await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+    }
+    if (index < assignments.length - 1) await page.getByRole('button', { name: '下一题', exact: true }).click()
+  }
+  await attachStageTimings(page, testInfo, 'paper20-forward')
+  for (let index = assignments.length - 2; index >= 0; index--) {
+    await page.getByRole('button', { name: '上一题', exact: true }).click()
+    await expect(page).toHaveURL(new RegExp(`/questions/${assignments[index]}/`))
+    await expect(page.locator('textarea[name=answer]')).toBeEnabled()
+    if (index === 5) await expect(page.locator('textarea[name=answer]')).toHaveValue('Q6 stable answer')
+  }
+  await attachStageTimings(page, testInfo, 'paper20-return')
+  const accepted = page.waitForResponse(response => response.url().endsWith(`/sessions/${sessionId}/finish/`) && response.status() === 202)
+  await page.locator('[data-finish-request]:visible').click()
+  await page.locator('[data-paper-submit-confirm]').click()
+  const receipt = (await (await accepted).json()).data
+  await expect.poll(async () => (await (await page.request.get(receipt.status_url)).json()).data.status,
+    { timeout: 45_000 }).toBe('completed')
+  await expect(page).toHaveURL(new RegExp(`/student/sessions/${sessionId}/complete/`))
+  await attachStageTimings(page, testInfo, 'paper20-completed')
+  const evidence = django(['shell', '-c', `import json; from apps.assessment.models import Attempt,AssessmentEvent,NavigationReceipt; from apps.assessment.session_submission_models import SessionSubmission; attempts=Attempt.objects.filter(session_id=${sessionId}); a=attempts.get(assignment_id=${assignments[5]}); print(json.dumps({'questions':attempts.count(),'navigations':NavigationReceipt.objects.filter(attempt__session_id=${sessionId}).count(),'paper_submissions':SessionSubmission.objects.filter(session_id=${sessionId}).count(),'q6_answer':a.final_answer,'q6_states':list(AssessmentEvent.objects.filter(attempt=a,event_type='response_transition').values_list('payload__after_state__value',flat=True)),'submitted':attempts.filter(status='submitted').count(),'unanswered':attempts.filter(status='unanswered').count()}))`])
+  expect(evidence).toEqual({ questions: 20, navigations: 38, paper_submissions: 1, q6_answer: 'Q6 stable answer',
+    q6_states: ['Q6 stable answer'], submitted: 1, unanswered: 19 })
 })
 
 for (const bundled of [false, true]) test(`capture pointer writes preserve ${bundled ? 'atomic capture receipts' : 'a prior acknowledgement'} under delayed upload`, async ({ page }) => {
@@ -368,6 +630,7 @@ for (const bundled of [false, true]) test(`capture pointer writes preserve ${bun
   const witness = await captureProtocol(page)
   witnesses.set(page, witness)
   const earlyPointers: string[] = []
+  const confidenceWrites: number[] = []
   const previouslyAcknowledged = new Set<string>()
   await page.route('**/api/v1/assessment/process/capture-v2/batch/', async (route) => {
     const body = route.request().postDataJSON()
@@ -379,6 +642,7 @@ for (const bundled of [false, true]) test(`capture pointer writes preserve ${bun
   page.on('request', (request) => {
     if (!request.url().endsWith('/draft/') || request.method() !== 'POST') return
     const body = request.postDataJSON()
+    if (typeof body.inline_confidence?.probability === 'number') confidenceWrites.push(body.inline_confidence.probability)
     const confirmed = witness.clientAcknowledgements.flatMap((row: { acknowledgements: { event_id: string }[] }) => row.acknowledgements.map(ack => ack.event_id))
     if (confirmed.includes(body.target_event_id)) previouslyAcknowledged.add(body.target_event_id)
     const inlineTarget = body.capture_bundle?.events?.some((event: { event_id: string }) => event.event_id === body.target_event_id)
@@ -402,8 +666,17 @@ for (const bundled of [false, true]) test(`capture pointer writes preserve ${bun
     await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
     await expect.poll(() => witness.clientAcknowledgements.flatMap((row: { acknowledgements: { event_id: string }[] }) => row.acknowledgements.map(ack => ack.event_id))).toContain(target)
     const confidenceSave = page.waitForResponse((row) => row.url().endsWith('/draft/') && row.request().postDataJSON().inline_confidence?.probability === 50)
-    await page.locator('[data-inline-confidence]').fill('50')
+    const confidence = page.locator('[data-inline-confidence]')
+    await confidence.fill('47')
+    await confidence.press('ArrowUp')
+    await confidence.press('ArrowUp')
+    await confidence.press('ArrowUp')
+    await expect(confidence).toHaveValue('50')
+    await page.waitForTimeout(500)
+    expect(confidenceWrites).toEqual([])
+    await confidence.press('Tab')
     saved = await confidenceSave
+    expect(confidenceWrites).toEqual([50])
   }
   expect(earlyPointers).toEqual([])
   expect(saved.status()).toBe(200)

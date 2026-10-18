@@ -6,6 +6,10 @@ export default defineConfig({
   testDir: './e2e', testMatch: 'capture-v2.spec.ts', workers: 1,
   outputDir: '.e2e-results/capture-v2', reporter: 'list',
   use: { baseURL: 'http://127.0.0.1:8124', actionTimeout: 15000, navigationTimeout: 20000, viewport: { width: 1440, height: 900 }, trace: 'retain-on-failure' },
+  projects: [
+    { name: 'chromium', use: { browserName: 'chromium' } },
+    { name: 'webkit', use: { browserName: 'webkit' } },
+  ],
   webServer: { command: 'node scripts/run-e2e-backend.mjs', cwd: fileURLToPath(new URL('.', import.meta.url)),
     url: 'http://127.0.0.1:8124/health/', reuseExistingServer: false,
     env: { ...process.env, ...requireIsolatedPostgres(process.env), E2E_GATEWAY_PORT: '8124',

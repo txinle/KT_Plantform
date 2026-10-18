@@ -197,6 +197,57 @@ class CaptureBundleTests(TestCase):
         bundle.update(events=[*bundle['events'], second, session_event], event_boundary=3)
         self.assert_receipt(self.post('assessment_process:capture_v2_batch', {'capture_bundle': bundle}), bundle)
 
+    def mixed_session_capture(self):
+        from apps.experiments.models import ExperimentVersion
+        from .models import ExperimentSession
+        _, bundle = self.capture()
+        version = ExperimentVersion.objects.create(experiment=self.version.experiment,
+            version_number=2, published_by=self.teacher, configuration=self.version.configuration)
+        session = ExperimentSession.objects.create(version=version, student=self.student,
+            capture_contract=self.capture_contract)
+        event = copy.deepcopy(bundle['events'][0])
+        event.update(event_id=str(uuid.uuid4()), session_id=session.pk, attempt_id=None,
+            event_type='session_started', payload={}, client_sequence_no=2, client_monotonic_ms=200)
+        checkpoint = copy.deepcopy(bundle['checkpoints'][0])
+        checkpoint.update(checkpoint_id=str(uuid.uuid4()), session_id=session.pk,
+            highest_emitted_sequence_no=2, pending_event_count=2)
+        bundle.update(events=[*bundle['events'], event], checkpoints=[*bundle['checkpoints'], checkpoint], event_boundary=2)
+        return session, bundle
+
+    def test_batch_replays_an_unchanged_shared_outbox_packet_across_owned_sessions(self):
+        _, bundle = self.mixed_session_capture()
+        frozen = copy.deepcopy(bundle)
+        receipt = self.assert_receipt(self.post('assessment_process:capture_v2_batch', {'capture_bundle': bundle}), bundle)
+        self.assertEqual(self.assert_receipt(self.post('assessment_process:capture_v2_batch', {'capture_bundle': bundle}), bundle), receipt)
+        self.assertEqual(bundle, frozen)
+        self.assertEqual(AssessmentEvent.objects.filter(pk__in=[e['event_id'] for e in bundle['events']]).count(), 2)
+
+    def test_mixed_session_packet_rejects_a_foreign_owner_without_partial_ingest(self):
+        from apps.accounts.models import User
+        from .models import ExperimentSession
+        session, bundle = self.mixed_session_capture()
+        other = User.objects.create_user(username='foreign-capture-owner', role=User.Role.STUDENT)
+        ExperimentSession.objects.filter(pk=session.pk).update(student=other)
+        response = self.post('assessment_process:capture_v2_batch', {'capture_bundle': bundle})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(AssessmentEvent.objects.filter(pk__in=[e['event_id'] for e in bundle['events']]).exists())
+        self.assertFalse(ClientCaptureCheckpoint.objects.filter(pk__in=[c['checkpoint_id'] for c in bundle['checkpoints']]).exists())
+
+    def test_mixed_session_packet_rolls_back_all_facts_if_a_later_session_is_invalid(self):
+        _, bundle = self.mixed_session_capture()
+        bundle['events'][-1]['event_type'] = 'invalid-event-type'
+        response = self.post('assessment_process:capture_v2_batch', {'capture_bundle': bundle})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(AssessmentEvent.objects.filter(pk__in=[e['event_id'] for e in bundle['events']]).exists())
+        self.assertFalse(ClientCaptureCheckpoint.objects.filter(pk__in=[c['checkpoint_id'] for c in bundle['checkpoints']]).exists())
+
+    def test_mixed_session_packet_keeps_the_aggregate_event_bound(self):
+        _, bundle = self.mixed_session_capture()
+        bundle['events'] *= 51
+        response = self.post('assessment_process:capture_v2_batch', {'capture_bundle': bundle})
+        self.assertEqual(response.status_code, 413)
+        self.assertFalse(AssessmentEvent.objects.filter(pk__in=[e['event_id'] for e in bundle['events']]).exists())
+
     def test_draft_commits_capture_and_saved_pointer_together(self):
         attempt, bundle = self.capture()
         receipt = self.assert_receipt(self.post('assessment_api:save_draft', self.draft_document(bundle), attempt), bundle)
@@ -460,6 +511,36 @@ class CaptureBundleCommitTests(TransactionTestCase):
     draft_document = CaptureBundleTests.draft_document
     tool_document = CaptureBundleTests.tool_document
 
+    def test_rejected_draft_commit_failure_is_unknown_and_does_not_persist_proof(self):
+        from .capture_bundle_services import save_draft_capture_bundle
+        from .models import CaptureMutationReceipt
+        attempt, bundle = self.capture()
+        document = self.draft_document(bundle)
+        document['target_event_id'] = str(uuid.uuid4())
+        with patch.object(connection, 'commit', side_effect=DatabaseError('injected commit failure')):
+            with self.assertRaises(DatabaseError) as outcome:
+                save_draft_capture_bundle(student=self.student, attempt_id=attempt.pk, document=document)
+        self.assertFalse(hasattr(outcome.exception, 'mutation_rejection_receipt'))
+        self.assertFalse(CaptureMutationReceipt.objects.exists())
+        self.assertFalse(AssessmentEvent.objects.filter(pk=bundle['events'][0]['event_id']).exists())
+
+    def test_lost_rejection_response_recovers_original_rejection_after_reload(self):
+        from .capture_bundle_services import save_draft_capture_bundle
+        from .event_batch_services import ProcessRequestError
+        from .models import CaptureMutationReceipt
+        attempt, bundle = self.capture()
+        document = self.draft_document(bundle)
+        document['target_event_id'] = str(uuid.uuid4())
+        with patch.object(connection, 'run_and_clear_commit_hooks', side_effect=RuntimeError('lost response')):
+            with self.assertRaises(RuntimeError) as outcome:
+                save_draft_capture_bundle(student=self.student, attempt_id=attempt.pk, document=document)
+        self.assertFalse(hasattr(outcome.exception, 'mutation_rejection_receipt'))
+        stored = CaptureMutationReceipt.objects.get(attempt=attempt).receipt
+        with self.assertRaises(ProcessRequestError) as replay:
+            save_draft_capture_bundle(student=self.student, attempt_id=attempt.pk, document=copy.deepcopy(document))
+        self.assertEqual(replay.exception.mutation_rejection_receipt, stored)
+        self.assertFalse(AssessmentEvent.objects.filter(pk=bundle['events'][0]['event_id']).exists())
+
     def test_session_lock_allows_independent_time_sync_foreign_key_commit(self):
         from .capture_bundle_services import _locked_session
         from .event_batch_services import batch_session_contexts
@@ -597,6 +678,81 @@ class CaptureMutationReceiptTests(TestCase):
     tool_document = CaptureBundleTests.tool_document
     post = CaptureBundleTests.post
     assert_receipt = CaptureBundleTests.assert_receipt
+
+    def test_rejected_draft_rolls_back_evidence_and_replays_bound_terminal_receipt(self):
+        from .atomic_submission_services import process_material_fingerprint
+        from .models import CaptureMutationReceipt
+        attempt, bundle = self.capture()
+        document = self.draft_document(bundle)
+        document['target_event_id'] = str(uuid.uuid4())
+        response = self.post('assessment_api:save_draft', document, attempt)
+        self.assertEqual(response.status_code, 409, response.content)
+        error = domain_payload(response)['error']
+        error.pop('request_id', None)
+        self.assertEqual(error['code'], 'response_target_not_persisted')
+        self.assertEqual(error['message'], '目标答案状态尚未持久化，请先同步本机记录后重试。')
+        fingerprint = process_material_fingerprint(document)
+        self.assertEqual(error['fields'], {
+            'mutation_rejected': True, 'receipt_version': 2, 'mutation_kind': 'draft',
+            'attempt_id': attempt.pk, 'capture_operation_id': document['capture_operation_id'],
+            'material_fingerprint': fingerprint,
+        })
+        stored = CaptureMutationReceipt.objects.get(attempt=attempt, token=document['capture_operation_id'])
+        self.assertEqual(stored.receipt['error'], error)
+        self.assertFalse(AssessmentEvent.objects.filter(pk=bundle['events'][0]['event_id']).exists())
+        self.assertFalse(ClientCaptureCheckpoint.objects.exists())
+        self.assertFalse(ResponseSnapshot.objects.exists())
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.response_version, 0)
+        # A changed world cannot convert the same rejected operation into a success.
+        with patch('apps.assessment.capture_bundle_services._ingest', side_effect=AssertionError('must not retry')):
+            replay = self.post('assessment_api:save_draft', document, attempt)
+        replay_error = domain_payload(replay)['error']
+        replay_error.pop('request_id', None)
+        self.assertEqual(replay_error, error)
+        self.assertEqual(replay.status_code, response.status_code)
+        changed = copy.deepcopy(document)
+        changed['target_event_id'] = bundle['events'][0]['event_id']
+        conflict = self.post('assessment_api:save_draft', changed, attempt)
+        self.assertEqual(domain_payload(conflict)['error']['code'], 'capture_mutation_material_conflict')
+        self.assertFalse(domain_payload(conflict)['error']['fields'].get('mutation_rejected'))
+
+    def test_rejected_lease_and_version_conflicts_have_durable_material_proof(self):
+        from .models import Attempt, CaptureMutationReceipt
+        for failure in ('lease', 'version'):
+            with self.subTest(failure=failure):
+                attempt, bundle = self.capture()
+                Attempt.objects.filter(pk=attempt.pk).update(writer_lease_token=None,
+                    writer_client_instance_id=None, writer_lease_expires_at=None)
+                document = self.draft_document(bundle)
+                if failure == 'lease':
+                    from .writer_lease_services import acquire_attempt_writer_lease
+                    acquire_attempt_writer_lease(attempt, client_instance_id=uuid.uuid4())
+                else:
+                    Attempt.objects.filter(pk=attempt.pk).update(response_version=7)
+                first = self.post('assessment_api:save_draft', document, attempt)
+                self.assertEqual(first.status_code, 409, first.content)
+                self.assertEqual(domain_payload(first)['error']['code'],
+                    'writer_lease_conflict' if failure == 'lease' else 'RESPONSE_VERSION_CONFLICT')
+                proof = domain_payload(first)['error']['fields']
+                self.assertTrue(proof['mutation_rejected'])
+                self.assertEqual(proof['capture_operation_id'], document['capture_operation_id'])
+                self.assertTrue(CaptureMutationReceipt.objects.filter(attempt=attempt,
+                    token=document['capture_operation_id']).exists())
+                retry = self.post('assessment_api:save_draft', document, attempt)
+                first_error, retry_error = domain_payload(first)['error'], domain_payload(retry)['error']
+                first_error.pop('request_id', None)
+                retry_error.pop('request_id', None)
+                self.assertEqual(retry_error, first_error)
+
+    def test_new_success_receipt_binds_original_operation_and_material(self):
+        from .atomic_submission_services import process_material_fingerprint
+        attempt, bundle = self.capture()
+        document = self.draft_document(bundle)
+        receipt = self.assert_receipt(self.post('assessment_api:save_draft', document, attempt), bundle)
+        self.assertEqual(receipt['capture_operation_id'], document['capture_operation_id'])
+        self.assertEqual(receipt['attempt_id'], attempt.pk)
+        self.assertEqual(receipt['material_fingerprint'], process_material_fingerprint(document))
 
     def test_draft_replay_preserves_original_head_version_and_saved_at(self):
         from .models import Attempt

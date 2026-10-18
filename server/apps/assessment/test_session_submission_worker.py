@@ -3,12 +3,39 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from django.db import OperationalError
+from django.db import connection
 from django.test import SimpleTestCase
 
 from apps.assessment.management.commands.run_session_submissions import Command
 
 
 class SessionSubmissionWorkerCommandTests(SimpleTestCase):
+    def test_pooled_route_cannot_report_worker_liveness_from_backend_tags(self):
+        from .session_submission_services import session_submission_worker_status
+        with patch.dict(connection.settings_dict, {'HOST': 'pgbouncer'}):
+            self.assertEqual(session_submission_worker_status()['status'], 'unknown')
+        with patch.dict('os.environ', {'POSTGRES_POOL_ALIAS': 'pooled-assessment'}):
+            self.assertEqual(session_submission_worker_status()['status'], 'unknown')
+
+    def test_pooled_worker_does_not_tag_or_retain_a_pool_backend(self):
+        from .management.commands.run_session_submissions import mark_worker_connection
+        pooled = Mock(vendor='postgresql', settings_dict={'HOST': 'pgbouncer'})
+        original_close_at = pooled.close_at
+        with patch('apps.assessment.management.commands.run_session_submissions.db.connection', pooled):
+            mark_worker_connection()
+        pooled.cursor.assert_not_called()
+        self.assertIs(pooled.close_at, original_close_at)
+
+    def test_status_reports_observation_without_claiming_work(self):
+        output = StringIO()
+        with patch('apps.assessment.management.commands.run_session_submissions.observe_submission_queue',
+                   return_value={'queued_count': 2, 'oldest_queued_age_seconds': 45}), patch(
+            'apps.assessment.management.commands.run_session_submissions.claim_session_submission'
+        ) as claim:
+            Command(stdout=output).handle(status=True)
+        claim.assert_not_called()
+        self.assertIn('"oldest_queued_age_seconds": 45', output.getvalue())
+
     def test_closes_old_connections_before_claim_and_after_processing(self):
         job = SimpleNamespace(pk='receipt', status='completed')
         order = Mock()

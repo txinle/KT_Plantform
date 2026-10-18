@@ -52,6 +52,56 @@ class SavedNavigationTests(TestCase):
         return self.client.post(reverse('assessment_api:save_draft', args=[attempt.pk]),
                                 data=json.dumps(document), content_type='application/json')
 
+    def test_navigation_rejection_is_durable_and_binds_inline_confidence_material(self):
+        from .models import CaptureMutationReceipt
+        attempt, document = self.bundle()
+        document['target_event_id'] = str(uuid.uuid4())
+        document['inline_confidence'] = None
+        first = self.post(attempt, document)
+        self.assertEqual(first.status_code, 409, first.content)
+        error = domain_payload(first)['error']
+        error.pop('request_id', None)
+        self.assertEqual(error['code'], 'response_target_not_persisted')
+        self.assertTrue(error['fields']['mutation_rejected'])
+        self.assertEqual(error['fields']['mutation_kind'], 'navigation')
+        self.assertEqual(error['fields']['navigation_token'], document['navigation_token'])
+        self.assertEqual(error['fields']['attempt_id'], attempt.pk)
+        self.assertTrue(CaptureMutationReceipt.objects.filter(attempt=attempt,
+            token=document['navigation_token']).exists())
+        self.assertFalse(AssessmentEvent.objects.filter(event_type__in=['response_transition', 'item_left']).exists())
+        self.assertFalse(ClientCaptureCheckpoint.objects.exists())
+        with patch('apps.assessment.saved_navigation_services.ingest_capture_batch', side_effect=AssertionError('must not retry')):
+            replay = self.post(attempt, document)
+        replay_error = domain_payload(replay)['error']
+        replay_error.pop('request_id', None)
+        self.assertEqual(replay_error, error)
+        changed = deepcopy(document)
+        changed.pop('inline_confidence')
+        conflict = self.post(attempt, changed)
+        self.assertEqual(domain_payload(conflict)['error']['code'], 'navigation_material_conflict')
+        self.assertFalse(domain_payload(conflict)['error']['fields'].get('mutation_rejected'))
+
+    def test_new_navigation_receipt_freezes_inline_confidence_and_legacy_replay_keeps_old_formula(self):
+        from .atomic_submission_services import process_material_fingerprint
+        attempt, document = self.bundle()
+        document['inline_confidence'] = None
+        original = self.post(attempt, document)
+        self.assertEqual(original.status_code, 200, original.content)
+        self.assertEqual(domain_payload(original)['receipt_version'], 2)
+        altered = deepcopy(document)
+        altered.pop('inline_confidence')
+        self.assertEqual(self.post(attempt, altered).status_code, 409)
+        # Existing version-1 outcomes remain recoverable with their original material formula.
+        stored = NavigationReceipt.objects.get(attempt=attempt)
+        stored.receipt.pop('receipt_version')
+        material = {key: document.get(key) for key in ['save_and_leave', 'leave_event_id',
+            'target_event_id', 'to_assignment_id', 'client_clicked_at']}
+        stored.material_fingerprint = process_material_fingerprint(material)
+        stored.save(update_fields=['receipt', 'material_fingerprint'])
+        replay = self.post(attempt, altered)
+        self.assertEqual(replay.status_code, 200, replay.content)
+        self.assertEqual(domain_payload(replay), stored.receipt)
+
     def test_saves_and_leaves_in_one_confirmed_request_without_formal_submission(self):
         attempt, document = self.bundle()
         response = self.post(attempt, document)
@@ -233,6 +283,35 @@ class SavedNavigationCommitTests(TransactionTestCase):
     setUp = capture_fixtures.CaptureV2Tests.setUp
     transition = capture_fixtures.CaptureV2Tests.transition
     bundle = SavedNavigationTests.bundle
+
+    def test_rejection_commit_failure_is_unknown_without_durable_proof(self):
+        from .saved_navigation_services import save_and_leave_attempt
+        from .models import CaptureMutationReceipt
+        attempt, document = self.bundle()
+        document['target_event_id'] = str(uuid.uuid4())
+        with patch.object(connection, 'commit', side_effect=DatabaseError('injected commit failure')):
+            with self.assertRaises(DatabaseError) as outcome:
+                save_and_leave_attempt(student=self.student, attempt_id=attempt.pk, document=document)
+        self.assertFalse(hasattr(outcome.exception, 'mutation_rejection_receipt'))
+        self.assertFalse(CaptureMutationReceipt.objects.exists())
+        self.assertFalse(NavigationReceipt.objects.exists())
+
+    def test_post_commit_rejection_response_loss_replays_durable_original_rejection(self):
+        from .saved_navigation_services import save_and_leave_attempt
+        from .event_batch_services import ProcessRequestError
+        from .models import CaptureMutationReceipt
+        attempt, document = self.bundle()
+        document['target_event_id'] = str(uuid.uuid4())
+        with patch.object(connection, 'run_and_clear_commit_hooks', side_effect=ValidationError('lost response')):
+            with self.assertRaises(ValidationError) as outcome:
+                save_and_leave_attempt(student=self.student, attempt_id=attempt.pk, document=document)
+        self.assertFalse(hasattr(outcome.exception, 'mutation_rejection_receipt'))
+        self.assertFalse(hasattr(outcome.exception, 'navigation_rejection_token'))
+        stored = CaptureMutationReceipt.objects.get(attempt=attempt).receipt
+        with self.assertRaises(ProcessRequestError) as replay:
+            save_and_leave_attempt(student=self.student, attempt_id=attempt.pk, document=deepcopy(document))
+        self.assertEqual(replay.exception.mutation_rejection_receipt, stored)
+        self.assertFalse(NavigationReceipt.objects.exists())
 
     def test_navigation_racing_formal_submission_never_overwrites_the_final_response(self):
         from .capture_v2_services import ingest_capture_batch

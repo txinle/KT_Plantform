@@ -186,6 +186,30 @@ const confidenceOnlyContract = {
 }
 
 describe('StudentAssessment', () => {
+  it('uses server stable-input policy to record and save one completed text burst', async () => {
+    vi.useFakeTimers()
+    const dto = captureV2Question({ draft_answer: '', remaining_seconds: 600,
+      question: { ...questionState.question, question_type: 'short_answer', options: [] } })
+    mocks.api.question.mockResolvedValue({ ...dto, process: { ...dto.process, text_capture_policy: { id: 'stable-input-v1', idle_ms: 1000 } } })
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      mocks.runtime.record.mockClear()
+      const input = wrapper.get('textarea[name="answer"]')
+      await input.setValue('需')
+      await vi.advanceTimersByTimeAsync(100)
+      await input.setValue('需求分析')
+      await vi.advanceTimersByTimeAsync(999)
+      expect(mocks.runtime.record.mock.calls.filter(row => row[0] === 'response_transition')).toHaveLength(0)
+      expect(mocks.api.saveDraft).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      await flushPromises()
+      expect(mocks.runtime.record.mock.calls.filter(row => row[0] === 'response_transition')).toHaveLength(1)
+      expect(mocks.runtime.record.mock.calls.filter(row => row[0] === 'input_operation')).toHaveLength(1)
+      expect(mocks.api.saveDraft).toHaveBeenCalledOnce()
+      expect(mocks.api.saveDraft.mock.calls[0]![1]).toBe('需求分析')
+    } finally { wrapper.unmount() }
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     // A new assessment instance owns a new runtime; remounts inside one test
@@ -294,9 +318,11 @@ describe('StudentAssessment', () => {
       expect(mocks.api.saveDraft).toHaveBeenCalledOnce()
       expect(wrapper.get<HTMLInputElement>('[data-inline-confidence]').element.value).toBe('')
       await wrapper.get('[data-inline-confidence]').setValue('0')
+      await wrapper.get('[data-inline-confidence]').trigger('blur')
       await vi.advanceTimersByTimeAsync(100)
       expect(mocks.api.saveDraft).toHaveBeenLastCalledWith(expect.any(String), 'B', expect.any(String), expect.objectContaining({ inline_confidence: expect.objectContaining({ probability: 0 }) }))
       await wrapper.get('[data-inline-confidence]').setValue('')
+      await wrapper.get('[data-inline-confidence]').trigger('blur')
       await vi.advanceTimersByTimeAsync(100)
       expect(mocks.api.saveDraft).toHaveBeenLastCalledWith(expect.any(String), 'B', expect.any(String), expect.objectContaining({ inline_confidence: expect.objectContaining({ probability: null }) }))
       expect(mocks.api.finishPaper).not.toHaveBeenCalled()
@@ -826,6 +852,26 @@ describe('StudentAssessment', () => {
     expect(wrapper.get('[data-next-question]').attributes('disabled')).toBeDefined()
     expect(mocks.push).not.toHaveBeenCalled()
     wrapper.unmount()
+  })
+
+  it('keeps the original navigation recoverable after its local pointer wait exceeds 60 seconds', async () => {
+    vi.useFakeTimers()
+    const dto = captureV2Question({ remaining_seconds: 600 })
+    Object.assign(dto.process, { save_and_leave: { version: 1 } })
+    mocks.api.question.mockResolvedValue(dto)
+    mocks.runtime.pointerWritesSettled.mockImplementation(() => new Promise(() => undefined))
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      await wrapper.get('[data-nav-assignment="12"]').trigger('click')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(60000)
+      await flushPromises()
+      expect(mocks.api.saveAndLeave).not.toHaveBeenCalled()
+      expect(wrapper.find('[data-navigation-retry]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('等待超时')
+      expect(mocks.push).not.toHaveBeenCalled()
+    } finally { wrapper.unmount() }
   })
 
 
@@ -1898,6 +1944,7 @@ describe('StudentAssessment', () => {
       const blocked = mocks.runtime.serializePointerWrite(() => new Promise<void>(resolve => { release = resolve }))
       await flushPromises()
       await wrapper.get('[data-inline-confidence]').setValue('20')
+      await wrapper.get('[data-inline-confidence]').trigger('blur')
       await vi.advanceTimersByTimeAsync(800)
       mocks.runtime.record.mockClear()
       const tools = wrapper.findComponent({ name: 'StudentResearchTools' })
@@ -1931,14 +1978,40 @@ describe('StudentAssessment', () => {
     } finally { wrapper.unmount() }
   })
 
-  it('invalidates inline confidence on answer changes and preserves the observed value trajectory', async () => {
+  it('saves only the final inline confidence after editing without recording intermediate observations', async () => {
+    vi.useFakeTimers()
+    mocks.api.question.mockResolvedValue({ ...structuredClone(questionState), assessment_flow_version: 1, pending_confidence: confidenceOnlyContract, draft_answer: 'B' })
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      mocks.runtime.record.mockClear()
+      const input = wrapper.get('[data-inline-confidence]')
+      for (const value of ['70', '71', '72', '80']) {
+        await input.setValue(value)
+        await vi.advanceTimersByTimeAsync(800)
+      }
+      expect(mocks.api.saveDraft).not.toHaveBeenCalled()
+      expect(mocks.metadata.has('paper-confidence:0:7:v1:13')).toBe(false)
+      expect(mocks.runtime.record.mock.calls.filter(([type]) => type === 'confidence_observed')).toHaveLength(0)
+      await input.trigger('blur')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(800)
+      expect(mocks.api.saveDraft).toHaveBeenCalledOnce()
+      expect(mocks.api.saveDraft).toHaveBeenLastCalledWith(expect.any(String), 'B', expect.any(String), expect.objectContaining({ inline_confidence: { probability: 80, answer_event_id: null } }))
+      expect(mocks.metadata.get('paper-confidence:0:7:v1:13')).toEqual(expect.objectContaining({ probability: 80 }))
+      expect(mocks.runtime.record.mock.calls.filter(([type]) => type === 'confidence_observed')).toHaveLength(1)
+    } finally { wrapper.unmount() }
+  })
+
+  it('invalidates final inline confidence on answer changes without recording a value trajectory', async () => {
     vi.useFakeTimers()
     mocks.api.question.mockResolvedValue({ ...structuredClone(questionState), assessment_flow_version: 1, pending_confidence: confidenceOnlyContract, draft_answer: 'B' })
     const wrapper = mount(StudentAssessment)
     await flushPromises()
     await wrapper.get('[data-inline-confidence]').setValue('80')
+    await wrapper.get('[data-inline-confidence]').trigger('blur')
     await flushPromises()
-    expect(mocks.runtime.record).toHaveBeenCalledWith('confidence_observed', expect.objectContaining({ stage: 'responded', probability: 80, feedback_phase: 'before_feedback' }), { eventVersion: 2 })
+    expect(mocks.runtime.record.mock.calls.filter(([type]) => type === 'confidence_observed')).toHaveLength(1)
     await wrapper.findAll<HTMLInputElement>('input[name="answer"]')[0]!.setValue(true)
     expect(wrapper.get<HTMLInputElement>('[data-inline-confidence]').element.value).toBe('')
     await vi.advanceTimersByTimeAsync(800)
@@ -2013,7 +2086,7 @@ describe('StudentAssessment', () => {
       expect(wrapper.get('[data-paper-submission-status]').text()).toBe('正在提交试卷，等待服务器确认…')
       accept({ success: true, submission_id: 'receipt', status: 'queued', accepted_at: new Date().toISOString(), status_url: '/status/', next_url: '/student/' })
       await flushPromises()
-      expect(wrapper.get('[data-paper-submission-status]').text()).toBe('试卷已受理，正在处理交卷结果…')
+      expect(wrapper.get('[data-paper-submission-status]').text()).toBe('试卷已受理，等待后台处理…')
     } finally { wrapper.unmount() }
   })
 
@@ -2098,6 +2171,7 @@ describe('StudentAssessment', () => {
     const first = mount(StudentAssessment)
     await flushPromises()
     await first.get('[data-inline-confidence]').setValue('80')
+    await first.get('[data-inline-confidence]').trigger('blur')
     await flushPromises()
     expect(mocks.api.saveDraft).not.toHaveBeenCalled()
     first.unmount()

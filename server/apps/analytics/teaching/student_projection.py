@@ -741,10 +741,8 @@ def _question_options(question, student_answer, *, include_correct):
 
 
 def _feedback_capture(*, task, session, attempt, availability):
-    if (
-        session.capture_contract_id is None
-        or session.capture_contract.contract_name != "capture-v2"
-    ):
+    from apps.assessment.capture_v2_services import uses_capture_v2
+    if not uses_capture_v2(session):
         return None
     return StudentAllowListDTO(
         capture_version="capture-v2",

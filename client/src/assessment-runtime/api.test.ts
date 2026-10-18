@@ -5,6 +5,26 @@ import { createApiClient, MutationOutcomeUnknownError } from '@/api/client'
 import { writeAdmissionCredentials } from './admission'
 
 describe('student assessment API', () => {
+  it.each(['draft', 'navigation', 'entry', 'finish', 'recovery'])('bounds the initial %s transport at 30 seconds', async kind => {
+    vi.useFakeTimers()
+    const client = { mutate: vi.fn((_url: string, options: { signal?: AbortSignal }) => new Promise<never>((_resolve, reject) => {
+      options.signal?.addEventListener('abort', () => reject(options.signal!.reason))
+    })), get: vi.fn((_url: string, options?: { signal?: AbortSignal }) => new Promise<never>((_resolve, reject) => {
+      options?.signal?.addEventListener('abort', () => reject(options.signal!.reason))
+    })) }
+    try {
+      const api = createStudentAssessmentApi(client)
+      const request = kind === 'draft' ? api.saveDraft('/draft/', 'answer', '2026-10-18T00:00:00Z')
+        : kind === 'navigation' ? api.saveAndLeave('/draft/', {} as never)
+        : kind === 'entry' ? api.enterQuestion(7, 11, 'resume', { navigationId: 'nav', clientOccurredAt: '2026-10-18T00:00:00Z', clientMonotonicMs: 1, clientTimeOrigin: '2026-10-18T00:00:00Z' })
+        : kind === 'finish' ? api.finishPaper('/finish/', {} as never)
+        : api.recoverQuestion(7, 11)
+      const result = expect(request).rejects.toMatchObject({ name: 'TimeoutError' })
+      await vi.advanceTimersByTimeAsync(30000)
+      await result
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
   it('exposes only whole-paper submission and no retired per-item submit or skip methods', () => {
     const api = createStudentAssessmentApi({ mutate: vi.fn(), get: vi.fn() })
     expect(api).not.toHaveProperty('submit')
@@ -78,11 +98,12 @@ describe('student assessment API', () => {
 
     expect(client.get.mock.calls).toEqual([['/api/v1/student/sessions/7/questions/10/']])
     expect(client.mutate.mock.calls).toEqual([
-      ['/api/v1/student/sessions/7/questions/11/', { method: 'POST', body: { reason: 'navigation_click', navigation_id: '00000000-0000-4000-8000-000000000010', client_occurred_at: '2026-08-30T08:00:00.000Z', client_monotonic_ms: '62422.300', client_time_origin: '2026-08-30T07:59:58.765Z' } }],
+      ['/api/v1/student/sessions/7/questions/11/', { method: 'POST', signal: expect.any(AbortSignal), body: { reason: 'navigation_click', navigation_id: '00000000-0000-4000-8000-000000000010', client_occurred_at: '2026-08-30T08:00:00.000Z', client_monotonic_ms: '62422.300', client_time_origin: '2026-08-30T07:59:58.765Z' } }],
       [
         '/student/attempts/13/draft/',
         {
           method: 'POST',
+          signal: expect.any(AbortSignal),
           body: { answer: 'B', client_occurred_at: '2026-08-30T08:00:00Z' },
         },
       ],

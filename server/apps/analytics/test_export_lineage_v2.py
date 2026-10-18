@@ -433,6 +433,33 @@ class ExportLineageV2Tests(TransactionTestCase):
             self.assertIn(field, TABLE_FIELD_DESCRIPTIONS["grade_records"])
             self.assertIn(field, COMMON_FIELD_DESCRIPTIONS)
 
+    def test_complete_export_keeps_old_and_stable_input_contracts_distinct(self):
+        from apps.assessment.recording_capture_services import (
+            ensure_capture_contract_v2, ensure_capture_contract_v2_stable_input)
+        contracts = [ensure_capture_contract_v2(), ensure_capture_contract_v2_stable_input()]
+        for index, contract in enumerate(contracts):
+            attempt = self._session(f'contract-policy-{index}', status=Attempt.Status.DRAFT,
+                                    draft_answer='draft', capture_contract=contract)
+            generate_session_coverage(attempt.session)
+        snapshot = create_export_snapshot(course=self.course, experiment=self.experiment,
+                                          created_by=self.teacher)
+        job = ExportJob.objects.create(course=self.course, experiment=self.experiment,
+            snapshot=snapshot, created_by=self.teacher, package='complete')
+        run_export_job(job)
+        with zipfile.ZipFile(job.artifact_path) as archive:
+            rows = list(csv.DictReader(StringIO(archive.read(
+                '01_design_metadata/capture_contracts.csv').decode('utf-8-sig'))))
+            coverage = list(csv.DictReader(StringIO(archive.read(
+                '07_quality/recording_coverage_runs.csv').decode('utf-8-sig'))))
+        self.assertEqual({row['contract_name'] for row in rows},
+                         {'capture-v2', 'capture-v2-stable-input-v1'})
+        self.assertEqual({row['schema_sha256'] for row in rows},
+                         {contract.schema_sha256 for contract in contracts})
+        stable = next(row for row in rows if row['contract_name'] == 'capture-v2-stable-input-v1')
+        self.assertEqual(json.loads(stable['schema_document'])['parameters']['text_input_operations'],
+                         'burst_summary')
+        self.assertEqual({row['coverage_version'] for row in coverage}, {'coverage-v3', 'coverage-v4'})
+
     def test_complete_export_freezes_coverage_run_provenance(self):
         from apps.assessment.recording_capture_services import ensure_capture_contract_v2
 

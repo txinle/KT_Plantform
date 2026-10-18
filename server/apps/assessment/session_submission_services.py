@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from datetime import timedelta
@@ -9,8 +10,8 @@ from functools import wraps
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
-from django.db.models import Prefetch, Q
+from django.db import IntegrityError, connection, transaction
+from django.db.models import Count, Min, Prefetch, Q
 from django.http import Http404
 from django.urls import reverse
 from django.utils import timezone
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 timing_logger = logging.getLogger('kt.session_submission_timing')
 MAX_ATTEMPTS = 3
 LEASE_SECONDS = 300
+WORKER_APPLICATION_NAME = 'kt-session-submission-worker'
 
 
 def _timed_submission_phase(phase):
@@ -188,15 +190,50 @@ def accept_session_submission(*, student, session_id, document, request_received
         raise ProcessRequestError('submission_token_conflict', status=409) from error
 
 
+def submission_worker_connection_is_pooled(database_connection):
+    return bool(os.getenv('POSTGRES_POOL_ALIAS')
+                or 'pgbouncer' in str(database_connection.settings_dict.get('HOST', '')).lower())
+
+
+def session_submission_worker_status():
+    """Observe a DB-connected worker across containers, without claiming execution."""
+    observed_at = timezone.now().isoformat()
+    # Pool backends can outlive their worker clients and retain another client's tag.
+    if connection.vendor != 'postgresql' or submission_worker_connection_is_pooled(connection):
+        return {'status': 'unknown', 'observed_at': observed_at}
+    with connection.cursor() as cursor:
+        cursor.execute('SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() '
+                       'AND application_name = %s)', [WORKER_APPLICATION_NAME])
+        connected = cursor.fetchone()[0]
+    return {'status': 'connected' if connected else 'not_connected', 'observed_at': observed_at}
+
+
+def observe_submission_queue():
+    now = timezone.now()
+    queue = SessionSubmission.objects.filter(status='queued').aggregate(
+        queued_count=Count('pk'), oldest_queued_at=Min('accepted_at'))
+    oldest = queue['oldest_queued_at']
+    return {'queued_count': queue['queued_count'],
+            'oldest_queued_at': oldest.isoformat() if oldest else None,
+            'oldest_queued_age_seconds': max(0, int((now - oldest).total_seconds())) if oldest else None,
+            'worker': session_submission_worker_status()}
+
+
 def submission_receipt(job):
     session = job.session
     next_url = reverse('assessment:complete', args=[session.pk])
+    state = job.status
+    if state == SessionSubmission.Status.QUEUED and job.attempts:
+        state = 'retrying'
+    elif state == SessionSubmission.Status.RUNNING and job.lease_expires_at <= timezone.now():
+        state = 'failed' if job.attempts >= MAX_ATTEMPTS else 'recovering'
     return {'success': True, 'submission_id': str(job.pk), 'status': job.status,
+            'processing_state': state, 'worker': session_submission_worker_status(),
             'accepted_at': job.accepted_at.isoformat(),
             'completed_at': job.completed_at.isoformat() if job.completed_at else None,
             'error': ({'code': 'submission_needs_verification',
                        'message': '试卷已受理，处理结果需要核验，请联系教师；请勿重复作答。'}
-                      if job.status == SessionSubmission.Status.FAILED else None),
+                      if state == SessionSubmission.Status.FAILED else None),
             'status_url': reverse('assessment_api:student-session-submission', args=[session.pk]),
             'next_url': next_url}
 

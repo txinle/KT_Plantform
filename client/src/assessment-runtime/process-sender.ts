@@ -17,6 +17,7 @@ export class ProcessEventCollector {
   checkpointUploads: CheckpointQueue
   captureBundle?: CaptureBundleCapability
   private progressWaiters = new Set<() => void>()
+  lastFlushError: unknown
 
   constructor(options: SenderOptions) {
     if (!options || !options.outbox) throw new Error('An outbox is required.');
@@ -141,7 +142,7 @@ export class ProcessEventCollector {
     if (!this.setTimeout || this.retryTimer !== null) return;
     this.retryTimer = this.setTimeout(() => {
       this.retryTimer = null;
-      this.flush();
+      void this.flush().catch(error => { this.lastFlushError = error });
     }, delay);
   }
 
@@ -162,13 +163,17 @@ export class ProcessEventCollector {
         if (!clientId) break;
         const events = batch?.events || [];
         const checkpoints = pending.filter(row => row.client_instance_id === clientId).slice(0, capability.max_checkpoints);
+        if (checkpoints.some(row => new TextEncoder().encode(JSON.stringify(row)).byteLength > 256 * 1024)) {
+          throw Object.assign(new Error('单条检查点超过传输边界，材料已保留，请联系教师处理。'), { code: 'capture_item_too_large' });
+        }
         const snapshot: CaptureBundle = { version: 1, client_instance_id: clientId,
           event_boundary: options.boundary?.[clientId] ?? Math.max(0, ...events.map(event => event.client_sequence_no), ...checkpoints.map(row => row.highest_emitted_sequence_no)),
           events, checkpoints };
-        while (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > capability.max_bytes - 64 * 1024) {
-          if (snapshot.checkpoints.length) snapshot.checkpoints.pop();
+        const bytes = () => new TextEncoder().encode(JSON.stringify({ capture_bundle: snapshot })).byteLength;
+        while (bytes() > capability.max_bytes - 64 * 1024) {
+          if (snapshot.checkpoints.length && (snapshot.events.length || snapshot.checkpoints.length > 1)) snapshot.checkpoints.pop();
           else if (snapshot.events.length > 1) snapshot.events.pop();
-          else return false;
+          else throw Object.assign(new Error('单条作答材料超过传输边界，材料已保留，请联系教师处理。'), { code: 'capture_item_too_large' });
         }
         intent = { processSnapshot: snapshot, operationId: options.operationId };
         await timedAssessmentStage('local_store', () => this.outbox.writeMetadata(key, intent), options.operationId ?? null);
@@ -355,19 +360,21 @@ export class ProcessEventCollector {
       if (this.captureBundle?.enabled && this.captureBundle.version === 1) {
         const requiredCheckpoints = (await this.outbox.pendingCheckpoints()).filter(row => row.session_id === this.sessionId
           && row.highest_emitted_sequence_no <= (boundary[row.client_instance_id] ?? -1)).map(row => row.checkpoint_id);
+        let previousProgress: string | undefined;
         while (true) {
-          let notify!: () => void;
-          const changed = new Promise<void>(resolve => { notify = resolve; this.progressWaiters.add(notify); });
-          try {
-            const states = await Promise.all(Object.entries(boundary).map(async ([id, sequence]) => (await this.outbox.captureState(id)).highestContiguousAcked >= sequence));
-            const pendingIds = new Set((await this.outbox.pendingCheckpoints()).map(row => row.checkpoint_id));
-            if (states.every(Boolean) && requiredCheckpoints.every(id => !pendingIds.has(id))) return true;
-            const earlier = this.flushPromise;
-            const upload = earlier || this.flush({ ...options, boundary });
-            const result = await Promise.race([upload, changed]);
-            // flush() notifies waiters in finally before its result settles.
-            if (!earlier && (result === false || (!this.flushPromise && await upload === false))) return false;
-          } finally { this.progressWaiters.delete(notify); }
+          const states = await Promise.all(Object.entries(boundary).map(async ([id, sequence]) => {
+            const state = await this.outbox.captureState(id);
+            return { ack: state.highestContiguousAcked, confirmed: state.highestContiguousAcked >= sequence };
+          }));
+          const pendingIds = new Set((await this.outbox.pendingCheckpoints()).map(row => row.checkpoint_id));
+          const remaining = requiredCheckpoints.filter(id => pendingIds.has(id));
+          if (states.every(state => state.confirmed) && !remaining.length) return true;
+          const progress = JSON.stringify([states.map(state => state.ack), remaining]);
+          if (progress === previousProgress) throw Object.assign(new Error('待同步材料正由先前操作占用，请核验原操作后重试。'), { code: 'capture_drain_blocked' });
+          const earlier = this.flushPromise;
+          if (!await (earlier || this.flush({ ...options, boundary }))) return false;
+          // An older concurrent upload may not cover this boundary; allow our own round.
+          previousProgress = earlier ? undefined : progress;
         }
       }
       while (true) {
@@ -519,7 +526,7 @@ export class ProcessEventCollector {
         throw Object.assign(new Error('Submission evidence has a rejected event or local sequence gap.'), { code: 'submission_snapshot_gap' });
       }
       const events = await this.outbox.pendingEvents(this.clientInstanceId, sequence);
-      if (events.length > MAX_BATCH_SIZE) {
+      if (events.length > Math.min(MAX_BATCH_SIZE, this.captureBundle?.max_events ?? MAX_BATCH_SIZE)) {
         throw Object.assign(new Error('Submission snapshot exceeds the bounded event limit.'), { code: 'submission_snapshot_too_large' });
       }
       await this._createCheckpoint('commit');
@@ -528,7 +535,8 @@ export class ProcessEventCollector {
         throw Object.assign(new Error('Earlier client checkpoints must be confirmed before submission.'), { code: 'submission_snapshot_backlog' });
       }
       const processSnapshot = { client_instance_id: this.clientInstanceId, event_boundary: sequence, events, checkpoints };
-      if (checkpoints.length > MAX_BATCH_SIZE || new TextEncoder().encode(JSON.stringify(processSnapshot)).byteLength > 8 * 1024 * 1024 - 64 * 1024) {
+      if (checkpoints.length > Math.min(MAX_BATCH_SIZE, this.captureBundle?.max_checkpoints ?? MAX_BATCH_SIZE)
+        || new TextEncoder().encode(JSON.stringify({ ...intent, processSnapshot })).byteLength > (this.captureBundle?.max_bytes ?? 8 * 1024 * 1024) - 64 * 1024) {
         throw Object.assign(new Error('Submission snapshot exceeds the bounded envelope limit.'), { code: 'submission_snapshot_too_large' });
       }
       const result = { ...clone(intent), processSnapshot };
@@ -562,7 +570,7 @@ export class ProcessEventCollector {
       if (events.some(event => event.attempt_id !== null && event.attempt_id !== this.attemptId)) {
         throw Object.assign(new Error('Earlier question evidence must be confirmed before navigation.'), { code: 'navigation_snapshot_backlog' });
       }
-      if (events.length > MAX_BATCH_SIZE) {
+      if (events.length > Math.min(MAX_BATCH_SIZE, this.captureBundle?.max_events ?? MAX_BATCH_SIZE)) {
         throw Object.assign(new Error('Navigation snapshot exceeds the bounded event limit.'), { code: 'navigation_snapshot_too_large' });
       }
       await this._createCheckpoint('navigation');
@@ -570,7 +578,14 @@ export class ProcessEventCollector {
         checkpoint.session_id === this.sessionId && checkpoint.client_instance_id === this.clientInstanceId
         && checkpoint.highest_emitted_sequence_no <= sequence);
       const processSnapshot = { client_instance_id: this.clientInstanceId, event_boundary: sequence, events, checkpoints };
-      if (checkpoints.length > MAX_BATCH_SIZE || new TextEncoder().encode(JSON.stringify(processSnapshot)).byteLength > 8 * 1024 * 1024 - 64 * 1024) {
+      const request = { navigation_token: intent.token, leave_event_id: intent.leaveEventId,
+        target_event_id: intent.head, to_assignment_id: intent.toAssignmentId, client_clicked_at: intent.clickedAt,
+        writer_lease_token: intent.writerLeaseToken, writer_client_instance_id: intent.writerClientInstanceId,
+        save_and_leave: { version: 1, ...processSnapshot, expected_version: intent.expectedResponseVersion },
+        ...(intent.nextEntry ? { next_entry: intent.nextEntry } : {}),
+        ...(intent.inlineConfidence ? { inline_confidence: intent.inlineConfidence } : {}) };
+      if (checkpoints.length > Math.min(MAX_BATCH_SIZE, this.captureBundle?.max_checkpoints ?? MAX_BATCH_SIZE)
+        || new TextEncoder().encode(JSON.stringify(request)).byteLength > (this.captureBundle?.max_bytes ?? 8 * 1024 * 1024) - 64 * 1024) {
         throw Object.assign(new Error('Navigation snapshot exceeds the bounded envelope limit.'), { code: 'navigation_snapshot_too_large' });
       }
       const result = { ...clone(intent), processSnapshot };

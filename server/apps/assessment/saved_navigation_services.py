@@ -8,8 +8,9 @@ from django.core.exceptions import ValidationError
 
 from .atomic_submission_services import MAX_BYTES, MAX_CHECKPOINTS, MAX_EVENTS, process_material_fingerprint, validate_process_bundle
 from .capture_v2_services import ingest_capture_batch, uses_capture_v2
+from .capture_bundle_services import attach_mutation_rejection, mutation_rejection_receipt, raise_mutation_rejection
 from .event_batch_services import ProcessRequestError, parse_uuid, require_exact_mapping
-from .models import AssessmentEvent, Attempt, ExperimentSession, NavigationReceipt
+from .models import AssessmentEvent, Attempt, CaptureMutationReceipt, ExperimentSession, NavigationReceipt
 from .recording_capture_services import capture_checkpoint_context, record_client_capture_checkpoint
 from .services import _validate_course_access, _validate_process_event_time, save_draft
 from .writer_lease_services import WriterLeaseConflict, _bind_locked_attempt, acquire_attempt_writer_lease, assert_attempt_writer_lease, release_attempt_writer_lease
@@ -28,19 +29,6 @@ def saved_navigation_capability(attempt):
 
 
 def save_and_leave_attempt(*, student, attempt_id, document, request_received_at=None):
-    outcome = {'new_operation': False, 'body_completed': False}
-    try:
-        return _save_and_leave_attempt(student=student, attempt_id=attempt_id, document=document,
-                                      request_received_at=request_received_at, outcome=outcome)
-    except (ValidationError, WriterLeaseConflict, ProcessRequestError) as error:
-        # This marker is only set after the durable transaction has rolled back.
-        # A failed COMMIT or an existing receipt conflict leaves the outcome unknown.
-        if outcome['new_operation'] and not outcome['body_completed']:
-            error.navigation_rejection_token = str(document['navigation_token'])
-        raise
-
-
-def _save_and_leave_attempt(*, student, attempt_id, document, request_received_at, outcome):
     require_exact_mapping(document, allowed=FIELDS,
                           required={'navigation_token', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'save_and_leave'})
     token = parse_uuid(document['navigation_token'])
@@ -56,6 +44,7 @@ def _save_and_leave_attempt(*, student, attempt_id, document, request_received_a
     if clicked_at is not None and (client_time is None or not timezone.is_aware(client_time)):
         raise ProcessRequestError('invalid_client_clicked_at')
     request_received_at = request_received_at or timezone.now()
+    rejection = None
     with transaction.atomic(durable=True):
         session_id = Attempt.objects.filter(pk=attempt_id, session__student=student).values_list('session_id', flat=True).get()
         session = ExperimentSession.objects.select_for_update(of=('self',)).select_related(
@@ -79,72 +68,89 @@ def _save_and_leave_attempt(*, student, attempt_id, document, request_received_a
             ['save_and_leave', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'client_clicked_at']}
         if 'next_entry' in document:
             material['next_entry'] = document['next_entry']
-        fingerprint = process_material_fingerprint(material)
         _validate_course_access(session, request_received_at=request_received_at)
         existing = NavigationReceipt.objects.filter(attempt=attempt, token=token).first()
+        # Receipts issued before v2 keep their original fingerprint formula.
+        if (existing is None or existing.receipt.get('receipt_version', 1) >= 2) and 'inline_confidence' in document:
+            material['inline_confidence'] = document['inline_confidence']
+        fingerprint = process_material_fingerprint(material)
         if existing is not None:
             if existing.material_fingerprint != fingerprint:
                 raise ProcessRequestError('navigation_material_conflict', status=409)
             receipt = existing.receipt
         else:
-            outcome['new_operation'] = True
-            if not saved_navigation_capability(attempt)['enabled']:
-                raise ProcessRequestError('save_and_leave_disabled', status=409)
-            if destination_id == attempt.assignment_id or not session.assignments.filter(pk=destination_id).exists():
-                raise ProcessRequestError('invalid_navigation_destination')
-            time_error = _validate_process_event_time(session, request_received_at=request_received_at)
-            if time_error:
-                raise ValidationError(time_error)
-            if session.status != ExperimentSession.Status.IN_PROGRESS:
-                raise ValidationError('当前会话不可继续作答')
-            if document.get('writer_lease_token') is not None:
-                assert_attempt_writer_lease(attempt, lease_token=document['writer_lease_token'],
-                                           client_instance_id=client_id)
-                lease_token = document['writer_lease_token']
-            else:
-                lease_token = acquire_attempt_writer_lease(attempt, client_instance_id=client_id,
-                                                          _locked_attempt=attempt).token
-            acknowledgements = ingest_capture_batch(student=student, document={
-                'client_instance_id': bundle['client_instance_id'], 'events': bundle['events'],
-            }, request_received_at=request_received_at, locked_sessions={session.pk: session},
-                locked_attempts={attempt.pk: attempt}) if bundle['events'] else []
-            left = AssessmentEvent.objects.filter(pk=leave_id, attempt=attempt, event_type='item_left',
-                                                  client_instance_id=client_id, correlation_id=token).first()
-            if (left is None or left.client_sequence_no > bundle['event_boundary']
-                    or left.payload != {'leave_reason': 'navigation', 'to_assignment_id': destination_id}):
-                raise ProcessRequestError('invalid_navigation_leave_event')
+            rejected = CaptureMutationReceipt.objects.filter(attempt=attempt, token=token).first()
+            if rejected is not None:
+                if (rejected.material_fingerprint != fingerprint
+                        or rejected.receipt.get('error', {}).get('fields', {}).get('mutation_kind') != 'navigation'):
+                    raise ProcessRequestError('navigation_material_conflict', status=409)
+                raise_mutation_rejection(rejected.receipt)
             try:
-                context = capture_checkpoint_context(student=student, bundle=bundle, session=session)
-                checkpoint_ids = [str(record_client_capture_checkpoint(student=student, document=row, context=context).pk)
-                                  for row in bundle['checkpoints']]
-            except ValidationError as error:
-                raise ProcessRequestError('invalid_capture_checkpoint') from error
-            terminal = attempt.status in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}
-            if (target is None or terminal) and attempt.response_version != bundle['expected_version']:
-                raise ProcessRequestError('navigation_response_version_conflict', status=409)
-            if not terminal:
-                if target is not None:
-                    attempt = save_draft(attempt.pk, None, client_time, target_event_id=target,
-                        expected_version=bundle['expected_version'], writer_lease_token=lease_token,
-                        writer_client_instance_id=client_id, request_received_at=request_received_at,
-                        _locked_attempt=attempt,
-                        inline_confidence=document.get('inline_confidence'))
-                elif attempt.active_response_event_id is not None:
-                    raise ProcessRequestError('missing_navigation_response_target')
-                else:
-                    from .prepared_services import save_inline_confidence
-                    save_inline_confidence(attempt, document.get('inline_confidence'))
-            elif (str(attempt.active_response_event_id) if attempt.active_response_event_id else None) != target:
-                raise ProcessRequestError('navigation_response_conflict', status=409)
-            release_attempt_writer_lease(attempt, lease_token=lease_token, client_instance_id=client_id,
-                                         _locked_attempt=attempt)
-            receipt = {'success': True, 'committed': True, 'navigation_token': str(token),
-                       'acknowledgements': acknowledgements, 'checkpoint_ids': checkpoint_ids,
-                       'response_version': attempt.response_version,
-                       'active_response_event_id': str(attempt.active_response_event_id) if attempt.active_response_event_id else None,
-                       'saved_at': attempt.draft_saved_at.isoformat() if attempt.draft_saved_at else None,
-                       'status': attempt.status, 'writer_lease_released': True, 'to_assignment_id': destination_id,
-                       'next_url': reverse('assessment:question', args=[session.pk, destination_id])}
-            NavigationReceipt.objects.create(attempt=attempt, token=token, material_fingerprint=fingerprint, receipt=receipt)
-        outcome['body_completed'] = True
+                with transaction.atomic():
+                    if not saved_navigation_capability(attempt)['enabled']:
+                        raise ProcessRequestError('save_and_leave_disabled', status=409)
+                    if destination_id == attempt.assignment_id or not session.assignments.filter(pk=destination_id).exists():
+                        raise ProcessRequestError('invalid_navigation_destination')
+                    time_error = _validate_process_event_time(session, request_received_at=request_received_at)
+                    if time_error:
+                        raise ValidationError(time_error)
+                    if session.status != ExperimentSession.Status.IN_PROGRESS:
+                        raise ValidationError('当前会话不可继续作答')
+                    if document.get('writer_lease_token') is not None:
+                        assert_attempt_writer_lease(attempt, lease_token=document['writer_lease_token'],
+                                                   client_instance_id=client_id)
+                        lease_token = document['writer_lease_token']
+                    else:
+                        lease_token = acquire_attempt_writer_lease(attempt, client_instance_id=client_id,
+                                                                  _locked_attempt=attempt).token
+                    acknowledgements = ingest_capture_batch(student=student, document={
+                        'client_instance_id': bundle['client_instance_id'], 'events': bundle['events'],
+                    }, request_received_at=request_received_at, locked_sessions={session.pk: session},
+                        locked_attempts={attempt.pk: attempt}) if bundle['events'] else []
+                    left = AssessmentEvent.objects.filter(pk=leave_id, attempt=attempt, event_type='item_left',
+                                                          client_instance_id=client_id, correlation_id=token).first()
+                    if (left is None or left.client_sequence_no > bundle['event_boundary']
+                            or left.payload != {'leave_reason': 'navigation', 'to_assignment_id': destination_id}):
+                        raise ProcessRequestError('invalid_navigation_leave_event')
+                    try:
+                        context = capture_checkpoint_context(student=student, bundle=bundle, session=session)
+                        checkpoint_ids = [str(record_client_capture_checkpoint(student=student, document=row, context=context).pk)
+                                          for row in bundle['checkpoints']]
+                    except ValidationError as error:
+                        raise ProcessRequestError('invalid_capture_checkpoint') from error
+                    terminal = attempt.status in {Attempt.Status.SUBMITTED, Attempt.Status.TIMED_OUT, Attempt.Status.UNANSWERED}
+                    if (target is None or terminal) and attempt.response_version != bundle['expected_version']:
+                        raise ProcessRequestError('navigation_response_version_conflict', status=409)
+                    if not terminal:
+                        if target is not None:
+                            attempt = save_draft(attempt.pk, None, client_time, target_event_id=target,
+                                expected_version=bundle['expected_version'], writer_lease_token=lease_token,
+                                writer_client_instance_id=client_id, request_received_at=request_received_at,
+                                _locked_attempt=attempt,
+                                inline_confidence=document.get('inline_confidence'))
+                        elif attempt.active_response_event_id is not None:
+                            raise ProcessRequestError('missing_navigation_response_target')
+                        else:
+                            from .prepared_services import save_inline_confidence
+                            save_inline_confidence(attempt, document.get('inline_confidence'))
+                    elif (str(attempt.active_response_event_id) if attempt.active_response_event_id else None) != target:
+                        raise ProcessRequestError('navigation_response_conflict', status=409)
+                    release_attempt_writer_lease(attempt, lease_token=lease_token, client_instance_id=client_id,
+                                                 _locked_attempt=attempt)
+                    receipt = {'success': True, 'committed': True, 'receipt_version': 2, 'navigation_token': str(token),
+                               'acknowledgements': acknowledgements, 'checkpoint_ids': checkpoint_ids,
+                               'response_version': attempt.response_version,
+                               'active_response_event_id': str(attempt.active_response_event_id) if attempt.active_response_event_id else None,
+                               'saved_at': attempt.draft_saved_at.isoformat() if attempt.draft_saved_at else None,
+                               'status': attempt.status, 'writer_lease_released': True, 'to_assignment_id': destination_id,
+                               'next_url': reverse('assessment:question', args=[session.pk, destination_id])}
+                    NavigationReceipt.objects.create(attempt=attempt, token=token, material_fingerprint=fingerprint, receipt=receipt)
+            except (ValidationError, WriterLeaseConflict, ProcessRequestError) as error:
+                rejection = error
+                receipt = mutation_rejection_receipt(error, attempt, token, fingerprint, kind='navigation')
+                CaptureMutationReceipt.objects.create(attempt=attempt, token=token, kind='draft',
+                    material_fingerprint=fingerprint, receipt=receipt)
+    if rejection is not None:
+        attach_mutation_rejection(rejection, receipt)
+        raise rejection
     return attempt, receipt

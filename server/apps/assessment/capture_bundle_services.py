@@ -130,28 +130,39 @@ def ingest_capture_bundle(*, student, document, request_received_at=None):
         raise ProcessRequestError('invalid_request')
     process_material_fingerprint(document)
     session_ids = set()
-    for name in ('events', 'checkpoints'):
+    for name, limit in (('events', MAX_EVENTS), ('checkpoints', MAX_CHECKPOINTS)):
         rows = bundle.get(name)
         if not isinstance(rows, list):
             raise ProcessRequestError('invalid_request')
+        if len(rows) > limit:
+            raise ProcessRequestError('atomic_submission_too_large', status=413)
         for row in rows:
             if not isinstance(row, dict) or type(row.get('session_id')) is not int:
                 raise ProcessRequestError('invalid_bundle_link')
             session_ids.add(row['session_id'])
-    if len(session_ids) != 1:
+    if not session_ids:
         raise ProcessRequestError('invalid_bundle_link')
     request_received_at = request_received_at or timezone.now()
     with coalesce_session_materializations(), transaction.atomic(durable=True):
-        session = _locked_session(student, session_ids.pop())
+        # One browser outbox may retain facts from several owned sessions.
+        # Lock in one order and confirm the original packet only after all commit.
+        sessions = [_locked_session(student, session_id) for session_id in sorted(session_ids)]
         from apps.accounts.research_consent import research_consent_required
         if research_consent_required(student):
             raise ProcessRequestError('research_consent_required', status=403)
-        receipt = _ingest(student, bundle, session, request_received_at,
-            recording_close=session.status != ExperimentSession.Status.IN_PROGRESS)
+        receipt = {'acknowledgements': [], 'checkpoint_ids': []}
+        for session in sessions:
+            part = {**bundle, 'events': [row for row in bundle['events'] if row['session_id'] == session.pk],
+                'checkpoints': [row for row in bundle['checkpoints'] if row['session_id'] == session.pk]}
+            confirmed = _ingest(student, part, session, request_received_at,
+                recording_close=session.status != ExperimentSession.Status.IN_PROGRESS)
+            receipt['acknowledgements'].extend(confirmed['acknowledgements'])
+            receipt['checkpoint_ids'].extend(confirmed['checkpoint_ids'])
     return {**receipt, 'committed': True}
 
 
 def save_draft_capture_bundle(*, student, attempt_id, document, request_received_at=None):
+    from .writer_lease_services import WriterLeaseConflict
     require_exact_mapping(document, allowed={'answer', 'client_occurred_at', 'target_event_id',
         'expected_version', 'writer_lease_token', 'writer_client_instance_id', 'capture_bundle', 'capture_operation_id', 'inline_confidence'},
         required={'capture_bundle', 'capture_operation_id'})
@@ -159,6 +170,7 @@ def save_draft_capture_bundle(*, student, attempt_id, document, request_received
     token = parse_uuid(document['capture_operation_id'])
     fingerprint = _mutation_fingerprint(document)
     request_received_at = request_received_at or timezone.now()
+    rejection = None
     with coalesce_session_materializations(), transaction.atomic(durable=True):
         attempt = _locked_attempt(student, attempt_id)
         from .services import mutation_validation_context
@@ -169,20 +181,29 @@ def save_draft_capture_bundle(*, student, attempt_id, document, request_received
         receipt = _existing_mutation_receipt(student, attempt, token, 'draft', fingerprint, request_received_at,
             validation_context=validation_context)
         if receipt is None:
-            evidence = _ingest(student, document['capture_bundle'], attempt.session, request_received_at, attempt,
-                validation_context=validation_context)
             try:
-                attempt = save_draft(attempt_id, document.get('answer'),
-                    parse_datetime(document['client_occurred_at']) if document.get('client_occurred_at') else None,
-                    request_received_at=request_received_at, target_event_id=document.get('target_event_id'),
-                    expected_version=document.get('expected_version'), writer_lease_token=document.get('writer_lease_token'),
-                    writer_client_instance_id=document.get('writer_client_instance_id'), _locked_attempt=attempt,
-                    inline_confidence=document.get('inline_confidence'), _validation_context=validation_context)
-            except ResponseVersionConflict as error:
-                raise ProcessRequestError('response_version_conflict', status=409) from error
-            receipt = {**draft_response(attempt), **evidence, 'committed': True}
+                # Only a completed rollback of this savepoint proves rejection.
+                # The outer commit must still succeed before exposing that proof.
+                with transaction.atomic():
+                    evidence = _ingest(student, document['capture_bundle'], attempt.session, request_received_at, attempt,
+                        validation_context=validation_context)
+                    attempt = save_draft(attempt_id, document.get('answer'),
+                        parse_datetime(document['client_occurred_at']) if document.get('client_occurred_at') else None,
+                        request_received_at=request_received_at, target_event_id=document.get('target_event_id'),
+                        expected_version=document.get('expected_version'), writer_lease_token=document.get('writer_lease_token'),
+                        writer_client_instance_id=document.get('writer_client_instance_id'), _locked_attempt=attempt,
+                        inline_confidence=document.get('inline_confidence'), _validation_context=validation_context)
+                    receipt = {**draft_response(attempt), **evidence, 'committed': True,
+                        'receipt_version': 2, 'capture_operation_id': str(token), 'attempt_id': attempt.pk,
+                        'material_fingerprint': fingerprint}
+            except (ValidationError, WriterLeaseConflict, ProcessRequestError) as error:
+                rejection = error
+                receipt = mutation_rejection_receipt(error, attempt, token, fingerprint, kind='draft')
             CaptureMutationReceipt.objects.create(attempt=attempt, token=token, kind='draft',
                 material_fingerprint=fingerprint, receipt=receipt)
+    if rejection is not None:
+        attach_mutation_rejection(rejection, receipt)
+        raise rejection
     return attempt, receipt
 
 
@@ -226,7 +247,45 @@ def _existing_mutation_receipt(student, attempt, token, kind, fingerprint, reque
         return None
     if existing.kind != kind or existing.material_fingerprint != fingerprint:
         raise ProcessConflictError('capture_mutation_material_conflict')
+    if existing.receipt.get('outcome') == 'rejected':
+        raise_mutation_rejection(existing.receipt)
     return existing.receipt
+
+
+def mutation_rejection_receipt(error, attempt, token, fingerprint, *, kind):
+    """Freeze only domain rejections after their writes have rolled back."""
+    from .writer_lease_services import WriterLeaseConflict
+    fields = dict(error.document) if isinstance(error, ResponseVersionConflict) else {}
+    if isinstance(error, ProcessRequestError):
+        code, status = error.code, error.status
+        message = getattr(error, 'message', error.code)
+    elif isinstance(error, WriterLeaseConflict):
+        code, status = 'writer_lease_conflict', 409
+        message = '另一设备正在保存此题，请稍后重试；本机轨迹仍保留。'
+    else:
+        code, status = ('RESPONSE_VERSION_CONFLICT' if isinstance(error, ResponseVersionConflict)
+            else 'navigation_rejected' if kind == 'navigation' else 'draft_rejected'), 409
+        message = '; '.join(error.messages)
+    fields.update(mutation_rejected=True, receipt_version=2, mutation_kind=kind,
+        attempt_id=attempt.pk, material_fingerprint=fingerprint)
+    if kind == 'navigation':
+        fields.update(navigation_rejected=True, navigation_token=str(token))
+    else:
+        fields['capture_operation_id'] = str(token)
+    return {'receipt_version': 2, 'outcome': 'rejected', 'http_status': status,
+        'error': {'code': code, 'message': message, 'fields': fields}}
+
+
+def attach_mutation_rejection(error, receipt):
+    error.mutation_rejection_receipt = receipt
+    if receipt['error']['fields']['mutation_kind'] == 'navigation':
+        error.navigation_rejection_token = receipt['error']['fields']['navigation_token']
+
+
+def raise_mutation_rejection(receipt):
+    error = ProcessRequestError(receipt['error']['code'], status=receipt['http_status'])
+    attach_mutation_rejection(error, receipt)
+    raise error
 
 
 def draft_response(attempt):

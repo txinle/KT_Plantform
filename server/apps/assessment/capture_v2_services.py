@@ -2,7 +2,7 @@
 from copy import deepcopy
 import uuid
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.core.exceptions import ValidationError
 
 from .event_batch_services import ProcessConflictError, ProcessRequestError, append_event_batch, batch_session_contexts
@@ -99,7 +99,9 @@ def ingest_capture_batch(*, student, document, request_received_at=None, locked_
 
 
 def uses_capture_v2(session):
-    return bool(session.capture_contract_id and session.capture_contract.contract_name == 'capture-v2')
+    return bool(session.capture_contract_id and session.capture_contract.contract_name in {
+        'capture-v2', 'capture-v2-stable-input-v1',
+    })
 
 
 class ResponseVersionConflict(ValidationError):
@@ -112,6 +114,13 @@ class ResponseVersionConflict(ValidationError):
             'candidate_answer': candidate.payload['after_state']['value'],
         }
         super().__init__('另一设备保存了不同答案，请选择继续使用的版本。')
+
+
+class ResponseTargetNotPersisted(ProcessRequestError):
+    message = '目标答案状态尚未持久化，请先同步本机记录后重试。'
+
+    def __init__(self):
+        super().__init__('response_target_not_persisted', status=409)
 
 
 def record_response_pointer_conflict(
@@ -163,7 +172,7 @@ def select_response_target(attempt, target_event_id, expected_version, branch_re
             pk=target_event_id, attempt=attempt, event_type='response_transition',
         )
     except (AssessmentEvent.DoesNotExist, ValueError, ValidationError):
-        raise ValidationError('目标答案状态尚未持久化，不能保存或提交。') from None
+        raise ResponseTargetNotPersisted() from None
     if attempt.active_response_event_id == target.pk and branch_resolution is None:
         return target
     if expected_version != attempt.response_version:
@@ -183,12 +192,30 @@ def select_response_target(attempt, target_event_id, expected_version, branch_re
         return target
     # A stale device cannot silently make an alternate descendant active even
     # after learning the current version number; branch selection is explicit.
-    current = target
-    while current and current.pk != attempt.active_response_event_id:
-        parent = current.payload.get('parent_event_id')
-        current = AssessmentEvent.objects.filter(pk=parent, attempt=attempt).first() if parent else None
-    if attempt.active_response_event_id and current is None:
-        raise ResponseVersionConflict(attempt, target)
+    if attempt.active_response_event_id:
+        table = connection.ops.quote_name(AssessmentEvent._meta.db_table)
+        # UNION deduplicates visited nodes, so even a corrupt cycle terminates.
+        # Both the root and each recursive step stay inside this response history.
+        with connection.cursor() as cursor:
+            cursor.execute(f'''
+                WITH RECURSIVE ancestors AS (
+                    SELECT event_id, (payload->>'parent_event_id')::uuid AS parent_event_id
+                    FROM {table}
+                    WHERE event_id = %s AND attempt_id = %s AND session_id = %s
+                        AND event_type = 'response_transition'
+                    UNION
+                    SELECT parent.event_id, (parent.payload->>'parent_event_id')::uuid
+                    FROM {table} parent
+                    JOIN ancestors child ON parent.event_id = child.parent_event_id
+                    WHERE parent.attempt_id = %s AND parent.session_id = %s
+                        AND parent.event_type = 'response_transition'
+                )
+                SELECT EXISTS (SELECT 1 FROM ancestors WHERE event_id = %s)
+            ''', [target.pk, attempt.pk, attempt.session_id, attempt.pk, attempt.session_id,
+                attempt.active_response_event_id])
+            is_descendant = cursor.fetchone()[0]
+        if not is_descendant:
+            raise ResponseVersionConflict(attempt, target)
     return target
 
 

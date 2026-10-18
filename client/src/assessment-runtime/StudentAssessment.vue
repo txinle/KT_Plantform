@@ -17,6 +17,9 @@ import { getStudentAssessmentApi, nextEntryRequest } from './api'
 import { createProcessRuntime, getSessionController, disposeSessionController, type StudentProcessRuntime, type NavigationIntent } from './session-controller'
 import { markPreparedStartupPhase, hydratePreparedQuestion, submissionPollDelay, type PreparedManifest, type ExpectedAttemptVersion, type PaperSubmissionIntent, type PaperSubmissionResponse } from './prepared-paper'
 import { ResponseTrajectory } from './response-trajectory'
+import { createStableTextInput, type TextCandidate, type TextFlushReason } from './stable-text-input'
+import { createOperationBudget } from './operation-budget'
+import { matchesMutationRejection, mutationMaterialFingerprint } from './mutation-material'
 import { createDraftSaveQueue } from './draft-save-queue'
 import StudentResearchTools from './StudentResearchTools.vue'
 import { prepareOfflineQuestion } from './offline-cache'
@@ -39,6 +42,7 @@ const state = ref<StudentRuntimeQuestionEntry>()
 const answer = ref<unknown>(null)
 const paperFlow = computed(() => state.value?.assessment_flow_version === 1)
 const inlineProbability = ref<number | null>(null)
+const inlineConfidenceInput = ref<string>()
 const inlineConfidenceError = ref('')
 const paperSubmission = ref<PaperSubmissionIntent>()
 const paperConfirmOpen = ref(false)
@@ -98,6 +102,7 @@ let lastStableText = ''
 let pendingTextObservation: TextObservation | undefined
 let routeTransitionPrepared = false
 let trajectory: ResponseTrajectory | undefined
+let stableTextInput: ReturnType<typeof createStableTextInput> | undefined
 let writerLease: WriterLease | undefined
 let composing = false
 let compositionInitial = ''
@@ -119,10 +124,6 @@ interface ConfidenceContract {
   prompt_shown_url: string
   commit_url: string
   skip_url: string
-}
-
-function confidenceEventOptions(contract: ConfidenceContract) {
-  return { eventVersion: contract.scale_version === 'v2' ? 2 : 1 }
 }
 
 const sequenceLabel = computed(() => {
@@ -223,7 +224,7 @@ function startCountdown() {
       timedOut.value = true
       error.value = '本题或实验时间已结束，页面将刷新并同步服务器状态。'
       if (countdown !== undefined) globalThis.clearInterval(countdown)
-      void flushTextObservation().then(() => closeAttemptAndRelease('timeout')).finally(() => {
+      void flushAnswerBoundary('deadline').then(flushTextObservation).then(() => closeAttemptAndRelease('timeout')).catch(handleLocalInputError).finally(() => {
         globalThis.setTimeout(() => globalThis.location.reload(), 1_200)
       })
     }
@@ -339,6 +340,7 @@ async function recordTextSnapshot(
 
 async function saveDraft(force = false) {
   if (!interactionAllowed() || !state.value || navigationSaving || navigationUncertain.value) return
+  await flushAnswerBoundary(force ? 'submit' : 'idle')
   if (saveMaximumTimer !== undefined) { clearTimeout(saveMaximumTimer); saveMaximumTimer = undefined }
   if (textSaveTimer !== undefined) {
     globalThis.clearTimeout(textSaveTimer)
@@ -474,6 +476,13 @@ function updateText(event: unknown) {
   const value = String((event as { target?: { value?: unknown } }).target?.value ?? '')
   answer.value = value
   invalidateInlineConfidence()
+  if (stableTextInput) {
+    const details = event as InputEvent
+    stableTextInput.update(value, details.inputType || 'insertText', composing || details.isComposing)
+    void noteInputStarted()
+    saveStatus.value = '正在编辑'
+    return
+  }
   if (trajectory) {
     const details = event as InputEvent
     if (composing || details.isComposing) return
@@ -486,6 +495,33 @@ function updateText(event: unknown) {
   void noteInputStarted()
   saveStatus.value = '等待自动保存'
   scheduleTextSave()
+}
+
+function handleLocalInputError(caught: unknown) {
+  saveStatus.value = '本地保存失败'
+  error.value = `无法持久化作答材料：${caught instanceof Error ? caught.message : '存储不可用'}。请勿关闭本页。`
+}
+
+async function flushAnswerBoundary(reason: TextFlushReason) {
+  if (stableTextInput) {
+    if (composing) {
+      const active = document.activeElement
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) active.blur()
+      await nextTick()
+    }
+    await stableTextInput.flush(reason)
+    await trajectory?.settled()
+  }
+  await commitInlineConfidence()
+  if (inlineConfidenceError.value) throw new Error(inlineConfidenceError.value)
+}
+
+async function flushTextInputOnBlur() {
+  try {
+    await flushAnswerBoundary('blur')
+    await flushTextObservation()
+    if (stableTextInput) await saveDraft()
+  } catch (caught) { error.value = caught instanceof Error ? caught.message : '草稿保存失败，请重试。' }
 }
 
 function captureChange(value: unknown, inputType: string, extra = {}) {
@@ -543,6 +579,7 @@ async function chooseResponseBranch(side: 'current' | 'candidate') {
 
 function beforeTextInput(event: Event) {
   if (!interactionAllowed() || !trajectory) return
+  if (stableTextInput) { void noteInputStarted(); return }
   const input = event as InputEvent
   const target = input.target as HTMLInputElement | HTMLTextAreaElement
   inputOperationId = inputOperationId || crypto.randomUUID()
@@ -554,6 +591,7 @@ function startComposition(event: Event) {
   if (!interactionAllowed()) return
   composing = true
   compositionInitial = String(answer.value ?? '')
+  if (stableTextInput) { stableTextInput.compositionStart(); void noteInputStarted(); return }
   inputOperationId = crypto.randomUUID()
   const target = event.target as HTMLInputElement | HTMLTextAreaElement
   trajectory?.operation('insertCompositionText', 'started', target.selectionStart, target.selectionEnd, inputOperationId)
@@ -564,6 +602,12 @@ function finishComposition(event: unknown) {
   if (!interactionAllowed()) return
   const value = String((event as { target?: { value?: unknown } }).target?.value ?? '')
   composing = false
+  if (stableTextInput) {
+    answer.value = value
+    invalidateInlineConfidence()
+    stableTextInput.compositionEnd(value)
+    return
+  }
   if (trajectory) {
     const operationId = inputOperationId || crypto.randomUUID()
     trajectory.operation('insertCompositionText', value === compositionInitial ? 'cancelled' : 'confirmed', null, null, operationId)
@@ -603,6 +647,7 @@ async function closeAttemptAndRelease(reason: string, toAssignmentId?: number | 
 }
 
 function releaseWriterLeaseOnPageHide() {
+  void stableTextInput?.flush('hidden').catch(handleLocalInputError)
   if (processRuntime?.closesWriterLease && closePromise?.runtime === processRuntime) return
   void writerLease?.release({ keepalive: true }).catch(() => undefined)
 }
@@ -688,32 +733,35 @@ async function saveAndLeave(item: StudentRuntimeQuestionEntry['navigation'][numb
     throw new Error('切题恢复契约不完整，请刷新页面后重试。')
   }
   navigationSaving = true
+  const budget = createOperationBudget(() => { saveStatus.value = '正在同步作答记录，切题结果尚待确认…' })
   try {
     if (!pendingNavigation.value) {
       if (textSaveTimer !== undefined) { globalThis.clearTimeout(textSaveTimer); textSaveTimer = undefined }
-      await flushTextObservation()
-      await trajectory.settled()
-      await pointerWritePromise
-      await runtime.pointerWritesSettled()
+      await budget.run(() => flushAnswerBoundary('navigation'))
+      await budget.run(flushTextObservation)
+      await budget.run(() => trajectory!.settled())
+      await budget.run(() => pointerWritePromise)
+      await budget.run(() => runtime.pointerWritesSettled())
       if (!navigation) throw new Error('缺少本次切题令牌。')
       const credentials = writerLease?.cachedCredentials()
-      const left = await runtime.prepareNavigation(navigation.navigationId, item.assignment_id)
+      const left = await budget.run(() => runtime.prepareNavigation!(navigation.navigationId, item.assignment_id))
       const intent: NavigationIntent = {
         token: navigation.navigationId, clickedAt: navigation.clientOccurredAt,
         toAssignmentId: item.assignment_id, leaveEventId: left.event_id,
         head: trajectory.head, expectedResponseVersion: processRuntime?.responseVersion ?? 0,
+        ...(paperFlow.value && inlineContract.value ? { inlineConfidence: { probability: inlineProbability.value, answer_event_id: trajectory.head } } : {}),
         ...(state.value.process.transition_entry?.enabled && state.value.process.transition_entry.version === 1
           ? { nextEntry: nextEntryRequest({ ...navigation, assignmentId: item.assignment_id, reason: 'navigation_click' }) } : {}),
         ...(credentials ? { writerLeaseToken: credentials.writer_lease_token,
           writerClientInstanceId: credentials.writer_client_instance_id } : {}),
       }
-      pendingNavigation.value = await runtime.freezeNavigationSnapshot(intent)
+      pendingNavigation.value = await budget.run(() => runtime.freezeNavigationSnapshot!(intent))
     }
     const intent = pendingNavigation.value
     if (!intent.processSnapshot) throw new Error('切题证据尚未持久化到本机。')
     const snapshot = intent.processSnapshot
     navigationUncertain.value = true
-    const receipt = await timedAssessmentStage('save_and_leave_remote', () => getStudentAssessmentApi().saveAndLeave(
+    const receipt = await budget.run(() => timedAssessmentStage('save_and_leave_remote', () => getStudentAssessmentApi().saveAndLeave(
       state.value!.actions.save_draft_url, {
         navigation_token: intent.token, leave_event_id: intent.leaveEventId,
         to_assignment_id: intent.toAssignmentId, target_event_id: intent.head,
@@ -722,9 +770,9 @@ async function saveAndLeave(item: StudentRuntimeQuestionEntry['navigation'][numb
           writer_client_instance_id: intent.writerClientInstanceId } : {}),
         save_and_leave: { version: 1, ...snapshot, expected_version: intent.expectedResponseVersion },
         ...(intent.nextEntry ? { next_entry: intent.nextEntry } : {}),
-        ...(paperFlow.value && inlineContract.value ? { inline_confidence: { probability: inlineProbability.value, answer_event_id: intent.head } } : {}),
+        ...(intent.inlineConfidence ? { inline_confidence: intent.inlineConfidence } : {}),
       },
-    ))
+    )))
     await runtime.acknowledgeNavigation(intent.processSnapshot, receipt)
     await (await getSessionController(state.value!.session_id, getBootstrapContext().csrf_token)).confirmLeave(state.value!.session_id, intent.token)
     if (intent.nextEntry) await (await getSessionController(state.value!.session_id, getBootstrapContext().csrf_token))
@@ -741,12 +789,26 @@ async function saveAndLeave(item: StudentRuntimeQuestionEntry['navigation'][numb
     navigationUncertain.value = false
   } catch (caught) {
     const intent = pendingNavigation.value
-    if (!intent && navigation) {
+    const waitExpired = (caught as { code?: string })?.code === 'assessment_wait_expired'
+    if (waitExpired) navigationUncertain.value = true
+    if (!intent && navigation && !waitExpired) {
       runtime.cancelNavigation?.(navigation.navigationId)
       pendingNavigationClick = undefined
     }
-    if (intent && caught instanceof ApiError && caught.fields.navigation_rejected === true
-      && caught.fields.navigation_token === intent.token) {
+    const material = intent?.processSnapshot ? {
+      save_and_leave: { version: 1, ...intent.processSnapshot, expected_version: intent.expectedResponseVersion },
+      leave_event_id: intent.leaveEventId, target_event_id: intent.head, to_assignment_id: intent.toAssignmentId,
+      client_clicked_at: intent.clickedAt,
+      ...(intent.nextEntry ? { next_entry: intent.nextEntry } : {}),
+      ...(intent.inlineConfidence ? { inline_confidence: intent.inlineConfidence } : {}),
+    } : undefined
+    const rejected = intent && caught instanceof ApiError && caught.fields.navigation_rejected === true
+      && caught.fields.navigation_token === intent.token
+      && (caught.fields.receipt_version === undefined || material && matchesMutationRejection(caught, {
+        mutationKind: 'navigation', attemptId: state.value!.assignment.attempt_id, navigationToken: intent.token,
+        materialFingerprint: await mutationMaterialFingerprint(material),
+      }))
+    if (intent && rejected) {
       await runtime.saveNavigationIntent(null)
       await (await getSessionController(state.value!.session_id, getBootstrapContext().csrf_token)).cancelEntry(state.value!.session_id, intent.token)
       runtime.cancelNavigation?.(intent.token)
@@ -807,9 +869,11 @@ async function rememberPaperReceipt(attemptId: number, version: number, head: st
 }
 
 function invalidateInlineConfidence() {
-  if (!paperFlow.value || inlineProbability.value === null) return
-  inlineProbability.value = null
+  if (!paperFlow.value) return
+  inlineConfidenceInput.value = undefined
   inlineConfidenceError.value = ''
+  if (inlineProbability.value === null) return
+  inlineProbability.value = null
   void persistInlineConfidence(null).catch(() => undefined)
 }
 
@@ -832,22 +896,45 @@ function persistInlineConfidence(probability: number | null, head = trajectory?.
   return inlineConfidenceWrites
 }
 
-async function updateInlineConfidence(event: Event) {
+function updateInlineConfidence(event: Event) {
   if (responseDisabled.value || !hasLocalResponse.value || !inlineContract.value) return
   const value = (event.target as HTMLInputElement).value
+  inlineConfidenceInput.value = value
   const probability = value === '' ? null : Number(value)
   const contract = inlineContract.value
   if (probability !== null && (!Number.isInteger(probability) || probability < contract.minimum || probability > contract.maximum || (probability - contract.minimum) % contract.step !== 0)) {
     inlineConfidenceError.value = `请输入 ${contract.minimum} 到 ${contract.maximum} 之间、间隔为 ${contract.step} 的整数。`
     return
   }
-  inlineProbability.value = probability
   inlineConfidenceError.value = ''
+}
+
+async function commitInlineConfidence() {
+  if (!interactionAllowed() || answerLocked.value || !hasLocalResponse.value || !inlineContract.value
+      || inlineConfidenceInput.value === undefined || inlineConfidenceError.value) return
+  const value = inlineConfidenceInput.value
   const currentState = state.value
+  await stableTextInput?.flush('blur')
   await trajectory?.settled()
+  if (currentState !== state.value || inlineConfidenceInput.value !== value) return
+  const probability = value === '' ? null : Number(value)
+  inlineConfidenceInput.value = undefined
+  if (inlineProbability.value === probability) return
   const head = trajectory?.head || null
-  await processRuntime?.record('confidence_observed', { capture_version: 'capture-v2', confidence_assignment_id: contract.confidence_assignment_id,
-    operation_id: crypto.randomUUID(), stage: probability === null ? 'skipped' : 'responded', answer_event_id: head, probability, feedback_phase: 'before_feedback' }, confidenceEventOptions(contract))
+  const contract = inlineContract.value
+  try {
+    await processRuntime?.record('confidence_observed', {
+      capture_version: 'capture-v2', operation_id: crypto.randomUUID(),
+      confidence_assignment_id: contract.confidence_assignment_id,
+      stage: probability === null ? 'skipped' : 'responded', answer_event_id: head, probability,
+      feedback_phase: 'before_feedback',
+    }, { eventVersion: contract.scale_version === 'v2' ? 2 : 1 })
+  } catch (caught) {
+    if (currentState === state.value && inlineConfidenceInput.value === undefined) inlineConfidenceInput.value = value
+    handleLocalInputError(caught)
+    throw caught
+  }
+  inlineProbability.value = probability
   await persistInlineConfidence(probability, head, currentState)
   if (currentState === state.value) scheduleTextSave()
 }
@@ -855,6 +942,7 @@ async function updateInlineConfidence(event: Event) {
 function acceptToolInlineConfidence(receipt: NonNullable<StudentRuntimeQuestionEntry['inline_confidence']>) {
   if (!paperFlow.value || !inlineContract.value || !hasLocalResponse.value || !receipt.answer_event_id || receipt.answer_event_id !== trajectory?.head) return
   inlineProbability.value = receipt.probability
+  inlineConfidenceInput.value = undefined
   inlineConfidenceError.value = ''
   void persistInlineConfidence(receipt.probability, receipt.answer_event_id).catch(() => undefined)
 }
@@ -890,12 +978,18 @@ async function acceptPaperStatus(response: PaperSubmissionResponse) {
   if (countdown !== undefined) { clearInterval(countdown); countdown = undefined }
   if (response.status === 'completed') {
     paperStatus.value = '交卷处理完成。'
+    finishAssessmentOperation()
     if (!response.next_url) throw new Error('提交已完成，但缺少后续页面。请核验状态。')
     globalThis.location.assign(response.next_url)
   } else if (response.status === 'failed') {
     paperStatus.value = response.error?.message || '提交处理失败，请核验提交状态。'
     finishing.value = false
-  } else paperStatus.value = '试卷已受理，正在处理交卷结果…'
+    finishAssessmentOperation(false)
+  } else paperStatus.value = response.status === 'queued'
+    ? '试卷已受理，等待后台处理…'
+    : response.processing_state === 'recovering'
+      ? '试卷已受理，正在恢复后台处理…'
+      : '试卷已受理，后台正在处理…'
 }
 
 let paperPollFlight: Promise<void> | undefined
@@ -908,14 +1002,18 @@ async function pollPaperSubmission() {
   const pending = (async () => {
     try {
       const intent = paperSubmission.value!
-      const response = intent.status_url ? await getStudentAssessmentApi().paperSubmissionStatus(intent.status_url)
-        : await getStudentAssessmentApi().finishPaper(intent.finish_url || state.value!.actions.finish_url, intent)
+      const api = getStudentAssessmentApi(intent.operation_id ?? currentAssessmentOperationId() ?? null)
+      const response = intent.status_url ? await api.paperSubmissionStatus(intent.status_url)
+        : await api.finishPaper(intent.finish_url || state.value!.actions.finish_url, intent)
       await acceptPaperStatus(response)
       if (response.status === 'queued' || response.status === 'running') paperPollTimer = setTimeout(() => { void pollPaperSubmission() }, submissionPollDelay(paperPollIndex++))
     } catch (caught) {
       finishing.value = false
       paperStatus.value = '提交结果尚未确认。答案已冻结，请核验原操作。'
       error.value = caught instanceof Error ? caught.message : '提交状态查询失败。'
+      if (caught instanceof ApiError && caught.status === 429 && caught.retryAfterSeconds !== undefined) {
+        paperPollTimer = setTimeout(() => { void pollPaperSubmission() }, Math.max(1000, caught.retryAfterSeconds * 1000))
+      }
     }
   })()
   paperPollFlight = pending
@@ -928,15 +1026,19 @@ async function submitPaper(clickedAt = new Date().toISOString()) {
   paperConfirmOpen.value = false
   paperStatus.value = '正在保存作答材料…'
   error.value = ''
+  const budget = createOperationBudget(() => { paperStatus.value = '正在准备交卷材料，等待同步确认…' })
   try {
-    await flushTextObservation()
-    if (!answerLocked.value) await saveDraft(true)
-    await trajectory?.settled()
-    await processRuntime?.pointerWritesSettled()
-    await closeAttemptAndRelease('finish')
-    await processRuntime?.checkpoint('commit')
-    if (await processRuntime?.flushConfirmed() === false) throw new Error('作答材料尚未确认保存，请恢复网络后重试。')
-    const manifest = paperManifest ? await paperManifest : undefined
+    beginAssessmentOperation('submit')
+    processRuntime?.setOperationId?.(currentAssessmentOperationId())
+    await budget.run(() => flushAnswerBoundary('submit'))
+    await budget.run(flushTextObservation)
+    if (!answerLocked.value) await budget.run(() => saveDraft(true))
+    await budget.run(() => trajectory?.settled())
+    await budget.run(() => processRuntime?.pointerWritesSettled())
+    await budget.run(() => closeAttemptAndRelease('finish'))
+    await budget.run(() => processRuntime?.checkpoint('commit'))
+    if (await budget.run(() => processRuntime?.flushConfirmed()) === false) throw new Error('作答材料尚未确认保存，请恢复网络后重试。')
+    const manifest = paperManifest ? await budget.run(() => paperManifest) : undefined
     const versions: ExpectedAttemptVersion[] = manifest ? manifest.navigation.map(row => paperReceiptVersions[row.attempt_id]
       || { attempt_id: row.attempt_id, response_version: row.response_version, target_event_id: row.active_response_event_id })
       : Object.values(paperReceiptVersions)
@@ -945,10 +1047,11 @@ async function submitPaper(clickedAt = new Date().toISOString()) {
     if (index >= 0) versions[index] = current
     else versions.push(current)
     paperSubmission.value = { submission_token: crypto.randomUUID(), client_clicked_at: clickedAt, expected_versions: versions, finish_url: state.value.actions.finish_url, content_version: state.value.prepared_paper?.content_version || 'v1' }
-    await (await paperStore()).writeMetadata(paperMetadataKey('submission'), cloneJson(paperSubmission.value))
+    paperSubmission.value.operation_id = currentAssessmentOperationId()
+    await budget.run(async () => (await paperStore()).writeMetadata(paperMetadataKey('submission'), cloneJson(paperSubmission.value)))
     paperStatus.value = '正在提交试卷，等待服务器确认…'
     finishing.value = false
-    await pollPaperSubmission()
+    await budget.run(pollPaperSubmission)
   } catch (caught) {
     finishing.value = false
     paperStatus.value = paperSubmission.value ? '提交结果尚未确认，请核验原操作。' : '作答材料尚未确认保存，请重试。'
@@ -957,6 +1060,8 @@ async function submitPaper(clickedAt = new Date().toISOString()) {
 }
 
 function resumePaperPolling() {
+  if (document.visibilityState === 'hidden') void stableTextInput?.flush('hidden').catch(handleLocalInputError)
+  else stableTextInput?.resume()
   if (document.visibilityState !== 'hidden' && paperSubmission.value && !['completed', 'failed'].includes(paperSubmission.value.status || '')) void pollPaperSubmission()
 }
 
@@ -1049,7 +1154,6 @@ async function finishInitialization(
   if (currentState.process.capture_version === 'capture-v2') startRecoveryTimer()
   if (paperFlow.value) {
     markPreparedStartupPhase('runtime_init_end')
-    if (inlineContract.value) await runtime.record('confidence_observed', { capture_version: 'capture-v2', operation_id: crypto.randomUUID(), confidence_assignment_id: inlineContract.value.confidence_assignment_id, stage: 'presented', answer_event_id: trajectory?.head || null, probability: null, feedback_phase: 'before_feedback' }, confidenceEventOptions(inlineContract.value))
     if (!responseDisabled.value) {
       if (document.querySelector<HTMLInputElement>('.kt-assessment-focus input[name="answer"]:not(:disabled), .kt-assessment-focus textarea[name="answer"]:not(:disabled)')) markPreparedStartupPhase('operable')
       operablePaperGeneration = generation
@@ -1098,6 +1202,8 @@ async function retryCaptureInitialization() {
 }
 
 function disposeQuestionRuntime() {
+  stableTextInput?.dispose()
+  stableTextInput = undefined
   closePromise = undefined
   initializationGeneration += 1
   preparationPromise = undefined
@@ -1233,6 +1339,7 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
     paperManifest = hydrated.manifest
     state.value = loadedState
     inlineProbability.value = loadedState.inline_confidence?.probability ?? null
+    inlineConfidenceInput.value = undefined
     inlineConfidenceError.value = ''
     if (loadedState.assessment_flow_version === 1) {
       paperReceiptVersions = await controller.store.readMetadata<Record<number, ExpectedAttemptVersion>>(paperMetadataKey('receipts')) || {}
@@ -1300,6 +1407,29 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
       const initial = answer.value ?? (kind === 'multiple_choice' ? [] : ['short_answer', 'fill_blank', 'numeric'].includes(kind) ? '' : null)
       const runtime = processRuntime
       trajectory = new ResponseTrajectory(kind, initial, head, (type, payload, options) => runtime.record(type, payload, options))
+      const policy = (loadedState.process as typeof loadedState.process & { text_capture_policy?: { id: string; idle_ms: number } }).text_capture_policy
+      if (policy?.id === 'stable-input-v1' && ['short_answer', 'fill_blank', 'numeric'].includes(kind) && !answerLocked.value) {
+        const fixedTrajectory = trajectory
+        const key = `text-candidate:${loadedState.session_id}:${loadedState.assignment.attempt_id}:${runtime.clientInstanceId}`
+        const candidate = await controller.store.readMetadata<TextCandidate>(key)
+        stableTextInput = createStableTextInput({ initialValue: String(initial), idleMs: policy.idle_ms,
+          getHead: () => fixedTrajectory.head,
+          persist: value => controller.store.writeMetadata(key, value),
+          record: async (value, inputType, operationId, cancelled) => {
+            fixedTrajectory.operation(inputType, cancelled ? 'cancelled' : inputType === 'insertCompositionText' ? 'confirmed' : 'none', null, null, operationId)
+            if (!cancelled) fixedTrajectory.change(value, inputType, operationId)
+            await fixedTrajectory.settled()
+            if (processRuntime === runtime) saveStatus.value = '已保存到本机，等待同步'
+          },
+          onStable: async () => { if (processRuntime === runtime) await saveDraft().catch(() => undefined) },
+          onError: handleLocalInputError,
+        })
+        if (candidate && !candidate.composing && candidate.baseHead === head && typeof candidate.value === 'string') {
+          answer.value = candidate.value
+          stableTextInput.update(candidate.value, 'insertReplacementText', false)
+          saveStatus.value = '已恢复本机草稿，等待同步'
+        }
+      }
     }
     if (paperFlow.value && inlineContract.value) {
       const local = await controller.store.readMetadata<{ probability: number | null; answer_event_id: string | null; scale_version: string }>(inlineConfidenceKey(loadedState))
@@ -1514,14 +1644,14 @@ onBeforeUnmount(() => {
         </fieldset>
         <label v-else class="kt-assessment-text-answer">
           <span>你的答案</span>
-          <textarea v-if="state.question.question_type === 'short_answer'" name="answer" rows="6" :disabled="responseDisabled" :value="String(answer ?? '')" @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition" @compositionend="finishComposition" @blur="flushTextObservation" />
-          <input v-else name="answer" :disabled="responseDisabled" :inputmode="state.question.question_type === 'numeric' ? 'decimal' : undefined" :value="String(answer ?? '')" @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition" @compositionend="finishComposition" @blur="flushTextObservation">
+          <textarea v-if="state.question.question_type === 'short_answer'" name="answer" rows="6" :disabled="responseDisabled" :value="String(answer ?? '')" @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition" @compositionend="finishComposition" @blur="flushTextInputOnBlur" />
+          <input v-else name="answer" :disabled="responseDisabled" :inputmode="state.question.question_type === 'numeric' ? 'decimal' : undefined" :value="String(answer ?? '')" @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition" @compositionend="finishComposition" @blur="flushTextInputOnBlur">
         </label>
         <div v-if="paperFlow" class="kt-assessment-paper-actions">
           <button type="button" class="kt-button kt-button--secondary" data-previous-question :disabled="!previousQuestion || !captureReady || actionBusy || navigationUncertain || !!paperSubmission" @click="previousQuestion && navigateToAssignment(previousQuestion)">上一题</button>
           <label v-if="inlineContract" class="kt-assessment-inline-confidence">
             <span>作答信心（可选）</span>
-            <input data-inline-confidence type="number" :value="inlineProbability ?? ''" :min="inlineContract.minimum" :max="inlineContract.maximum" :step="inlineContract.step" :disabled="responseDisabled || !hasLocalResponse" placeholder="未评价" @input="updateInlineConfidence">
+            <input data-inline-confidence type="number" :value="inlineConfidenceInput ?? inlineProbability ?? ''" :min="inlineContract.minimum" :max="inlineContract.maximum" :step="inlineContract.step" :disabled="responseDisabled || !hasLocalResponse" placeholder="未评价" @input="updateInlineConfidence" @blur="commitInlineConfidence" @keydown.enter.prevent="commitInlineConfidence">
             <span>%</span>
             <small v-if="inlineConfidenceError" role="alert">{{ inlineConfidenceError }}</small>
           </label>

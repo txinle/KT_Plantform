@@ -230,7 +230,7 @@ TABLE_FIELD_DESCRIPTIONS = {
     },
     "response_events": {
         "event_type": "从 assessment_events 筛选的响应过程事件；包括 capture-v2 input_operation，以及 response_pointer_conflict_observed 的服务器 409 观察。",
-        "payload": "响应过程事件负载；capture-v2 input_operation 保留 IME/输入操作数据。response_pointer_conflict_observed 只保存候选/当前引用、版本和请求客户端实例，不保存答案正文，且每行对应一次服务器观察。",
+        "payload": "响应过程事件负载；capture-v2 input_operation 保留 IME/输入操作数据。capture-v2-stable-input-v1 的 input_operation 为稳定状态转换对应的输入段摘要，不提供逐键轨迹或逐键时间；须按会话绑定的采集契约区分。response_pointer_conflict_observed 只保存候选/当前引用、版本和请求客户端实例，不保存答案正文，且每行对应一次服务器观察。",
     },
     "response_input_observations": {
         "source_event_id": "旧采集协议的稳定输入观测来源事件；capture-v2 输入操作应从 response_events 的 input_operation 或完整 assessment_events 分析。",

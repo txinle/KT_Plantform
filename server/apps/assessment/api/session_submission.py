@@ -31,10 +31,18 @@ class SessionSubmissionPublicErrorSerializer(serializers.Serializer):
     message = serializers.CharField()
 
 
+class SubmissionWorkerStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=['connected', 'not_connected', 'unknown'])
+    observed_at = serializers.DateTimeField()
+
+
 class SessionSubmissionReceiptSerializer(serializers.Serializer):
     success = serializers.BooleanField()
     submission_id = serializers.UUIDField()
     status = serializers.ChoiceField(choices=SessionSubmission.Status.choices)
+    processing_state = serializers.ChoiceField(choices=[
+        'queued', 'running', 'retrying', 'recovering', 'completed', 'failed'])
+    worker = SubmissionWorkerStatusSerializer()
     accepted_at = serializers.DateTimeField()
     completed_at = serializers.DateTimeField(allow_null=True)
     error = SessionSubmissionPublicErrorSerializer(allow_null=True)

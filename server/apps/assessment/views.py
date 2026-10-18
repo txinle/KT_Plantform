@@ -68,11 +68,20 @@ def save_draft_api(request, attempt_id):
         from .capture_bundle_services import draft_response
         return JsonResponse(draft_response(attempt))
     except ProcessRequestError as error:
+        if hasattr(error, 'mutation_rejection_receipt'):
+            return _mutation_rejection_response(error)
         fields = _navigation_rejection_fields(error)
-        return JsonResponse({'success': False, 'error': {'code': error.code, 'fields': fields}}, status=error.status)
+        detail = {'code': error.code, 'fields': fields}
+        if hasattr(error, 'message'):
+            detail['message'] = error.message
+        return JsonResponse({'success': False, 'error': detail}, status=error.status)
     except WriterLeaseConflict as error:
+        if hasattr(error, 'mutation_rejection_receipt'):
+            return _mutation_rejection_response(error)
         return JsonResponse({'success': False, 'error': {'code': 'writer_lease_conflict', 'message': '另一设备正在保存此题，请稍后重试；本机轨迹仍保留。', 'fields': _navigation_rejection_fields(error)}}, status=409)
     except ValidationError as exc:
+        if hasattr(exc, 'mutation_rejection_receipt'):
+            return _mutation_rejection_response(exc)
         from .capture_v2_services import (
             ResponseVersionConflict,
             record_response_pointer_conflict,
@@ -93,6 +102,11 @@ def save_draft_api(request, attempt_id):
 def _navigation_rejection_fields(error):
     token = getattr(error, 'navigation_rejection_token', None)
     return {'navigation_rejected': True, 'navigation_token': token} if token else {}
+
+
+def _mutation_rejection_response(error):
+    receipt = error.mutation_rejection_receipt
+    return JsonResponse({'success': False, 'error': receipt['error']}, status=receipt['http_status'])
 
 
 def _whole_paper_required():

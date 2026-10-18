@@ -1,4 +1,4 @@
-import type { CaptureStore, CaptureEvent, CaptureCheckpoint, CaptureRejection, DurableIntent, FactRecord } from './capture-contract'
+import type { CaptureStore, CaptureEvent, CaptureCheckpoint, CaptureRejection, CaptureMutation, CaptureMutationRejection, DurableIntent, FactRecord } from './capture-contract'
 import { clone, submissionOwnership, missingSequenceRanges, MAX_BATCH_SIZE } from './process-types'
 const DATABASE_NAME = 'kt-process-events-v1'
 const DATABASE_VERSION = 2
@@ -22,6 +22,17 @@ export class MemoryOutbox implements CaptureStore {
   metadata = new Map<string, unknown>()
   async readMetadata<T>(key: string): Promise<T | null> { return clone(this.metadata.get(key) as T ?? null) }
   async writeMetadata<T>(key: string, value: T | null): Promise<void> { if (value === null) this.metadata.delete(key); else this.metadata.set(key, clone(value)) }
+  async rejectCaptureMutation(intent: CaptureMutation, rejection: CaptureMutationRejection): Promise<boolean> {
+    const key = `capture-mutation:${intent.sessionId}:${intent.attemptId}`
+    if (JSON.stringify(this.metadata.get(key)) !== JSON.stringify(intent)) return false
+    this.metadata.set(`capture-mutation-rejection:${intent.sessionId}:${intent.attemptId}`, clone(rejection))
+    this.metadata.delete(key)
+    return true
+  }
+  async pendingCaptureMutations(sessionId: number): Promise<CaptureMutation[]> {
+    return [...this.metadata].filter(([key]) => key.startsWith(`capture-mutation:${sessionId}:`))
+      .map(([, value]) => clone(value as CaptureMutation))
+  }
   isFallback: boolean
   submissionIntents = new Map<string, DurableIntent>()
   navigationIntents = new Map<string, DurableIntent>()
@@ -227,6 +238,27 @@ export class IndexedDbOutbox implements CaptureStore {
     if (value === null) transaction.objectStore('meta').delete(key)
     else transaction.objectStore('meta').put({ key, value: clone(value) })
     await completed
+  }
+  async rejectCaptureMutation(intent: CaptureMutation, rejection: CaptureMutationRejection): Promise<boolean> {
+    const transaction = this.database.transaction('meta', 'readwrite')
+    const completed = transactionResult(transaction)
+    const store = transaction.objectStore('meta')
+    const key = `capture-mutation:${intent.sessionId}:${intent.attemptId}`
+    const saved = await requestResult<Meta<CaptureMutation> | undefined>(store.get(key))
+    const matches = JSON.stringify(saved?.value) === JSON.stringify(intent)
+    if (matches) {
+      store.put({ key: `capture-mutation-rejection:${intent.sessionId}:${intent.attemptId}`, value: clone(rejection) })
+      store.delete(key)
+    }
+    await completed
+    return matches
+  }
+  async pendingCaptureMutations(sessionId: number): Promise<CaptureMutation[]> {
+    const transaction = this.database.transaction('meta', 'readonly')
+    const completed = transactionResult(transaction)
+    const rows = await requestResult<Meta<CaptureMutation>[]>(transaction.objectStore('meta').getAll())
+    await completed
+    return rows.filter(row => row.key.startsWith(`capture-mutation:${sessionId}:`)).map(row => row.value)
   }
   database: IDBDatabase
   isFallback: boolean

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createApiClient } from '@/api/client'
+import { ApiError, createApiClient } from '@/api/client'
 import * as assessmentApi from './api'
 import { createSessionController, assessmentClientInstanceId } from './session-controller'
 import { MemoryOutbox } from './fact-store'
@@ -598,7 +598,7 @@ it('recovers an already dispatched bundled draft before a later navigation and p
       acknowledgements: frozen.capture_bundle.events.map((row: { client_sequence_no: number; event_id?: string }) => ({ client_sequence_no: row.client_sequence_no, event_id: row.event_id || crypto.randomUUID(), server_ingest_sequence_no: row.client_sequence_no })),
       checkpoint_ids: frozen.capture_bundle.checkpoints.map((row: { checkpoint_id: string }) => row.checkpoint_id) }))
     await runtime.pointerWritesSettled()
-    expect(post).toHaveBeenLastCalledWith('/draft/', { ...saved?.body, capture_bundle: saved?.processSnapshot }, undefined)
+    expect(post).toHaveBeenLastCalledWith('/draft/', { ...saved?.body, capture_bundle: saved?.processSnapshot }, { timeoutMs: 30000 })
     expect(runtime.responseVersion).toBe(1)
     expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
   } finally { spy.mockRestore(); controller.dispose() }
@@ -648,6 +648,240 @@ it('keeps the legacy sender path when the question has no bundle capability', as
   const controller = createSessionController({ store: new MemoryOutbox(), csrfToken: 'csrf', autoSchedule: false })
   try { expect((await controller.activate(process as never, 'visited')).captureMutation).toBeUndefined() }
   finally { controller.dispose() }
+})
+
+describe('draft mutation identity recovery', () => {
+  const capability = { enabled: true, version: 1 as const, max_events: 100, max_checkpoints: 100, max_bytes: 8388608, mutation_receipts: true }
+  const acknowledged = (body: Record<string, unknown>, version: number) => {
+    const bundle = body.capture_bundle as import('./capture-contract').CaptureBundle
+    return { success: true, committed: true, active_response_event_id: body.target_event_id as string, response_version: version,
+      acknowledgements: bundle.events.map(row => ({ event_id: row.event_id || crypto.randomUUID(), client_sequence_no: row.client_sequence_no, server_ingest_sequence_no: row.client_sequence_no })),
+      checkpoint_ids: bundle.checkpoints.map(row => row.checkpoint_id) }
+  }
+
+  it.each(['flush', 'draft'] as const)('recovers an older attempt bundled tool owner before current attempt %s without changing the current CAS version', async operation => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const old = await controller.activate({ ...process, capture_bundle: capability } as never, 'visited')
+    await old.record('research_tool_requested', {}, { eventId: crypto.randomUUID() })
+    await expect(old.captureMutation!('/tools/13/', { tool: 'check', stage: 'finished', operation_id: crypto.randomUUID() }, async () => {
+      throw new Error('response lost on document navigation')
+    })).rejects.toThrow('response lost')
+    const pending = await store.readMetadata<import('./capture-contract').CaptureMutation>('capture-mutation:7:13')
+    const runtime = await controller.activate({ ...process, attempt_id: 14, response_version: 9, capture_bundle: capability } as never, 'visited')
+    const head = await runtime.record('response_input_started', {}, { eventId: crypto.randomUUID() })
+    const post = vi.fn(async (_url, body) => acknowledged(body, 100))
+    const api = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => Response.json({
+      data: acknowledged(JSON.parse(String(init?.body)), 0), meta: { request_id: 'raw-sync' },
+    }))
+    try {
+      if (operation === 'flush') {
+        expect(await runtime.flushConfirmed()).toBe(true)
+        expect(runtime.responseVersion).toBe(9)
+      } else {
+        await runtime.captureMutation!('/draft/14/', { answer: 'B', target_event_id: head.event_id, expected_version: 9, writer_lease_token: 'lease' }, async body => {
+          expect(body.expected_version).toBe(9)
+          return acknowledged(body, 10)
+        })
+        expect(runtime.responseVersion).toBe(10)
+      }
+      expect(post).toHaveBeenCalledExactlyOnceWith('/tools/13/', { ...pending!.body, capture_bundle: pending!.processSnapshot }, { timeoutMs: 30000 })
+      expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+      expect(await store.pendingEvents(runtime.clientInstanceId!, Number.MAX_SAFE_INTEGER)).not.toEqual(expect.arrayContaining(pending!.processSnapshot.events))
+    } finally { api.mockRestore(); fetch.mockRestore(); controller.dispose() }
+  })
+
+  it('retains an older unknown tool owner and all raw facts when its replay receipt is incomplete', async () => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const old = await controller.activate({ ...process, capture_bundle: capability } as never, 'visited')
+    await old.record('research_tool_requested', {}, { eventId: crypto.randomUUID() })
+    await expect(old.captureMutation!('/tools/13/', { tool: 'check', operation_id: crypto.randomUUID() }, async () => { throw new Error('lost') })).rejects.toThrow('lost')
+    const pending = await store.readMetadata('capture-mutation:7:13')
+    const runtime = await controller.activate({ ...process, attempt_id: 14, response_version: 9, capture_bundle: capability } as never, 'visited')
+    const facts = await store.pendingEvents(runtime.clientInstanceId!, Number.MAX_SAFE_INTEGER)
+    const api = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post: async () => ({ committed: true, acknowledgements: [], checkpoint_ids: [] }) } as never)
+    const flush = vi.spyOn(runtime.sender, 'flushConfirmed')
+    try {
+      await expect(runtime.flushConfirmed()).rejects.toThrow('confirmation')
+      expect(await store.readMetadata('capture-mutation:7:13')).toEqual(pending)
+      expect(await store.pendingEvents(runtime.clientInstanceId!, Number.MAX_SAFE_INTEGER)).toEqual(facts)
+      expect(flush).not.toHaveBeenCalled()
+      expect(runtime.responseVersion).toBe(9)
+    } finally { api.mockRestore(); flush.mockRestore(); controller.dispose() }
+  })
+
+  it('does not attach the current attempt lease to an older durably unsent draft', async () => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const old = await controller.activate({ ...process, capture_bundle: capability } as never, 'visited')
+    const head = await old.record('response_input_started', {}, { eventId: crypto.randomUUID() })
+    const frozen = await old.sender.freezeCaptureMutation('/draft/13/', { answer: 'A', target_event_id: head.event_id, expected_version: 0, capture_operation_id: crypto.randomUUID() })
+    const pending = { ...frozen, phase: 'prepared' as const }
+    await store.writeMetadata('capture-mutation:7:13', pending)
+    const runtime = await controller.activate({ ...process, attempt_id: 14, response_version: 9, capture_bundle: capability } as never, 'visited')
+    const facts = await store.pendingEvents(runtime.clientInstanceId!, Number.MAX_SAFE_INTEGER)
+    const lease = vi.spyOn(runtime.writerLease!, 'beforePointerWrite').mockRejectedValue(new Error('wrong attempt lease used'))
+    const post = vi.fn()
+    const api = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+    try {
+      await expect(runtime.pointerWritesSettled()).rejects.toMatchObject({ code: 'capture_prior_lease_unavailable', fields: { attempt_id: 13 } })
+      expect(lease).not.toHaveBeenCalled()
+      expect(post).not.toHaveBeenCalled()
+      expect(await store.readMetadata('capture-mutation:7:13')).toEqual(pending)
+      expect(await store.pendingEvents(runtime.clientInstanceId!, Number.MAX_SAFE_INTEGER)).toEqual(facts)
+      expect(runtime.responseVersion).toBe(9)
+    } finally { api.mockRestore(); lease.mockRestore(); controller.dispose() }
+  })
+
+  it('replays lost success once and sends a new request for confidence changes on the same answer head', async () => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const runtime = await controller.activate({ ...process, capture_bundle: capability } as never, 'visited')
+    const head = await runtime.record('response_input_started', {}, { eventId: crypto.randomUUID() })
+    const body = { answer: '答复', target_event_id: head.event_id, expected_version: 0, writer_lease_token: 'original',
+      inline_confidence: { probability: null, answer_event_id: head.event_id } }
+    await expect(runtime.captureMutation!('/draft/', body, async () => { throw new Error('lost response') })).rejects.toThrow('lost response')
+    const saved = await store.readMetadata<import('./capture-contract').CaptureMutation>('capture-mutation:7:13')
+    const post = vi.fn(async (_url, frozen) => acknowledged(frozen, 1))
+    const api = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+    const send = vi.fn(async frozen => acknowledged(frozen, runtime.responseVersion + 1))
+    try {
+      await runtime.captureMutation!('/draft/', { ...body, inline_confidence: { probability: 50, answer_event_id: head.event_id } }, send)
+      expect(post).toHaveBeenCalledExactlyOnceWith('/draft/', { ...saved!.body, capture_bundle: saved!.processSnapshot }, { timeoutMs: 30000 })
+      expect(send).toHaveBeenCalledOnce()
+      expect(send.mock.calls[0]![0]).toMatchObject({ expected_version: 1, inline_confidence: { probability: 50 } })
+      expect(send.mock.calls[0]![0].capture_operation_id).not.toBe(saved!.body.capture_operation_id)
+      await runtime.captureMutation!('/draft/', { ...body, expected_version: runtime.responseVersion, inline_confidence: { probability: 100, answer_event_id: head.event_id } }, send)
+      expect(send).toHaveBeenCalledTimes(2)
+      expect(runtime.responseVersion).toBe(3)
+    } finally { api.mockRestore(); controller.dispose() }
+  })
+
+  it.each(['valid', 'wrong-attempt', 'wrong-operation', 'wrong-material', 'legacy'] as const)('releases only an exactly proven rejected intent and preserves raw facts: %s', async mode => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const runtime = await controller.activate({ ...process, capture_bundle: capability } as never, 'visited')
+    const event = await runtime.record('response_input_started', {}, { eventId: crypto.randomUUID() })
+    let request: Record<string, unknown> | undefined
+    await expect(runtime.captureMutation!('/draft/', { answer: 'A', target_event_id: event.event_id, expected_version: 0, writer_lease_token: 'original' }, async body => {
+      request = body
+      throw new Error('lost response')
+    })).rejects.toThrow('lost response')
+    const saved = await store.readMetadata<import('./capture-contract').CaptureMutation>('capture-mutation:7:13')
+    const later = await runtime.record('activity_heartbeat', {})
+    const rejection = new ApiError(409, { error: { code: 'response_target_not_persisted', message: 'target missing', fields: mode === 'legacy' ? { mutation_rejected: true } : {
+      mutation_rejected: true, receipt_version: 2, mutation_kind: 'draft', attempt_id: mode === 'wrong-attempt' ? 14 : 13,
+      capture_operation_id: mode === 'wrong-operation' ? crypto.randomUUID() : request!.capture_operation_id,
+      material_fingerprint: mode === 'wrong-material' ? 'wrong' : saved!.materialFingerprint,
+    } } })
+    const post = vi.fn().mockRejectedValue(rejection)
+    const api = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+    try {
+      await expect(runtime.pointerWritesSettled()).rejects.toBe(rejection)
+      expect(await store.readMetadata('capture-mutation:7:13')).toEqual(mode === 'valid' ? null : saved)
+      expect(await store.pendingEvents(runtime.clientInstanceId!, 99)).toContainEqual(event)
+      expect(await store.pendingEvents(runtime.clientInstanceId!, 99)).toContainEqual(later)
+      expect(await store.readMetadata('capture-mutation-rejection:7:13')).toEqual(mode === 'valid' ? expect.objectContaining({ code: 'response_target_not_persisted', fields: rejection.fields }) : null)
+    } finally { api.mockRestore(); controller.dispose() }
+  })
+
+  it('replays historical unknown requests without acquiring or adding a lease', async () => {
+    const store = new MemoryOutbox()
+    const sender = new ProcessEventCollector({ sessionId: 7, attemptId: 13, endpoint: '/events/', outbox: store, captureBundle: capability, autoSchedule: false })
+    const event = await sender.record('response_input_started', {}, { eventId: crypto.randomUUID() })
+    const saved = await sender.freezeCaptureMutation('/draft/', { answer: 'A', target_event_id: event.event_id, expected_version: 0 })
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const runtime = await controller.activate({ ...process, capture_bundle: capability } as never, 'visited')
+    const post = vi.fn(async (_url, body) => acknowledged(body, 1))
+    const api = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+    try {
+      await runtime.pointerWritesSettled()
+      expect(post).toHaveBeenCalledExactlyOnceWith('/draft/', { ...saved.body, capture_bundle: saved.processSnapshot }, { timeoutMs: 30000 })
+    } finally { api.mockRestore(); controller.dispose() }
+  })
+
+  it('prepares a lease only for a durably unsent request before recording its sent material identity', async () => {
+    const store = new MemoryOutbox()
+    const sender = new ProcessEventCollector({ sessionId: 7, attemptId: 13, endpoint: '/events/', outbox: store, captureBundle: capability, autoSchedule: false })
+    const event = await sender.record('response_input_started', {}, { eventId: crypto.randomUUID() })
+    const intent = await sender.freezeCaptureMutation('/draft/', { answer: 'A', capture_operation_id: crypto.randomUUID(), target_event_id: event.event_id, expected_version: 0 })
+    await store.writeMetadata('capture-mutation:7:13', { ...intent, phase: 'prepared' })
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const runtime = await controller.activate({ ...process, capture_bundle: capability } as never, 'visited')
+    const post = vi.fn(async (url, body) => {
+      if (url !== '/draft/') return { success: true, lease_token: 'fresh', client_instance_id: runtime.clientInstanceId, expires_at: '2099-01-01T00:00:00Z' }
+      expect(body.writer_lease_token).toBe('fresh')
+      expect(await store.readMetadata('capture-mutation:7:13')).toMatchObject({ phase: 'sent', materialFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) })
+      return acknowledged(body, 1)
+    })
+    const api = vi.spyOn(assessmentApi, 'getStudentAssessmentApi').mockReturnValue({ post } as never)
+    try {
+      await runtime.pointerWritesSettled()
+      expect(post).toHaveBeenCalledTimes(2)
+    } finally { api.mockRestore(); controller.dispose() }
+  })
+
+  it('synchronizes released target facts before rebuilding a rejected draft and does not repeat the rejection sync', async () => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const runtime = await controller.activate({ ...process, capture_bundle: capability } as never, 'visited')
+    const event = await runtime.record('response_transition', { after_state: { value: 'A' }, after_state_hash: 'hash' }, { eventId: crypto.randomUUID() })
+    const body = { answer: 'A', target_event_id: event.event_id, expected_version: 0, writer_lease_token: 'lease' }
+    await expect(runtime.captureMutation!('/draft/', body, async () => {
+      const intent = await store.readMetadata<import('./capture-contract').CaptureMutation>('capture-mutation:7:13')
+      throw new ApiError(409, { error: { code: 'response_target_not_persisted', fields: { mutation_rejected: true, receipt_version: 2,
+        mutation_kind: 'draft', attempt_id: 13, capture_operation_id: intent!.body.capture_operation_id, material_fingerprint: intent!.materialFingerprint } } })
+    })).rejects.toMatchObject({ code: 'response_target_not_persisted' })
+    let targetUploaded = false
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+      const frozen = JSON.parse(String(init?.body))
+      targetUploaded ||= frozen.capture_bundle.events.some((row: { event_id?: string }) => row.event_id === event.event_id)
+      return Response.json({ data: acknowledged(frozen, 0), meta: { request_id: 'raw-sync' } })
+    })
+    const sync = vi.spyOn(runtime.sender, 'flushConfirmed')
+    const send = async (frozen: Record<string, unknown>) => {
+      expect(targetUploaded).toBe(true)
+      return acknowledged(frozen, runtime.responseVersion + 1)
+    }
+    try {
+      await runtime.captureMutation!('/draft/', body, send)
+      await runtime.captureMutation!('/draft/', { ...body, expected_version: 1 }, send)
+      expect(sync).toHaveBeenCalledOnce()
+    } finally { sync.mockRestore(); fetch.mockRestore(); controller.dispose() }
+  })
+
+  it.each([false, true])('requires local target evidence before rebuilding after target rejection, accepting a restored acknowledged head: %s', async acknowledgedHead => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })
+    const runtime = await controller.activate({ ...process, capture_bundle: capability } as never, 'visited')
+    const target = acknowledgedHead
+      ? await runtime.record('response_transition', { after_state: { value: 'A' }, after_state_hash: 'hash' }, { eventId: crypto.randomUUID() })
+      : null
+    if (target) await store.deleteAcknowledged(runtime.clientInstanceId!, [target.client_sequence_no])
+    const targetEventId = target?.event_id || crypto.randomUUID()
+    const rejection = { code: 'response_target_not_persisted', status: 409, fields: {}, materialFingerprint: 'sha', rejectedAt: 'time' }
+    await store.writeMetadata('capture-mutation-rejection:7:13', rejection)
+    const facts = await store.pendingEvents(runtime.clientInstanceId!, Number.MAX_SAFE_INTEGER)
+    const sync = vi.spyOn(runtime.sender, 'flushConfirmed').mockResolvedValue(true)
+    const send = vi.fn(async body => acknowledged(body, 1))
+    try {
+      const saving = runtime.captureMutation!('/draft/', { answer: 'A', target_event_id: targetEventId, expected_version: 0, writer_lease_token: 'lease' }, send)
+      if (acknowledgedHead) {
+        await saving
+        expect(send).toHaveBeenCalledOnce()
+      } else {
+        await expect(saving).rejects.toMatchObject({ code: 'response_target_missing_local', fields: { target_event_id: targetEventId } })
+        expect(sync).not.toHaveBeenCalled()
+        expect(send).not.toHaveBeenCalled()
+        expect(await store.readMetadata('capture-mutation:7:13')).toBeNull()
+        expect(await store.readMetadata('capture-mutation-rejection:7:13')).toEqual(rejection)
+        expect(await store.pendingEvents(runtime.clientInstanceId!, Number.MAX_SAFE_INTEGER)).toEqual(facts)
+      }
+    } finally { sync.mockRestore(); controller.dispose() }
+  })
 })
 
 it('freezes original draft facts before waiting for a lease renewal', async () => {

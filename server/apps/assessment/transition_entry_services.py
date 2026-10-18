@@ -17,7 +17,7 @@ def transition_protocol_for_start(student, experiment, capture_contract):
                or str(student.pk) in settings.ASSESSMENT_TRANSITION_USER_IDS
                or str(experiment.course_id) in settings.ASSESSMENT_TRANSITION_COURSE_IDS)
     return int(bool(settings.ASSESSMENT_TRANSITION_ENABLED and allowed
-                    and capture_contract.contract_name == 'capture-v2'))
+                    and capture_contract.contract_name in {'capture-v2', 'capture-v2-stable-input-v1'}))
 
 
 def validate_next_entry(attempt, document, *, destination_id=None):

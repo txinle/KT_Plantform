@@ -655,7 +655,7 @@ class StudentAssessmentApiTests(StudentApiTestCase):
         from .prepared_content import read_display_content
         self.start()
         session = ExperimentSession.objects.get(class_task=self.task, student=self.student)
-        self.assertEqual(session.capture_contract.contract_name, 'capture-v2')
+        self.assertEqual(session.capture_contract.contract_name, 'capture-v2-stable-input-v1')
         assignment = session.assignments.select_related('snapshot').get()
         attempt = assignment.attempt
         visits_before = attempt.visit_count

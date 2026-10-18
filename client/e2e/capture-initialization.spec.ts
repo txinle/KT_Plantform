@@ -2,6 +2,7 @@ import { submitWholePaper } from './whole-paper'
 import { expect, test, type Page } from '@playwright/test'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { connect, createServer, type Server, type Socket } from 'node:net'
 import { requireServerPython, serverDir } from '../scripts/e2e-runtime.mjs'
 
@@ -148,6 +149,57 @@ async function login(page: Page, username: string, password: string) {
   await expect(page).toHaveURL(/\/student\/$/)
   await acceptResearchConsentIfRequired(page)
 }
+
+test('capture-v2 updates a previously installed worker before preparing a router-entered question', async ({ page, browserName }) => {
+  test.skip(!!process.env.E2E_BASE_URL, 'Requires the owned local frontend asset server.')
+  test.setTimeout(120_000)
+  const fixture: CaptureFixture = django(['seed_e2e_capture_initialization', '--run-key', `upgrade-${browserName}-${randomUUID().slice(0, 8)}`])
+  const workerFile = new URL('../dist/spa-assets/capture-v2-offline-worker.js', import.meta.url)
+  const currentWorker = readFileSync(workerFile)
+  const retiredWorker = `
+    self.addEventListener('install', () => self.skipWaiting());
+    self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
+    self.addEventListener('message', event => {
+      if (event.data?.type === 'legacy-upgrade-probe') {
+        event.ports[0]?.postMessage({ retired: true });
+      } else if (event.data?.type === 'prepare-capture-v2-common') {
+        event.ports[0]?.postMessage({ ok: true, commonResourcesPrepared: true });
+      } else if (event.data?.type === 'prepare-capture-v2') {
+        event.ports[0]?.postMessage({ ok: false, error: 'Error: invalid_scope' });
+      }
+    });
+  `
+  try {
+    writeFileSync(workerFile, retiredWorker)
+    await page.goto('/login/')
+    const installed = await page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.register('/assessment/process/capture-v2/offline-worker.js', {
+        scope: '/student/sessions/', updateViaCache: 'none',
+      })
+      const worker = registration.installing || registration.waiting || registration.active!
+      if (worker.state !== 'activated') await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Legacy worker activation timed out')), 15000)
+        worker.addEventListener('statechange', () => {
+          if (worker.state === 'activated') { clearTimeout(timeout); resolve() }
+        })
+      })
+      return new Promise<{ retired: boolean }>((resolve) => {
+        const channel = new MessageChannel()
+        channel.port1.onmessage = event => { channel.port1.close(); resolve(event.data) }
+        worker.postMessage({ type: 'legacy-upgrade-probe' }, [channel.port2])
+      })
+    })
+    expect(installed).toEqual({ retired: true })
+  } finally { writeFileSync(workerFile, currentWorker) }
+
+  await login(page, fixture.student.username, fixture.student.password)
+  await page.goto(`/student/courses/${fixture.course.id}/`)
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: fixture.experiment_name, exact: true }) })
+    .getByRole('button', { name: '开始作业', exact: true }).click()
+  await expect(page).toHaveURL(/\/student\/sessions\/\d+\/questions\/\d+\/$/)
+  await expect(page.locator('[name=answer]').first()).toBeEnabled()
+  await expect(page.getByRole('heading', { name: '安全作答环境准备失败', exact: true })).toHaveCount(0)
+})
 
 test('capture-v2 initializes once, recovers safely, and preserves all six response types', async ({ browser, browserName, context, page }, testInfo) => {
   test.setTimeout(300_000)

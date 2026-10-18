@@ -12,7 +12,8 @@ from ..models import ExperimentSession
 from ..prepared_models import PreparedSessionArtifact
 from ..prepared_admission import ActivationBusy, ActivationExecuting
 from ..prepared_services import (PreparationNotReady, activate_prepared_session,
-                                 enqueue_preparation_repair, ensure_canonical_paper_session)
+                                 enqueue_preparation_repair, ensure_canonical_paper_session,
+                                 preparation_repair_status)
 from apps.experiments.models import ExperimentVersionParticipantSnapshot
 from .serializers import StudentPreparedStartSerializer
 
@@ -42,9 +43,17 @@ def prepared_start_request(request, task_id):
         session__student=request.user, session__assessment_flow_version=1).only(
             'pk', 'ready', 'session_id', 'activation_receipt').first()
     if artifact is None or not artifact.ready:
-        enqueue_preparation_repair(participant)
-        raise ApiConflict('个人试卷尚未就绪，后台正在修复，请稍后重试。',
-                          code='PREPARATION_NOT_READY', status=409)
+        preparation = preparation_repair_status(enqueue_preparation_repair(participant))
+        messages = {
+            'queued': '个人试卷尚未就绪，修复请求已排队，请稍后重试。',
+            'paused': '个人试卷修复暂缓，请稍后重试。',
+            'retrying': '个人试卷修复将再次尝试，请稍后重试。',
+            'exhausted': '个人试卷修复未完成，请联系教师处理。',
+        }
+        return Response({'error': {'code': 'PREPARATION_NOT_READY',
+            'message': messages.get(preparation['status'], '个人试卷尚未就绪，请联系教师。'),
+            'fields': {'preparation': preparation}}}, status=409,
+            headers={'Cache-Control': 'no-store'})
     if not artifact.activation_receipt:
         upgraded = ExperimentSession.objects.filter(pk=artifact.session_id,
             status=ExperimentSession.Status.IN_PROGRESS).select_related('class_task', 'current_assignment').first()

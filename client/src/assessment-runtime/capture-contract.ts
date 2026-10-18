@@ -40,7 +40,25 @@ export interface ProcessSnapshot {
 }
 export interface CaptureBundle extends ProcessSnapshot { version: 1 }
 export interface CaptureBundleCapability { enabled: boolean; version: 1; max_events: number; max_checkpoints: number; max_bytes: number; mutation_receipts?: boolean; recovery_supported?: boolean }
-export interface CaptureMutation extends DurableIntent { url: string; body: Record<string, unknown>; sessionId: number; attemptId: number; operationId?: string; processSnapshot: CaptureBundle }
+export interface CaptureMutation extends DurableIntent {
+  url: string
+  body: Record<string, unknown>
+  sessionId: number
+  attemptId: number
+  operationId?: string
+  processSnapshot: CaptureBundle
+  phase?: 'prepared' | 'sent'
+  materialFingerprint?: string
+}
+export interface CaptureMutationRejection {
+  code: string
+  status: number
+  fields: Record<string, unknown>
+  materialFingerprint: string
+  captureOperationId?: string
+  rejectedAt: string
+  materialSynchronized?: boolean
+}
 export interface DurableIntent { processSnapshot?: ProcessSnapshot; [key: string]: unknown }
 export interface FactRecord {
   client_instance_id: string
@@ -78,6 +96,8 @@ export interface CaptureStore {
   moveToDeadLetter(id: string, sequence: number, rejection: CaptureRejection): Promise<void>
   readMetadata<T>(key: string): Promise<T | null>
   writeMetadata<T>(key: string, value: T | null): Promise<void>
+  rejectCaptureMutation(intent: CaptureMutation, rejection: CaptureMutationRejection): Promise<boolean>
+  pendingCaptureMutations(sessionId: number): Promise<CaptureMutation[]>
 }
 export interface RecordOptions {
   wallTime?: string

@@ -185,7 +185,13 @@ class TransitionEntryCapabilitySerializer(serializers.Serializer):
     version = serializers.IntegerField()
 
 
+class TextCapturePolicySerializer(serializers.Serializer):
+    id = serializers.ChoiceField(choices=('stable-input-v1', 'confirmed-transition-v1'))
+    idle_ms = serializers.IntegerField(min_value=0)
+
+
 class StudentRuntimeProcessSerializer(serializers.Serializer):
+    text_capture_policy = TextCapturePolicySerializer(required=False)
     paper_flow_version = serializers.IntegerField(required=False)
     transition_entry = TransitionEntryCapabilitySerializer(required=False)
     capture_bundle = AtomicSubmissionCapabilitySerializer(required=False)

@@ -5618,6 +5618,19 @@ paths:
                           items:
                             type: string
                             format: uuid
+                        receipt_version:
+                          type: integer
+                          enum:
+                          - 2
+                        capture_operation_id:
+                          type: string
+                          format: uuid
+                        attempt_id:
+                          type: integer
+                          minimum: 1
+                        material_fingerprint:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
                         success:
                           type: boolean
                           enum:
@@ -5655,6 +5668,10 @@ paths:
                       - success
                     - type: object
                       properties:
+                        receipt_version:
+                          type: integer
+                          enum:
+                          - 2
                         success:
                           type: boolean
                           enum:
@@ -6553,6 +6570,32 @@ paths:
                       submission_id:
                         type: string
                         format: uuid
+                      processing_state:
+                        type: string
+                        enum:
+                        - queued
+                        - running
+                        - retrying
+                        - recovering
+                        - completed
+                        - failed
+                      worker:
+                        type: object
+                        properties:
+                          status:
+                            type: string
+                            enum:
+                            - connected
+                            - not_connected
+                            - unknown
+                          observed_at:
+                            type: string
+                            format: date-time
+                            description: Timezone-aware timestamp.
+                        additionalProperties: false
+                        required:
+                        - observed_at
+                        - status
                       status:
                         type: string
                         enum:
@@ -17427,6 +17470,14 @@ components:
         * `review` - review
         * `new` - new
         * `unrestricted` - unrestricted
+    IdEnum:
+      enum:
+      - stable-input-v1
+      - confirmed-transition-v1
+      type: string
+      description: |-
+        * `stable-input-v1` - stable-input-v1
+        * `confirmed-transition-v1` - confirmed-transition-v1
     ImportConfirmRequest:
       type: object
       properties:
@@ -19317,6 +19368,22 @@ components:
       - value
       - value_after
       - value_before
+    ProcessingStateEnum:
+      enum:
+      - queued
+      - running
+      - retrying
+      - recovering
+      - completed
+      - failed
+      type: string
+      description: |-
+        * `queued` - queued
+        * `running` - running
+        * `retrying` - retrying
+        * `recovering` - recovering
+        * `completed` - completed
+        * `failed` - failed
     PublishOperationJob:
       type: object
       properties:
@@ -20884,6 +20951,10 @@ components:
           format: uuid
         status:
           $ref: '#/components/schemas/SessionSubmissionReceiptStatusEnum'
+        processing_state:
+          $ref: '#/components/schemas/ProcessingStateEnum'
+        worker:
+          $ref: '#/components/schemas/SubmissionWorkerStatus'
         accepted_at:
           type: string
           format: date-time
@@ -20904,10 +20975,12 @@ components:
       - completed_at
       - error
       - next_url
+      - processing_state
       - status
       - status_url
       - submission_id
       - success
+      - worker
     SessionSubmissionReceiptStatusEnum:
       enum:
       - queued
@@ -22571,6 +22644,8 @@ components:
     StudentRuntimeProcess:
       type: object
       properties:
+        text_capture_policy:
+          $ref: '#/components/schemas/TextCapturePolicy'
         paper_flow_version:
           type: integer
         transition_entry:
@@ -23032,6 +23107,27 @@ components:
           type: string
           default: longitudinal
           maxLength: 32
+    SubmissionWorkerStatus:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/SubmissionWorkerStatusStatusEnum'
+        observed_at:
+          type: string
+          format: date-time
+      required:
+      - observed_at
+      - status
+    SubmissionWorkerStatusStatusEnum:
+      enum:
+      - connected
+      - not_connected
+      - unknown
+      type: string
+      description: |-
+        * `connected` - connected
+        * `not_connected` - not_connected
+        * `unknown` - unknown
     TaskReason:
       type: object
       properties:
@@ -24646,6 +24742,17 @@ components:
       required:
       - display_duration_ms
       - display_label
+    TextCapturePolicy:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/IdEnum'
+        idle_ms:
+          type: integer
+          minimum: 0
+      required:
+      - id
+      - idle_ms
     TimeModeEnum:
       enum:
       - none

@@ -27,7 +27,7 @@ from .prepared_admission import ActivationExecuting, acquire_activation_slot
 from .research_tool_services import has_research_tools
 from .prepared_models import (PreparedActivationCancellation, PreparedAttemptProjection,
                              PreparedSessionArtifact, PreparedSessionRepair)
-from .recording_capture_services import ensure_capture_contract_v2
+from .recording_capture_services import capture_contract_for_start, text_capture_policy
 
 PREPARATION_VERSION = 'prepared-paper-v1'
 
@@ -83,6 +83,7 @@ def _projection(attempt, confidence, item_count):
         },
         'process': {
             'paper_flow_version': 1,
+            'text_capture_policy': text_capture_policy(session),
             'visit_id': None, 'visit_index': None, 'entry_event_id': None, 'navigation_id': None,
             'session_id': session.pk, 'attempt_id': attempt.pk, 'capture_version': 'capture-v2',
             'writer_lease_acquire_url': reverse('assessment_process:writer_lease_acquire', args=[attempt.pk]),
@@ -126,7 +127,8 @@ def prepare_participant(participant):
             'sampling_algorithm_version': participant.sampling_algorithm_version,
             'assignment_unit_type': participant.version.assignment_unit_type,
             'status': ExperimentSession.Status.PREPARED, 'started_at': None,
-            'assessment_flow_version': 1, 'capture_contract': ensure_capture_contract_v2(),
+            'assessment_flow_version': 1, 'capture_contract': capture_contract_for_start(
+                participant.student, participant.version.experiment, require_capture_v2=True),
             'transition_protocol_version': 1,
         },
     )
@@ -292,6 +294,20 @@ def run_preparation_repair():
     return True
 
 
+def preparation_repair_status(job):
+    """Queued work is not evidence that a repair worker is executing it."""
+    from apps.analytics.runtime_pressure import runtime_pressure
+    if job.status == 'failed' and job.attempts >= 3:
+        status = 'exhausted'
+    elif runtime_pressure()['mode'] in ('capture_priority', 'capture_emergency'):
+        status = 'paused'
+    elif job.status == 'failed':
+        status = 'retrying'
+    else:
+        status = job.status
+    return {'status': status, 'attempts': job.attempts, 'max_attempts': 3}
+
+
 def save_inline_confidence(attempt, document=None):
     """Mutable draft only; confidence observations stay in the append-only client stream."""
     from .confidence_services import validate_confidence_probability
@@ -380,7 +396,8 @@ def prepared_runtime(attempt, visit_entry=None, *, request_received_at=None, dec
     payload['remaining_seconds'] = max(0, int((deadline - now).total_seconds())) if deadline else None
     payload['prepared_paper'] = {'version': 1, 'content_version': artifact.preparation_version,
                                  'manifest': artifact.manifest_descriptor, 'question': projection.content_descriptor}
-    payload['process'].update(paper_flow_version=1, response_version=attempt.response_version,
+    payload['process'].update(paper_flow_version=1, text_capture_policy=text_capture_policy(session),
+        response_version=attempt.response_version,
         active_response_event_id=str(attempt.active_response_event_id) if attempt.active_response_event_id else None)
     confidence = ConfidenceAssignment.objects.filter(attempt=attempt).first()
     if confidence:
@@ -537,7 +554,8 @@ def activate_prepared_session(*, student, task_id, client_instance_id, navigatio
         runtime['entry_receipt'] = {'navigation_id': str(navigation_id), 'session_id': session.pk,
             'assignment_id': assignment.pk, 'attempt_id': attempt.pk, 'visit_id': visit.pk,
             'visit_index': 1, 'entry_event_id': str(entry_event.pk), 'entered_at': now.isoformat()}
-        runtime['process'].update(paper_flow_version=1, visit_id=visit.pk, visit_index=1,
+        runtime['process'].update(paper_flow_version=1, text_capture_policy=text_capture_policy(session),
+            visit_id=visit.pk, visit_index=1,
             entry_event_id=str(entry_event.pk), navigation_id=str(navigation_id))
         runtime['initial_writer_lease'] = {'writer_lease_token': str(attempt.writer_lease_token),
             'writer_client_instance_id': str(client_id), 'expires_at': attempt.writer_lease_expires_at.isoformat()}

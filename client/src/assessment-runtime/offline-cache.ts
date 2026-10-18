@@ -21,6 +21,7 @@ async function registerOfflineWorker() {
   const registration = await navigator.serviceWorker.register(OFFLINE_WORKER_URL, {
     scope: OFFLINE_WORKER_SCOPE, updateViaCache: 'none',
   })
+  if (registration.active) await registration.update()
   const candidate = registration.installing || registration.waiting
   if (candidate && candidate.state !== 'activated') await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => { candidate.removeEventListener('statechange', check); reject(new Error('offline worker activation timed out')) }, 15000)
@@ -68,18 +69,14 @@ async function logWorkerInitializationFailure(firstError: unknown, retryError: u
 }
 
 async function resolveOfflineWorker() {
-  const active = await activeWorkerForScope().catch(() => undefined)
-  if (active) return active
-
+  // SPA navigation may retain a worker installed before the current client build.
+  // Registration checks its script before any authorized question is cached.
   let firstError: unknown
   try {
     return await registerOfflineWorker()
   } catch (error) {
     firstError = error
   }
-
-  const recovered = await activeWorkerForScope().catch(() => undefined)
-  if (recovered) return recovered
 
   try {
     return await registerOfflineWorker()

@@ -125,6 +125,46 @@ class SessionSubmissionTests(TestCase):
         self.assertEqual(submission_receipt(job)['next_url'],
                          reverse('assessment:complete', args=[self.session.pk]))
 
+    def test_receipt_distinguishes_queue_retry_and_expired_worker_lease(self):
+        from .session_submission_services import submission_receipt, claim_session_submission
+        job = self.accept()
+        self.assertEqual(submission_receipt(job)['processing_state'], 'queued')
+        type(job).objects.filter(pk=job.pk).update(attempts=1)
+        job.refresh_from_db()
+        self.assertEqual(submission_receipt(job)['processing_state'], 'retrying')
+        claimed = claim_session_submission(worker_id='status-worker')
+        self.assertEqual(submission_receipt(claimed)['processing_state'], 'running')
+        type(job).objects.filter(pk=job.pk).update(lease_expires_at=timezone.now() - timedelta(seconds=1))
+        claimed.refresh_from_db()
+        self.assertEqual(submission_receipt(claimed)['processing_state'], 'recovering')
+        type(job).objects.filter(pk=job.pk).update(attempts=3)
+        claimed.refresh_from_db()
+        receipt = submission_receipt(claimed)
+        self.assertEqual(receipt['processing_state'], 'failed')
+        self.assertEqual(receipt['error']['code'], 'submission_needs_verification')
+
+    def test_worker_observation_uses_shared_postgres_connections_and_queue_age(self):
+        from .session_submission_services import session_submission_worker_status, observe_submission_queue
+        from .management.commands.run_session_submissions import mark_worker_connection
+        old_name = connection.settings_dict['OPTIONS'].get('application_name', '')
+        original_close_at = connection.close_at
+        self.addCleanup(setattr, connection, 'close_at', original_close_at)
+        job = self.accept()
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT set_config('application_name', 'kt-web-test', false)")
+        self.assertEqual(session_submission_worker_status()['status'], 'not_connected')
+        mark_worker_connection()
+        # TestCase keeps one outer transaction, unlike status requests in autocommit.
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT pg_stat_clear_snapshot()')
+        self.assertEqual(session_submission_worker_status()['status'], 'connected')
+        queue = observe_submission_queue()
+        self.assertEqual(queue['queued_count'], 1)
+        self.assertEqual(queue['oldest_queued_at'], job.accepted_at.isoformat())
+        self.assertGreaterEqual(queue['oldest_queued_age_seconds'], 0)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT set_config('application_name', %s, false)", [old_name])
+
     def test_required_check_blocks_freeze_until_real_completion(self):
         from .research_tool_services import record_tool_action
         self.version.configuration = {'research_tools': {'check_enabled': True, 'rules': [{

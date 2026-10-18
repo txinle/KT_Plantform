@@ -69,7 +69,7 @@ describe('prepareOfflineQuestion', () => {
       }),
     }
     getRegistration = vi.fn().mockResolvedValue(undefined)
-    register = vi.fn().mockResolvedValue({ active: worker })
+    register = vi.fn().mockResolvedValue({ active: worker, update: vi.fn().mockResolvedValue(undefined) })
     Object.defineProperty(globalThis.navigator, 'serviceWorker', {
       configurable: true,
       value: {
@@ -115,16 +115,55 @@ describe('prepareOfflineQuestion', () => {
     })
   })
 
-  it('reuses an active assessment worker without registering it again', async () => {
+  it('checks for an updated worker once before reusing it across question preparation', async () => {
     workerResponse = { ok: true }
     getRegistration.mockResolvedValue({ active: worker })
 
     await prepareOfflineQuestion(state)
 
-    expect(getRegistration).toHaveBeenCalledWith('/student/sessions/')
-    expect(register).not.toHaveBeenCalled()
+    expect(register).toHaveBeenCalledTimes(1)
     await prepareOfflineQuestion(state)
-    expect(register).not.toHaveBeenCalled()
+    expect(register).toHaveBeenCalledTimes(1)
+  })
+
+  it('replaces an already-active worker that rejects the current router scope', async () => {
+    workerResponse = { ok: true }
+    const retired = { postMessage: vi.fn((_message: unknown, ports: Array<{ replyTo: TestMessageChannel['port1'] }>) => {
+      queueMicrotask(() => ports[0]!.replyTo.onmessage?.({ data: { ok: false, error: 'Error: invalid_scope' } }))
+    }) }
+    getRegistration.mockResolvedValue({ active: retired })
+
+    await expect(prepareOfflineQuestion(state)).resolves.toBeUndefined()
+
+    expect(retired.postMessage).not.toHaveBeenCalled()
+    expect(worker.postMessage).toHaveBeenCalled()
+  })
+
+  it('waits for the registered worker update before selecting its active instance', async () => {
+    workerResponse = { ok: true }
+    const retired = { postMessage: vi.fn((_message: unknown, ports: Array<{ replyTo: TestMessageChannel['port1'] }>) => {
+      queueMicrotask(() => ports[0]!.replyTo.onmessage?.({ data: { ok: false, error: 'Error: invalid_scope' } }))
+    }) }
+    const registration = { active: retired as typeof worker, update: vi.fn(async () => { registration.active = worker }) }
+    register.mockResolvedValue(registration)
+
+    await expect(prepareOfflineQuestion(state)).resolves.toBeUndefined()
+
+    expect(registration.update).toHaveBeenCalledTimes(1)
+    expect(retired.postMessage).not.toHaveBeenCalled()
+  })
+
+  it('does not fall back to an unchecked active worker when both update checks fail', async () => {
+    workerResponse = { ok: true }
+    getRegistration.mockResolvedValue({ active: worker })
+    register.mockRejectedValue(new TypeError('worker script fetch failed'))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('')))
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await expect(prepareOfflineQuestion(state)).rejects.toMatchObject({ code: 'offline_worker_initialization_failed' })
+      expect(worker.postMessage).not.toHaveBeenCalled()
+      expect(register).toHaveBeenCalledTimes(2)
+    } finally { consoleError.mockRestore() }
   })
 
   it('sends unique static resources and the loaded Vite entry identity', async () => {
@@ -271,7 +310,7 @@ describe('prepareOfflineQuestion', () => {
     } finally { vi.useRealTimers() }
   })
 
-  it('registers only when the assessment scope has no active worker', async () => {
+  it('registers the assessment scope without using the HTTP cache for its script', async () => {
     workerResponse = { ok: true }
 
     await prepareOfflineQuestion(state)
@@ -283,15 +322,15 @@ describe('prepareOfflineQuestion', () => {
     )
   })
 
-  it('rechecks the scope and retries registration once after a transient failure', async () => {
+  it('retries registration once after a transient failure', async () => {
     workerResponse = { ok: true }
     register
       .mockRejectedValueOnce(new TypeError('worker script fetch failed'))
-      .mockResolvedValueOnce({ active: worker })
+      .mockResolvedValueOnce({ active: worker, update: vi.fn().mockResolvedValue(undefined) })
 
     await prepareOfflineQuestion(state)
 
-    expect(getRegistration).toHaveBeenCalledTimes(2)
+    expect(getRegistration).not.toHaveBeenCalled()
     expect(register).toHaveBeenCalledTimes(2)
   })
 

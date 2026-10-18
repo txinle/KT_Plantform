@@ -24,6 +24,7 @@ from apps.assessment.response_snapshot_services import (
     TEXT_LIKE_QUESTION_TYPES,
     canonical_response_state,
 )
+from apps.assessment.recording_capture_services import CAPTURE_V2_STABLE_INPUT_NAME
 
 from .models import (
     RecordingCoverageAttempt,
@@ -804,7 +805,7 @@ def _attempt_result(*, run, attempt, events, session_reasons, gap_count, syncs):
         getattr(attempt, "session", None), "capture_contract", None,
     )
     capture_v2_text_attempt = (
-        getattr(capture_contract, "contract_name", None) == "capture-v2"
+        getattr(capture_contract, "contract_name", None) in {'capture-v2', CAPTURE_V2_STABLE_INPUT_NAME}
         and question_type in TEXT_LIKE_QUESTION_TYPES
     )
     text_input_operations_complete = False
@@ -1405,10 +1406,26 @@ def generate_scope_coverage(
             (event.server_ingest_sequence_no for event in events), default=0
         ),
     }
-    has_capture_v2 = any(session.capture_contract_id and session.capture_contract.contract_name == 'capture-v2' for session in sessions)
+    has_stable_input = any(session.capture_contract_id and
+        session.capture_contract.contract_name == CAPTURE_V2_STABLE_INPUT_NAME for session in sessions)
+    has_capture_v2 = any(session.capture_contract_id and session.capture_contract.contract_name in
+        {'capture-v2', CAPTURE_V2_STABLE_INPUT_NAME} for session in sessions)
+    coverage_version = ('coverage-v4' if has_stable_input else
+                        CAPTURE_V2_COVERAGE_VERSION if has_capture_v2 else COVERAGE_VERSION)
+    algorithm_version = ('recording-coverage-v4' if has_stable_input else
+                         CAPTURE_V2_ALGORITHM_VERSION if has_capture_v2 else ALGORITHM_VERSION)
+    parameters = COVERAGE_PARAMETERS
+    if has_stable_input:
+        # Mixed exports retain both identities; burst summaries cannot support key-level timing.
+        parameters = {**COVERAGE_PARAMETERS, 'capture_contracts': sorted({
+            (session.capture_contract.contract_name, session.capture_contract.schema_sha256)
+            for session in sessions if session.capture_contract_id}),
+            'stable_input_text_observation': 'stable_or_boundary_states_with_linked_burst_summaries',
+            'stable_input_keystroke_timing_available': False}
+        source_document['capture_contracts'] = parameters['capture_contracts']
     if has_capture_v2:
-        source_document['coverage_version'] = CAPTURE_V2_COVERAGE_VERSION
-        source_document['algorithm_version'] = CAPTURE_V2_ALGORITHM_VERSION
+        source_document['coverage_version'] = coverage_version
+        source_document['algorithm_version'] = algorithm_version
         source_document['response_heads'] = [
             [attempt.pk, str(attempt.active_response_event_id), str(attempt.final_response_event_id), attempt.response_version]
             for attempt in attempts
@@ -1439,15 +1456,11 @@ def generate_scope_coverage(
         scope_type=scope_type,
         scope_definition=scope_definition,
         scope_hash=_hash(scope_definition),
-        coverage_version=(
-            CAPTURE_V2_COVERAGE_VERSION if has_capture_v2 else COVERAGE_VERSION
-        ),
-        algorithm_version=(
-            CAPTURE_V2_ALGORITHM_VERSION if has_capture_v2 else ALGORITHM_VERSION
-        ),
+        coverage_version=coverage_version,
+        algorithm_version=algorithm_version,
         code_version=_code_version(),
-        parameter_document=COVERAGE_PARAMETERS,
-        parameter_hash=_hash(COVERAGE_PARAMETERS),
+        parameter_document=parameters,
+        parameter_hash=_hash(parameters),
         source_cutoff_at=source_cutoff_at,
         source_high_water_marks={
             "assessment_event_server_ingest_sequence_no": source_document[

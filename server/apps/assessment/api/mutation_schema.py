@@ -113,12 +113,15 @@ NAVIGATION = obj({
 }, ['navigation_token', 'leave_event_id', 'target_event_id', 'to_assignment_id', 'save_and_leave'])
 DRAFT_RECEIPT = obj({
     **CAPTURE_RECEIPT,
+    'receipt_version': {'type': 'integer', 'enum': [2]}, 'capture_operation_id': UUID,
+    'attempt_id': POSITIVE, 'material_fingerprint': {'type': 'string', 'pattern': '^[0-9a-f]{64}$'},
     'success': SUCCESS, 'saved_at': TIME, 'response_version': COUNTER,
     'active_response_event_id': nullable(UUID), 'response_snapshot_id': UUID,
     'content_hash': STRING, 'content_length': COUNTER, 'state_hash': STRING,
     'response_state_after': {'nullable': True, 'type': 'object', 'additionalProperties': True},
 }, ['success', 'saved_at', 'response_version', 'active_response_event_id'])
 NAVIGATION_RECEIPT = obj({
+    'receipt_version': {'type': 'integer', 'enum': [2]},
     'success': SUCCESS, 'committed': SUCCESS, 'navigation_token': UUID, 'acknowledgements': ACKS,
     'checkpoint_ids': array(UUID), 'response_version': COUNTER, 'active_response_event_id': nullable(UUID),
     'saved_at': nullable(TIME), 'status': STRING, 'writer_lease_released': SUCCESS, 'next_entry': NEXT_ENTRY_RESULT,
@@ -151,6 +154,8 @@ PAPER_REQUEST = obj({'submission_token': UUID, 'client_clicked_at': TIME,
                                    ['attempt_id', 'response_version', 'target_event_id']))},
     ['submission_token', 'client_clicked_at', 'expected_versions'])
 PAPER_RECEIPT = obj({'success': SUCCESS, 'submission_id': UUID,
+    'processing_state': {'type': 'string', 'enum': ['queued', 'running', 'retrying', 'recovering', 'completed', 'failed']},
+    'worker': obj({'status': {'type': 'string', 'enum': ['connected', 'not_connected', 'unknown']}, 'observed_at': TIME}, ['status', 'observed_at']),
     'status': {'type': 'string', 'enum': ['queued', 'running', 'completed', 'failed']},
     'accepted_at': TIME, 'status_url': STRING, 'next_url': STRING},
     ['success', 'submission_id', 'status', 'accepted_at', 'status_url', 'next_url'])

@@ -180,6 +180,7 @@ class CaptureV2TextInputCoverageTests(SimpleTestCase):
         transition_operation_ids=None,
         input_operations=None,
         foreign_input_operation_ids=(),
+        contract_name='capture-v2',
     ):
         transition_operation_ids = (
             [self.first_operation_id]
@@ -259,7 +260,7 @@ class CaptureV2TextInputCoverageTests(SimpleTestCase):
             final_response_event_id=None,
             formal_capture_boundary={},
             session=SimpleNamespace(
-                capture_contract=SimpleNamespace(contract_name='capture-v2'),
+                capture_contract=SimpleNamespace(contract_name=contract_name),
             ),
         )
         return _attempt_result(
@@ -270,6 +271,17 @@ class CaptureV2TextInputCoverageTests(SimpleTestCase):
             gap_count=0,
             syncs=[],
         )
+
+    def test_stable_input_accepts_one_burst_summary_per_stable_transition(self):
+        result = self.coverage_result('short_answer', with_input_operation=True,
+            contract_name='capture-v2-stable-input-v1')
+        self.assertTrue(result.analysis_eligibility['text_editing']['usable'])
+        self.assertEqual(result.overall_status, 'complete')
+
+    def test_stable_input_still_requires_a_linked_operation_for_each_state(self):
+        result = self.coverage_result('short_answer', with_input_operation=False,
+            contract_name='capture-v2-stable-input-v1')
+        self.assertIn('missing_input_operation_for_response_transition', result.missing_reasons)
 
     def test_capture_v2_input_operations_complete_text_editing_for_text_questions(self):
         for question_type in ('short_answer', 'fill_blank', 'numeric'):

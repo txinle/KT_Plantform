@@ -243,12 +243,14 @@ class SessionSubmissionProcessTests(TransactionTestCase):
         self.assertEqual(self.session.submission_job.status, 'completed')
 
     def test_long_lived_command_recovers_idle_disconnect_without_duplicate_processing(self):
+        from .session_submission_services import session_submission_worker_status
         self.save_answer()
         first = self.accept()
         worker = self.start_worker('long_lived_command')
         self.release(worker)
         idle = self.read_line(worker)
         self.assertTrue(idle.startswith('IDLE '), idle)
+        self.assertEqual(session_submission_worker_status()['status'], 'connected')
         first.refresh_from_db()
         self.assertEqual(first.status, 'completed')
         second = self.another_receipt()
@@ -257,6 +259,7 @@ class SessionSubmissionProcessTests(TransactionTestCase):
             self.assertTrue(cursor.fetchone()[0])
         self.release(worker)
         self.assertEqual(self.result(worker), {'recovered': True})
+        self.assertEqual(session_submission_worker_status()['status'], 'not_connected')
         first.refresh_from_db()
         second.refresh_from_db()
         self.assertEqual((first.status, second.status), ('completed', 'completed'))

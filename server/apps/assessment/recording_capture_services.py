@@ -99,13 +99,49 @@ def ensure_capture_contract_v2():
     return contract
 
 
-def capture_contract_for_start(student, experiment):
+CAPTURE_V2_STABLE_INPUT_NAME = 'capture-v2-stable-input-v1'
+CAPTURE_CONTRACT_V2_STABLE_INPUT = deepcopy(CAPTURE_CONTRACT_V2)
+CAPTURE_CONTRACT_V2_STABLE_INPUT['requirements'].update({
+    'input_operations': 'burst_summary_for_text_transition',
+})
+CAPTURE_CONTRACT_V2_STABLE_INPUT['parameters'].update({
+    'text_state_policy': 'stable_input', 'stable_state_idle_ms': 1000,
+    'text_input_operations': 'burst_summary', 'continuous_input_periodic_snapshot': False,
+})
+
+
+def ensure_capture_contract_v2_stable_input():
+    digest = _canonical_hash(CAPTURE_CONTRACT_V2_STABLE_INPUT)
+    contract, created = CaptureContractArtifact.objects.get_or_create(
+        contract_name=CAPTURE_V2_STABLE_INPUT_NAME, defaults={
+            'contract_version': 2, 'schema_document': CAPTURE_CONTRACT_V2_STABLE_INPUT,
+            'schema_sha256': digest,
+        },
+    )
+    if not created and (contract.contract_version != 2 or contract.schema_sha256 != digest
+                        or contract.schema_document != CAPTURE_CONTRACT_V2_STABLE_INPUT):
+        raise RuntimeError(f'{CAPTURE_V2_STABLE_INPUT_NAME} contract drift detected')
+    return contract
+
+
+def text_capture_policy(session):
+    """Project only the bound measurement artifact, including unopened old papers."""
+    if session.capture_contract_id and session.capture_contract.contract_name == CAPTURE_V2_STABLE_INPUT_NAME:
+        return {'id': 'stable-input-v1', 'idle_ms': 1000}
+    return {'id': 'confirmed-transition-v1', 'idle_ms': 0}
+
+
+def capture_contract_for_start(student, experiment, *, require_capture_v2=False):
     allowed = (
         '*' in settings.CAPTURE_V2_COURSE_IDS
         or str(student.pk) in settings.CAPTURE_V2_USER_IDS
         or str(experiment.course_id) in settings.CAPTURE_V2_COURSE_IDS
     )
-    return ensure_capture_contract_v2() if settings.CAPTURE_V2_ENABLED and allowed else ensure_capture_contract_v1()
+    # Prepared papers already require the V2 transport; ordinary entry retains its rollout.
+    if not (require_capture_v2 or settings.CAPTURE_V2_ENABLED and allowed):
+        return ensure_capture_contract_v1()
+    return (ensure_capture_contract_v2_stable_input() if settings.CAPTURE_STABLE_INPUT_ENABLED
+            else ensure_capture_contract_v2())
 
 
 CHECKPOINT_FIELDS = frozenset(

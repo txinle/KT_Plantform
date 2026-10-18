@@ -4,10 +4,11 @@ import { defaultOutbox } from './fact-store'
 import { ProcessEventCollector } from './process-sender'
 import { bindLifecycle } from './session-lifecycle'
 import { DEFAULT_SYNC_INTERVAL_MS } from './process-types'
-import type { CaptureStore, CaptureEvent, CaptureCheckpoint, CaptureMutation, ProcessConfirmation, RecordOptions, FlushOptions } from './capture-contract'
+import type { CaptureStore, CaptureEvent, CaptureCheckpoint, CaptureMutation, CaptureMutationRejection, ProcessConfirmation, RecordOptions, FlushOptions } from './capture-contract'
 import { createWriterLease, type WriterLease } from './writer-lease'
 import { getStudentAssessmentApi, nextEntryRequest } from './api'
 import { currentAssessmentOperationId, timedAssessmentStage } from './operation-timing'
+import { matchesMutationRejection, mutationMaterialFingerprint, sameDraftSemantics } from './mutation-material'
 type RuntimeProcess = StudentRuntimeQuestionEntry['process']
 type VisitFields = 'visit_id' | 'visit_index' | 'entry_event_id' | 'navigation_id'
 type ProcessState = Omit<RuntimeProcess, VisitFields> & Partial<Pick<RuntimeProcess, VisitFields>>
@@ -66,6 +67,7 @@ export interface NavigationIntent {
   writerClientInstanceId?: string
   processSnapshot?: SubmissionProcessSnapshot
   nextEntry?: NextEntryRequest
+  inlineConfidence?: { probability: number | null; answer_event_id: string | null }
   [key: string]: unknown
 }
 
@@ -327,6 +329,9 @@ export class SessionController {
     let closeFlight: Promise<boolean> | undefined;
     const prepareMutation = async (intent: CaptureMutation, prepare?: () => Promise<Record<string, unknown> | undefined>) => {
       if (Object.hasOwn(intent.body, 'target_event_id') && !intent.body.writer_lease_token) {
+        if (intent.attemptId !== process.attempt_id) throw Object.assign(new Error('先前题目的未发送草稿缺少原写入租约，请返回原题目核验。'), {
+          code: 'capture_prior_lease_unavailable', fields: { attempt_id: intent.attemptId },
+        });
         const credentials = prepare ? await prepare() : await lease?.beforePointerWrite();
         if (credentials) {
           intent = { ...intent, body: { ...intent.body, ...credentials } };
@@ -336,8 +341,32 @@ export class SessionController {
       return intent;
     };
     const confirmMutation = async <T extends ProcessConfirmation>(intent: CaptureMutation, send: (body: Record<string, unknown>) => Promise<T>) => {
-      intent = await prepareMutation(intent);
-      const result = await send({ ...intent.body, capture_bundle: intent.processSnapshot });
+      if (intent.phase === 'prepared') intent = await prepareMutation(intent);
+      const key = `capture-mutation:${intent.sessionId}:${intent.attemptId}`;
+      const document = { ...intent.body, capture_bundle: intent.processSnapshot };
+      const fingerprint = Object.hasOwn(intent.body, 'target_event_id') ? await mutationMaterialFingerprint(document) : undefined;
+      if (intent.materialFingerprint && intent.materialFingerprint !== fingerprint) throw new Error('本地操作材料与冻结凭证不一致，请核验原操作。');
+      if (intent.phase === 'prepared') {
+        intent = { ...intent, phase: 'sent', materialFingerprint: fingerprint };
+        await this.store.writeMetadata(key, intent);
+      }
+      let result: T;
+      try { result = await send(document); }
+      catch (error) {
+        if (fingerprint && matchesMutationRejection(error, { mutationKind: 'draft', attemptId: intent.attemptId,
+          materialFingerprint: fingerprint, captureOperationId: intent.body.capture_operation_id as string | undefined })) {
+          if (!await this.store.rejectCaptureMutation(intent, {
+            code: error.code, status: error.status, fields: error.fields, materialFingerprint: fingerprint,
+            captureOperationId: intent.body.capture_operation_id as string, rejectedAt: new Date().toISOString(),
+          })) throw new Error('拒绝回执与本地待确认操作不一致，请核验原操作。');
+        }
+        throw error;
+      }
+      const proof = result as ProcessConfirmation & { receipt_version?: number; attempt_id?: number; material_fingerprint?: string };
+      if (proof.receipt_version !== undefined && (proof.receipt_version !== 2 || proof.attempt_id !== intent.attemptId
+        || proof.material_fingerprint !== fingerprint || proof.capture_operation_id !== intent.body.capture_operation_id)) {
+        throw new Error('操作回执与本次冻结材料不一致，请核验原操作。');
+      }
       if (intent.body.leave_event_id && (result.capture_operation_id !== intent.body.capture_operation_id || result.writer_lease_released !== true)) {
         throw new Error('收尾回执与本次操作不一致，请核验原操作。');
       }
@@ -351,34 +380,68 @@ export class SessionController {
       await sender.acknowledgeCaptureMutation(intent, result);
       if (intent.body.leave_event_id) {
         const left = intent.processSnapshot.events.find(row => row.event_id === intent.body.leave_event_id);
-        const local = await this.store.readMetadata<{ reason: string }>(sender.closeMetadataKey());
-        await this.store.writeMetadata(`confirmed-close:${process.session_id}:${process.attempt_id}`, {
+        const visitId = left?.correlation_id || (intent.attemptId === process.attempt_id ? sender.correlationId : undefined);
+        const local = await this.store.readMetadata<{ reason: string }>(`close-local:${intent.sessionId}:${intent.attemptId}:${visitId || 'unscoped'}`);
+        await this.store.writeMetadata(`confirmed-close:${intent.sessionId}:${intent.attemptId}`, {
           leaveEventId: intent.body.leave_event_id, reason: left?.payload.leave_reason || local?.reason,
-          visitId: left?.correlation_id || sender.correlationId,
+          visitId,
         });
-        lease?.invalidate();
+        if (intent.attemptId === process.attempt_id) lease?.invalidate();
         if (intent.body.next_entry) {
           const request = intent.body.next_entry as NextEntryRequest;
           await this.confirmLeave(process.session_id, request.navigation_id);
           await this.rememberEnteredQuestion(process.session_id, request, (result as ProcessConfirmation & { next_entry?: NextEntryOutcome }).next_entry);
         }
       }
-      if (responseVersion !== undefined) runtime.responseVersion = responseVersion;
+      if (responseVersion !== undefined && intent.attemptId === process.attempt_id) runtime.responseVersion = responseVersion;
       return result;
+    };
+    let priorMutationRecovery: Promise<void> | undefined;
+    const recoverPriorMutations = () => {
+      if (!priorMutationRecovery) priorMutationRecovery = (async () => {
+        const pending = await this.store.pendingCaptureMutations(process.session_id);
+        for (const intent of pending) {
+          if (intent.attemptId === process.attempt_id) continue;
+          await confirmMutation(intent, frozen => getStudentAssessmentApi(intent.operationId ?? null).post(intent.url, frozen, { timeoutMs: 30000 }));
+        }
+      })().finally(() => { priorMutationRecovery = undefined; });
+      return priorMutationRecovery;
     };
     const runtime: StudentProcessRuntime = {
       captureMutation: async (url, body, send, operationId = currentAssessmentOperationId(), prepare) => {
         assertActive();
+        await recoverPriorMutations();
         const pending = await this.store.readMetadata<CaptureMutation>(`capture-mutation:${process.session_id}:${process.attempt_id}`);
         if (pending) {
-          const result = await confirmMutation(pending, frozen => getStudentAssessmentApi(pending.operationId ?? null).post<Awaited<ReturnType<typeof send>>>(pending.url, frozen, pending.body.leave_event_id ? { timeoutMs: 30000 } : undefined));
-          if (pending.url === url && (JSON.stringify(pending.body) === JSON.stringify(body)
-            || (Object.hasOwn(body, 'target_event_id') && pending.body.target_event_id === body.target_event_id))) return result;
+          const result = await confirmMutation(pending, frozen => getStudentAssessmentApi(pending.operationId ?? null).post<Awaited<ReturnType<typeof send>>>(pending.url, frozen, { timeoutMs: 30000 }));
+          if (pending.url === url && (Object.hasOwn(body, 'target_event_id')
+            ? sameDraftSemantics(pending.body, body) : JSON.stringify(pending.body) === JSON.stringify(body))) return result;
           if (pending.processSnapshot.client_instance_id !== sender.clientInstanceId
             && await sender.flushConfirmed({ ignoreVisibility: true, operationId: operationId || undefined }) === false) {
             throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。');
           }
           if (Object.hasOwn(body, 'expected_version')) body = { ...body, expected_version: runtime.responseVersion };
+        }
+        const rejectionKey = `capture-mutation-rejection:${process.session_id}:${process.attempt_id}`;
+        const rejection = await this.store.readMetadata<CaptureMutationRejection>(rejectionKey);
+        if (rejection?.code === 'response_target_not_persisted') {
+          const [events, head] = await Promise.all([
+            this.store.pendingEvents(sender.clientInstanceId, Number.MAX_SAFE_INTEGER),
+            this.store.restoreResponse(process.session_id, process.attempt_id),
+          ]);
+          const matchesTarget = (event: CaptureEvent) => event.event_id === body.target_event_id
+            && event.session_id === process.session_id && event.attempt_id === process.attempt_id;
+          if (!events.some(matchesTarget) && !(head && matchesTarget(head))) {
+            throw Object.assign(new Error('本地缺少目标答案记录，不能重建保存请求。请保留本页并联系教师核验。'), {
+              code: 'response_target_missing_local', fields: { target_event_id: body.target_event_id },
+            });
+          }
+        }
+        if (rejection?.code === 'response_target_not_persisted' && !rejection.materialSynchronized) {
+          if (await sender.flushConfirmed({ ignoreVisibility: true, operationId: operationId || undefined, timeoutMs: 30000 }) === false) {
+            throw new Error('目标答案轨迹尚未确认保存，请恢复网络后重试。');
+          }
+          await this.store.writeMetadata(rejectionKey, { ...rejection, materialSynchronized: true });
         }
         if (Object.hasOwn(body, 'target_event_id')) body = { ...body, capture_operation_id: crypto.randomUUID() };
         let intent: CaptureMutation;
@@ -388,6 +451,8 @@ export class SessionController {
           if (await sender.flushConfirmed({ ignoreVisibility: true, operationId: operationId || undefined }) === false) throw error;
           intent = await sender.freezeCaptureMutation(url, body, operationId);
         }
+        intent = { ...intent, phase: 'prepared' };
+        await this.store.writeMetadata(`capture-mutation:${intent.sessionId}:${intent.attemptId}`, intent);
         intent = await prepareMutation(intent, prepare);
         return confirmMutation(intent, send);
       },
@@ -403,8 +468,9 @@ export class SessionController {
       pointerWritesSettled: async () => {
         await this.pointerQueue;
         if (closeFlight) await closeFlight;
+        await recoverPriorMutations();
         const intent = await this.store.readMetadata<CaptureMutation>(`capture-mutation:${process.session_id}:${process.attempt_id}`);
-        if (intent) await confirmMutation(intent, frozen => getStudentAssessmentApi(intent.operationId ?? null).post(intent.url, frozen, intent.body.leave_event_id ? { timeoutMs: 30000 } : undefined));
+        if (intent) await confirmMutation(intent, frozen => getStudentAssessmentApi(intent.operationId ?? null).post(intent.url, frozen, { timeoutMs: 30000 }));
       },
       sender, responseVersion: process.response_version || 0, writerLease: lease, clientInstanceId: sender.clientInstanceId,
       restoredNavigation, restoredSubmission, restoredResponse: restored as RestoredResponse | null,
@@ -420,11 +486,13 @@ export class SessionController {
       cancelNavigation: token => { assertActive(); lifecycle.cancelNavigation(token) },
       freezeNavigationSnapshot: async intent => {
         assertActive()
+        await recoverPriorMutations()
         const operationId = sender.operationId
         try { return await sender.freezeNavigationSnapshot(intent) }
         catch (error) {
-          if ((error as { code?: string }).code !== 'navigation_snapshot_backlog'
-            || !await sender.flushConfirmed({ ignoreVisibility: true, operationId })) throw error
+          if (!['navigation_snapshot_backlog', 'navigation_snapshot_too_large'].includes((error as { code?: string }).code || '')) throw error
+          const boundary = await sender._freezeBoundary()
+          if (!await sender.flushConfirmed({ ignoreVisibility: true, operationId, boundary })) throw error
           assertActive()
           return sender.freezeNavigationSnapshot(intent)
         }
@@ -435,8 +503,8 @@ export class SessionController {
       setOperationId: operationId => { assertActive(); sender.setOperationId(operationId) },
       record: async (type, payload, options) => { assertActive(); return sender.record(type, payload, options) },
       checkpoint: trigger => { assertActive(); return sender.checkpoint(trigger) },
-      flushBounded: timeout => sender.flushBounded(timeout, { ignoreVisibility: true, keepalive: true }),
-      flushConfirmed: options => sender.flushConfirmed({ ignoreVisibility: true, keepalive: true, ...options }),
+      flushBounded: async timeout => { await recoverPriorMutations(); return sender.flushBounded(timeout, { ignoreVisibility: true, keepalive: true }) },
+      flushConfirmed: async options => { await recoverPriorMutations(); return sender.flushConfirmed({ ignoreVisibility: true, keepalive: true, ...options }) },
       closesWriterLease: process.close_bundle?.enabled === true && process.close_bundle.version === 1 && process.capture_bundle?.mutation_receipts === true,
       closeAttempt: async (reason, target = null, nextEntry) => {
         assertActive();
