@@ -17,6 +17,8 @@ export class ProcessEventCollector {
   checkpointUploads: CheckpointQueue
   captureBundle?: CaptureBundleCapability
   private progressWaiters = new Set<() => void>()
+  private rejectionRevalidation?: Promise<void>
+  private transportQueue: Promise<unknown> = Promise.resolve()
   lastFlushError: unknown
 
   constructor(options: SenderOptions) {
@@ -156,7 +158,7 @@ export class ProcessEventCollector {
       let intent = await this.outbox.readMetadata<DurableIntent & { processSnapshot: CaptureBundle }>(key);
       if (!intent) {
         if (resumeOnly) break;
-        const batch = await this.outbox.peekBatch(Math.min(MAX_BATCH_SIZE, capability.max_events), options.boundary);
+        const batch = await this.outbox.peekBatch(Math.min(MAX_BATCH_SIZE, capability.max_events), options.boundary, { sessionId: this.sessionId });
         const pending = (await this.outbox.pendingCheckpoints(false)).filter(row => roundCheckpoints.has(row.checkpoint_id) && row.session_id === this.sessionId
           && row.highest_emitted_sequence_no <= (options.boundary?.[row.client_instance_id] ?? Number.MAX_SAFE_INTEGER));
         const clientId = batch?.clientInstanceId || pending[0]?.client_instance_id;
@@ -219,6 +221,11 @@ export class ProcessEventCollector {
     while (this.isOnline() && (options.ignoreVisibility || this.isVisible())) {
       const batch = await this.outbox.peekBatch(MAX_BATCH_SIZE, options.boundary);
       if (!batch) break;
+      // A packet-level deadline/authorization rejection applies to one owner.
+      // Never quarantine another session or attempt because it shared that packet.
+      const first = batch.events[0]!;
+      const nextOwner = batch.events.findIndex(event => event.session_id !== first.session_id || event.attempt_id !== first.attempt_id);
+      if (nextOwner > 0) batch.events = batch.events.slice(0, nextOwner);
       while (batch.events.length > 1 && new TextEncoder().encode(JSON.stringify(batch.events)).byteLength > 48 * 1024) batch.events.pop();
       const body = JSON.stringify({
         client_instance_id: batch.clientInstanceId,
@@ -324,7 +331,7 @@ export class ProcessEventCollector {
     if (this.flushPromise) return this.flushPromise;
     const boundary = options.boundary ? this.recordQueue.then(() => options.boundary!) : this._freezeBoundary();
     const operationId = options.operationId ?? this.operationId;
-    this.flushPromise = boundary.then((frozen) => this._flushLoop({ ...options, boundary: frozen, operationId })).finally(() => {
+    this.flushPromise = boundary.then((frozen) => this.upload({ ...options, boundary: frozen, operationId })).finally(() => {
       this.flushPromise = null;
       for (const notify of this.progressWaiters) notify();
       this.progressWaiters.clear();
@@ -336,6 +343,27 @@ export class ProcessEventCollector {
     return this.flushBounded(null, options);
   }
 
+  private upload(options: FlushOptions) {
+    const pending = this.transportQueue.then(() => this._flushLoop(options));
+    this.transportQueue = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private revalidateRejectedEvents(priorUpload: Promise<boolean> | null) {
+    if (this.rejectionRevalidation) return this.rejectionRevalidation;
+    this.rejectionRevalidation = (async () => {
+      const state = await this.outbox.captureState(this.clientInstanceId, { sessionId: this.sessionId });
+      if (!state.failed) return;
+      if (priorUpload) await priorUpload;
+      // Re-send original facts once after historical packet-level rejection.
+      // A server ACK resolves them; neither local retry nor an old rejection is an ACK.
+      await this.outbox.requeueRejectedEvents(this.clientInstanceId, this.sessionId);
+      const boundary = await this.outbox.freezeBoundary(this.clientInstanceId);
+      await this.upload({ ignoreVisibility: true, boundary, operationId: this.operationId });
+    })().finally(() => { this.rejectionRevalidation = undefined; });
+    return this.rejectionRevalidation;
+  }
+
   async flushBounded(timeoutMs: number | null = 1500, options: FlushOptions = {}) {
     const existing = this.boundedFlush;
     if (existing
@@ -344,6 +372,7 @@ export class ProcessEventCollector {
       && JSON.stringify(existing.boundary) === JSON.stringify(options.boundary)
       && existing.ignoreVisibility === Boolean(options.ignoreVisibility)
       && existing.keepalive === Boolean(options.keepalive)) return existing.promise;
+    const priorUpload = this.flushPromise;
     const flight: BoundedFlush = {
       recordQueue: this.recordQueue,
       timeoutMs,
@@ -357,19 +386,21 @@ export class ProcessEventCollector {
     flight.recordQueue = this.recordQueue;
     const flushLatest = async () => {
       const boundary = await boundaryReady;
+      await this.revalidateRejectedEvents(priorUpload);
       if (this.captureBundle?.enabled && this.captureBundle.version === 1) {
         const requiredCheckpoints = (await this.outbox.pendingCheckpoints()).filter(row => row.session_id === this.sessionId
           && row.highest_emitted_sequence_no <= (boundary[row.client_instance_id] ?? -1)).map(row => row.checkpoint_id);
         let previousProgress: string | undefined;
         while (true) {
           const states = await Promise.all(Object.entries(boundary).map(async ([id, sequence]) => {
-            const state = await this.outbox.captureState(id);
-            return { ack: state.highestContiguousAcked, confirmed: state.highestContiguousAcked >= sequence };
+            const state = await this.outbox.captureState(id, { sessionId: this.sessionId, through: sequence });
+            return { ack: state.highestAcked, pending: state.pending, failed: state.failed,
+              confirmed: state.pending === 0 && state.failed === 0 && !state.missingLocalRanges.length };
           }));
           const pendingIds = new Set((await this.outbox.pendingCheckpoints()).map(row => row.checkpoint_id));
           const remaining = requiredCheckpoints.filter(id => pendingIds.has(id));
           if (states.every(state => state.confirmed) && !remaining.length) return true;
-          const progress = JSON.stringify([states.map(state => state.ack), remaining]);
+          const progress = JSON.stringify([states.map(state => [state.ack, state.pending, state.failed]), remaining]);
           if (progress === previousProgress) throw Object.assign(new Error('待同步材料正由先前操作占用，请核验原操作后重试。'), { code: 'capture_drain_blocked' });
           const earlier = this.flushPromise;
           if (!await (earlier || this.flush({ ...options, boundary }))) return false;
@@ -381,8 +412,8 @@ export class ProcessEventCollector {
         if (this.flushPromise) await this.flushPromise;
         let confirmed = true;
         for (const [clientInstanceId, sequence] of Object.entries(boundary)) {
-          const state = await this.outbox.captureState(clientInstanceId);
-          if (state.highestContiguousAcked < sequence) confirmed = false;
+          const state = await this.outbox.captureState(clientInstanceId, { sessionId: this.sessionId, through: sequence });
+          if (state.pending || state.failed || state.missingLocalRanges.length) confirmed = false;
         }
         if (confirmed && !this.checkpointEndpoint && !await this.outbox.readMetadata(`capture-flush:${this.sessionId}`)) return true;
         // Another caller may start an older boundary while captureState awaits.
@@ -391,8 +422,8 @@ export class ProcessEventCollector {
         if (!uploaded) return false;
         confirmed = true;
         for (const [clientInstanceId, sequence] of Object.entries(boundary)) {
-          const state = await this.outbox.captureState(clientInstanceId);
-          if (state.highestContiguousAcked < sequence) confirmed = false;
+          const state = await this.outbox.captureState(clientInstanceId, { sessionId: this.sessionId, through: sequence });
+          if (state.pending || state.failed || state.missingLocalRanges.length) confirmed = false;
         }
         if (confirmed) return true;
         if (!joinedEarlierFlush) return false;
@@ -506,6 +537,7 @@ export class ProcessEventCollector {
 
   freezeSubmissionSnapshot<T extends DurableIntent>(intent: T): Promise<T & { processSnapshot: ProcessSnapshot }> {
     const recordFence = this.recordQueue;
+    const priorUpload = this.flushPromise;
     const frozen = recordFence.then(async () => {
       const saved = await this.outbox.restoreSubmissionIntent(this.sessionId, this.attemptId);
       if (saved?.processSnapshot) {
@@ -516,16 +548,17 @@ export class ProcessEventCollector {
         if (JSON.stringify(savedIntent) !== JSON.stringify(requestedIntent)) throw new Error('Submission snapshot is immutable.');
         return clone(saved) as T & { processSnapshot: ProcessSnapshot };
       }
+      await this.revalidateRejectedEvents(priorUpload);
       const boundary = await this.outbox.freezeBoundary(this.clientInstanceId);
       if (Object.keys(boundary).some((id) => id !== this.clientInstanceId)) {
         throw Object.assign(new Error('Earlier client evidence must be confirmed before submission.'), { code: 'submission_snapshot_backlog' });
       }
       const sequence = boundary[this.clientInstanceId];
-      const state = await this.outbox.captureState(this.clientInstanceId);
+      const state = await this.outbox.captureState(this.clientInstanceId, { sessionId: this.sessionId, through: sequence });
       if (state.failed || state.missingLocalRanges.length) {
         throw Object.assign(new Error('Submission evidence has a rejected event or local sequence gap.'), { code: 'submission_snapshot_gap' });
       }
-      const events = await this.outbox.pendingEvents(this.clientInstanceId, sequence);
+      const events = (await this.outbox.pendingEvents(this.clientInstanceId, sequence)).filter(event => event.session_id === this.sessionId);
       if (events.length > Math.min(MAX_BATCH_SIZE, this.captureBundle?.max_events ?? MAX_BATCH_SIZE)) {
         throw Object.assign(new Error('Submission snapshot exceeds the bounded event limit.'), { code: 'submission_snapshot_too_large' });
       }
@@ -550,6 +583,7 @@ export class ProcessEventCollector {
 
   freezeNavigationSnapshot<T extends DurableIntent>(intent: T): Promise<T & { processSnapshot: ProcessSnapshot }> {
     const recordFence = this.recordQueue;
+    const priorUpload = this.flushPromise;
     const frozen = recordFence.then(async () => {
       const saved = await this.outbox.restoreNavigationIntent(this.sessionId, this.attemptId);
       if (saved?.processSnapshot) {
@@ -560,13 +594,14 @@ export class ProcessEventCollector {
         if (JSON.stringify(savedIntent) !== JSON.stringify(requestedIntent)) throw new Error('Navigation snapshot is immutable.');
         return clone(saved) as T & { processSnapshot: ProcessSnapshot };
       }
+      await this.revalidateRejectedEvents(priorUpload);
       const boundary = await this.outbox.freezeBoundary(this.clientInstanceId);
       const sequence = boundary[this.clientInstanceId];
-      const state = await this.outbox.captureState(this.clientInstanceId);
+      const state = await this.outbox.captureState(this.clientInstanceId, { sessionId: this.sessionId, through: sequence });
       if (state.failed || state.missingLocalRanges.length) {
         throw Object.assign(new Error('Navigation evidence has a rejected event or local sequence gap.'), { code: 'navigation_snapshot_gap' });
       }
-      const events = await this.outbox.pendingEvents(this.clientInstanceId, sequence);
+      const events = (await this.outbox.pendingEvents(this.clientInstanceId, sequence)).filter(event => event.session_id === this.sessionId);
       if (events.some(event => event.attempt_id !== null && event.attempt_id !== this.attemptId)) {
         throw Object.assign(new Error('Earlier question evidence must be confirmed before navigation.'), { code: 'navigation_snapshot_backlog' });
       }
@@ -618,9 +653,10 @@ export class ProcessEventCollector {
         }
         return saved;
       }
+      await this.revalidateRejectedEvents(earlierUpload);
       const boundary = await this.outbox.freezeBoundary(this.clientInstanceId);
       const sequence = boundary[this.clientInstanceId]!;
-      const state = await this.outbox.captureState(this.clientInstanceId);
+      const state = await this.outbox.captureState(this.clientInstanceId, { sessionId: this.sessionId, through: sequence });
       if (state.failed || state.missingLocalRanges.length) throw new Error('作答轨迹存在缺失或拒绝，请先核验原操作。');
       const events = (await this.outbox.pendingEvents(this.clientInstanceId, sequence)).filter(event => event.session_id === sessionId
         && (event.attempt_id === attemptId || event.attempt_id === null));

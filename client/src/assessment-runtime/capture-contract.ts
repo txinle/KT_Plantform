@@ -75,6 +75,7 @@ export interface CaptureState {
   failed: number
   missingLocalRanges: number[][]
 }
+export interface CaptureStateScope { sessionId: number; through?: number }
 export interface CaptureStore {
   isFallback: boolean
   enqueue(id: string, factory: (sequence: number) => CaptureEvent): Promise<CaptureEvent>
@@ -86,10 +87,11 @@ export interface CaptureStore {
   clearResponseRecovery(session: number, attempt: number): Promise<void>
   freezeBoundary(id: string): Promise<Record<string, number>>
   pendingEvents(id: string, boundary: number): Promise<CaptureEvent[]>
-  peekBatch(limit?: number, boundary?: Record<string, number> | null): Promise<{ clientInstanceId: string; events: CaptureEvent[] } | null>
+  peekBatch(limit?: number, boundary?: Record<string, number> | null, scope?: CaptureStateScope): Promise<{ clientInstanceId: string; events: CaptureEvent[] } | null>
   deleteAcknowledged(id: string, sequences: number[]): Promise<void>
   count(): Promise<number>
-  captureState(id: string): Promise<CaptureState>
+  captureState(id: string, scope?: CaptureStateScope): Promise<CaptureState>
+  requeueRejectedEvents(id: string, sessionId: number): Promise<number>
   enqueueCheckpoint(checkpoint: CaptureCheckpoint): Promise<unknown>
   pendingCheckpoints(includeOwned?: boolean): Promise<CaptureCheckpoint[]>
   deleteCheckpoint(id: string): Promise<void>

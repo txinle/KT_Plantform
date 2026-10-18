@@ -12,6 +12,71 @@ import { backoffDelay, sanitizePayload } from './process-types';
 
 const INSTANCE_A = '11111111-1111-4111-8111-111111111111';
 
+test('a closed session cannot quarantine valid current-session facts in the same client batch', async () => {
+  const outbox = new MemoryOutbox();
+  const batches = [];
+  const options = { outbox, endpoint: '/assessment/process/capture-v2/batch/', fetch: async (_url, init) => {
+    const body = JSON.parse(init.body); batches.push(body);
+    if (body.events.some(event => event.session_id === 8)) return { ok: false, status: 409,
+      json: async () => ({ success: false, error: { code: 'deadline_expired' } }) };
+    return okResponse({ success: true, acknowledgements: body.events.map(event => ({ client_sequence_no: event.client_sequence_no })) });
+  } };
+  const previous = new ProcessEventCollector(eventPayload({ ...options, sessionId: 8 }));
+  const current = new ProcessEventCollector(eventPayload(options));
+  await previous.record('document_visible', {});
+  const entered = await current.record('item_rendered', { presentation_state: 'interactive' });
+  try {
+    assert.equal(await current.flush(), true);
+    assert.equal(outbox.deadLetters.filter(row => row.event.session_id === 7).length, 0);
+    assert.equal((await outbox.captureState(INSTANCE_A, { sessionId: 7 })).failed, 0);
+    assert.ok(batches.some(body => body.events.some(row => row.event_id === entered.event_id) && body.events.every(row => row.session_id === 7)));
+    const frozen = await current.freezeNavigationSnapshot({ token: INSTANCE_B });
+    assert.equal(frozen.processSnapshot.event_boundary, 2);
+  } finally { previous.dispose(); current.dispose(); }
+});
+
+test('revalidates original current-session packet rejections once and retains their rejection history', async () => {
+  const outbox = new MemoryOutbox();
+  const bodies = [];
+  const current = new ProcessEventCollector(eventPayload({ outbox, endpoint: '/assessment/process/capture-v2/batch/',
+    fetch: async (_url, init) => { const body = JSON.parse(init.body); bodies.push(body); return okResponse({ success: true,
+      acknowledgements: body.events.map(event => ({ client_sequence_no: event.client_sequence_no })) }); } }));
+  const previous = new ProcessEventCollector(eventPayload({ outbox, sessionId: 8 }));
+  await previous.record('document_visible', {});
+  const original = await current.record('item_rendered', { presentation_state: 'interactive' });
+  const rejection = { code: 'deadline_expired', permanent: true, http_status: 409 };
+  await outbox.moveToDeadLetter(INSTANCE_A, 1, rejection);
+  await outbox.moveToDeadLetter(INSTANCE_A, 2, rejection);
+  try {
+    await current.freezeNavigationSnapshot({ token: INSTANCE_B });
+    assert.equal(bodies.length, 1);
+    assert.deepEqual(bodies[0].events, [original]);
+    assert.equal(outbox.deadLetters.length, 2);
+    assert.deepEqual(outbox.deadLetters[1].rejection, rejection);
+    assert.equal((await outbox.captureState(INSTANCE_A)).failed, 1);
+    assert.equal((await outbox.captureState(INSTANCE_A, { sessionId: 7 })).failed, 0);
+    await current.flushConfirmed({ ignoreVisibility: true });
+    assert.equal(bodies.length, 1);
+  } finally { previous.dispose(); current.dispose(); }
+});
+
+test('a genuine current-session rejection remains blocking after one bounded revalidation', async () => {
+  const outbox = new MemoryOutbox();
+  let calls = 0;
+  const sender = new ProcessEventCollector(eventPayload({ outbox, endpoint: '/assessment/process/capture-v2/batch/',
+    fetch: async () => { calls += 1; return { ok: false, status: 409,
+      json: async () => ({ success: false, error: { code: 'deadline_expired' } }) }; } }));
+  await sender.record('document_visible', {});
+  await outbox.moveToDeadLetter(INSTANCE_A, 1, { code: 'deadline_expired', permanent: true, http_status: 409 });
+  try {
+    await assert.rejects(sender.freezeNavigationSnapshot({ token: INSTANCE_B }));
+    await assert.rejects(sender.freezeNavigationSnapshot({ token: INSTANCE_B }));
+    assert.equal(calls, 1);
+    assert.equal((await outbox.captureState(INSTANCE_A, { sessionId: 7 })).failed, 1);
+    assert.equal(outbox.deadLetters.length, 1);
+  } finally { sender.dispose(); }
+});
+
 test('uses the browser monotonic clock origin rather than estimating it from wall time', () => {
   const origin = 1792108800000.5;
   vi.stubGlobal('performance', { timeOrigin: origin, now: () => 123.4 });

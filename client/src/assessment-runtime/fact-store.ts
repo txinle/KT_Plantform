@@ -1,8 +1,13 @@
-import type { CaptureStore, CaptureEvent, CaptureCheckpoint, CaptureRejection, CaptureMutation, CaptureMutationRejection, DurableIntent, FactRecord } from './capture-contract'
+import type { CaptureStore, CaptureEvent, CaptureCheckpoint, CaptureRejection, CaptureMutation, CaptureMutationRejection, DurableIntent, FactRecord, CaptureStateScope } from './capture-contract'
 import { clone, submissionOwnership, missingSequenceRanges, MAX_BATCH_SIZE } from './process-types'
 const DATABASE_NAME = 'kt-process-events-v1'
 const DATABASE_VERSION = 2
 interface Meta<T> { key: string; value: T }
+const packetScopeRejections = new Set(['invalid_event_link', 'task_terminated', 'deadline_expired', 'course_access_revoked'])
+function canRevalidate(rejection: CaptureRejection) {
+  return rejection.permanent === true && rejection.http_status !== undefined
+    && rejection.http_status >= 400 && rejection.http_status < 500 && packetScopeRejections.has(rejection.code || '')
+}
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -133,11 +138,12 @@ export class MemoryOutbox implements CaptureStore {
       .map((record) => clone(record.event)));
   }
 
-  peekBatch(limit = MAX_BATCH_SIZE, boundary: Record<string, number> | null = null) {
+  peekBatch(limit = MAX_BATCH_SIZE, boundary: Record<string, number> | null = null, scope?: CaptureStateScope) {
     return this._locked(() => {
       const owned = submissionOwnership([...this.submissionIntents.values(), ...this.navigationIntents.values(),
         ...[...this.metadata].filter(([key]) => key.startsWith('capture-flush:') || key.startsWith('capture-mutation:')).map(([, intent]) => intent as DurableIntent)]);
       const ordered = this.records.filter((record) => !owned.events.has(`${record.client_instance_id}:${record.client_sequence_no}`)
+        && (!scope || record.event.session_id === scope.sessionId)
         && (!boundary || record.client_sequence_no <= (boundary[record.client_instance_id] ?? -1))).sort((left, right) => (
         left.outbox_order - right.outbox_order
       ));
@@ -170,10 +176,10 @@ export class MemoryOutbox implements CaptureStore {
     return this._locked(() => this.records.length);
   }
 
-  captureState(clientInstanceId: string) {
+  captureState(clientInstanceId: string, scope?: CaptureStateScope) {
     return this._locked(() => {
-      const emitted = (this.nextSequences.get(clientInstanceId) || 1) - 1;
-      const acknowledged = this.acknowledged.get(clientInstanceId) || new Set<number>();
+      const emitted = Math.min((this.nextSequences.get(clientInstanceId) || 1) - 1, scope?.through ?? Number.MAX_SAFE_INTEGER);
+      const acknowledged = new Set([...(this.acknowledged.get(clientInstanceId) || [])].filter(sequence => sequence <= emitted));
       const highestAcked = acknowledged.size ? Math.max(...acknowledged) : 0;
       let contiguous = 0;
       while (acknowledged.has(contiguous + 1)) contiguous += 1;
@@ -190,8 +196,9 @@ export class MemoryOutbox implements CaptureStore {
         highestEmitted: emitted,
         highestAcked,
         highestContiguousAcked: contiguous,
-        pending: pending.length,
-        failed: failedRows.length,
+        pending: pending.filter(row => row.client_sequence_no <= emitted && (!scope || row.event.session_id === scope.sessionId)).length,
+        failed: failedRows.filter(row => row.client_sequence_no <= emitted && !acknowledged.has(row.client_sequence_no)
+          && (!scope || row.event.session_id === scope.sessionId)).length,
         missingLocalRanges: missingSequenceRanges(emitted, known),
       };
     });
@@ -218,8 +225,27 @@ export class MemoryOutbox implements CaptureStore {
   moveToDeadLetter(clientInstanceId: string, sequence: number, rejection: CaptureRejection) {
     return this._locked(() => {
       const record = this.records.find((row) => row.client_instance_id === clientInstanceId && row.client_sequence_no === sequence);
-      if (record) this.deadLetters.push({ ...record, rejection: clone(rejection) });
+      if (record && !this.deadLetters.some(row => row.client_instance_id === clientInstanceId && row.client_sequence_no === sequence)) {
+        this.deadLetters.push({ ...record, rejection: clone(rejection) });
+      }
       this.records = this.records.filter((row) => !(row.client_instance_id === clientInstanceId && row.client_sequence_no === sequence));
+    });
+  }
+
+  requeueRejectedEvents(clientInstanceId: string, sessionId: number) {
+    return this._locked(() => {
+      let count = 0;
+      for (const row of this.deadLetters) {
+        const key = `capture-revalidation:${clientInstanceId}:${row.client_sequence_no}`;
+        if (row.client_instance_id !== clientInstanceId || row.event.session_id !== sessionId || !canRevalidate(row.rejection)
+          || this.metadata.has(key) || this.acknowledged.get(clientInstanceId)?.has(row.client_sequence_no)
+          || this.records.some(record => record.client_instance_id === clientInstanceId && record.client_sequence_no === row.client_sequence_no)) continue;
+        this.records.push({ client_instance_id: clientInstanceId, client_sequence_no: row.client_sequence_no,
+          outbox_order: row.outbox_order, event: clone(row.event) });
+        this.metadata.set(key, { sessionId, originalRejection: clone(row.rejection) });
+        count += 1;
+      }
+      return count;
     });
   }
 }
@@ -406,7 +432,7 @@ export class IndexedDbOutbox implements CaptureStore {
       .map((record) => clone(record.event));
   }
 
-  async peekBatch(limit = MAX_BATCH_SIZE, boundary: Record<string, number> | null = null) {
+  async peekBatch(limit = MAX_BATCH_SIZE, boundary: Record<string, number> | null = null, scope?: CaptureStateScope) {
     const transaction = this.database.transaction(['events', 'meta'], 'readonly');
     const completed = transactionResult(transaction);
     const [allRecords, metadata] = await Promise.all([
@@ -416,6 +442,7 @@ export class IndexedDbOutbox implements CaptureStore {
     await completed;
     const owned = submissionOwnership(metadata.filter((row) => row.key.startsWith('submission-intent:') || row.key.startsWith('navigation-intent:') || row.key.startsWith('capture-flush:') || row.key.startsWith('capture-mutation:')).map((row) => row.value));
     const records = allRecords.filter((record) => !owned.events.has(`${record.client_instance_id}:${record.client_sequence_no}`)
+      && (!scope || record.event.session_id === scope.sessionId)
       && (!boundary || record.client_sequence_no <= (boundary[record.client_instance_id] ?? -1)));
     if (!records.length) return null;
     records.sort((left, right) => left.outbox_order - right.outbox_order);
@@ -451,7 +478,7 @@ export class IndexedDbOutbox implements CaptureStore {
     return count;
   }
 
-  async captureState(clientInstanceId: string) {
+  async captureState(clientInstanceId: string, scope?: CaptureStateScope) {
     const transaction = this.database.transaction(['events', 'meta', 'dead_letters'], 'readonly');
     const completed = transactionResult(transaction);
     const events = transaction.objectStore('events');
@@ -463,8 +490,8 @@ export class IndexedDbOutbox implements CaptureStore {
       requestResult<FactRecord[]>(transaction.objectStore('dead_letters').getAll()),
     ]);
     await completed;
-    const emitted = (sequenceRow?.value || 1) - 1;
-    const values = new Set(ackRow?.value || []);
+    const emitted = Math.min((sequenceRow?.value || 1) - 1, scope?.through ?? Number.MAX_SAFE_INTEGER);
+    const values = new Set((ackRow?.value || []).filter(sequence => sequence <= emitted));
     const highestAcked = values.size ? Math.max(...values) : 0;
     let contiguous = 0;
     while (values.has(contiguous + 1)) contiguous += 1;
@@ -481,8 +508,9 @@ export class IndexedDbOutbox implements CaptureStore {
       highestEmitted: emitted,
       highestAcked,
       highestContiguousAcked: contiguous,
-      pending: pendingRows.length,
-      failed: failedRows.length,
+      pending: pendingRows.filter(row => row.client_sequence_no <= emitted && (!scope || row.event.session_id === scope.sessionId)).length,
+      failed: failedRows.filter(row => row.client_sequence_no <= emitted && !values.has(row.client_sequence_no)
+        && (!scope || row.event.session_id === scope.sessionId)).length,
       missingLocalRanges: missingSequenceRanges(emitted, known),
     };
   }
@@ -519,7 +547,9 @@ export class IndexedDbOutbox implements CaptureStore {
     const events = transaction.objectStore('events');
     const record = await requestResult<FactRecord | undefined>(events.get([clientInstanceId, sequence]));
     if (record) {
-      transaction.objectStore('dead_letters').put({
+      const failed = transaction.objectStore('dead_letters');
+      const existing = await requestResult(failed.get(`${clientInstanceId}:${sequence}`));
+      if (!existing) failed.put({
         ...record,
         dead_letter_id: `${clientInstanceId}:${sequence}`,
         rejection: clone(rejection),
@@ -527,6 +557,32 @@ export class IndexedDbOutbox implements CaptureStore {
       events.delete([clientInstanceId, sequence]);
     }
     await completed;
+  }
+
+  async requeueRejectedEvents(clientInstanceId: string, sessionId: number) {
+    const transaction = this.database.transaction(['events', 'meta', 'dead_letters'], 'readwrite');
+    const completed = transactionResult(transaction);
+    const events = transaction.objectStore('events');
+    const meta = transaction.objectStore('meta');
+    const [records, metadata, rejected] = await Promise.all([
+      requestResult<FactRecord[]>(events.getAll()), requestResult<Meta<unknown>[]>(meta.getAll()),
+      requestResult<Array<FactRecord & { rejection: CaptureRejection }>>(transaction.objectStore('dead_letters').getAll()),
+    ]);
+    const values = new Map(metadata.map(row => [row.key, row.value]));
+    const acknowledged = new Set(values.get(`acknowledged:${clientInstanceId}`) as number[] || []);
+    let count = 0;
+    for (const row of rejected) {
+      const key = `capture-revalidation:${clientInstanceId}:${row.client_sequence_no}`;
+      if (row.client_instance_id !== clientInstanceId || row.event.session_id !== sessionId || !canRevalidate(row.rejection)
+        || values.has(key) || acknowledged.has(row.client_sequence_no)
+        || records.some(record => record.client_instance_id === clientInstanceId && record.client_sequence_no === row.client_sequence_no)) continue;
+      events.put({ client_instance_id: clientInstanceId, client_sequence_no: row.client_sequence_no,
+        outbox_order: row.outbox_order, event: clone(row.event) });
+      meta.put({ key, value: { sessionId, originalRejection: clone(row.rejection) } });
+      count += 1;
+    }
+    await completed;
+    return count;
   }
 }
 

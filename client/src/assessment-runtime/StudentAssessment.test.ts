@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
+  bootstrapUser: undefined as import('@/app/bootstrap').AuthenticatedUser | undefined,
   rememberEnteredQuestion: vi.fn(), takeEnteredQuestion: vi.fn(), takeStartedQuestion: vi.fn(),
   pendingEntry: vi.fn(), confirmLeave: vi.fn(), recoverClosedSubmission: vi.fn(), confirmEntry: vi.fn(), offlineBootstrapRecovery: false,
   metadata: new Map<string, unknown>(),
@@ -97,7 +98,7 @@ vi.mock('./offline-cache', () => ({
   prepareOfflineQuestion: (...args: unknown[]) => mocks.prepareOfflineQuestion(...args),
 }))
 vi.mock('@/app/bootstrap', () => ({
-  getBootstrapContext: () => ({ csrf_token: 'csrf-token' }),
+  getBootstrapContext: () => ({ csrf_token: 'csrf-token', user: mocks.bootstrapUser }),
   isOfflineBootstrapRecovery: () => mocks.offlineBootstrapRecovery,
 }))
 
@@ -186,6 +187,43 @@ const confidenceOnlyContract = {
 }
 
 describe('StudentAssessment', () => {
+  it('shows the signed-in student and the server countdown in the requested header regions', async () => {
+    vi.useFakeTimers()
+    mocks.bootstrapUser = { id: 5, role: 'student', display_name: '测试学生', username: 'login-only', student_number: '20260001',
+      home_url: '/student/', uses_initial_password: false, initial_password_reminder_pending: false,
+      research_consent_required: false, research_consent_version: '' }
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      const header = wrapper.get('[data-assessment-topbar]')
+      expect(header.get('[data-assessment-student]').text()).toContain('测试学生')
+      expect(header.get('[data-assessment-student]').text()).toContain('20260001')
+      expect(header.get('[data-assessment-countdown] [role="timer"]').text()).toContain('10:00')
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(header.get('[data-assessment-countdown] [role="timer"]').text()).toContain('09:59')
+      const back = header.get('[data-assessment-return]')
+      expect(back.text()).toBe('返回作业列表')
+      expect(back.attributes('href')).toBe('/student/')
+      await back.trigger('click')
+      expect(mocks.push).toHaveBeenCalledWith('/student/')
+    } finally { wrapper.unmount() }
+  })
+
+  it('shows an unlimited server time limit without inventing a countdown or student number', async () => {
+    mocks.bootstrapUser = { id: 5, role: 'student', display_name: '测试学生', username: 'not-a-student-number', student_number: null,
+      home_url: '/student/', uses_initial_password: false, initial_password_reminder_pending: false,
+      research_consent_required: false, research_consent_version: '' }
+    mocks.api.question.mockResolvedValue({ ...structuredClone(questionState), remaining_seconds: null })
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(wrapper.get('[data-assessment-countdown]').text()).toBe('不限时')
+      expect(wrapper.find('[role="timer"]').exists()).toBe(false)
+      expect(wrapper.get('[data-assessment-student]').text()).toContain('学号：未提供')
+      expect(wrapper.get('[data-assessment-student]').text()).not.toContain('not-a-student-number')
+    } finally { wrapper.unmount() }
+  })
+
   it('uses server stable-input policy to record and save one completed text burst', async () => {
     vi.useFakeTimers()
     const dto = captureV2Question({ draft_answer: '', remaining_seconds: 600,
@@ -212,6 +250,7 @@ describe('StudentAssessment', () => {
   })
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.bootstrapUser = undefined
     // A new assessment instance owns a new runtime; remounts inside one test
     // deliberately retain its identity to exercise the real recovery lifecycle.
     mocks.runtime = { ...mocks.runtime }
@@ -946,7 +985,8 @@ describe('StudentAssessment', () => {
   it('places the answer before the number card and moving the drawer does not collect an answer', async () => {
     const wrapper = mount(StudentAssessment)
     await flushPromises()
-    expect(wrapper.get('.kt-assessment-topbar').text()).toContain('反馈策略实验')
+    expect(wrapper.get('.kt-assessment-question__header').text()).toContain('反馈策略实验')
+    expect(wrapper.get('[data-assessment-return]').text()).toBe('返回作业列表')
     const question = wrapper.get('.kt-assessment-question').element
     const navigation = wrapper.get('.kt-assessment-nav').element
     expect(question.compareDocumentPosition(navigation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()

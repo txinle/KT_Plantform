@@ -10,3 +10,8 @@ if [ -d "$shell_source" ]; then
     mkdir -p "$target_dir/shells"
     cp "$shell_source"/capture-shell-*.html "$target_dir/shells/"
 fi
+# Offline archives can retain owner-only modes. Only the public frontend tree
+# receives readable files and traversable directories; private inputs stay private.
+public_root="$(dirname "$target_dir")"
+find "$public_root" -type d -exec chmod 755 {} +
+find "$public_root" -type f -exec chmod 644 {} +
