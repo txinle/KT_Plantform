@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, routeLocationKey } from 'vue-router'
 
 import App from './App.vue'
+import WorkspaceShell from '@/design-system/components/WorkspaceShell.vue'
 import LoginPage from './LoginPage.vue'
 import * as authentication from './auth'
 import { acceptBootstrapContext, clearBootstrapContext } from './bootstrap'
@@ -30,6 +31,35 @@ function context(researchConsentRequired: boolean) {
 
 describe('App research consent gate', () => {
   afterEach(() => clearBootstrapContext())
+
+  it('does not inject a global or header deletion receipt UI for a saved operation', async () => {
+    const storageKey = 'kt-teacher-deletion:v1:71:7:experiment:13'
+    const saved = JSON.stringify({ submitted: true, input: {
+      operation_id: '00000000-0000-4000-8000-000000000021', action: 'delete_experiment',
+      object_id: 13, class_id: null, confirmation_token: 'token-13',
+    } })
+    sessionStorage.setItem(storageKey, saved)
+    acceptBootstrapContext({ ...context(false), user: { ...context(false).user, id: 71, role: 'teacher' } })
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/teacher/courses/:courseId/experiments/', component: {
+        components: { WorkspaceShell },
+        template: '<WorkspaceShell user-name="教师" csrf-token="token" main-id="experiment-main"><h1>实验</h1></WorkspaceShell>',
+      } },
+    ] })
+    await router.push('/teacher/courses/7/experiments/')
+    await router.isReady()
+    const wrapper = mount(App, { global: { plugins: [router] } })
+    try {
+      await flushPromises()
+      expect(wrapper.find('.kt-deletion-recovery').exists()).toBe(false)
+      expect(wrapper.find('[data-deletion-recover]').exists()).toBe(false)
+      expect(wrapper.get('.kt-site-root__content').element.firstElementChild).toBe(wrapper.get('.kt-workspace').element)
+      expect(sessionStorage.getItem(storageKey)).toBe(saved)
+    } finally {
+      wrapper.unmount()
+      sessionStorage.removeItem(storageKey)
+    }
+  })
 
   it('finishes login navigation before gating the destination without mounting its protected content', async () => {
     clearBootstrapContext()

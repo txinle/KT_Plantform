@@ -12396,6 +12396,11 @@ paths:
     get:
       operationId: teacher_experiment_list
       parameters:
+      - in: query
+        name: archived
+        schema:
+          type: boolean
+        description: Return archived experiments only; defaults to current experiments.
       - in: path
         name: course_id
         schema:
@@ -12533,6 +12538,44 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/PatchedTeacherExperiment'
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/TeacherExperiment'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+  /api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/archive/:
+    post:
+      operationId: teacher_courses_experiments_archive_create
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
       security:
       - SessionAuth: []
       responses:
@@ -19453,6 +19496,9 @@ components:
         can_manage:
           type: boolean
           readOnly: true
+        can_archive:
+          type: boolean
+          readOnly: true
         created_at:
           type: string
           format: date-time
@@ -24228,6 +24274,9 @@ components:
         can_manage:
           type: boolean
           readOnly: true
+        can_archive:
+          type: boolean
+          readOnly: true
         created_at:
           type: string
           format: date-time
@@ -24237,6 +24286,7 @@ components:
           format: date-time
           readOnly: true
       required:
+      - can_archive
       - can_edit
       - can_manage
       - confidence_mode_label

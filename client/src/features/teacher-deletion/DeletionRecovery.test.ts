@@ -1,11 +1,12 @@
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createMemoryHistory, createRouter } from 'vue-router'
+import { createMemoryHistory, createRouter, useRoute } from 'vue-router'
 
 import App from '@/app/App.vue'
-import { acceptBootstrapContext, clearBootstrapContext } from '@/app/bootstrap'
+import { acceptBootstrapContext, clearBootstrapContext, getAuthenticationGeneration } from '@/app/bootstrap'
 import { ApiError } from '@/api/client'
 import TeacherExperimentList from '@/features/teacher-experiments/TeacherExperimentList.vue'
+import DeletionRecovery from './DeletionRecovery.vue'
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
@@ -38,7 +39,11 @@ function authenticate(actor = 71, role = 'teacher') {
 }
 async function openList(course = 7) {
   const router = createRouter({ history: createMemoryHistory(), routes: [
-    { path: '/teacher/courses/:courseId/experiments/', component: TeacherExperimentList },
+    { path: '/teacher/courses/:courseId/experiments/', component: {
+      components: { DeletionRecovery, TeacherExperimentList },
+      setup: () => ({ route: useRoute(), getAuthenticationGeneration }),
+      template: '<DeletionRecovery :key="`${getAuthenticationGeneration()}:${route.params.courseId}`" :course-id="Number(route.params.courseId)" /><TeacherExperimentList />',
+    } },
     { path: '/:pathMatch(.*)*', component: { template: '<div />' } },
   ] })
   await router.push(`/teacher/courses/${course}/experiments/`)
@@ -48,7 +53,7 @@ async function openList(course = 7) {
   return { wrapper, router }
 }
 
-describe('persisted deletion recovery from the application', () => {
+describe('persisted deletion recovery when explicitly mounted', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     sessionStorage.clear()

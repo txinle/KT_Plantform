@@ -121,6 +121,43 @@ class TeacherExperimentApiTests(TestCase):
         self.assertTrue(payload["can_edit"])
         self.assertNotIn("heartbeat_interval_seconds", payload)
 
+    def test_list_queries_do_not_grow_with_experiments_and_sampling_nodes(self):
+        concepts = [Concept.objects.create(course=self.course, code=f"KC{index + 1}", name=f"范围 {index}")
+                    for index in range(3)]
+        ExperimentSamplingKC.objects.create(experiment=self.experiment, concept=concepts[0])
+        self.client.force_login(self.teacher)
+        with CaptureQueriesContext(connection) as initial:
+            response = self.client.get(self.api_url())
+            self.assertEqual(response.status_code, 200)
+        for index in range(4):
+            experiment = Experiment.objects.create(name=f"列表实验 {index}", course=self.course,
+                question_bank=self.bank, owner=self.teacher)
+            for concept in concepts:
+                ExperimentSamplingKC.objects.create(experiment=experiment, concept=concept)
+        with CaptureQueriesContext(connection) as expanded:
+            response = self.client.get(self.api_url())
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(len(domain_payload(response)["items"]), 5)
+        self.assertLessEqual(len(expanded), len(initial) + 1)
+        self.course.teacher_links.create(teacher=self.other_teacher)
+        self.client.force_login(self.other_teacher)
+        with CaptureQueriesContext(connection) as collaborator:
+            response = self.client.get(self.api_url())
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(domain_payload(response)['capabilities']['can_manage'])
+        self.assertLessEqual(len(collaborator), len(expanded) + 2)
+
+    def test_list_separates_current_and_archived_experiments(self):
+        self.experiment.status = Experiment.Status.ARCHIVED
+        self.experiment.save(update_fields=['status'])
+        active = Experiment.objects.create(name='当前实验', course=self.course, owner=self.teacher)
+        self.client.force_login(self.teacher)
+        current = self.client.get(self.api_url())
+        archived = self.client.get(self.api_url(), {'archived': '1'})
+        self.assertEqual([row['id'] for row in domain_payload(current)['items']], [active.pk])
+        self.assertEqual([row['id'] for row in domain_payload(archived)['items']], [self.experiment.pk])
+        self.assertEqual(self.client.get(self.api_url(), {'archived': 'invalid'}).status_code, 400)
+
     def test_inaccessible_course_is_not_disclosed(self):
         self.client.force_login(self.other_teacher)
 

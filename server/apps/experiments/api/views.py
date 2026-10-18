@@ -5,7 +5,7 @@ from django.db import transaction
 from django.db.models import Count, Exists, OuterRef, Q, Sum
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -405,22 +405,29 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
 class TeacherExperimentCollectionView(TeacherExperimentApiMixin, APIView):
     @extend_schema(
         operation_id="teacher_experiment_list",
+        parameters=[OpenApiParameter('archived', bool, description='Return archived experiments only; defaults to current experiments.')],
         responses=TeacherExperimentCollectionSerializer,
     )
     def get(self, request, course_id):
         course = self.get_course()
+        archived = request.query_params.get('archived', '0')
+        if archived not in {'0', '1', 'false', 'true'}:
+            raise ValidationError({'archived': ['归档筛选参数无效。']})
         queryset = course.experiments.select_related(
             "question_bank", "frozen_release_snapshot"
-        ).prefetch_related("question_quotas", "question_bank_links__question_bank")
+        ).prefetch_related("question_quotas", "question_bank_links__question_bank", "sampling_kcs__concept")
+        queryset = (queryset.filter(status=Experiment.Status.ARCHIVED) if archived in {'1', 'true'}
+                    else queryset.exclude(status=Experiment.Status.ARCHIVED))
+        can_manage = course.can_manage(request.user) and course.status == course.Status.ACTIVE
         paginator = FixedPageNumberPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         serializer = TeacherExperimentSerializer(
             page,
             many=True,
-            context={"request": request, "course": course},
+            context={"request": request, "course": course, "can_manage": can_manage},
         )
         response = paginator.get_paginated_response(serializer.data)
-        response.data["capabilities"] = {"can_manage": course.can_manage(request.user) and course.status == course.Status.ACTIVE}
+        response.data["capabilities"] = {"can_manage": can_manage}
         response.data["summary"] = {
             "question_banks": list(
                 course.question_banks.exclude(visibility="archived")

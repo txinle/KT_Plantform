@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const route = { params: { courseId: '7' }, query: { page: '2' } as Record<string, string> }
 const mocks = vi.hoisted(() => ({
   operationId: '',
-  api: { list: vi.fn() },
+  api: { list: vi.fn(), archive: vi.fn() },
   deletion: {
     previewExperiment: vi.fn(), deleteExperiment: vi.fn(),
     previewClassExperiment: vi.fn(), removeClassExperiment: vi.fn(),
@@ -82,5 +82,42 @@ describe('TeacherExperimentList deletion', () => {
     expect(mocks.api.list).toHaveBeenNthCalledWith(2, 7, 2)
     expect(mocks.push).toHaveBeenCalledWith({ query: {} })
     expect(mocks.api.list).toHaveBeenNthCalledWith(3, 7, 1)
+  })
+
+  it('archives with confirmation while preserving access to the archived list', async () => {
+    mocks.api.list.mockResolvedValueOnce(collection([{ ...experiment, can_archive: true }]))
+      .mockResolvedValueOnce(collection([]))
+    mocks.api.archive.mockResolvedValue({ ...experiment, status: 'archived', can_archive: false })
+    const wrapper = mount(TeacherExperimentList)
+    await flushPromises()
+    await wrapper.findAll('[data-archive-experiment="13"]')[0]!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[role="dialog"]').text()).toContain('保留')
+    expect(mocks.api.archive).not.toHaveBeenCalled()
+    await wrapper.get('[data-archive-confirm]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.archive).toHaveBeenCalledWith(7, 13)
+    expect(mocks.deletion.deleteExperiment).not.toHaveBeenCalled()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    await wrapper.get('[data-show-archived]').trigger('click')
+    await flushPromises()
+    expect(mocks.push).toHaveBeenLastCalledWith({ query: { archived: '1' } })
+    expect(mocks.api.list).toHaveBeenLastCalledWith(7, 1, true)
+  })
+
+  it('does not offer archiving without the server capability and keeps archive failures visible', async () => {
+    const wrapper = mount(TeacherExperimentList)
+    await flushPromises()
+    expect(wrapper.find('[data-archive-experiment]').exists()).toBe(false)
+    wrapper.unmount()
+    mocks.api.list.mockResolvedValue(collection([{ ...experiment, can_archive: true }]))
+    mocks.api.archive.mockRejectedValue(new Error('归档失败，请重试'))
+    const authorized = mount(TeacherExperimentList)
+    await flushPromises()
+    await authorized.findAll('[data-archive-experiment="13"]')[0]!.trigger('click')
+    await authorized.get('[data-archive-confirm]').trigger('click')
+    await flushPromises()
+    expect(authorized.get('[role="alert"]').text()).toContain('归档失败')
+    expect(authorized.find('[role="dialog"]').exists()).toBe(true)
   })
 })

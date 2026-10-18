@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { createTeacherExperimentApi } from './api'
 
 describe('teacher experiment API paths', () => {
+  it('requests the archived collection explicitly and archives through the server action', async () => {
+    const client = { get: vi.fn().mockResolvedValue({}), mutate: vi.fn().mockResolvedValue({}) }
+    const api = createTeacherExperimentApi(client as never)
+    await api.list(7, 1, true)
+    await api.archive(7, 13)
+    expect(client.get).toHaveBeenCalledWith('/api/v1/teacher/courses/7/experiments/?page=1&archived=1')
+    expect(client.mutate).toHaveBeenCalledWith('/api/v1/teacher/courses/7/experiments/13/archive/', { method: 'POST' })
+  })
   it('builds collection participant filters with the typed client', async () => {
     const client = {
       get: vi.fn().mockResolvedValue({}),

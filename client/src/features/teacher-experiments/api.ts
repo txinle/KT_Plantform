@@ -122,9 +122,15 @@ type ApiClient = ReturnType<typeof createApiClient>
 
 export function createTeacherExperimentApi(client: ApiClient) {
   return {
-    list(courseId: number, page = 1) {
+    list(courseId: number, page = 1, archived = false) {
       return client.get<TeacherExperimentCollection>(
-        `/api/v1/teacher/courses/${courseId}/experiments/?page=${page}`,
+        `/api/v1/teacher/courses/${courseId}/experiments/?page=${page}${archived ? '&archived=1' : ''}`,
+      )
+    },
+    archive(courseId: number, experimentId: number) {
+      return client.mutate<TeacherExperiment>(
+        `/api/v1/teacher/courses/${courseId}/experiments/${experimentId}/archive/`,
+        { method: 'POST' },
       )
     },
     detail(courseId: number, experimentId: number) {

@@ -6,8 +6,9 @@ import hashlib
 import random
 import secrets
 from collections import defaultdict, deque
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
+from django.shortcuts import get_object_or_404
 from apps.accounts.course_access import lock_course, lock_writable_course
 from apps.accounts.models import ClassGroup, Course, CourseEnrollment, User
 from apps.accounts.class_lifecycle import lock_active_class_groups
@@ -78,6 +79,30 @@ def _class_experiment_task_terminal_update_is_active():
 @dataclass(frozen=True)
 class ParticipantRuleSaveResult:
     preview_count: int
+
+
+@transaction.atomic
+def archive_experiment(*, course, experiment_id, actor):
+    course = lock_course(course.pk)
+    if not course.can_manage(actor, lock_teacher_link=True):
+        raise PermissionDenied
+    if course.status != Course.Status.ACTIVE:
+        raise ValidationError("课程已归档，不能归档实验。", code="COURSE_READ_ONLY")
+    experiment = get_object_or_404(
+        Experiment.objects.select_for_update(), pk=experiment_id, course=course,
+    )
+    experiment.course = course
+    if experiment.status == Experiment.Status.ARCHIVED:
+        return experiment
+    previous_status = experiment.status
+    experiment.status = Experiment.Status.ARCHIVED
+    experiment.save(update_fields=["status", "updated_at"])
+    AuditLog.objects.create(
+        actor=actor, action="experiment.archive", object_type="Experiment",
+        object_id=str(experiment.pk),
+        details={"course_id": course.pk, "previous_status": previous_status},
+    )
+    return experiment
 
 
 def delete_experiment(experiment):
