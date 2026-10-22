@@ -177,10 +177,32 @@ export class SessionController {
       || receipt.visit_id !== dto.process.visit_id || receipt.visit_index !== dto.process.visit_index
       || receipt.entry_event_id !== dto.process.entry_event_id || !receipt.entered_at) throw new Error('进入回执与本次操作不一致，请核验原题目。')
   }
-  private async entryForRequest(sessionId: number, request: NextEntryRequest): Promise<EntryIntent> {
+  private async entryForRequest(sessionId: number, request: NextEntryRequest, recoverNavigation = false): Promise<EntryIntent> {
     if (this.disposed) throw new Error('会话控制器已关闭。')
     if (this.store.isFallback) throw new Error('本地持久化不可用，不能可靠记录答案轨迹。请释放存储空间后重试。')
-    const intent = await this.pendingEntry(sessionId)
+    let intent = await this.pendingEntry(sessionId)
+    if (recoverNavigation && (!intent || !this.matchesEntryRequest(intent, request)) && this.sessionId === sessionId && this.sender
+      && (!intent || intent.navigationId === this.sender.correlationId
+        || intent.assignmentId === request.assignment_id && intent.navigationId === request.navigation_id)) {
+      // Navigation snapshots survive a new tab; its entry metadata must use that original request.
+      const navigation = await this.store.restoreNavigationIntent(sessionId, this.sender.attemptId) as NavigationIntent | null
+      const frozen = navigation?.nextEntry
+      if (navigation?.processSnapshot && frozen && navigation.token === request.navigation_id
+        && navigation.toAssignmentId === request.assignment_id
+        && Object.keys(frozen).length === Object.keys(request).length
+        && Object.keys(frozen).every(key => frozen[key as keyof NextEntryRequest] === request[key as keyof NextEntryRequest])) {
+        const restored: EntryIntent = {
+          ...(intent?.assignmentId === request.assignment_id ? intent : {}),
+          assignmentId: request.assignment_id, reason: request.reason, navigationId: request.navigation_id,
+          clientOccurredAt: request.client_occurred_at, clientMonotonicMs: Number(request.client_monotonic_ms),
+          clientTimeOrigin: request.client_time_origin, clientInstanceId: request.client_instance_id, leaveConfirmed: true,
+        }
+        if (this.matchesEntryRequest(restored, request)) {
+          await this.store.writeMetadata(`entry-intent:${sessionId}:${this.tabId}`, restored)
+          intent = restored
+        }
+      }
+    }
     if (!intent || !this.matchesEntryRequest(intent, request)) throw new Error('目标题进入材料与本地冻结操作不一致，请核验原操作。')
     return intent
   }
@@ -189,7 +211,7 @@ export class SessionController {
     return Object.keys(frozen).every(key => frozen[key as keyof NextEntryRequest] === request[key as keyof NextEntryRequest])
   }
   async rememberEnteredQuestion(sessionId: number, request: NextEntryRequest, outcome?: NextEntryOutcome): Promise<boolean> {
-    const intent = await this.entryForRequest(sessionId, request)
+    const intent = await this.entryForRequest(sessionId, request, true)
     if (this.enteredQuestion?.sessionId === sessionId && this.enteredQuestion.request.navigation_id === request.navigation_id) this.enteredQuestion = undefined
     if (outcome?.committed === false && typeof outcome.error?.code === 'string' && outcome.error.code
       && typeof outcome.error.message === 'string' && outcome.error.message) return false

@@ -22,6 +22,54 @@ function enteredQuestion(intent: EntryIntent): EnteredQuestion {
 }
 
 describe('source close and target entry confirmation', () => {
+  it.each(['missing', 'source', 'same-navigation'])('recovers the original durable target entry when tab metadata is %s', async metadata => {
+    const store = new MemoryOutbox()
+    const original = createSessionController({ store, csrfToken: 'csrf', tabId: 'original', autoSchedule: false })
+    const target = await original.freezeEntry(7, 14, 'navigation_click', undefined,
+      { sourceAssignmentId: 13, targetUrl: '/student/sessions/7/questions/14/' })
+    const request = assessmentApi.nextEntryRequest(target)
+    const navigation = { token: target.navigationId, clickedAt: target.clientOccurredAt, toAssignmentId: 14,
+      leaveEventId: 'original-leave', head: null, expectedResponseVersion: 0, nextEntry: request,
+      processSnapshot: { client_instance_id: target.clientInstanceId!, event_boundary: 0, events: [], checkpoints: [] } }
+    await store.saveNavigationIntent(7, 13, navigation)
+    original.dispose()
+    const recovered = createSessionController({ store, csrfToken: 'csrf', tabId: 'recovered', autoSchedule: false })
+    try {
+      const source = metadata === 'source' ? await recovered.freezeEntry(7, 13, 'resume') : undefined
+      await recovered.activate({ ...process, navigation_id: source?.navigationId || process.navigation_id }, 'visited')
+      if (metadata === 'same-navigation') await store.writeMetadata('entry-intent:7:recovered', { ...target, clientInstanceId: 'stale-client' })
+      const before = await recovered.pendingEntry(7)
+      for (const field of Object.keys(request) as Array<keyof typeof request>) {
+        await expect(recovered.rememberEnteredQuestion(7, { ...request, [field]: 'tampered' } as never,
+          { committed: true, runtime: enteredQuestion(target) })).rejects.toThrow('本地冻结操作不一致')
+      }
+      expect(await recovered.pendingEntry(7)).toEqual(before)
+      expect(await recovered.rememberEnteredQuestion(7, request, { committed: true, runtime: enteredQuestion(target) })).toBe(true)
+      const pending = await recovered.pendingEntry(7)
+      expect(assessmentApi.nextEntryRequest(pending!)).toEqual(request)
+      expect(pending?.leaveConfirmed).toBe(true)
+      expect(await store.restoreNavigationIntent(7, 13)).toEqual(navigation)
+      expect(await original.pendingEntry(7)).toEqual(target)
+      expect(recovered.takeEnteredQuestion(7, pending!)).toEqual(enteredQuestion(target))
+    } finally { recovered.dispose() }
+  })
+
+  it('preserves an unrelated pending entry when recovering a durable navigation', async () => {
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', tabId: 'tab', autoSchedule: false })
+    try {
+      const target = await controller.freezeEntry(7, 14, 'navigation_click')
+      const request = assessmentApi.nextEntryRequest(target)
+      await store.saveNavigationIntent(7, 13, { token: target.navigationId, toAssignmentId: 14, nextEntry: request,
+        processSnapshot: { client_instance_id: target.clientInstanceId!, event_boundary: 0, events: [], checkpoints: [] } })
+      await controller.activate(process, 'visited')
+      await controller.cancelEntry(7, target.navigationId)
+      const unrelated = await controller.freezeEntry(7, 99, 'navigation_click')
+      await expect(controller.rememberEnteredQuestion(7, request, { committed: true, runtime: enteredQuestion(target) })).rejects.toThrow('本地冻结操作不一致')
+      expect(await controller.pendingEntry(7)).toEqual(unrelated)
+    } finally { controller.dispose() }
+  })
+
   it.each([true, false])('confirms older-attempt facts before freezing navigation and preserves its leave fact on retry: %s', async succeedsInitially => {
     const store = new MemoryOutbox()
     const controller = createSessionController({ store, csrfToken: 'csrf', autoSchedule: false })

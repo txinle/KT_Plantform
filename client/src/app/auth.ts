@@ -1,4 +1,4 @@
-import { ApiError, createApiClient } from '@/api/client'
+import { ApiError, createApiClient, throwIfAborted } from '@/api/client'
 import { disposeAllSessionControllers } from '@/assessment-runtime/session-controller'
 import { clearOfflineAssessmentCache } from '@/assessment-runtime/offline-cache'
 import { currentAssessmentOperationId } from '@/assessment-runtime/operation-timing'
@@ -62,14 +62,14 @@ export function createAuthenticationApi(options: AuthenticationApiOptions) {
         let retryIndex = 0
         try {
           for (;;) {
-            controller.signal.throwIfAborted()
+            throwIfAborted(controller.signal)
             let context: BootstrapContext
             try {
               context = await client.mutate<BootstrapContext>('/api/v1/auth/login/', {
                 method: 'POST', body: credentials, signal: controller.signal,
               })
             } catch (error) {
-              controller.signal.throwIfAborted()
+              throwIfAborted(controller.signal)
               if (!(error instanceof ApiError) || error.status !== 429 || error.code !== 'LOGIN_BUSY') throw error
               const windowMs = Math.min(2000, 250 * 2 ** Math.min(retryIndex++, 3))
               const delay = (error.retryAfterSeconds ?? 1) * 1000 + Math.floor(Math.random() * windowMs)
@@ -81,10 +81,10 @@ export function createAuthenticationApi(options: AuthenticationApiOptions) {
               })
               continue
             }
-            controller.signal.throwIfAborted()
+            throwIfAborted(controller.signal)
             disposeAllSessionControllers()
             await clearOfflineAssessmentCache()
-            controller.signal.throwIfAborted()
+            throwIfAborted(controller.signal)
             return acceptBootstrapContext(context)
           }
         } finally {

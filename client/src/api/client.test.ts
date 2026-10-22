@@ -14,6 +14,24 @@ function jsonResponse(body: unknown, status = 200, raw = false) {
 }
 
 describe('API client', () => {
+  it.each([false, true])('supports bounded reads without AbortSignal.throwIfAborted, cancelled: %s', async cancelled => {
+    const descriptor = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'throwIfAborted')!
+    Object.defineProperty(AbortSignal.prototype, 'throwIfAborted', { configurable: true, value: undefined })
+    try {
+      const controller = new AbortController()
+      if (cancelled) controller.abort()
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ ok: true }))
+      const result = createApiClient({ fetchImpl }).get('/teacher/read/', { retryPolicy: 'teacher-read', signal: controller.signal })
+      if (cancelled) {
+        await expect(result).rejects.toMatchObject({ name: 'AbortError' })
+        expect(fetchImpl).not.toHaveBeenCalled()
+      } else {
+        await expect(result).resolves.toEqual({ ok: true })
+        expect(fetchImpl).toHaveBeenCalledOnce()
+      }
+    } finally { Object.defineProperty(AbortSignal.prototype, 'throwIfAborted', descriptor) }
+  })
+
   it.each(['2', 'Thu, 15 Oct 2026 00:00:02 GMT'])('waits for teacher Retry-After %s before the sole retry', async (retryAfter) => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-10-15T00:00:00Z'))

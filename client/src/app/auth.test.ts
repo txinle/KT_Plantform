@@ -46,6 +46,26 @@ describe('bounded login retries', () => {
   })
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); bootstrap.clearBootstrapContext() })
 
+  it.each([false, true])('supports login without AbortSignal.throwIfAborted, cancelled: %s', async cancelled => {
+    const descriptor = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'throwIfAborted')!
+    Object.defineProperty(AbortSignal.prototype, 'throwIfAborted', { configurable: true, value: undefined })
+    try {
+      const controller = new AbortController()
+      if (cancelled) controller.abort()
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(context))
+      const result = apiFor(fetchImpl).login('S001', 'password', { signal: controller.signal })
+      if (cancelled) {
+        await expect(result).rejects.toMatchObject({ name: 'AbortError' })
+        expect(fetchImpl).not.toHaveBeenCalled()
+      } else {
+        await expect(result).resolves.toEqual(context)
+        expect(fetchImpl).toHaveBeenCalledOnce()
+        expect(bootstrap.acceptBootstrapContext).toHaveBeenCalledOnce()
+      }
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { Object.defineProperty(AbortSignal.prototype, 'throwIfAborted', descriptor) }
+  })
+
   it('shares a single flow with fixed credentials and additive capped jitter, accepting success once', async () => {
     const times: number[] = []
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {

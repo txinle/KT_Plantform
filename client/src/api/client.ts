@@ -125,6 +125,11 @@ function abortibleDelay(milliseconds: number, signal: AbortSignal) {
   })
 }
 
+export function throwIfAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return
+  throw signal.reason === undefined ? new DOMException('请求已取消。', 'AbortError') : signal.reason
+}
+
 export function createApiClient(options: ClientOptions = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch.bind(globalThis)
   const getCsrfToken = options.getCsrfToken || (() => '')
@@ -170,7 +175,7 @@ export function createApiClient(options: ClientOptions = {}) {
     const attempts = requestOptions.retry === false ? 1 : 2
     const operation = async () => {
       for (let attempt = 0; attempt < attempts; attempt += 1) {
-        controller.signal.throwIfAborted()
+        throwIfAborted(controller.signal)
         let response: Response
         try {
           response = await fetchImpl(path, {
@@ -178,13 +183,13 @@ export function createApiClient(options: ClientOptions = {}) {
             headers: { Accept: 'application/json', ...correlationHeaders() }, signal: controller.signal,
           })
         } catch (caught) {
-          controller.signal.throwIfAborted()
+          throwIfAborted(controller.signal)
           if (isAbortError(caught)) throw caught
           if (attempt + 1 === attempts) throw new Error('无法连接服务器，请检查网络后重试。', { cause: caught })
           await abortibleDelay(200 + Math.floor(Math.random() * 201), controller.signal)
           continue
         }
-        controller.signal.throwIfAborted()
+        throwIfAborted(controller.signal)
         if (attempt + 1 < attempts && [502, 503, 504].includes(response.status)) {
           const seconds = retryAfterSeconds(response)
           const delay = seconds === undefined ? 200 + Math.floor(Math.random() * 201) : seconds * 1000
