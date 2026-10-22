@@ -507,17 +507,20 @@ test('history question links recover the original uncertain navigation and allow
   await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
   const nextId = await page.locator('[data-nav-assignment]').evaluateAll((nodes, current) =>
     Number(nodes.find(node => Number(node.getAttribute('data-nav-assignment')) !== current)?.getAttribute('data-nav-assignment')), firstId)
-  const packets: unknown[] = []
+  let navigationToken: string | undefined
   let loseResponse = true
   await page.route('**/api/v1/student/attempts/*/draft/', async route => {
     const document = route.request().postDataJSON()
     if (!document.save_and_leave) return route.continue()
-    packets.push(document)
+    navigationToken ??= document.navigation_token
     const response = await route.fetch()
     if (loseResponse) { loseResponse = false; await route.abort('failed'); return }
     await route.fulfill({ response })
   })
+  const lostResponse = page.waitForEvent('requestfailed', request => request.url().endsWith('/draft/')
+    && Boolean(request.postDataJSON()?.save_and_leave))
   await page.locator(`[data-nav-assignment="${nextId}"]`).click()
+  await lostResponse
   await expect(page.locator('[data-navigation-retry]')).toBeVisible()
   await page.goto('/student/')
   const historyUrl = new URL(sourceUrl)
@@ -532,8 +535,11 @@ test('history question links recover the original uncertain navigation and allow
   await page.locator('[data-navigation-retry]').click()
   await expect(page).toHaveURL(new RegExp(`/questions/${nextId}/`))
   await expect(page.locator('[name=answer]').first()).toBeEnabled()
-  expect(packets).toHaveLength(2)
-  expect(packets[1]).toEqual(packets[0])
+  const observed: Array<{ navigation_token: string; sha256: string }> = await page.evaluate(() =>
+    JSON.parse(sessionStorage.getItem('kt-e2e-navigation-material') || '[]'))
+  const replays = observed.filter(row => row.navigation_token === navigationToken)
+  expect(replays).toHaveLength(2)
+  expect(replays[1]).toEqual(replays[0])
   await page.locator(`[data-nav-assignment="${firstId}"]:visible`).click()
   await expect(page.getByRole('radio').first()).toBeChecked()
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
