@@ -932,6 +932,8 @@
 }
 
 @media (min-width: 64rem) {
+  .kt-teacher-experiments .kt-workspace { --kt-workspace-sidebar: 164px; }
+  .kt-teacher-experiments .kt-workspace-main { padding: 8px 34px 14px 18px; }
   .kt-teacher-experiments .kt-experiment-page-header:has(.kt-experiment-back-button) { align-items: center; justify-content: flex-start; gap: 16px; min-height: 31px; margin-bottom: 10px; }
   .kt-teacher-experiments .kt-step-one-grid textarea { height: 60px; }
   .kt-teacher-experiments .kt-quota-panel { grid-template-columns: 120px minmax(0, 1fr); gap: 10px; }
