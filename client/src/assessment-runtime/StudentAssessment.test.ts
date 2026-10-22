@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
+  routeQuery: {} as Record<string, string>,
   bootstrapUser: undefined as import('@/app/bootstrap').AuthenticatedUser | undefined,
   rememberEnteredQuestion: vi.fn(), takeEnteredQuestion: vi.fn(), takeStartedQuestion: vi.fn(),
   pendingEntry: vi.fn(), confirmLeave: vi.fn(), recoverClosedSubmission: vi.fn(), confirmEntry: vi.fn(), offlineBootstrapRecovery: false,
@@ -60,7 +61,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { sessionId: '7', assignmentId: '11' }, query: {} }),
+  useRoute: () => ({ params: { sessionId: '7', assignmentId: '11' }, query: mocks.routeQuery }),
   useRouter: () => ({
     push: mocks.push,
     replace: mocks.replace,
@@ -252,6 +253,7 @@ describe('StudentAssessment', () => {
   })
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.routeQuery = {}
     mocks.bootstrapUser = undefined
     // A new assessment instance owns a new runtime; remounts inside one test
     // deliberately retain its identity to exercise the real recovery lifecycle.
@@ -951,7 +953,7 @@ describe('StudentAssessment', () => {
     const wrapper = mount(StudentAssessment)
     await flushPromises()
 
-    expect(mocks.api.question).toHaveBeenCalledWith(7, 11, 'navigation_click', expect.any(Object))
+    expect(mocks.api.question).toHaveBeenCalledWith(7, 11, 'resume', expect.any(Object))
     expect(wrapper.get('h1').text()).toBe('第 1/2 题')
     expect(wrapper.text()).toContain('反馈策略实验')
     expect(wrapper.text()).toContain('2 + 2 等于多少？')
@@ -960,6 +962,30 @@ describe('StudentAssessment', () => {
     expect(wrapper.get('[role="timer"]').text()).toContain('10:00')
     expect(wrapper.text()).not.toContain('回答正确')
     expect(wrapper.text()).not.toContain('回答错误')
+  })
+
+  it.each(['navigate', 'back_forward', 'reload'])('resumes a direct question URL opened by %s', async type => {
+    const navigation = vi.spyOn(performance, 'getEntriesByType').mockReturnValue([{ type }] as PerformanceNavigationTiming[])
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(mocks.api.question).toHaveBeenCalledWith(7, 11, 'resume', expect.any(Object))
+      expect(wrapper.get('input[name="answer"]').attributes('disabled')).toBeUndefined()
+    } finally { wrapper.unmount(); navigation.mockRestore() }
+  })
+
+  it('does not replay consumed URL click material when reopening a history link', async () => {
+    mocks.routeQuery = { reason: 'navigation_click', navigation_id: 'old-history-click',
+      client_occurred_at: '2026-10-20T02:00:00Z', client_monotonic_ms: '1234.500',
+      client_time_origin: '2026-10-20T01:59:00Z' }
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(mocks.api.question).toHaveBeenCalledWith(7, 11, 'resume', expect.objectContaining({
+        navigationId: expect.not.stringMatching(/^old-history-click$/),
+      }))
+      expect(mocks.api.saveAndLeave).not.toHaveBeenCalled()
+    } finally { wrapper.unmount() }
   })
 
   it.each([

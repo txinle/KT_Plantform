@@ -1272,7 +1272,8 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
   error.value = ''
   try {
     const navigation = (
-      typeof targetRoute.query.navigation_id === 'string'
+      deferCapturePreparation
+      && typeof targetRoute.query.navigation_id === 'string'
       && typeof targetRoute.query.client_occurred_at === 'string'
       && typeof targetRoute.query.client_monotonic_ms === 'string'
       && typeof targetRoute.query.client_time_origin === 'string'
@@ -1282,7 +1283,7 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
         clientMonotonicMs: Number(targetRoute.query.client_monotonic_ms),
         clientTimeOrigin: targetRoute.query.client_time_origin,
       } : undefined
-    const reason = targetRoute.query.reason === 'resume' || (!navigation && (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined)?.type === 'reload') ? 'resume' : 'navigation_click'
+    const reason = targetRoute.query.reason === 'resume' || !deferCapturePreparation ? 'resume' : 'navigation_click'
     const controller = await getSessionController(sessionId, getBootstrapContext().csrf_token)
     const restoredPaper = await controller.store?.readMetadata<PaperSubmissionIntent>(paperMetadataKey('submission'))
     if (restoredPaper) {

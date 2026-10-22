@@ -487,6 +487,70 @@ test('navigation drains more than 100 offline transitions and replays a lost res
   await attachStageTimings(page, testInfo, 'backlog-navigation-recovery')
 })
 
+test('history question links recover the original uncertain navigation and allow returning to the list', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-history-${Date.now()}'; command._research_tools=lambda questions: {}; command.handle()`])
+  await page.goto('/login/')
+  await page.getByLabel('账号或学号').fill('S002')
+  await page.getByLabel('密码').fill('student123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
+  await page.goto(`/student/courses/${fixture.course.id}/`)
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'E2E Capture V2 五题回放', exact: true }) })
+    .getByRole('button', { name: '开始作业' }).click()
+  await expect(page.getByRole('radio').first()).toBeEnabled()
+  const sourceUrl = page.url()
+  const sessionId = Number(sourceUrl.match(/sessions\/(\d+)/)![1])
+  const firstId = Number(sourceUrl.match(/questions\/(\d+)/)![1])
+  await page.getByRole('radio').first().check()
+  await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
+  const nextId = await page.locator('[data-nav-assignment]').evaluateAll((nodes, current) =>
+    Number(nodes.find(node => Number(node.getAttribute('data-nav-assignment')) !== current)?.getAttribute('data-nav-assignment')), firstId)
+  const packets: unknown[] = []
+  let loseResponse = true
+  await page.route('**/api/v1/student/attempts/*/draft/', async route => {
+    const document = route.request().postDataJSON()
+    if (!document.save_and_leave) return route.continue()
+    packets.push(document)
+    const response = await route.fetch()
+    if (loseResponse) { loseResponse = false; await route.abort('failed'); return }
+    await route.fulfill({ response })
+  })
+  await page.locator(`[data-nav-assignment="${nextId}"]`).click()
+  await expect(page.locator('[data-navigation-retry]')).toBeVisible()
+  await page.goto('/student/')
+  const historyUrl = new URL(sourceUrl)
+  historyUrl.search = new URLSearchParams({ reason: 'navigation_click', navigation_id: 'obsolete-history-click',
+    client_occurred_at: '2026-10-20T02:00:00Z', client_monotonic_ms: '1234.500',
+    client_time_origin: '2026-10-20T01:59:00Z' }).toString()
+  const entering = page.waitForRequest(request => request.method() === 'POST'
+    && new URL(request.url()).pathname === `/api/v1/student/sessions/${sessionId}/questions/${firstId}/`)
+  await page.goto(historyUrl.toString())
+  expect((await entering).postDataJSON().reason).toBe('resume')
+  await expect(page.locator('[data-navigation-retry]')).toBeVisible()
+  await page.locator('[data-navigation-retry]').click()
+  await expect(page).toHaveURL(new RegExp(`/questions/${nextId}/`))
+  await expect(page.locator('[name=answer]').first()).toBeEnabled()
+  expect(packets).toHaveLength(2)
+  expect(packets[1]).toEqual(packets[0])
+  await page.locator(`[data-nav-assignment="${firstId}"]:visible`).click()
+  await expect(page.getByRole('radio').first()).toBeChecked()
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`history-recovery-${viewport.width}.png`), fullPage: true })
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.evaluate(() => { document.documentElement.style.zoom = '2' })
+  await expect(page.getByRole('radio').first()).toBeEnabled()
+  await page.screenshot({ path: testInfo.outputPath('history-recovery-zoom-200.png'), fullPage: true })
+  await page.locator('[data-assessment-return]:visible').click()
+  await expect(page).toHaveURL(/\/student\/$/)
+  const evidence = django(['shell', '-c', `import json; from apps.assessment.models import Attempt,NavigationReceipt,SubmissionEvent; a=Attempt.objects.get(session_id=${sessionId},assignment_id=${firstId}); print(json.dumps({'answer':a.draft_answer,'receipts':NavigationReceipt.objects.filter(attempt=a).count(),'submissions':SubmissionEvent.objects.filter(attempt__session_id=${sessionId}).count()}))`])
+  expect(evidence).toEqual({ answer: 'A', receipts: 1, submissions: 0 })
+})
+
 test('stable input records one settled text answer then navigates and completes the paper', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const fixture = django(['shell', '-c', [
