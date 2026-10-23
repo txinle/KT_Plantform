@@ -75,6 +75,44 @@ describe('TeacherShortAnswerGrading', () => {
     })
   })
 
+  it('keeps question navigation compact and displays server pending counts', async () => {
+    const overview = await mocks.api.grading()
+    overview.questions.push({
+      question_snapshot_id: 42, code: 'SA-2', text_summary: '另一道题的完整摘要',
+      submitted_count: 4, pending_count: 0, graded_count: 4,
+    })
+    const wrapper = mount(TeacherShortAnswerGrading)
+    await flushPromises()
+
+    const navigation = wrapper.get('[aria-label="简答题列表"]')
+    const questions = navigation.findAll('button')
+    expect(questions.map(button => button.text())).toEqual([
+      'SA-1待批 1', 'SA-2待批 0',
+    ])
+    expect(navigation.text()).not.toContain('说明变量关系')
+    expect(navigation.text()).not.toContain('已批改')
+    expect(questions[0]!.attributes('aria-pressed')).toBe('true')
+
+    await questions[1]!.trigger('click')
+    await flushPromises()
+    expect(mocks.api.gradingQuestion).toHaveBeenLastCalledWith(17, 42, 'pending', 1)
+    expect(questions[1]!.attributes('aria-pressed')).toBe('true')
+  })
+
+  it('separates references from the submission list and its filters', async () => {
+    const wrapper = mount(TeacherShortAnswerGrading)
+    await flushPromises()
+
+    const reference = wrapper.get('[aria-label="题目与参考"]')
+    const submissions = wrapper.get('[aria-label="学生作答与批改"]')
+    expect(reference.text()).toContain('说明变量关系')
+    expect(reference.text()).toContain('参考解析')
+    expect(reference.find('textarea').exists()).toBe(false)
+    expect(submissions.text()).toContain('学生回答')
+    expect(submissions.find('[data-grade="correct"]').exists()).toBe(true)
+    expect(submissions.find('[aria-label="筛选作答"]').exists()).toBe(true)
+  })
+
   it('shows the existing note but requires a fresh reason before regrading', async () => {
     mocks.api.gradingQuestion.mockResolvedValueOnce({
       question: {
