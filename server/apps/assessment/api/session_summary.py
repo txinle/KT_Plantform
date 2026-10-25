@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 
 from apps.api.permissions import RolePermission
 from apps.assessment.models import ExperimentSession
+from .session_submission import ExpectedVersionSerializer
 
 
 class StudentSessionSummarySerializer(serializers.Serializer):
@@ -17,6 +18,8 @@ class StudentSessionSummarySerializer(serializers.Serializer):
     submission_count = serializers.IntegerField()
     attempt_count = serializers.IntegerField()
     return_url = serializers.CharField()
+    expected_versions = ExpectedVersionSerializer(many=True)
+    submission_status_url = serializers.CharField()
 
 
 class StudentSessionSummaryView(APIView):
@@ -37,4 +40,10 @@ class StudentSessionSummaryView(APIView):
             'submission_count': session.submission_count,
             'attempt_count': session.attempts.count(),
             'return_url': reverse('assessment:dashboard'),
-        }).data)
+            'expected_versions': [
+                {'attempt_id': pk, 'response_version': version, 'target_event_id': head}
+                for pk, version, head in session.attempts.order_by('pk').values_list(
+                    'pk', 'response_version', 'active_response_event_id')
+            ],
+            'submission_status_url': reverse('assessment_api:student-session-submission', args=[session.pk]),
+        }).data, headers={'Cache-Control': 'no-store'})

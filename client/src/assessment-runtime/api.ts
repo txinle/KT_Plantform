@@ -1,7 +1,7 @@
 import { createApiClient } from '@/api/client'
 import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
-import type { PreparedPaper, PaperSubmissionIntent, PaperSubmissionResponse } from './prepared-paper'
+import type { PreparedPaper, PaperSubmissionIntent, PaperSubmissionResponse, PaperSummary } from './prepared-paper'
 import type { WriterLeaseCredentials } from './writer-lease'
 import { currentAssessmentOperationId } from './operation-timing'
 import { currentAdmissionCredentials, readAdmissionCredentials } from './admission'
@@ -178,6 +178,7 @@ export function createStudentAssessmentApi(client: StudentAssessmentClient) {
   return {
     finishPaper: (url: string, body: PaperSubmissionIntent) => mutate<PaperSubmissionResponse>(url, { method: 'POST', body: { submission_token: body.submission_token, client_clicked_at: body.client_clicked_at, expected_versions: body.expected_versions } }),
     paperSubmissionStatus: (url: string) => recover<PaperSubmissionResponse>(url),
+    paperSummary: (sessionId: number) => recover<PaperSummary>(`/api/v1/student/sessions/${sessionId}/summary/`),
     saveAndLeave: (url: string, body: SavedNavigationRequest) => mutate<SavedNavigationResponse>(url, { method: 'POST', body }),
     recoverQuestion: (sessionId: number, assignmentId: number) => recover<RecoveryState>(`/api/v1/student/sessions/${sessionId}/questions/${assignmentId}/recovery/`),
     recover: (attemptId: number, token: string) => recover<RecoveryState>(`/api/v1/student/attempts/${attemptId}/recovery/?submission_token=${encodeURIComponent(token)}`),

@@ -5801,6 +5801,8 @@ export interface components {
             submission_count: number;
             attempt_count: number;
             return_url: string;
+            expected_versions: components["schemas"]["ExpectedVersion"][];
+            submission_status_url: string;
         };
         StudentSummaryRow: {
             student_id: number;

@@ -23200,14 +23200,22 @@ components:
           type: integer
         return_url:
           type: string
+        expected_versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExpectedVersion'
+        submission_status_url:
+          type: string
       required:
       - attempt_count
+      - expected_versions
       - experiment_name
       - return_url
       - session_id
       - status
       - status_label
       - submission_count
+      - submission_status_url
     StudentSummaryRow:
       type: object
       properties:

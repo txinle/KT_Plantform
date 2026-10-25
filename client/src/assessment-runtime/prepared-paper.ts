@@ -10,10 +10,12 @@ export interface PreparedNavigationItem {
 }
 export interface PreparedManifest { version: 1; session_id: number; content_version: string; navigation: PreparedNavigationItem[]; question_count: number }
 export interface ExpectedAttemptVersion { attempt_id: number; response_version: number; target_event_id: string | null }
+export interface PaperSummary { session_id: number; expected_versions: ExpectedAttemptVersion[]; submission_status_url: string }
 export interface PaperSubmissionIntent {
   operation_id?: string
   submission_token: string; client_clicked_at: string; expected_versions: ExpectedAttemptVersion[]
   finish_url?: string; content_version?: string
+  submission_status_url?: string; reconcile_required?: boolean
   submission_id?: string; status_url?: string; status?: 'queued' | 'running' | 'completed' | 'failed'
 }
 export interface PaperSubmissionResponse {

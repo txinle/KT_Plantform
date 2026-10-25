@@ -994,18 +994,57 @@ async function acceptPaperStatus(response: PaperSubmissionResponse) {
 }
 
 let paperPollFlight: Promise<void> | undefined
-async function pollPaperSubmission() {
+let paperNeedsReceiptCheck = false
+async function findPaperReceipt(intent: PaperSubmissionIntent) {
+  const sessionId = state.value?.session_id || Number(route.params.sessionId)
+  try {
+    return await getStudentAssessmentApi(intent.operation_id ?? currentAssessmentOperationId() ?? null)
+      .paperSubmissionStatus(intent.submission_status_url || `/api/v1/student/sessions/${sessionId}/submission/`)
+  } catch (caught) {
+    if (caught instanceof ApiError && caught.status === 404) return undefined
+    throw caught
+  }
+}
+
+async function pollPaperSubmission(allowReconcile = false) {
   if (paperPollFlight) return paperPollFlight
   if (!paperSubmission.value || document.visibilityState === 'hidden') return
+  if (paperSubmission.value.reconcile_required && !allowReconcile) return
   if (paperPollTimer !== undefined) clearTimeout(paperPollTimer)
   paperPollTimer = undefined
   finishing.value = true
   const pending = (async () => {
     try {
-      const intent = paperSubmission.value!
+      let intent = paperSubmission.value!
       const api = getStudentAssessmentApi(intent.operation_id ?? currentAssessmentOperationId() ?? null)
-      const response = intent.status_url ? await api.paperSubmissionStatus(intent.status_url)
-        : await api.finishPaper(intent.finish_url || state.value!.actions.finish_url, intent)
+      let response = intent.status_url ? await api.paperSubmissionStatus(intent.status_url)
+        : paperNeedsReceiptCheck || intent.reconcile_required ? await findPaperReceipt(intent) : undefined
+      if (!response) {
+        if (intent.reconcile_required) {
+          const summary = await api.paperSummary(state.value?.session_id || Number(route.params.sessionId))
+          intent = { ...intent, expected_versions: summary.expected_versions, submission_status_url: summary.submission_status_url,
+            submission_token: crypto.randomUUID(), client_clicked_at: new Date().toISOString(), reconcile_required: false }
+          await (await paperStore()).writeMetadata(paperMetadataKey('submission'), cloneJson(intent))
+          paperSubmission.value = intent
+        }
+        paperNeedsReceiptCheck = true
+        try {
+          response = await api.finishPaper(intent.finish_url || state.value!.actions.finish_url, intent)
+        } catch (caught) {
+          if (caught instanceof ApiError && caught.status === 409) {
+            response = await findPaperReceipt(intent)
+            if (!response && ['response_version_conflict', 'submission_manifest_incomplete'].includes(caught.code)) {
+              intent.reconcile_required = true
+              await (await paperStore()).writeMetadata(paperMetadataKey('submission'), cloneJson(intent))
+              paperStatus.value = '交卷未完成，请重新核对并交卷。已保存的答案会保留。'
+              error.value = ''
+              finishing.value = false
+              return
+            }
+          }
+          if (!response) throw caught
+        }
+      }
       await acceptPaperStatus(response)
       if (response.status === 'queued' || response.status === 'running') paperPollTimer = setTimeout(() => { void pollPaperSubmission() }, submissionPollDelay(paperPollIndex++))
     } catch (caught) {
@@ -1039,15 +1078,8 @@ async function submitPaper(clickedAt = new Date().toISOString()) {
     await budget.run(() => closeAttemptAndRelease('finish'))
     await budget.run(() => processRuntime?.checkpoint('commit'))
     if (await budget.run(() => processRuntime?.flushConfirmed()) === false) throw new Error('作答材料尚未确认保存，请恢复网络后重试。')
-    const manifest = paperManifest ? await budget.run(() => paperManifest) : undefined
-    const versions: ExpectedAttemptVersion[] = manifest ? manifest.navigation.map(row => paperReceiptVersions[row.attempt_id]
-      || { attempt_id: row.attempt_id, response_version: row.response_version, target_event_id: row.active_response_event_id })
-      : Object.values(paperReceiptVersions)
-    const current = { attempt_id: state.value.assignment.attempt_id, response_version: processRuntime?.responseVersion ?? state.value.process.response_version ?? 0, target_event_id: trajectory?.head || state.value.process.active_response_event_id || null }
-    const index = versions.findIndex(row => row.attempt_id === current.attempt_id)
-    if (index >= 0) versions[index] = current
-    else versions.push(current)
-    paperSubmission.value = { submission_token: crypto.randomUUID(), client_clicked_at: clickedAt, expected_versions: versions, finish_url: state.value.actions.finish_url, content_version: state.value.prepared_paper?.content_version || 'v1' }
+    const summary = await budget.run(() => getStudentAssessmentApi().paperSummary(state.value!.session_id))
+    paperSubmission.value = { submission_token: crypto.randomUUID(), client_clicked_at: clickedAt, expected_versions: summary.expected_versions, submission_status_url: summary.submission_status_url, finish_url: state.value.actions.finish_url, content_version: state.value.prepared_paper?.content_version || 'v1' }
     paperSubmission.value.operation_id = currentAssessmentOperationId()
     await budget.run(async () => (await paperStore()).writeMetadata(paperMetadataKey('submission'), cloneJson(paperSubmission.value)))
     paperStatus.value = '正在提交试卷，等待服务器确认…'
@@ -1288,10 +1320,11 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
     const restoredPaper = await controller.store?.readMetadata<PaperSubmissionIntent>(paperMetadataKey('submission'))
     if (restoredPaper) {
       paperSubmission.value = restoredPaper
-      paperStatus.value = '正在核验原试卷提交结果…'
+      paperNeedsReceiptCheck = true
+      paperStatus.value = restoredPaper.reconcile_required ? '交卷未完成，请重新核对并交卷。已保存的答案会保留。' : '正在核验原试卷提交结果…'
       initializationState.value = 'ready'
       loading.value = false
-      void pollPaperSubmission()
+      if (!restoredPaper.reconcile_required) void pollPaperSubmission()
       return
     }
     const pendingEntry = await controller.pendingEntry(sessionId)
@@ -1583,7 +1616,7 @@ onBeforeUnmount(() => {
       <h1>正在确认试卷提交结果</h1>
       <p role="status" data-paper-submission-status>{{ paperStatus }}</p>
       <p v-if="error" role="alert">{{ error }}</p>
-      <button v-if="!finishing" type="button" class="kt-button" data-paper-submission-retry @click="pollPaperSubmission">核验提交状态</button>
+      <button v-if="!finishing" type="button" class="kt-button" data-paper-submission-retry @click="pollPaperSubmission(true)">{{ paperSubmission.reconcile_required ? '重新核对并交卷' : '核验提交状态' }}</button>
     </section>
     <section v-else-if="!state && error" class="kt-alert kt-alert--danger" role="alert">
       <p>{{ error }}</p><button type="button" class="kt-button" @click="loadQuestion()">重试进入原题目</button>
@@ -1689,7 +1722,7 @@ onBeforeUnmount(() => {
         <p v-if="!online" class="kt-alert kt-alert--warning" role="status" data-connectivity-status>当前离线。答案保留在本页，恢复网络后将自动保存。</p>
         <p v-if="answerLocked" class="kt-alert kt-alert--info">本题已提交并锁定，答案不可再修改。</p>
         <p v-if="paperFlow && paperStatus" role="status" data-paper-submission-status>{{ paperStatus }}</p>
-        <button v-if="paperFlow && paperSubmission && !finishing" type="button" class="kt-button" data-paper-submission-retry @click="pollPaperSubmission">核验提交状态</button>
+        <button v-if="paperFlow && paperSubmission && !finishing" type="button" class="kt-button" data-paper-submission-retry @click="pollPaperSubmission(true)">{{ paperSubmission.reconcile_required ? '重新核对并交卷' : '核验提交状态' }}</button>
       </section>
       <aside class="kt-assessment-nav" aria-labelledby="assessment-navigation-title">
         <div class="kt-assessment-nav__header">

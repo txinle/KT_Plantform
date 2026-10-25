@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   preparedManifest: undefined as undefined | import('./prepared-paper').PreparedManifest,
   paperPrefetch: vi.fn(),
   api: {
-    finishPaper: vi.fn(), paperSubmissionStatus: vi.fn(),
+    finishPaper: vi.fn(), paperSubmissionStatus: vi.fn(), paperSummary: vi.fn(),
     question: vi.fn(),
     enterQuestion: (...args: unknown[]) => mocks.api.question(...args),
     saveDraft: vi.fn(),
@@ -280,6 +280,11 @@ describe('StudentAssessment', () => {
       },
     })
     mocks.api.question.mockResolvedValue(structuredClone(questionState))
+    mocks.api.paperSummary.mockResolvedValue({ session_id: 7, submission_status_url: '/api/v1/student/sessions/7/submission/', expected_versions: [
+      { attempt_id: 13, response_version: 3, target_event_id: '00000000-0000-4000-8000-000000000050' },
+      { attempt_id: 14, response_version: 0, target_event_id: null },
+    ] })
+    mocks.api.paperSubmissionStatus.mockRejectedValue(new ApiError(404, {}))
     mocks.recoverClosedSubmission.mockResolvedValue(null)
     mocks.api.recover.mockResolvedValue({ status: 'draft', can_continue: true, code: '', result: null })
     mocks.api.saveDraft.mockResolvedValue({ success: true, saved_at: '2026-08-30T08:00:00Z' })
@@ -2088,7 +2093,7 @@ describe('StudentAssessment', () => {
     wrapper.unmount()
   })
 
-  it('flushes all known materials, submits all manifest pointers, freezes through 202, and recovers the same submission after reload', async () => {
+  it('submits current server pointers from another browser without reopening every question and recovers the accepted receipt', async () => {
     vi.useFakeTimers()
     const head = '00000000-0000-4000-8000-000000000050'
     const dto = captureV2Question({ assessment_flow_version: 1 })
@@ -2102,6 +2107,11 @@ describe('StudentAssessment', () => {
     mocks.api.post.mockResolvedValue({ success: true, lease_token: 'lease', client_instance_id: mocks.runtime.clientInstanceId, expires_at: new Date(Date.now() + 60000).toISOString() })
     mocks.api.saveDraft.mockResolvedValue({ success: true, response_version: 3, active_response_event_id: head, saved_at: new Date().toISOString() })
     mocks.runtime.flushConfirmed.mockResolvedValue(true)
+    const remoteHead = '00000000-0000-4000-8000-000000000070'
+    mocks.api.paperSummary.mockResolvedValue({ session_id: 7, submission_status_url: '/api/v1/student/sessions/7/submission/', expected_versions: [
+      { attempt_id: 13, response_version: 3, target_event_id: head },
+      { attempt_id: 14, response_version: 5, target_event_id: remoteHead },
+    ] })
     const receipt = { success: true, submission_id: 'submission-one', status: 'queued', accepted_at: new Date().toISOString(), status_url: '/status/one/', next_url: '/student/' }
     mocks.api.finishPaper.mockResolvedValue(receipt)
     mocks.api.paperSubmissionStatus.mockResolvedValue({ ...receipt, status: 'running' })
@@ -2115,7 +2125,8 @@ describe('StudentAssessment', () => {
     await flushPromises()
     expect(mocks.api.finishPaper.mock.calls, wrapper.text()).toHaveLength(1)
     const intent = mocks.api.finishPaper.mock.calls[0]![1]
-    expect(intent.expected_versions).toEqual([{ attempt_id: 13, response_version: 3, target_event_id: head }, { attempt_id: 14, response_version: 0, target_event_id: null }])
+    expect(intent.expected_versions).toEqual([{ attempt_id: 13, response_version: 3, target_event_id: head }, { attempt_id: 14, response_version: 5, target_event_id: remoteHead }])
+    expect(mocks.runtime.flushConfirmed.mock.invocationCallOrder.at(-1)!).toBeLessThan(mocks.api.paperSummary.mock.invocationCallOrder[0]!)
     expect(mocks.runtime.flushConfirmed.mock.invocationCallOrder.at(-1)!).toBeLessThan(mocks.api.finishPaper.mock.invocationCallOrder[0]!)
     expect(wrapper.findAll<HTMLInputElement>('input[name="answer"]').every(input => input.element.disabled)).toBe(true)
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
@@ -2131,6 +2142,49 @@ describe('StudentAssessment', () => {
     expect(mocks.api.question).toHaveBeenCalledOnce()
     expect([...mocks.metadata.values()]).toContainEqual(expect.objectContaining({ submission_token: intent.submission_token, submission_id: 'submission-one', status: 'running' }))
     restored.unmount()
+  })
+
+  it('recovers a rejected frozen submission after reload and only replaces it on explicit reconciliation', async () => {
+    const oldIntent = { submission_token: 'old-token', client_clicked_at: new Date().toISOString(), expected_versions: [], finish_url: '/student/sessions/7/finish/' }
+    mocks.metadata.set('paper-submission:0:7', oldIntent)
+    mocks.api.finishPaper.mockRejectedValueOnce(new ApiError(409, { error: { code: 'response_version_conflict' } }))
+    let wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(wrapper.text()).toContain('交卷未完成，请重新核对并交卷')
+      expect(mocks.api.finishPaper).toHaveBeenCalledOnce()
+      expect(mocks.api.question).not.toHaveBeenCalled()
+      wrapper.unmount()
+      wrapper = mount(StudentAssessment)
+      await flushPromises()
+      expect(wrapper.get('[data-paper-submission-retry]').text()).toBe('重新核对并交卷')
+      expect(mocks.api.finishPaper).toHaveBeenCalledOnce()
+      mocks.api.finishPaper.mockResolvedValue({ success: true, submission_id: 'accepted', status: 'queued', status_url: '/status/', next_url: '/student/' })
+      await wrapper.get('[data-paper-submission-retry]').trigger('click')
+      await flushPromises()
+      expect(mocks.api.finishPaper).toHaveBeenCalledTimes(2)
+      const replacement = mocks.api.finishPaper.mock.calls[1]![1]
+      expect(replacement.submission_token).not.toBe(oldIntent.submission_token)
+      expect(replacement.expected_versions).toEqual((await mocks.api.paperSummary()).expected_versions)
+      expect(mocks.api.saveDraft).not.toHaveBeenCalled()
+    } finally { wrapper.unmount() }
+  })
+
+  it('keeps the original intent when receipt verification is unavailable and follows acceptance without another POST', async () => {
+    const oldIntent = { submission_token: 'old-token', client_clicked_at: new Date().toISOString(), expected_versions: [], finish_url: '/student/sessions/7/finish/' }
+    mocks.metadata.set('paper-submission:0:7', oldIntent)
+    mocks.api.paperSubmissionStatus.mockRejectedValue(new Error('network unavailable'))
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(mocks.api.finishPaper).not.toHaveBeenCalled()
+      expect(mocks.metadata.get('paper-submission:0:7')).toEqual(oldIntent)
+      mocks.api.paperSubmissionStatus.mockResolvedValue({ success: true, submission_id: 'accepted', status: 'queued', status_url: '/status/', next_url: '/student/' })
+      await wrapper.get('[data-paper-submission-retry]').trigger('click')
+      await flushPromises()
+      expect(mocks.api.finishPaper).not.toHaveBeenCalled()
+      expect(mocks.metadata.get('paper-submission:0:7')).toEqual(expect.objectContaining({ submission_token: 'old-token', submission_id: 'accepted' }))
+    } finally { wrapper.unmount() }
   })
 
   it('shows material saving before receipt and durable acceptance only after the server responds', async () => {
