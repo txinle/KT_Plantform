@@ -137,6 +137,40 @@ docker compose --env-file server/.env -f deploy/docker-compose.yml logs nginx --
 
 `django.request` 的错误会写入 Gunicorn 控制台，因此 Django 请求异常可直接通过 `web` 服务日志查看。
 
+## 快捷添加管理员
+
+快捷命令每次询问新账号、密码和确认密码，并一次设置管理员角色、后台登录权限和超级用户权限。新账号没有默认账号或默认密码，由操作者输入；输入密码时不显示字符，源码、README 和命令输出不记录明文密码。同名账号直接拒绝，不会覆盖账号或重置其密码。
+
+本地在项目根目录的 PowerShell 中运行：
+
+```powershell
+.\add_admin.ps1
+```
+
+本地入口使用当前 checkout 的 Python 环境，默认连接 `127.0.0.1:55432/kt_platform`，已有 `POSTGRES_*` 环境变量优先。先启动既有本地 PostgreSQL 并完成数据库迁移；可用 `.\add_admin.ps1 -Help` 查看命令帮助而不创建账号。已配置 Python 和数据库环境时，也可在 `server` 目录直接运行 `python manage.py add_admin`。
+
+已安装快捷入口的两台服务器可从本机 PowerShell 直接调用：
+
+```powershell
+# 学校服务器；先输入学校系统 sudo 密码（若提示），再输入新管理员账号和密码。
+ssh -t kt-school '~/.local/bin/kt-add-admin'
+
+# 腾讯云；保持 IP 访问，不修改正式域名指向。
+ssh -t -i "$env:USERPROFILE\.ssh\ktedu.pem" ubuntu@106.55.4.217 kt-add-admin
+```
+
+登录服务器后也可直接运行 `kt-add-admin`；学校服务器需在安装后重新登录，使 `~/.local/bin` 加入 PATH。新建账号只属于命令所连接环境的数据库，本地、学校、腾讯云之间不自动同步。
+
+服务器入口使用仓库中的 `server/scripts/ops/kt-add-admin.sh`，将其与 `server/apps/accounts/management/commands/add_admin.py` 分别安装为同一目录下的 `kt-add-admin` 和 `kt-add-admin.py`。入口按 Compose project `kt_plantform`、service `web` 定位运行容器；没有 Docker socket 权限时正常通过 sudo 认证，不更改系统用户权限或重启业务服务。
+
+后续新服务器可在仓库根目录安装该入口：
+
+```bash
+mkdir -p "$HOME/.local/bin"
+install -m 700 server/scripts/ops/kt-add-admin.sh "$HOME/.local/bin/kt-add-admin"
+install -m 600 server/apps/accounts/management/commands/add_admin.py "$HOME/.local/bin/kt-add-admin.py"
+```
+
 ## 功能指南
 
 ### 课程与班级
