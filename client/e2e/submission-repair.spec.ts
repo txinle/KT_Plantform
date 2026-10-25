@@ -183,11 +183,16 @@ test('initial-password reminder, inline confidence and lost whole-paper receipt 
   page.on('request', request => {
     if (/\/student\/sessions\/\d+\/finish\/$/.test(new URL(request.url()).pathname)) submittedTokens.push(request.postDataJSON().submission_token)
   })
+  const receiptReadStatuses: number[] = []
+  page.on('response', response => {
+    if (response.request().method() === 'GET' && new URL(response.url()).pathname === `/api/v1/student/sessions/${sessionId}/submission/`) receiptReadStatuses.push(response.status())
+  })
   await page.reload()
   await expect(page).toHaveURL(new RegExp(`/sessions/${sessionId}/complete/$`), { timeout: 60_000 })
   const evidence = django(['shell', '-c', `import json; from apps.assessment.models import SubmissionEvent,ConfidenceAssignment,ExperimentSession; from apps.assessment.session_submission_models import SessionSubmission; print(json.dumps({'submissions':SubmissionEvent.objects.filter(attempt__session_id=${sessionId}).count(),'skip':ConfidenceAssignment.objects.get(attempt__session_id=${sessionId},attempt__assignment_id=${short.id}).response_status,'single_confidence':ConfidenceAssignment.objects.get(attempt__session_id=${sessionId},attempt__assignment_id=${single.id}).probability,'sessions':ExperimentSession.objects.filter(student__username='${username}').count(),'receipts':SessionSubmission.objects.filter(session_id=${sessionId}).count()}))`])
   expect(evidence).toEqual({ submissions: 2, skip: 'skipped', single_confidence: 98, sessions: 1, receipts: 1 })
-  expect(submittedTokens.length).toBeGreaterThanOrEqual(2)
+  expect(submittedTokens).toHaveLength(1)
+  expect(receiptReadStatuses).toContain(200)
   expect(new Set(submittedTokens).size).toBe(1)
   expect(errors).toEqual([])
   const teacherContext = await browser.newContext({ baseURL: 'http://127.0.0.1:8127' })
