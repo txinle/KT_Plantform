@@ -22,7 +22,7 @@ from .models import StudentExperimentResultSnapshot
 from .teaching.scope import analytics_read_transaction
 
 
-PROJECTION_VERSION = "student-result-v2"
+PROJECTION_VERSION = "student-result-v3"
 logger = logging.getLogger(__name__)
 
 

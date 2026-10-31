@@ -1,9 +1,12 @@
 .kt-teacher-account-management {
   display: grid;
   gap: 20px;
-  max-width: 1320px;
+  min-width: 0;
+  width: 100%;
   margin: 0 auto;
-  color: #263449;
+  color: var(--kt-ink);
+  font-size: .9375rem;
+  line-height: 1.5;
 }
 
 .kt-account-management-tabs,
@@ -20,26 +23,26 @@
 }
 
 .kt-account-management-tabs {
-  border-bottom: 1px solid #dbe3ee;
+  border-bottom: 1px solid var(--kt-border);
   padding-bottom: 10px;
 }
 
 .kt-account-management-tabs button {
   min-height: 40px;
-  border: 1px solid #c9d5e4;
+  border: 1px solid var(--kt-border);
   border-radius: 7px;
   padding: 8px 13px;
-  background: #fff;
-  color: #29425f;
+  background: var(--kt-surface);
+  color: var(--kt-ink);
   font: inherit;
   font-weight: 650;
   cursor: pointer;
 }
 
 .kt-account-management-tabs button[aria-current='page'] {
-  border-color: #1e5eaa;
-  background: #e9f1fb;
-  color: #164b89;
+  border-color: var(--kt-action-600);
+  background: var(--kt-action-050);
+  color: var(--kt-action-600);
 }
 
 .kt-account-management-tabs button:disabled {
@@ -87,8 +90,8 @@
 .kt-account-management-confirm label {
   display: grid;
   gap: 7px;
-  color: #334861;
-  font-size: 14px;
+  color: var(--kt-ink);
+  font-size: 0.875rem;
   font-weight: 700;
 }
 
@@ -97,11 +100,11 @@
 .kt-account-management-confirm input,
 .kt-account-management-inline select {
   min-height: 42px;
-  border: 1px solid #c9d5e4;
+  border: 1px solid var(--kt-border);
   border-radius: 7px;
   padding: 8px 10px;
-  background: #fff;
-  color: #263449;
+  background: var(--kt-surface);
+  color: var(--kt-ink);
   font: inherit;
 }
 
@@ -119,22 +122,22 @@
 
 .kt-account-management-guide {
   align-content: start;
-  background: #f7f9fc;
+  background: var(--kt-surface-subtle);
 }
 
 .kt-account-management-guide p,
 .kt-account-management-form p,
 .kt-account-management-confirm p {
-  color: #647187;
+  color: var(--kt-muted);
   line-height: 1.6;
 }
 
 .kt-account-management-notice {
-  border: 1px solid #c8d9ec;
+  border: 1px solid var(--kt-border);
   border-radius: 7px;
   padding: 12px;
-  background: #f2f7fd;
-  color: #2c4869 !important;
+  background: var(--kt-action-050);
+  color: var(--kt-ink) !important;
 }
 
 .kt-account-management-members {
@@ -148,7 +151,7 @@
 }
 
 .kt-account-management-members .kt-table-scroll {
-  border-top: 1px solid #e1e7ef;
+  border-top: 1px solid var(--kt-border);
 }
 
 .kt-account-management-inline {

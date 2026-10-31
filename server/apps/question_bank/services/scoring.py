@@ -6,9 +6,10 @@ from typing import Any, Iterable
 from .numeric import normalize_finite_decimal
 
 
-def _normalized_text(value: Any) -> str:
+def _normalized_text(value: Any, *, case_sensitive=False) -> str:
     """Trim, casefold, then collapse every run of internal whitespace."""
-    return " ".join(str(value or "").strip().casefold().split())
+    text = str(value or "").strip()
+    return " ".join((text if case_sensitive else text.casefold()).split())
 
 
 def normalize_true_false_answer(value: Any) -> bool | None:
@@ -51,8 +52,13 @@ def score_payload(
     accepted_answers: Iterable[Any] | None = None,
     absolute_tolerance: Any = None,
     relative_tolerance: Any = None,
+    max_score: Any = Decimal("1"),
+    case_sensitive: bool = False,
 ) -> tuple[bool, Decimal]:
-    """Return binary correctness and a 0/1 score for the MVP scoring rules."""
+    """Return binary correctness and its frozen question weight."""
+    maximum = normalize_finite_decimal(max_score)
+    if maximum < Decimal('0.01') or maximum > Decimal('999.99') or maximum != maximum.quantize(Decimal('0.01')):
+        raise ValueError('分值必须为 0.01 至 999.99，最多两位小数。')
     is_correct = False
 
     if question_type == "single_choice":
@@ -75,8 +81,8 @@ def score_payload(
             is_correct = any(checks) if checks else difference == 0
     elif question_type in {"short_answer", "fill_blank"}:
         candidates = [correct_answer, *(accepted_answers or [])]
-        submitted = _normalized_text(submitted_answer)
-        is_correct = bool(submitted) and submitted in {_normalized_text(item) for item in candidates}
+        submitted = _normalized_text(submitted_answer, case_sensitive=case_sensitive)
+        is_correct = bool(submitted) and submitted in {_normalized_text(item, case_sensitive=case_sensitive) for item in candidates}
     elif question_type == "true_false":
         expected = normalize_true_false_answer(correct_answer)
         observed = normalize_true_false_answer(submitted_answer)
@@ -84,4 +90,4 @@ def score_payload(
     else:
         raise ValueError(f"Unsupported question type: {question_type}")
 
-    return is_correct, Decimal("1") if is_correct else Decimal("0")
+    return is_correct, maximum if is_correct else Decimal("0")

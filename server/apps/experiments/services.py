@@ -651,6 +651,8 @@ def validate_for_publish(experiment, question_bank=None, participant_count=None)
     questions = _publish_candidates_from_banks([bank.pk for bank in banks])
     if not questions:
         raise ValidationError("题库中至少需要一道可用题目")
+    from .question_group_publication import validate_group_publication
+    validate_group_publication(experiment, questions)
     _raise_for_invalid_identities(questions)
     missing = []
     for question in questions:
@@ -672,16 +674,18 @@ def validate_for_publish(experiment, question_bank=None, participant_count=None)
 
 
 def _quota_map(experiment):
+    from .sampling import SAMPLING_TYPES
     values = dict(
         experiment.question_quotas.select_for_update().values_list("question_type", "amount")
     )
-    return {question_type: int(values.get(question_type, 0)) for question_type in Question.Type.values}
+    return {question_type: int(values.get(question_type, 0)) for question_type in SAMPLING_TYPES}
 
 
 def _candidate_inventory(questions, selection_mode, quota_map):
-    available = {question_type: 0 for question_type in Question.Type.values}
-    for question in questions:
-        available[question.question_type] += 1
+    from .sampling import SAMPLING_TYPES, SAMPLING_TYPE_CHOICES, complete_question_units, sampling_question_type
+    available = {question_type: 0 for question_type in SAMPLING_TYPES}
+    for question in complete_question_units(questions):
+        available[sampling_question_type(question)] += 1
     inventory = {
         question_type: {
             "need": quota_map[question_type]
@@ -689,7 +693,7 @@ def _candidate_inventory(questions, selection_mode, quota_map):
             else available[question_type],
             "available": available[question_type],
         }
-        for question_type in Question.Type.values
+        for question_type in SAMPLING_TYPES
     }
     if selection_mode == Experiment.SelectionMode.QUOTA:
         insufficient = [
@@ -698,7 +702,7 @@ def _candidate_inventory(questions, selection_mode, quota_map):
             if values["available"] < values["need"]
         ]
         if insufficient:
-            labels = dict(Question.Type.choices)
+            labels = dict(SAMPLING_TYPE_CHOICES)
             details = "; ".join(
                 f"{labels[question_type]}：需要 {values['need']} 题，可用 {values['available']} 题"
                 for question_type, values in insufficient
@@ -779,6 +783,7 @@ def publish_experiment(experiment, actor):
 
 @transaction.atomic
 def _publish_legacy_experiment(experiment, actor):
+    from .question_group_publication import frozen_question_fields
     """Publish the retained v1 model; course callers must use A+ publication."""
 
     experiment = _lock_draft_experiment(
@@ -851,6 +856,8 @@ def _publish_legacy_experiment(experiment, actor):
         "course_code_snapshot": experiment.course.code if experiment.course_id else "",
         "course_term_snapshot": experiment.course.term if experiment.course_id else "",
     }
+    if any(question.group_id for question in questions):
+        config['question_group_runtime_version'] = 1
     version = ExperimentVersion.objects.create(
         experiment=experiment,
         version_number=version_number,
@@ -880,6 +887,7 @@ def _publish_legacy_experiment(experiment, actor):
         primary = next(item.concept.name for item in kc_links if item.is_primary)
         QuestionSnapshot.objects.create(
             version=version,
+            **frozen_question_fields(version, q),
             source_question=q,
             source_sequence=q.sequence,
             course_sequence=identity.course_sequence if identity else None,
@@ -999,6 +1007,12 @@ def ordered_snapshots(version, student_id, snapshots=None, ordering_seed=None):
     mode = version.configuration.get("ordering_mode", "fixed")
     ordering_seed = ordering_seed or derive_session_seeds(version, student_id)[1]
     rng = random.Random(int(ordering_seed[:16], 16))
+    if any(item.group_snapshot_id for item in items):
+        from .question_group_publication import group_units
+        units = group_units(items)
+        if mode == 'random':
+            rng.shuffle(units)
+        return [item for unit in units for item in unit]
     if mode == "random":
         rng.shuffle(items)
     elif mode == "stratified_random":

@@ -5,6 +5,7 @@ from django.db import models, transaction
 from django.db.models import Q
 from django.utils import timezone
 from datetime import timedelta
+from decimal import Decimal
 import uuid
 
 
@@ -229,6 +230,8 @@ class ImportPreviewBatch(models.Model):
         "accounts.Course",
         on_delete=models.CASCADE,
         related_name="question_bank_import_previews",
+        null=True,
+        blank=True,
     )
     bank = models.ForeignKey(
         QuestionBank,
@@ -260,6 +263,29 @@ class ImportPreviewBatch(models.Model):
         indexes = [
             models.Index(fields=["status", "expires_at"], name="qb_preview_status_exp"),
         ]
+        constraints = [models.CheckConstraint(
+            condition=Q(course__isnull=False) | Q(kind="question_content", bank__isnull=False),
+            name="qb_preview_course_or_content_bank",
+        )]
+
+
+class QuestionGroup(models.Model):
+    class Kind(models.TextChoices):
+        READING = "reading", "阅读理解"
+        CLOZE = "cloze", "短文填空"
+        WORDS = "words", "选词填空"
+
+    bank = models.ForeignKey(QuestionBank, on_delete=models.CASCADE, related_name="groups")
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    title = models.CharField(max_length=240, blank=True)
+    instructions = models.TextField(blank=True)
+    material = models.TextField()
+    word_bank = models.JSONField(default=list, blank=True)
+    content_language = models.CharField(max_length=16, default="en")
+    revision = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        ordering = ["id"]
 
 class QuestionQuerySet(models.QuerySet):
     def update(self, **kwargs):
@@ -303,6 +329,10 @@ class QuestionManager(models.Manager.from_queryset(QuestionQuerySet)):
 
 
 class Question(models.Model):
+    class EducationalType(models.TextChoices):
+        STANDARD = "standard", "普通题"
+        TRANSLATION = "translation", "翻译题"
+        ESSAY = "essay", "作文题"
     class Type(models.TextChoices):
         SINGLE = "single_choice", "单选题"
         MULTIPLE = "multiple_choice", "多选题"
@@ -315,10 +345,20 @@ class Question(models.Model):
         ACTIVE = "active", "可用"
         ARCHIVED = "archived", "归档"
     bank = models.ForeignKey(QuestionBank, on_delete=models.CASCADE, related_name="questions")
+    group = models.ForeignKey(QuestionGroup, null=True, blank=True, on_delete=models.CASCADE, related_name="members")
+    group_order = models.PositiveIntegerField(null=True, blank=True)
+    blank_id = models.CharField(max_length=32, blank=True, default="")
+    max_score = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("1"), validators=[MinValueValidator(Decimal("0.01")), MaxValueValidator(Decimal("999.99"))])
+    content_language = models.CharField(max_length=16, default="und")
+    text_match_case_sensitive = models.BooleanField(default=False)
+    text_match_policy_version = models.CharField(max_length=32, default="text-exact-v1")
     sequence = models.PositiveIntegerField()
     code = models.CharField(max_length=64, blank=True)
     question_type = models.CharField(max_length=24, choices=Type.choices)
-    text = models.TextField()
+    educational_type = models.CharField(max_length=16, choices=EducationalType.choices, default="standard")
+    title = models.CharField(max_length=240, blank=True)
+    instructions = models.TextField(blank=True)
+    text = models.TextField(blank=True)
     correct_answer = models.JSONField()
     accepted_answers = models.JSONField(default=list, blank=True)
     absolute_tolerance = models.DecimalField(max_digits=12, decimal_places=6, null=True, blank=True)
@@ -333,7 +373,21 @@ class Question(models.Model):
     objects = QuestionManager()
     class Meta:
         ordering = ["sequence", "id"]
-        constraints = [models.UniqueConstraint(fields=["bank", "sequence"], name="unique_question_sequence_in_bank")]
+        constraints = [
+            models.UniqueConstraint(fields=["bank", "sequence"], name="unique_question_sequence_in_bank"),
+            models.UniqueConstraint(fields=["group", "group_order"], name="unique_question_group_order", deferrable=models.Deferrable.DEFERRED),
+            models.CheckConstraint(condition=Q(max_score__gte=Decimal("0.01"), max_score__lte=Decimal("999.99")), name="question_max_score_range"),
+            models.CheckConstraint(condition=Q(group__isnull=True, group_order__isnull=True, blank_id="") | Q(group__isnull=False, group_order__gt=0), name="question_group_context"),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.educational_type != self.EducationalType.STANDARD and self.question_type != self.Type.SHORT:
+            raise ValidationError({"educational_type": "翻译题和作文题必须使用简答题作答规则。"})
+        if self.group_id and self.group.bank_id != self.bank_id:
+            raise ValidationError({"group": "题组成员必须属于同一题库。"})
+        if self.text_match_policy_version != "text-exact-v1":
+            raise ValidationError({"text_match_policy_version": "不支持的文本匹配版本。"})
     def save(self, *args, **kwargs):
         if not self.code:
             self.code = f"Q{self.sequence:04d}"

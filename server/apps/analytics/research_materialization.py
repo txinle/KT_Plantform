@@ -42,7 +42,7 @@ from .quality_reports import build_quality_report
 from .research_dataset import read_research_bundle
 
 
-PROJECTION_VERSION = "research-session-v6"
+PROJECTION_VERSION = "research-session-v7"
 MAX_RETRIES = 3
 MAX_SOURCE_READ_ATTEMPTS = 3
 

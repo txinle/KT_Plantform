@@ -84,6 +84,20 @@ describe('TeacherExperimentList deletion', () => {
     expect(mocks.api.list).toHaveBeenNthCalledWith(3, 7, 1)
   })
 
+  it('shows the authoritative pending count and separate schedule columns', async () => {
+    mocks.api.list.mockResolvedValue(collection([{ ...experiment, activity: {
+      pending_grading_count: 8,
+      grading_url: '/teacher/courses/7/experiments/13/class-tasks/31/grading/',
+      schedules: [{ task_id: 31, class_name: '一班', opens_at: '2026-11-01T01:00:00Z', closes_at: '2026-11-02T01:00:00Z', total_time_limit_minutes: 45, per_question_time_limit_seconds: null }],
+    } }]))
+    const wrapper = mount(TeacherExperimentList)
+    await flushPromises()
+    expect(wrapper.get('[data-pending-grading]').text()).toBe('待批改：8')
+    expect(wrapper.get('[data-pending-grading]').attributes('href')).toBe('/teacher/courses/7/experiments/13/class-tasks/31/grading/')
+    expect(wrapper.findAll('thead th').map(cell => cell.text())).toEqual(expect.arrayContaining(['开始时间', '截止时间', '实验限时']))
+    expect(wrapper.text()).toContain('45 分钟')
+  })
+
   it('archives with confirmation while preserving access to the archived list', async () => {
     mocks.api.list.mockResolvedValueOnce(collection([{ ...experiment, can_archive: true }]))
       .mockResolvedValueOnce(collection([]))

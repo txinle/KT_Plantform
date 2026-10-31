@@ -1,6 +1,7 @@
 import hashlib
 import json
 import uuid
+from decimal import Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -136,6 +137,7 @@ class Experiment(models.Model):
         "selection_mode",
         "sampling_mode",
         "sampling_total_count",
+        "sampling_pinned_question_ids",
         "sampling_match_scope",
         "cross_experiment_item_policy",
         "review_count",
@@ -248,6 +250,7 @@ class Experiment(models.Model):
         blank=True,
     )
     sampling_total_count = models.PositiveIntegerField(null=True, blank=True)
+    sampling_pinned_question_ids = models.JSONField(default=list, blank=True)
     sampling_match_scope = models.CharField(
         max_length=16,
         choices=MatchScope.choices,
@@ -586,6 +589,8 @@ class ExperimentQuestionQuota(models.Model):
             ("short_answer", "简答题"),
             ("fill_blank", "填空题"),
             ("true_false", "判断题"),
+            ("reading", "阅读理解"), ("words", "选词填空"), ("cloze", "完形填空"),
+            ("translation", "英汉互译"), ("essay", "作文"),
         ],
     )
     amount = models.PositiveIntegerField(default=0)
@@ -1344,7 +1349,38 @@ class QuestionSnapshotManager(models.Manager.from_queryset(QuestionSnapshotQuery
     pass
 
 
+class QuestionGroupSnapshot(models.Model):
+    version = models.ForeignKey(ExperimentVersion, on_delete=models.CASCADE, related_name='question_group_snapshots')
+    source_group_id = models.PositiveBigIntegerField()
+    source_revision = models.PositiveIntegerField(default=1)
+    kind = models.CharField(max_length=16)
+    title = models.CharField(max_length=240, blank=True)
+    instructions = models.TextField(blank=True)
+    material = models.TextField()
+    word_bank = models.JSONField(default=list, blank=True)
+    content_language = models.CharField(max_length=35, default='en')
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['version', 'source_group_id'], name='unique_release_question_group')]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError('已发布题组快照不可修改。')
+        return super().save(*args, **kwargs)
+
+
 class QuestionSnapshot(models.Model):
+    group_snapshot = models.ForeignKey(QuestionGroupSnapshot, null=True, blank=True, on_delete=models.PROTECT, related_name='members')
+    group_order = models.PositiveIntegerField(null=True, blank=True)
+    blank_id = models.CharField(max_length=32, blank=True, default='')
+    max_score = models.DecimalField(max_digits=5, decimal_places=2, default=1, validators=[MinValueValidator(Decimal('0.01')), MaxValueValidator(Decimal('999.99'))])
+    content_language = models.CharField(max_length=35, default='und')
+    text_match_case_sensitive = models.BooleanField(default=False)
+    text_match_policy_version = models.CharField(max_length=32, default='text-exact-v1')
+    educational_type = models.CharField(max_length=16, default='standard', choices=[
+        ('standard', '基础题型'), ('translation', '英汉互译'), ('essay', '作文题')])
+    title = models.CharField(max_length=240, blank=True)
+    instructions = models.TextField(blank=True)
     version = models.ForeignKey(ExperimentVersion, on_delete=models.CASCADE, related_name="question_snapshots")
     source_question = models.ForeignKey("question_bank.Question", on_delete=models.PROTECT)
     source_sequence = models.PositiveIntegerField()

@@ -20,6 +20,13 @@ async function setup(data = fixture()) {
   return wrapper
 }
 describe('question editor disclosure preserves saved fields', () => {
+  it('sends the configured maximum score for an ordinary question', async () => {
+    const wrapper = await setup()
+    await wrapper.get('[data-question-max-score]').setValue('3.50')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.save).toHaveBeenCalledWith(1, 2, 3, expect.objectContaining({ max_score: '3.50' }))
+  })
   beforeEach(() => { vi.resetAllMocks(); mocks.save.mockResolvedValue({ detail_url: '/teacher/courses/1/banks/2/' }) })
   it('defaults to an answer summary and preserves edits across collapse', async () => {
     const wrapper = await setup()

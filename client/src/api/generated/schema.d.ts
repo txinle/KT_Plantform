@@ -1045,6 +1045,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/banks/{bank_id}/groups/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_banks_groups_list"];
+        put?: never;
+        post: operations["teacher_banks_groups_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/banks/{bank_id}/groups/{group_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_banks_groups_retrieve"];
+        put: operations["teacher_banks_groups_update"];
+        post?: never;
+        delete: operations["teacher_banks_groups_destroy"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/banks/{bank_id}/imports/kc/confirm/": {
         parameters: {
             query?: never;
@@ -1504,6 +1536,38 @@ export interface paths {
         put: operations["teacher_question_bank_editor_update"];
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/groups/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_courses_banks_groups_list"];
+        put?: never;
+        post: operations["teacher_courses_banks_groups_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/banks/{bank_id}/groups/{group_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_courses_banks_groups_retrieve"];
+        put: operations["teacher_courses_banks_groups_update"];
+        post?: never;
+        delete: operations["teacher_courses_banks_groups_destroy"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2516,6 +2580,54 @@ export interface paths {
             cookie?: never;
         };
         get: operations["teacher_kc_import_template"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/import-templates/question-groups.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_question_group_import_template_csv"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/import-templates/question-groups.docx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_question_group_import_template_docx"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/import-templates/question-groups.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_question_group_import_template_xlsx"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3545,6 +3657,13 @@ export interface components {
             count: number;
         };
         /**
+         * @description * `standard` - standard
+         *     * `translation` - translation
+         *     * `essay` - essay
+         * @enum {string}
+         */
+        EducationalTypeEnum: "standard" | "translation" | "essay";
+        /**
          * @description * `create` - create
          *     * `transfer` - transfer
          *     * `skip` - skip
@@ -3559,6 +3678,21 @@ export interface components {
             response_version: number;
             /** Format: uuid */
             target_event_id: string | null;
+        };
+        ExperimentActivity: {
+            pending_grading_count: number;
+            grading_url: string | null;
+            schedules: components["schemas"]["ExperimentActivitySchedule"][];
+        };
+        ExperimentActivitySchedule: {
+            task_id: number;
+            class_name: string;
+            /** Format: date-time */
+            opens_at: string | null;
+            /** Format: date-time */
+            closes_at: string | null;
+            total_time_limit_minutes: number | null;
+            per_question_time_limit_seconds: number | null;
         };
         ExperimentManagementCapabilities: {
             can_manage: boolean;
@@ -3652,6 +3786,23 @@ export interface components {
             level_3: number;
         };
         /**
+         * @description * `A` - A
+         *     * `B` - B
+         *     * `C` - C
+         *     * `D` - D
+         *     * `E` - E
+         *     * `F` - F
+         * @enum {string}
+         */
+        KeyEnum: "A" | "B" | "C" | "D" | "E" | "F";
+        /**
+         * @description * `reading` - reading
+         *     * `cloze` - cloze
+         *     * `words` - words
+         * @enum {string}
+         */
+        Kind6e9Enum: "reading" | "cloze" | "words";
+        /**
          * @description * `standalone` - standalone
          *     * `canonical` - canonical
          * @enum {string}
@@ -3717,6 +3868,7 @@ export interface components {
             id: number;
             name: string;
             description: string;
+            complete_question_count?: number;
             question_count: number;
             created_by_name: string;
             /** Format: date-time */
@@ -3866,6 +4018,9 @@ export interface components {
             sequence: number;
             code: string;
             text: string;
+            title?: string;
+            instructions?: string;
+            educational_type?: components["schemas"]["EducationalTypeEnum"];
             question_type: components["schemas"]["QuestionType128Enum"];
             status: components["schemas"]["StatusB97Enum"];
             draft_reasons: string[];
@@ -3877,9 +4032,20 @@ export interface components {
             accepted_answers_text: string;
             options: components["schemas"]["ManagementQuestionEditorOptions"];
             kc_mapping?: components["schemas"]["QuestionKCMapping"];
+            group_id: number | null;
+            group_order: number | null;
+            blank_id: string;
+            /** Format: decimal */
+            max_score: string;
+            content_language: string;
+            text_match_case_sensitive: boolean;
+            text_match_policy_version: string;
         };
         ManagementQuestionEditorRequest: {
             text: string;
+            title?: string;
+            instructions?: string;
+            educational_type?: components["schemas"]["EducationalTypeEnum"];
             question_type: components["schemas"]["QuestionType128Enum"];
             status: components["schemas"]["StatusB97Enum"];
             teacher_difficulty?: string;
@@ -3895,6 +4061,11 @@ export interface components {
             option_e?: string;
             option_f?: string;
             kc_mapping_json?: string;
+            /** Format: decimal */
+            max_score?: string;
+            content_language?: string;
+            text_match_case_sensitive?: boolean;
+            text_match_policy_version?: components["schemas"]["TextMatchPolicyVersionEnum"];
         };
         ManagementQuestionEditorResponse: {
             course?: components["schemas"]["QuestionBankCourse"];
@@ -3909,6 +4080,7 @@ export interface components {
             /** Format: uuid */
             preview_id: string;
             selected_row_ids?: string[];
+            selected_group_ids?: string[];
         };
         ManagementQuestionImportConfirmResponse: {
             created: number;
@@ -3920,9 +4092,15 @@ export interface components {
             rows?: {
                 [key: string]: unknown;
             }[];
+            groups?: {
+                [key: string]: unknown;
+            }[];
         };
         ManagementQuestionImportPreviewPayload: {
             rows: components["schemas"]["ManagementQuestionImportPreviewRow"][];
+            groups?: {
+                [key: string]: unknown;
+            }[];
             summary?: {
                 [key: string]: number;
             };
@@ -3934,6 +4112,11 @@ export interface components {
             preview: components["schemas"]["ManagementQuestionImportPreviewPayload"];
         };
         ManagementQuestionImportPreviewRow: {
+            absolute_tolerance?: string | null;
+            relative_tolerance?: string | null;
+            title?: string;
+            instructions?: string;
+            educational_type?: string;
             sequence: number;
             text: string;
             question_type: string;
@@ -3954,6 +4137,14 @@ export interface components {
             draft_reasons?: string[];
             errors?: string[];
             existing_question_id?: number | null;
+            /** Format: uuid */
+            group_id?: string | null;
+            group_order?: number | null;
+            blank_id?: string;
+            max_score?: string;
+            content_language?: string;
+            text_match_case_sensitive?: boolean;
+            text_match_policy_version?: string;
         };
         ManagementQuestionsUpdatedResponse: {
             questions_updated: number;
@@ -3962,6 +4153,7 @@ export interface components {
             id: number;
             name: string;
             description: string;
+            complete_question_count?: number;
             question_count: number;
         };
         ManagementSharedCreator: {
@@ -4004,6 +4196,7 @@ export interface components {
             description: string;
             visibility: components["schemas"]["VisibilityE8aEnum"];
             visibility_label: string;
+            complete_question_count?: number;
             question_count: number;
             detail_url: string;
             question_import_url: string;
@@ -4021,6 +4214,8 @@ export interface components {
             visibility?: components["schemas"]["VisibilityE8aEnum"];
         };
         ManagementStandaloneBankDetail: {
+            unit_summary?: unknown;
+            groups?: components["schemas"]["QuestionGroupResponse"][];
             redirect_url?: string;
             bank?: components["schemas"]["ManagementStandaloneBank"];
             can_edit_metadata?: boolean;
@@ -4051,10 +4246,20 @@ export interface components {
             preview: components["schemas"]["ManagementStandaloneKCImportPreviewPayload"];
         };
         ManagementStandaloneQuestion: {
+            group_id: number | null;
+            group_order: number | null;
+            blank_id: string;
+            max_score: string;
+            content_language: string;
+            text_match_case_sensitive: boolean;
+            text_match_policy_version: string;
             id: number;
             sequence: number;
             code: string;
             text: string;
+            title?: string;
+            instructions?: string;
+            educational_type?: components["schemas"]["EducationalTypeEnum"];
             question_type: components["schemas"]["QuestionType128Enum"];
             question_type_label: string;
             status: components["schemas"]["StatusB97Enum"];
@@ -4076,6 +4281,7 @@ export interface components {
             id: number;
             name: string;
             description: string;
+            complete_question_count?: number;
             question_count: number;
             created_by_name: string;
         };
@@ -4344,6 +4550,7 @@ export interface components {
             readonly can_manage?: boolean;
             readonly can_archive?: boolean;
             readonly can_restore?: boolean;
+            readonly activity?: components["schemas"]["ExperimentActivity"];
             /** Format: date-time */
             readonly created_at?: string;
             /** Format: date-time */
@@ -4402,6 +4609,9 @@ export interface components {
             class_id: number;
             class_name: string;
             item_count: number;
+            question_count: number;
+            review_question_count: number;
+            new_question_count: number;
             is_valid: boolean;
             excluded: boolean;
             review_item_count: number;
@@ -4419,6 +4629,9 @@ export interface components {
             class_id: number;
             class_name: string;
             item_count: number;
+            question_count: number;
+            review_question_count: number;
+            new_question_count: number;
             is_valid: boolean;
             excluded: boolean;
             review_item_count: number;
@@ -4546,6 +4759,7 @@ export interface components {
             class_count: number;
             participant_count: number;
             item_count: number;
+            question_count: number;
             randomization_validation: string;
             /** Format: date-time */
             created_at: string;
@@ -4585,11 +4799,16 @@ export interface components {
             detail_url: string;
         };
         QuestionBankDetail: {
+            unit_summary: unknown;
+            groups: {
+                [key: string]: unknown;
+            }[];
             id: number;
             name: string;
             description: string;
             visibility: string;
             visibility_label: string;
+            complete_question_count?: number;
             question_count: number;
             created_by_name: string;
             /** Format: date-time */
@@ -4630,6 +4849,7 @@ export interface components {
             description: string;
             visibility: string;
             visibility_label: string;
+            complete_question_count?: number;
             question_count: number;
             created_by_name: string;
             /** Format: date-time */
@@ -4697,6 +4917,83 @@ export interface components {
             status: string;
             draft_reasons: string[];
         };
+        QuestionGroupMember: {
+            primary_concept_id?: number | null;
+            id?: number | null;
+            readonly item_key: string;
+            question_type: components["schemas"]["QuestionType128Enum"];
+            /** @default  */
+            text: string;
+            group_order: number;
+            /** @default  */
+            blank_id: string;
+            options?: components["schemas"]["QuestionGroupOption"][];
+            /** @default  */
+            answer: unknown;
+            accepted_answers?: string[];
+            /**
+             * Format: decimal
+             * @default 1.00
+             */
+            max_score: string;
+            content_language?: string;
+            /** @default false */
+            text_match_case_sensitive: boolean;
+            /** @default text-exact-v1 */
+            text_match_policy_version: components["schemas"]["TextMatchPolicyVersionEnum"];
+            /** @default  */
+            explanation: string;
+            /** Format: decimal */
+            teacher_difficulty?: string | null;
+            kc_mapping?: unknown;
+            readonly status: string;
+        };
+        QuestionGroupOption: {
+            key: components["schemas"]["KeyEnum"];
+            text: string;
+        };
+        QuestionGroupRequest: {
+            word_bank?: string[];
+            kind: components["schemas"]["Kind6e9Enum"];
+            /** @default  */
+            title: string;
+            /** @default  */
+            instructions: string;
+            material: string;
+            /** @default en */
+            content_language: string;
+            expected_revision?: number;
+            /** @default false */
+            confirm_member_deletion: boolean;
+            members: components["schemas"]["QuestionGroupMember"][];
+        };
+        QuestionGroupResponse: {
+            word_bank?: string[];
+            kind: components["schemas"]["Kind6e9Enum"];
+            /** @default  */
+            title: string;
+            /** @default  */
+            instructions: string;
+            material: string;
+            /** @default en */
+            content_language: string;
+            expected_revision?: number;
+            /** @default false */
+            confirm_member_deletion: boolean;
+            members: components["schemas"]["QuestionGroupMember"][];
+            available_concepts?: {
+                [key: string]: unknown;
+            }[];
+            id: number;
+            revision: number;
+            material_segments: {
+                [key: string]: unknown;
+            }[];
+            item_count: number;
+            total_max_score: string;
+            status: string;
+            readiness_issues: string[];
+        };
         QuestionKCImportResult: {
             questions_updated: number;
         };
@@ -4727,10 +5024,20 @@ export interface components {
             process_url: string;
         };
         QuestionQuota: {
-            question_type: components["schemas"]["QuestionType334Enum"];
+            question_type: components["schemas"]["QuestionTypeD8fEnum"];
             amount: number;
         };
         QuestionSummary: {
+            title?: string;
+            instructions?: string;
+            educational_type: string;
+            group_id: number | null;
+            group_order: number | null;
+            blank_id: string;
+            max_score: string;
+            content_language: string;
+            text_match_case_sensitive: boolean;
+            text_match_policy_version: string;
             id: number;
             course_sequence: number | null;
             stable_code: string;
@@ -4785,9 +5092,14 @@ export interface components {
          *     * `short_answer` - 简答题
          *     * `fill_blank` - 填空题
          *     * `true_false` - 判断题
+         *     * `reading` - 阅读理解
+         *     * `words` - 选词填空
+         *     * `cloze` - 完形填空
+         *     * `translation` - 英汉互译
+         *     * `essay` - 作文
          * @enum {string}
          */
-        QuestionType334Enum: "single_choice" | "multiple_choice" | "numeric" | "short_answer" | "fill_blank" | "true_false";
+        QuestionTypeD8fEnum: "single_choice" | "multiple_choice" | "numeric" | "short_answer" | "fill_blank" | "true_false" | "reading" | "words" | "cloze" | "translation" | "essay";
         /**
          * @description * `none` - 不展示
          *     * `self` - 仅本人
@@ -4928,6 +5240,7 @@ export interface components {
             mode: (components["schemas"]["Mode9dfEnum"] | components["schemas"]["NullEnum"]) | null;
             total_count?: number | null;
             match_scope?: components["schemas"]["MatchScopeEnum"];
+            pinned_question_ids?: number[];
             nodes?: components["schemas"]["SamplingKC"][];
             type_quotas?: components["schemas"]["SamplingQuestionTypeQuota"][];
         };
@@ -4950,7 +5263,7 @@ export interface components {
          */
         SamplingModeEnum: "total_count" | "kc_quota";
         SamplingQuestionTypeQuota: {
-            question_type: components["schemas"]["QuestionType334Enum"];
+            question_type: components["schemas"]["QuestionTypeD8fEnum"];
             amount: number;
         };
         /**
@@ -5144,9 +5457,19 @@ export interface components {
             name: string;
         };
         StandaloneQuestionQuotaInput: {
-            question_type: components["schemas"]["QuestionType334Enum"];
+            question_type: components["schemas"]["StandaloneQuestionQuotaInputQuestionTypeEnum"];
             amount: number;
         };
+        /**
+         * @description * `single_choice` - 单选题
+         *     * `multiple_choice` - 多选题
+         *     * `numeric` - 数值题
+         *     * `short_answer` - 简答题
+         *     * `fill_blank` - 填空题
+         *     * `true_false` - 判断题
+         * @enum {string}
+         */
+        StandaloneQuestionQuotaInputQuestionTypeEnum: "single_choice" | "multiple_choice" | "numeric" | "short_answer" | "fill_blank" | "true_false";
         StandaloneSession: {
             id: number;
             student_number: string | null;
@@ -5380,6 +5703,12 @@ export interface components {
             comparison: components["schemas"]["StudentComparison"];
         };
         StudentLearningExperiment: {
+            score_progress?: {
+                [key: string]: unknown;
+            };
+            groups?: {
+                [key: string]: unknown;
+            }[];
             version?: string;
             comparison_status?: components["schemas"]["ComparisonStatusEnum"];
             /** Format: date-time */
@@ -5417,6 +5746,12 @@ export interface components {
         };
         StudentLearningExperimentResponse: components["schemas"]["StudentLearningExperiment"] | components["schemas"]["StudentProjectionStatus"];
         StudentLearningItemResult: {
+            response_value?: unknown;
+            group_id?: string | null;
+            group_order?: number | null;
+            blank_id?: string;
+            /** Format: decimal */
+            max_score?: string;
             /** Format: date-time */
             generated_at: string;
             question_id: number;
@@ -5558,6 +5893,12 @@ export interface components {
             /** Format: date-time */
             completed_at: string | null;
             grading_status: string;
+            score_progress?: {
+                [key: string]: unknown;
+            };
+            groups?: {
+                [key: string]: unknown;
+            }[];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -5574,6 +5915,7 @@ export interface components {
          */
         StudentResultCorrectnessFeedbackModeEnum: "correctness";
         StudentResultCorrectnessItem: {
+            response_value?: unknown;
             question_id: number;
             question_code: string;
             submitted_answer: string;
@@ -5600,6 +5942,12 @@ export interface components {
             /** Format: date-time */
             completed_at: string | null;
             grading_status: string;
+            score_progress?: {
+                [key: string]: unknown;
+            };
+            groups?: {
+                [key: string]: unknown;
+            }[];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -5616,6 +5964,7 @@ export interface components {
          */
         StudentResultFullFeedbackModeEnum: "full";
         StudentResultFullItem: {
+            response_value?: unknown;
             question_id: number;
             question_code: string;
             submitted_answer: string;
@@ -5736,6 +6085,9 @@ export interface components {
             stable_code: string;
             code: string;
             question_type: string;
+            educational_type?: string;
+            title?: string;
+            instructions?: string;
             text: string;
             primary_kc: string;
             options: components["schemas"]["StudentRuntimeOption"][];
@@ -5757,6 +6109,9 @@ export interface components {
             admission_action?: components["schemas"]["AdmissionActionEnum"];
         };
         StudentRuntimeQuestionEntry: {
+            question_group_runtime_version?: number;
+            question_group?: unknown;
+            group_responses?: unknown;
             assessment_flow_version?: number;
             prepared_paper?: unknown;
             initial_writer_lease?: unknown;
@@ -5795,6 +6150,7 @@ export interface components {
             readonly admission_execution_id: string | null;
         };
         StudentSessionSummary: {
+            result?: unknown;
             session_id: number;
             experiment_name: string;
             status: string;
@@ -6207,6 +6563,7 @@ export interface components {
             readonly can_manage: boolean;
             readonly can_archive: boolean;
             readonly can_restore: boolean;
+            readonly activity: components["schemas"]["ExperimentActivity"];
             /** Format: date-time */
             readonly created_at: string;
             /** Format: date-time */
@@ -6232,6 +6589,7 @@ export interface components {
             available: number;
         };
         TeacherExperimentReadiness: {
+            readonly question_group_pool: boolean;
             ready: boolean;
             issues: string[];
             blocking_issues: components["schemas"]["TeacherExperimentReadinessIssue"][];
@@ -6336,7 +6694,7 @@ export interface components {
             any_level_available: number;
         };
         TeacherSamplingInventoryQuestionType: {
-            question_type: components["schemas"]["QuestionType334Enum"];
+            question_type: components["schemas"]["QuestionTypeD8fEnum"];
             label: string;
             available: number;
         };
@@ -6352,6 +6710,9 @@ export interface components {
             question_types: components["schemas"]["TeacherSamplingInventoryQuestionType"][];
             kc_counts: components["schemas"]["TeacherSamplingInventoryKC"][];
             bank_counts?: {
+                [key: string]: unknown;
+            }[];
+            questions?: {
                 [key: string]: unknown;
             }[];
         };
@@ -6458,6 +6819,11 @@ export interface components {
             id: components["schemas"]["IdEnum"];
             idle_ms: number;
         };
+        /**
+         * @description * `text-exact-v1` - text-exact-v1
+         * @enum {string}
+         */
+        TextMatchPolicyVersionEnum: "text-exact-v1";
         /**
          * @description * `none` - 无时限
          *     * `total` - 实验总时限
@@ -11557,6 +11923,213 @@ export interface operations {
             };
         };
     };
+    teacher_banks_groups_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["QuestionGroupResponse"][];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_banks_groups_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuestionGroupRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["QuestionGroupRequest"];
+                "multipart/form-data": components["schemas"]["QuestionGroupRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["QuestionGroupResponse"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_banks_groups_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                group_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["QuestionGroupResponse"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_banks_groups_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                group_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuestionGroupRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["QuestionGroupRequest"];
+                "multipart/form-data": components["schemas"]["QuestionGroupRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["QuestionGroupResponse"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_banks_groups_destroy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                group_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
     teacher_standalone_question_bank_kc_import_confirm: {
         parameters: {
             query?: never;
@@ -12677,6 +13250,218 @@ export interface operations {
             };
         };
     };
+    teacher_courses_banks_groups_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["QuestionGroupResponse"][];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_courses_banks_groups_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuestionGroupRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["QuestionGroupRequest"];
+                "multipart/form-data": components["schemas"]["QuestionGroupRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["QuestionGroupResponse"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_courses_banks_groups_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+                group_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["QuestionGroupResponse"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_courses_banks_groups_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+                group_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuestionGroupRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["QuestionGroupRequest"];
+                "multipart/form-data": components["schemas"]["QuestionGroupRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["QuestionGroupResponse"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_courses_banks_groups_destroy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+                group_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
     teacher_question_bank_kc_import_confirm: {
         parameters: {
             query?: never;
@@ -12880,6 +13665,7 @@ export interface operations {
     teacher_courses_banks_questions_retrieve: {
         parameters: {
             query?: {
+                complete_only?: string;
                 q?: string;
                 question_type?: string;
                 status?: string;
@@ -15555,6 +16341,276 @@ export interface operations {
                 };
                 content: {
                     "text/csv": string;
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_question_group_import_template_csv: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Django CSRF token, required for unsafe methods. */
+                "X-CSRFToken"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_question_group_import_template_docx: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Django CSRF token, required for unsafe methods. */
+                "X-CSRFToken"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": string;
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_question_group_import_template_xlsx: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Django CSRF token, required for unsafe methods. */
+                "X-CSRFToken"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
                 };
             };
             400: {

@@ -97,6 +97,9 @@ class StudentRuntimeQuestionSerializer(serializers.Serializer):
     stable_code = serializers.CharField(allow_blank=True)
     code = serializers.CharField()
     question_type = serializers.CharField()
+    educational_type = serializers.CharField(required=False)
+    title = serializers.CharField(required=False, allow_blank=True)
+    instructions = serializers.CharField(required=False, allow_blank=True)
     text = serializers.CharField()
     primary_kc = serializers.CharField()
     options = StudentRuntimeOptionSerializer(many=True)
@@ -225,6 +228,9 @@ class StudentRuntimeOfflineAuthorizationSerializer(serializers.Serializer):
 
 
 class StudentRuntimeQuestionEntrySerializer(serializers.Serializer):
+    question_group_runtime_version = serializers.IntegerField(required=False)
+    question_group = serializers.JSONField(required=False)
+    group_responses = serializers.JSONField(required=False)
     assessment_flow_version = serializers.IntegerField(required=False)
     prepared_paper = serializers.JSONField(required=False)
     initial_writer_lease = serializers.JSONField(required=False)
@@ -265,6 +271,7 @@ class StudentResultCorrectnessSummarySerializer(serializers.Serializer):
 
 
 class StudentResultCorrectnessItemSerializer(serializers.Serializer):
+    response_value = serializers.JSONField(required=False, allow_null=True)
     question_id = serializers.IntegerField()
     question_code = serializers.CharField()
     submitted_answer = serializers.CharField()
@@ -312,6 +319,8 @@ class StudentResultNoneSerializer(StudentResultBaseSerializer):
 
 
 class StudentResultCorrectnessSerializer(StudentResultBaseSerializer):
+    score_progress = serializers.DictField(required=False)
+    groups = serializers.ListField(child=serializers.DictField(), required=False)
     feedback_mode = serializers.ChoiceField(choices=("correctness",))
     items = StudentResultCorrectnessItemSerializer(many=True, required=False)
     score = StudentResultScoreSerializer(required=False)
@@ -320,6 +329,8 @@ class StudentResultCorrectnessSerializer(StudentResultBaseSerializer):
 
 
 class StudentResultFullSerializer(StudentResultBaseSerializer):
+    score_progress = serializers.DictField(required=False)
+    groups = serializers.ListField(child=serializers.DictField(), required=False)
     feedback_mode = serializers.ChoiceField(choices=("full",))
     items = StudentResultFullItemSerializer(many=True, required=False)
     score = StudentResultScoreSerializer(required=False)
@@ -401,6 +412,11 @@ class StudentLearningScoreSerializer(serializers.Serializer):
 
 
 class StudentLearningItemResultSerializer(serializers.Serializer):
+    response_value = serializers.JSONField(required=False, allow_null=True)
+    group_id = serializers.CharField(allow_null=True, required=False)
+    group_order = serializers.IntegerField(allow_null=True, required=False)
+    blank_id = serializers.CharField(allow_blank=True, required=False)
+    max_score = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
     generated_at = serializers.DateTimeField()
     question_id = serializers.IntegerField()
     code = serializers.CharField()
@@ -414,6 +430,8 @@ class StudentLearningItemResultSerializer(serializers.Serializer):
 
 
 class StudentLearningExperimentSerializer(serializers.Serializer):
+    score_progress = serializers.DictField(required=False)
+    groups = serializers.ListField(child=serializers.DictField(), required=False)
     version = serializers.CharField(required=False)
     comparison_status = serializers.ChoiceField(choices=("pending", "updating", "ready", "failed"), required=False)
     comparison_generated_at = serializers.DateTimeField(required=False)

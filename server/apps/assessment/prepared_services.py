@@ -54,10 +54,14 @@ def _projection(attempt, confidence, item_count):
     question = {
         'snapshot_id': assignment.snapshot_id, 'stable_code': assignment.snapshot.stable_code,
         'code': assignment.snapshot.code, 'question_type': assignment.snapshot.question_type,
+        'educational_type': assignment.snapshot.educational_type,
+        'title': assignment.snapshot.title, 'instructions': assignment.snapshot.instructions,
         'text': assignment.snapshot.text, 'primary_kc': assignment.snapshot.primary_kc if tools['kc_visible'] else '',
         'options': _runtime_options(assignment),
     }
-    content = persist_display_content({'question': question})
+    from .group_runtime import group_runtime_projection
+    grouped = group_runtime_projection(attempt)
+    content = persist_display_content({'question': question, **({'question_group': grouped['question_group']} if grouped else {})})
     empty_question = {**question, 'text': '', 'options': []}
     payload = {
         'assessment_flow_version': 1,
@@ -107,6 +111,11 @@ def _projection(attempt, confidence, item_count):
     }
     if not has_research_tools(attempt):
         payload['actions'].pop('research_tools_url', None)
+    if grouped:
+        payload['question_group_runtime_version'] = 1
+        payload['question_group'] = {**grouped['question_group'], 'material': '', 'material_segments': [],
+            'members': [{**row, 'text': '', 'options': []} for row in grouped['question_group']['members']]}
+        payload['group_responses'] = grouped['group_responses']
     return json.loads(json.dumps(payload, cls=DjangoJSONEncoder)), content
 
 
@@ -187,15 +196,19 @@ def _persist_paper_projections(session, attempts, confidence, signature, artifac
             'response_version': attempt.response_version,
             'active_response_event_id': str(attempt.active_response_event_id) if attempt.active_response_event_id else None,
             'content': descriptor,
+            **({'group_id': str(attempt.assignment.snapshot.group_snapshot_id), 'group_order': attempt.assignment.snapshot.group_order}
+               if attempt.assignment.snapshot.group_snapshot_id else {}),
         })
         if first_runtime is None:
             first_runtime = runtime
+    grouped_paper = bool(session.version.configuration.get('question_group_runtime_version'))
     manifest = persist_display_content({
-        'version': 1, 'session_id': session.pk, 'content_version': signature,
+        'version': 2 if grouped_paper else 1, 'session_id': session.pk, 'content_version': signature,
         'navigation': navigation, 'question_count': len(attempts),
+        **({'presentation_units': _presentation_units(attempts)} if grouped_paper else {}),
     })
     first_runtime['prepared_paper'] = {
-        'version': 1, 'content_version': signature, 'manifest': manifest,
+        'version': 2 if grouped_paper else 1, 'content_version': signature, 'manifest': manifest,
         'question': navigation[0]['content'],
     }
     artifact.preparation_version, artifact.item_count = signature, len(attempts)
@@ -203,6 +216,23 @@ def _persist_paper_projections(session, attempts, confidence, signature, artifac
     artifact.manifest_descriptor, artifact.ready = manifest, True
     artifact.save()
     return artifact
+
+
+def _presentation_units(attempts):
+    units, grouped = [], {}
+    for attempt in attempts:
+        snapshot = attempt.assignment.snapshot
+        identity = str(snapshot.group_snapshot_id) if snapshot.group_snapshot_id else None
+        if identity and identity in grouped:
+            grouped[identity]['assignment_ids'].append(attempt.assignment_id)
+            continue
+        group = snapshot.group_snapshot if identity else None
+        unit = {'group_id': identity, 'kind': group.kind if group else 'single',
+            'title': group.title if group else snapshot.code, 'assignment_ids': [attempt.assignment_id]}
+        units.append(unit)
+        if identity:
+            grouped[identity] = unit
+    return units
 
 
 @transaction.atomic
@@ -396,7 +426,7 @@ def prepared_runtime(attempt, visit_entry=None, *, request_received_at=None, dec
                 if writable else None) or session.deadline_at
     payload['presented_deadline_at'] = deadline.isoformat() if deadline else None
     payload['remaining_seconds'] = max(0, int((deadline - now).total_seconds())) if deadline else None
-    payload['prepared_paper'] = {'version': 1, 'content_version': artifact.preparation_version,
+    payload['prepared_paper'] = {'version': 2 if session.version.configuration.get('question_group_runtime_version') else 1, 'content_version': artifact.preparation_version,
                                  'manifest': artifact.manifest_descriptor, 'question': projection.content_descriptor}
     payload['process'].update(paper_flow_version=1, text_capture_policy=text_capture_policy(session),
         response_version=attempt.response_version,
@@ -415,6 +445,9 @@ def prepared_runtime(attempt, visit_entry=None, *, request_received_at=None, dec
         }
         payload['process'].update(visit_id=visit_entry.visit.pk, visit_index=visit_entry.visit.visit_index,
             entry_event_id=str(visit_entry.entry_event.pk), navigation_id=str(visit_entry.navigation_id))
+    if payload.get('question_group_runtime_version'):
+        from .group_runtime import group_runtime_projection
+        payload['group_responses'] = group_runtime_projection(attempt).get('group_responses', {})
     return payload
 
 

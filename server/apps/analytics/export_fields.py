@@ -89,6 +89,8 @@ def field_values(attempt):
     session = attempt.session
     student = session.student
     version = session.version
+    submission = getattr(attempt, 'submission_event', None)
+    grade = next(iter(submission.export_effective_grades), None) if submission else None
     return {
         "student_number": student.student_number,
         "student_name": student.shown_name,
@@ -120,8 +122,8 @@ def field_values(attempt):
         "submitted_at": attempt.submitted_at.isoformat() if attempt.submitted_at else None,
         "first_to_submit_duration_ms": attempt.first_to_submit_duration_ms,
         "last_visit_to_submission_ms": attempt.last_visit_to_submission_ms,
-        "final_answer": _answer(attempt.final_answer),
-        "is_correct": attempt.is_correct,
-        "score": attempt.score,
+        "final_answer": _answer(submission.final_answer if submission else attempt.final_answer),
+        "is_correct": grade.is_correct if grade else None if submission else attempt.is_correct,
+        "score": grade.score if grade else None if submission else attempt.score,
         "attempt_status": attempt.status,
     }

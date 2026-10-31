@@ -210,7 +210,7 @@ onMounted(load)
               <tbody>
                 <tr v-for="bank in banks.items" :key="bank.id">
                   <td><RouterLink :to="bank.detail_url"><strong>{{ bank.name }}</strong></RouterLink><small>创建者：{{ bank.created_by_name }}</small><small>{{ bank.description }}</small></td>
-                  <td>{{ bank.question_count }}</td>
+                  <td>{{ bank.complete_question_count ?? bank.question_count }}</td>
                   <td><span class="kt-qb-badge" :class="`is-${bank.visibility}`">{{ bank.visibility_label }}</span></td>
                   <td>{{ formattedDate(bank.updated_at) }}</td>
                   <td><div class="kt-qb-row-actions"><RouterLink class="kt-qb-btn kt-qb-btn--outline" :to="bank.detail_url">管理</RouterLink><button v-if="bank.archive_url" data-bank-archive class="kt-qb-btn kt-qb-btn--outline" type="button" :disabled="actionBusy" @click="archiveBank(bank.id)">归档</button></div></td>
@@ -218,7 +218,7 @@ onMounted(load)
               </tbody>
             </table>
           </div>
-          <ul class="kt-qb-mobile-list"><li v-for="bank in banks.items" :key="bank.id"><div><RouterLink :to="bank.detail_url"><strong>{{ bank.name }}</strong></RouterLink><span class="kt-qb-badge" :class="`is-${bank.visibility}`">{{ bank.visibility_label }}</span></div><p>{{ bank.description }}</p><dl><div><dt>题目数</dt><dd>{{ bank.question_count }}</dd></div><div><dt>创建者</dt><dd>{{ bank.created_by_name }}</dd></div></dl><div class="kt-qb-row-actions"><RouterLink class="kt-qb-btn kt-qb-btn--outline" :to="bank.detail_url">管理</RouterLink><button v-if="bank.archive_url" data-bank-archive class="kt-qb-btn kt-qb-btn--outline" type="button" :disabled="actionBusy" @click="archiveBank(bank.id)">归档</button></div></li></ul>
+          <ul class="kt-qb-mobile-list"><li v-for="bank in banks.items" :key="bank.id"><div><RouterLink :to="bank.detail_url"><strong>{{ bank.name }}</strong></RouterLink><span class="kt-qb-badge" :class="`is-${bank.visibility}`">{{ bank.visibility_label }}</span></div><p>{{ bank.description }}</p><dl><div><dt>题目数</dt><dd>{{ bank.complete_question_count ?? bank.question_count }}</dd></div><div><dt>创建者</dt><dd>{{ bank.created_by_name }}</dd></div></dl><div class="kt-qb-row-actions"><RouterLink class="kt-qb-btn kt-qb-btn--outline" :to="bank.detail_url">管理</RouterLink><button v-if="bank.archive_url" data-bank-archive class="kt-qb-btn kt-qb-btn--outline" type="button" :disabled="actionBusy" @click="archiveBank(bank.id)">归档</button></div></li></ul>
         </section>
 
         <section class="kt-qb-card kt-qb-kc-entry" aria-labelledby="kc-entry-heading">

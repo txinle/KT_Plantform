@@ -56,11 +56,11 @@ def _status_projection(session, attempts, submissions, grades):
 
 
 def _score_summary(attempts, submissions, grades):
-    if not attempts or len(submissions) != len(attempts) or len(grades) != len(attempts):
+    if not attempts or len(submissions) != len(attempts) or len(grades) != len(attempts) or any(grade.score is None for grade in grades.values()):
         return None
     earned = sum((grade.score or Decimal("0") for grade in grades.values()), Decimal("0"))
     maximum = sum(
-        (grade.max_score or Decimal("0") for grade in grades.values()),
+        (attempt.assignment.snapshot.max_score for attempt in attempts),
         Decimal("0"),
     )
     if maximum <= 0:
@@ -70,6 +70,55 @@ def _score_summary(attempts, submissions, grades):
         "maximum": maximum,
         "percent": (earned / maximum * Decimal("100")).quantize(Decimal("0.1")),
     }
+
+
+def score_progress(attempts, submissions, grades):
+    """Keep the paper denominator separate from the completed-grade denominator."""
+    scored = [attempt for attempt in attempts if attempt.pk in grades and grades[attempt.pk].score is not None]
+    scored_ids = {attempt.pk for attempt in scored}
+    return {
+        'earned': sum((grades[attempt.pk].score for attempt in scored), Decimal('0')),
+        'paper_maximum': sum((attempt.assignment.snapshot.max_score for attempt in attempts), Decimal('0')),
+        'graded_maximum': sum((attempt.assignment.snapshot.max_score for attempt in scored), Decimal('0')),
+        'graded_count': len(scored), 'item_count': len(attempts),
+        'pending_count': sum(attempt.pk in submissions and attempt.pk not in scored_ids for attempt in attempts),
+        'unsubmitted_count': sum(attempt.pk not in submissions for attempt in attempts),
+    }
+
+
+def result_groups(attempts, items, submissions, grades, *, show_scores):
+    """Add frozen shared content to already-authorized per-item result fields."""
+    from apps.question_bank.services.question_groups import material_segments
+    by_question = {item['question_id']: item for item in items}
+    grouped = {}
+    for attempt in attempts:
+        snapshot = attempt.assignment.snapshot
+        if snapshot.group_snapshot_id:
+            grouped.setdefault(snapshot.group_snapshot_id, []).append(attempt)
+    groups = []
+    for group_attempts in grouped.values():
+        group_attempts.sort(key=lambda attempt: attempt.assignment.snapshot.group_order)
+        frozen = group_attempts[0].assignment.snapshot.group_snapshot
+        members = []
+        for attempt in group_attempts:
+            question = attempt.assignment.snapshot
+            member = {
+                **by_question.get(question.pk, {}), 'item_key': str(question.pk), 'question_id': question.pk,
+                'question_type': question.question_type, 'text': display_text(question.text),
+                'options': [{'key': option.key, 'text': option.text} for option in options_for_snapshot(question)],
+                'group_order': question.group_order, 'blank_id': question.blank_id,
+            }
+            if show_scores:
+                member['max_score'] = question.max_score
+            members.append(member)
+        group = {'group_id': str(frozen.pk), 'source_group_id': frozen.source_group_id, 'kind': frozen.kind,
+            'title': frozen.title, 'instructions': frozen.instructions, 'material': frozen.material,
+            'content_language': frozen.content_language, 'members': members, 'item_count': len(members),
+            'material_segments': material_segments(frozen, members)}
+        if show_scores:
+            group['score_progress'] = score_progress(group_attempts, submissions, grades)
+        groups.append(group)
+    return groups
 
 
 def _correctness_summary(attempts, submissions, grades):
@@ -163,7 +212,7 @@ def build_student_task_result(task, student):
         .prefetch_related(
             Prefetch(
                 "attempts",
-                queryset=Attempt.objects.select_related("assignment__snapshot").order_by(
+                queryset=Attempt.objects.select_related("assignment__snapshot__group_snapshot").order_by(
                     "assignment__assigned_sequence_index"
                 ),
             )
@@ -204,6 +253,7 @@ def build_student_task_result(task, student):
                 effective_grade=grade,
             )
             item = {
+                'response_value': submission.final_answer,
                 "question_id": snapshot.pk,
                 "question_code": snapshot.code,
                 "submitted_answer": format_answer(
@@ -217,7 +267,7 @@ def build_student_task_result(task, student):
                 item["is_correct"] = grade.is_correct
             if policy.show_scores and item_availability.allows_correctness:
                 item["score"] = grade.score
-                item["max_score"] = grade.max_score
+                item["max_score"] = snapshot.max_score
             if item_availability.allows_full:
                 item["correct_answer"] = format_answer(
                     snapshot.question_type,
@@ -227,8 +277,11 @@ def build_student_task_result(task, student):
                 item["explanation"] = display_text(snapshot.explanation)
             items.append(item)
         result["items"] = items
+        if any(attempt.assignment.snapshot.group_snapshot_id for attempt in attempts):
+            result['groups'] = result_groups(attempts, items, submissions, grades, show_scores=policy.show_scores)
 
     if policy.show_scores:
+        result['score_progress'] = score_progress(attempts, submissions, grades)
         score = _score_summary(attempts, submissions, grades)
         if score is not None:
             result["score"] = score
@@ -265,7 +318,7 @@ def _legacy_comparison_projection(task, session, policy):
             Prefetch(
                 "attempts",
                 queryset=Attempt.objects.select_related(
-                    "submission_event"
+                    "submission_event", "assignment__snapshot"
                 ).prefetch_related(
                     Prefetch(
                         "submission_event__grade_records",

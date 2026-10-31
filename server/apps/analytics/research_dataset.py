@@ -202,6 +202,12 @@ def build_research_bundle(captured, *, scope, include_course_catalog=True):
     attempts = {(str(row["session_id"]), str(row["question_snapshot_id"])): row for row in records(raw, "attempts")}
     instances = {str(row["item_instance_id"]): row for row in records(raw, "item_instances")}
     submissions = {str(item.attempt_id): item for item in captured["submissions"]}
+    teacher_comments = {
+        str(row['submission_id']): row['comment'] or ''
+        for row in records(raw, 'grade_records')
+        if row['status'] == 'completed' and row['validity_status'] == 'effective'
+        and row['grading_method'] == 'manual_binary_v1' and row['grader_id']
+    }
     responses = []
     skipped_attempts = {str(event.attempt_id) for event in captured["events"]
         if event.event_type == "item_left" and event.payload.get("leave_reason") == "skip"}
@@ -231,13 +237,13 @@ def build_research_bundle(captured, *, scope, include_course_catalog=True):
             "submitted_at": research_time(submission.committed_at) if submitted else "",
             "final_answer": scalar(final_answer), "status_label": response_status(attempt, submitted=submitted,
                 visited=bool(question_visits), skipped=str(attempt.get("attempt_id")) in skipped_attempts),
-            "is_correct": correct}
+            "is_correct": correct, "comment": teacher_comments.get(str(submission.pk), "") if submitted else ""}
         responses.append(item)
         response_counts[sid] += 1
         option_order = parsed(instances.get(str(assignment.get("item_instance_id")), {}).get("option_order"), [])
         files["responses"].append([refs[sid], *identities[sid], qref, item["assigned_order"], item["first_visit_order"],
             ";".join(map(str, option_order)), item["visit_count"], *[";".join(item[key]) for key in ("clicked_times", "entered_times", "left_times")],
-            item["submitted_at"], item["final_answer"], item["status_label"], scalar(correct)])
+            item["submitted_at"], item["final_answer"], item["status_label"], scalar(correct), item["comment"]])
     sessions = []
     for sid, session in session_objects.items():
         end = session.authoritative_terminal_at or session.completed_at

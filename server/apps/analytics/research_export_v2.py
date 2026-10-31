@@ -165,7 +165,7 @@ def _course_asset_files(course):
     library = []
     questions = (
         Question.objects.filter(bank__course=course)
-        .select_related("course_identity")
+        .select_related("course_identity", "group")
         .prefetch_related("options", question_kc_mapping_prefetch())
         .order_by("course_identity__course_sequence", "pk")
     )
@@ -200,6 +200,13 @@ def _course_asset_files(course):
                 ),
             }
         )
+        if question.group_id:
+            group = question.group
+            library[-1]['题组'] = {'编号': group.pk, '形式': group.kind, '标题': group.title,
+                '作答说明': group.instructions, '材料': group.material, '内容语言': group.content_language,
+                '组内顺序': question.group_order, '空位编号': question.blank_id, '词库': list(group.word_bank)}
+        if question.educational_type != 'standard' or question.title or question.instructions:
+            library[-1].update({'教学题型': question.educational_type, '标题': question.title, '作答说明': question.instructions})
     rows = {
         "course_students": list(roster.values()),
         "course_knowledge": knowledge,
@@ -347,6 +354,7 @@ def create_research_export_snapshot(*, course, experiment, created_by, scope):
             "version": 2,
             "research_export_v2": {
                 "contract_version": CONTRACT_VERSION,
+                "response_headers": list(next(item["headers"] for item in FILES if item["key"] == "responses")),
                 "course_asset_id": None,
                 "course_asset_hash": _content_hash(course_files),
                 "experiment_session_asset_id": None,
@@ -485,6 +493,9 @@ def materialize_research_export(job):
     identities = _identity_map(session_asset)
     materialization_ids = frozen.get("materialization_ids", [])
     contracts = {item["key"]: item for item in FILES}
+    # Queued historical snapshots keep the response schema frozen before comment was added.
+    contracts['responses'] = {**contracts['responses'], 'headers': frozen.get(
+        'response_headers', contracts['responses']['headers'][:-1])}
     expected_paths = {item["path"] for item in FILES}
 
     root = os.path.join(settings.MEDIA_ROOT, "exports", str(job.pk))

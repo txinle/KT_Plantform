@@ -258,7 +258,7 @@ def _load_fact_bundle(enrollment, generated_at, *, experiment_id, cohort):
     attempts = tuple(
         attempt
         for attempt in Attempt.objects.filter(session_id__in=session_by_id).select_related(
-            "assignment__snapshot"
+            "assignment__snapshot__group_snapshot"
         )
         if attempt.assignment.snapshot.version_id
         == session_by_id[attempt.session_id].version_id
@@ -799,6 +799,7 @@ def _item_rows(bundle, task):
         values = {
             "generated_at": bundle.context.generated_at,
             "question_id": question.pk,
+            'response_value': submission.final_answer,
             "code": question.code,
             "kcs": tuple(dict.fromkeys(question.all_kcs or [question.primary_kc])),
             "result_label": result_label,
@@ -809,12 +810,16 @@ def _item_rows(bundle, task):
                 options_for_snapshot(question),
             )
             or "（空）",
+            'group_id': str(question.group_snapshot_id) if question.group_snapshot_id else None,
+            'group_order': question.group_order, 'blank_id': question.blank_id,
         }
+        if bundle.policy.show_scores:
+            values['max_score'] = question.max_score
         if bundle.policy.show_scores and availability.allows_correctness:
             values["score"] = StudentAllowListDTO(
                 generated_at=bundle.context.generated_at,
                 value=grade.score,
-                maximum=grade.max_score,
+                maximum=question.max_score,
             )
         rows.append(StudentAllowListDTO(**values))
     return tuple(rows)
@@ -867,6 +872,8 @@ def _build_student_experiment_projection(
         if comparison is not None:
             values["correct_rate_comparison"] = comparison
     if bundle.policy.show_scores:
+        from apps.assessment.student_results import score_progress
+        values['score_progress'] = score_progress(_task_attempts(bundle, task, bundle.context.student_id), bundle.submission_by_attempt, bundle.grade_by_attempt)
         metric = _score_rate(bundle, task, bundle.context.student_id)
         values["score_rate"] = metric
         coverage = _grading_coverage(
@@ -885,6 +892,11 @@ def _build_student_experiment_projection(
                 values["rank"] = rank
     if bundle.policy.show_item_results:
         values["item_results"] = _item_rows(bundle, task)
+        attempts = _task_attempts(bundle, task, bundle.context.student_id)
+        if any(attempt.assignment.snapshot.group_snapshot_id for attempt in attempts):
+            from apps.assessment.student_results import result_groups
+            values['groups'] = result_groups(attempts, [row.to_dict() for row in values['item_results']],
+                bundle.submission_by_attempt, bundle.grade_by_attempt, show_scores=bundle.policy.show_scores)
     return StudentAllowListDTO(**values)
 
 

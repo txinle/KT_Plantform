@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import Icon from '@/design-system/Icon.vue'
+import QuestionGroupResults from '@/question-content/QuestionGroupResults.vue'
 
 import type { StudentLearningExperiment } from '../student-courses/api'
 import { getStudentCourseApi } from '../student-courses/api'
@@ -90,6 +91,7 @@ onMounted(async () => {
     <p v-if="loading" class="kt-feedback-loading" role="status">正在加载实验结果…</p>
 
     <template v-else-if="result">
+      <QuestionGroupResults :groups="result.groups" :score-progress="result.score_progress" />
       <p v-if="result.comparison_status === 'pending' || result.comparison_status === 'updating'" role="status">班级比较正在生成，个人作答与评分已显示。</p>
       <p v-else-if="result.comparison_status === 'failed'" role="status">班级比较暂时无法生成，个人作答与评分可正常查看。</p>
       <p class="kt-feedback-generated">统计生成时间：{{ formatGeneratedAt(result.generated_at) }}</p>

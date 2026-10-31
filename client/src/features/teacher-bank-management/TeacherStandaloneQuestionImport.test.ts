@@ -41,4 +41,17 @@ describe('TeacherStandaloneQuestionImport', () => {
     await flushPromises()
     expect(mocks.push).toHaveBeenCalledWith('/teacher/banks/11/')
   })
+
+  it('confirms groups explicitly and never selects their child rows individually', async () => {
+    mocks.api.previewQuestionImport.mockResolvedValue({ preview_id: 'group-preview', preview: { rows: [{ row_id: 'r1', group_id: 'g1', sequence: 1, text: 'Why?', question_type: 'single_choice', options: [], classification: 'ready' }], groups: [{ group_id: 'g1', source_group_code: 'R001', kind: 'reading', title: 'Garden', material: 'Garden.', material_segments: [], instructions: '', content_language: 'en', member_row_ids: ['r1'], classification: 'ready', errors: [], item_count: 1, total_max_score: '2.00' }] } })
+    const wrapper = mount(TeacherStandaloneQuestionImport)
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [new File(['rows'], 'group.docx')], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'QuestionGroupImportPreview' }).exists()).toBe(true)
+    await wrapper.get('[data-confirm-standalone-import]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.confirmQuestionImport).toHaveBeenCalledWith(11, 'group-preview', [], ['g1'])
+  })
 })

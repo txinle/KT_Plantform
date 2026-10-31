@@ -1,3 +1,4 @@
+from decimal import Decimal
 from rest_framework import serializers
 
 from .serializers import (
@@ -52,6 +53,7 @@ class ManagementArchivedBankSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
     description = serializers.CharField()
+    complete_question_count = serializers.IntegerField(min_value=0, required=False)
     question_count = serializers.IntegerField(min_value=0)
     created_by_name = serializers.CharField()
     updated_at = serializers.DateTimeField()
@@ -112,6 +114,7 @@ class ManagementSharedBankSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
     description = serializers.CharField()
+    complete_question_count = serializers.IntegerField(min_value=0, required=False)
     question_count = serializers.IntegerField(min_value=0)
 
 
@@ -142,6 +145,9 @@ class ManagementQuestionEditorQuestionSerializer(serializers.Serializer):
     sequence = serializers.IntegerField(min_value=1)
     code = serializers.CharField()
     text = serializers.CharField(allow_blank=True)
+    title = serializers.CharField(max_length=240, allow_blank=True, required=False)
+    instructions = serializers.CharField(allow_blank=True, required=False)
+    educational_type = serializers.ChoiceField(choices=('standard', 'translation', 'essay'), required=False)
     question_type = serializers.ChoiceField(choices=QUESTION_TYPE_CHOICES)
     status = serializers.ChoiceField(choices=QUESTION_STATUS_CHOICES)
     draft_reasons = serializers.ListField(child=serializers.CharField())
@@ -153,6 +159,13 @@ class ManagementQuestionEditorQuestionSerializer(serializers.Serializer):
     accepted_answers_text = serializers.CharField(allow_blank=True)
     options = ManagementQuestionEditorOptionsSerializer()
     kc_mapping = QuestionKCMappingSerializer(required=False)
+    group_id = serializers.IntegerField(allow_null=True)
+    group_order = serializers.IntegerField(allow_null=True)
+    blank_id = serializers.CharField(allow_blank=True)
+    max_score = serializers.DecimalField(max_digits=5, decimal_places=2)
+    content_language = serializers.CharField()
+    text_match_case_sensitive = serializers.BooleanField()
+    text_match_policy_version = serializers.CharField()
 
 
 class ManagementQuestionEditorConceptSerializer(serializers.Serializer):
@@ -174,6 +187,9 @@ class ManagementQuestionEditorResponseSerializer(serializers.Serializer):
 
 class ManagementQuestionEditorRequestSerializer(serializers.Serializer):
     text = serializers.CharField(allow_blank=True)
+    title = serializers.CharField(max_length=240, allow_blank=True, required=False)
+    instructions = serializers.CharField(allow_blank=True, required=False)
+    educational_type = serializers.ChoiceField(choices=('standard', 'translation', 'essay'), required=False)
     question_type = serializers.ChoiceField(choices=QUESTION_TYPE_CHOICES)
     status = serializers.ChoiceField(choices=QUESTION_STATUS_CHOICES)
     teacher_difficulty = serializers.CharField(allow_blank=True, required=False)
@@ -189,9 +205,73 @@ class ManagementQuestionEditorRequestSerializer(serializers.Serializer):
     option_e = serializers.CharField(allow_blank=True, required=False)
     option_f = serializers.CharField(allow_blank=True, required=False)
     kc_mapping_json = serializers.CharField(allow_blank=True, required=False)
+    max_score = serializers.DecimalField(max_digits=5, decimal_places=2, min_value=Decimal('0.01'), max_value=Decimal('999.99'), required=False)
+    content_language = serializers.CharField(max_length=16, required=False)
+    text_match_case_sensitive = serializers.BooleanField(required=False)
+    text_match_policy_version = serializers.ChoiceField(choices=('text-exact-v1',), required=False)
+
+
+class QuestionGroupOptionSerializer(serializers.Serializer):
+    key = serializers.ChoiceField(choices=tuple('ABCDEF'))
+    text = serializers.CharField(allow_blank=True)
+
+
+class QuestionGroupMemberSerializer(serializers.Serializer):
+    primary_concept_id = serializers.IntegerField(allow_null=True, required=False, min_value=1)
+    id = serializers.IntegerField(allow_null=True, required=False)
+    item_key = serializers.CharField(read_only=True)
+    question_type = serializers.ChoiceField(choices=QUESTION_TYPE_CHOICES)
+    text = serializers.CharField(allow_blank=True, required=False, default='')
+    group_order = serializers.IntegerField(min_value=1)
+    blank_id = serializers.CharField(allow_blank=True, required=False, default='')
+    options = QuestionGroupOptionSerializer(many=True, required=False, default=list)
+    answer = serializers.JSONField(required=False, allow_null=True, default='')
+    accepted_answers = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    max_score = serializers.DecimalField(max_digits=5, decimal_places=2, min_value=Decimal('0.01'), max_value=Decimal('999.99'), required=False, default='1')
+    content_language = serializers.CharField(max_length=16, required=False)
+    text_match_case_sensitive = serializers.BooleanField(required=False, default=False)
+    text_match_policy_version = serializers.ChoiceField(choices=('text-exact-v1',), required=False, default='text-exact-v1')
+    explanation = serializers.CharField(allow_blank=True, required=False, default='')
+    teacher_difficulty = serializers.DecimalField(max_digits=4, decimal_places=3, min_value=0, max_value=1, allow_null=True, required=False)
+    kc_mapping = serializers.JSONField(required=False)
+    status = serializers.CharField(read_only=True)
+
+    def validate_options(self, value):
+        keys = [option['key'] for option in value]
+        if len(keys) != len(set(keys)):
+            raise serializers.ValidationError('选项编号不能重复。')
+        return value
+
+
+class QuestionGroupRequestSerializer(serializers.Serializer):
+    word_bank = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    kind = serializers.ChoiceField(choices=('reading', 'cloze', 'words'))
+    title = serializers.CharField(max_length=240, allow_blank=True, required=False, default='')
+    instructions = serializers.CharField(allow_blank=True, required=False, default='')
+    material = serializers.CharField()
+    content_language = serializers.CharField(max_length=16, required=False, default='en')
+    expected_revision = serializers.IntegerField(min_value=1, required=False)
+    confirm_member_deletion = serializers.BooleanField(required=False, default=False)
+    members = QuestionGroupMemberSerializer(many=True, allow_empty=False)
+
+
+class QuestionGroupResponseSerializer(QuestionGroupRequestSerializer):
+    available_concepts = serializers.ListField(child=serializers.DictField(), required=False)
+    id = serializers.IntegerField()
+    revision = serializers.IntegerField()
+    material_segments = serializers.ListField(child=serializers.DictField())
+    item_count = serializers.IntegerField(min_value=1)
+    total_max_score = serializers.CharField()
+    status = serializers.CharField()
+    readiness_issues = serializers.ListField(child=serializers.CharField())
 
 
 class ManagementQuestionImportPreviewRowSerializer(serializers.Serializer):
+    absolute_tolerance = serializers.CharField(allow_null=True, required=False)
+    relative_tolerance = serializers.CharField(allow_null=True, required=False)
+    title = serializers.CharField(max_length=240, allow_blank=True, required=False)
+    instructions = serializers.CharField(allow_blank=True, required=False)
+    educational_type = serializers.CharField(required=False)
     sequence = serializers.IntegerField(min_value=1)
     text = serializers.CharField(allow_blank=True)
     question_type = serializers.CharField(allow_blank=True)
@@ -209,10 +289,18 @@ class ManagementQuestionImportPreviewRowSerializer(serializers.Serializer):
     draft_reasons = serializers.ListField(child=serializers.CharField(), required=False)
     errors = serializers.ListField(child=serializers.CharField(), required=False)
     existing_question_id = serializers.IntegerField(required=False, allow_null=True)
+    group_id = serializers.UUIDField(required=False, allow_null=True)
+    group_order = serializers.IntegerField(required=False, allow_null=True)
+    blank_id = serializers.CharField(required=False, allow_blank=True)
+    max_score = serializers.CharField(required=False)
+    content_language = serializers.CharField(required=False)
+    text_match_case_sensitive = serializers.BooleanField(required=False)
+    text_match_policy_version = serializers.CharField(required=False)
 
 
 class ManagementQuestionImportPreviewPayloadSerializer(serializers.Serializer):
     rows = ManagementQuestionImportPreviewRowSerializer(many=True)
+    groups = serializers.ListField(child=serializers.DictField(), required=False)
     summary = serializers.DictField(child=serializers.IntegerField(min_value=0), required=False)
     confirmable = serializers.BooleanField(required=False)
 
@@ -225,8 +313,9 @@ class ManagementQuestionImportPreviewResponseSerializer(serializers.Serializer):
 class ManagementQuestionImportConfirmRequestSerializer(serializers.Serializer):
     preview_id = serializers.UUIDField()
     selected_row_ids = serializers.ListField(
-        child=serializers.UUIDField(), required=False, allow_empty=False
+        child=serializers.UUIDField(), required=False, allow_empty=True
     )
+    selected_group_ids = serializers.ListField(child=serializers.UUIDField(), required=False, allow_empty=True)
 
 
 class ManagementQuestionImportConfirmResponseSerializer(serializers.Serializer):
@@ -237,6 +326,7 @@ class ManagementQuestionImportConfirmResponseSerializer(serializers.Serializer):
     skipped = serializers.IntegerField(min_value=0, required=False)
     failed = serializers.IntegerField(min_value=0, required=False)
     rows = serializers.ListField(child=serializers.DictField(), required=False)
+    groups = serializers.ListField(child=serializers.DictField(), required=False)
 
 
 class QuestionDraftRecheckRowSerializer(serializers.Serializer):
@@ -345,6 +435,7 @@ class ManagementStandaloneBankSerializer(serializers.Serializer):
     description = serializers.CharField()
     visibility = serializers.ChoiceField(choices=BANK_VISIBILITY_CHOICES)
     visibility_label = serializers.CharField()
+    complete_question_count = serializers.IntegerField(min_value=0, required=False)
     question_count = serializers.IntegerField(min_value=0)
     detail_url = serializers.CharField()
     question_import_url = serializers.CharField()
@@ -361,6 +452,7 @@ class ManagementStandaloneSharedBankSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
     description = serializers.CharField()
+    complete_question_count = serializers.IntegerField(min_value=0, required=False)
     question_count = serializers.IntegerField(min_value=0)
     created_by_name = serializers.CharField()
 
@@ -373,10 +465,23 @@ class ManagementStandaloneBankCollectionSerializer(serializers.Serializer):
 
 
 class ManagementStandaloneQuestionSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=240, allow_blank=True, required=False)
+    instructions = serializers.CharField(allow_blank=True, required=False)
+    educational_type = serializers.CharField()
+    group_id = serializers.IntegerField(allow_null=True)
+    group_order = serializers.IntegerField(allow_null=True)
+    blank_id = serializers.CharField(allow_blank=True)
+    max_score = serializers.CharField()
+    content_language = serializers.CharField()
+    text_match_case_sensitive = serializers.BooleanField()
+    text_match_policy_version = serializers.CharField()
     id = serializers.IntegerField()
     sequence = serializers.IntegerField(min_value=1)
     code = serializers.CharField()
     text = serializers.CharField()
+    title = serializers.CharField(max_length=240, allow_blank=True, required=False)
+    instructions = serializers.CharField(allow_blank=True, required=False)
+    educational_type = serializers.ChoiceField(choices=('standard', 'translation', 'essay'), required=False)
     question_type = serializers.ChoiceField(choices=QUESTION_TYPE_CHOICES)
     question_type_label = serializers.CharField()
     status = serializers.ChoiceField(choices=QUESTION_STATUS_CHOICES)
@@ -388,6 +493,8 @@ class ManagementStandaloneQuestionSerializer(serializers.Serializer):
 
 
 class ManagementStandaloneBankDetailSerializer(serializers.Serializer):
+    unit_summary = serializers.JSONField(required=False)
+    groups = QuestionGroupResponseSerializer(many=True, required=False)
     redirect_url = serializers.CharField(required=False)
     bank = ManagementStandaloneBankSerializer(required=False)
     can_edit_metadata = serializers.BooleanField(required=False)

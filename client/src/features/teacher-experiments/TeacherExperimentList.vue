@@ -36,6 +36,16 @@ function statusTone(status: string) {
   return 'success' as const
 }
 
+function displayDate(value: string | null, empty: string) {
+  return value ? new Date(value).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : empty
+}
+
+function displayLimit(total: number | null | undefined, item: number | null | undefined) {
+  if (total != null) return `${total} 分钟`
+  if (item != null) return `每题 ${item} 秒`
+  return '不限时'
+}
+
 async function load(page = currentPage.value, archived = archivedView.value) {
   loading.value = true
   error.value = ''
@@ -120,20 +130,24 @@ onMounted(() => load())
       <span>{{ collection.page.total_items }} 个</span>
     </div>
     <div class="kt-table-scroll kt-desktop-only">
-      <table class="kt-table">
-        <thead><tr><th>实验</th><th>题库</th><th>选题</th><th>状态</th><th>更新时间</th><th v-if="canManage"><span class="kt-visually-hidden">操作</span></th></tr></thead>
+      <table class="kt-table kt-experiment-list-table">
+        <thead><tr><th>实验</th><th>开始时间</th><th>截止时间</th><th>实验限时</th><th>状态</th><th v-if="canManage">操作</th></tr></thead>
         <tbody>
           <tr v-for="experiment in collection.items" :key="experiment.id">
             <td>
               <RouterLink :to="`/teacher/courses/${courseId}/experiments/${experiment.id}/`">
                 <strong>{{ experiment.name }}</strong>
               </RouterLink>
+              <a v-if="experiment.activity?.grading_url" data-pending-grading class="kt-experiment-pending" :href="experiment.activity.grading_url">待批改：{{ experiment.activity.pending_grading_count }}</a>
+              <span v-else class="kt-cell-note">待批改：{{ experiment.activity?.pending_grading_count ?? 0 }}</span>
               <span class="kt-cell-note">{{ experiment.description || '无说明' }}</span>
+              <span class="kt-cell-note">{{ experiment.question_banks?.map((bank) => bank.name).join('、') || experiment.question_bank?.name || '未选择题库' }} · {{ experiment.sampling_mode_label || experiment.selection_mode_label }}</span>
+              <span class="kt-cell-note">更新 {{ new Date(experiment.updated_at).toLocaleString('zh-CN') }}</span>
             </td>
-            <td>{{ experiment.question_banks?.map((bank) => bank.name).join('、') || experiment.question_bank?.name || '未选择题库' }}</td>
-            <td>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}</td>
+            <td><div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id" class="kt-experiment-schedule-cell"><span>{{ displayDate(schedule.opens_at, '立即开放') }}</span><small>{{ schedule.class_name }}</small></div><span v-if="!experiment.activity?.schedules.length">未安排</span></td>
+            <td><div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id" class="kt-experiment-schedule-cell"><span>{{ displayDate(schedule.closes_at, '无截止') }}</span><small>{{ schedule.class_name }}</small></div><span v-if="!experiment.activity?.schedules.length">未安排</span></td>
+            <td><div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id" class="kt-experiment-schedule-cell"><span>{{ displayLimit(schedule.total_time_limit_minutes, schedule.per_question_time_limit_seconds) }}</span><small>{{ schedule.class_name }}</small></div><span v-if="!experiment.activity?.schedules.length">{{ displayLimit(experiment.total_time_limit_minutes, experiment.per_question_time_limit_seconds) }}</span></td>
             <td><StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" /></td>
-            <td>{{ new Date(experiment.updated_at).toLocaleString('zh-CN') }}</td>
             <td v-if="canManage">
               <div class="kt-inline-actions">
                 <button v-if="experiment.can_restore" class="kt-text-button" type="button" :data-restore-experiment="experiment.id" :disabled="restoringId !== undefined" @click="restore(experiment)">{{ restoringId === experiment.id ? '恢复中…' : '恢复' }}</button>
@@ -154,9 +168,12 @@ onMounted(() => load())
           <StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" />
         </div>
         <p>{{ experiment.description || '无说明' }}</p>
+        <a v-if="experiment.activity?.grading_url" class="kt-experiment-pending" :href="experiment.activity.grading_url">待批改：{{ experiment.activity.pending_grading_count }}</a>
+        <span v-else class="kt-cell-note">待批改：{{ experiment.activity?.pending_grading_count ?? 0 }}</span>
         <dl>
           <div><dt>题库</dt><dd>{{ experiment.question_banks?.map((bank) => bank.name).join('、') || experiment.question_bank?.name || '未选择题库' }}</dd></div>
           <div><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}</dd></div>
+          <div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id"><dt>{{ schedule.class_name }}</dt><dd>开始 {{ displayDate(schedule.opens_at, '立即开放') }}<br>截止 {{ displayDate(schedule.closes_at, '无截止') }}<br>实验限时 {{ displayLimit(schedule.total_time_limit_minutes, schedule.per_question_time_limit_seconds) }}</dd></div>
         </dl>
         <div v-if="canManage" class="kt-inline-actions">
           <button v-if="experiment.can_restore" class="kt-text-button" type="button" :data-restore-experiment="experiment.id" :disabled="restoringId !== undefined" @click="restore(experiment)">{{ restoringId === experiment.id ? '恢复中…' : '恢复实验' }}</button>

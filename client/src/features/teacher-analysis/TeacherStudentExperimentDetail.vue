@@ -70,8 +70,8 @@ onMounted(load)
 </template>
 
 <style scoped>
-.kt-analysis-generated { color: var(--kt-text-muted); font-size: .875rem; }
+.kt-analysis-generated { color: var(--kt-muted); font-size: 0.875rem; }
 .kt-analysis-facts { margin-top: 1rem; }
 .kt-analysis-section { margin-top: 1.25rem; }
-.kt-analysis-section p { color: var(--kt-text-muted); margin: .25rem 0 1rem; }
+.kt-analysis-section p { color: var(--kt-muted); margin: .25rem 0 1rem; }
 </style>

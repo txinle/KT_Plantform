@@ -26,6 +26,7 @@ const saving = ref(false)
 const moreOptionsOpen = ref(false)
 const answersOpen = ref(false)
 const draft = reactive({
+  title: '', instructions: '', educational_type: 'standard', max_score: '1.00', content_language: 'und', text_match_case_sensitive: false,
   text: '', question_type: '', status: '', teacher_difficulty: '', absolute_tolerance: '', relative_tolerance: '', explanation: '', correct_answer_text: '', accepted_answers_text: '', option_a: '', option_b: '', option_c: '', option_d: '', option_e: '', option_f: '',
 })
 const mapping = reactive<{ root_kc_code: string; nodes: MappingNode[] }>({ root_kc_code: '', nodes: [] })
@@ -47,6 +48,7 @@ onMounted(async () => {
     editor.value = await api.questionEditor(courseId, bankId, questionId)
     const question = editor.value.question
     Object.assign(draft, {
+      title: question.title || '', instructions: question.instructions || '', educational_type: question.educational_type || 'standard', max_score: question.max_score || '1.00', content_language: question.content_language || 'und', text_match_case_sensitive: question.text_match_case_sensitive || false,
       text: question.text,
       question_type: question.question_type,
       status: question.status === 'archived' ? 'archived' : 'active',
@@ -94,7 +96,11 @@ async function save() {
     <PageHeader class="kt-question-editor-page-header" :title="`编辑第 ${editor.question.sequence} 题`"><template #kicker>{{ editor.bank.name }}</template><p>内容可不完整保存；服务器会在每次保存后自动判断题目是否可用。</p><template #actions><RouterLink class="kt-button kt-button--secondary" :to="editor.detail_url">返回题库</RouterLink></template></PageHeader>
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
     <Alert v-if="editor.question.draft_reasons.length" tone="warning"><strong>当前保存为草稿。</strong><ul><li v-for="reason in editor.question.draft_reasons" :key="reason">{{ reason }}</li></ul></Alert>
-    <form class="kt-form-stack kt-question-editor" novalidate @submit.prevent="save">
+    <Alert v-if="editor.question.group_id" tone="info">本题属于题组。<RouterLink :to="`${editor.detail_url}?edit_group=${editor.question.group_id}`">编辑整个题组</RouterLink></Alert>
+    <form v-else class="kt-form-stack kt-question-editor" novalidate @submit.prevent="save">
+      <section class="kt-card"><div class="kt-form-grid"><FormField for-id="question-max-score" label="分值" :error="fieldErrors.max_score"><input id="question-max-score" v-model="draft.max_score" data-question-max-score inputmode="decimal"></FormField><FormField for-id="question-language" label="内容语言"><select id="question-language" v-model="draft.content_language"><option value="und">未声明</option><option value="en">英语</option><option value="zh-CN">中文</option></select></FormField></div><label v-if="['fill_blank', 'short_answer'].includes(draft.question_type)"><input v-model="draft.text_match_case_sensitive" type="checkbox">区分大小写</label></section>
+      <section class="kt-card"><label>标题<input v-model="draft.title" maxlength="240"></label><label>作答说明<textarea v-model="draft.instructions" rows="2" /></label></section>
+      <section v-if="draft.question_type === 'short_answer'" class="kt-card"><label>教学题型<select v-model="draft.educational_type"><option value="standard">简答题</option><option value="translation">翻译题</option><option value="essay">作文题</option></select></label><p>翻译和作文沿用实验的简答题评阅规则；参考答案和评阅说明分别填写在答案、解析中。</p></section>
       <section class="kt-card" aria-labelledby="question-basics-title">
         <div class="kt-question-editor-heading"><Icon name="definition" :size="24" /><div><h2 id="question-basics-title">基础信息</h2><p>设置题目的基本属性。</p></div></div>
         <div class="kt-form-grid">

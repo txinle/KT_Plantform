@@ -22,6 +22,7 @@ import {
   type TeacherExperiment,
   type TeacherExperimentReadiness,
 } from './api'
+import type { ResearchTools } from './research-tools'
 
 const route = useRoute()
 const router = useRouter()
@@ -69,6 +70,8 @@ let detailRequestId = 0
 const readinessTone = computed(() => readiness.value?.ready ? 'success' : 'warning')
 const courseName = computed(() => course?.value?.name || '课程')
 const isPublished = computed(() => experiment.value?.status !== 'draft')
+const researchTools = computed(() => experiment.value?.research_tools as Partial<ResearchTools> | undefined)
+const questionTypeLabels: Record<string, string> = { single_choice: '单选题', multiple_choice: '多选题', true_false: '判断题', fill_blank: '填空题', short_answer: '简答题', numeric: '数值题', reading: '阅读理解', words: '选词填空', cloze: '短文填空', translation: '英汉互译', essay: '作文' }
 const sharedClassTotalLimit = computed(() => {
   const limits = tasks.value.map(task => task.total_time_limit_minutes)
   return limits.length && limits[0] != null && limits.every(limit => limit === limits[0]) ? limits[0] : null
@@ -177,6 +180,13 @@ async function applyCollectionFilters() {
   await loadCollection(1)
 }
 
+async function selectCollectionCount(task: ClassTask, status: string) {
+  collectionClassId.value = String(task.class_id)
+  collectionStatus.value = status
+  collectionQuery.value = ''
+  await applyCollectionFilters()
+}
+
 async function clearCollectionFilters() {
   collectionClassId.value = ''
   collectionStatus.value = ''
@@ -199,9 +209,10 @@ async function selectTab(tab: 'definition' | 'tasks' | 'collection') {
     await loadCollection(collectionPage.value)
     return
   }
-  replacingCollectionRoute = collectionRouteKey({})
-  await router.replace({ query: {} })
-  if (replacingCollectionRoute === collectionRouteKey({})) replacingCollectionRoute = ''
+  const query = tab === 'tasks' ? { tab: 'tasks' } : {}
+  replacingCollectionRoute = collectionRouteKey(query)
+  await router.replace({ query })
+  if (replacingCollectionRoute === collectionRouteKey(query)) replacingCollectionRoute = ''
 }
 
 function dateTimeLocal(value: string | null) {
@@ -272,8 +283,8 @@ async function load() {
     const definition = await api.detail(courseId, experimentId)
     if (requestId !== detailRequestId) return
     experiment.value = definition
-    const defaultTab = definition.status === 'draft' ? 'definition' : 'tasks'
-    activeTab.value = queryText(route.query.tab) === 'collection' ? 'collection' : defaultTab
+    const requestedTab = queryText(route.query.tab)
+    activeTab.value = requestedTab === 'tasks' || requestedTab === 'collection' ? requestedTab : 'definition'
     detailReady.value = true
     loading.value = false
     if (activeTab.value === 'collection') await loadCollection(collectionPage.value)
@@ -301,7 +312,7 @@ watch(
     if (!experiment.value) return
     activeTab.value = queryText(query.tab) === 'definition' || queryText(query.tab) === 'tasks'
       ? queryText(query.tab) as 'definition' | 'tasks'
-      : experiment.value.status === 'draft' ? 'definition' : 'tasks'
+      : 'definition'
   },
   { deep: true },
 )
@@ -436,7 +447,7 @@ onMounted(load)
 
     <SidebarSection>
       <nav class="kt-experiment-tabs kt-sidebar-secondary-nav" role="tablist" aria-label="实验详情导航" aria-orientation="vertical">
-        <button id="experiment-tab-definition" type="button" role="tab" :aria-selected="activeTab === 'definition'" aria-controls="experiment-panel-definition" :class="{ 'is-active': activeTab === 'definition' }" @click="selectTab('definition')">实验定义</button>
+        <button id="experiment-tab-definition" type="button" role="tab" :aria-selected="activeTab === 'definition'" aria-controls="experiment-panel-definition" :class="{ 'is-active': activeTab === 'definition' }" @click="selectTab('definition')">概况</button>
         <button id="experiment-tab-tasks" type="button" role="tab" :aria-selected="activeTab === 'tasks'" aria-controls="experiment-panel-tasks" :class="{ 'is-active': activeTab === 'tasks' }" @click="selectTab('tasks')">班级发布</button>
         <button id="experiment-tab-collection" type="button" role="tab" :aria-selected="activeTab === 'collection'" aria-controls="experiment-panel-collection" :class="{ 'is-active': activeTab === 'collection' }" @click="selectTab('collection')">采集状态</button>
       </nav>
@@ -459,12 +470,22 @@ onMounted(load)
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="status" :size="17" /></span><dt>单题限时</dt><dd>{{ displayLimit(experiment.per_question_time_limit_seconds, '秒') }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="data" :size="17" /></span><dt>中断续答</dt><dd>{{ experiment.resume_mode_label }}</dd></div>
             <div><span class="kt-summary-icon" data-summary-icon><Icon name="data" :size="17" /></span><dt>作答信心</dt><dd>{{ experiment.confidence_mode_label }}</dd></div>
+            <div><span class="kt-summary-icon"><Icon name="definition" :size="17" /></span><dt>题型构成</dt><dd>{{ experiment.question_quotas?.filter(quota => quota.amount > 0).map(quota => `${questionTypeLabels[quota.question_type] || quota.question_type} ${quota.amount} 道`).join('、') || '未指定题型数量' }}</dd></div>
+            <div><span class="kt-summary-icon"><Icon name="data" :size="17" /></span><dt>信心采样</dt><dd>{{ experiment.confidence_sampling_unit_label || '未设置' }}<template v-if="experiment.confidence_probability != null"> · {{ Number(experiment.confidence_probability) * 100 }}%</template></dd></div>
+            <div v-if="experiment.sampling_kcs?.length" class="kt-definition-summary__wide"><span class="kt-summary-icon"><Icon name="bank" :size="17" /></span><dt>知识点范围</dt><dd><span v-for="node in experiment.sampling_kcs" :key="node.kc_code" class="kt-cell-note">{{ node.kc_name || node.kc_code }} · {{ node.match_scope === 'any_level' ? '匹配任意层级' : '仅匹配主知识点' }}<template v-if="node.quota != null"> · {{ node.quota }} 道</template></span></dd></div>
           </dl>
+          <div v-if="researchTools" class="kt-definition-tools">
+            <h3>研究工具配置</h3>
+            <dl class="kt-definition-tool-facts"><div><dt>疑问标记</dt><dd>{{ researchTools.doubt_enabled === true ? '启用' : researchTools.doubt_enabled === false ? '关闭' : '未设置' }}</dd></div><div><dt>答案检查</dt><dd>{{ researchTools.check_enabled === true ? '启用' : researchTools.check_enabled === false ? '关闭' : '未设置' }}</dd></div><div><dt>知识点展示</dt><dd>{{ researchTools.kc_visible === true ? '显示' : researchTools.kc_visible === false ? '隐藏' : '未设置' }}</dd></div></dl>
+            <ul v-if="researchTools.hints?.length" class="kt-definition-tool-rules"><li v-for="hint in researchTools.hints" :key="hint.id"><strong>{{ hint.question_code || '全部题目' }} · {{ hint.level }} 级提示</strong> {{ hint.text }}<span class="kt-cell-note">{{ hint.contains_answer ? '包含答案' : '不含答案' }}</span></li></ul>
+            <ul v-if="researchTools.rules?.length" class="kt-definition-tool-rules"><li v-for="rule in researchTools.rules" :key="rule.id">{{ rule.question_code || '全部题目' }} · {{ { confidence: '作答信心', check: '答案检查', hint: '提示' }[rule.tool] }} · {{ rule.trigger === 'item_enter' ? '进入题目时' : `作答 ${rule.after_seconds} 秒后` }} · 最多 {{ rule.max_exposures }} 次 · {{ rule.required ? '必须完成' : '可选' }}<span v-if="rule.hint_id" class="kt-cell-note">提示：{{ rule.hint_id }}</span></li></ul>
+          </div>
           <div v-if="experiment.can_edit" class="kt-definition-summary__action">
             <a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/edit/`">编辑实验定义</a>
           </div>
         </section>
         <aside class="kt-experiment-side-stack">
+          <section class="kt-card kt-publish-ready-card" aria-labelledby="definition-schedule-title"><h2 id="definition-schedule-title">时间与发布</h2><p v-if="!tasksLoading && !tasksError">{{ tasks.length }} 个班级任务</p><div v-for="task in tasks" :key="task.id" class="kt-definition-schedule"><strong>{{ task.class_name }}</strong><span>开始 {{ task.opens_at ? displayDate(task.opens_at) : '立即开放' }}</span><span>截止 {{ task.closes_at ? displayDate(task.closes_at) : '无截止' }}</span></div><button type="button" class="kt-text-button" @click="selectTab('tasks')">管理班级与排期</button></section>
           <section class="kt-card kt-publish-ready-card" aria-labelledby="publish-ready-title">
             <div v-if="!isPublished" class="kt-publish-empty-illustration" aria-hidden="true"><Icon name="publish" :size="31" /><Icon name="classes" :size="22" /><Icon name="check" :size="17" /></div>
             <h2 id="publish-ready-title">发布到班级</h2>
@@ -476,17 +497,14 @@ onMounted(load)
             <div class="kt-section-heading"><h2 id="readiness-summary">发布前检查</h2><StatusBadge v-if="readiness" :label="readiness.ready ? '定义就绪' : '需要处理'" :tone="readinessTone" /></div>
             <p v-if="readinessLoading" role="status">正在加载发布前检查…</p>
             <Alert v-else-if="readinessError" tone="danger">{{ readinessError }}</Alert>
-            <dl v-if="readiness" class="kt-readiness-facts">
-              <div><dt>题库全局候选</dt><dd>{{ readiness?.candidate_count ?? 0 }} 道可用题目</dd></div>
-              <div><dt>已关联参与者</dt><dd>{{ readiness?.participant_count ?? 0 }}</dd></div>
-            </dl>
             <ul v-if="readiness" class="kt-readiness-checklist">
               <li><Icon :name="readiness?.ready ? 'check' : 'warning'" :size="17" /><span>{{ readiness?.ready ? '实验定义已通过基础检查' : '实验定义仍需完成基础检查' }}</span></li>
-              <li><Icon name="bank" :size="17" /><span>题库全局候选：{{ readiness?.candidate_count ?? 0 }} 道，尚未按学生历史过滤</span></li>
+              <li><Icon name="bank" :size="17" /><span>题库全局候选：{{ readiness?.candidate_count ?? 0 }} 道可用题目，尚未按学生历史过滤</span></li>
               <li><Icon name="classes" :size="17" /><span>已关联参与者：{{ readiness?.participant_count ?? 0 }}</span></li>
               <li v-for="issue in readiness?.issues || []" :key="issue"><Icon name="warning" :size="17" /><span>{{ issue }}</span></li>
             </ul>
           </section>
+          <section class="kt-card kt-publish-ready-card"><h2>研究数据</h2><a v-if="experiment.activity?.grading_url" class="kt-experiment-pending" :href="experiment.activity.grading_url">待批改：{{ experiment.activity.pending_grading_count }}</a><a class="kt-text-button" :href="`/teacher/courses/${courseId}/data/`">进入数据中心</a></section>
         </aside>
       </div>
       <Alert tone="info">{{ isPublished ? '实验定义已经冻结；如需调整内容，请按现有流程创建新的实验定义。' : '首次正式发布后，实验定义将冻结；后续可继续发布到其他班级。' }}</Alert>
@@ -504,12 +522,12 @@ onMounted(load)
           <EmptyState v-else-if="!tasks.length" title="尚未发布到班级"><p>完成发布检查并提交后，这里会显示每个班级的任务状态。</p></EmptyState>
           <div v-else class="kt-table-scroll">
             <table class="kt-table">
-              <thead><tr><th>班级</th><th>状态</th><th>参与者</th><th>开放时段</th><th>未开始</th><th>进行中</th><th>已完成</th><th>操作</th></tr></thead>
+              <thead><tr><th>班级</th><th>状态</th><th>参与者</th><th>开始时间</th><th>截止时间</th><th>实验限时</th><th>未开始</th><th>进行中</th><th>已完成</th><th>操作</th></tr></thead>
               <tbody>
                 <template v-for="task in tasks" :key="task.id">
                   <tr>
                     <td><strong>{{ task.class_name }}</strong></td><td><StatusBadge :label="task.business_status" tone="neutral" /></td>
-                    <td>{{ progress[task.id]?.total_participants ?? task.participant_count }}</td><td>{{ displayDate(task.opens_at) }} — {{ displayDate(task.closes_at) }}<span v-if="task.total_time_limit_minutes != null"> · 总时限 {{ task.total_time_limit_minutes }} 分钟</span><span v-if="task.per_question_time_limit_seconds != null"> · 单题 {{ task.per_question_time_limit_seconds }} 秒</span><span v-if="task.recoverable_count"> · 可恢复 {{ task.recoverable_count }} 人</span></td>
+                    <td>{{ progress[task.id]?.total_participants ?? task.participant_count }}</td><td>{{ task.opens_at ? displayDate(task.opens_at) : '立即开放' }}</td><td>{{ task.closes_at ? displayDate(task.closes_at) : '无截止' }}</td><td><span v-if="task.total_time_limit_minutes != null">{{ task.total_time_limit_minutes }} 分钟</span><span v-else-if="task.per_question_time_limit_seconds != null">每题 {{ task.per_question_time_limit_seconds }} 秒</span><span v-else>不限时</span><span v-if="task.recoverable_count" class="kt-cell-note">可恢复 {{ task.recoverable_count }} 人</span></td>
                     <td>{{ progress[task.id]?.not_started ?? '—' }}</td><td>{{ progress[task.id]?.in_progress ?? '—' }}</td><td>{{ progress[task.id]?.completed ?? '—' }}</td>
                     <td>
                       <div class="kt-table-actions">
@@ -518,7 +536,7 @@ onMounted(load)
                           data-action="grade-short-answers"
                           class="kt-text-button"
                           :href="`/teacher/courses/${courseId}/experiments/${experimentId}/class-tasks/${task.id}/grading/`"
-                        >批改简答题 · 待批改 {{ task.grading?.pending ?? 0 }}</a>
+                        >待批改：{{ task.grading?.pending ?? 0 }}</a>
                         <button v-if="task.available_actions.includes('revise_schedule')" data-action="revise-schedule" class="kt-text-button" type="button" @click="editSchedule(task)">修订排期</button>
                         <button v-else-if="task.available_actions.includes('adjust_time')" data-action="adjust-time" class="kt-text-button" type="button" @click="editSchedule(task)">调整时间</button>
                         <button v-if="task.available_actions.includes('cancel')" data-action="cancel-task" class="kt-text-button kt-text-button--danger" type="button" @click="requestTerminalAction(task.id, 'cancel')">取消任务</button>
@@ -527,7 +545,7 @@ onMounted(load)
                       </div>
                     </td>
                   </tr>
-                  <tr v-if="confirmation.taskId === task.id && confirmation.action"><td colspan="8"><form class="kt-inline-panel kt-inline-panel--danger" @submit.prevent="applyTerminalAction"><h3>{{ confirmation.action === 'cancel' ? '确认取消该班任务' : '确认提前结束该班任务' }}</h3><p>此操作会立即改变学生端可用状态，请填写可审计原因后确认。</p><label>原因<input v-model="confirmation.reason" maxlength="500" required></label><div class="kt-inline-actions"><button class="kt-button kt-button--danger" type="submit" :disabled="working">确认执行</button><button type="button" class="kt-text-button" @click="confirmation.action = ''">返回</button></div></form></td></tr>
+                  <tr v-if="confirmation.taskId === task.id && confirmation.action"><td colspan="10"><form class="kt-inline-panel kt-inline-panel--danger" @submit.prevent="applyTerminalAction"><h3>{{ confirmation.action === 'cancel' ? '确认取消该班任务' : '确认提前结束该班任务' }}</h3><p>此操作会立即改变学生端可用状态，请填写可审计原因后确认。</p><label>原因<input v-model="confirmation.reason" maxlength="500" required></label><div class="kt-inline-actions"><button class="kt-button kt-button--danger" type="submit" :disabled="working">确认执行</button><button type="button" class="kt-text-button" @click="confirmation.action = ''">返回</button></div></form></td></tr>
                 </template>
               </tbody>
             </table>
@@ -557,13 +575,13 @@ onMounted(load)
 
     <section v-else id="experiment-panel-collection" role="tabpanel" aria-labelledby="experiment-tab-collection">
       <section class="kt-card kt-published-task-table" aria-labelledby="collection-status-title" data-collection-summary>
-        <div class="kt-section-heading"><div><p class="kt-kicker">采集状态</p><h2 id="collection-status-title">班级任务进度</h2></div><span v-if="!tasksLoading && !tasksError">{{ tasks.length }} 个</span></div>
+        <div class="kt-section-heading"><div><p class="kt-kicker">采集状态</p><h2 id="collection-status-title">采集总览</h2><p class="kt-cell-note">全班参与者统计；点击人数筛选下方记录。</p></div><span v-if="!tasksLoading && !tasksError">{{ tasks.length }} 个</span></div>
         <p v-if="progressLoading" role="status">正在加载班级进度…</p>
         <Alert v-if="progressError" tone="danger">{{ progressError }}</Alert>
         <p v-if="tasksLoading" role="status">正在加载班级任务…</p>
         <Alert v-else-if="tasksError" tone="danger">{{ tasksError }}</Alert>
         <EmptyState v-else-if="!tasks.length" title="暂无采集任务"><p>发布到班级后，服务端会在这里返回各任务的采集进度。</p></EmptyState>
-        <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>状态</th><th>参与者</th><th>未开始</th><th>进行中</th><th>正常完成</th><th>已超时</th><th>已作废</th></tr></thead><tbody><tr v-for="task in tasks" :key="task.id"><td>{{ task.class_name }}</td><td>{{ task.business_status }}</td><td>{{ progress[task.id]?.total_participants ?? '—' }}</td><td>{{ progress[task.id]?.not_started ?? '—' }}</td><td>{{ progress[task.id]?.in_progress ?? '—' }}</td><td>{{ progress[task.id]?.completed ?? '—' }}</td><td>{{ progress[task.id]?.expired ?? '—' }}</td><td>{{ progress[task.id]?.invalidated ?? '—' }}</td></tr></tbody></table></div>
+        <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>状态</th><th>参与者</th><th>未开始</th><th>进行中</th><th>正常完成</th><th>已超时</th><th>已作废</th></tr></thead><tbody><tr v-for="task in tasks" :key="task.id"><td>{{ task.class_name }}</td><td>{{ task.business_status }}</td><td>{{ progress[task.id]?.total_participants ?? '—' }}</td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:not_started`" :aria-label="`${task.class_name} · 未开始 · ${progress[task.id]?.not_started ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'not_started'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'not_started')">{{ progress[task.id]?.not_started ?? '—' }}</button></td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:in_progress`" :aria-label="`${task.class_name} · 进行中 · ${progress[task.id]?.in_progress ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'in_progress'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'in_progress')">{{ progress[task.id]?.in_progress ?? '—' }}</button></td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:completed`" :aria-label="`${task.class_name} · 正常完成 · ${progress[task.id]?.completed ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'completed'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'completed')">{{ progress[task.id]?.completed ?? '—' }}</button></td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:expired`" :aria-label="`${task.class_name} · 已超时 · ${progress[task.id]?.expired ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'expired'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'expired')">{{ progress[task.id]?.expired ?? '—' }}</button></td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:invalidated`" :aria-label="`${task.class_name} · 已作废 · ${progress[task.id]?.invalidated ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'invalidated'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'invalidated')">{{ progress[task.id]?.invalidated ?? '—' }}</button></td></tr></tbody></table></div>
       </section>
 
       <section class="kt-card kt-published-task-table" aria-labelledby="collection-participants-title" data-collection-participants>

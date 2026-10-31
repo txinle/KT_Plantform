@@ -9,7 +9,7 @@ FILES = [
     {"key": "session_bindings", "path": "02_学生Session实验绑定表.csv", "label": "学生Session实验绑定表", "level": "experiment_binding", "headers": "课程 学号 姓名 班级 实验序号 实验名称 sessionID".split()},
     {"key": "course_knowledge", "path": "03_课程知识点表.csv", "label": "课程知识点表", "level": "course", "headers": "课程 KC编号 知识点名称".split()},
     {"key": "course_mapping", "path": "04_题目KC映射表.csv", "label": "题目KC映射表", "level": "course", "headers": "课程 课程内题目ID 一级KC编号 二级KC编号 三级KC继承映射".split()},
-    {"key": "responses", "path": "05_单次实验_逐题作答表.csv", "label": "逐题作答表", "level": "experiment", "headers": "sessionID 学号 姓名 课程内题目ID 分配顺序 首次访问顺序 选项呈现顺序 访问次数 各次点击题目时间 各次进入题目时间 各次离开题目时间 正式提交时间 最终答案 答案状态 是否正确".split()},
+    {"key": "responses", "path": "05_单次实验_逐题作答表.csv", "label": "逐题作答表", "level": "experiment", "headers": "sessionID 学号 姓名 课程内题目ID 分配顺序 首次访问顺序 选项呈现顺序 访问次数 各次点击题目时间 各次进入题目时间 各次离开题目时间 正式提交时间 最终答案 答案状态 是否正确 comment".split()},
     {"key": "behavior_events", "path": "06_单次实验_行为过程表.csv", "label": "行为过程表", "level": "experiment", "headers": "sessionID 学号 姓名 课程内题目ID 第几次访问 题内行为序号 行为类别 具体行为 发生时间 变化前内容 变化后内容 补充信息".split()},
     {"key": "event_dictionary", "path": "07_表6事件字典.csv", "label": "表6事件字典", "level": "dictionary", "headers": "行为类别 具体行为 适用对象 何时记录 变化前内容 变化后内容 补充信息建议 是否建议默认采集".split()},
     {"key": "question_library", "path": "课程题目固定库.json", "label": "课程题目固定库", "level": "course", "headers": []},

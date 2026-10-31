@@ -1,5 +1,5 @@
 .kt-assessment-focus {
-  min-height: 100vh;
+  min-height: 100dvh;
   overflow-x: clip;
   background: var(--kt-page);
   padding: 0 24px 32px;
@@ -53,9 +53,9 @@
 
 .kt-assessment-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  gap: 24px;
-  width: min(100%, 1440px);
+  grid-template-columns: minmax(0, 1fr) 264px;
+  gap: 16px;
+  width: 100%;
   margin: 0 auto;
 }
 
@@ -447,4 +447,45 @@
   .kt-dialog__actions .kt-button {
     width: 100%;
   }
+}
+
+/* R3: shared fixed navigation, wide assessment canvas and readable content. */
+.kt-assessment-focus > .kt-app-header { margin-inline: -24px; }
+.kt-assessment-focus .kt-assessment-topbar { position: sticky; top: var(--kt-header-height); z-index: var(--kt-z-nav); min-height: 56px; padding: 6px 16px; }
+.kt-assessment-focus .kt-assessment-nav { top: calc(var(--kt-header-height) + 72px); max-height: calc(100dvh - var(--kt-header-height) - 96px); }
+.kt-assessment-focus .kt-assessment-stem { font-size: 1.125rem; line-height: 1.6; }
+.kt-assessment-focus .kt-assessment-option { min-height: 44px; font-size: 1.0625rem; line-height: 1.6; }
+.kt-assessment-focus .kt-assessment-text-answer input { font-size: 1.1875rem; }
+.kt-assessment-focus .kt-assessment-nav nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.kt-assessment-focus .kt-assessment-nav .kt-assessment-nav__item { min-height: 44px; font-size: .875rem; }
+.kt-assessment-focus .kt-assessment-nav__item small { max-width: 100%; font-size: .875rem; white-space: normal; overflow-wrap: anywhere; text-align: center; }
+.kt-assessment-focus .kt-assessment-nav .kt-assessment-nav__item span { font-size: .875rem; }
+.kt-group-tabs { display: flex; flex-wrap: wrap; gap: .5rem; padding: .5rem 1rem; border-bottom: 1px solid var(--kt-border); }
+.kt-group-tabs button { min-height: 44px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--kt-muted); padding: .5rem; cursor: pointer; }
+.kt-group-tabs button[aria-current] { color: var(--kt-action-600); border-color: var(--kt-action-600); }
+.kt-assessment-focus .kt-group-task-heading { padding: .5rem 1rem; }
+.kt-group-task-heading > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: .75rem; }
+.kt-group-task-heading h1, .kt-group-task-heading .kt-kicker { margin: 0; font-size: 1rem; }
+.kt-assessment-focus.has-question-group .kt-assessment-question { padding: 0; }
+.kt-assessment-focus.has-question-group .kt-assessment-paper-actions { margin: 0; padding: .75rem 1rem; }
+.kt-assessment-focus.has-question-group .kt-assessment-question > .kt-alert { margin: .5rem 1rem; }
+@media (min-width: 64rem) {
+  .kt-assessment-focus.has-question-group .kt-assessment-question { display: flex; flex-direction: column; min-height: 0; height: calc(100dvh - var(--kt-header-height) - 104px); overflow: hidden; }
+  .kt-assessment-focus.has-question-group .kt-question-group { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+  .kt-assessment-focus.has-question-group .kt-question-group__body { flex: 1; min-height: 0; overflow: hidden; }
+  .kt-assessment-focus.has-question-group .kt-question-group--reading .kt-question-group__material,
+  .kt-assessment-focus.has-question-group .kt-question-group__questions { max-height: 100%; overflow-y: auto; }
+  .kt-assessment-focus.has-question-group .kt-question-group--cloze .kt-question-group__body { overflow-y: auto; }
+  .kt-assessment-focus.has-question-group .kt-assessment-question > :not(.kt-question-group) { flex-shrink: 0; }
+}
+@media (max-width: 79.99rem) {
+  .kt-assessment-focus .kt-assessment-layout { grid-template-columns: minmax(0, 1fr); }
+  .kt-assessment-focus .kt-assessment-nav { display: none; }
+  .kt-assessment-focus .kt-assessment-mobile-header { display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding-block: .5rem; }
+}
+@media (max-width: 48rem) {
+  .kt-assessment-focus { padding-inline: 16px; }
+  .kt-assessment-focus > .kt-app-header { margin-inline: -16px; }
+  .kt-assessment-focus .kt-assessment-option { font-size: 1rem; }
+  .kt-assessment-focus .kt-assessment-text-answer input { font-size: 1.125rem; }
 }

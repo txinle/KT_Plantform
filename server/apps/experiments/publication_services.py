@@ -8,6 +8,7 @@ import hmac
 import json
 import random
 import secrets
+from types import SimpleNamespace
 
 from django.core.exceptions import ValidationError
 from django.conf import settings
@@ -58,6 +59,10 @@ from .sampling import (
     _grouped_quota_flow,
     _maximum_matching,
     question_allowed_by_history,
+    complete_question_units,
+    sampling_question_type,
+    SAMPLING_TYPES,
+    SAMPLING_TYPE_CHOICES,
 )
 from .presentation_instances import get_or_create_default_item_instance
 
@@ -107,7 +112,9 @@ def get_or_create_publish_plan(experiment, actor):
     experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
     if experiment.status == Experiment.Status.ARCHIVED:
         raise PublicationConflict("归档实验不能继续发布班级。", code="EXPERIMENT_ARCHIVED")
-    if not experiment.sampling_mode:
+    grouped_pool = (bool(experiment.frozen_release_snapshot_id and experiment.frozen_release_snapshot.configuration.get('question_group_runtime_version'))
+        or Question.objects.filter(bank_id__in=experiment.selected_question_bank_ids, group__isnull=False).exists())
+    if not experiment.sampling_mode and not (experiment.selection_mode == Experiment.SelectionMode.ALL and grouped_pool):
         raise PublicationConflict(
             "旧版草稿必须先显式转换为总题数或知识点配额模式。",
             code="LEGACY_CONVERSION_REQUIRED",
@@ -194,10 +201,10 @@ def _global_sampling_inventory(experiment, candidates):
             "requested": type_quotas.get(question_type, 0),
             "available": sum(
                 _candidate_question_type(candidate) == question_type
-                for candidate in candidates
+                for candidate in [unit[0] for unit in _publication_units(candidates)]
             ),
         }
-        for question_type in Question.Type.values
+        for question_type in SAMPLING_TYPES
     ] if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT else []
     requested_count = (
         int((frozen_configuration or {}).get("sampling_total_count", experiment.sampling_total_count) or 0)
@@ -210,7 +217,7 @@ def _global_sampling_inventory(experiment, candidates):
     )
     return {
         "scope": "question_bank",
-        "candidate_count": len(candidates),
+        "candidate_count": len(_publication_units(candidates)),
         "requested_count": requested_count,
         "question_types": question_types,
     }
@@ -240,11 +247,18 @@ def _student_inventory_check(experiment, candidates, students, contexts, class_b
     )
     minimum_candidate_count = None
     minimum_type_available = {
-        question_type: None for question_type in Question.Type.values
+        question_type: None for question_type in SAMPLING_TYPES
     }
     insufficient_type_students = {
-        question_type: 0 for question_type in Question.Type.values
+        question_type: 0 for question_type in SAMPLING_TYPES
     }
+    units = _publication_units(candidates)
+    unit_members_by_id = {_candidate_id(unit[0]): unit for unit in units}
+    if frozen_configuration is None:
+        complete_question_units(candidates)
+    for unit in units:
+        if frozen_configuration is not None:
+            frozen_evidence[_candidate_id(unit[0])] = set().union(*(frozen_evidence.get(_candidate_id(member), set()) for member in unit))
     blocking_issues = []
     for student in students:
         context = contexts[student.pk]
@@ -268,15 +282,28 @@ def _student_inventory_check(experiment, candidates, students, contexts, class_b
                 "student_number": student.student_number or "",
             })
             continue
+        if (frozen_configuration or {}).get('sampling_pinned_question_ids', experiment.sampling_pinned_question_ids):
+            try:
+                if frozen_configuration is not None:
+                    _select_frozen_complete_questions(candidates, frozen_configuration, context, '0' * 64)
+                else:
+                    SamplingService(experiment, prepared_candidates=candidates, prepared_rules=rules,
+                        prepared_type_quotas=type_quotas,
+                        completed_question_ids=context.completed_question_ids,
+                        assigned_question_ids=context.assigned_question_ids,
+                        active_frozen_question_ids=context.active_frozen_question_ids).resolve()
+            except SamplingValidationError as exc:
+                blocking_issues.extend({**issue, 'scope': 'student', 'class_id': class_id,
+                    'student_id': student.pk, 'student_number': student.student_number or ''} for issue in exc.issues)
         filtered = [
-            candidate for candidate in candidates
-            if question_allowed_by_history(
+            unit[0] for unit in units
+            if all(question_allowed_by_history(
                 _candidate_id(candidate),
                 experiment.cross_experiment_item_policy,
                 completed_question_ids=context.completed_question_ids,
                 assigned_question_ids=context.assigned_question_ids,
                 active_frozen_question_ids=context.active_frozen_question_ids,
-            )
+            ) for candidate in unit)
         ]
         minimum_candidate_count = (
             len(filtered)
@@ -284,7 +311,7 @@ def _student_inventory_check(experiment, candidates, students, contexts, class_b
             else min(minimum_candidate_count, len(filtered))
         )
         if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT:
-            for question_type in Question.Type.values:
+            for question_type in SAMPLING_TYPES:
                 requested = type_quotas.get(question_type, 0)
                 available = sum(
                     _candidate_question_type(candidate) == question_type
@@ -301,7 +328,7 @@ def _student_inventory_check(experiment, candidates, students, contexts, class_b
                         "code": "QUESTION_TYPE_QUOTA_INSUFFICIENT",
                         "message": (
                             f"学生 {student.student_number or student.username} 的"
-                            f"{Question.Type(question_type).label}需要 {requested} 题，"
+                            f"{dict(SAMPLING_TYPE_CHOICES)[question_type]}需要 {requested} 题，"
                             f"排除已提交或已分配题目后可用 {available} 题。"
                         ),
                         "class_id": class_id,
@@ -398,7 +425,7 @@ def _student_inventory_check(experiment, candidates, students, contexts, class_b
                 (frozen_configuration or {}).get("review_count", experiment.review_count) or 0
             )
             review_available = sum(
-                _candidate_id(candidate) in context.completed_question_ids
+                any(_candidate_id(member) in context.completed_question_ids for member in unit_members_by_id[_candidate_id(candidate)])
                 for candidate in filtered
             )
             new_available = len(filtered) - review_available
@@ -431,7 +458,7 @@ def _student_inventory_check(experiment, candidates, students, contexts, class_b
                     return [str(_candidate_question_type(candidate))] if type_quotas else ["all"]
             maximum, _ = _grouped_quota_flow(
                 candidates=filtered,
-                completed_ids=context.completed_question_ids,
+                completed_ids={_candidate_id(candidate) for candidate in filtered if any(_candidate_id(member) in context.completed_question_ids for member in unit_members_by_id[_candidate_id(candidate)])},
                 review_count=review_count,
                 bucket_capacities=capacities,
                 bucket_ids_for_question=bucket_ids,
@@ -458,7 +485,7 @@ def _student_inventory_check(experiment, candidates, students, contexts, class_b
                 "minimum_available": minimum_type_available[question_type] or 0,
                 "insufficient_student_count": insufficient_type_students[question_type],
             }
-            for question_type in Question.Type.values
+            for question_type in SAMPLING_TYPES
         ] if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT else [],
         "blocking_issue_count": len({issue["student_id"] for issue in blocking_issues}),
     }, blocking_issues
@@ -781,6 +808,7 @@ def canonical_json_hash(value):
 
 def question_release_fingerprint(question):
     """Fingerprint every question attribute that can alter a release fact."""
+    from .question_group_publication import release_extra_facts
     options = [
         {"key": option.key, "text": option.text}
         for option in question.options.all().order_by("pk")
@@ -804,6 +832,7 @@ def question_release_fingerprint(question):
                 for link in concept_links
             ],
             "bank_id": question.bank_id,
+            **release_extra_facts(question),
         }
     )
 
@@ -922,6 +951,23 @@ def _candidate_source_question(candidate):
     return candidate
 
 
+def _publication_units(candidates):
+    units, groups = [], {}
+    for candidate in candidates:
+        frozen = isinstance(candidate, ReleaseSnapshotQuestionMapping)
+        group_id = candidate.question_snapshot.group_snapshot_id if frozen else candidate.group_id
+        if group_id:
+            if group_id not in groups:
+                groups[group_id] = []
+                units.append(groups[group_id])
+            groups[group_id].append(candidate)
+        else:
+            units.append([candidate])
+    for unit in groups.values():
+        unit.sort(key=lambda item: item.question_snapshot.group_order if isinstance(item, ReleaseSnapshotQuestionMapping) else item.group_order)
+    return units
+
+
 def _candidate_id(candidate):
     if isinstance(candidate, ReleaseSnapshotQuestionMapping):
         return candidate.source_question_id
@@ -936,8 +982,46 @@ def _candidate_sequence(candidate):
 
 def _candidate_question_type(candidate):
     if isinstance(candidate, ReleaseSnapshotQuestionMapping):
-        return candidate.question_snapshot.question_type
-    return candidate.question_type
+        snapshot = candidate.question_snapshot
+        if snapshot.group_snapshot_id:
+            return snapshot.group_snapshot.kind
+        return snapshot.educational_type if snapshot.educational_type != 'standard' else snapshot.question_type
+    return sampling_question_type(candidate)
+
+
+def _select_frozen_complete_questions(items, configuration, item_context, sampling_seed):
+    """Replay unit selection only from frozen content, KC matches and definition."""
+    rules = [SimpleNamespace(concept_id=row['concept_id'], quota=row['quota'],
+        match_scope=row['match_scope'], concept=SimpleNamespace(code=row['kc_code'], name=row['kc_name']))
+        for row in sorted(configuration['sampling_kcs'], key=lambda row: row['concept_id'])]
+    evidence = {row['question_id']: row for row in configuration['candidate_resolution']}
+    candidates = []
+    for item in items:
+        snapshot = item.question_snapshot
+        matched = evidence[item.source_question_id]['matched_kc_codes']
+        links = [SimpleNamespace(concept_id=rule.concept_id, is_primary=True)
+            for rule in rules if rule.concept.code in matched]
+        candidates.append(SimpleNamespace(pk=item.source_question_id, bank_id=snapshot.source_bank_id,
+            sequence=snapshot.source_sequence, group_id=snapshot.group_snapshot_id,
+            group=snapshot.group_snapshot, group_order=snapshot.group_order,
+            question_type=snapshot.question_type, educational_type=snapshot.educational_type,
+            concept_links=SimpleNamespace(all=lambda links=links: links)))
+    definition = SimpleNamespace(**{key: configuration[key] for key in (
+        'sampling_mode', 'sampling_total_count', 'sampling_match_scope',
+        'cross_experiment_item_policy', 'review_count', 'sampling_pinned_question_ids')})
+    service = SamplingService(definition, prepared_candidates=candidates, prepared_rules=rules,
+        prepared_type_quotas={row['question_type']: row['amount'] for row in configuration['sampling_type_quotas']},
+        completed_question_ids=item_context.completed_question_ids,
+        assigned_question_ids=item_context.assigned_question_ids,
+        active_frozen_question_ids=item_context.active_frozen_question_ids)
+    by_id = {item.source_question_id: item for item in items}
+    codes = {rule.concept_id: rule.concept.code for rule in rules}
+    return [{'candidate': by_id[row['question'].pk], 'sampling_source': {
+        'mode': definition.sampling_mode, 'quota_kc_code': codes.get(row['quota_kc_id']),
+        'quota_question_type': row['quota_question_type'], 'match_scope': row['match_scope'],
+        'history_role': row['history_role'], 'cross_experiment_item_policy': row['cross_experiment_item_policy'],
+        'algorithm_version': 'complete-question-v1',
+    }} for row in service.select_with_attribution(sampling_seed)]
 
 
 def _candidate_primary_kc(candidate):
@@ -1171,7 +1255,8 @@ def _select_questions(
         if configuration is not None
         else experiment.cross_experiment_item_policy
     )
-    if policy != Experiment.CrossExperimentItemPolicy.UNRESTRICTED:
+    complete_sampling = bool(sampling_mode and configuration is not None and configuration.get('sampling_unit_version') == 'complete-question-v1')
+    if policy != Experiment.CrossExperimentItemPolicy.UNRESTRICTED and not complete_sampling:
         items = [
             item for item in items
             if question_allowed_by_history(
@@ -1183,7 +1268,9 @@ def _select_questions(
             )
         ]
     if sampling_mode:
-        if (
+        if complete_sampling:
+            items = _select_frozen_complete_questions(items, configuration, item_context, sampling_seed)
+        elif (
             configuration is not None
             and policy == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW
         ):
@@ -1333,6 +1420,10 @@ def _select_questions(
         items = selected
     if sampling_mode:
         for row in items:
+            if configuration is None and (experiment.sampling_pinned_question_ids or any(
+                question.group_id or question.educational_type != 'standard' for question in candidates
+            )):
+                row['sampling_source']['algorithm_version'] = 'complete-question-v1'
             row["sampling_source"].setdefault(
                 "history_role",
                 "new"
@@ -1358,6 +1449,50 @@ def _select_questions(
         if configuration is not None
         else experiment.ordering_mode
     )
+    def group_identity(row):
+        candidate = row['candidate']
+        if isinstance(candidate, ReleaseSnapshotQuestionMapping):
+            return candidate.question_snapshot.group_snapshot_id
+        return candidate.group_id
+
+    if any(group_identity(row) for row in items):
+        from .question_group_publication import validate_group_publication
+        if configuration is None:
+            validate_group_publication(experiment, [_candidate_source_question(row['candidate']) for row in items])
+        units, grouped = [], {}
+        for row in items:
+            identity = group_identity(row)
+            if identity:
+                if identity not in grouped:
+                    grouped[identity] = []
+                    units.append(grouped[identity])
+                grouped[identity].append(row)
+            else:
+                units.append([row])
+        for unit in grouped.values():
+            unit.sort(key=lambda row: row['candidate'].question_snapshot.group_order if isinstance(row['candidate'], ReleaseSnapshotQuestionMapping) else row['candidate'].group_order)
+            candidate = unit[0]['candidate']
+            expected = candidate.question_snapshot.group_snapshot.members.count() if isinstance(candidate, ReleaseSnapshotQuestionMapping) else candidate.group.members.count()
+            if len(unit) != expected:
+                raise PublicationConflict('筛选结果拆散题组，请选择完整题组。', code='QUESTION_GROUP_INCOMPLETE')
+        if ordering_mode == Experiment.Ordering.RANDOM:
+            rng.shuffle(units)
+        elif ordering_mode == Experiment.Ordering.STRATIFIED:
+            strata = {}
+            for unit in units:
+                primary = min(_candidate_primary_kc(row['candidate']) for row in unit)
+                difficulty = sum(float(_candidate_teacher_difficulty(row['candidate']) or 0.5) for row in unit) / len(unit)
+                band = 0 if difficulty < 1 / 3 else 1 if difficulty < 2 / 3 else 2
+                strata.setdefault((primary, band), []).append(unit)
+            queues = [strata[key] for key in sorted(strata)]
+            for queue in queues:
+                rng.shuffle(queue)
+            units = []
+            while any(queues):
+                for queue in queues:
+                    if queue:
+                        units.append(queue.pop(0))
+        return [row for unit in units for row in unit]
     if ordering_mode == Experiment.Ordering.RANDOM:
         rng.shuffle(items)
     elif ordering_mode == Experiment.Ordering.STRATIFIED:
@@ -1462,6 +1597,7 @@ def _preview_definition_fingerprint(experiment, candidates):
             "selection_mode": frozen.get("selection_mode") if frozen else experiment.selection_mode,
             "sampling_mode": frozen.get("sampling_mode") if frozen else experiment.sampling_mode,
             "sampling_total_count": frozen.get("sampling_total_count") if frozen else experiment.sampling_total_count,
+            "sampling_pinned_question_ids": frozen.get("sampling_pinned_question_ids", []) if frozen else experiment.sampling_pinned_question_ids,
             "sampling_match_scope": frozen.get("sampling_match_scope") if frozen else experiment.sampling_match_scope,
             "cross_experiment_item_policy": (
                 frozen.get("cross_experiment_item_policy")
@@ -1757,6 +1893,7 @@ def _release_configuration(experiment, candidates):
     from .research_tool_config import validate_research_tools
     configuration = {
         "short_answer_grading_policy": "manual_binary_v1",
+        "question_group_runtime_version": int(any(_candidate_source_question(candidate).group_id for candidate in candidates)),
         "research_tools": validate_research_tools(experiment.research_tools),
         "ordering_mode": experiment.ordering_mode,
         "feedback_mode": experiment.feedback_mode,
@@ -1771,6 +1908,11 @@ def _release_configuration(experiment, candidates):
         "review_count": experiment.review_count,
         "quota_map": _quota_map(experiment),
         "candidate_count": len(candidates),
+        "candidate_unit_count": len(complete_question_units(candidates)),
+        "sampling_pinned_question_ids": experiment.sampling_pinned_question_ids,
+        "sampling_unit_version": ('complete-question-v1' if experiment.sampling_pinned_question_ids or any(
+            question.group_id or question.educational_type != 'standard' for question in candidates
+        ) else None),
         "candidate_fingerprints": {
             str(_candidate_id(candidate)): _candidate_release_fingerprint(candidate)
             for candidate in candidates
@@ -1783,7 +1925,7 @@ def _release_configuration(experiment, candidates):
         "timezone": settings.TIME_ZONE,
         "question_bank_ids": sorted(experiment.selected_question_bank_ids),
         "bank_counts": [
-            {"question_bank_id": bank_id, "candidate_count": sum(q.bank_id == bank_id for q in candidates)}
+            {"question_bank_id": bank_id, "candidate_count": sum(q.bank_id == bank_id for q in complete_question_units(candidates))}
             for bank_id in sorted(experiment.selected_question_bank_ids)
         ],
         "question_banks": [
@@ -1808,7 +1950,7 @@ def _release_configuration(experiment, candidates):
         sampling_type_quotas = (
             [
                 {"question_type": question_type, "amount": quota_map[question_type]}
-                for question_type in Question.Type.values
+                for question_type in SAMPLING_TYPES
                 if quota_map.get(question_type, 0) > 0
             ]
             if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
@@ -1829,6 +1971,7 @@ def _release_configuration(experiment, candidates):
         configuration["sampling_type_quotas"] = sampling_type_quotas
         configuration["sampling_kcs"] = [
             {
+                "concept_id": rule.concept_id,
                 "kc_code": rule.concept.code,
                 "kc_name": rule.concept.name,
                 "quota": rule.quota,
@@ -1887,9 +2030,8 @@ def _release_configuration(experiment, candidates):
                     len(resolution.buckets[rule.concept_id])
                     if experiment.sampling_mode == Experiment.SamplingMode.KC_QUOTA
                     else sum(
-                        1
-                        for evidence in candidate_resolution
-                        if rule.concept.code in evidence["matched_kc_codes"]
+                        SamplingService._question_matches(question, rule.concept_id, experiment.sampling_match_scope)
+                        for question in resolution.unit_candidates
                     )
                 ),
             }
@@ -1901,11 +2043,11 @@ def _release_configuration(experiment, candidates):
             [
                 {
                     "question_type": question_type,
-                    "label": dict(Question.Type.choices)[question_type],
+                    "label": dict(SAMPLING_TYPE_CHOICES)[question_type],
                     "requested": quota_map.get(question_type, 0),
                     "available": len(resolution.type_buckets.get(question_type, [])),
                 }
-                for question_type in Question.Type.values
+                for question_type in SAMPLING_TYPES
             ]
             if experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
             else []
@@ -1953,10 +2095,14 @@ def _release_configuration(experiment, candidates):
             "candidate_ordering": "source_bank_then_sequence_then_pk",
             "seed_derivation_version": "task_root_hmac_v2",
         }
+        if configuration['sampling_unit_version']:
+            configuration['sampling']['schema_version'] = 'sampling-snapshot-v5'
+            configuration['sampling']['sampling_algorithm_version'] = 'complete-question-v1'
     return configuration
 
 
 def _create_question_snapshot(version, question):
+    from .question_group_publication import frozen_question_fields
     from apps.question_bank.services.question_kc_mapping import (
         project_question_kc_mapping,
     )
@@ -1993,6 +2139,7 @@ def _create_question_snapshot(version, question):
     )
     mapping_projection = project_question_kc_mapping(question)
     snapshot = QuestionSnapshot.objects.create(
+        **frozen_question_fields(version, question),
         version=version,
         source_question=question,
         source_sequence=question.sequence,

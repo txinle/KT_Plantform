@@ -8422,6 +8422,296 @@ paths:
                       request_id:
                         type: string
           description: ''
+  /api/v1/teacher/banks/{bank_id}/groups/:
+    get:
+      operationId: teacher_banks_groups_list
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/QuestionGroupResponse'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+    post:
+      operationId: teacher_banks_groups_create
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionGroupRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/QuestionGroupRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/QuestionGroupRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/QuestionGroupResponse'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+  /api/v1/teacher/banks/{bank_id}/groups/{group_id}/:
+    get:
+      operationId: teacher_banks_groups_retrieve
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: group_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/QuestionGroupResponse'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+    put:
+      operationId: teacher_banks_groups_update
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: group_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionGroupRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/QuestionGroupRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/QuestionGroupRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/QuestionGroupResponse'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+    delete:
+      operationId: teacher_banks_groups_destroy
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: group_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '204':
+          description: No response body
+        '409':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
   /api/v1/teacher/banks/{bank_id}/imports/kc/confirm/:
     post:
       operationId: teacher_standalone_question_bank_kc_import_confirm
@@ -9988,6 +10278,321 @@ paths:
                       request_id:
                         type: string
           description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/groups/:
+    get:
+      operationId: teacher_courses_banks_groups_list
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/QuestionGroupResponse'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+    post:
+      operationId: teacher_courses_banks_groups_create
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionGroupRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/QuestionGroupRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/QuestionGroupRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/QuestionGroupResponse'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+  /api/v1/teacher/courses/{course_id}/banks/{bank_id}/groups/{group_id}/:
+    get:
+      operationId: teacher_courses_banks_groups_retrieve
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: group_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/QuestionGroupResponse'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+    put:
+      operationId: teacher_courses_banks_groups_update
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: group_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionGroupRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/QuestionGroupRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/QuestionGroupRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/QuestionGroupResponse'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+    delete:
+      operationId: teacher_courses_banks_groups_destroy
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: group_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '204':
+          description: No response body
+        '409':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
   /api/v1/teacher/courses/{course_id}/banks/{bank_id}/imports/kc/confirm/:
     post:
       operationId: teacher_question_bank_kc_import_confirm
@@ -10301,6 +10906,10 @@ paths:
         schema:
           type: integer
         required: true
+      - in: query
+        name: complete_only
+        schema:
+          type: string
       - in: path
         name: course_id
         schema:
@@ -14316,6 +14925,381 @@ paths:
                       request_id:
                         type: string
           description: ''
+  /api/v1/teacher/import-templates/question-groups.csv:
+    get:
+      operationId: teacher_question_group_import_template_csv
+      parameters:
+      - in: header
+        name: X-CSRFToken
+        schema:
+          type: string
+        description: Django CSRF token, required for unsafe methods.
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+  /api/v1/teacher/import-templates/question-groups.docx:
+    get:
+      operationId: teacher_question_group_import_template_docx
+      parameters:
+      - in: header
+        name: X-CSRFToken
+        schema:
+          type: string
+        description: Django CSRF token, required for unsafe methods.
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/vnd.openxmlformats-officedocument.wordprocessingml.document:
+              schema:
+                type: string
+                format: binary
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+  /api/v1/teacher/import-templates/question-groups.xlsx:
+    get:
+      operationId: teacher_question_group_import_template_xlsx
+      parameters:
+      - in: header
+        name: X-CSRFToken
+        schema:
+          type: string
+        description: Django CSRF token, required for unsafe methods.
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
   /api/v1/teacher/import-templates/questions.csv:
     get:
       operationId: teacher_question_import_template_csv
@@ -17485,6 +18469,16 @@ components:
       - count
       - key
       - label
+    EducationalTypeEnum:
+      enum:
+      - standard
+      - translation
+      - essay
+      type: string
+      description: |-
+        * `standard` - standard
+        * `translation` - translation
+        * `essay` - essay
     EnrollmentActionEnum:
       enum:
       - create
@@ -17520,6 +18514,50 @@ components:
       - attempt_id
       - response_version
       - target_event_id
+    ExperimentActivity:
+      type: object
+      properties:
+        pending_grading_count:
+          type: integer
+        grading_url:
+          type: string
+          nullable: true
+        schedules:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExperimentActivitySchedule'
+      required:
+      - grading_url
+      - pending_grading_count
+      - schedules
+    ExperimentActivitySchedule:
+      type: object
+      properties:
+        task_id:
+          type: integer
+        class_name:
+          type: string
+        opens_at:
+          type: string
+          format: date-time
+          nullable: true
+        closes_at:
+          type: string
+          format: date-time
+          nullable: true
+        total_time_limit_minutes:
+          type: integer
+          nullable: true
+        per_question_time_limit_seconds:
+          type: integer
+          nullable: true
+      required:
+      - class_name
+      - closes_at
+      - opens_at
+      - per_question_time_limit_seconds
+      - task_id
+      - total_time_limit_minutes
     ExperimentManagementCapabilities:
       type: object
       properties:
@@ -17726,6 +18764,32 @@ components:
       - level_1
       - level_2
       - level_3
+    KeyEnum:
+      enum:
+      - A
+      - B
+      - C
+      - D
+      - E
+      - F
+      type: string
+      description: |-
+        * `A` - A
+        * `B` - B
+        * `C` - C
+        * `D` - D
+        * `E` - E
+        * `F` - F
+    Kind6e9Enum:
+      enum:
+      - reading
+      - cloze
+      - words
+      type: string
+      description: |-
+        * `reading` - reading
+        * `cloze` - cloze
+        * `words` - words
     KindE91Enum:
       enum:
       - standalone
@@ -17896,6 +18960,9 @@ components:
           type: string
         description:
           type: string
+        complete_question_count:
+          type: integer
+          minimum: 0
         question_count:
           type: integer
           minimum: 0
@@ -18283,6 +19350,13 @@ components:
           type: string
         text:
           type: string
+        title:
+          type: string
+          maxLength: 240
+        instructions:
+          type: string
+        educational_type:
+          $ref: '#/components/schemas/EducationalTypeEnum'
         question_type:
           $ref: '#/components/schemas/QuestionType128Enum'
         status:
@@ -18307,14 +19381,37 @@ components:
           $ref: '#/components/schemas/ManagementQuestionEditorOptions'
         kc_mapping:
           $ref: '#/components/schemas/QuestionKCMapping'
+        group_id:
+          type: integer
+          nullable: true
+        group_order:
+          type: integer
+          nullable: true
+        blank_id:
+          type: string
+        max_score:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+        content_language:
+          type: string
+        text_match_case_sensitive:
+          type: boolean
+        text_match_policy_version:
+          type: string
       required:
       - absolute_tolerance
       - accepted_answers_text
+      - blank_id
       - code
+      - content_language
       - correct_answer_text
       - draft_reasons
       - explanation
+      - group_id
+      - group_order
       - id
+      - max_score
       - options
       - question_type
       - relative_tolerance
@@ -18322,11 +19419,20 @@ components:
       - status
       - teacher_difficulty
       - text
+      - text_match_case_sensitive
+      - text_match_policy_version
     ManagementQuestionEditorRequest:
       type: object
       properties:
         text:
           type: string
+        title:
+          type: string
+          maxLength: 240
+        instructions:
+          type: string
+        educational_type:
+          $ref: '#/components/schemas/EducationalTypeEnum'
         question_type:
           $ref: '#/components/schemas/QuestionType128Enum'
         status:
@@ -18357,6 +19463,17 @@ components:
           type: string
         kc_mapping_json:
           type: string
+        max_score:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+        content_language:
+          type: string
+          maxLength: 16
+        text_match_case_sensitive:
+          type: boolean
+        text_match_policy_version:
+          $ref: '#/components/schemas/TextMatchPolicyVersionEnum'
       required:
       - question_type
       - status
@@ -18402,6 +19519,11 @@ components:
           items:
             type: string
             format: uuid
+        selected_group_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
       required:
       - preview_id
     ManagementQuestionImportConfirmResponse:
@@ -18429,6 +19551,11 @@ components:
           items:
             type: object
             additionalProperties: {}
+        groups:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
       required:
       - active
       - created
@@ -18441,6 +19568,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ManagementQuestionImportPreviewRow'
+        groups:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
         summary:
           type: object
           additionalProperties:
@@ -18464,6 +19596,19 @@ components:
     ManagementQuestionImportPreviewRow:
       type: object
       properties:
+        absolute_tolerance:
+          type: string
+          nullable: true
+        relative_tolerance:
+          type: string
+          nullable: true
+        title:
+          type: string
+          maxLength: 240
+        instructions:
+          type: string
+        educational_type:
+          type: string
         sequence:
           type: integer
           minimum: 1
@@ -18512,6 +19657,23 @@ components:
         existing_question_id:
           type: integer
           nullable: true
+        group_id:
+          type: string
+          format: uuid
+          nullable: true
+        group_order:
+          type: integer
+          nullable: true
+        blank_id:
+          type: string
+        max_score:
+          type: string
+        content_language:
+          type: string
+        text_match_case_sensitive:
+          type: boolean
+        text_match_policy_version:
+          type: string
       required:
       - option_count
       - question_type
@@ -18536,6 +19698,9 @@ components:
           type: string
         description:
           type: string
+        complete_question_count:
+          type: integer
+          minimum: 0
         question_count:
           type: integer
           minimum: 0
@@ -18656,6 +19821,9 @@ components:
           $ref: '#/components/schemas/VisibilityE8aEnum'
         visibility_label:
           type: string
+        complete_question_count:
+          type: integer
+          minimum: 0
         question_count:
           type: integer
           minimum: 0
@@ -18707,6 +19875,11 @@ components:
     ManagementStandaloneBankDetail:
       type: object
       properties:
+        unit_summary: {}
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionGroupResponse'
         redirect_url:
           type: string
         bank:
@@ -18782,6 +19955,22 @@ components:
     ManagementStandaloneQuestion:
       type: object
       properties:
+        group_id:
+          type: integer
+          nullable: true
+        group_order:
+          type: integer
+          nullable: true
+        blank_id:
+          type: string
+        max_score:
+          type: string
+        content_language:
+          type: string
+        text_match_case_sensitive:
+          type: boolean
+        text_match_policy_version:
+          type: string
         id:
           type: integer
         sequence:
@@ -18791,6 +19980,13 @@ components:
           type: string
         text:
           type: string
+        title:
+          type: string
+          maxLength: 240
+        instructions:
+          type: string
+        educational_type:
+          $ref: '#/components/schemas/EducationalTypeEnum'
         question_type:
           $ref: '#/components/schemas/QuestionType128Enum'
         question_type_label:
@@ -18811,11 +20007,16 @@ components:
         edit_url:
           type: string
       required:
+      - blank_id
       - code
+      - content_language
       - draft_reasons
       - edit_url
+      - group_id
+      - group_order
       - id
       - kc_mapping
+      - max_score
       - question_type
       - question_type_label
       - sequence
@@ -18823,6 +20024,8 @@ components:
       - status_label
       - teacher_difficulty
       - text
+      - text_match_case_sensitive
+      - text_match_policy_version
     ManagementStandaloneQuestionEditorResponse:
       type: object
       properties:
@@ -18860,6 +20063,9 @@ components:
           type: string
         description:
           type: string
+        complete_question_count:
+          type: integer
+          minimum: 0
         question_count:
           type: integer
           minimum: 0
@@ -19540,6 +20746,10 @@ components:
         can_restore:
           type: boolean
           readOnly: true
+        activity:
+          allOf:
+          - $ref: '#/components/schemas/ExperimentActivity'
+          readOnly: true
         created_at:
           type: string
           format: date-time
@@ -19682,6 +20892,15 @@ components:
         item_count:
           type: integer
           minimum: 0
+        question_count:
+          type: integer
+          minimum: 0
+        review_question_count:
+          type: integer
+          minimum: 0
+        new_question_count:
+          type: integer
+          minimum: 0
         is_valid:
           type: boolean
         excluded:
@@ -19707,7 +20926,10 @@ components:
       - is_valid
       - item_count
       - new_item_count
+      - new_question_count
+      - question_count
       - review_item_count
+      - review_question_count
       - student_number
     PublishParticipantCollection:
       type: object
@@ -19735,6 +20957,15 @@ components:
         class_name:
           type: string
         item_count:
+          type: integer
+          minimum: 0
+        question_count:
+          type: integer
+          minimum: 0
+        review_question_count:
+          type: integer
+          minimum: 0
+        new_question_count:
           type: integer
           minimum: 0
         is_valid:
@@ -19767,7 +20998,10 @@ components:
       - item_count
       - items
       - new_item_count
+      - new_question_count
+      - question_count
       - review_item_count
+      - review_question_count
       - student_number
     PublishParticipantItem:
       type: object
@@ -20121,6 +21355,9 @@ components:
         item_count:
           type: integer
           minimum: 0
+        question_count:
+          type: integer
+          minimum: 0
         randomization_validation:
           type: string
         created_at:
@@ -20133,6 +21370,7 @@ components:
       - item_count
       - participant_count
       - plan_revision
+      - question_count
       - randomization_validation
     QuestionBankCollection:
       type: object
@@ -20221,6 +21459,12 @@ components:
     QuestionBankDetail:
       type: object
       properties:
+        unit_summary: {}
+        groups:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
         id:
           type: integer
         name:
@@ -20231,6 +21475,9 @@ components:
           type: string
         visibility_label:
           type: string
+        complete_question_count:
+          type: integer
+          minimum: 0
         question_count:
           type: integer
           minimum: 0
@@ -20277,6 +21524,7 @@ components:
       - delete_url
       - description
       - edit_url
+      - groups
       - id
       - kc_import_url
       - list_url
@@ -20284,6 +21532,7 @@ components:
       - question_count
       - question_import_url
       - restore_url
+      - unit_summary
       - updated_at
       - visibility
       - visibility_label
@@ -20358,6 +21607,9 @@ components:
           type: string
         visibility_label:
           type: string
+        complete_question_count:
+          type: integer
+          minimum: 0
         question_count:
           type: integer
           minimum: 0
@@ -20574,6 +21826,187 @@ components:
       - draft_reasons
       - id
       - status
+    QuestionGroupMember:
+      type: object
+      properties:
+        primary_concept_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        id:
+          type: integer
+          nullable: true
+        item_key:
+          type: string
+          readOnly: true
+        question_type:
+          $ref: '#/components/schemas/QuestionType128Enum'
+        text:
+          type: string
+          default: ''
+        group_order:
+          type: integer
+          minimum: 1
+        blank_id:
+          type: string
+          default: ''
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionGroupOption'
+        answer:
+          nullable: true
+          default: ''
+        accepted_answers:
+          type: array
+          items:
+            type: string
+        max_score:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          default: '1.00'
+        content_language:
+          type: string
+          maxLength: 16
+        text_match_case_sensitive:
+          type: boolean
+          default: false
+        text_match_policy_version:
+          allOf:
+          - $ref: '#/components/schemas/TextMatchPolicyVersionEnum'
+          default: text-exact-v1
+        explanation:
+          type: string
+          default: ''
+        teacher_difficulty:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,1}(?:\.\d{0,3})?$
+          nullable: true
+        kc_mapping: {}
+        status:
+          type: string
+          readOnly: true
+      required:
+      - group_order
+      - item_key
+      - question_type
+      - status
+    QuestionGroupOption:
+      type: object
+      properties:
+        key:
+          $ref: '#/components/schemas/KeyEnum'
+        text:
+          type: string
+      required:
+      - key
+      - text
+    QuestionGroupRequest:
+      type: object
+      properties:
+        word_bank:
+          type: array
+          items:
+            type: string
+        kind:
+          $ref: '#/components/schemas/Kind6e9Enum'
+        title:
+          type: string
+          default: ''
+          maxLength: 240
+        instructions:
+          type: string
+          default: ''
+        material:
+          type: string
+        content_language:
+          type: string
+          default: en
+          maxLength: 16
+        expected_revision:
+          type: integer
+          minimum: 1
+        confirm_member_deletion:
+          type: boolean
+          default: false
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionGroupMember'
+      required:
+      - kind
+      - material
+      - members
+    QuestionGroupResponse:
+      type: object
+      properties:
+        word_bank:
+          type: array
+          items:
+            type: string
+        kind:
+          $ref: '#/components/schemas/Kind6e9Enum'
+        title:
+          type: string
+          default: ''
+          maxLength: 240
+        instructions:
+          type: string
+          default: ''
+        material:
+          type: string
+        content_language:
+          type: string
+          default: en
+          maxLength: 16
+        expected_revision:
+          type: integer
+          minimum: 1
+        confirm_member_deletion:
+          type: boolean
+          default: false
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionGroupMember'
+        available_concepts:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        id:
+          type: integer
+        revision:
+          type: integer
+        material_segments:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        item_count:
+          type: integer
+          minimum: 1
+        total_max_score:
+          type: string
+        status:
+          type: string
+        readiness_issues:
+          type: array
+          items:
+            type: string
+      required:
+      - id
+      - item_count
+      - kind
+      - material
+      - material_segments
+      - members
+      - readiness_issues
+      - revision
+      - status
+      - total_max_score
     QuestionKCImportResult:
       type: object
       properties:
@@ -20665,7 +22098,7 @@ components:
       type: object
       properties:
         question_type:
-          $ref: '#/components/schemas/QuestionType334Enum'
+          $ref: '#/components/schemas/QuestionTypeD8fEnum'
         amount:
           type: integer
           minimum: 0
@@ -20675,6 +22108,28 @@ components:
     QuestionSummary:
       type: object
       properties:
+        title:
+          type: string
+        instructions:
+          type: string
+        educational_type:
+          type: string
+        group_id:
+          type: integer
+          nullable: true
+        group_order:
+          type: integer
+          nullable: true
+        blank_id:
+          type: string
+        max_score:
+          type: string
+        content_language:
+          type: string
+        text_match_case_sensitive:
+          type: boolean
+        text_match_policy_version:
+          type: string
         id:
           type: integer
         course_sequence:
@@ -20716,13 +22171,19 @@ components:
           type: string
           nullable: true
       required:
+      - blank_id
       - code
+      - content_language
       - course_sequence
       - delete_url
       - draft_reasons
       - edit_url
+      - educational_type
+      - group_id
+      - group_order
       - id
       - kc_mapping
+      - max_score
       - question_type
       - question_type_label
       - sequence
@@ -20731,6 +22192,8 @@ components:
       - status_label
       - teacher_difficulty
       - text
+      - text_match_case_sensitive
+      - text_match_policy_version
     QuestionSummaryRow:
       type: object
       properties:
@@ -20809,7 +22272,7 @@ components:
         * `short_answer` - short_answer
         * `fill_blank` - fill_blank
         * `true_false` - true_false
-    QuestionType334Enum:
+    QuestionTypeD8fEnum:
       enum:
       - single_choice
       - multiple_choice
@@ -20817,6 +22280,11 @@ components:
       - short_answer
       - fill_blank
       - true_false
+      - reading
+      - words
+      - cloze
+      - translation
+      - essay
       type: string
       description: |-
         * `single_choice` - 单选题
@@ -20825,6 +22293,11 @@ components:
         * `short_answer` - 简答题
         * `fill_blank` - 填空题
         * `true_false` - 判断题
+        * `reading` - 阅读理解
+        * `words` - 选词填空
+        * `cloze` - 完形填空
+        * `translation` - 英汉互译
+        * `essay` - 作文
     RankModeEnum:
       enum:
       - none
@@ -21133,6 +22606,11 @@ components:
           nullable: true
         match_scope:
           $ref: '#/components/schemas/MatchScopeEnum'
+        pinned_question_ids:
+          type: array
+          items:
+            type: integer
+            minimum: 1
         nodes:
           type: array
           items:
@@ -21182,7 +22660,7 @@ components:
       type: object
       properties:
         question_type:
-          $ref: '#/components/schemas/QuestionType334Enum'
+          $ref: '#/components/schemas/QuestionTypeD8fEnum'
         amount:
           type: integer
           minimum: 1
@@ -21648,13 +23126,29 @@ components:
       type: object
       properties:
         question_type:
-          $ref: '#/components/schemas/QuestionType334Enum'
+          $ref: '#/components/schemas/StandaloneQuestionQuotaInputQuestionTypeEnum'
         amount:
           type: integer
           minimum: 0
       required:
       - amount
       - question_type
+    StandaloneQuestionQuotaInputQuestionTypeEnum:
+      enum:
+      - single_choice
+      - multiple_choice
+      - numeric
+      - short_answer
+      - fill_blank
+      - true_false
+      type: string
+      description: |-
+        * `single_choice` - 单选题
+        * `multiple_choice` - 多选题
+        * `numeric` - 数值题
+        * `short_answer` - 简答题
+        * `fill_blank` - 填空题
+        * `true_false` - 判断题
     StandaloneSession:
       type: object
       properties:
@@ -22256,6 +23750,14 @@ components:
     StudentLearningExperiment:
       type: object
       properties:
+        score_progress:
+          type: object
+          additionalProperties: {}
+        groups:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
         version:
           type: string
         comparison_status:
@@ -22324,6 +23826,20 @@ components:
     StudentLearningItemResult:
       type: object
       properties:
+        response_value:
+          nullable: true
+        group_id:
+          type: string
+          nullable: true
+        group_order:
+          type: integer
+          nullable: true
+        blank_id:
+          type: string
+        max_score:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         generated_at:
           type: string
           format: date-time
@@ -22640,6 +24156,14 @@ components:
           nullable: true
         grading_status:
           type: string
+        score_progress:
+          type: object
+          additionalProperties: {}
+        groups:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
         feedback_mode:
           $ref: '#/components/schemas/StudentResultCorrectnessFeedbackModeEnum'
         items:
@@ -22667,6 +24191,8 @@ components:
     StudentResultCorrectnessItem:
       type: object
       properties:
+        response_value:
+          nullable: true
         question_id:
           type: integer
         question_code:
@@ -22727,6 +24253,14 @@ components:
           nullable: true
         grading_status:
           type: string
+        score_progress:
+          type: object
+          additionalProperties: {}
+        groups:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
         feedback_mode:
           $ref: '#/components/schemas/StudentResultFullFeedbackModeEnum'
         items:
@@ -22754,6 +24288,8 @@ components:
     StudentResultFullItem:
       type: object
       properties:
+        response_value:
+          nullable: true
         question_id:
           type: integer
         question_code:
@@ -23034,6 +24570,12 @@ components:
           type: string
         question_type:
           type: string
+        educational_type:
+          type: string
+        title:
+          type: string
+        instructions:
+          type: string
         text:
           type: string
         primary_kc:
@@ -23089,6 +24631,10 @@ components:
     StudentRuntimeQuestionEntry:
       type: object
       properties:
+        question_group_runtime_version:
+          type: integer
+        question_group: {}
+        group_responses: {}
         assessment_flow_version:
           type: integer
         prepared_paper: {}
@@ -23191,6 +24737,7 @@ components:
     StudentSessionSummary:
       type: object
       properties:
+        result: {}
         session_id:
           type: integer
         experiment_name:
@@ -24334,6 +25881,10 @@ components:
         can_restore:
           type: boolean
           readOnly: true
+        activity:
+          allOf:
+          - $ref: '#/components/schemas/ExperimentActivity'
+          readOnly: true
         created_at:
           type: string
           format: date-time
@@ -24343,6 +25894,7 @@ components:
           format: date-time
           readOnly: true
       required:
+      - activity
       - can_archive
       - can_edit
       - can_manage
@@ -24429,6 +25981,9 @@ components:
     TeacherExperimentReadiness:
       type: object
       properties:
+        question_group_pool:
+          type: boolean
+          readOnly: true
         ready:
           type: boolean
         issues:
@@ -24458,6 +26013,7 @@ components:
       - inventory_buckets
       - issues
       - participant_count
+      - question_group_pool
       - ready
       - requested_count
     TeacherExperimentReadinessIssue:
@@ -24708,7 +26264,7 @@ components:
       type: object
       properties:
         question_type:
-          $ref: '#/components/schemas/QuestionType334Enum'
+          $ref: '#/components/schemas/QuestionTypeD8fEnum'
         label:
           type: string
         available:
@@ -24756,6 +26312,11 @@ components:
           items:
             $ref: '#/components/schemas/TeacherSamplingInventoryKC'
         bank_counts:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        questions:
           type: array
           items:
             type: object
@@ -25068,6 +26629,11 @@ components:
       required:
       - id
       - idle_ms
+    TextMatchPolicyVersionEnum:
+      enum:
+      - text-exact-v1
+      type: string
+      description: '* `text-exact-v1` - text-exact-v1'
     TimeModeEnum:
       enum:
       - none

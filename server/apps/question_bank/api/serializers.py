@@ -75,6 +75,7 @@ class QuestionBankSummarySerializer(serializers.Serializer):
     description = serializers.CharField()
     visibility = serializers.CharField()
     visibility_label = serializers.CharField()
+    complete_question_count = serializers.IntegerField(min_value=0, required=False)
     question_count = serializers.IntegerField(min_value=0)
     created_by_name = serializers.CharField()
     updated_at = serializers.DateTimeField()
@@ -136,11 +137,14 @@ class CourseConceptCollectionSerializer(serializers.Serializer):
 
 
 class QuestionBankDetailSerializer(serializers.Serializer):
+    unit_summary = serializers.JSONField()
+    groups = serializers.ListField(child=serializers.DictField())
     id = serializers.IntegerField()
     name = serializers.CharField()
     description = serializers.CharField()
     visibility = serializers.CharField()
     visibility_label = serializers.CharField()
+    complete_question_count = serializers.IntegerField(min_value=0, required=False)
     question_count = serializers.IntegerField(min_value=0)
     created_by_name = serializers.CharField()
     updated_at = serializers.DateTimeField()
@@ -187,6 +191,16 @@ class QuestionKCMappingSerializer(serializers.Serializer):
 
 
 class QuestionSummarySerializer(serializers.Serializer):
+    title = serializers.CharField(allow_blank=True, required=False)
+    instructions = serializers.CharField(allow_blank=True, required=False)
+    educational_type = serializers.CharField()
+    group_id = serializers.IntegerField(allow_null=True)
+    group_order = serializers.IntegerField(allow_null=True)
+    blank_id = serializers.CharField(allow_blank=True)
+    max_score = serializers.CharField()
+    content_language = serializers.CharField()
+    text_match_case_sensitive = serializers.BooleanField()
+    text_match_policy_version = serializers.CharField()
     id = serializers.IntegerField()
     course_sequence = serializers.IntegerField(allow_null=True, min_value=1)
     stable_code = serializers.CharField()

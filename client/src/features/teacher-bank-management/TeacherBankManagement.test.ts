@@ -114,8 +114,8 @@ describe('Teacher bank-management Vue views', () => {
   it('shows format-specific templates and server-classified preview rows with inspectable content', async () => {
     const wrapper = mount(TeacherQuestionImport, { global: { stubs: { RouterLink: routerLink } } })
     const input = wrapper.get('input[type="file"]')
-    expect(wrapper.get('[data-question-template="xlsx"]').attributes('href')).toBe('/api/v1/teacher/import-templates/questions.xlsx')
-    expect(wrapper.get('[data-question-template="docx"]').attributes('href')).toBe('/api/v1/teacher/import-templates/questions.docx')
+    expect(wrapper.get('[data-question-template="xlsx"]').attributes('href')).toBe('/api/v1/teacher/import-templates/question-groups.xlsx')
+    expect(wrapper.get('[data-question-template="docx"]').attributes('href')).toBe('/api/v1/teacher/import-templates/question-groups.docx')
     expect(input.attributes('accept')).toBe('.csv,.xlsx')
 
     await wrapper.get('#question-import-format-docx').setValue()
@@ -156,6 +156,24 @@ describe('Teacher bank-management Vue views', () => {
     await wrapper.get('#question-import-filter-invalid').trigger('click')
     expect(wrapper.find('[data-import-row="row-ready"]').exists()).toBe(false)
     expect(wrapper.find('[data-import-row="row-invalid"]').exists()).toBe(true)
+  })
+
+  it('includes grouped members in the file summary while filtering only standalone rows', async () => {
+    const row = { row_id: 'group-row', sequence: 1, text: 'Why?', question_type: 'single_choice', question_type_label: '单选题', options: [{ key: 'A', text: 'Because' }], answer: 'A', accepted_answers: [], classification: 'ready', errors: [], group_order: 1 }
+    mocks.api.previewQuestionImport.mockResolvedValue({ preview_id: 'group-preview', preview: {
+      rows: [row, { ...row, row_id: 'standalone-row', sequence: 2 }],
+      groups: [{ group_id: 'g1', source_group_code: 'R001', kind: 'reading', title: 'Garden', instructions: '', material: 'A garden.', material_segments: [], content_language: 'en', member_row_ids: ['group-row'], classification: 'ready', errors: [], item_count: 1, total_max_score: '1.00' }],
+      summary: { ready: 2, draft: 0, duplicate: 0, invalid: 0 }, confirmable: true,
+    } })
+    const wrapper = mount(TeacherQuestionImport, { global: { stubs: { RouterLink: routerLink } } })
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [new File(['group'], 'groups.csv')], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+    expect(wrapper.get('[aria-label="预览状态汇总"] .is-ready').text()).toContain('导入后可用 2')
+    expect(wrapper.get('[data-import-filter="ready"]').text()).toContain('导入后可用 1')
+    expect(wrapper.get('[data-confirm-import]').text()).toBe('确认导入 2 道题')
+    wrapper.unmount()
   })
 
   it('clears a previous preview before a replacement upload fails', async () => {

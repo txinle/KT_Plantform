@@ -2,7 +2,7 @@ from django.conf import settings
 from django.http import FileResponse, Http404, HttpResponse
 from django.views.decorators.http import require_GET
 from apps.accounts.permissions import role_required
-from .services.import_templates import build_question_import_template_excel, build_question_import_template_word
+from .services.import_templates import build_question_group_template, build_question_import_template_excel, build_question_import_template_word
 
 def _fixture_download(filename):
     path = settings.BASE_DIR / "fixtures" / filename
@@ -42,6 +42,17 @@ def question_import_template_word(request):
         "question_import_template.docx",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
+
+@role_required('teacher', 'admin')
+@require_GET
+def question_group_import_template(request, extension):
+    content_types = {'csv': 'text/csv; charset=utf-8',
+        'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}
+    if extension not in content_types:
+        raise Http404('不支持的模板格式')
+    return _memory_download(build_question_group_template(extension), f'question_groups_template.{extension}', content_types[extension])
 
 @role_required("teacher", "admin")
 @require_GET

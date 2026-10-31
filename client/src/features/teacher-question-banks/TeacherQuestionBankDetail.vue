@@ -8,6 +8,8 @@ import MobileCardList from '@/design-system/components/MobileCardList.vue'
 import PageHeader from '@/design-system/components/PageHeader.vue'
 import Paginator from '@/design-system/components/Paginator.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
+import QuestionBankInventory from '../teacher-bank-management/QuestionBankInventory.vue'
+import QuestionGroupEditor from '../teacher-bank-management/QuestionGroupEditor.vue'
 
 import {
   getTeacherQuestionBankApi,
@@ -30,6 +32,10 @@ const loading = ref(true)
 const error = ref('')
 const success = ref('')
 const rechecking = ref(false)
+const editingGroup = ref(false)
+const selectedGroupId = ref<number>()
+const questionFilter = ref({ query: '', type: '' })
+async function filterQuestions(value: { query: string; type: string }) { questionFilter.value = value; await router.push({ query: { ...route.query, page: undefined } }); await load() }
 const questionPage = computed(() => Number(route.query.page || 1))
 const conceptPage = computed(() => Number(route.query.kc_page || 1))
 
@@ -67,10 +73,14 @@ async function load() {
   try {
     const [detail, questionCollection, conceptCollection] = await Promise.all([
       api.detail(courseId, bankId),
-      api.questions(courseId, bankId, { page: questionPage.value }),
+      api.questions(courseId, bankId, { page: questionPage.value, query: questionFilter.value.query, questionType: questionFilter.value.type, completeOnly: true }),
       api.bankConcepts(courseId, bankId, { page: conceptPage.value }),
     ])
     bank.value = detail
+    if (route.query.edit_group && detail.groups?.some(group => group.id === Number(route.query.edit_group))) {
+      selectedGroupId.value = Number(route.query.edit_group)
+      editingGroup.value = true
+    }
     questions.value = questionCollection
     concepts.value = conceptCollection
   } catch (caught) {
@@ -170,6 +180,8 @@ onMounted(load)
         <button v-if="bank.can_edit_content" data-recheck-drafts class="kt-button kt-button--secondary" type="button" :disabled="rechecking" @click="recheckDrafts">{{ rechecking ? '正在复核…' : '复核草稿' }}</button>
       </template>
     </PageHeader>
+    <QuestionBankInventory :summary="bank.unit_summary" :groups="bank.groups" :can-edit="bank.can_edit_content" @filter="filterQuestions" @edit="id => { selectedGroupId = id; editingGroup = true }" />
+    <QuestionGroupEditor v-if="editingGroup" :key="selectedGroupId || 'new'" :bank-id="bankId" :course-id="courseId" :group-id="selectedGroupId" @saved="editingGroup = false; load()" @close="editingGroup = false" />
 
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
     <Alert v-if="success" tone="success">{{ success }}</Alert>
@@ -182,17 +194,17 @@ onMounted(load)
     <Alert v-else tone="info">导入题库文件可同时创建题干、选项、答案和 KC 映射；也可在单题编辑页维护课程 KC。</Alert>
 
     <section class="kt-section kt-bank-question-section" aria-labelledby="question-list-title">
-      <div class="kt-section-heading"><h2 id="question-list-title">题目清单</h2><span>{{ questions.page.total_items }} 题</span></div>
+      <div class="kt-section-heading"><h2 id="question-list-title">独立题目</h2><span>{{ questions.page.total_items }} 题</span></div>
       <EmptyState v-if="!questions.items.length" title="没有符合条件的题目"><p>调整筛选条件，或通过题目文件导入。</p></EmptyState>
       <div v-else class="kt-card kt-table-card">
         <div class="kt-table-scroll kt-desktop-only">
           <table class="kt-table">
-            <thead><tr><th>题库内序号</th><th>题目</th><th>题型</th><th>知识点结构</th><th>难度</th><th>状态</th><th>操作</th></tr></thead><tbody>
-              <tr v-for="question in questions.items" :key="question.id"><td class="kt-mono">{{ question.sequence }}</td><td><strong>{{ question.text }}</strong><ul v-if="question.draft_reasons.length" class="kt-draft-reasons"><li v-for="reason in question.draft_reasons" :key="reason">{{ reason }}</li></ul></td><td>{{ question.question_type_label }}</td><td><div class="kt-kc-structure" :aria-label="`知识点结构：${mappingText(question.kc_mapping)}`"><span v-for="node in question.kc_mapping.nodes" :key="node.kc_code" class="kt-kc-node" :data-depth="node.depth">{{ node.name }}</span><span v-if="!question.kc_mapping.nodes.length">未映射</span></div></td><td>{{ question.teacher_difficulty ?? '未设置' }}</td><td><StatusBadge :label="question.status_label" :tone="statusTone(question.status)" /></td><td><div class="kt-inline-actions"><a v-if="question.edit_url" :href="question.edit_url">编辑</a><details v-if="question.delete_url"><summary class="kt-danger-summary">删除</summary><section class="kt-inline-panel kt-inline-panel--danger"><p>确认永久删除“第 {{ question.sequence }} 题”？已被实验或快照引用时服务器会拒绝操作。</p><button data-delete-question class="kt-button kt-button--danger" type="button" @click="deleteQuestion(question.id)">确认删除</button></section></details></div></td></tr>
+            <thead><tr><th>题库内序号</th><th>题目</th><th>题型</th><th>知识点结构</th><th>分值</th><th>难度</th><th>状态</th><th>操作</th></tr></thead><tbody>
+              <tr v-for="question in questions.items" :key="question.id"><td class="kt-mono">{{ question.sequence }}</td><td><strong>{{ question.title || question.text }}</strong><p v-if="question.instructions" class="kt-bank-question-description">{{ question.instructions }}</p><ul v-if="question.draft_reasons.length" class="kt-draft-reasons"><li v-for="reason in question.draft_reasons" :key="reason">{{ reason }}</li></ul></td><td>{{ question.question_type_label }}</td><td><div class="kt-kc-structure" :aria-label="`知识点结构：${mappingText(question.kc_mapping)}`"><span v-for="node in question.kc_mapping.nodes" :key="node.kc_code" class="kt-kc-node" :data-depth="node.depth">{{ node.name }}</span><span v-if="!question.kc_mapping.nodes.length">未映射</span></div></td><td>{{ question.max_score || '1.00' }} 分</td><td>{{ question.teacher_difficulty ?? '未设置' }}</td><td><StatusBadge :label="question.status_label" :tone="statusTone(question.status)" /></td><td><div class="kt-inline-actions"><a v-if="question.edit_url" :href="question.edit_url">编辑</a><details v-if="question.delete_url"><summary class="kt-danger-summary">删除</summary><section class="kt-inline-panel kt-inline-panel--danger"><p>确认永久删除“第 {{ question.sequence }} 题”？已被实验或快照引用时服务器会拒绝操作。</p><button data-delete-question class="kt-button kt-button--danger" type="button" @click="deleteQuestion(question.id)">确认删除</button></section></details></div></td></tr>
             </tbody>
           </table>
         </div>
-        <MobileCardList class="kt-mobile-only"><li v-for="question in questions.items" :key="question.id" class="kt-mobile-question-card"><div class="kt-section-heading"><span class="kt-mono">第 {{ question.sequence }} 题</span><StatusBadge :label="question.status_label" :tone="statusTone(question.status)" /></div><h3>{{ question.text }}</h3><ul v-if="question.draft_reasons.length" class="kt-draft-reasons"><li v-for="reason in question.draft_reasons" :key="reason">{{ reason }}</li></ul><dl><div><dt>题型</dt><dd>{{ question.question_type_label }}</dd></div><div><dt>知识点结构</dt><dd>{{ mappingText(question.kc_mapping) }}</dd></div><div><dt>难度</dt><dd>{{ question.teacher_difficulty ?? '未设置' }}</dd></div></dl><div v-if="question.edit_url || question.delete_url" class="kt-inline-actions"><a v-if="question.edit_url" class="kt-button kt-button--secondary" :href="question.edit_url">编辑</a><details v-if="question.delete_url"><summary class="kt-danger-summary">删除</summary><section class="kt-inline-panel kt-inline-panel--danger"><button class="kt-button kt-button--danger" type="button" @click="deleteQuestion(question.id)">确认永久删除</button></section></details></div></li></MobileCardList>
+        <MobileCardList class="kt-mobile-only"><li v-for="question in questions.items" :key="question.id" class="kt-mobile-question-card"><div class="kt-section-heading"><span class="kt-mono">第 {{ question.sequence }} 题</span><StatusBadge :label="question.status_label" :tone="statusTone(question.status)" /></div><h3>{{ question.title || question.text }}</h3><p v-if="question.instructions">{{ question.instructions }}</p><ul v-if="question.draft_reasons.length" class="kt-draft-reasons"><li v-for="reason in question.draft_reasons" :key="reason">{{ reason }}</li></ul><dl><div><dt>题型</dt><dd>{{ question.question_type_label }}</dd></div><div><dt>知识点结构</dt><dd>{{ mappingText(question.kc_mapping) }}</dd></div><div><dt>难度</dt><dd>{{ question.teacher_difficulty ?? '未设置' }}</dd></div></dl><div v-if="question.edit_url || question.delete_url" class="kt-inline-actions"><a v-if="question.edit_url" class="kt-button kt-button--secondary" :href="question.edit_url">编辑</a><details v-if="question.delete_url"><summary class="kt-danger-summary">删除</summary><section class="kt-inline-panel kt-inline-panel--danger"><button class="kt-button kt-button--danger" type="button" @click="deleteQuestion(question.id)">确认永久删除</button></section></details></div></li></MobileCardList>
         <Paginator :page="questions.page.number" :total-pages="questions.page.total_pages" @navigate="navigate('question', $event)" />
       </div>
     </section>

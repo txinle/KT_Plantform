@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -24,7 +25,7 @@ class InitialGradingResultTests(SimpleTestCase):
                 )
             ),
             assignment=SimpleNamespace(
-                snapshot=SimpleNamespace(question_type="short_answer")
+                snapshot=SimpleNamespace(question_type="short_answer", max_score=Decimal('2.50'))
             ),
         )
 
@@ -33,7 +34,7 @@ class InitialGradingResultTests(SimpleTestCase):
         self.assertEqual(result.status, SubmissionEvent.GradingStatus.PENDING)
         self.assertIsNone(result.is_correct)
         self.assertIsNone(result.score)
-        self.assertEqual(result.max_score, 1)
+        self.assertEqual(result.max_score, Decimal('2.50'))
         self.assertEqual(result.method, "manual_binary_v1")
 
     @patch("apps.assessment.capture_v2_services.uses_capture_v2", return_value=False)
@@ -47,7 +48,7 @@ class InitialGradingResultTests(SimpleTestCase):
                 )
             ),
             assignment=SimpleNamespace(
-                snapshot=SimpleNamespace(question_type="single_choice")
+                snapshot=SimpleNamespace(question_type="single_choice", max_score=Decimal('1.00'))
             ),
         )
 
@@ -63,7 +64,7 @@ class InitialGradingResultTests(SimpleTestCase):
         attempt = SimpleNamespace(
             session=SimpleNamespace(),
             assignment=SimpleNamespace(
-                snapshot=SimpleNamespace(question_type="short_answer")
+                snapshot=SimpleNamespace(question_type="short_answer", max_score=Decimal('1.00'))
             ),
         )
 
@@ -80,7 +81,7 @@ class InitialGradingResultTests(SimpleTestCase):
         attempt = SimpleNamespace(
             session=SimpleNamespace(),
             assignment=SimpleNamespace(
-                snapshot=SimpleNamespace(question_type="short_answer")
+                snapshot=SimpleNamespace(question_type="short_answer", max_score=Decimal('1.00'))
             ),
         )
 

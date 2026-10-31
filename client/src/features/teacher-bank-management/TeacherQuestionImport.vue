@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ApiError } from '@/api/client'
 import Alert from '@/design-system/components/Alert.vue'
 import Icon from '@/design-system/Icon.vue'
+import QuestionGroupImportPreview from './QuestionGroupImportPreview.vue'
 import {
   getTeacherBankManagementApi,
   type QuestionImportConfirmation,
@@ -32,6 +33,7 @@ const showFilters = ref(false)
 const page = ref(1)
 const pageSize = ref(10)
 const selectedIds = ref<string[]>([])
+const selectedGroupIds = ref<string[]>([])
 const activeRowId = ref<string>()
 const detailOpen = ref(true)
 const mobileDetailOpen = ref(false)
@@ -44,7 +46,11 @@ const error = ref('')
 const busy = ref(false)
 
 const acceptedFileTypes = computed(() => format.value === 'docx' ? '.docx' : '.csv,.xlsx')
-const rows = computed(() => preview.value?.preview.rows || [])
+const allRows = computed(() => preview.value?.preview.rows || [])
+const groups = computed(() => preview.value?.preview.groups || [])
+const groupedRowIds = computed(() => new Set(groups.value.flatMap(group => group.member_row_ids)))
+const rows = computed(() => allRows.value.filter(row => !groupedRowIds.value.has(row.row_id)))
+const selectedQuestionCount = computed(() => selectedIds.value.length + groups.value.filter(group => selectedGroupIds.value.includes(group.group_id)).reduce((sum, group) => sum + group.item_count, 0))
 const readyLabel = computed(() => confirmation.value ? '已创建可用' : '导入后可用')
 const draftLabel = computed(() => confirmation.value ? '已创建草稿' : '保存为草稿')
 const confirmedActive = computed(() => confirmation.value?.active ?? confirmation.value?.created ?? 0)
@@ -52,15 +58,15 @@ const confirmedDraft = computed(() => confirmation.value?.draft ?? 0)
 const outcomes = computed(() => new Map(confirmation.value?.rows.map((row) => [row.row_id, row]) || []))
 const summary = computed(() => {
   const counts = { ready: 0, draft: 0, duplicate: 0, invalid: 0, unselected: 0 }
-  for (const row of rows.value) counts[classification(row)] += 1
+  for (const row of allRows.value) counts[classification(row)] += 1
   return counts
 })
 const filters = computed(() => [
   { value: 'all' as const, label: '全部', count: rows.value.length },
-  { value: 'ready' as const, label: readyLabel.value, count: summary.value.ready },
-  { value: 'draft' as const, label: draftLabel.value, count: summary.value.draft },
-  { value: 'duplicate' as const, label: '重复', count: summary.value.duplicate },
-  { value: 'invalid' as const, label: '需修正', count: summary.value.invalid },
+  { value: 'ready' as const, label: readyLabel.value, count: rows.value.filter(row => classification(row) === 'ready').length },
+  { value: 'draft' as const, label: draftLabel.value, count: rows.value.filter(row => classification(row) === 'draft').length },
+  { value: 'duplicate' as const, label: '重复', count: rows.value.filter(row => classification(row) === 'duplicate').length },
+  { value: 'invalid' as const, label: '需修正', count: rows.value.filter(row => classification(row) === 'invalid').length },
 ])
 const questionTypes = computed(() => [...new Map(rows.value.map((row) => [row.question_type, row.question_type_label])).entries()])
 const filteredRows = computed(() => rows.value.filter((row) => {
@@ -74,7 +80,7 @@ const pageRows = computed(() => filteredRows.value.slice((page.value - 1) * page
 const selectablePageRows = computed(() => pageRows.value.filter(isSelectable))
 const pageSelected = computed(() => selectablePageRows.value.length > 0 && selectablePageRows.value.every((row) => selectedIds.value.includes(row.row_id)))
 const pagePartlySelected = computed(() => !pageSelected.value && selectablePageRows.value.some((row) => selectedIds.value.includes(row.row_id)))
-const canConfirm = computed(() => Boolean(preview.value?.preview.confirmable && selectedIds.value.length && !confirmation.value && !busy.value))
+const canConfirm = computed(() => Boolean(preview.value?.preview.confirmable && selectedQuestionCount.value && !confirmation.value && !busy.value))
 const activeRow = computed(() => rows.value.find((row) => row.row_id === activeRowId.value))
 const activeIndex = computed(() => rows.value.findIndex((row) => row.row_id === activeRowId.value))
 const detailUrl = computed(() => confirmation.value?.detail_url || '/teacher/courses/' + courseId + '/banks/' + bankId + '/')
@@ -152,14 +158,14 @@ const graph = computed(() => {
   const columns = Array.from({ length: maxDepth + 1 }, (_, depth) => nodes.filter((node) => depths.get(node.kc_code) === depth))
   const height = Math.max(160, Math.max(...columns.map((column) => column.length)) * 82)
   const positioned = columns.flatMap((column, depth) => column.map((node, index) => ({
-    ...node, x: 2 + depth * 112, y: (index + .5) * height / column.length - 22,
+    ...node, x: 2 + depth * 172, y: (index + .5) * height / column.length - 28,
   })))
   const edges = mapping.nodes.filter((node) => node.parent_kc_code).flatMap((node) => {
     const start = positioned.find((candidate) => candidate.kc_code === node.parent_kc_code)
     const end = positioned.find((candidate) => candidate.kc_code === node.kc_code)
-    return start && end ? [{ key: start.kc_code + '>' + end.kc_code, x1: start.x + 86, y1: start.y + 22, x2: end.x - 4, y2: end.y + 22 }] : []
+    return start && end ? [{ key: start.kc_code + '>' + end.kc_code, x1: start.x + 140, y1: start.y + 28, x2: end.x - 4, y2: end.y + 28 }] : []
   })
-  return { width: Math.max(320, (maxDepth + 1) * 112 - 22), height, nodes: positioned, edges }
+  return { width: Math.max(320, (maxDepth + 1) * 172 - 28), height, nodes: positioned, edges }
 })
 function isCorrectOption(key: string) {
   const answer = activeRow.value?.answer
@@ -179,6 +185,7 @@ function clearPreview() {
   confirmation.value = undefined
   uploadedFile.value = undefined
   selectedIds.value = []
+  selectedGroupIds.value = []
   activeRowId.value = undefined
   filter.value = 'all'
   search.value = ''
@@ -196,6 +203,7 @@ async function selectFile(event: Event) {
     preview.value = await api.previewQuestionImport(courseId, bankId, file)
     uploadedFile.value = { name: file.name, size: file.size, uploadedAt: new Date() }
     selectedIds.value = rows.value.filter(isSelectable).map((row) => row.row_id)
+    selectedGroupIds.value = groups.value.filter(group => ['ready', 'draft'].includes(group.classification)).map(group => group.group_id)
     activeRowId.value = rows.value[0]?.row_id
     detailOpen.value = true
     mobileDetailOpen.value = false
@@ -213,7 +221,9 @@ async function confirm() {
   busy.value = true
   error.value = ''
   try {
-    confirmation.value = await api.confirmQuestionImport(courseId, bankId, preview.value.preview_id, selectedIds.value)
+    confirmation.value = groups.value.length
+      ? await api.confirmQuestionImport(courseId, bankId, preview.value.preview_id, selectedIds.value, selectedGroupIds.value)
+      : await api.confirmQuestionImport(courseId, bankId, preview.value.preview_id, selectedIds.value)
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '题库导入确认失败，请重新生成预览。'
   } finally {
@@ -280,7 +290,7 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
           <p>一份文件导入题目与 KC 映射。请使用当前课程已有的知识点。</p>
         </div>
         <div v-if="preview" class="qimp-summary" aria-label="预览状态汇总">
-          <strong class="qimp-total">共解析 {{ rows.length }} 道题</strong>
+          <strong class="qimp-total">共解析 {{ allRows.length }} 道题<span v-if="groups.length"> · {{ groups.length }} 个题组</span></strong>
           <span class="is-ready">{{ readyLabel }} <strong>{{ summary.ready }}</strong></span>
           <span class="is-draft">{{ draftLabel }} <strong>{{ summary.draft }}</strong></span>
           <span class="is-duplicate">重复 <strong>{{ summary.duplicate }}</strong></span>
@@ -292,9 +302,9 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
             <summary v-if="preview" class="qimp-button qimp-icon-button" aria-label="文件格式与模板"><Icon name="chevron-down" :size="16" /></summary>
             <div class="qimp-file-menu-content">
               <fieldset><legend>文件格式</legend><label><input v-model="format" type="radio" name="question-import-format" value="spreadsheet" @change="closeFileMenu"> Excel / CSV</label><label><input id="question-import-format-docx" v-model="format" type="radio" name="question-import-format" value="docx" @change="closeFileMenu"> Word .docx</label></fieldset>
-              <a data-question-template="xlsx" href="/api/v1/teacher/import-templates/questions.xlsx" download="question_import_template.xlsx">下载 Excel 模板</a>
-              <a data-question-template="csv" href="/api/v1/teacher/import-templates/questions.csv" download="question_import_template.csv">下载 CSV 模板</a>
-              <a data-question-template="docx" href="/api/v1/teacher/import-templates/questions.docx" download="question_import_template.docx">下载 Word 模板</a>
+              <a data-question-template="xlsx" href="/api/v1/teacher/import-templates/question-groups.xlsx" download="question_import_template.xlsx">完整 11 类题型 Excel 模板</a>
+              <a data-question-template="csv" href="/api/v1/teacher/import-templates/question-groups.csv" download="question_import_template.csv">完整 11 类题型 CSV 模板</a>
+              <a data-question-template="docx" href="/api/v1/teacher/import-templates/question-groups.docx" download="question_import_template.docx">完整 11 类题型 Word 模板</a>
             </div>
           </details>
         </div>
@@ -306,7 +316,8 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
         <span v-if="summary.unselected">另有 {{ summary.unselected }} 道未选择。</span><span v-if="confirmation.failed">未完成的导入行保留在下方，修正后可重新上传完整文件。</span><span v-else-if="confirmedDraft">草稿已成功保存，可在题库中继续补全。</span>
       </Alert>
 
-      <section v-if="preview" data-import-preview class="qimp-preview" aria-label="导入预览">
+      <QuestionGroupImportPreview v-if="preview && groups.length" v-model="selectedGroupIds" :groups="groups" :rows="allRows" :disabled="busy || Boolean(confirmation)" />
+      <section v-if="preview && rows.length" data-import-preview class="qimp-preview" aria-label="导入预览">
         <div class="qimp-toolbar">
           <div class="qimp-filters" role="group" aria-label="显示预览行">
             <button v-for="item in filters" :id="item.value === 'invalid' ? 'question-import-filter-invalid' : undefined" :key="item.value" :data-import-filter="item.value" class="qimp-filter" :class="{ 'is-active': filter === item.value }" type="button" :aria-pressed="filter === item.value" @click="filter = item.value">{{ item.label }} <span>{{ item.count }}</span></button>
@@ -352,7 +363,7 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
 
       <footer v-if="preview" class="qimp-footer">
         <p><Icon name="warning" :size="23" /><span>{{ confirmation ? confirmation.failed ? '如仍有未完成行，请修正后重新上传完整文件。' : confirmedDraft ? '草稿可在题库中继续补全，保存后会自动转为可用。' : '全部所选题目已导入为可用题目。' : '确认导入前，请再次检查题目内容与 KC 映射是否正确。' }}</span></p>
-        <div><button class="qimp-button is-outline" type="button" :disabled="busy" @click="clearPreview">取消</button><button v-if="confirmation" data-return-detail class="qimp-button is-primary" type="button" @click="router.push(detailUrl)">返回题库详情</button><button v-else data-confirm-import class="qimp-button is-primary" type="button" :disabled="!canConfirm" @click="confirm">{{ busy ? '正在确认…' : '确认导入 ' + selectedIds.length + ' 道题' }}</button><button v-if="confirmation" data-confirm-import class="kt-visually-hidden" disabled type="button">本预览已处理</button></div>
+        <div><button class="qimp-button is-outline" type="button" :disabled="busy" @click="clearPreview">取消</button><button v-if="confirmation" data-return-detail class="qimp-button is-primary" type="button" @click="router.push(detailUrl)">返回题库详情</button><button v-else data-confirm-import class="qimp-button is-primary" type="button" :disabled="!canConfirm" @click="confirm">{{ busy ? '正在确认…' : '确认导入 ' + selectedQuestionCount + ' 道题' }}</button><button v-if="confirmation" data-confirm-import class="kt-visually-hidden" disabled type="button">本预览已处理</button></div>
       </footer>
     </div>
 
@@ -360,6 +371,9 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
     <aside v-if="activeRow && detailOpen" ref="detailPanel" data-question-detail class="qimp-detail" :class="{ 'is-mobile-open': mobileDetailOpen }" :role="compact ? 'dialog' : undefined" :aria-modal="compact && mobileDetailOpen ? true : undefined" aria-labelledby="question-import-detail-title" @keydown="detailKeydown">
       <header><h2 id="question-import-detail-title">题目 {{ activeRow.sequence }} 详细信息</h2><button ref="closeDetailButton" class="qimp-close" type="button" aria-label="关闭题目详情" @click="closeDetail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg></button></header>
       <div class="qimp-detail-body">
+        <section v-if="activeRow.title"><h3>标题</h3><p>{{ activeRow.title }}</p></section>
+        <section v-if="activeRow.instructions"><h3>作答说明</h3><p class="kt-question-import__multiline">{{ activeRow.instructions }}</p></section>
+        <section v-if="activeRow.question_type === 'numeric'"><h3>误差容限</h3><p>绝对：{{ activeRow.absolute_tolerance ?? '未设置' }} · 相对：{{ activeRow.relative_tolerance ?? '未设置' }}</p></section>
         <section><h3>题干</h3><p class="qimp-detail-value kt-question-import__multiline">{{ activeRow.text || '未读取到题干' }}</p></section>
         <section v-if="activeRow.options.length"><h3>选项</h3><ul class="qimp-options"><li v-for="option in activeRow.options" :key="option.key" :data-option="option.key" :class="{ 'is-correct': isCorrectOption(option.key) }"><span>{{ option.key }}</span><p class="kt-question-import__multiline">{{ option.text }}</p></li></ul></section>
         <section><h3>{{ activeRow.question_type === 'short_answer' ? '参考答案' : '正确答案' }}</h3><p class="qimp-detail-value kt-question-import__multiline">{{ formatValue(activeRow.answer) }}</p></section>
@@ -375,7 +389,7 @@ onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
             <svg class="qimp-graph" :viewBox="'0 0 ' + graph.width + ' ' + graph.height" role="img" aria-label="题目 KC 结构图">
               <defs><marker id="question-import-arrow" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto"><path d="M1 1 5 3.5 1 6" fill="none" stroke="currentColor" /></marker></defs>
               <line v-for="edge in graph.edges" :key="edge.key" :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" marker-end="url(#question-import-arrow)" />
-              <g v-for="node in graph.nodes" :key="node.kc_code" :transform="'translate(' + node.x + ' ' + node.y + ')'" :class="{ 'is-root': node.kc_code === activeRow.kc_mapping.root_kc_code }"><title>{{ node.kc_code }} {{ node.name }}</title><rect width="86" height="44" rx="21" /><text x="43" y="17" text-anchor="middle">{{ node.kc_code }}</text><text x="43" y="32" text-anchor="middle" class="qimp-graph-name">{{ node.name.length > 8 ? node.name.slice(0, 7) + '…' : node.name }}</text></g>
+              <g v-for="node in graph.nodes" :key="node.kc_code" :transform="'translate(' + node.x + ' ' + node.y + ')'" :class="{ 'is-root': node.kc_code === activeRow.kc_mapping.root_kc_code }"><title>{{ node.kc_code }} {{ node.name }}</title><rect width="140" height="56" rx="8" /><text x="70" y="22" text-anchor="middle">{{ node.kc_code }}</text><text x="70" y="43" text-anchor="middle" class="qimp-graph-name">{{ node.name.length > 8 ? node.name.slice(0, 7) + '…' : node.name }}</text></g>
             </svg>
             <details class="qimp-edge-list"><summary>查看对应关系</summary><ul aria-label="KC 对应关系"><li v-for="(node, index) in activeRow.kc_mapping.nodes" :key="index">{{ kcEdgeLabel(activeRow.kc_mapping, node) }}</li></ul></details>
           </template>

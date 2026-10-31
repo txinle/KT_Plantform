@@ -75,7 +75,7 @@ onMounted(load)
       <div class="kt-table-scroll">
         <table class="kt-table">
           <thead><tr><th>题库</th><th>题目数</th><th>创建者</th><th>最近更新</th><th>操作</th></tr></thead><tbody>
-            <tr v-for="bank in collection.items" :key="bank.id"><td><RouterLink :to="bank.detail_url"><strong>{{ bank.name }}</strong></RouterLink><small>{{ bank.description || '未填写说明' }}</small></td><td>{{ bank.question_count }}</td><td>{{ bank.created_by_name }}</td><td>{{ new Date(bank.updated_at).toLocaleString('zh-CN') }}</td><td><div v-if="bank.can_edit_metadata" class="kt-inline-actions"><button class="kt-button kt-button--secondary" type="button" @click="restore(bank.id)">恢复为私有</button><button class="kt-text-button kt-text-button--danger" type="button" @click="deletingId = bank.id">永久删除</button></div></td></tr>
+            <tr v-for="bank in collection.items" :key="bank.id"><td><RouterLink :to="bank.detail_url"><strong>{{ bank.name }}</strong></RouterLink><small>{{ bank.description || '未填写说明' }}</small></td><td>{{ bank.complete_question_count ?? bank.question_count }}</td><td>{{ bank.created_by_name }}</td><td>{{ new Date(bank.updated_at).toLocaleString('zh-CN') }}</td><td><div v-if="bank.can_edit_metadata" class="kt-inline-actions"><button class="kt-button kt-button--secondary" type="button" @click="restore(bank.id)">恢复为私有</button><button class="kt-text-button kt-text-button--danger" type="button" @click="deletingId = bank.id">永久删除</button></div></td></tr>
           </tbody>
         </table>
       </div>

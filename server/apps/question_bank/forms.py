@@ -93,7 +93,8 @@ class QuestionEditForm(forms.ModelForm):
     correct_answer_text = forms.CharField(label="正确答案", required=False)
     class Meta:
         model = Question
-        fields = ["text", "question_type", "teacher_difficulty", "absolute_tolerance", "relative_tolerance", "explanation", "status"]
+        fields = ["text", "question_type", "educational_type", "title", "instructions", "teacher_difficulty", "absolute_tolerance", "relative_tolerance", "explanation", "status",
+                  "max_score", "content_language", "text_match_case_sensitive", "text_match_policy_version"]
         labels = {
             "text": "题干",
             "question_type": "题型",
@@ -106,6 +107,11 @@ class QuestionEditForm(forms.ModelForm):
         widgets = {"text": forms.Textarea(attrs={"rows": 4}), "explanation": forms.Textarea(attrs={"rows": 3})}
     def __init__(self, *args, course=None, **kwargs):
         super().__init__(*args, **kwargs)
+        if self.is_bound:
+            self.data = self.data.copy()
+            for field in ('title', 'instructions', 'educational_type', 'max_score', 'content_language', 'text_match_case_sensitive', 'text_match_policy_version'):
+                if field not in self.data:
+                    self.data[field] = getattr(self.instance, field)
         self.fields["text"].required = False
         self.fields["status"].help_text = "非归档题目在保存后自动判定为可用或草稿。"
         if course is None and self.instance.pk:
@@ -142,6 +148,8 @@ class QuestionEditForm(forms.ModelForm):
             ).values_list("concept_id", flat=True)
     def clean(self):
         cleaned = super().clean()
+        if cleaned.get("question_type") != Question.Type.SHORT:
+            cleaned["educational_type"] = Question.EducationalType.STANDARD
         mapping = None
         try:
             mapping = json.loads(cleaned.get("kc_mapping_json") or "{}")

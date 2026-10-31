@@ -80,6 +80,9 @@ export function nextEntryRequest(intent: NavigationClickContext & { assignmentId
 }
 
 export type StudentRuntimeQuestionEntry = components['schemas']['StudentRuntimeQuestionEntry'] & {
+  question_group_runtime_version?: number
+  question_group?: import('@/question-content/question-group-content').QuestionGroupView
+  group_responses?: Record<string, unknown>
   assessment_flow_version?: number
   response_write_allowed?: boolean
   prepared_paper?: PreparedPaper

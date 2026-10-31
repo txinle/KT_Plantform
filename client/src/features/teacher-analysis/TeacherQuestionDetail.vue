@@ -86,12 +86,12 @@ onMounted(load)
 </template>
 
 <style scoped>
-.kt-analysis-generated { color: var(--kt-text-muted); font-size: .875rem; }
+.kt-analysis-generated { color: var(--kt-muted); font-size: 0.875rem; }
 .kt-analysis-section { margin-top: 1.25rem; }
-.kt-analysis-section p { color: var(--kt-text-muted); margin: .25rem 0 1rem; }
+.kt-analysis-section p { color: var(--kt-muted); margin: .25rem 0 1rem; }
 .kt-analysis-quality { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .75rem; margin: 0; }
-.kt-analysis-quality > div { border-left: 2px solid var(--kt-border, #d8dee9); padding-left: .75rem; }
-.kt-analysis-quality dt { color: var(--kt-text-muted); }
+.kt-analysis-quality > div { border-left: 2px solid var(--kt-border, var(--kt-border)); padding-left: .75rem; }
+.kt-analysis-quality dt { color: var(--kt-muted); }
 .kt-analysis-quality dd { margin: .25rem 0 0; font-weight: 700; }
 .kt-analysis-option-list { display: grid; gap: .75rem; list-style: none; margin: 0; padding: 0; }
 .kt-analysis-option-list li { display: grid; align-items: center; gap: .75rem; grid-template-columns: minmax(10rem, 1fr) minmax(6rem, 2fr) auto; }

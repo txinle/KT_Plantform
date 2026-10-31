@@ -6,8 +6,9 @@ from apps.api.exceptions import ApiConflict
 from apps.question_bank.models import Concept, Question, QuestionBank
 
 from ..collection_status import COLLECTION_STATUS_CHOICES
+from ..experiment_activity import experiment_activity_map
 from ..models import Experiment, ExperimentSamplingKC
-from ..sampling import SamplingService, SamplingValidationError
+from ..sampling import SamplingService, SamplingValidationError, SAMPLING_TYPES, SAMPLING_TYPE_CHOICES
 from ..services import sync_experiment_questions
 from ..question_bank_selection import validate_question_banks, replace_question_banks
 
@@ -20,12 +21,12 @@ class QuestionBankReferenceSerializer(serializers.ModelSerializer):
 
 
 class QuestionQuotaSerializer(serializers.Serializer):
-    question_type = serializers.ChoiceField(choices=Question.Type.choices)
+    question_type = serializers.ChoiceField(choices=SAMPLING_TYPE_CHOICES)
     amount = serializers.IntegerField(min_value=0)
 
 
 class SamplingQuestionTypeQuotaSerializer(serializers.Serializer):
-    question_type = serializers.ChoiceField(choices=Question.Type.choices)
+    question_type = serializers.ChoiceField(choices=SAMPLING_TYPE_CHOICES)
     amount = serializers.IntegerField(min_value=1)
 
 
@@ -63,6 +64,7 @@ class SamplingDefinitionSerializer(serializers.Serializer):
         choices=Experiment.MatchScope.choices,
         required=False,
     )
+    pinned_question_ids = serializers.ListField(source="sampling_pinned_question_ids", child=serializers.IntegerField(min_value=1), required=False)
     nodes = SamplingKCSerializer(source="sampling_kcs", many=True, required=False)
     type_quotas = SamplingQuestionTypeQuotaSerializer(many=True, required=False)
 
@@ -75,13 +77,29 @@ class SamplingDefinitionSerializer(serializers.Serializer):
         }
         representation["type_quotas"] = [
             {"question_type": question_type, "amount": amounts[question_type]}
-            for question_type in Question.Type.values
+            for question_type in SAMPLING_TYPES
             if question_type in amounts
         ]
         return representation
 
 
+class ExperimentActivityScheduleSerializer(serializers.Serializer):
+    task_id = serializers.IntegerField()
+    class_name = serializers.CharField()
+    opens_at = serializers.DateTimeField(allow_null=True)
+    closes_at = serializers.DateTimeField(allow_null=True)
+    total_time_limit_minutes = serializers.IntegerField(allow_null=True)
+    per_question_time_limit_seconds = serializers.IntegerField(allow_null=True)
+
+
+class ExperimentActivitySerializer(serializers.Serializer):
+    pending_grading_count = serializers.IntegerField()
+    grading_url = serializers.CharField(allow_null=True)
+    schedules = ExperimentActivityScheduleSerializer(many=True)
+
+
 class TeacherExperimentSerializer(serializers.ModelSerializer):
+    activity = serializers.SerializerMethodField()
     cross_experiment_item_policy = serializers.ChoiceField(
         choices=Experiment.CrossExperimentItemPolicy.choices,
         default=Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS,
@@ -180,6 +198,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "can_manage",
             "can_archive",
             "can_restore",
+            "activity",
             "created_at",
             "updated_at",
         )
@@ -197,6 +216,13 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
 
     def get_can_edit(self, experiment) -> bool:
         return experiment.status == Experiment.Status.DRAFT
+
+    @extend_schema_field(ExperimentActivitySerializer)
+    def get_activity(self, experiment):
+        if not hasattr(self, "_activity_map"):
+            instances = self.parent.instance if isinstance(self.parent, serializers.ListSerializer) else [experiment]
+            self._activity_map = experiment_activity_map(instances, can_grade=self.get_can_manage(experiment))
+        return ExperimentActivitySerializer(self._activity_map[experiment.pk]).data
 
     def get_can_manage(self, experiment) -> bool:
         if 'can_manage' in self.context:
@@ -252,7 +278,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
                 "question_type": question_type,
                 "amount": configuration.get("quota_map", {}).get(question_type, 0),
             }
-            for question_type in Question.Type.values
+            for question_type in SAMPLING_TYPES
         ]
         representation["sampling_kcs"] = [
             {
@@ -269,6 +295,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "match_scope": representation["sampling_match_scope"],
             "nodes": representation["sampling_kcs"],
             "type_quotas": configuration.get("sampling_type_quotas", []),
+            "pinned_question_ids": configuration.get("sampling_pinned_question_ids", []),
         }
         label_fields = {
             "selection_mode": Experiment.SelectionMode,
@@ -349,10 +376,20 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         sampling_match_scope = self._effective_value(attrs, "sampling_match_scope")
         sampling_kcs = attrs.get("sampling_kcs")
         type_quotas = attrs.get("type_quotas")
+        group_full_pool = sampling_mode is None and Question.objects.filter(
+            bank_id__in=[bank.pk for bank in attrs.get('selected_banks', self.instance.selected_question_banks if self.instance is not None else [])],
+            group__isnull=False,
+        ).exists()
+        if group_full_pool:
+            if sampling_total_count is not None or sampling_kcs or type_quotas:
+                raise serializers.ValidationError({'sampling_mode': '全量题组不能设置题数或配额。'})
+            attrs.update(selection_mode=Experiment.SelectionMode.ALL, sampling_kcs=[], type_quotas=[])
+            sampling_kcs, type_quotas = [], []
         if (
             self.instance is not None
             and self.instance.sampling_mode is None
             and (sampling_mode is None or sampling_kcs is None)
+            and not group_full_pool
         ):
             raise ApiConflict(
                 "旧版草稿只读；请先显式转换为完整的新抽题配置。",
@@ -360,7 +397,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             )
         if self.instance is None and sampling_kcs is None:
             sampling_kcs = []
-        if self.instance is None and sampling_mode is None:
+        if self.instance is None and sampling_mode is None and not group_full_pool:
             raise serializers.ValidationError({"sampling_mode": "请选择抽题模式。"})
         if sampling_kcs is not None:
             kc_codes = [row["kc_code"] for row in sampling_kcs]
@@ -405,7 +442,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError(
                         {"sampling_kcs": "知识点配额模式必须为每个节点设置正整数配额。"}
                     )
-            else:
+            elif not group_full_pool:
                 raise serializers.ValidationError({"sampling_mode": "请选择抽题模式。"})
         if sampling_mode == Experiment.SamplingMode.KC_QUOTA:
             if type_quotas is not None:
@@ -509,7 +546,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         if quotas is None:
             return
         amounts = {quota["question_type"]: quota["amount"] for quota in quotas}
-        for question_type in Question.Type.values:
+        for question_type in SAMPLING_TYPES:
             experiment.question_quotas.update_or_create(
                 question_type=question_type,
                 defaults={"amount": amounts.get(question_type, 0)},
@@ -546,12 +583,13 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         replace_question_banks(experiment, [bank.pk for bank in banks])
         self._save_quotas(experiment, quotas)
         self._save_sampling_kcs(experiment, sampling_kcs)
-        try:
-            SamplingService(experiment).resolve(validate_inventory=False)
-        except SamplingValidationError as exc:
-            raise serializers.ValidationError(
-                {issue["field"] or "sampling_kcs": issue["message"] for issue in exc.issues}
-            ) from exc
+        if experiment.sampling_mode:
+            try:
+                SamplingService(experiment).resolve(validate_inventory=False)
+            except SamplingValidationError as exc:
+                raise serializers.ValidationError(
+                    {issue["field"] or "sampling_kcs": issue["message"] for issue in exc.issues}
+                ) from exc
         sync_experiment_questions(experiment)
         return experiment
 
@@ -641,6 +679,7 @@ class TeacherExperimentInventoryBucketSerializer(serializers.Serializer):
 
 
 class TeacherExperimentReadinessSerializer(serializers.Serializer):
+    question_group_pool = serializers.BooleanField(read_only=True)
     ready = serializers.BooleanField()
     issues = serializers.ListField(child=serializers.CharField())
     blocking_issues = TeacherExperimentReadinessIssueSerializer(many=True)
@@ -679,7 +718,7 @@ class TeacherSamplingInventoryRequestSerializer(serializers.Serializer):
 
 
 class TeacherSamplingInventoryQuestionTypeSerializer(serializers.Serializer):
-    question_type = serializers.ChoiceField(choices=Question.Type.choices)
+    question_type = serializers.ChoiceField(choices=SAMPLING_TYPE_CHOICES)
     label = serializers.CharField()
     available = serializers.IntegerField(min_value=0)
 
@@ -696,6 +735,7 @@ class TeacherSamplingInventoryResponseSerializer(serializers.Serializer):
     question_types = TeacherSamplingInventoryQuestionTypeSerializer(many=True)
     kc_counts = TeacherSamplingInventoryKCSerializer(many=True)
     bank_counts = serializers.ListField(child=serializers.DictField(), required=False)
+    questions = serializers.ListField(child=serializers.DictField(), required=False)
 
 
 class PublishPlanClassSerializer(serializers.Serializer):
@@ -868,6 +908,7 @@ class PublishPreviewSummarySerializer(serializers.Serializer):
     class_count = serializers.IntegerField(min_value=0)
     participant_count = serializers.IntegerField(min_value=0)
     item_count = serializers.IntegerField(min_value=0)
+    question_count = serializers.IntegerField(min_value=0)
     randomization_validation = serializers.CharField()
     created_at = serializers.DateTimeField()
 
@@ -898,6 +939,9 @@ class PublishParticipantSerializer(serializers.Serializer):
     class_id = serializers.IntegerField()
     class_name = serializers.CharField()
     item_count = serializers.IntegerField(min_value=0)
+    question_count = serializers.IntegerField(min_value=0)
+    review_question_count = serializers.IntegerField(min_value=0)
+    new_question_count = serializers.IntegerField(min_value=0)
     is_valid = serializers.BooleanField()
     excluded = serializers.BooleanField()
     review_item_count = serializers.IntegerField(min_value=0)

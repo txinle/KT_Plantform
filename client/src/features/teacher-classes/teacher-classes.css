@@ -26,7 +26,7 @@
   display: grid;
   gap: .5rem;
   color: var(--kt-color-muted);
-  font-size: .875rem;
+  font-size: 0.875rem;
   font-weight: 650;
 }
 
@@ -136,3 +136,6 @@
   }
 
 }
+#class-main { font-size: .9375rem; line-height: 1.5; }
+#class-main .kt-text-button { min-height: 2.75rem; border: 0; padding: .45rem; background: transparent; color: var(--kt-color-primary); font-weight: 700; cursor: pointer; }
+#class-main .kt-text-button--danger { color: var(--kt-color-danger); }

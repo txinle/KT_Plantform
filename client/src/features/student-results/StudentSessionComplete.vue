@@ -4,8 +4,11 @@ import { useRoute } from 'vue-router'
 import { createApiClient } from '@/api/client'
 import { getBootstrapContext } from '@/app/bootstrap'
 import WorkspaceShell from '@/design-system/components/WorkspaceShell.vue'
+import QuestionGroupResults from '@/question-content/QuestionGroupResults.vue'
+import type { ResultGroup, ScoreProgress } from '@/question-content/question-group-results'
 
 interface Summary {
+  result?: { feedback_phase: string; groups?: ResultGroup[]; score_progress?: ScoreProgress }
   session_id: number
   experiment_name: string
   status: string
@@ -38,6 +41,8 @@ onMounted(async () => {
       <h1 id="session-title">{{ summary.experiment_name }}</h1>
       <p>当前状态：<strong>{{ summary.status_label }}</strong></p>
       <dl><div><dt>已正式提交</dt><dd>{{ summary.submission_count }}</dd></div><div><dt>分配题目</dt><dd>{{ summary.attempt_count }}</dd></div></dl>
+      <QuestionGroupResults v-if="summary.result" :groups="summary.result.groups" :score-progress="summary.result.score_progress" />
+      <p v-if="summary.result?.feedback_phase === 'not_released'">反馈将在服务器确认的开放时间显示。</p>
       <a class="kt-button" :href="summary.return_url">返回作业列表</a>
     </section>
     <p v-else role="status">正在加载会话状态…</p>
@@ -45,7 +50,7 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.kt-session-summary { max-width: 720px; padding: 24px; }
+.kt-session-summary { width: 100%; padding: 24px; }
 dl { display: flex; flex-wrap: wrap; gap: 32px; margin-block: 24px; }
 dt { color: var(--kt-muted); }
 dd { margin: 8px 0 0; font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }

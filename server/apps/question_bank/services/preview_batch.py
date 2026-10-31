@@ -46,20 +46,18 @@ class ImportPreviewBatchService:
             raise ValueError("未知的预览批次类型")
         if (kind in (ImportPreviewBatch.Kind.QUESTION_KC, ImportPreviewBatch.Kind.QUESTION_CONTENT)) != (bank is not None):
             raise ValueError("题目 KC 预览必须绑定题库，课程 KC 预览不得绑定题库")
-        if bank is not None and bank.course_id != course.pk:
+        if course is None and (kind != ImportPreviewBatch.Kind.QUESTION_CONTENT or bank is None or bank.course_id is not None):
+            raise ValueError('只有独立题库内容预览可以不绑定课程')
+        if bank is not None and bank.course_id != (course.pk if course is not None else None):
             raise ValueError("预览题库不属于当前课程")
-        course = lock_course(course)
+        course = lock_course(course) if course is not None else None
         bound_payload = dict(payload)
-        identity_map_max_pk = (
-            course.question_identities.aggregate(value=Max("pk"))["value"] or 0
-        )
-        bound_payload["_course_question_identity_max_pk"] = identity_map_max_pk
-        bound_payload["_course_question_identity_fingerprint"] = (
-            course_question_identity_fingerprint(
-                course,
-                through_identity_pk=identity_map_max_pk,
+        if course is not None:
+            identity_map_max_pk = course.question_identities.aggregate(value=Max("pk"))["value"] or 0
+            bound_payload["_course_question_identity_max_pk"] = identity_map_max_pk
+            bound_payload["_course_question_identity_fingerprint"] = course_question_identity_fingerprint(
+                course, through_identity_pk=identity_map_max_pk,
             )
-        )
         return ImportPreviewBatch.objects.create(
             kind=kind,
             course=course,
@@ -73,7 +71,7 @@ class ImportPreviewBatchService:
 
     @staticmethod
     def _locked_valid_batch(*, batch_id, kind, course, bank, actor, session_key, allow_consumed=False):
-        course = lock_course(course)
+        course = lock_course(course) if course is not None else None
         try:
             batch = ImportPreviewBatch.objects.select_for_update().get(pk=batch_id)
         except (ImportPreviewBatch.DoesNotExist, ValueError, TypeError, ValidationError):
@@ -84,7 +82,7 @@ class ImportPreviewBatchService:
         expected_bank_id = bank.pk if bank is not None else None
         if (
             batch.kind != kind
-            or batch.course_id != course.pk
+            or batch.course_id != (course.pk if course is not None else None)
             or batch.bank_id != expected_bank_id
             or batch.created_by_id != actor.pk
             or batch.session_binding != _session_binding(session_key)
@@ -93,12 +91,14 @@ class ImportPreviewBatchService:
                 "preview_binding_mismatch",
                 "预览批次与当前会话不匹配",
             )
+        if batch.expires_at <= timezone.now():
+            raise ImportPreviewBatchConflict("preview_expired", "预览批次已过期，请重新上传")
         if batch.status == ImportPreviewBatch.Status.CONSUMED:
             if allow_consumed:
                 return batch
             raise ImportPreviewBatchConflict("preview_consumed", "预览批次已经确认，不能重复消费")
         identity_map_max_pk = batch.payload.get("_course_question_identity_max_pk")
-        if (
+        if course is not None and (
             not isinstance(identity_map_max_pk, int)
             or batch.payload.get("_course_question_identity_fingerprint")
             != course_question_identity_fingerprint(
@@ -110,8 +110,6 @@ class ImportPreviewBatchService:
                 "preview_stale",
                 "课程题号已变化，预览批次已失效，请重新上传",
             )
-        if batch.expires_at <= timezone.now():
-            raise ImportPreviewBatchConflict("preview_expired", "预览批次已过期，请重新上传")
         return batch
 
     @classmethod

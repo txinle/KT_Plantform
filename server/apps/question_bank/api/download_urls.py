@@ -4,6 +4,12 @@ from .. import downloads
 
 
 urlpatterns = [
+    path('import-templates/question-groups.csv', download_view(downloads.question_group_import_template,
+         operation_id='teacher_question_group_import_template_csv'), {'extension': 'csv'}, name='teacher-question-group-import-template-csv'),
+    path('import-templates/question-groups.xlsx', download_view(downloads.question_group_import_template, media_types=(XLSX,),
+         operation_id='teacher_question_group_import_template_xlsx'), {'extension': 'xlsx'}, name='teacher-question-group-import-template-excel'),
+    path('import-templates/question-groups.docx', download_view(downloads.question_group_import_template, media_types=(DOCX,),
+         operation_id='teacher_question_group_import_template_docx'), {'extension': 'docx'}, name='teacher-question-group-import-template-word'),
     path('import-templates/questions.csv', download_view(downloads.question_import_template,
          operation_id='teacher_question_import_template_csv'), name='teacher-question-import-template'),
     path('import-templates/questions.xlsx', download_view(downloads.question_import_template_excel, media_types=(XLSX,),

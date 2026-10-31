@@ -112,6 +112,40 @@ describe('TeacherExperimentPublishPlan', () => {
     await flushPromises()
   })
 
+  it.each(['review', 'new'] as const)('shows one complete question and three response items for a %s reading question', async (historyRole) => {
+    mocks.route.params.step = '2'
+    const completedPlan = {
+      ...await mocks.api.plan(), current_step: 2, status: 'previewed', setup_status: 'complete',
+      missing_requirements: [], classes: [{ class_id: 5, class_name: '一班', excluded_student_ids: [],
+        excluded_count: 0, participant_count: 1, schedule_mode: 'default', opens_at: null, closes_at: null }],
+    }
+    mocks.api.plan.mockResolvedValue(completedPlan)
+    mocks.api.review.mockResolvedValue({ plan: completedPlan, effects: [], preview: {
+      id: 41, plan_revision: 1, class_count: 1, participant_count: 1,
+      question_count: 1, item_count: 3, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z',
+    } })
+    mocks.api.participants.mockResolvedValue({ items: [{
+      id: 9, student_number: 'S009', display_name: '学生甲', class_id: 5, class_name: '一班',
+      question_count: 1, item_count: 3, is_valid: true, excluded: false,
+      review_question_count: historyRole === 'review' ? 1 : 0, new_question_count: historyRole === 'new' ? 1 : 0,
+      review_item_count: historyRole === 'review' ? 3 : 0, new_item_count: historyRole === 'new' ? 3 : 0,
+    }], page: { number: 1, size: 20, total_items: 1, total_pages: 1, start: 1, end: 1 } })
+
+    const wrapper = mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+
+    const metric = wrapper.findAll('.kt-publish-precheck__metrics > div')[2]!
+    expect(metric.get('strong').text()).toBe('1')
+    expect(metric.text()).toContain('完整题')
+    expect(metric.text()).toContain('3 个作答项')
+    expect(wrapper.findAll('.kt-precheck-participants th').map((cell) => cell.text())).toEqual([
+      '班级', '学号', '姓名', '完整题数', '作答项数', '复测题', '新题', '校验',
+    ])
+    expect(wrapper.findAll('.kt-precheck-participants tbody td').map((cell) => cell.text())).toEqual([
+      '一班', 'S009', '学生甲', '1', '3', historyRole === 'review' ? '1' : '0', historyRole === 'new' ? '1' : '0', '有效',
+    ])
+  })
+
   it('loads participant pages on demand and preserves exclusions from unvisited pages', async () => {
     const initialPlan = await mocks.api.plan()
     mocks.api.plan.mockResolvedValue({
@@ -247,7 +281,7 @@ describe('TeacherExperimentPublishPlan', () => {
     mocks.api.plan.mockResolvedValue(completedPlan)
     mocks.api.review.mockResolvedValue({
       plan: completedPlan,
-      preview: { id: 41, plan_revision: 4, class_count: 1, participant_count: 36, item_count: 36, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z' },
+      preview: { id: 41, plan_revision: 4, class_count: 1, participant_count: 36, question_count: 36, item_count: 36, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z' },
       effects: [],
     })
     mocks.api.detail.mockResolvedValue({
@@ -284,7 +318,7 @@ describe('TeacherExperimentPublishPlan', () => {
     }
     mocks.api.review.mockResolvedValue({
       plan: completedPlan,
-      preview: { id: 41, plan_revision: 3, class_count: 1, participant_count: 36, item_count: 36, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z' },
+      preview: { id: 41, plan_revision: 3, class_count: 1, participant_count: 36, question_count: 36, item_count: 36, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z' },
       effects: [],
     })
     const wrapper = mount(TeacherExperimentPublishPlan)
@@ -317,7 +351,7 @@ describe('TeacherExperimentPublishPlan', () => {
     })
     mocks.api.review.mockResolvedValue({
       plan: completedPlan,
-      preview: { id: 41, plan_revision: 3, class_count: 1, participant_count: 36, item_count: 36, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z' },
+      preview: { id: 41, plan_revision: 3, class_count: 1, participant_count: 36, question_count: 36, item_count: 36, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z' },
       effects: [],
     })
 
@@ -366,12 +400,12 @@ describe('TeacherExperimentPublishPlan', () => {
     }
     mocks.api.plan.mockResolvedValue(completedPlan)
     mocks.api.participants.mockResolvedValue({
-      items: [{ id: 9, student_number: 'S009', display_name: '学生甲', class_id: 5, class_name: '一班', item_count: 4, is_valid: true, excluded: false }],
+      items: [{ id: 9, student_number: 'S009', display_name: '学生甲', class_id: 5, class_name: '一班', question_count: 4, item_count: 4, review_question_count: 0, new_question_count: 4, review_item_count: 0, new_item_count: 4, is_valid: true, excluded: false }],
       page: { number: 1, size: 20, total_items: 35, total_pages: 2, start: 1, end: 20 },
     })
     mocks.api.review.mockResolvedValue({
       plan: completedPlan,
-      preview: { id: 41, plan_revision: 4, class_count: 1, participant_count: 35, item_count: 140, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z' },
+      preview: { id: 41, plan_revision: 4, class_count: 1, participant_count: 35, question_count: 140, item_count: 140, randomization_validation: '通过', created_at: '2026-08-30T00:00:00Z' },
       effects: ['将冻结当前实验定义。'],
     })
     const queuedCommit = {

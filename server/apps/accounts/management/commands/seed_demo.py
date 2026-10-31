@@ -334,4 +334,6 @@ class Command(BaseCommand):
                 teacher,
                 expected_revision=plan.plan_revision,
             )
+        from apps.question_bank.services.example_groups import ensure_english_group_examples
+        ensure_english_group_examples(teacher)
         self.stdout.write(self.style.SUCCESS("演示数据已就绪：admin/admin123，teacher/teacher123，S001-S003/student123"))

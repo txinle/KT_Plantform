@@ -13,7 +13,7 @@ export type StudentTask = components['schemas']['StudentTask']
 export type StudentTaskCollection = components['schemas']['StudentTaskCollection']
 export type StudentSessionEntry = components['schemas']['StudentSessionEntry'] & { runtime?: EnteredQuestion }
 export type StudentResult = components['schemas']['StudentResult']
-export type StudentLearningExperiment = components['schemas']['StudentLearningExperiment'] & { version?: string }
+export type StudentLearningExperiment = components['schemas']['StudentLearningExperiment'] & { version?: string; groups?: import('@/question-content/question-group-results').ResultGroup[]; score_progress?: import('@/question-content/question-group-results').ScoreProgress }
 export type StudentLearningQuestion = components['schemas']['StudentLearningQuestion']
 
 export interface MetricDisplay {

@@ -304,7 +304,7 @@ def initial_grading_result(attempt, correct, score) -> InitialGradingResult:
             status=SubmissionEvent.GradingStatus.PENDING,
             is_correct=None,
             score=None,
-            max_score=Decimal("1"),
+            max_score=attempt.assignment.snapshot.max_score,
             method="manual_binary_v1",
         )
     if (
@@ -322,7 +322,7 @@ def initial_grading_result(attempt, correct, score) -> InitialGradingResult:
         status=SubmissionEvent.GradingStatus.COMPLETED,
         is_correct=correct,
         score=score,
-        max_score=Decimal("1"),
+        max_score=attempt.assignment.snapshot.max_score,
         method="automatic",
     )
 

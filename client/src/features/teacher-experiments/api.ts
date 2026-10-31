@@ -6,6 +6,7 @@ export type TeacherExperiment = components['schemas']['TeacherExperiment']
 export type TeacherExperimentCollection = components['schemas']['TeacherExperimentCollection']
 export type TeacherExperimentReadiness = components['schemas']['TeacherExperimentReadiness']
 export type ExperimentQuestionType = 'single_choice' | 'multiple_choice' | 'numeric' | 'short_answer' | 'fill_blank' | 'true_false'
+  | 'reading' | 'words' | 'cloze' | 'translation' | 'essay'
 export type SamplingInventoryInput = {
   question_bank_ids: number[]
   kc_codes: string[]
@@ -24,12 +25,16 @@ export type SamplingInventory = {
     available: number
   }>
   bank_counts?: Array<{ question_bank_id: number; name: string; candidate_count: number }>
+  questions?: Array<{
+    question_id: number; question_type: ExperimentQuestionType; code: string; title: string; text: string
+    item_count: number; question_bank_id: number
+  }>
 }
 export type ExperimentDefinitionInput = Omit<components['schemas']['PatchedTeacherExperiment'], 'sampling'> & {
   name: string
   question_bank_ids: number[]
   sampling?: {
-    mode: 'total_count' | 'kc_quota'
+    mode: 'total_count' | 'kc_quota' | null
     total_count?: number | null
     match_scope: 'primary' | 'any_level'
     nodes: Array<{
@@ -41,6 +46,7 @@ export type ExperimentDefinitionInput = Omit<components['schemas']['PatchedTeach
       question_type: ExperimentQuestionType
       amount: number
     }>
+    pinned_question_ids?: number[]
   }
 }
 export type PublishPlan = components['schemas']['PublishPlan']

@@ -29,9 +29,12 @@ def content_issues(content, *, question_name="题目"):
     issues = []
     kind = content.get("question_type")
     answer = content.get("answer")
+    educational_type = content.get("educational_type", "standard")
+    if educational_type not in Question.EducationalType.values or (educational_type != "standard" and kind != Question.Type.SHORT):
+        issues.append(f"{question_name} 的教学题型与作答规则不匹配")
     option_values = content.get("options") or {}
     options = {str(key).upper() for key in option_values}
-    if not _has_text(content.get("text")):
+    if not _has_text(content.get("text")) and not (kind == Question.Type.FILL_BLANK and content.get('valid_cloze_context')):
         issues.append(f"{question_name} 的题干不能为空")
     if len(options) != len(option_values):
         issues.append(f"{question_name} 的选项编号不能重复")
@@ -64,6 +67,12 @@ def content_issues(content, *, question_name="题目"):
         issues.append(f"{question_name} 的题型无效")
     if kind not in {Question.Type.SINGLE, Question.Type.MULTIPLE} and options:
         issues.append(f"{question_name} 的非选择题不能包含自定义选项")
+    try:
+        maximum = normalize_finite_decimal(content.get('max_score', '1'))
+        if maximum < Decimal('0.01') or maximum > Decimal('999.99') or maximum != maximum.quantize(Decimal('0.01')):
+            raise ValueError
+    except ValueError:
+        issues.append(f'{question_name} 的分值必须为 0.01 至 999.99，最多两位小数')
     for field, label in (("teacher_difficulty", "教师设定难度"), ("absolute_tolerance", "绝对误差容限"), ("relative_tolerance", "相对误差容限")):
         value = content.get(field)
         if value is None or value == "":
@@ -79,13 +88,22 @@ def content_issues(content, *, question_name="题目"):
 
 
 def _content(question):
+    valid_cloze_context = False
+    if question.group_id and question.group.kind in ('cloze', 'words'):
+        from .question_groups import validate_group_structure
+        try:
+            validate_group_structure(question.group)
+            valid_cloze_context = True
+        except ValidationError:
+            pass
     return {
-        "text": question.text, "question_type": question.question_type,
+        "text": question.text, "question_type": question.question_type, "educational_type": question.educational_type,
         "answer": question.correct_answer, "accepted_answers": question.accepted_answers,
         "options": {option.key: option.text for option in question.options.all()},
         "teacher_difficulty": question.teacher_difficulty,
         "absolute_tolerance": question.absolute_tolerance,
         "relative_tolerance": question.relative_tolerance,
+        'max_score': question.max_score, 'valid_cloze_context': valid_cloze_context,
     }
 
 
@@ -95,11 +113,17 @@ def validate_question_answer_structure(question):
         raise ValidationError(issues)
 
 
-def readiness_issues(question, *, require_primary=None):
+def readiness_issues(question, *, require_primary=None, include_group=True):
     issues = content_issues(_content(question), question_name=question.code or f"题目#{question.pk}")
+    if include_group and question.group_id:
+        from .question_groups import validate_group_structure
+        try:
+            validate_group_structure(question.group)
+        except ValidationError as error:
+            issues.extend(error.messages)
     course_required = question.bank.course_id is not None
     if require_primary is None:
-        require_primary = course_required
+        require_primary = course_required or question.group_id is not None
     if not course_required and not require_primary:
         return issues
     links = list(question.concept_links.select_related("concept", "parent_link__concept"))
@@ -107,6 +131,11 @@ def readiness_issues(question, *, require_primary=None):
     if len(primary) != 1:
         issues.append("课程可用题目必须有且仅有一个主 KC。" if course_required else "题目缺少主知识点。")
         return issues
+    if not course_required:
+        from .standalone_kc import available_standalone_concepts
+        available_ids = set(available_standalone_concepts(question.bank).values_list('pk', flat=True))
+        if any(link.concept_id not in available_ids for link in links):
+            issues.append('题组知识点必须为题库所有者可用的私有或公共 KC。')
     if course_required:
         from .question_kc_mapping import validate_question_kc_mapping
         try:

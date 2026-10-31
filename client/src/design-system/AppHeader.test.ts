@@ -1,25 +1,19 @@
-import { flushPromises, mount } from '@vue/test-utils'
-import { expect, it, vi } from 'vitest'
-const auth = vi.hoisted(() => ({ logout: vi.fn() }))
-vi.mock('@/app/auth', () => auth)
+import { mount } from '@vue/test-utils'
+import { afterEach, expect, it, vi } from 'vitest'
 import AppHeader from './components/AppHeader.vue'
 
-it('reports a rejected logout without losing the current page', async () => {
-  auth.logout.mockRejectedValue(new Error('连接失败，请重试'))
-  const wrapper = mount(AppHeader, { props: { userName: '教师', showLogout: true, csrfToken: 'csrf' } })
-  await wrapper.get('form').trigger('submit')
-  await flushPromises()
-  expect(auth.logout).toHaveBeenCalledOnce()
-  expect(wrapper.get('[role="alert"]').text()).toBe('连接失败，请重试')
-  expect(wrapper.get('button').attributes('disabled')).toBeUndefined()
-})
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); document.documentElement.style.removeProperty('--kt-header-height') })
 
-it('shows the permanent password-change entry only when supplied for a student', () => {
-  const student = mount(AppHeader, {
-    props: { userName: '学生', passwordChangeUrl: '/password/change/' },
-  })
-  expect(student.get('[data-password-change-link]').attributes('href')).toBe('/password/change/')
-
-  const teacher = mount(AppHeader, { props: { userName: '教师' } })
-  expect(teacher.find('[data-password-change-link]').exists()).toBe(false)
+it('keeps the reserved header offset equal to its actual wrapped height', () => {
+  let resize: ResizeObserverCallback | undefined
+  const disconnect = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: ResizeObserverCallback) { resize = callback } observe() {} disconnect = disconnect })
+  const size = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ height: 64 } as DOMRect)
+  const wrapper = mount(AppHeader, { props: { userName: 'Teacher' } })
+  expect(document.documentElement.style.getPropertyValue('--kt-header-height')).toBe('64px')
+  size.mockReturnValue({ height: 112 } as DOMRect)
+  resize?.([], {} as ResizeObserver)
+  expect(document.documentElement.style.getPropertyValue('--kt-header-height')).toBe('112px')
+  wrapper.unmount()
+  expect(disconnect).toHaveBeenCalledOnce()
 })

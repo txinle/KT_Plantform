@@ -24,6 +24,7 @@ export interface ArchivedBank {
   id: number
   name: string
   description: string
+  complete_question_count?: number
   question_count: number
   created_by_name: string
   updated_at: string
@@ -51,6 +52,13 @@ export interface QuestionEditor {
   course: CourseReference
   bank: { id: number; name: string }
   question: {
+    title?: string
+    instructions?: string
+    educational_type?: string
+    group_id?: number | null
+    max_score?: string
+    content_language?: string
+    text_match_case_sensitive?: boolean
     id: number
     sequence: number
     code: string
@@ -80,6 +88,16 @@ export interface QuestionEditor {
 export type QuestionImportClassification = 'ready' | 'draft' | 'duplicate' | 'invalid'
 
 export interface QuestionImportPreviewRow {
+  title?: string
+  instructions?: string
+  absolute_tolerance?: string | null
+  relative_tolerance?: string | null
+  group_id?: string | null
+  group_order?: number | null
+  blank_id?: string
+  max_score?: string
+  content_language?: string
+  text_match_case_sensitive?: boolean
   row_id: string
   sequence: number
   source_label: string
@@ -104,10 +122,28 @@ export interface QuestionImportPreviewRow {
 export interface QuestionImportPreview {
   preview_id: string
   preview: {
+    groups?: QuestionImportPreviewGroup[]
     rows: QuestionImportPreviewRow[]
     summary: { ready: number; draft: number; duplicate: number; invalid: number }
     confirmable: boolean
   }
+}
+
+export interface QuestionImportPreviewGroup {
+  group_id: string
+  source_group_code: string
+  kind: 'reading' | 'cloze' | 'words'
+  word_bank?: string[]
+  title: string
+  instructions: string
+  material: string
+  material_segments: import('@/question-content/question-group-content').MaterialSegment[]
+  content_language: string
+  member_row_ids: string[]
+  classification: QuestionImportClassification
+  errors: string[]
+  item_count: number
+  total_max_score: string
 }
 
 export interface QuestionImportConfirmation {
@@ -200,7 +236,7 @@ export function createTeacherBankManagementApi(client: ApiClient) {
     sharedBanks(courseId: number, sourceCourseId: number, creatorId: number) {
       return client.get<{ course: CourseReference; source_course: CourseReference; creator: {
         id: number; name: string; username: string
-      }; items: Array<{ id: number; name: string; description: string; question_count: number }> }>(
+      }; items: Array<{ id: number; name: string; description: string; complete_question_count?: number; question_count: number }> }>(
         `/api/v1/teacher/courses/${courseId}/banks/shared/${sourceCourseId}/creators/${creatorId}/`,
       )
     },
@@ -246,10 +282,10 @@ export function createTeacherBankManagementApi(client: ApiClient) {
         { method: 'POST', body },
       )
     },
-    confirmQuestionImport(courseId: number, bankId: number, previewId: string, selectedRowIds?: string[]) {
+    confirmQuestionImport(courseId: number, bankId: number, previewId: string, selectedRowIds?: string[], selectedGroupIds?: string[]) {
       return client.mutate<QuestionImportConfirmation>(
         `/api/v1/teacher/courses/${courseId}/banks/${bankId}/imports/questions/confirm/`,
-        { method: 'POST', body: { preview_id: previewId, ...(selectedRowIds ? { selected_row_ids: selectedRowIds } : {}) } },
+        { method: 'POST', body: { preview_id: previewId, ...(selectedRowIds ? { selected_row_ids: selectedRowIds } : {}), ...(selectedGroupIds ? { selected_group_ids: selectedGroupIds } : {}) } },
       )
     },
     previewKCImport(courseId: number, bankId: number, file: File) {
@@ -293,3 +329,5 @@ export function getTeacherBankManagementApi() {
     createApiClient({ getCsrfToken: () => bootstrap.csrf_token }),
   )
 }
+
+export interface BankUnitSummary { complete_count: number; response_item_count: number; usable_count: number; types: Array<{ value: string; label: string; count: number }> }

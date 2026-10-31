@@ -3,12 +3,13 @@ import type { CaptureStore } from './capture-contract'
 import type { StudentRuntimeQuestionEntry } from './api'
 
 export interface StaticContentDescriptor { url: string; sha256: string; byte_length: number; key: string }
-export interface PreparedPaper { version: 1; content_version: string; manifest: StaticContentDescriptor; question: StaticContentDescriptor }
+export interface PreparedPaper { version: 1 | 2; content_version: string; manifest: StaticContentDescriptor; question: StaticContentDescriptor }
 export interface PreparedNavigationItem {
   assignment_id: number; attempt_id: number; sequence_index: number; status: string; url: string; current: boolean
   response_version: number; active_response_event_id: string | null; content: StaticContentDescriptor
 }
-export interface PreparedManifest { version: 1; session_id: number; content_version: string; navigation: PreparedNavigationItem[]; question_count: number }
+export interface PresentationUnit { group_id: string | null; kind: string; title: string; assignment_ids: number[] }
+export interface PreparedManifest { version: 1 | 2; session_id: number; content_version: string; navigation: PreparedNavigationItem[]; question_count: number; presentation_units?: PresentationUnit[] }
 export interface ExpectedAttemptVersion { attempt_id: number; response_version: number; target_event_id: string | null }
 export interface PaperSummary { session_id: number; expected_versions: ExpectedAttemptVersion[]; submission_status_url: string }
 export interface PaperSubmissionIntent {
@@ -90,12 +91,13 @@ export async function hydratePreparedQuestion(dto: StudentRuntimeQuestionEntry, 
   const prepared = dto.prepared_paper
   const cache = createPreparedPaperCache(store, { userId, sessionId: dto.session_id, contentVersion: prepared.content_version })
   markPreparedStartupPhase('first_content_start')
-  const decoded = await cache.content<{ question: StudentRuntimeQuestionEntry['question']; research_tools?: StudentRuntimeQuestionEntry['research_tools'] }>(prepared.question)
+  const decoded = await cache.content<{ question: StudentRuntimeQuestionEntry['question']; question_group?: StudentRuntimeQuestionEntry['question_group']; research_tools?: StudentRuntimeQuestionEntry['research_tools'] }>(prepared.question)
   markPreparedStartupPhase('first_content_end')
   dto.question = decoded.question
+  if (decoded.question_group) dto.question_group = decoded.question_group
   if (decoded.research_tools) dto.research_tools = { ...decoded.research_tools, ...dto.research_tools }
   const manifest = cache.content<PreparedManifest>(prepared.manifest).then(value => {
-    if (value.session_id !== dto.session_id || value.content_version !== prepared.content_version || value.version !== 1) throw new Error('试卷清单与当前会话不一致。')
+    if (value.session_id !== dto.session_id || value.content_version !== prepared.content_version || ![1, 2].includes(value.version)) throw new Error('试卷清单与当前会话不一致。')
     return value
   })
   return { dto, manifest, cache }

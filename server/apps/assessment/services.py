@@ -333,6 +333,8 @@ def _auto_submit_saved_attempt_for_deadline(session, attempt, *, terminal_at):
                     snapshot.correct_answer,
                     attempt.draft_answer,
                     accepted_answers=snapshot.accepted_answers,
+                    max_score=snapshot.max_score,
+                    case_sensitive=snapshot.text_match_case_sensitive,
                     absolute_tolerance=snapshot.absolute_tolerance,
                     relative_tolerance=snapshot.relative_tolerance,
                 )
@@ -536,7 +538,7 @@ def get_or_create_session(
             "ordering_seed": ordering_seed,
             "sampling_algorithm_version": algorithm_version,
             "assignment_unit_type": version.assignment_unit_type,
-            "capture_contract": capture_contract_for_start(student, experiment),
+            "capture_contract": capture_contract_for_start(student, experiment, require_capture_v2=bool(version.configuration.get('question_group_runtime_version'))),
             "class_task": class_task,
             "participant_snapshot": participant_snapshot,
             "schedule_revision": schedule,
@@ -551,6 +553,8 @@ def get_or_create_session(
     from .transition_entry_services import transition_protocol_for_start
     session_defaults['transition_protocol_version'] = transition_protocol_for_start(
         student, experiment, session_defaults['capture_contract'])
+    if version.configuration.get('question_group_runtime_version'):
+        session_defaults['transition_protocol_version'] = 1
     if class_task is not None:
         try:
             with transaction.atomic():
@@ -1558,6 +1562,8 @@ def _submit_attempt_transaction(
     correct, score = score_payload(
         snapshot.question_type, snapshot.correct_answer, attempt.draft_answer,
         accepted_answers=snapshot.accepted_answers,
+        max_score=snapshot.max_score,
+        case_sensitive=snapshot.text_match_case_sensitive,
         absolute_tolerance=snapshot.absolute_tolerance,
         relative_tolerance=snapshot.relative_tolerance,
     )

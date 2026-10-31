@@ -30,8 +30,11 @@ CANONICAL_KEYS = (
     "二级知识点",
     "三级知识点",
 )
+GROUP_KEYS = ('题组编号', '题组形式', '材料标题', '作答说明', '共享材料', '组内顺序', '空位编号', '内容语言', '分值', '大小写敏感', '共享词库', '绝对误差容限', '相对误差容限')
 
 _FIELD_ALIASES = {
+    "标题": "材料标题", "词库": "共享词库",
+    **{key: key for key in GROUP_KEYS},
     "序号": "序号",
     "题目": "题目",
     "题干": "题目",
@@ -132,12 +135,12 @@ def _has_structured_marker(text: str) -> bool:
 
 def _is_template_preamble(text: str) -> bool:
     stripped = text.strip()
-    return stripped == _TEMPLATE_TITLE or stripped.startswith(("填写说明：", "填写说明:"))
+    return stripped in (_TEMPLATE_TITLE, '英语题组导入模板', '完整题型导入模板') or stripped.startswith(("填写说明：", "填写说明:"))
 
 
 class _QuestionRow:
     def __init__(self, location: str, sequence: str = "") -> None:
-        self.row = {key: "" for key in CANONICAL_KEYS}
+        self.row = {key: "" for key in (*CANONICAL_KEYS, *GROUP_KEYS)}
         self.row["_errors"] = []
         self.locations = [location]
         self.active_field: str | None = None
@@ -258,6 +261,114 @@ def _add_unsupported_object_errors(question: _QuestionRow, element, location: st
         question.add_error(message, location)
 
 
+def _read_explicit_group_rows(document):
+    rows, group_members = [], []
+    metadata = None
+    current = None
+    shared_keys = ('题组编号', '题组形式', '材料标题', '作答说明', '共享材料', '内容语言', '共享词库')
+
+    def finish_member():
+        nonlocal current
+        if current is not None:
+            row = current.as_dict(str(len(rows) + len(group_members) + 1))
+            (group_members if metadata is not None else rows).append(row)
+            current = None
+
+    for block_type, block, number in _body_blocks(document):
+        if block_type != 'paragraph':
+            raise ValueError('带题组开始／结束标签的 Word 请使用明确的段落标签，不支持混入表格布局。')
+        text, location = block.text, f'第{number}段'
+        if _is_template_preamble(text) and metadata is None and current is None:
+            if _unsupported_object_errors(block._p):
+                raise ValueError('模板前言包含不支持的对象')
+            continue
+        boundary = re.fullmatch(r'\s*【(题组开始|题组结束|小题)】\s*(.*?)\s*', text, re.DOTALL)
+        if boundary:
+            label, value = boundary.groups()
+            if label == '题组开始':
+                if metadata is not None:
+                    raise ValueError('题组不能嵌套，请先标记【题组结束】。')
+                finish_member()
+                if not value:
+                    raise ValueError('【题组开始】必须填写本文件题组编号。')
+                metadata = _QuestionRow(location)
+                metadata.assign('题组编号', value, location)
+                group_members = []
+            elif label == '小题':
+                if metadata is None:
+                    raise ValueError('【小题】必须位于题组开始与题组结束之间。')
+                finish_member()
+                current = _QuestionRow(location)
+                current.assign('组内顺序', value, location)
+            else:
+                if metadata is None:
+                    raise ValueError('【题组结束】没有对应的题组开始。')
+                finish_member()
+                if not group_members:
+                    raise ValueError('题组至少需要一个【小题】。')
+                for member in group_members:
+                    for key in shared_keys:
+                        if member[key] and metadata.row[key] and member[key] != metadata.row[key]:
+                            member['_errors'].append(f'题组共享字段冲突：{key}')
+                        member[key] = member[key] or metadata.row[key]
+                    member['_errors'].extend(metadata.row['_errors'])
+                rows.extend(group_members)
+                metadata, group_members = None, []
+            target = current or metadata
+            if target is not None:
+                _add_unsupported_object_errors(target, block._p, location)
+            continue
+        heading = _HEADING_BOUNDARY.match(text)
+        if heading:
+            if metadata is not None:
+                raise ValueError('题组内必须使用【小题】标签明确成员边界。')
+            finish_member()
+            current = _QuestionRow(location, heading.group('sequence'))
+            if heading.group('rest'):
+                _process_text(current, heading.group('rest'), location)
+        elif text.strip() or _unsupported_object_errors(block._p):
+            target = current or metadata
+            if target is None:
+                raise ValueError('请使用第 N 题或【题组开始】标签明确边界。')
+            _process_text(target, text, location)
+        target = current or metadata
+        if target is not None:
+            _add_unsupported_object_errors(target, block._p, location)
+    if metadata is not None:
+        raise ValueError('题组缺少【题组结束】标签。')
+    finish_member()
+    if not rows:
+        raise ValueError('文档中没有可解析的题目')
+    return rows
+
+
+def _read_numbered_label_rows(document):
+    """Read the approved template's explicit 序号：N record boundaries."""
+    rows, current = [], None
+    for block_type, block, number in _body_blocks(document):
+        location = f'第{number}段'
+        if block_type != 'paragraph':
+            raise ValueError('序号标签模板请使用段落字段，不支持混入表格。')
+        boundary = re.fullmatch(r'\s*序号\s*[:：]\s*(\d+)\s*', block.text)
+        if boundary:
+            if current is not None:
+                rows.append(current.as_dict(str(len(rows) + 1)))
+            current = _QuestionRow(location, boundary.group(1))
+        elif block.style.name.startswith('Heading'):
+            if current is not None:
+                rows.append(current.as_dict(str(len(rows) + 1)))
+                current = None
+        elif current is not None and block.text.strip():
+            _process_text(current, block.text, location)
+        if current is not None:
+            _add_unsupported_object_errors(current, block._p, location)
+        elif _unsupported_object_errors(block._p):
+            raise ValueError('模板前言包含不支持的对象')
+    if current is not None:
+        rows.append(current.as_dict(str(len(rows) + 1)))
+    return rows
+
+
 def read_docx_rows(uploaded_file) -> list[dict[str, object]]:
     name = getattr(uploaded_file, "name", "")
     if name and not name.lower().endswith(".docx"):
@@ -266,6 +377,10 @@ def read_docx_rows(uploaded_file) -> list[dict[str, object]]:
         document = Document(io.BytesIO(uploaded_file.read()))
     except (BadZipFile, KeyError, OSError, PackageNotFoundError, XMLSyntaxError) as error:
         raise ValueError("无法读取 DOCX 文档") from error
+    if any('【题组开始】' in paragraph.text or '【题组结束】' in paragraph.text or '【小题】' in paragraph.text for paragraph in document.paragraphs):
+        return _read_explicit_group_rows(document)
+    if any(re.fullmatch(r'\s*序号\s*[:：]\s*\d+\s*', paragraph.text) for paragraph in document.paragraphs):
+        return _read_numbered_label_rows(document)
     rows: list[dict[str, object]] = []
     question: _QuestionRow | None = None
     pending_preamble_errors: list[tuple[str, str]] = []
@@ -351,11 +466,10 @@ def read_docx_rows(uploaded_file) -> list[dict[str, object]]:
                             f"表格{block_number}第{row_number}行第{column_number}列"
                         )
                         if field is None:
-                            if value.strip():
-                                question.add_error(
-                                    f"无法识别的字段：{header}",
-                                    cell_location,
-                                )
+                            question.add_error(
+                                f"无法识别的字段：{header}",
+                                cell_location,
+                            )
                             _add_unsupported_object_errors(
                                 question, row.cells[column_number - 1]._tc, cell_location
                             )

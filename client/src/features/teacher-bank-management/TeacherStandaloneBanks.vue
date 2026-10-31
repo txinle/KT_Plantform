@@ -123,7 +123,7 @@ onMounted(load)
             <tbody>
               <tr v-for="bank in collection.banks" :key="bank.id">
                 <td><RouterLink :to="bank.detail_url"><strong>{{ bank.name }}</strong></RouterLink><small>{{ bank.description || '未填写说明' }}</small></td>
-                <td>{{ bank.question_count }}</td>
+                <td>{{ bank.complete_question_count ?? bank.question_count }}</td>
                 <td><StatusBadge :label="bank.visibility_label" :tone="bank.visibility === 'shared' ? 'success' : 'neutral'" /></td>
                 <td><RouterLink :to="bank.detail_url">管理</RouterLink></td>
               </tr>
@@ -151,7 +151,7 @@ onMounted(load)
               <tr v-for="bank in collection.shared_banks" :key="bank.id">
                 <td><strong>{{ bank.name }}</strong><small>{{ bank.description || '未填写说明' }}</small></td>
                 <td>{{ bank.created_by_name }}</td>
-                <td>{{ bank.question_count }}</td>
+                <td>{{ bank.complete_question_count ?? bank.question_count }}</td>
                 <td><button class="kt-button kt-button--secondary" type="button" :disabled="copyingId === bank.id" @click="copy(bank.id)">{{ copyingId === bank.id ? '正在复制…' : '复制到我的题库' }}</button></td>
               </tr>
             </tbody>

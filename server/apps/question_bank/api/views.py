@@ -283,7 +283,7 @@ class TeacherQuestionBankCollectionView(APIView):
                 visibility=QuestionBank.Visibility.ARCHIVED
             )
             .select_related("created_by", "owner", "course__owner")
-            .annotate(question_count=Count("questions"))
+            .annotate(question_count=Count("questions"), complete_question_count=Count("questions", filter=Q(questions__group__isnull=True)) + Count("questions__group", distinct=True))
             .order_by("-updated_at", "pk")
         )
         if query:
@@ -306,6 +306,7 @@ class TeacherQuestionBankCollectionView(APIView):
                     "visibility": bank.visibility,
                     "visibility_label": bank.get_visibility_display(),
                     "question_count": bank.question_count,
+                    "complete_question_count": bank.complete_question_count if hasattr(bank, "complete_question_count") else bank.questions.filter(group__isnull=True).count() + bank.groups.count(),
                     "created_by_name": _creator_name(bank),
                     "updated_at": bank.updated_at,
                     "detail_url": _bank_detail_url(course.pk, bank.pk),
@@ -513,6 +514,8 @@ class TeacherQuestionBankDetailView(APIView):
         course = _course_for_teacher(request.user, course_id)
         bank = _bank_for_course(course, bank_id)
         bank.question_count = bank.questions.count()
+        from ..services.question_groups import project_question_group, project_bank_unit_summary
+        groups = [project_question_group(group) for group in bank.groups.all()]
         capabilities = _metadata_capabilities(request.user, course, bank)
         can_edit_content = (
             course.status == Course.Status.ACTIVE
@@ -525,6 +528,7 @@ class TeacherQuestionBankDetailView(APIView):
             "visibility": bank.visibility,
             "visibility_label": bank.get_visibility_display(),
             "question_count": bank.question_count,
+            "complete_question_count": bank.complete_question_count if hasattr(bank, "complete_question_count") else bank.questions.filter(group__isnull=True).count() + bank.groups.count(),
             "created_by_name": _creator_name(bank),
             "updated_at": bank.updated_at,
             "can_edit_metadata": capabilities["can_edit_metadata"],
@@ -555,6 +559,7 @@ class TeacherQuestionBankDetailView(APIView):
             if can_edit_content
             else None,
             "course": _course_payload(course),
+            "groups": groups, "unit_summary": project_bank_unit_summary(bank, groups),
         }
         return Response(QuestionBankDetailSerializer(payload).data)
 
@@ -564,6 +569,7 @@ class TeacherQuestionCollectionView(APIView):
         parameters=[
             OpenApiParameter("q", str, required=False),
             OpenApiParameter("question_type", str, required=False),
+            OpenApiParameter("complete_only", str, required=False),
             OpenApiParameter("status", str, required=False),
         ],
         responses=QuestionCollectionSerializer,
@@ -574,7 +580,7 @@ class TeacherQuestionCollectionView(APIView):
         query = request.query_params.get("q", "").strip()
         question_type = request.query_params.get("question_type", "").strip()
         status = request.query_params.get("status", "").strip()
-        type_values = {value for value, _label in Question.Type.choices}
+        type_values = {value for value, _label in Question.Type.choices} | {"translation", "essay", "reading", "words", "cloze"}
         status_values = {value for value, _label in Question.Status.choices}
         if question_type and question_type not in type_values:
             raise ValidationError({"question_type": "未知题型。"})
@@ -593,15 +599,22 @@ class TeacherQuestionCollectionView(APIView):
             )
             .order_by("sequence", "pk")
         )
+        if request.query_params.get("complete_only") == "1":
+            questions = questions.filter(group__isnull=True)
         if query:
             questions = questions.filter(
                 Q(text__icontains=query)
+                | Q(title__icontains=query) | Q(instructions__icontains=query)
                 | Q(code__icontains=query)
                 | Q(course_identity__stable_code__icontains=query)
                 | Q(concept_links__concept__name__icontains=query)
             ).distinct()
-        if question_type:
-            questions = questions.filter(question_type=question_type)
+        if question_type in {"translation", "essay"}:
+            questions = questions.filter(educational_type=question_type)
+        elif question_type in {"reading", "words", "cloze"}:
+            questions = questions.filter(group__kind=question_type)
+        elif question_type:
+            questions = questions.filter(question_type=question_type, educational_type="standard")
         if status:
             questions = questions.filter(status=status)
 
@@ -623,7 +636,11 @@ class TeacherQuestionCollectionView(APIView):
                     "code": question.code,
                     "text": question.text,
                     "question_type": question.question_type,
-                    "question_type_label": question.get_question_type_display(),
+                    "question_type_label": (question.get_educational_type_display() if question.educational_type != "standard" else question.get_question_type_display()),
+                    "group_id": question.group_id, "group_order": question.group_order, "blank_id": question.blank_id,
+                    "title": question.title, "instructions": question.instructions, "educational_type": question.educational_type, "max_score": format(question.max_score, '.2f'), "content_language": question.content_language,
+                    "text_match_case_sensitive": question.text_match_case_sensitive,
+                    "text_match_policy_version": question.text_match_policy_version,
                     "kc_mapping": project_question_kc_mapping(question),
                     "teacher_difficulty": (
                         format(question.teacher_difficulty, "f")

@@ -184,5 +184,6 @@ class MultiBankWorkflowTests(TestCase):
                     for p in PublishPreviewParticipant.objects.filter(class_result__preview_run=preview)}
         before = assignments(run)
         self.select_banks([bank.pk for bank in reversed(self.banks[:2])])
+        plan.refresh_from_db()
         next_run = generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
         self.assertEqual(assignments(next_run), before)

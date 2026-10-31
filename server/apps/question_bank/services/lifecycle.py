@@ -91,13 +91,15 @@ def delete_question_bank(bank):
 
 
 @transaction.atomic
-def delete_question(question):
+def delete_question(question, *, from_group=False):
     course_id = type(question).objects.values_list(
         "bank__course_id", flat=True
     ).get(pk=question.pk)
     if course_id is not None:
         lock_course(course_id)
     question = type(question).objects.select_for_update().select_related("bank").get(pk=question.pk)
+    if question.group_id and not from_group:
+        raise ReferencedQuestionError('题组成员不能单独删除，请使用题组编辑器。')
     blocking_experiments = _experiment_names(
         Experiment.objects.filter(question_links__question=question)
         .exclude(status=Experiment.Status.DRAFT)

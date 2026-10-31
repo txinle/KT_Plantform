@@ -223,7 +223,7 @@ def import_kc_workbook(bank, workbook: ParsedKCWorkbook):
 
 @transaction.atomic
 def copy_shared_bank(source_bank, target_course, actor=None):
-    from ..models import QuestionBank
+    from ..models import QuestionBank, QuestionGroup
     if actor is None:
         actor = target_course
         target_course = None
@@ -239,14 +239,22 @@ def copy_shared_bank(source_bank, target_course, actor=None):
         description=source_bank.description,
         visibility=QuestionBank.Visibility.PRIVATE,
     )
+    groups = {group.pk: QuestionGroup.objects.create(bank=target, **{
+        field: getattr(group, field) for field in ('kind', 'title', 'instructions', 'material', 'content_language', 'word_bank')
+    }) for group in source_bank.groups.all()}
+    copied_questions = []
     for source in source_bank.questions.prefetch_related("options", "concept_links__concept"):
         question = Question.objects.create(
             bank=target, sequence=source.sequence, code=source.code,
-            question_type=source.question_type, text=source.text,
+            question_type=source.question_type, text=source.text, educational_type=source.educational_type,
+            title=source.title, instructions=source.instructions,
             correct_answer=source.correct_answer, accepted_answers=source.accepted_answers,
             absolute_tolerance=source.absolute_tolerance, relative_tolerance=source.relative_tolerance,
             explanation=source.explanation, teacher_difficulty=source.teacher_difficulty,
             empirical_difficulty=source.empirical_difficulty, status=source.status,
+            group=groups.get(source.group_id), group_order=source.group_order, blank_id=source.blank_id,
+            max_score=source.max_score, content_language=source.content_language,
+            text_match_case_sensitive=source.text_match_case_sensitive, text_match_policy_version=source.text_match_policy_version,
         )
         QuestionOption.objects.bulk_create([
             QuestionOption(question=question, key=o.key, text=o.text, display_order=o.display_order)
@@ -288,5 +296,7 @@ def copy_shared_bank(source_bank, target_course, actor=None):
                 QuestionConcept.objects.create(
                     question=question, concept=concept, is_primary=link.is_primary
                 )
+        copied_questions.append(question)
+    for question in copied_questions:
         refresh_question_readiness(question)
     return target

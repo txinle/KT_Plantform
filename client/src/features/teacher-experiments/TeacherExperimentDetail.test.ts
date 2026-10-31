@@ -177,12 +177,28 @@ describe('TeacherExperimentDetail', () => {
     expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/11/publish-plan/23/step/1/')
   })
 
+  it('filters from full-class collection counts without deriving totals from the current page', async () => {
+    mocks.api.classTasks.mockResolvedValue({ items: [{ id: 31, class_id: 5, class_name: '一班', available_actions: [] }] })
+    mocks.api.progress.mockResolvedValue({ total_participants: 60, not_started: 10, in_progress: 5, completed: 40, expired: 4, invalidated: 1 })
+    mocks.api.collectionParticipants.mockResolvedValue(collectionResult('单页学生', 'new'))
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+    await wrapper.get('#experiment-tab-collection').trigger('click')
+    await flushPromises()
+    const count = wrapper.get('[data-collection-count="31:completed"]')
+    expect(count.text()).toBe('40')
+    await count.trigger('click')
+    await flushPromises()
+    expect(mocks.api.collectionParticipants).toHaveBeenLastCalledWith(11, { classId: 5, status: 'completed', page: 1 })
+    expect(wrapper.get('[data-collection-count="31:completed"]').text()).toBe('40')
+  })
+
   it('uses local definition, publishing, and collection tabs for a draft experiment', async () => {
     const wrapper = mount(TeacherExperimentDetail)
     await flushPromises()
 
     const tabs = wrapper.get('.kt-experiment-tabs').findAll('[role="tab"]')
-    expect(tabs.map((tab) => tab.text())).toEqual(['实验定义', '班级发布', '采集状态'])
+    expect(tabs.map((tab) => tab.text())).toEqual(['概况', '班级发布', '采集状态'])
     expect(wrapper.get('.kt-experiment-tabs').classes()).toContain('kt-sidebar-secondary-nav')
     expect(wrapper.find('.kt-experiment-draft-grid').exists()).toBe(true)
     expect(tabs[0]?.attributes('aria-selected')).toBe('true')
@@ -216,6 +232,21 @@ describe('TeacherExperimentDetail', () => {
     expect(definition).toContain('发布时 30 分钟')
   })
 
+  it('opens published experiments on overview and preserves explicit task links', async () => {
+    mocks.api.detail.mockResolvedValue({ id: 11, name: '已发布实验', status: 'published', status_label: '已发布' })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+    expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toBe('概况')
+    await wrapper.get('#experiment-tab-tasks').trigger('click')
+    await flushPromises()
+    expect(mocks.replace).toHaveBeenLastCalledWith({ query: { tab: 'tasks' } })
+    wrapper.unmount()
+    mocks.route.query = reactive({ tab: 'tasks' })
+    const deepLink = mount(TeacherExperimentDetail)
+    await flushPromises()
+    expect(deepLink.get('#experiment-tab-tasks').attributes('aria-selected')).toBe('true')
+  })
+
   it('deletes an experiment after preview and returns to the experiment list', async () => {
     const wrapper = mount(TeacherExperimentDetail)
     await flushPromises()
@@ -244,6 +275,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('renders server-authorized task actions in the published task table', async () => {
+    mocks.route.query = reactive({ tab: 'tasks' })
     mocks.api.detail.mockResolvedValue({
       id: 11,
       name: '认知诊断实验',
@@ -284,7 +316,7 @@ describe('TeacherExperimentDetail', () => {
     expect(wrapper.get('[data-action="revise-schedule"]').text()).toBe('修订排期')
     expect(wrapper.get('[data-action="manual-close"]').text()).toBe('提前结束')
     expect(wrapper.get('[data-action="release-feedback"]').text()).toBe('发布反馈')
-    expect(wrapper.get('[data-action="grade-short-answers"]').text()).toContain('待批改 4')
+    expect(wrapper.get('[data-action="grade-short-answers"]').text()).toBe('待批改：4')
 
     await wrapper.get('[data-action="release-feedback"]').trigger('click')
     await flushPromises()
@@ -295,6 +327,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('adds student minutes without changing the class cutoff after the task starts', async () => {
+    mocks.route.query = reactive({ tab: 'tasks' })
     mocks.api.detail.mockResolvedValue({
       id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_edit: false, can_manage: true,
       time_mode_label: '实验总时限', total_time_limit_minutes: 15,
@@ -332,6 +365,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('uses the latest total limit when adding student minutes again', async () => {
+    mocks.route.query = reactive({ tab: 'tasks' })
     mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true })
     mocks.api.classTasks.mockResolvedValue({ items: [{
       id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
@@ -357,6 +391,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('adds seconds in per-question mode and allows a later class cutoff together', async () => {
+    mocks.route.query = reactive({ tab: 'tasks' })
     mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true })
     mocks.api.classTasks.mockResolvedValue({ items: [{
       id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
@@ -385,6 +420,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('keeps absolute time editing before a task starts', async () => {
+    mocks.route.query = reactive({ tab: 'tasks' })
     mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true })
     mocks.api.classTasks.mockResolvedValue({ items: [{
       id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
@@ -412,6 +448,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('reopens a naturally closed class with a later cutoff and no personal limit field', async () => {
+    mocks.route.query = reactive({ tab: 'tasks' })
     mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true })
     mocks.api.classTasks.mockResolvedValue({ items: [{
       id: 31, class_id: 5, class_name: '实验班', participant_count: 36,

@@ -11,6 +11,7 @@ from .session_submission import ExpectedVersionSerializer
 
 
 class StudentSessionSummarySerializer(serializers.Serializer):
+    result = serializers.JSONField(required=False)
     session_id = serializers.IntegerField()
     experiment_name = serializers.CharField()
     status = serializers.CharField()
@@ -32,7 +33,13 @@ class StudentSessionSummaryView(APIView):
             ExperimentSession.objects.select_related('version__experiment'),
             pk=session_id, student=request.user,
         )
+        result = {}
+        if session.version.configuration.get('question_group_runtime_version'):
+            if session.class_task_id:
+                from ..student_results import build_student_task_result
+                result['result'] = build_student_task_result(session.class_task, request.user)
         return Response(StudentSessionSummarySerializer({
+            **result,
             'session_id': session.pk,
             'experiment_name': session.version.experiment.name,
             'status': session.status,

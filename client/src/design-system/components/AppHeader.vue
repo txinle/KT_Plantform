@@ -1,9 +1,28 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { logout } from '@/app/auth'
 
 const pending = ref(false)
 const error = ref('')
+const header = ref<HTMLElement>()
+let observer: ResizeObserver | undefined
+const previousHeaderHeight = document.documentElement.style.getPropertyValue('--kt-header-height')
+function measureHeader() {
+  const height = header.value?.getBoundingClientRect().height
+  if (height) document.documentElement.style.setProperty('--kt-header-height', `${height}px`)
+}
+onMounted(() => {
+  measureHeader()
+  if (typeof ResizeObserver !== 'undefined' && header.value) {
+    observer = new ResizeObserver(measureHeader)
+    observer.observe(header.value)
+  }
+})
+onBeforeUnmount(() => {
+  observer?.disconnect()
+  if (previousHeaderHeight) document.documentElement.style.setProperty('--kt-header-height', previousHeaderHeight)
+  else document.documentElement.style.removeProperty('--kt-header-height')
+})
 async function signOut() {
   if (pending.value) return
   pending.value = true
@@ -32,7 +51,7 @@ withDefaults(defineProps<{
 </script>
 
 <template>
-  <header class="kt-app-header">
+  <header ref="header" class="kt-app-header">
     <div class="kt-shell kt-app-header__inner">
       <a class="kt-wordmark" href="/" aria-label="KT Data Lab 首页">
         <span class="kt-brand-mark" aria-hidden="true">KT</span>

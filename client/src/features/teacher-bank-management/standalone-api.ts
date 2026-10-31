@@ -10,6 +10,7 @@ export interface StandaloneBank {
   description: string
   visibility: string
   visibility_label: string
+  complete_question_count?: number
   question_count: number
   detail_url: string
   question_import_url: string
@@ -17,6 +18,11 @@ export interface StandaloneBank {
 }
 
 export interface StandaloneQuestion {
+  group_id?: number | null
+  title?: string
+  instructions?: string
+  max_score?: string
+  educational_type?: string
   id: number
   sequence: number
   code: string
@@ -44,7 +50,8 @@ export interface StandaloneBankCollection {
     id: number
     name: string
     description: string
-    question_count: number
+    complete_question_count?: number
+  question_count: number
     created_by_name: string
   }>
   visibility_choices: Array<{ value: string; label: string }>
@@ -57,6 +64,13 @@ export interface StandaloneConceptCollection {
 export interface StandaloneQuestionEditor {
   bank: { id: number; name: string }
   question: {
+    title?: string
+    instructions?: string
+    educational_type?: string
+    group_id?: number | null
+    max_score?: string
+    content_language?: string
+    text_match_case_sensitive?: boolean
     id: number
     sequence: number
     code: string
@@ -81,14 +95,26 @@ export interface StandaloneQuestionEditor {
 export interface StandaloneQuestionImportPreview {
   preview_id: string
   preview: {
+    groups?: import('./api').QuestionImportPreviewGroup[]
     rows: Array<{
+      row_id?: string
+      group_id?: string | null
+      group_order?: number | null
+      blank_id?: string
+      max_score?: string
+      options?: Array<{ key: string; text: string }>
+      answer?: unknown
+      accepted_answers?: string[]
+      explanation?: string
+      source_label?: string
+      errors?: string[]
       sequence: number
       text: string
       question_type: string
       question_type_label: string
       option_count: number
       teacher_difficulty: string | null
-      classification?: 'ready' | 'draft'
+      classification?: 'ready' | 'draft' | 'duplicate' | 'invalid'
       draft_reasons?: string[]
     }>
   }
@@ -112,6 +138,8 @@ export interface StandaloneConcept {
 }
 
 export type StandaloneBankDetailResponse = {
+  unit_summary?: import('./api').BankUnitSummary
+  groups?: import('./group-api').GroupEditorDocument[]
   bank: StandaloneBank
   can_edit_metadata: boolean
   can_edit_content: boolean
@@ -184,10 +212,10 @@ export function createTeacherStandaloneQuestionBankApi(client: ApiClient) {
         { method: 'POST', body },
       )
     },
-    confirmQuestionImport(bankId: number, previewId: string) {
+    confirmQuestionImport(bankId: number, previewId: string, selectedRowIds?: string[], selectedGroupIds?: string[]) {
       return client.mutate<{ created: number; active?: number; draft?: number; detail_url: string }>(
         `/api/v1/teacher/banks/${bankId}/imports/questions/confirm/`,
-        { method: 'POST', body: { preview_id: previewId } },
+        { method: 'POST', body: { preview_id: previewId, ...(selectedRowIds ? { selected_row_ids: selectedRowIds } : {}), ...(selectedGroupIds ? { selected_group_ids: selectedGroupIds } : {}) } },
       )
     },
     previewKCImport(bankId: number, file: File) {

@@ -97,7 +97,7 @@ describe('TeacherQuestionBankDetail', () => {
     expect(wrapper.text()).toContain('2 + 2 等于多少？')
     expect(wrapper.text()).not.toContain('C000007-Q000051')
     expect(wrapper.text()).not.toContain('Q001')
-    expect(wrapper.findAll('.kt-bank-question-section th').map((cell) => cell.text())).toEqual(['题库内序号', '题目', '题型', '知识点结构', '难度', '状态', '操作'])
+    expect(wrapper.findAll('.kt-bank-question-section th').map((cell) => cell.text())).toEqual(['题库内序号', '题目', '题型', '知识点结构', '分值', '难度', '状态', '操作'])
     expect(wrapper.get('.kt-bank-question-section').findAll('td')[0]?.text()).toBe('7')
     expect(wrapper.get('.kt-mobile-question-card').text()).toContain('第 7 题')
     expect(wrapper.get('.kt-bank-concept-section').get('a').text()).toBe('第 7 题')

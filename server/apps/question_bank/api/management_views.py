@@ -46,19 +46,16 @@ from apps.question_bank.services.import_parsing import (
     ParsedKCMapping,
     ParsedKCNode,
     ParsedKCWorkbook,
-    ParsedQuestion,
     ParsedQuestionKCRelation,
     ParsedQuestionKCRoot,
     parse_kc_rows,
     parse_kc_workbook,
     parse_question_kc_tree_rows,
-    parse_question_rows,
 )
 from apps.question_bank.services.import_service import (
     copy_shared_bank,
     import_kc_mappings,
     import_kc_workbook,
-    import_questions,
 )
 from apps.question_bank.services.lifecycle import (
     ReferencedQuestionBankError,
@@ -76,7 +73,7 @@ from apps.question_bank.services.question_kc_import import (
     preview_question_kc_trees,
 )
 from apps.question_bank.services.question_kc_mapping import project_question_kc_mapping
-from apps.question_bank.services.question_readiness import content_issues, readiness_issues, recheck_bank_drafts
+from apps.question_bank.services.question_readiness import readiness_issues, recheck_bank_drafts
 from apps.question_bank.services.unified_import import (
     SelectedRowIdsValidationError,
     UnifiedQuestionImportService,
@@ -124,9 +121,6 @@ from .management_serializers import (
     ManagementStandaloneVisibilityRequestSerializer,
 )
 from .serializers import FileImportRequestSerializer
-
-
-QUESTION_IMPORT_SESSION_PREFIX = "teacher_question_import_api"
 
 
 def _form_errors(form):
@@ -197,12 +191,19 @@ def _question_answer_text(question):
     return "" if question.correct_answer is None else str(question.correct_answer)
 
 
+def _question_content_metadata(question):
+    return {'group_id': question.group_id, 'group_order': question.group_order, 'blank_id': question.blank_id,
+        'title': question.title, 'instructions': question.instructions, 'educational_type': question.educational_type, 'max_score': format(question.max_score, '.2f'), 'content_language': question.content_language,
+        'text_match_case_sensitive': question.text_match_case_sensitive, 'text_match_policy_version': question.text_match_policy_version}
+
+
 def _question_editor_payload(course, bank, question):
     options = {item.key.lower(): item.text for item in question.options.all()}
     return {
         "course": _course_payload(course),
         "bank": {"id": bank.pk, "name": bank.name},
         "question": {
+            **_question_content_metadata(question),
             "id": question.pk,
             "sequence": question.sequence,
             "code": question.code,
@@ -252,14 +253,6 @@ def _question_editor_payload(course, bank, question):
         ],
         "detail_url": reverse("courses:bank_detail", args=[course.pk, bank.pk]),
     }
-
-
-def _question_import_session_key(course, bank):
-    return f"{QUESTION_IMPORT_SESSION_PREFIX}:{course.pk}:{bank.pk}"
-
-
-def _standalone_question_import_session_key(bank):
-    return f"{QUESTION_IMPORT_SESSION_PREFIX}:standalone:{bank.pk}"
 
 
 def _standalone_kc_import_session_key(bank):
@@ -331,6 +324,7 @@ def _standalone_bank_payload(bank):
         "description": bank.description,
         "visibility": bank.visibility,
         "visibility_label": bank.get_visibility_display(),
+        "complete_question_count": bank.complete_question_count if hasattr(bank, "complete_question_count") else bank.questions.filter(group__isnull=True).count() + bank.groups.count(),
         "question_count": (
             bank.question_count
             if hasattr(bank, "question_count")
@@ -347,6 +341,7 @@ def _standalone_question_editor_payload(bank, question):
     return {
         "bank": {"id": bank.pk, "name": bank.name},
         "question": {
+            **_question_content_metadata(question),
             "id": question.pk,
             "sequence": question.sequence,
             "code": question.code,
@@ -389,12 +384,13 @@ def _standalone_question_editor_payload(bank, question):
 
 def _standalone_question_payload(bank, question):
     return {
+        **_question_content_metadata(question),
         "id": question.pk,
         "sequence": question.sequence,
         "code": question.code,
         "text": question.text,
         "question_type": question.question_type,
-        "question_type_label": question.get_question_type_display(),
+        "question_type_label": (question.get_educational_type_display() if question.educational_type != "standard" else question.get_question_type_display()),
         "status": question.status,
         "draft_reasons": readiness_issues(question) if question.status == Question.Status.DRAFT else [],
         "status_label": question.get_status_display(),
@@ -407,21 +403,6 @@ def _standalone_question_payload(bank, question):
         "edit_url": reverse(
             "question_bank:question_edit", args=[bank.pk, question.pk]
         ),
-    }
-
-
-def _question_import_preview_row(row):
-    issues = content_issues(asdict(row))
-    return {
-        "classification": "draft" if issues else "ready",
-        "draft_reasons": issues,
-        "errors": issues,
-        "sequence": row.sequence,
-        "text": row.text,
-        "question_type": row.question_type,
-        "question_type_label": Question.Type(row.question_type).label,
-        "option_count": len(row.options),
-        "teacher_difficulty": row.teacher_difficulty,
     }
 
 
@@ -539,7 +520,7 @@ class TeacherArchivedQuestionBankCollectionView(TeacherQuestionBankManagementApi
         banks = (
             course.question_banks.filter(visibility=QuestionBank.Visibility.ARCHIVED)
             .select_related("created_by", "owner", "course__owner")
-            .annotate(question_count=Count("questions"))
+            .annotate(question_count=Count("questions"), complete_question_count=Count("questions", filter=Q(questions__group__isnull=True)) + Count("questions__group", distinct=True))
             .order_by("-updated_at", "pk")
         )
         paginator = FixedPageNumberPagination()
@@ -550,6 +531,7 @@ class TeacherArchivedQuestionBankCollectionView(TeacherQuestionBankManagementApi
                 "name": bank.name,
                 "description": bank.description,
                 "question_count": bank.question_count,
+                "complete_question_count": bank.complete_question_count if hasattr(bank, "complete_question_count") else bank.questions.filter(group__isnull=True).count() + bank.groups.count(),
                 "created_by_name": _creator_name(bank),
                 "updated_at": bank.updated_at,
                 "detail_url": reverse("courses:bank_detail", args=[course.pk, bank.pk]),
@@ -763,6 +745,8 @@ class TeacherQuestionEditorView(TeacherQuestionBankManagementApiView):
                 bank.questions.select_for_update().prefetch_related("options"),
                 pk=question_id,
             )
+            if question.group_id:
+                return _api_error_response('question_group_editor_required', '题组成员请通过题组编辑器整体编辑。', status.HTTP_409_CONFLICT)
             form = QuestionEditForm(
                 _query_data(request.data), instance=question, course=course
             )
@@ -817,6 +801,7 @@ class TeacherQuestionImportConfirmView(TeacherQuestionBankManagementApiView):
                     if "selected_row_ids" in request.data
                     else None
                 ),
+                selected_group_ids=request.data.get("selected_group_ids"),
                 audit_request=request,
             )
         except SelectedRowIdsValidationError as error:
@@ -1019,7 +1004,7 @@ class TeacherSharedQuestionBankCollectionView(TeacherQuestionBankManagementApiVi
         banks = (
             _shared_banks_for(course)
             .filter(course=source_course, created_by=creator)
-            .annotate(question_count=Count("questions"))
+            .annotate(question_count=Count("questions"), complete_question_count=Count("questions", filter=Q(questions__group__isnull=True)) + Count("questions__group", distinct=True))
             .order_by("name", "pk")
         )
         return Response(
@@ -1037,6 +1022,7 @@ class TeacherSharedQuestionBankCollectionView(TeacherQuestionBankManagementApiVi
                         "name": bank.name,
                         "description": bank.description,
                         "question_count": bank.question_count,
+                        "complete_question_count": bank.complete_question_count if hasattr(bank, "complete_question_count") else bank.questions.filter(group__isnull=True).count() + bank.groups.count(),
                     }
                     for bank in banks
                 ],
@@ -1203,14 +1189,14 @@ class TeacherStandaloneQuestionBankCollectionView(TeacherQuestionBankManagementA
             return Response({"redirect_url": reverse("courses:list")})
         banks = (
             _standalone_bank_queryset(request.user)
-            .annotate(question_count=Count("questions"))
+            .annotate(question_count=Count("questions"), complete_question_count=Count("questions", filter=Q(questions__group__isnull=True)) + Count("questions__group", distinct=True))
             .order_by("-updated_at", "pk")
         )
         shared_banks = (
             QuestionBank.objects.filter(visibility=QuestionBank.Visibility.SHARED)
             .exclude(owner=request.user)
             .select_related("created_by", "owner", "course__owner")
-            .annotate(question_count=Count("questions"))
+            .annotate(question_count=Count("questions"), complete_question_count=Count("questions", filter=Q(questions__group__isnull=True)) + Count("questions__group", distinct=True))
             .order_by("name", "pk")
         )
         return Response(
@@ -1222,6 +1208,7 @@ class TeacherStandaloneQuestionBankCollectionView(TeacherQuestionBankManagementA
                         "name": bank.name,
                         "description": bank.description,
                         "question_count": bank.question_count,
+                        "complete_question_count": bank.complete_question_count if hasattr(bank, "complete_question_count") else bank.questions.filter(group__isnull=True).count() + bank.groups.count(),
                         "created_by_name": _creator_name(bank),
                     }
                     for bank in shared_banks
@@ -1283,6 +1270,8 @@ class TeacherStandaloneQuestionBankDetailView(TeacherQuestionBankManagementApiVi
             )
         questions = bank.questions.prefetch_related("options", "concept_links__concept")
         can_edit_metadata = _can_edit_standalone_bank(request.user, bank)
+        from apps.question_bank.services.question_groups import project_question_group, project_bank_unit_summary
+        groups = [project_question_group(group) for group in bank.groups.all()]
         return Response(
             {
                 "bank": _standalone_bank_payload(bank),
@@ -1295,6 +1284,7 @@ class TeacherStandaloneQuestionBankDetailView(TeacherQuestionBankManagementApiVi
                     _standalone_question_payload(bank, question)
                     for question in questions
                 ],
+                "groups": groups, "unit_summary": project_bank_unit_summary(bank, groups),
             }
         )
 
@@ -1352,6 +1342,8 @@ class TeacherStandaloneQuestionEditorView(TeacherQuestionBankManagementApiView):
                 bank.questions.select_for_update().prefetch_related("options"),
                 pk=question_id,
             )
+            if question.group_id:
+                return _api_error_response('question_group_editor_required', '题组成员请通过题组编辑器整体编辑。', status.HTTP_409_CONFLICT)
             form = QuestionEditForm(_query_data(request.data), instance=question)
             if not form.is_valid():
                 return _form_error_response(form)
@@ -1374,35 +1366,13 @@ class TeacherStandaloneQuestionImportPreviewView(TeacherQuestionBankManagementAp
         uploaded = request.FILES.get("file")
         if uploaded is None:
             raise ValidationError({"file": "请选择 CSV 或 Excel 文件。"})
-        sequence_floor = bank.questions.aggregate(value=Max("sequence"))["value"] or 0
         try:
-            parsed = parse_question_rows(
-                read_uploaded_rows(uploaded), sequence_floor=sequence_floor, allow_incomplete=True
+            result = UnifiedQuestionImportService.preview(
+                bank=bank, actor=request.user, session_key=_session_key(request), uploaded=uploaded,
             )
-            incoming = [item.sequence for item in parsed]
-            existing = list(
-                bank.questions.filter(sequence__in=incoming)
-                .order_by("sequence")
-                .values_list("sequence", flat=True)
-            )
-            if existing:
-                raise ValueError(
-                    f"题库中已存在以下序号：{existing}。请先修改序号或编辑现有题目。"
-                )
         except ValueError as error:
             raise ValidationError({"file": str(error)}) from error
-        preview_id = str(uuid.uuid4())
-        request.session[_standalone_question_import_session_key(bank)] = {
-            "preview_id": preview_id,
-            "rows": [asdict(item) for item in parsed],
-        }
-        request.session.modified = True
-        return Response(
-            {
-                "preview_id": preview_id,
-                "preview": {"rows": [_question_import_preview_row(item) for item in parsed]},
-            }
-        )
+        return Response(result)
 
 
 class TeacherStandaloneQuestionImportConfirmView(TeacherQuestionBankManagementApiView):
@@ -1413,42 +1383,17 @@ class TeacherStandaloneQuestionImportConfirmView(TeacherQuestionBankManagementAp
     )
     def post(self, request, bank_id):
         bank = _standalone_bank_for_user(request.user, bank_id)
-        key = _standalone_question_import_session_key(bank)
-        stored = request.session.get(key, {})
-        if (
-            not stored
-            or stored.get("preview_id") != request.data.get("preview_id")
-            or not stored.get("rows")
-        ):
-            return _api_error_response(
-                "question_import_preview_invalid",
-                "导入预览已失效，请重新上传文件。",
-                status.HTTP_409_CONFLICT,
-            )
-        parsed = [ParsedQuestion(**item) for item in stored["rows"]]
         try:
-            with transaction.atomic():
-                bank = lock_writable_bank_content(bank)
-                imported = import_questions(bank, parsed)
-        except ValueError as error:
-            request.session.pop(key, None)
-            request.session.modified = True
-            return _api_error_response(
-                "question_import_preview_stale",
-                f"导入预览已失效：{error}。请重新上传文件。",
-                status.HTTP_409_CONFLICT,
+            result = UnifiedQuestionImportService.confirm(
+                bank=bank, actor=request.user, session_key=_session_key(request),
+                preview_id=request.data.get("preview_id"), selected_row_ids=request.data.get("selected_row_ids"),
+                selected_group_ids=request.data.get("selected_group_ids"), audit_request=request,
             )
-        request.session.pop(key, None)
-        request.session.modified = True
-        return Response(
-            {
-                "created": len(imported),
-                "active": sum(question.status == Question.Status.ACTIVE for question in imported),
-                "draft": sum(question.status == Question.Status.DRAFT for question in imported),
-                "detail_url": reverse("question_bank:bank_detail", args=[bank.pk]),
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        except SelectedRowIdsValidationError as error:
+            raise ValidationError({"selected_row_ids": str(error)}) from error
+        except ImportPreviewBatchConflict as error:
+            return _api_error_response(error.code, str(error), status.HTTP_409_CONFLICT)
+        return Response(result, status=status.HTTP_201_CREATED)
 
 
 class TeacherStandaloneQuestionKCImportPreviewView(TeacherQuestionBankManagementApiView):

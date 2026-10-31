@@ -91,7 +91,7 @@ onMounted(load)
 
 <style scoped>
 .kt-result-section { margin-top: 1.25rem; }
-.kt-result-section p { color: var(--kt-text-muted); margin: .25rem 0 1rem; }
+.kt-result-section p { color: var(--kt-muted); margin: .25rem 0 1rem; }
 .kt-result-filter { align-items: end; display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.25rem; }
 .kt-result-filter label { display: grid; gap: .35rem; }
 </style>

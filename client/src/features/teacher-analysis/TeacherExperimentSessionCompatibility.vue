@@ -87,7 +87,7 @@ onMounted(load)
 .kt-session-question { margin-top: 1rem; }
 .kt-session-facts { display: grid; gap: .6rem; margin: 0; }
 .kt-session-facts > div { display: grid; gap: .25rem; grid-template-columns: minmax(8rem, 12rem) 1fr; }
-.kt-session-facts dt { color: var(--kt-text-muted); }
+.kt-session-facts dt { color: var(--kt-muted); }
 .kt-session-facts dd { margin: 0; }
 .kt-session-text { overflow-wrap: anywhere; white-space: pre-wrap; }
 </style>

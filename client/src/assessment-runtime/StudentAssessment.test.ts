@@ -188,6 +188,71 @@ const confidenceOnlyContract = {
 }
 
 describe('StudentAssessment', () => {
+  it.each([['translation', '英汉互译'], ['essay', '作文']])('shows frozen %s title and instructions with the existing text response', async (educationalType, label) => {
+    mocks.api.question.mockResolvedValue(captureV2Question({ question: { ...questionState.question,
+      question_type: 'short_answer', educational_type: educationalType, title: 'A school visit',
+      instructions: 'Write 80 words.\nKeep your original wording.', options: [] } }))
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(wrapper.get('.kt-assessment-context').text()).toContain(label)
+      expect(wrapper.get('[data-question-content-title]').text()).toBe('A school visit')
+      expect(wrapper.get('[data-question-instructions]').text()).toContain('Write 80 words.')
+      expect(wrapper.find('textarea[name="answer"]').exists()).toBe(true)
+    } finally { wrapper.unmount() }
+  })
+  it('renders the server-frozen group and restores sibling responses without fabricating visits', async () => {
+    mocks.api.question.mockResolvedValue(captureV2Question({
+      question_group_runtime_version: 1,
+      group_responses: { '11': 'B', '12': 'A' },
+      question_group: { group_id: '3', kind: 'reading', title: 'Garden', instructions: '', content_language: 'en', material: 'A shared garden.', material_segments: [], members: [11, 12].map((id, index) => ({ item_key: String(id), assignment_id: id, attempt_id: id + 2, question_type: 'single_choice', text: `Why ${index + 1}?`, options: [{ key: 'A', text: 'First' }, { key: 'B', text: 'Second' }], group_order: index + 1, blank_id: '', max_score: '2.00' })) },
+    }))
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(wrapper.find('[data-group-id="3"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('A shared garden.')
+      expect(wrapper.get<HTMLInputElement>('[data-group-question="12"] input[value="A"]').element.checked).toBe(true)
+      expect(mocks.runtime.record.mock.calls.filter(row => row[0] === 'item_rendered')).toHaveLength(1)
+    } finally { wrapper.unmount() }
+  })
+  it('removes a confirmed cleared group input from durable pending recovery before showing saved', async () => {
+    vi.useFakeTimers()
+    let confirm!: (receipt: object) => void
+    mocks.api.saveDraft.mockImplementation(() => new Promise(resolve => { confirm = resolve }))
+    mocks.api.question.mockResolvedValue(captureV2Question({
+      question: { ...questionState.question, question_type: 'fill_blank', options: [] }, draft_answer: 'temporary',
+      question_group_runtime_version: 1, group_responses: { '11': 'temporary' },
+      question_group: { group_id: '3', kind: 'cloze', title: 'Visit', instructions: '', content_language: 'en', material: 'A {{b01}}.', material_segments: [{ kind: 'text', text: 'A ' }, { kind: 'blank', item_key: '11', blank_id: 'b01' }, { kind: 'text', text: '.' }], members: [{ item_key: '11', assignment_id: 11, attempt_id: 13, question_type: 'fill_blank', text: '', options: [], group_order: 1, blank_id: 'b01', max_score: '1.00' }] },
+    }))
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      await wrapper.get('[data-group-item="11"]').setValue('')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises()
+      expect(mocks.api.saveDraft).toHaveBeenCalled()
+      expect(mocks.metadata.get('group-pending-input:7')).toEqual({ '11': '' })
+      confirm({ success: true, response_version: 1 })
+      await flushPromises()
+      expect(wrapper.get('[data-save-status]').text()).toBe('草稿已保存')
+      expect(mocks.metadata.get('group-pending-input:7')).toEqual({})
+    } finally { wrapper.unmount() }
+  })
+
+  it('keeps grouped answers read-only when the server denies response writes', async () => {
+    mocks.api.question.mockResolvedValue(captureV2Question({
+      question_group_runtime_version: 1, response_write_allowed: false,
+      question_group: { group_id: '3', kind: 'reading', title: 'Garden', instructions: '', content_language: 'en', material: 'A shared garden.', material_segments: [], members: [{ item_key: '11', assignment_id: 11, attempt_id: 13, question_type: 'single_choice', text: 'Why?', options: [{ key: 'A', text: 'First' }], group_order: 1, blank_id: '', max_score: '2.00' }] },
+    }))
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(wrapper.get<HTMLFieldSetElement>('[data-group-question="11"]').element.disabled).toBe(true)
+    } finally { wrapper.unmount() }
+  })
+
   it('shows the signed-in student and the server countdown in the requested header regions', async () => {
     vi.useFakeTimers()
     mocks.bootstrapUser = { id: 5, role: 'student', display_name: '测试学生', username: 'login-only', student_number: '20260001',

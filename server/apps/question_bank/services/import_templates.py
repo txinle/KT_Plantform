@@ -230,3 +230,75 @@ def build_question_import_template_word() -> bytes:
     output = BytesIO()
     document.save(output)
     return output.getvalue()
+
+
+def question_group_template_rows():
+    import json
+    from pathlib import Path
+    from .unified_reader import GROUP_HEADERS
+    examples = json.loads(Path(__file__).with_name('latest_template_data.json').read_text(encoding='utf-8'))
+    return [{**dict.fromkeys(GROUP_HEADERS, ''), **{
+        {'标题': '材料标题', '词库': '共享词库'}.get(key, key): str(value)
+        for key, value in example.items()
+    }} for example in examples]
+
+
+def build_question_group_template(extension):
+    from .unified_reader import GROUP_HEADERS
+    rows = question_group_template_rows()
+    if extension == 'csv':
+        output = StringIO(newline='')
+        writer = csv.DictWriter(output, fieldnames=GROUP_HEADERS)
+        writer.writeheader()
+        writer.writerows(rows)
+        return output.getvalue().encode('utf-8-sig')
+    output = BytesIO()
+    if extension == 'xlsx':
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = '题目'
+        sheet.append(GROUP_HEADERS)
+        for row in rows:
+            sheet.append([row[header] for header in GROUP_HEADERS])
+        for row in sheet:
+            for cell in row:
+                cell.number_format = '@'
+                cell.alignment = Alignment(wrap_text=True, vertical='top')
+        sheet.freeze_panes = 'A2'
+        notes = workbook.create_sheet('填写说明')
+        for line in ('11 类题型，12 道完整题，22 个作答项；包括两种翻译方向。', '课程题库须填已有 KC，空 KC 仅保存为草稿。', '同一题组共享首行材料、标题、作答说明、词库、语言和大小写规则。', '词库用 | 分隔，文章空位 {{b01}} 与空位编号逐一对应。', '简答、翻译、作文沿用实验既有评阅规则；解析中的分项分值仅为教师参考。'):
+            notes.append([line])
+        notes.column_dimensions['A'].width = 90
+        for row in notes:
+            row[0].alignment = Alignment(wrap_text=True, vertical='top')
+        workbook.save(output)
+        workbook.close()
+    elif extension == 'docx':
+        document = Document()
+        document.add_paragraph('完整题型导入模板', style='Title')
+        document.add_paragraph('填写说明：本模板含 11 类题型、12 道完整题目和 22 个作答项，包括两种翻译方向。请填写当前课程已有 KC；独立题库填写已有私有或公共知识点名称或 id:知识点ID。空 KC 仅保存为草稿。简答、翻译、作文采用实验既有二元人工判定规则，解析中的维度分值为参考说明。文件序号不作为服务器题号。')
+        current_code = None
+        for row in rows:
+            code = row['题组编号'] or None
+            if code != current_code:
+                if current_code is not None:
+                    _add_labeled_paragraph(document, '题组结束', '')
+                current_code = code
+                if code:
+                    _add_labeled_paragraph(document, '题组开始', code)
+                    for field in ('题组形式', '材料标题', '作答说明', '共享材料', '内容语言', '共享词库'):
+                        if row[field]:
+                            _add_labeled_paragraph(document, field, row[field])
+            if code:
+                _add_labeled_paragraph(document, '小题', row['组内顺序'])
+            else:
+                document.add_paragraph(f"第{row['序号']}题")
+            for field in (*QUESTION_IMPORT_TEMPLATE_HEADERS[1:], '空位编号', '分值', '大小写敏感', '绝对误差容限', '相对误差容限', *(() if code else ('材料标题', '作答说明', '内容语言'))):
+                if row[field]:
+                    _add_labeled_paragraph(document, field, row[field])
+        if current_code is not None:
+            _add_labeled_paragraph(document, '题组结束', '')
+        document.save(output)
+    else:
+        raise ValueError('不支持的题组模板格式。')
+    return output.getvalue()

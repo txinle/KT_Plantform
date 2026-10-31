@@ -231,10 +231,10 @@ def grade_task_short_answer(
 
     record = grade_submission(
         submission.pk,
-        score=Decimal("1") if is_correct else Decimal("0"),
+        score=submission.attempt.assignment.snapshot.max_score.normalize() if is_correct else Decimal("0"),
         is_correct=bool(is_correct),
         status=GradeRecord.Status.COMPLETED,
-        max_score=Decimal("1"),
+        max_score=submission.attempt.assignment.snapshot.max_score.normalize(),
         grading_method=MANUAL_BINARY_POLICY,
         grading_version=MANUAL_BINARY_POLICY,
         grader_version=MANUAL_BINARY_POLICY,

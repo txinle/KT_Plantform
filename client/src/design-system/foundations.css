@@ -1,21 +1,22 @@
 @import './tokens.css';
 
 *, *::before, *::after { box-sizing: border-box; }
-html { background: var(--kt-color-page); color: var(--kt-color-text); font-family: var(--kt-font-sans); }
+html { background: var(--kt-color-page); color: var(--kt-color-text); font-family: var(--kt-font-sans); scroll-padding-top: calc(var(--kt-header-height) + 1rem); }
 body { min-width: 20rem; margin: 0; font-family: var(--kt-font-sans); font-size: var(--kt-font-base); line-height: 1.6; }
 a { color: var(--kt-color-primary); text-underline-offset: 0.16em; }
 h1, h2, h3, h4, p { margin-top: 0; }
 h1 { margin-bottom: 0.5rem; font-size: var(--kt-font-title); line-height: 1.2; letter-spacing: -0.025em; }
 h2 { margin-bottom: 0.75rem; font-size: 1.15rem; line-height: 1.3; }
 h3 { margin-bottom: 0.35rem; font-size: 1rem; }
+small { font-size: var(--kt-font-xs); }
 button, input, select, textarea { font: inherit; }
-.kt-shell { width: min(100% - 5rem, var(--kt-content-max)); margin-inline: auto; }
-.kt-app-header { position: relative; z-index: var(--kt-z-nav); border-bottom: 1px solid var(--kt-border); background: rgb(255 255 255 / 97%); color: var(--kt-ink); }
-.kt-app-header__inner { display: flex; min-height: 4.25rem; align-items: center; gap: clamp(1rem, 2.5vw, 2.5rem); }
+.kt-shell { width: calc(100% - clamp(3rem, 3vw, 4rem)); margin-inline: auto; }
+.kt-app-header { position: sticky; top: 0; z-index: var(--kt-z-nav); border-bottom: 1px solid var(--kt-border); background: var(--kt-surface); color: var(--kt-ink); }
+.kt-app-header__inner { display: flex; min-height: 4rem; align-items: center; gap: clamp(1rem, 2.5vw, 2.5rem); }
 .kt-wordmark { display: inline-flex; flex: none; align-items: center; gap: 0.75rem; color: var(--kt-brand-900); font-size: 1.25rem; font-weight: 750; letter-spacing: -0.02em; text-decoration: none; white-space: nowrap; }
 .kt-brand-mark { display: grid; width: 2.25rem; height: 2.25rem; place-items: center; border-radius: 0.375rem; background: var(--kt-brand-900); color: var(--kt-surface); font-size: 0.875rem; font-style: italic; font-weight: 800; letter-spacing: 0.04em; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 16%); }
 .kt-global-nav { display: flex; min-width: 0; flex: 1 1 auto; align-self: stretch; align-items: stretch; justify-content: center; gap: clamp(0.75rem, 2vw, 2rem); }
-.kt-global-nav a { display: inline-flex; min-height: 4.25rem; align-items: center; border-bottom: 3px solid transparent; color: var(--kt-ink); font-size: 0.9375rem; font-weight: 650; text-decoration: none; white-space: nowrap; }
+.kt-global-nav a { display: inline-flex; min-height: 3.5rem; align-items: center; border-bottom: 3px solid transparent; color: var(--kt-ink); font-size: 1rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
 .kt-global-nav a:hover { color: var(--kt-action-600); }
 .kt-global-nav [aria-current='page'] { border-bottom-color: var(--kt-action-600); color: var(--kt-action-600); }
 .kt-account-actions { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 0.75rem; }
@@ -36,7 +37,7 @@ button, input, select, textarea { font: inherit; }
 .kt-course-nav a { display: inline-flex; min-height: 3.25rem; align-items: center; border-bottom: 3px solid transparent; padding: 0.25rem 0.8rem 0; color: var(--kt-muted); font-size: var(--kt-font-sm); font-weight: 650; text-decoration: none; white-space: nowrap; }
 .kt-course-nav a:hover { color: var(--kt-action-600); }
 .kt-course-nav a[aria-current='page'] { border-color: var(--kt-action-600); color: var(--kt-action-600); }
-.kt-page-main { padding-block: 2rem 4rem; }
+.kt-page-main { padding-block: 1.25rem 2rem; }
 .kt-section { margin-top: 2rem; }
 .kt-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 0.85rem; }
 .kt-section-heading h2, .kt-section-heading h3, .kt-section-heading p { margin-bottom: 0; }
@@ -83,7 +84,7 @@ input[type='checkbox'], input[type='radio'] { width: 1.1rem; height: 1.1rem; acc
 .kt-paginator button { min-height: 2.75rem; border: 1px solid var(--kt-border); border-radius: var(--kt-radius-control); padding: .5rem .75rem; background: var(--kt-surface); color: var(--kt-ink); cursor: pointer; }
 .kt-paginator button:disabled { opacity: .55; cursor: not-allowed; }
 .kt-paginator button:not(:disabled):hover { border-color: var(--kt-action-600); color: var(--kt-action-600); }
-.kt-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.kt-table { width: 100%; border-collapse: collapse; font-size: .9375rem; font-variant-numeric: tabular-nums; }
 .kt-table th, .kt-table td { border-bottom: 1px solid var(--kt-color-border); padding: 0.7rem 0.75rem; text-align: left; vertical-align: top; }
 .kt-table th { white-space: nowrap; background: var(--kt-surface-subtle); color: var(--kt-muted); font-size: 0.875rem; letter-spacing: 0.02em; }
 .kt-table tbody tr:hover { background: var(--kt-surface); }
@@ -96,7 +97,7 @@ input[type='checkbox'], input[type='radio'] { width: 1.1rem; height: 1.1rem; acc
 .kt-drawer-backdrop { position: fixed; z-index: 60; inset: 0; background: rgb(23 35 58 / 42%); }
 .kt-drawer { position: absolute; inset: 0 0 0 auto; width: min(22rem, 90vw); overflow: auto; background: var(--kt-color-surface); box-shadow: var(--kt-shadow-raised); padding: 1rem; }
 @media (max-width: 63.99rem) {
-  .kt-shell { width: min(100% - 2rem, var(--kt-content-max)); }
+  .kt-shell { width: calc(100% - 2rem); }
   .kt-app-header__inner { flex-wrap: wrap; gap: 0 1rem; padding-block: 0.5rem; }
   .kt-global-nav { order: 3; width: 100%; flex-basis: 100%; justify-content: flex-start; overflow-x: auto; }
   .kt-global-nav a { min-height: 2.75rem; }
@@ -109,7 +110,8 @@ input[type='checkbox'], input[type='radio'] { width: 1.1rem; height: 1.1rem; acc
   .kt-course-bar > .kt-shell { display: block; }
   .kt-course-context { padding-bottom: 0.25rem; }
   .kt-course-nav { margin-inline: -0.75rem; padding-inline: 0.25rem; }
-  .kt-page-main { padding-block: 1.5rem 3rem; }
+  .kt-page-main { padding-block: 1rem 2rem; }
+  .kt-table { font-size: 1rem; }
   .kt-page-header__actions > * { flex: 1 1 auto; }
 }
 @media (max-width: 35.99rem) { .kt-wordmark__name { display: none; } }

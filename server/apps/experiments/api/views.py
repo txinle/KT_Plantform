@@ -37,6 +37,7 @@ from ..models import (
     PublishPlan,
     PublishPlanExclusion,
     PublishPreviewParticipant,
+    PublishPreviewItem,
 )
 from ..publication_jobs import (
     enqueue_publish_operation,
@@ -57,7 +58,7 @@ from ..publication_services import (
     save_plan_schedules,
     save_plan_selection,
 )
-from ..sampling import SamplingService, SamplingValidationError
+from ..sampling import SamplingService, SamplingValidationError, complete_question_units, unit_members, sampling_question_type, SAMPLING_TYPES, SAMPLING_TYPE_CHOICES
 from ..question_bank_selection import validate_question_banks
 from .serializers import (
     CollectionParticipantCollectionSerializer,
@@ -158,12 +159,20 @@ def _preview_projection(preview_run):
     participant_totals = PublishPreviewParticipant.objects.filter(
         class_result__preview_run=preview_run
     ).aggregate(participant_count=Count("pk"), item_count=Sum("item_count"))
+    question_units = set()
+    for participant_id, mapping_id, frozen_group_id, group_id, question_id in PublishPreviewItem.objects.filter(
+        participant__class_result__preview_run=preview_run
+    ).values_list('participant_id', 'release_mapping_id', 'release_mapping__question_snapshot__group_snapshot_id',
+        'source_question__group_id', 'source_question_id'):
+        group_id = frozen_group_id if mapping_id else group_id
+        question_units.add((participant_id, 'group' if group_id else 'question', group_id or question_id))
     return {
         "id": preview_run.pk,
         "plan_revision": preview_run.plan_revision,
         "class_count": class_count,
         "participant_count": participant_totals["participant_count"] or 0,
         "item_count": participant_totals["item_count"] or 0,
+        "question_count": len(question_units),
         "randomization_validation": f"{valid_count}/{class_count}",
         "created_at": preview_run.created_at,
     }
@@ -173,6 +182,11 @@ def _participant_projection(participant, *, include_items=False):
     class_group = participant.class_result.publish_plan_class.class_group
     preview_items = list(participant.items.all())
     history_roles = [item.sampling_source.get("history_role") for item in preview_items]
+    question_roles = {}
+    for item in preview_items:
+        group_id = (item.release_mapping.question_snapshot.group_snapshot_id
+            if item.release_mapping_id else item.source_question.group_id)
+        question_roles[('group' if group_id else 'question', group_id or item.source_question_id)] = item.sampling_source.get('history_role')
     result = {
         "id": participant.pk,
         "student_number": participant.student.student_number,
@@ -180,6 +194,9 @@ def _participant_projection(participant, *, include_items=False):
         "class_id": class_group.pk,
         "class_name": str(class_group),
         "item_count": participant.item_count,
+        "question_count": len(question_roles),
+        "review_question_count": list(question_roles.values()).count('review'),
+        "new_question_count": list(question_roles.values()).count('new'),
         "is_valid": participant.is_valid,
         "excluded": False,
         "review_item_count": history_roles.count("review"),
@@ -223,6 +240,9 @@ def _draft_participant_projection(enrollment, *, include_items=False):
         "class_id": enrollment.class_group_id,
         "class_name": str(enrollment.class_group),
         "item_count": 0,
+        "question_count": 0,
+        "review_question_count": 0,
+        "new_question_count": 0,
         "is_valid": True,
         "excluded": enrollment.excluded,
         "review_item_count": 0,
@@ -359,11 +379,11 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
             raise ValidationError(
                 {"kc_codes": "包含不存在、已归档或不属于当前课程的知识点。"}
             )
-        bank_candidates = SamplingService.total_count_candidates(
+        bank_candidates = complete_question_units(SamplingService.total_count_candidates(
             question_bank_ids=[bank.pk for bank in banks],
             concept_ids=[],
             match_scope=Experiment.MatchScope.ANY_LEVEL,
-        )
+        ))
         selected_ids = [concept.pk for concept in concepts if concept.code in data["kc_codes"]]
         candidates = bank_candidates if not selected_ids else [
             question
@@ -375,14 +395,21 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
         ]
         counts = {
             question_type: sum(
-                question.question_type == question_type for question in candidates
+                sampling_question_type(question) == question_type for question in candidates
             )
-            for question_type in Question.Type.values
+            for question_type in SAMPLING_TYPES
         }
         return Response(
             {
                 "scope": "question_bank",
                 "candidate_count": len(candidates),
+                "questions": [
+                    {"question_id": question.pk, "question_type": sampling_question_type(question),
+                     "code": question.code, "title": question.group.title if question.group_id else question.text,
+                     "text": question.group.material if question.group_id else question.text,
+                     "item_count": len(unit_members(question)), "question_bank_id": question.bank_id}
+                    for question in candidates
+                ],
                 "bank_counts": [
                     {"question_bank_id": bank.pk, "name": bank.name,
                      "candidate_count": sum(question.bank_id == bank.pk for question in candidates)}
@@ -408,7 +435,7 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
                         "label": label,
                         "available": counts[question_type],
                     }
-                    for question_type, label in Question.Type.choices
+                    for question_type, label in SAMPLING_TYPE_CHOICES
                 ],
             }
         )
@@ -570,13 +597,15 @@ class TeacherExperimentReadinessView(TeacherExperimentApiMixin, APIView):
             release = experiment.frozen_release_snapshot
             configuration = release.configuration
             inventory = configuration.get("sampling_inventory", [])
+            candidate_count = configuration.get('candidate_unit_count', release.question_snapshots.count())
             return Response({
+                'question_group_pool': bool(configuration.get('question_group_runtime_version')),
                 "ready": True,
                 "issues": [],
                 "blocking_issues": [],
-                "candidate_count": release.question_snapshots.count(),
+                "candidate_count": candidate_count,
                 "requested_count": (
-                    configuration.get("sampling_total_count")
+                    candidate_count if not configuration.get('sampling_mode') else configuration.get("sampling_total_count")
                     if configuration.get("sampling_mode") != Experiment.SamplingMode.KC_QUOTA
                     else sum(row.get("quota") or 0 for row in inventory)
                 ),
@@ -588,15 +617,20 @@ class TeacherExperimentReadinessView(TeacherExperimentApiMixin, APIView):
                 ],
                 "participant_count": experiment.student_links.count(),
             })
-        candidate_count = Question.objects.filter(
+        candidate_stats = Question.objects.filter(
             bank_id__in=experiment.selected_question_bank_ids,
-            status=Question.Status.ACTIVE,
-        ).count()
+        ).aggregate(candidate_count=Count('pk', filter=Q(status=Question.Status.ACTIVE)),
+            question_groups=Count('group_id', distinct=True))
+        candidate_count = candidate_stats['candidate_count']
+        question_group_pool = bool(candidate_stats['question_groups'])
+        if question_group_pool:
+            candidate_count = len(complete_question_units(SamplingService.total_count_candidates(
+                question_bank_ids=experiment.selected_question_bank_ids, concept_ids=[], match_scope='any_level')))
         participant_count = experiment.student_links.count()
         issues = []
         blocking_issues = []
         inventory_buckets = []
-        requested_count = experiment.sampling_total_count
+        requested_count = candidate_count if question_group_pool and not experiment.sampling_mode else experiment.sampling_total_count
         with transaction.atomic():
             try:
                 # Active questions already passed technical readiness when edited.
@@ -621,7 +655,7 @@ class TeacherExperimentReadinessView(TeacherExperimentApiMixin, APIView):
                 try:
                     service = SamplingService(experiment)
                     resolution = service.resolve(validate_inventory=False)
-                    candidate_count = len(resolution.candidates)
+                    candidate_count = len(resolution.unit_candidates)
                     rules = list(
                         experiment.sampling_kcs.select_related("concept").order_by("pk")
                     )
@@ -645,7 +679,7 @@ class TeacherExperimentReadinessView(TeacherExperimentApiMixin, APIView):
                                 else len(
                                     [
                                         question
-                                        for question in resolution.candidates
+                                        for question in resolution.unit_candidates
                                         if service._question_matches(
                                             question,
                                             rule.concept_id,
@@ -672,6 +706,7 @@ class TeacherExperimentReadinessView(TeacherExperimentApiMixin, APIView):
         return Response(
             {
                 "ready": not issues,
+                'question_group_pool': question_group_pool,
                 "issues": issues,
                 "blocking_issues": blocking_issues,
                 "candidate_count": candidate_count,

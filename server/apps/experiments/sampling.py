@@ -7,6 +7,53 @@ from apps.question_bank.models import Question
 
 from .models import Experiment
 
+SAMPLING_TYPE_CHOICES = list(Question.Type.choices) + [
+    ('reading', '阅读理解'), ('words', '选词填空'), ('cloze', '完形填空'),
+    ('translation', '英汉互译'), ('essay', '作文'),
+]
+SAMPLING_TYPES = [value for value, _label in SAMPLING_TYPE_CHOICES]
+
+
+def sampling_question_type(question):
+    if question.group_id:
+        return question.group.kind
+    educational_type = getattr(question, 'educational_type', 'standard')
+    return educational_type if educational_type != 'standard' else question.question_type
+
+
+def complete_question_units(questions):
+    """Represent each complete group once, retaining its ordered source members."""
+    units, groups = [], {}
+    for question in questions:
+        if question.group_id:
+            if question.group_id not in groups:
+                groups[question.group_id] = []
+                units.append(groups[question.group_id])
+            groups[question.group_id].append(question)
+        else:
+            units.append([question])
+    representatives = []
+    for members in units:
+        if members[0].group_id:
+            members.sort(key=lambda question: (question.group_order, question.pk))
+        representative = members[0]
+        representative._sampling_members = tuple(members)
+        representatives.append(representative)
+    return representatives
+
+
+def unit_members(question):
+    return getattr(question, '_sampling_members', (question,))
+
+
+def flatten_units(questions):
+    return [member for question in questions for member in unit_members(question)]
+
+
+def sample_with_pins(options, count, pinned_ids, rng):
+    pinned = [question for question in options if question.pk in pinned_ids]
+    return pinned + rng.sample([question for question in options if question.pk not in pinned_ids], count - len(pinned))
+
 
 class SamplingValidationError(ValidationError):
     def __init__(self, issues):
@@ -45,6 +92,10 @@ class SamplingResolution:
     resolved_leaf_ids_by_node: dict
     review_candidates: tuple = ()
     new_candidates: tuple = ()
+
+    @property
+    def unit_candidates(self):
+        return complete_question_units(self.candidates)
 
 
 def _grouped_quota_flow(*, candidates, completed_ids, review_count, bucket_capacities,
@@ -189,19 +240,38 @@ class SamplingService:
     def requested_count(self):
         if self.experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT:
             return int(self.experiment.sampling_total_count or 0)
-        return sum(self.experiment.sampling_kcs.values_list("quota", flat=True))
+        return sum(rule.quota or 0 for rule in self._rules())
 
     def _filter_candidates(self, candidates):
         return [
             question for question in candidates
-            if question_allowed_by_history(
-                question.pk,
+            if all(question_allowed_by_history(
+                member.pk,
                 self.policy,
                 completed_question_ids=self.completed_question_ids,
                 assigned_question_ids=self.assigned_question_ids,
                 active_frozen_question_ids=self.active_frozen_question_ids,
-            )
+            ) for member in unit_members(question))
         ]
+
+    def _is_review(self, question):
+        return any(member.pk in self.completed_question_ids for member in unit_members(question))
+
+    def _pinned_ids(self, candidates):
+        requested = list(getattr(self.experiment, 'sampling_pinned_question_ids', []))
+        if not requested:
+            return set()
+        member_to_unit = {member.pk: question.pk for question in candidates for member in unit_members(question)}
+        if self.experiment.sampling_mode != Experiment.SamplingMode.TOTAL_COUNT or any(pk not in member_to_unit for pk in requested):
+            raise SamplingValidationError([self._issue('PINNED_QUESTION_UNAVAILABLE', '指定题目不在当前可用范围，或当前模式不支持指定题目。', field='pinned_question_ids')])
+        pinned = {member_to_unit[pk] for pk in requested}
+        quotas = self._type_quota_map()
+        if len(pinned) != len(requested) or len(pinned) > self.requested_count() or (quotas and any(
+            sum(question.pk in pinned and sampling_question_type(question) == kind for question in candidates) > quotas.get(kind, 0)
+            for kind in SAMPLING_TYPES
+        )):
+            raise SamplingValidationError([self._issue('PINNED_QUESTION_QUOTA_CONFLICT', '指定题目重复或超过对应题数配额。', field='pinned_question_ids')])
+        return pinned
 
     def _issue(self, code, message, *, kc_id=None, field=None, **metadata):
         issue = {
@@ -216,7 +286,7 @@ class SamplingService:
 
     @staticmethod
     def _question_matches(question, concept_id, match_scope):
-        links = list(question.concept_links.all())
+        links = [link for member in unit_members(question) for link in member.concept_links.all()]
         if match_scope == Experiment.MatchScope.PRIMARY:
             return any(link.is_primary and link.concept_id == concept_id for link in links)
         return any(link.concept_id == concept_id for link in links)
@@ -248,8 +318,29 @@ class SamplingService:
             )
 
             def bucket_ids(question):
-                return [str(question.question_type)] if type_quotas else ["all"]
+                return [str(sampling_question_type(question))] if type_quotas else ["all"]
         return capacities, bucket_ids
+
+    def _history_allocation(self, resolution, rules, *, rng=None):
+        capacities, bucket_ids = self._history_flow_inputs(resolution, rules)
+        pinned_ids = self._pinned_ids(resolution.unit_candidates)
+        pinned = [question for question in resolution.unit_candidates if question.pk in pinned_ids]
+        allocation = {}
+        review_count = self.experiment.review_count
+        for question in pinned:
+            bucket = bucket_ids(question)[0]
+            capacities[bucket] -= 1
+            review_count -= int(self._is_review(question))
+            allocation[question.pk] = bucket
+        if review_count < 0 or review_count > sum(capacities.values()):
+            raise SamplingValidationError([self._issue('PINNED_HISTORY_CONFLICT', '指定题目与复测题数不兼容。', field='pinned_question_ids')])
+        maximum, remainder = _grouped_quota_flow(
+            candidates=[question for question in resolution.unit_candidates if question.pk not in pinned_ids],
+            completed_ids={question.pk for question in resolution.review_candidates},
+            review_count=review_count, bucket_capacities=capacities,
+            bucket_ids_for_question=bucket_ids, rng=rng,
+        )
+        return maximum + len(pinned), {**allocation, **remainder}
 
     def _validate_history_constraints(self, resolution, rules):
         if self.policy != Experiment.CrossExperimentItemPolicy.MIXED_REVIEW:
@@ -276,14 +367,7 @@ class SamplingService:
             ))
         if issues:
             raise SamplingValidationError(issues)
-        capacities, bucket_ids = self._history_flow_inputs(resolution, rules)
-        maximum, _allocation = _grouped_quota_flow(
-            candidates=resolution.candidates,
-            completed_ids=self.completed_question_ids,
-            review_count=review_count,
-            bucket_capacities=capacities,
-            bucket_ids_for_question=bucket_ids,
-        )
+        maximum, _allocation = self._history_allocation(resolution, rules)
         if maximum < requested:
             raise SamplingValidationError([self._issue(
                 "GLOBAL_MATCHING_INSUFFICIENT",
@@ -301,19 +385,20 @@ class SamplingService:
                 bank_id__in=bank_ids,
                 status=Question.Status.ACTIVE,
             )
+            .select_related("group")
             .prefetch_related("concept_links")
             .order_by("bank_id", "sequence", "pk")
         )
         if not concept_ids:
             return questions
-        return [
+        return flatten_units([
             question
-            for question in questions
+            for question in complete_question_units(questions)
             if any(
                 cls._question_matches(question, concept_id, match_scope)
                 for concept_id in concept_ids
             )
-        ]
+        ])
 
     def resolve(self, *, validate_inventory=True):
         mode = self.experiment.sampling_mode
@@ -362,20 +447,21 @@ class SamplingService:
                     match_scope=scope,
                 )
             )
-            candidates = self._filter_candidates(candidates)
+            candidates = self._filter_candidates(complete_question_units(candidates))
+            self._pinned_ids(candidates)
             type_buckets = {
                 question_type: [
                     question
                     for question in candidates
-                    if question.question_type == question_type
+                    if sampling_question_type(question) == question_type
                 ]
-                for question_type in Question.Type.values
+                for question_type in SAMPLING_TYPES
             }
             type_quotas = self._type_quota_map()
             type_issues = [
                 self._issue(
                     "QUESTION_TYPE_QUOTA_INSUFFICIENT",
-                    f"题型“{Question.Type(question_type).label}”需要 {requested} 题，可用 {len(type_buckets[question_type])} 题。",
+                    f"题型“{dict(SAMPLING_TYPE_CHOICES)[question_type]}”需要 {requested} 题，可用 {len(type_buckets[question_type])} 题。",
                     field="sampling_type_quotas",
                     question_type=question_type,
                     requested=requested,
@@ -400,9 +486,9 @@ class SamplingService:
                     )
                 ])
             resolution = SamplingResolution(
-                candidates, {}, type_buckets, resolved,
-                tuple(question for question in candidates if question.pk in self.completed_question_ids),
-                tuple(question for question in candidates if question.pk not in self.completed_question_ids),
+                flatten_units(candidates), {}, type_buckets, resolved,
+                tuple(question for question in candidates if self._is_review(question)),
+                tuple(question for question in candidates if not self._is_review(question)),
             )
             if validate_inventory:
                 self._validate_history_constraints(resolution, rules)
@@ -420,7 +506,8 @@ class SamplingService:
                 .order_by("bank_id", "sequence", "pk")
             )
         )
-        questions = self._filter_candidates(questions)
+        questions = self._filter_candidates(complete_question_units(questions))
+        self._pinned_ids(questions)
         buckets = {
             rule.concept_id: [
                 question for question in questions
@@ -460,28 +547,20 @@ class SamplingService:
             key=lambda question: (question.bank_id, question.sequence, question.pk),
         )
         resolution = SamplingResolution(
-            candidates, buckets, {}, resolved,
-            tuple(question for question in candidates if question.pk in self.completed_question_ids),
-            tuple(question for question in candidates if question.pk not in self.completed_question_ids),
+            flatten_units(candidates), buckets, {}, resolved,
+            tuple(question for question in candidates if self._is_review(question)),
+            tuple(question for question in candidates if not self._is_review(question)),
         )
         if validate_inventory:
             self._validate_history_constraints(resolution, rules)
         return resolution
 
-    def select_with_attribution(self, sampling_seed):
+    def _select_units_with_attribution(self, sampling_seed):
         resolution = self.resolve()
         rng = random.Random(int(sampling_seed[:16], 16))
         if self.policy == Experiment.CrossExperimentItemPolicy.MIXED_REVIEW:
             rules = self._rules()
-            capacities, bucket_ids = self._history_flow_inputs(resolution, rules)
-            maximum, allocation = _grouped_quota_flow(
-                candidates=resolution.candidates,
-                completed_ids=self.completed_question_ids,
-                review_count=self.experiment.review_count,
-                bucket_capacities=capacities,
-                bucket_ids_for_question=bucket_ids,
-                rng=rng,
-            )
+            maximum, allocation = self._history_allocation(resolution, rules, rng=rng)
             if maximum < self.requested_count():
                 raise SamplingValidationError([self._issue(
                     "GLOBAL_MATCHING_INSUFFICIENT",
@@ -490,7 +569,7 @@ class SamplingService:
                     requested=self.requested_count(),
                     maximum_assignable=maximum,
                 )])
-            questions = {question.pk: question for question in resolution.candidates}
+            questions = {question.pk: question for question in resolution.unit_candidates}
             scope_by_concept = {str(rule.concept_id): rule.match_scope for rule in rules}
             selected = []
             for question_id, bucket_id in allocation.items():
@@ -503,7 +582,7 @@ class SamplingService:
                         else None
                     ),
                     "quota_question_type": (
-                        question.question_type
+                        sampling_question_type(question)
                         if self.experiment.sampling_mode == Experiment.SamplingMode.TOTAL_COUNT
                         and bucket_id != "all"
                         else None
@@ -514,7 +593,7 @@ class SamplingService:
                         else self.experiment.sampling_match_scope
                     ),
                     "history_role": (
-                        "review" if question_id in self.completed_question_ids else "new"
+                        "review" if self._is_review(question) else "new"
                     ),
                     "cross_experiment_item_policy": self.policy,
                 })
@@ -524,19 +603,19 @@ class SamplingService:
             if type_quotas:
                 selected = [
                     question
-                    for question_type in Question.Type.values
-                    for question in rng.sample(
+                    for question_type in SAMPLING_TYPES
+                    for question in sample_with_pins(
                         resolution.type_buckets[question_type],
-                        type_quotas.get(question_type, 0),
+                        type_quotas.get(question_type, 0), self._pinned_ids(resolution.unit_candidates), rng,
                     )
                 ]
             else:
-                selected = rng.sample(resolution.candidates, self.experiment.sampling_total_count)
+                selected = sample_with_pins(resolution.unit_candidates, self.experiment.sampling_total_count, self._pinned_ids(resolution.unit_candidates), rng)
             return [
                 {
                     "question": question,
                     "quota_kc_id": None,
-                    "quota_question_type": question.question_type if type_quotas else None,
+                    "quota_question_type": sampling_question_type(question) if type_quotas else None,
                     "match_scope": self.experiment.sampling_match_scope,
                     "history_role": (
                         "new"
@@ -549,7 +628,7 @@ class SamplingService:
             ]
         rules = self._rules()
         matching = _maximum_matching(rules, resolution.buckets, rng=rng)
-        questions = {question.pk: question for question in resolution.candidates}
+        questions = {question.pk: question for question in resolution.unit_candidates}
         scope_by_concept = {rule.concept_id: rule.match_scope for rule in rules}
         selected = [
             {
@@ -567,6 +646,9 @@ class SamplingService:
             for (concept_id, _slot), question_id in matching.items()
         ]
         return sorted(selected, key=lambda item: (item["question"].bank_id, item["question"].sequence, item["question"].pk))
+
+    def select_with_attribution(self, sampling_seed):
+        return [{**row, "question": member} for row in self._select_units_with_attribution(sampling_seed) for member in unit_members(row["question"])]
 
     def select(self, sampling_seed):
         return [item["question"] for item in self.select_with_attribution(sampling_seed)]

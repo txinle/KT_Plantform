@@ -73,6 +73,77 @@ describe('TeacherExperimentForm', () => {
     })
   })
 
+  it('offers available complete English question types from the selected banks', async () => {
+    mocks.api.samplingInventory.mockResolvedValue({ candidate_count: 3, kc_counts: [], question_types: [
+      { question_type: 'reading', label: '阅读理解', available: 1 },
+      { question_type: 'words', label: '选词填空', available: 1 },
+      { question_type: 'essay', label: '作文题', available: 1 },
+    ] })
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+    expect(wrapper.get('.kt-type-tree-selector').text()).toContain('阅读理解')
+    expect(wrapper.get('.kt-type-tree-selector').text()).toContain('选词填空')
+    expect(wrapper.get('.kt-type-tree-selector').text()).toContain('作文题')
+    await wrapper.get('#experiment-name').setValue('英语完整题抽取')
+    await wrapper.get('input[name="question_type_choice"][value="reading"]').setValue(true)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.api.create).toHaveBeenCalledWith(7, expect.objectContaining({
+      sampling: expect.objectContaining({ type_quotas: [{ question_type: 'reading', amount: 1 }] }),
+    }))
+    wrapper.unmount()
+  })
+
+  it('creates a full question-group pool without per-item quotas', async () => {
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+    await wrapper.get('#experiment-name').setValue('英语题组')
+    await wrapper.get('input[name="sampling_mode"][value="all"]').setValue(true)
+    expect(wrapper.find('#sampling-total-count').exists()).toBe(false)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.api.create).toHaveBeenCalledWith(7, expect.objectContaining({
+      sampling: { mode: null, total_count: null, match_scope: 'any_level', nodes: [], type_quotas: [] },
+    }))
+    wrapper.unmount()
+  })
+
+  it('pins a complete question by its server-projected representative id', async () => {
+    mocks.api.samplingInventory.mockResolvedValue({ candidate_count: 2, kc_counts: [], question_types: [
+      { question_type: 'reading', label: '阅读理解', available: 2 },
+    ], questions: [
+      { question_id: 41, question_type: 'reading', code: 'R001', title: 'A community garden', text: 'Shared article', item_count: 3, question_bank_id: 3 },
+      { question_id: 56, question_type: 'reading', code: 'R002', title: 'A library', text: 'Another article', item_count: 4, question_bank_id: 3 },
+    ] })
+    const wrapper = mount(TeacherExperimentForm, { global: { stubs: { Drawer: { template: '<section><slot /></section>' } } } })
+    await flushPromises()
+    await wrapper.get('#experiment-name').setValue('指定一篇阅读')
+    await wrapper.get('button[data-select-questions]').trigger('click')
+    await wrapper.get('input[data-pin-question="41"]').setValue(true)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.api.create).toHaveBeenCalledWith(7, expect.objectContaining({
+      sampling: expect.objectContaining({ pinned_question_ids: [41], total_count: 1 }),
+    }))
+    wrapper.unmount()
+  })
+
+  it('keeps a server-identified group pool editable instead of classifying it as a legacy draft', async () => {
+    mocks.route.name = 'teacher-experiment-edit'
+    mocks.route.params = { courseId: '7', experimentId: '19' }
+    mocks.api.detail.mockResolvedValue({ id: 19, name: '英语题组', selection_mode: 'all', question_bank: { id: 3, name: '题库' }, sampling_mode: null, sampling_kcs: [] })
+    mocks.api.readiness.mockResolvedValue({ ready: true, issues: [], blocking_issues: [], candidate_count: 18, inventory_buckets: [], question_group_pool: true })
+    mocks.api.update.mockResolvedValue({ id: 19 })
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('只读旧版草稿')
+    expect(wrapper.get<HTMLInputElement>('input[name="sampling_mode"][value="all"]').element.checked).toBe(true)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.api.update).toHaveBeenCalledWith(7, 19, expect.objectContaining({ sampling: expect.objectContaining({ mode: null, nodes: [] }) }))
+    wrapper.unmount()
+  })
+
   it('uses bank inventory for KC counts and initializes the quota match scope', async () => {
     const wrapper = mount(TeacherExperimentForm)
     await flushPromises()

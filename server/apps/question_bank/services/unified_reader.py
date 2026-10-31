@@ -5,14 +5,20 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from .word_import import read_docx_rows
+from .word_import import GROUP_KEYS, read_docx_rows
 
 
 HEADERS = ('序号', '题目', '题型', *[f'选项{k}' for k in 'ABCDEF'],
            '答案', '可接受答案', '解析', '难度', '一级知识点', '二级知识点', '三级知识点')
+GROUP_FIELDS = GROUP_KEYS
+GROUP_HEADERS = (*HEADERS, *GROUP_FIELDS)
+LEGACY_HEADER_VARIANTS = (
+    ('序号', '题目', '题型', '答案'), ('序号', '题目', '答案'),
+    ('题目', '题型', '答案'), ('题目', '答案'),
+)
 
 
-def read_unified_rows(uploaded):
+def read_unified_rows(uploaded, *, allow_legacy=False):
     suffix = Path(uploaded.name).suffix.lower()
     if suffix == '.docx':
         return read_docx_rows(uploaded)
@@ -34,7 +40,8 @@ def read_unified_rows(uploaded):
         try:
             workbook = load_workbook(uploaded, data_only=False)
             sheets = [sheet for sheet in workbook.worksheets
-                      if any(cell.value is not None for row in sheet for cell in row)]
+                      if any(cell.value is not None for row in sheet for cell in row)
+                      and sheet.title != '填写说明']
             if len(sheets) != 1:
                 raise ValueError('Excel 必须且只能包含一个有数据的工作表。')
             sheet = sheets[0]
@@ -54,11 +61,14 @@ def read_unified_rows(uploaded):
     if not data:
         raise ValueError('文件为空。')
     headers = [str(value or '').strip() for value in data[0][1]]
-    headers = ['题目' if name == '题干' else name for name in headers]
+    headers = [{'题干': '题目', '标题': '材料标题', '词库': '共享词库'}.get(name, name) for name in headers]
     # Empty trailing Excel columns are formatting, not additional fields.
     while headers and not headers[-1]:
         headers.pop()
-    if len(headers) != len(set(headers)) or set(headers) != set(HEADERS):
+    valid_headers = [set(HEADERS), set(GROUP_HEADERS), set(GROUP_HEADERS) - {"共享词库", "绝对误差容限", "相对误差容限"}]
+    if allow_legacy:
+        valid_headers.extend(set(variant) for variant in LEGACY_HEADER_VARIANTS)
+    if len(headers) != len(set(headers)) or set(headers) not in valid_headers:
         raise ValueError(f'表头必须完整且不重复：{"、".join(HEADERS)}（题目也可写为题干，列可调整顺序）。')
     rows = []
     for number, values, errors in data[1:]:
@@ -67,7 +77,8 @@ def read_unified_rows(uploaded):
         if any(value is not None and str(value).strip() for value in values[len(headers):]):
             errors = [*errors, '存在没有对应表头的数据列。']
         values = [*values, *([''] * max(0, len(headers) - len(values)))]
-        rows.append({**dict(zip(headers, values)), '_location': location.format(number=number), '_errors': errors})
+        rows.append({**dict(zip(headers, values)), '_location': location.format(number=number), '_errors': errors,
+                     '_legacy_standalone': allow_legacy and set(headers) not in (set(GROUP_HEADERS), set(GROUP_HEADERS) - {'共享词库', '绝对误差容限', '相对误差容限'})})
     if not rows:
         raise ValueError('文件中没有可导入的题目。')
     return rows

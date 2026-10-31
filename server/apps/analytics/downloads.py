@@ -3,7 +3,7 @@ import os
 from io import BytesIO
 from urllib.parse import quote
 from django.http import FileResponse, HttpResponse
-from django.db.models import F, Q
+from django.db.models import F, Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_POST
 from openpyxl import Workbook
@@ -11,7 +11,7 @@ from openpyxl.cell import WriteOnlyCell
 from apps.accounts.permissions import role_required
 from apps.accounts.course_access import accessible_courses, get_accessible_course
 from apps.accounts.models import User
-from apps.assessment.models import Attempt, QuestionVisitEvent
+from apps.assessment.models import Attempt, GradeRecord, QuestionVisitEvent
 from apps.audit.services import log_action
 from apps.experiments.models import Experiment
 from .models import ExportJob
@@ -118,7 +118,11 @@ def identified_export(request, experiment_id):
             "session__student",
             "session__version",
             "assignment__snapshot",
+            "submission_event",
         )
+        .prefetch_related(Prefetch('submission_event__grade_records',
+            queryset=GradeRecord.objects.filter(status=GradeRecord.Status.COMPLETED, validity_status=GradeRecord.ValidityStatus.EFFECTIVE),
+            to_attr='export_effective_grades'))
         .order_by(
             "session__student__student_number",
             F("assignment__snapshot__course_sequence").asc(nulls_last=True),

@@ -99,21 +99,21 @@ onMounted(load)
 </template>
 
 <style scoped>
-.kt-analysis-generated { color: var(--kt-text-muted); font-size: .875rem; }
+.kt-analysis-generated { color: var(--kt-muted); font-size: 0.875rem; }
 .kt-analysis-section { margin-top: 1.25rem; }
-.kt-analysis-section p { color: var(--kt-text-muted); margin: .25rem 0 1rem; }
+.kt-analysis-section p { color: var(--kt-muted); margin: .25rem 0 1rem; }
 .kt-analysis-trend { max-width: 40rem; margin: 1rem 0; }
 .kt-analysis-trend svg { display: block; width: 100%; height: auto; }
-.trend-axis { stroke: var(--kt-border, #cbd5e1); stroke-width: .8; }
+.trend-axis { stroke: var(--kt-border, var(--kt-border)); stroke-width: .8; }
 .trend-line { fill: none; stroke-width: 1.4; }
-.trend-line-student, .trend-dot-student { stroke: #2563eb; fill: #2563eb; }
-.trend-line-class, .trend-dot-class { stroke: #a16207; fill: #a16207; }
-.kt-analysis-trend__legend { display: flex; gap: 1rem; color: var(--kt-text-muted); font-size: .875rem; }
+.trend-line-student, .trend-dot-student { stroke: var(--kt-action-600); fill: var(--kt-action-600); }
+.trend-line-class, .trend-dot-class { stroke: var(--kt-warning); fill: var(--kt-warning); }
+.kt-analysis-trend__legend { display: flex; gap: 1rem; color: var(--kt-muted); font-size: 0.875rem; }
 .trend-key { display: inline-block; width: .75rem; height: .75rem; margin-right: .35rem; border-radius: 50%; }
-.trend-key-student { background: #2563eb; }
-.trend-key-class { background: #a16207; }
+.trend-key-student { background: var(--kt-action-600); }
+.trend-key-class { background: var(--kt-warning); }
 .kt-analysis-comparisons { display: grid; gap: .75rem; margin: 0; }
-.kt-analysis-comparisons > div { border-top: 1px solid var(--kt-border, #d8dee9); padding-top: .75rem; }
+.kt-analysis-comparisons > div { border-top: 1px solid var(--kt-border, var(--kt-border)); padding-top: .75rem; }
 .kt-analysis-comparisons dt { font-weight: 700; }
-.kt-analysis-comparisons dd { margin: .25rem 0 0; color: var(--kt-text-muted); }
+.kt-analysis-comparisons dd { margin: .25rem 0 0; color: var(--kt-muted); }
 </style>
