@@ -4478,6 +4478,7 @@ export interface components {
             class_name: string;
             academic_year: string;
             excluded_count: number;
+            excluded_student_ids: number[];
             participant_count: number;
             schedule_mode: components["schemas"]["ScheduleModeEnum"];
             /** Format: date-time */

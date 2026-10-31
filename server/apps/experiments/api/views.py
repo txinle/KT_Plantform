@@ -43,6 +43,7 @@ from ..publication_jobs import (
     publish_operation_projection,
 )
 from ..publication_services import (
+    _invalidate_current_preview,
     PublicationConflict,
     append_schedule_revision,
     cancel_task,
@@ -51,11 +52,11 @@ from ..publication_services import (
     effective_plan_schedule,
     get_or_create_publish_plan,
     manual_close_task,
+    publish_preview_is_stale,
     publish_plan_setup_projection,
     save_plan_schedules,
     save_plan_selection,
 )
-from ..services import validate_for_publish
 from ..sampling import SamplingService, SamplingValidationError
 from ..question_bank_selection import validate_question_banks
 from .serializers import (
@@ -94,16 +95,23 @@ def _raise_api_domain_error(exc):
     raise ValidationError({"non_field_errors": exc.messages}) from exc
 
 
+def _assert_preview_not_stale(plan):
+    if publish_preview_is_stale(plan):
+        raise ApiConflict("实验定义已变化，请重新运行发布前检查。", code="PREVIEW_INVALIDATED")
+
+
 def _plan_projection(plan):
     plan = (
-        PublishPlan.objects.select_related("experiment")
+        PublishPlan.objects.select_related("experiment", "preview_run")
         .prefetch_related("class_plans__class_group", "class_plans__exclusions")
         .get(pk=plan.pk)
     )
     setup = publish_plan_setup_projection(plan)
+    stale_preview = publish_preview_is_stale(plan)
     class_rows = []
     for plan_class in plan.class_plans.all():
-        excluded_count = plan_class.exclusions.count()
+        excluded_student_ids = [row.student_id for row in plan_class.exclusions.all()]
+        excluded_count = len(excluded_student_ids)
         enrolled_count = CourseEnrollment.objects.filter(
             course=plan.experiment.course,
             class_group=plan_class.class_group,
@@ -118,6 +126,7 @@ def _plan_projection(plan):
                 "class_name": plan_class.class_group.name,
                 "academic_year": plan_class.class_group.academic_year,
                 "excluded_count": excluded_count,
+                "excluded_student_ids": excluded_student_ids,
                 "participant_count": max(0, enrolled_count - excluded_count),
                 "schedule_mode": (
                     "default"
@@ -131,8 +140,8 @@ def _plan_projection(plan):
     return {
         "id": plan.pk,
         "experiment_id": plan.experiment_id,
-        "status": plan.status,
-        "current_step": plan.current_step,
+        "status": PublishPlan.Status.DRAFT if stale_preview else plan.status,
+        "current_step": 1 if stale_preview else plan.current_step,
         **setup,
         "default_opens_at": plan.default_opens_at,
         "default_closes_at": plan.default_closes_at,
@@ -524,6 +533,14 @@ class TeacherExperimentDetailView(TeacherExperimentApiMixin, APIView):
             )
             serializer.is_valid(raise_exception=True)
             experiment = serializer.save()
+            for plan in PublishPlan.objects.select_for_update().filter(
+                experiment=experiment,
+                status__in=(PublishPlan.Status.DRAFT, PublishPlan.Status.PREVIEWED),
+                preview_run__isnull=False,
+            ):
+                _invalidate_current_preview(plan, reason="experiment_definition_changed", actor=request.user)
+                plan.plan_revision += 1
+                plan.save(update_fields=["plan_revision"])
             log_action(
                 request,
                 "experiment.update",
@@ -579,10 +596,11 @@ class TeacherExperimentReadinessView(TeacherExperimentApiMixin, APIView):
         requested_count = experiment.sampling_total_count
         with transaction.atomic():
             try:
-                validate_for_publish(
-                    experiment,
-                    participant_count=1,
-                )
+                # Active questions already passed technical readiness when edited.
+                # Full locked validation remains in preview and commit.
+                validate_question_banks(experiment.course, experiment.selected_question_bank_ids)
+                if not candidate_count:
+                    raise DjangoValidationError("题库中至少需要一道可用题目")
             except DjangoValidationError as exc:
                 issues.extend(exc.messages)
                 blocking_issues.extend(
@@ -692,7 +710,7 @@ class TeacherPublishPlanMixin:
 
     def get_plan(self):
         plan = get_object_or_404(
-            PublishPlan.objects.select_related("experiment__course"),
+            PublishPlan.objects.select_related("experiment__course", "preview_run"),
             pk=self.kwargs["plan_id"],
         )
         if not plan.experiment.course.can_manage(self.request.user):
@@ -795,6 +813,7 @@ class TeacherPublishPlanReviewView(TeacherPublishPlanMixin, APIView):
     )
     def get(self, request, plan_id):
         plan = self.get_plan()
+        _assert_preview_not_stale(plan)
         if plan.preview_run_id is None:
             raise ApiConflict("请先完成发布检查。", code="PREVIEW_REQUIRED")
         return Response(
@@ -912,6 +931,7 @@ class TeacherPublishParticipantListView(TeacherPublishParticipantMixin, APIView)
     )
     def get(self, request, plan_id):
         plan = self.get_plan()
+        _assert_preview_not_stale(plan)
         paginator = FixedPageNumberPagination()
         if plan.preview_run_id is None:
             queryset = self.draft_participant_queryset(plan)
@@ -934,6 +954,7 @@ class TeacherPublishParticipantDetailView(TeacherPublishParticipantMixin, APIVie
     )
     def get(self, request, plan_id, participant_id):
         plan = self.get_plan()
+        _assert_preview_not_stale(plan)
         if plan.preview_run_id is None:
             participant = get_object_or_404(
                 self.draft_participant_queryset(plan), student_id=participant_id
@@ -954,6 +975,7 @@ class TeacherPublishParticipantExportView(TeacherPublishParticipantMixin, APIVie
     )
     def get(self, request, plan_id):
         plan = self.get_plan()
+        _assert_preview_not_stale(plan)
         response = HttpResponse(content_type="text/csv; charset=utf-8")
         response.write("\ufeff")
         response["Content-Disposition"] = (

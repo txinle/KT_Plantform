@@ -15,12 +15,13 @@ const mocks = vi.hoisted(() => ({
     participantExportUrl: vi.fn(() => '/api/v1/teacher/publish-plans/23/participants/export/'),
   },
   push: vi.fn(),
+  replace: vi.fn(),
   route: { params: { courseId: '7', experimentId: '11', planId: '23', step: '1' } },
 }))
 
 vi.mock('vue-router', () => ({
   useRoute: () => mocks.route,
-  useRouter: () => ({ push: mocks.push }),
+  useRouter: () => ({ push: mocks.push, replace: mocks.replace }),
 }))
 vi.mock('./api', () => ({ getTeacherExperimentApi: () => mocks.api }))
 
@@ -96,6 +97,61 @@ describe('TeacherExperimentPublishPlan', () => {
       plan_revision: 3, stage: 'completed', processed: 36, total: 36, error_code: '', error_message: '',
       preview_run_id: 41, release_snapshot_id: null,
     })
+  })
+
+  it('shows setup before the participant page finishes loading', async () => {
+    let resolveParticipants!: (value: unknown) => void
+    mocks.api.participants.mockReturnValueOnce(new Promise((resolve) => { resolveParticipants = resolve }))
+    const wrapper = mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+
+    expect(wrapper.find('#publish-class-5').exists()).toBe(true)
+    await wrapper.get('[data-action="toggle-roster"]').trigger('click')
+    expect(wrapper.get('#publish-roster').text()).toContain('正在加载参与者')
+    resolveParticipants({ items: [], page: { number: 1, size: 20, total_items: 0, total_pages: 1, start: 0, end: 0 } })
+    await flushPromises()
+  })
+
+  it('loads participant pages on demand and preserves exclusions from unvisited pages', async () => {
+    const initialPlan = await mocks.api.plan()
+    mocks.api.plan.mockResolvedValue({
+      ...initialPlan,
+      classes: [{ class_id: 5, class_name: '一班', excluded_count: 1, excluded_student_ids: [99], participant_count: 35, schedule_mode: 'default', opens_at: null, closes_at: null }],
+    })
+    mocks.api.participants.mockImplementation(async (_planId: number, page: number) => ({
+      items: [{ id: page === 1 ? 9 : 10, student_number: `S00${page}`, display_name: `学生${page}`, class_id: 5, class_name: '一班', excluded: false }],
+      page: { number: page, size: 1, total_items: 9, total_pages: 9, start: page, end: page },
+    }))
+    const wrapper = mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+
+    expect(mocks.api.participants).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-action="toggle-roster"]').text()).toContain('9')
+    await wrapper.get('[data-action="toggle-roster"]').trigger('click')
+    await wrapper.get('#publish-roster input[type="checkbox"]').setValue(false)
+    await wrapper.get('#publish-roster [data-next]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.participants).toHaveBeenLastCalledWith(23, 2)
+    await wrapper.get('#publish-roster input[type="checkbox"]').setValue(false)
+    await wrapper.get('#publish-roster .kt-paginator button').trigger('click')
+    await flushPromises()
+    expect((wrapper.get('#publish-roster input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
+    await wrapper.get('[data-action="save-draft"]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.saveSetup.mock.calls[0]?.[1].classes).toEqual([
+      { class_id: 5, excluded_student_ids: [9, 10, 99] },
+    ])
+    expect(mocks.api.participants.mock.calls.every((call) => call[1] <= 2)).toBe(true)
+  })
+
+  it('returns a server-invalidated preview URL to setup without requesting review', async () => {
+    mocks.route.params.step = '2'
+    const wrapper = mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+
+    expect(mocks.replace).toHaveBeenCalledWith('/teacher/courses/7/experiments/11/publish-plan/23/step/1/')
+    expect(mocks.api.review).not.toHaveBeenCalled()
+    expect(wrapper.find('.kt-publish-precheck').exists()).toBe(false)
   })
 
   it('saves an immediate indefinite class schedule without previewing', async () => {
@@ -311,7 +367,7 @@ describe('TeacherExperimentPublishPlan', () => {
     mocks.api.plan.mockResolvedValue(completedPlan)
     mocks.api.participants.mockResolvedValue({
       items: [{ id: 9, student_number: 'S009', display_name: '学生甲', class_id: 5, class_name: '一班', item_count: 4, is_valid: true, excluded: false }],
-      page: { number: 1, size: 20, total_items: 1, total_pages: 1, start: 0, end: 1 },
+      page: { number: 1, size: 20, total_items: 35, total_pages: 2, start: 1, end: 20 },
     })
     mocks.api.review.mockResolvedValue({
       plan: completedPlan,
@@ -333,6 +389,9 @@ describe('TeacherExperimentPublishPlan', () => {
     await flushPromises()
 
     expect(wrapper.get('.kt-publish-precheck').text()).toContain('发布前检查结果')
+    expect(mocks.api.participants).toHaveBeenCalledExactlyOnceWith(23, 1)
+    expect(wrapper.get('.kt-precheck-participants .kt-paginator').text()).toContain('第 1/2 页')
+    expect(wrapper.get('.kt-precheck-participants a').attributes('href')).toBe('/api/v1/teacher/publish-plans/23/participants/export/')
     expect(wrapper.findAll('[data-precheck-metric-icon]').length).toBe(5)
     expect(wrapper.get('.kt-randomization-details').text()).toContain('通过')
     await wrapper.get('[data-action="enter-confirmation"]').trigger('click')

@@ -703,6 +703,7 @@ class PublishPlanClassSerializer(serializers.Serializer):
     class_name = serializers.CharField()
     academic_year = serializers.CharField()
     excluded_count = serializers.IntegerField(min_value=0)
+    excluded_student_ids = serializers.ListField(child=serializers.IntegerField())
     participant_count = serializers.IntegerField(min_value=0)
     schedule_mode = serializers.ChoiceField(choices=("default", "custom"))
     opens_at = serializers.DateTimeField(allow_null=True)

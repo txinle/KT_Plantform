@@ -136,6 +136,33 @@ describe('TeacherExperimentDetail', () => {
     mocks.deletion.deleteExperiment.mockImplementation(async () => ({ deleted: true, cleanup_pending: false, cleanup_id: null, operation_id: mocks.operationId }))
   })
 
+  it('shows detail and tasks while readiness and progress load independently', async () => {
+    const ready = deferred<unknown>()
+    const taskProgress = deferred<unknown>()
+    mocks.api.readiness.mockReturnValueOnce(ready.promise)
+    mocks.api.progress.mockReturnValueOnce(taskProgress.promise)
+    mocks.api.classTasks.mockResolvedValueOnce({ items: [
+      { id: 31, class_name: '一班', participant_count: 36, available_actions: [] },
+    ] })
+    const wrapper = mount(TeacherExperimentDetail)
+    await flushPromises()
+
+    expect(wrapper.get('h1').text()).toBe('认知诊断实验')
+    expect(wrapper.get('.kt-readiness-card').text()).toContain('正在加载发布前检查')
+    expect(wrapper.get('.kt-readiness-card').text()).not.toContain('0 道可用题目')
+    await wrapper.get('#experiment-tab-tasks').trigger('click')
+    expect(wrapper.get('.kt-published-task-table').text()).toContain('一班')
+    expect(wrapper.get('.kt-published-task-table').text()).toContain('正在加载班级进度')
+
+    ready.reject(new Error('检查暂时不可用'))
+    taskProgress.reject(new Error('进度暂时不可用'))
+    await flushPromises()
+    expect(wrapper.get('.kt-published-task-table').text()).toContain('进度暂时不可用')
+    await wrapper.get('#experiment-tab-definition').trigger('click')
+    expect(wrapper.get('.kt-readiness-card').text()).toContain('检查暂时不可用')
+    expect(wrapper.find('[data-action="publish-from-definition"]').exists()).toBe(true)
+  })
+
   it('renders authoritative readiness and resumes the server publish plan', async () => {
     const wrapper = mount(TeacherExperimentDetail)
     await flushPromises()

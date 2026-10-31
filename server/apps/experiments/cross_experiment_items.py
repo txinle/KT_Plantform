@@ -10,7 +10,7 @@ from apps.assessment.models import (
     SubmissionEvent,
 )
 
-from .models import ExperimentVersionParticipantSnapshot, ScheduleRevision
+from .models import ExperimentVersionParticipantSnapshot, ScheduleRevision, TaskManualClosure
 
 
 @dataclass(frozen=True)
@@ -85,14 +85,22 @@ def student_item_contexts(experiment, students, *, at=None):
             queryset=ScheduleRevision.objects.order_by("-revision_no"),
             to_attr="latest_schedule_revisions",
         ),
+        Prefetch(
+            "class_task__manual_closures",
+            queryset=TaskManualClosure.objects.order_by("-closed_at", "-pk"),
+            to_attr="current_manual_closures",
+        ),
     ).order_by("class_task_id")
     at = at or timezone.now()
     active_by_student = defaultdict(set)
     unresolved_by_student = defaultdict(set)
+    task_states = {}
     for participant in participants:
         task = participant.class_task
         rows = participant.assignment_snapshot
-        task_state = DeadlineDecisionService.get_task_state(task, at=at)
+        if task.pk not in task_states:
+            task_states[task.pk] = DeadlineDecisionService.get_task_state(task, at=at)
+        task_state = task_states[task.pk]
         expected_count = len(rows) if isinstance(rows, list) and rows else None
         if isinstance(rows, list) and rows:
             source_ids = [

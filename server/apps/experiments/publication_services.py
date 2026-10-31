@@ -474,6 +474,22 @@ def revise_publish_plan(plan, actor, *, expected_revision, current_step=None):
     return _touch_publish_plan(plan, now, current_step=current_step)
 
 
+def publish_preview_is_stale(plan):
+    """Reject previews predating a definition save, including pre-fix records."""
+    return bool(
+        plan.preview_run_id
+        and plan.status != PublishPlan.Status.COMMITTED
+        and (
+            plan.preview_run.status != PublishPreviewRun.Status.VALID
+            or plan.preview_run.plan_revision != plan.plan_revision
+            or (
+                not plan.experiment.frozen_release_snapshot_id
+                and plan.experiment.updated_at > plan.preview_run.created_at
+            )
+        )
+    )
+
+
 def _invalidate_current_preview(plan, *, reason, actor=None):
     if plan.preview_run_id is None:
         return
@@ -489,9 +505,10 @@ def _invalidate_current_preview(plan, *, reason, actor=None):
             created_by=actor,
         )
     plan.preview_run = None
+    plan.current_step = 1
     if plan.status == PublishPlan.Status.PREVIEWED:
         plan.status = PublishPlan.Status.DRAFT
-    plan.save(update_fields=["preview_run", "status"])
+    plan.save(update_fields=["preview_run", "status", "current_step"])
 
 
 def publish_plan_setup_projection(plan):

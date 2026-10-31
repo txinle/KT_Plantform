@@ -19913,6 +19913,10 @@ components:
         excluded_count:
           type: integer
           minimum: 0
+        excluded_student_ids:
+          type: array
+          items:
+            type: integer
         participant_count:
           type: integer
           minimum: 0
@@ -19932,6 +19936,7 @@ components:
       - class_name
       - closes_at
       - excluded_count
+      - excluded_student_ids
       - opens_at
       - participant_count
       - schedule_mode

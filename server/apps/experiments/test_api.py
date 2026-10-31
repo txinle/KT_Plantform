@@ -799,6 +799,29 @@ class TeacherExperimentApiTests(TestCase):
         self.assertTrue(domain_payload(response)["ready"])
         self.assertEqual(domain_payload(response)["candidate_count"], 1)
 
+    def test_definition_readiness_has_bounded_queries_without_row_locks(self):
+        concept = Concept.objects.create(course=self.course, code="KC1", name="读取检查")
+        self.experiment.sampling_mode = Experiment.SamplingMode.TOTAL_COUNT
+        self.experiment.sampling_total_count = 1
+        self.experiment.save()
+        self.client.force_login(self.teacher)
+        def add_question(sequence):
+            question = Question.objects.create(bank=self.bank, sequence=sequence,
+                question_type=Question.Type.SHORT, text="读取题目", correct_answer="答案")
+            QuestionConcept.objects.create(question=question, concept=concept, is_primary=True)
+        add_question(1)
+        url = self.api_url(f"{self.experiment.pk}/readiness/")
+        with CaptureQueriesContext(connection) as initial:
+            self.assertTrue(domain_payload(self.client.get(url))["ready"])
+        for sequence in range(2, 7):
+            add_question(sequence)
+        with CaptureQueriesContext(connection) as expanded:
+            response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(domain_payload(response)["candidate_count"], 6)
+        self.assertLessEqual(len(expanded), len(initial) + 1)
+        self.assertFalse(any("FOR UPDATE" in row["sql"] for row in expanded))
+
 
 class TeacherPublishPlanApiTests(TestCase):
     def setUp(self):
@@ -1651,6 +1674,48 @@ class TeacherPublishPlanApiTests(TestCase):
         plan.refresh_from_db()
         return plan, opens_at
 
+    def test_definition_count_edit_invalidates_preview_and_keeps_randomization_roots(self):
+        from .models import ExperimentClassRandomizationIdentity, PublishPreviewRun
+        original = self.experiment.question_bank.questions.get()
+        second = Question.objects.create(bank=original.bank, sequence=2,
+            question_type=Question.Type.SHORT, text="第二题", correct_answer="答案")
+        QuestionConcept.objects.create(question=second,
+            concept=original.concept_links.get(is_primary=True).concept, is_primary=True)
+        self.experiment.sampling_total_count = 2
+        self.experiment.save()
+        plan, _ = self.preview_two_classes()
+        preview_id, revision = plan.preview_run_id, plan.plan_revision
+        roots = list(ExperimentClassRandomizationIdentity.objects.filter(
+            experiment=self.experiment).order_by('pk').values())
+        response = self.client.patch(
+            f"/api/v1/teacher/courses/{self.course.pk}/experiments/{self.experiment.pk}/",
+            data=json.dumps({"sampling": {"mode": "total_count", "total_count": 1,
+                "match_scope": "any_level", "nodes": []}}), content_type="application/json")
+        self.assertEqual(response.status_code, 200, response.content)
+        plan.refresh_from_db()
+        self.assertIsNone(plan.preview_run_id)
+        self.assertEqual((plan.status, plan.current_step, plan.plan_revision), ('draft', 1, revision + 1))
+        self.assertEqual(PublishPreviewRun.objects.get(pk=preview_id).status, 'invalidated')
+        self.assertEqual(self.client.get(self.plan_url(plan, 'review/')).status_code, 409)
+        preview = self.client.post(self.plan_url(plan, 'preview/'),
+            data=json.dumps({'expected_revision': plan.plan_revision}), content_type='application/json')
+        self.complete_operation(preview)
+        review = domain_payload(self.client.get(self.plan_url(plan, 'review/')))
+        self.assertEqual(review['preview']['item_count'], 2)
+        self.assertEqual(list(ExperimentClassRandomizationIdentity.objects.filter(
+            experiment=self.experiment).order_by('pk').values()), roots)
+        self.assertFalse(self.experiment.class_tasks.exists())
+
+    def test_existing_stale_preview_is_not_exposed_by_read_endpoints(self):
+        plan, _ = self.preview_two_classes()
+        Experiment.objects.filter(pk=self.experiment.pk).update(
+            sampling_total_count=2, updated_at=timezone.now())
+        detail = domain_payload(self.client.get(self.plan_url(plan)))
+        self.assertEqual((detail['status'], detail['current_step']), ('draft', 1))
+        for suffix in ('review/', 'participants/', 'participants/export/'):
+            response = self.client.get(self.plan_url(plan, suffix))
+            self.assertEqual(response.status_code, 409, suffix)
+
     def test_draft_participants_expose_selected_class_roster_and_exclusions(self):
         excluded_student = User.objects.get(student_number="PUB-001")
         plan, _ = self.start_plan()
@@ -1673,6 +1738,7 @@ class TeacherPublishPlanApiTests(TestCase):
         participants = self.client.get(self.plan_url(plan, "participants/"))
 
         self.assertEqual(participants.status_code, 200, participants.content)
+        self.assertEqual(domain_payload(setup)["classes"][0]["excluded_student_ids"], [excluded_student.pk])
         self.assertEqual(domain_payload(participants)["page"]["total_items"], 1)
         roster_entry = domain_payload(participants)["items"][0]
         self.assertEqual(roster_entry["id"], excluded_student.pk)

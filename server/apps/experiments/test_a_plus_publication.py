@@ -20,6 +20,7 @@ from apps.accounts.research_consent import (
 )
 from apps.analytics.models import ExportJob
 from apps.analytics.services import create_export_snapshot, run_export_job
+from apps.assessment.deadline_services import DeadlineDecisionService
 from apps.assessment.services import (
     SubmissionValidationError,
     get_or_create_session,
@@ -56,6 +57,7 @@ from apps.experiments.publication_jobs import claim_publish_operation, run_publi
 from apps.experiments.cross_experiment_items import student_item_context, student_item_contexts
 from apps.experiments.publication_services import (
     PublicationConflict,
+    append_schedule_revision,
     commit_publish_plan,
     generate_preview,
     get_or_create_publish_plan,
@@ -509,10 +511,44 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
             sampling_total_count=1,
             cross_experiment_item_policy=Experiment.CrossExperimentItemPolicy.EXCLUDE_PREVIOUS,
         )
-        with CaptureQueriesContext(connection) as queries:
-            contexts = student_item_contexts(later, [self.student, *students])
-        self.assertEqual(len(contexts), 300)
-        self.assertLess(len(queries), 30)
+        source_id = original.assignment_snapshot[0]["source_question_id"]
+        open_at = timezone.now()
+        closed = manual_close_task(task, self.teacher, reason="暂停")
+        reopened = append_schedule_revision(
+            task, self.teacher, expected_revision=1, reopen=True, reason="继续",
+        )
+        manual_close_task(task, self.teacher, reason="结束")
+        closed_again_at = task.manual_closures.order_by("-closed_at").first().closed_at
+
+        for at, active in (
+            (closed.manual_closed_at, False),
+            (reopened.created_at, True),
+            (open_at, True),
+            (closed_again_at, False),
+        ):
+            with self.subTest(at=at, active=active):
+                with CaptureQueriesContext(connection) as single_queries:
+                    single = student_item_contexts(later, [self.student], at=at)
+                with (
+                    CaptureQueriesContext(connection) as queries,
+                    patch.object(
+                        DeadlineDecisionService, "get_task_state",
+                        wraps=DeadlineDecisionService.get_task_state,
+                    ) as task_state,
+                ):
+                    contexts = student_item_contexts(later, [self.student, *students], at=at)
+                self.assertEqual(len(queries), len(single_queries))
+                self.assertLessEqual(len(queries), 6)
+                self.assertEqual(task_state.call_count, 1)
+                self.assertEqual(len(contexts), 300)
+                self.assertEqual(contexts[self.student.pk], single[self.student.pk])
+                for context in contexts.values():
+                    self.assertEqual(context.assigned_question_ids, frozenset({source_id}))
+                    self.assertEqual(
+                        context.active_frozen_question_ids,
+                        frozenset({source_id}) if active else frozenset(),
+                    )
+                    self.assertEqual(context.unresolved_task_ids, ())
 
     def test_preview_accepts_the_default_open_ended_schedule(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)

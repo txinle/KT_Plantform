@@ -37,6 +37,12 @@ const readiness = ref<TeacherExperimentReadiness>()
 const tasks = ref<ClassTask[]>([])
 const progress = reactive<Record<number, ClassTaskProgress>>({})
 const loading = ref(true)
+const readinessLoading = ref(false)
+const readinessError = ref('')
+const tasksLoading = ref(false)
+const tasksError = ref('')
+const progressLoading = ref(false)
+const progressError = ref('')
 const working = ref(false)
 const error = ref('')
 const scheduleTaskId = ref<number>()
@@ -58,6 +64,7 @@ const collectionQuery = ref(queryText(route.query.q))
 const collectionPage = ref(queryPage(route.query.page))
 let replacingCollectionRoute = ''
 let collectionRequestId = 0
+let detailRequestId = 0
 
 const readinessTone = computed(() => readiness.value?.ready ? 'success' : 'warning')
 const courseName = computed(() => course?.value?.name || '课程')
@@ -208,30 +215,72 @@ function isoOrNull(value: string) {
   return value ? new Date(value).toISOString() : null
 }
 
+async function loadReadiness(requestId: number) {
+  try {
+    const result = await api.readiness(courseId, experimentId)
+    if (requestId === detailRequestId) readiness.value = result
+  } catch (caught) {
+    if (requestId === detailRequestId) readinessError.value = caught instanceof Error ? caught.message : '发布前检查加载失败。'
+  } finally {
+    if (requestId === detailRequestId) readinessLoading.value = false
+  }
+}
+
+async function loadTasks(requestId: number) {
+  try {
+    const taskCollection = await api.classTasks(experimentId)
+    if (requestId !== detailRequestId) return
+    tasks.value = taskCollection.items
+    tasksLoading.value = false
+    progressLoading.value = tasks.value.length > 0
+    await Promise.all(tasks.value.map(async (task) => {
+      try {
+        const row = await api.progress(task.id)
+        if (requestId === detailRequestId) progress[task.id] = row
+      } catch (caught) {
+        if (requestId === detailRequestId) {
+          progressError.value += `${task.class_name}：${caught instanceof Error ? caught.message : '班级进度加载失败。'} `
+        }
+      }
+    }))
+  } catch (caught) {
+    if (requestId === detailRequestId) tasksError.value = caught instanceof Error ? caught.message : '班级任务加载失败。'
+  } finally {
+    if (requestId === detailRequestId) {
+      tasksLoading.value = false
+      progressLoading.value = false
+    }
+  }
+}
+
 async function load() {
+  const requestId = ++detailRequestId
   loading.value = true
   detailReady.value = false
   error.value = ''
+  readiness.value = undefined
+  readinessError.value = ''
+  readinessLoading.value = true
+  tasksError.value = ''
+  tasksLoading.value = true
+  progressError.value = ''
+  progressLoading.value = false
+  for (const taskId of Object.keys(progress)) delete progress[Number(taskId)]
+  void loadReadiness(requestId)
+  void loadTasks(requestId)
   try {
-    const [definition, ready, taskCollection] = await Promise.all([
-      api.detail(courseId, experimentId),
-      api.readiness(courseId, experimentId),
-      api.classTasks(experimentId),
-    ])
+    const definition = await api.detail(courseId, experimentId)
+    if (requestId !== detailRequestId) return
     experiment.value = definition
     const defaultTab = definition.status === 'draft' ? 'definition' : 'tasks'
     activeTab.value = queryText(route.query.tab) === 'collection' ? 'collection' : defaultTab
-    readiness.value = ready
-    tasks.value = taskCollection.items
-    const rows = await Promise.all(tasks.value.map(async (task) => [task.id, await api.progress(task.id)] as const))
-    for (const [taskId, row] of rows) progress[taskId] = row
     detailReady.value = true
     loading.value = false
     if (activeTab.value === 'collection') await loadCollection(collectionPage.value)
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '实验详情加载失败。'
+    if (requestId === detailRequestId) error.value = caught instanceof Error ? caught.message : '实验详情加载失败。'
   } finally {
-    loading.value = false
+    if (requestId === detailRequestId) loading.value = false
   }
 }
 
@@ -419,17 +468,19 @@ onMounted(load)
           <section class="kt-card kt-publish-ready-card" aria-labelledby="publish-ready-title">
             <div v-if="!isPublished" class="kt-publish-empty-illustration" aria-hidden="true"><Icon name="publish" :size="31" /><Icon name="classes" :size="22" /><Icon name="check" :size="17" /></div>
             <h2 id="publish-ready-title">发布到班级</h2>
-            <p v-if="isPublished">当前实验已有 {{ tasks.length }} 个班级任务，可继续将同一实验定义发布到其他班级。</p>
+            <p v-if="isPublished">可继续将同一实验定义发布到其他班级。<span v-if="!tasksLoading && !tasksError">当前实验已有 {{ tasks.length }} 个班级任务。</span></p>
             <p v-else>首次发布后实验定义将冻结；班级、参与者和开放时段将在下一步确认。</p>
             <Button data-action="publish-from-definition" :disabled="working" @click="startPublish">{{ working ? '正在进入…' : (isPublished ? '继续发布' : '发布到班级') }}</Button>
           </section>
           <section class="kt-card kt-readiness-card" aria-labelledby="readiness-summary">
-            <div class="kt-section-heading"><h2 id="readiness-summary">发布前检查</h2><StatusBadge :label="readiness?.ready ? '定义就绪' : '需要处理'" :tone="readinessTone" /></div>
-            <dl class="kt-readiness-facts">
+            <div class="kt-section-heading"><h2 id="readiness-summary">发布前检查</h2><StatusBadge v-if="readiness" :label="readiness.ready ? '定义就绪' : '需要处理'" :tone="readinessTone" /></div>
+            <p v-if="readinessLoading" role="status">正在加载发布前检查…</p>
+            <Alert v-else-if="readinessError" tone="danger">{{ readinessError }}</Alert>
+            <dl v-if="readiness" class="kt-readiness-facts">
               <div><dt>题库全局候选</dt><dd>{{ readiness?.candidate_count ?? 0 }} 道可用题目</dd></div>
               <div><dt>已关联参与者</dt><dd>{{ readiness?.participant_count ?? 0 }}</dd></div>
             </dl>
-            <ul class="kt-readiness-checklist">
+            <ul v-if="readiness" class="kt-readiness-checklist">
               <li><Icon :name="readiness?.ready ? 'check' : 'warning'" :size="17" /><span>{{ readiness?.ready ? '实验定义已通过基础检查' : '实验定义仍需完成基础检查' }}</span></li>
               <li><Icon name="bank" :size="17" /><span>题库全局候选：{{ readiness?.candidate_count ?? 0 }} 道，尚未按学生历史过滤</span></li>
               <li><Icon name="classes" :size="17" /><span>已关联参与者：{{ readiness?.participant_count ?? 0 }}</span></li>
@@ -442,11 +493,15 @@ onMounted(load)
     </section>
 
     <section v-else-if="activeTab === 'tasks'" id="experiment-panel-tasks" role="tabpanel" aria-labelledby="experiment-tab-tasks">
-      <Alert v-if="isPublished" tone="success">已发布 {{ tasks.length }} 个班级任务。任务状态和可用操作由服务端返回。</Alert>
+      <Alert v-if="isPublished && !tasksLoading && !tasksError" tone="success">已发布 {{ tasks.length }} 个班级任务。任务状态和可用操作由服务端返回。</Alert>
       <div class="kt-published-layout">
         <section class="kt-card kt-published-task-table" aria-labelledby="class-task-title">
-          <div class="kt-section-heading"><div><p class="kt-kicker">班级发布</p><h2 id="class-task-title">已发布班级任务</h2></div><span>{{ tasks.length }} 个</span></div>
-          <EmptyState v-if="!tasks.length" title="尚未发布到班级"><p>完成发布检查并提交后，这里会显示每个班级的任务状态。</p></EmptyState>
+          <div class="kt-section-heading"><div><p class="kt-kicker">班级发布</p><h2 id="class-task-title">已发布班级任务</h2></div><span v-if="!tasksLoading && !tasksError">{{ tasks.length }} 个</span></div>
+          <p v-if="progressLoading" role="status">正在加载班级进度…</p>
+          <Alert v-if="progressError" tone="danger">{{ progressError }}</Alert>
+          <p v-if="tasksLoading" role="status">正在加载班级任务…</p>
+          <Alert v-else-if="tasksError" tone="danger">{{ tasksError }}</Alert>
+          <EmptyState v-else-if="!tasks.length" title="尚未发布到班级"><p>完成发布检查并提交后，这里会显示每个班级的任务状态。</p></EmptyState>
           <div v-else class="kt-table-scroll">
             <table class="kt-table">
               <thead><tr><th>班级</th><th>状态</th><th>参与者</th><th>开放时段</th><th>未开始</th><th>进行中</th><th>已完成</th><th>操作</th></tr></thead>
@@ -502,8 +557,12 @@ onMounted(load)
 
     <section v-else id="experiment-panel-collection" role="tabpanel" aria-labelledby="experiment-tab-collection">
       <section class="kt-card kt-published-task-table" aria-labelledby="collection-status-title" data-collection-summary>
-        <div class="kt-section-heading"><div><p class="kt-kicker">采集状态</p><h2 id="collection-status-title">班级任务进度</h2></div><span>{{ tasks.length }} 个</span></div>
-        <EmptyState v-if="!tasks.length" title="暂无采集任务"><p>发布到班级后，服务端会在这里返回各任务的采集进度。</p></EmptyState>
+        <div class="kt-section-heading"><div><p class="kt-kicker">采集状态</p><h2 id="collection-status-title">班级任务进度</h2></div><span v-if="!tasksLoading && !tasksError">{{ tasks.length }} 个</span></div>
+        <p v-if="progressLoading" role="status">正在加载班级进度…</p>
+        <Alert v-if="progressError" tone="danger">{{ progressError }}</Alert>
+        <p v-if="tasksLoading" role="status">正在加载班级任务…</p>
+        <Alert v-else-if="tasksError" tone="danger">{{ tasksError }}</Alert>
+        <EmptyState v-else-if="!tasks.length" title="暂无采集任务"><p>发布到班级后，服务端会在这里返回各任务的采集进度。</p></EmptyState>
         <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>状态</th><th>参与者</th><th>未开始</th><th>进行中</th><th>正常完成</th><th>已超时</th><th>已作废</th></tr></thead><tbody><tr v-for="task in tasks" :key="task.id"><td>{{ task.class_name }}</td><td>{{ task.business_status }}</td><td>{{ progress[task.id]?.total_participants ?? '—' }}</td><td>{{ progress[task.id]?.not_started ?? '—' }}</td><td>{{ progress[task.id]?.in_progress ?? '—' }}</td><td>{{ progress[task.id]?.completed ?? '—' }}</td><td>{{ progress[task.id]?.expired ?? '—' }}</td><td>{{ progress[task.id]?.invalidated ?? '—' }}</td></tr></tbody></table></div>
       </section>
 

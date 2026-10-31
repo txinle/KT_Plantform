@@ -6,6 +6,7 @@ import { ApiError } from '@/api/client'
 import type { components } from '@/api/generated/schema'
 import Alert from '@/design-system/components/Alert.vue'
 import Button from '@/design-system/components/Button.vue'
+import Paginator from '@/design-system/components/Paginator.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 import Icon from '@/design-system/Icon.vue'
 
@@ -32,18 +33,25 @@ const course = inject<Ref<components['schemas']['CourseContext'] | undefined>>(
   'teacher-experiments-course',
   ref<components['schemas']['CourseContext']>(),
 )
-const step = computed(() => Number(route.params.step) === 2 ? 2 : 1)
 const plan = ref<PublishPlan>()
+const step = computed(() => Number(route.params.step) === 2 && plan.value?.current_step !== 1 ? 2 : 1)
 const review = ref<PublishPlanReview>()
 const experiment = ref<TeacherExperiment>()
 const classes = ref<ClassOption[]>([])
 const participants = ref<Participant[]>([])
+const participantPage = ref<PublishParticipantCollection['page']>()
+const participantsLoading = ref(false)
+const participantsError = ref('')
+const participantPageNumber = ref(1)
+const excludedStudentIds = reactive<Record<number, Set<number>>>({})
+let participantRequestId = 0
 const selected = reactive<Record<number, boolean>>({})
 const scheduleMode = reactive<Record<number, 'default' | 'custom'>>({})
 const classOpensAt = reactive<Record<number, string>>({})
 const classClosesAt = reactive<Record<number, string>>({})
 const defaultSchedule = reactive({ opens_at: '', closes_at: '' })
 const loading = ref(true)
+const reviewLoading = ref(false)
 const working = ref(false)
 const error = ref('')
 const notice = ref('')
@@ -127,7 +135,7 @@ async function resumeStoredJob() {
     if (completed.operation === 'preview') {
       review.value = await api.review(planId)
       hydratePlan(review.value.plan)
-      await loadParticipants()
+      void loadParticipants()
       await router.push(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/2/`)
     } else {
       await router.push(`/teacher/courses/${courseId}/experiments/${experimentId}/`)
@@ -152,6 +160,7 @@ function isoOrNull(value: string) {
 
 function hydratePlan(nextPlan: PublishPlan) {
   plan.value = nextPlan
+  for (const classId of Object.keys(excludedStudentIds)) delete excludedStudentIds[Number(classId)]
   defaultSchedule.opens_at = dateTimeLocal(nextPlan.default_opens_at)
   defaultSchedule.closes_at = dateTimeLocal(nextPlan.default_closes_at)
   for (const option of classes.value) {
@@ -161,6 +170,7 @@ function hydratePlan(nextPlan: PublishPlan) {
     classClosesAt[option.id] = ''
   }
   for (const row of nextPlan.classes) {
+    excludedStudentIds[row.class_id] = new Set(row.excluded_student_ids)
     selected[row.class_id] = true
     scheduleMode[row.class_id] = row.schedule_mode === 'custom' ? 'custom' : 'default'
     classOpensAt[row.class_id] = dateTimeLocal(row.opens_at)
@@ -168,18 +178,29 @@ function hydratePlan(nextPlan: PublishPlan) {
   }
 }
 
-async function loadParticipants() {
-  const first = await api.participants(planId, 1)
-  const rows = [...first.items] as Participant[]
-  for (let pageNumber = 2; pageNumber <= first.page.total_pages; pageNumber += 1) {
-    rows.push(...(await api.participants(planId, pageNumber)).items)
+async function loadParticipants(pageNumber = 1) {
+  const requestId = ++participantRequestId
+  participantsLoading.value = true
+  participantsError.value = ''
+  participants.value = []
+  participantPageNumber.value = pageNumber
+  try {
+    const result = await api.participants(planId, pageNumber)
+    if (requestId !== participantRequestId) return
+    participants.value = result.items
+    participantPage.value = result.page
+  } catch (caught) {
+    if (requestId === participantRequestId) participantsError.value = caught instanceof Error ? caught.message : '参与者加载失败。'
+  } finally {
+    if (requestId === participantRequestId) participantsLoading.value = false
   }
-  participants.value = rows
 }
 
 async function load() {
   loading.value = true
   error.value = ''
+  review.value = undefined
+  confirmCommit.value = false
   try {
     const [nextPlan, collection, definition] = await Promise.all([
       api.plan(planId),
@@ -189,20 +210,26 @@ async function load() {
     classes.value = collection.summary.classes
     experiment.value = definition
     hydratePlan(nextPlan)
-    if (step.value === 2) review.value = await api.review(planId)
-    await loadParticipants()
     savedSetupFingerprint.value = setupFingerprint.value
+    loading.value = false
+    void loadParticipants()
+    if (Number(route.params.step) === 2 && nextPlan.current_step === 1) {
+      rememberJob(undefined)
+      await router.replace(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/1/`)
+    } else if (step.value === 2) {
+      reviewLoading.value = true
+      review.value = await api.review(planId)
+    }
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '发布计划加载失败。'
   } finally {
     loading.value = false
+    reviewLoading.value = false
   }
 }
 
 function exclusionsFor(classId: number) {
-  return participants.value
-    .filter((participant) => participant.class_id === classId && participant.excluded)
-    .map((participant) => participant.id)
+  return [...(excludedStudentIds[classId] || [])].sort((left, right) => left - right)
 }
 
 function setupInput(): PublishPlanSetupInput {
@@ -272,7 +299,7 @@ async function saveDraft(showNotice = true) {
   try {
     const saved = await api.saveSetup(planId, setupInput())
     hydratePlan(saved)
-    await loadParticipants()
+    void loadParticipants()
     savedSetupFingerprint.value = setupFingerprint.value
     if (showNotice && !saved.blocking_issues.length) notice.value = '草稿已保存。你可以退出后继续。'
     return saved
@@ -301,7 +328,7 @@ async function runPreview() {
     await waitForJob(job)
     review.value = await api.review(planId)
     hydratePlan(review.value.plan)
-    await loadParticipants()
+    void loadParticipants()
     await router.push(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/2/`)
   } catch (caught) {
     await recover(caught, '发布检查失败。')
@@ -311,7 +338,9 @@ async function runPreview() {
 }
 
 function setExcluded(participant: Participant, excluded: boolean) {
-  participant.excluded = excluded
+  const ids = excludedStudentIds[participant.class_id] ||= new Set<number>()
+  if (excluded) ids.add(participant.id)
+  else ids.delete(participant.id)
 }
 
 function planClass(classId: number) {
@@ -323,8 +352,7 @@ function participantCount(option: ClassOption) {
 }
 
 function exclusionCount(option: ClassOption) {
-  return planClass(option.id)?.excluded_count
-    ?? participants.value.filter((participant) => participant.class_id === option.id && participant.excluded).length
+  return excludedStudentIds[option.id]?.size ?? 0
 }
 
 function scheduleLabel(option: ClassOption) {
@@ -410,6 +438,7 @@ onMounted(async () => {
   </ol>
 
   <p v-if="loading" role="status">正在加载发布计划…</p>
+  <p v-if="reviewLoading" role="status">正在加载发布前检查结果…</p>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <Alert v-if="notice && !hasUnsavedChanges" tone="success">{{ notice }}</Alert>
   <Alert v-if="activeJob" tone="info" role="status">
@@ -456,10 +485,13 @@ onMounted(async () => {
       </div>
 
       <section id="publish-roster" class="kt-publish-roster" aria-labelledby="publish-roster-title">
-        <div class="kt-section-heading"><div><h3 id="publish-roster-title">参与者与排除名单</h3><p>名册由服务端按当前计划返回；保存草稿后可调整是否纳入。</p></div><button data-action="toggle-roster" class="kt-button kt-button--secondary" type="button" @click="rosterExpanded = !rosterExpanded">{{ rosterExpanded ? '收起名单' : `查看名单（${participants.length}）` }}</button></div>
+        <div class="kt-section-heading"><div><h3 id="publish-roster-title">参与者与排除名单</h3><p>名册由服务端按当前计划返回；保存草稿后可调整是否纳入。</p></div><button data-action="toggle-roster" class="kt-button kt-button--secondary" type="button" @click="rosterExpanded = !rosterExpanded">{{ rosterExpanded ? '收起名单' : `查看名单（${participantPage?.total_items ?? '—'}）` }}</button></div>
         <template v-if="rosterExpanded">
-          <p v-if="!participants.length" class="kt-publish-empty-row">选择班级并保存草稿后，服务端会返回该班当前有效名册。</p>
-          <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>学号</th><th>姓名</th><th>班级</th><th>参与</th></tr></thead><tbody><tr v-for="participant in participants" :key="`${participant.class_id}-${participant.id}`"><td>{{ participant.student_number }}</td><td>{{ participant.display_name }}</td><td>{{ participant.class_name }}</td><td><label class="kt-check-inline"><input type="checkbox" :checked="!participant.excluded" @change="setExcluded(participant, !($event.target as HTMLInputElement).checked)">纳入</label></td></tr></tbody></table></div>
+          <p v-if="participantsLoading" role="status">正在加载参与者…</p>
+          <Alert v-else-if="participantsError" tone="danger">{{ participantsError }} <button class="kt-text-button" type="button" @click="loadParticipants(participantPageNumber)">重试</button></Alert>
+          <p v-else-if="!participants.length" class="kt-publish-empty-row">选择班级并保存草稿后，服务端会返回该班当前有效名册。</p>
+          <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>学号</th><th>姓名</th><th>班级</th><th>参与</th></tr></thead><tbody><tr v-for="participant in participants" :key="`${participant.class_id}-${participant.id}`"><td>{{ participant.student_number }}</td><td>{{ participant.display_name }}</td><td>{{ participant.class_name }}</td><td><label class="kt-check-inline"><input type="checkbox" :checked="!excludedStudentIds[participant.class_id]?.has(participant.id)" @change="setExcluded(participant, !($event.target as HTMLInputElement).checked)">纳入</label></td></tr></tbody></table></div>
+          <Paginator v-if="participantPage && !participantsLoading && !participantsError" :page="participantPage.number" :total-pages="participantPage.total_pages" @navigate="loadParticipants" />
         </template>
       </section>
     </section>
@@ -472,7 +504,7 @@ onMounted(async () => {
       <div class="kt-publish-precheck__metrics"><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="classes" :size="19" /></span><strong>{{ review.preview.class_count }}</strong><span>参与班级</span></div><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="data" :size="19" /></span><strong>{{ review.preview.participant_count }}</strong><span>参与者</span></div><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="definition" :size="19" /></span><strong>{{ review.preview.item_count }}</strong><span>分配题目</span></div><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="publish" :size="19" /></span><strong>{{ configuredScheduleCount }}</strong><span>已配置排期</span></div><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="status" :size="19" /></span><strong>{{ review.preview.randomization_validation }}</strong><span>随机化校验</span></div></div>
       <h2 id="precheck-title">发布前检查结果</h2>
       <section class="kt-card kt-precheck-results"><div class="kt-section-heading"><h3>系统检查结果</h3><StatusBadge label="检查完成" tone="success" /></div><ul class="kt-precheck-effects"><li v-for="effect in review.effects" :key="effect">{{ effect }}</li><li v-if="!review.effects.length">{{ review.preview.randomization_validation }}</li></ul><details class="kt-randomization-details"><summary>查看随机化详情</summary><p>{{ review.preview.randomization_validation }}</p><p>预览版本：{{ review.preview.plan_revision }}</p></details></section>
-      <section class="kt-card kt-precheck-participants"><div class="kt-section-heading"><div><h3>参与者检查结果</h3><p>{{ experiment?.cross_experiment_item_policy === 'mixed_review' ? `混合复测：每人复测 ${experiment.review_count} 题` : (experiment?.cross_experiment_item_policy === 'exclude_previous' ? '排除已提交或其他正式任务曾分配的题目' : '不限制历史题目') }}</p></div><a :href="api.participantExportUrl(planId)">导出 CSV</a></div><div class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>学号</th><th>姓名</th><th>题数</th><th>复测题</th><th>新题</th><th>校验</th></tr></thead><tbody><tr v-for="participant in participants" :key="participant.id"><td>{{ participant.class_name }}</td><td>{{ participant.student_number }}</td><td>{{ participant.display_name }}</td><td>{{ participant.item_count }}</td><td>{{ participant.review_item_count }}</td><td>{{ participant.new_item_count }}</td><td>{{ participant.is_valid ? '有效' : '需处理' }}</td></tr></tbody></table></div></section>
+      <section class="kt-card kt-precheck-participants"><div class="kt-section-heading"><div><h3>参与者检查结果</h3><p>{{ experiment?.cross_experiment_item_policy === 'mixed_review' ? `混合复测：每人复测 ${experiment.review_count} 题` : (experiment?.cross_experiment_item_policy === 'exclude_previous' ? '排除已提交或其他正式任务曾分配的题目' : '不限制历史题目') }}</p></div><a :href="api.participantExportUrl(planId)">导出 CSV</a></div><p v-if="participantsLoading" role="status">正在加载参与者…</p><Alert v-else-if="participantsError" tone="danger">{{ participantsError }} <button class="kt-text-button" type="button" @click="loadParticipants(participantPageNumber)">重试</button></Alert><div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>学号</th><th>姓名</th><th>题数</th><th>复测题</th><th>新题</th><th>校验</th></tr></thead><tbody><tr v-for="participant in participants" :key="participant.id"><td>{{ participant.class_name }}</td><td>{{ participant.student_number }}</td><td>{{ participant.display_name }}</td><td>{{ participant.item_count }}</td><td>{{ participant.review_item_count }}</td><td>{{ participant.new_item_count }}</td><td>{{ participant.is_valid ? '有效' : '需处理' }}</td></tr></tbody></table></div><Paginator v-if="participantPage && !participantsLoading && !participantsError" :page="participantPage.number" :total-pages="participantPage.total_pages" @navigate="loadParticipants" /></section>
       <Alert tone="info">本次预览使用服务端返回的发布计划和检查结果；正式提交会使用同一计划版本。</Alert>
       <div class="kt-publish-actions kt-publish-actions--center"><a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/1/`">返回班级与排期</a><Button data-action="enter-confirmation" @click="confirmCommit = true">进入发布确认</Button></div>
     </section>
