@@ -107,7 +107,10 @@ def _plan_projection(plan):
         .get(pk=plan.pk)
     )
     setup = publish_plan_setup_projection(plan)
-    stale_preview = publish_preview_is_stale(plan)
+    stale_preview = (
+        plan.status in (PublishPlan.Status.DRAFT, PublishPlan.Status.PREVIEWED)
+        and publish_preview_is_stale(plan)
+    )
     class_rows = []
     for plan_class in plan.class_plans.all():
         excluded_student_ids = [row.student_id for row in plan_class.exclusions.all()]

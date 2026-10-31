@@ -1715,6 +1715,9 @@ class TeacherPublishPlanApiTests(TestCase):
         for suffix in ('review/', 'participants/', 'participants/export/'):
             response = self.client.get(self.plan_url(plan, suffix))
             self.assertEqual(response.status_code, 409, suffix)
+        plan.status = PublishPlan.Status.EXPIRED
+        plan.save(update_fields=["status"])
+        self.assertEqual(domain_payload(self.client.get(self.plan_url(plan)))["status"], "expired")
 
     def test_draft_participants_expose_selected_class_roster_and_exclusions(self):
         excluded_student = User.objects.get(student_number="PUB-001")
