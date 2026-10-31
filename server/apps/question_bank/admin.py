@@ -24,7 +24,7 @@ class QuestionAdminForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         if self.is_bound:
             self.data = self.data.copy()
-            for field in ('max_score', 'content_language', 'text_match_policy_version'):
+            for field in ('educational_type', 'max_score', 'content_language', 'text_match_policy_version'):
                 if field not in self.data:
                     self.data[field] = getattr(self.instance, field)
 
