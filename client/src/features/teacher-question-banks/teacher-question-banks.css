@@ -360,7 +360,6 @@ input.kt-qb-visually-hidden { position: absolute; width: 1px !important; min-hei
 .kt-teacher-question-banks .kt-site-bank-types { display:flex; gap:4px 10px; flex-wrap:wrap; max-width:260px; font-size:13px; }
 .kt-teacher-question-banks .kt-site-bank-types span { white-space:nowrap; }
 .kt-teacher-question-banks .kt-site-bank-types b { color:#637388; font-weight:500; }
-.kt-teacher-question-banks .kt-site-bank-create { position:fixed; z-index:80; left:50%; top:50%; transform:translate(-50%,-50%); width:min(540px,calc(100vw - 32px)); max-height:calc(100vh - 32px); overflow:auto; padding:24px; box-shadow:0 0 0 100vmax #182d4966; }
 .kt-teacher-question-banks .kt-bank-question-description { font-size:13px; line-height:1.5; color:#637388; margin:6px 0 0; }
 .kt-teacher-question-banks .kt-bank-question-section .kt-kc-node { background:none; border:0; border-radius:0; padding:0; font-size:13px; }
 @media(max-width:760px) { .kt-teacher-question-banks .kt-site-bank-toolbar { flex-wrap:wrap; } .kt-teacher-question-banks .kt-site-bank-toolbar input { width:100%; } .kt-teacher-question-banks .kt-qb-desktop-table { display:block; overflow:auto; } .kt-teacher-question-banks .kt-qb-bank-card .kt-qb-mobile-list { display:none; } .kt-teacher-question-banks .kt-bank-module-tabs .kt-qb-tabs { overflow:auto; } }

@@ -120,7 +120,7 @@ test('saved questions stay editable until the whole paper is submitted', async (
   const firstId = Number(page.url().match(/questions\/(\d+)/)![1])
   await page.getByRole('radio').first().check()
   await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '下一题', exact: true }).click()
+  await page.locator('[data-next-question]').click()
   await expect(page).not.toHaveURL(new RegExp(`/questions/${firstId}/`))
   await expect(page.locator('[name=answer]').first()).toBeEnabled()
   const secondId = Number(page.url().match(/questions\/(\d+)/)![1])
@@ -672,7 +672,7 @@ test('twenty questions navigate forward and back with stable text on question si
       await page.locator('textarea[name=answer]').pressSequentially('Q6 stable answer', { delay: 40 })
       await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
     }
-    if (index < assignments.length - 1) await page.getByRole('button', { name: '下一题', exact: true }).click()
+    if (index < assignments.length - 1) await page.locator('[data-next-question]').click()
   }
   await attachStageTimings(page, testInfo, 'paper20-forward')
   for (let index = assignments.length - 2; index >= 0; index--) {

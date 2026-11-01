@@ -151,7 +151,7 @@ test('KC tree preserves parent links through editing and server save', async ({ 
   }
   await page.locator('[data-modal-close]').click()
   const saved = page.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/questions/1/editor/'))
-  await page.getByRole('button', { name: '保存题目', exact: true }).click()
+  await page.locator('#question-document-form').getByRole('button', { name: '保存题目', exact: true }).click()
   expect((await saved).ok()).toBe(true)
   await expect(page).toHaveURL(/\/banks\/1\/$/)
   await page.goto('/teacher/courses/1/banks/1/questions/1/edit/')

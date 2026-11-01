@@ -45,7 +45,7 @@ test('imports usable questions and explained drafts, repairs old drafts, and pub
   expect(complete.status).toBe('active')
   expect(complete.stable_code).toBeTruthy()
   expect(complete.course_sequence).toBeGreaterThan(0)
-  await expect(page.locator('.kt-bank-question-section th')).toHaveText(['题库内序号', '题目', '题型', '知识点结构', '难度', '状态', '操作'])
+  await expect(page.locator('.kt-bank-question-section th')).toHaveText(['序号', '题目', '题型', '知识点结构', '难度 / 分值', '状态', '操作'])
   await expect(page.locator('.kt-bank-question-section')).not.toContainText(complete.stable_code)
   expect(complete.teacher_difficulty).toBeNull()
   expect(numeric.status).toBe('draft')
@@ -55,7 +55,7 @@ test('imports usable questions and explained drafts, repairs old drafts, and pub
   const toggle = page.locator('[data-answer-toggle]')
   if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click()
   await page.getByLabel('正确答案', { exact: true }).fill('0')
-  await page.getByRole('button', { name: '保存题目', exact: true }).click()
+  await page.locator('#question-document-form').getByRole('button', { name: '保存题目', exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/teacher/courses/1/banks/${bank.id}/$`))
   questions = (await (await page.request.get(`${apiBase}questions/`)).json()).data.items
   expect(questions.find((item: { id: number }) => item.id === numeric.id).status).toBe('active')
@@ -77,7 +77,7 @@ test('imports usable questions and explained drafts, repairs old drafts, and pub
   questions = (await (await page.request.get(`${apiBase}questions/`)).json()).data.items
   expect(questions.find((item: { id: number }) => item.id === complete.id).status).toBe('active')
   expect(questions.find((item: { id: number }) => item.id === numeric.id).status).toBe('archived')
-  await expect(page.getByRole('heading', { name: '题目清单', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '完整题目', exact: true })).toBeVisible()
   await expect(page.locator('.kt-alert--success')).toContainText('检查 2 道，转为可用 1 道，仍为草稿 1 道')
   for (const [name, width, height] of [['desktop', 1440, 900], ['mobile', 390, 844]] as const) {
     await page.setViewportSize({ width, height })
@@ -104,5 +104,6 @@ test('imports usable questions and explained drafts, repairs old drafts, and pub
   await page.getByRole('button', { name: '运行发布前检查', exact: true }).click()
   await page.getByRole('button', { name: '进入发布确认', exact: true }).click()
   await page.getByRole('button', { name: '确认发布', exact: true }).click()
+  await page.getByRole('tab', { name: '班级与排期', exact: true }).click()
   await expect(page.getByRole('heading', { name: '已发布班级任务', exact: true })).toBeVisible({ timeout: 30_000 })
 })

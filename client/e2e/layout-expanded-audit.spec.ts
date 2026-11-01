@@ -45,7 +45,7 @@ test('question import uses mobile cards and keeps its desktop table inside a loc
   }))
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/teacher/courses/1/banks/1/import/')
-  await expect(page.getByRole('heading', { name: '导入题库', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '导入题目', exact: true })).toBeVisible()
   await page.locator('input[type="file"]').setInputFiles({ name: 'layout.csv', mimeType: 'text/csv', buffer: Buffer.from('sequence,text\\n1,test') })
   const preview = page.locator('[data-import-preview]')
   await expect(preview).toBeVisible()
@@ -157,8 +157,12 @@ test('nested question-bank navigation and detail tables preserve local scrolling
   expect(tableGeometry.localOverflow).toBe(true)
 
   await page.setViewportSize({ width: 390, height: 844 })
-  await expect(page.locator('.kt-mobile-question-card').first()).toBeVisible()
-  await captureNoPageOverflow(page, info, 'question-bank-detail-phone-cards')
+  await expect(table).toBeVisible()
+  expect(await table.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(true)
+  const viewQuestion = table.getByRole('button', { name: '查看', exact: true }).first()
+  await viewQuestion.focus()
+  await expect(viewQuestion).toBeInViewport()
+  await captureNoPageOverflow(page, info, 'question-bank-detail-phone-table')
 })
 
 test('experiment selection and expanded research tools retain all inputs within the workspace', async ({ page }, info) => {

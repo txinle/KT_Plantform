@@ -12,6 +12,7 @@ async function login(page: Page, origin: string) {
 }
 
 async function selectFirstKnowledgeComponent(page: Page) {
+  await page.getByText('知识点范围与配额（可选）', { exact: true }).click()
   const picker = page
     .locator('.kt-kc-config-panel', { hasText: '知识点范围' })
     .locator('details.kt-kc-picker')
@@ -116,7 +117,8 @@ test('teacher previews and atomically publishes a class task', async ({ browserN
   await page.getByRole('button', { name: '进入发布确认' }).click()
   await page.getByRole('button', { name: '确认发布' }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/experiments\/\d+\/$/, { timeout: 30_000 })
-  await expect(page.getByRole('heading', { name: '班级任务' })).toBeVisible()
+  await page.getByRole('tab', { name: '班级与排期', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '已发布班级任务', exact: true })).toBeVisible()
   await expect(page.getByText('未开始', { exact: true })).toBeVisible()
 })
 
@@ -327,28 +329,31 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
   await login(page, 'http://127.0.0.1:8000')
   await page.goto('http://127.0.0.1:8000/teacher/courses/1/banks/')
 
-  const createForm = page.locator('form[data-create-bank]')
+  await page.getByRole('button', { name: '新建题库', exact: true }).click()
+  const createDialog = page.getByRole('dialog', { name: '创建题库', exact: true })
+  const createForm = createDialog.locator('form[data-create-bank]')
   await createForm.getByLabel('名称').fill(bankName)
   await createForm.getByLabel('说明').fill('验证统一导入的文件预览和确认写入')
   await createForm.getByLabel('可见性').selectOption('private')
-  await createForm.getByRole('button', { name: '创建题库' }).click()
+  await createDialog.getByRole('button', { name: '创建题库', exact: true }).click()
 
-  await page.getByRole('link', { name: bankName, exact: true }).click()
+  await expect(createDialog).toBeHidden()
+  await page.getByRole('textbox', { name: '搜索题库', exact: true }).fill(bankName)
+  await page.getByRole('textbox', { name: '搜索题库', exact: true }).press('Enter')
+  await page.locator('.kt-qb-desktop-table').getByRole('link', { name: bankName, exact: true }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/banks\/\d+\/$/)
   await expect(page.getByRole('heading', { name: bankName, exact: true })).toBeVisible()
   await page.locator('[data-question-import]').click()
   await expect(page).toHaveURL(/\/import\/$/)
   await expect(page.locator('#kt-app')).toBeVisible()
-  await expect(page.getByRole('heading', { name: '导入题库', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '导入题目', exact: true })).toBeVisible()
 
   const fileInput = page.locator('input[type="file"]')
   const preview = page.locator('[data-import-preview]')
   const summary = page.getByLabel('预览状态汇总')
   const uploadDownloadedTemplate = async (format: 'csv' | 'xlsx' | 'docx') => {
     const templateLink = page.locator(`[data-question-template="${format}"]`)
-    if (!await templateLink.isVisible()) {
-      await page.locator('summary[aria-label="文件格式与模板"]').click()
-    }
+    await page.getByRole('combobox', { name: '文件格式', exact: true }).selectOption(format === 'docx' ? 'docx' : 'spreadsheet')
     const downloadEvent = page.waitForEvent('download')
     await templateLink.click()
     const download = await downloadEvent
@@ -364,23 +369,24 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
     await fileInput.setInputFiles(downloadPath!)
     expect((await response).status()).toBe(200)
     await expect(preview).toBeVisible()
-    await expect(summary).toContainText('导入后可用 6')
+    await expect(summary).toContainText('共解析 12 道完整题')
+    await expect(summary).toContainText('22 个作答项')
+    await expect(summary).toContainText('保存为草稿 12')
+    await expect(summary).toContainText('需修正 0')
     return downloadPath!
   }
 
   const csvTemplate = await uploadDownloadedTemplate('csv')
   await uploadDownloadedTemplate('xlsx')
-  await page.locator('summary[aria-label="文件格式与模板"]').click()
-  await page.getByLabel('Word .docx').check()
+  await page.getByRole('combobox', { name: '文件格式', exact: true }).selectOption('docx')
   await expect(fileInput).toHaveAttribute('accept', '.docx')
   await uploadDownloadedTemplate('docx')
-  await page.locator('summary[aria-label="文件格式与模板"]').click()
-  await page.getByLabel('Excel / CSV').check()
+  await page.getByRole('combobox', { name: '文件格式', exact: true }).selectOption('spreadsheet')
   await expect(fileInput).toHaveAttribute('accept', '.csv,.xlsx')
 
   const captureImportViewport = async (name: string, width: number, height: number) => {
     await page.setViewportSize({ width, height })
-    await expect(page.getByRole('heading', { name: '导入题库', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '导入题目', exact: true })).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), name).toBe(false)
     await page.evaluate(() => window.scrollTo(0, 0))
     await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true })
@@ -405,7 +411,7 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
   await page.locator('[data-confirm-import]').click()
   expect((await response).status()).toBe(201)
   const result = page.getByRole('status').filter({ hasText: '本次导入已完成。' })
-  await expect(result).toContainText('新增 6 道，其中可用 6 道、草稿 0 道；跳过 0 道，未完成 0 道。')
+  await expect(result).toContainText('新增 22 道，其中可用 0 道、草稿 22 道；跳过 0 道，未完成 0 道。')
   await page.setViewportSize({ width: 1440, height: 900 })
   await expect(page.locator('[data-confirm-import]')).toBeDisabled()
 
@@ -465,13 +471,13 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
   await expect(result).toContainText('新增 0 道，修复 1 道，其中可用 1 道、草稿 0 道；跳过 1 道，未完成 0 道。')
   await page.locator('[data-return-detail]').click()
   await expect(page.getByRole('heading', { name: bankName, exact: true })).toBeVisible()
-  await expect(page.locator('.kt-bank-question-section .kt-desktop-only').getByText(repairedText, { exact: true })).toHaveCount(1)
+  await expect(page.locator('.kt-bank-question-section .kt-table-scroll').getByText(repairedText, { exact: true })).toHaveCount(1)
 
   const retiredKcImport = new URL(page.url())
   retiredKcImport.pathname = `${retiredKcImport.pathname}kc-import/`
   await page.goto(retiredKcImport.toString())
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/banks\/\d+\/import\/$/)
-  await expect(page.getByRole('heading', { name: '导入题库', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '导入题目', exact: true })).toBeVisible()
 })
 
 test('question-bank pages reflow without horizontal page overflow', async ({ browserName, page }, testInfo) => {

@@ -20,18 +20,19 @@ async function login(page: Page, username: string, password: string) {
 
 test('all registered R3 business pages have desktop, phone and 200 percent equivalent evidence', async ({ browser }, info) => {
   test.setTimeout(600_000)
-  const source = readFileSync('../artifacts/english-groups-ui-20261031/route-fixtures.py', 'utf8')
+  const source = readFileSync(new URL('./fixtures/registered-routes.py', import.meta.url), 'utf8')
   const fixture = spawnSync(requireServerPython(), ['manage.py', 'shell', '-c', source], {
     cwd: serverDir, encoding: 'utf8', timeout: 30_000,
     env: { ...process.env, ...requireIsolatedPostgres(process.env), PYTHONUTF8: '1' },
   })
   expect(fixture.status, fixture.stderr).toBe(0)
   const data = JSON.parse(fixture.stdout.trim().split(/\r?\n/).at(-1)!) as { routes: RouteCase[]; group_result: string }
-  expect(data.routes).toHaveLength(68)
+  const registry = JSON.parse(readFileSync(new URL('../../contracts/frontend-routes.json', import.meta.url), 'utf8')) as { routes: Array<{ name: string }> }
+  expect(data.routes.map(route => route.name)).toEqual(registry.routes.map(route => route.name))
   const identities: Record<string, [string, string] | null> = {
     anonymous: null, teacher: ['teacher', 'teacher123'], student: ['S002', 'student123'],
     runtime: ['S001', 'student123'],
-    r3student: ['r3-english-student', 'R3Student123!'],
+    groupstudent: ['site-v2-types-student', 'SiteV2Student123!'],
   }
   const pages = new Map<string, Page>()
   const contexts = []
@@ -71,7 +72,9 @@ test('all registered R3 business pages have desktop, phone and 200 percent equiv
           for (const node of document.querySelectorAll<HTMLElement>('main button, main label, main input, main textarea, main small, main th, main td')) {
             if (!node.getClientRects().length || node.closest('svg,[aria-hidden="true"],.kt-visually-hidden,details:not([open])')) continue
             if (!node.textContent?.trim() && !node.matches('input,textarea')) continue
-            if (Number.parseFloat(getComputedStyle(node).fontSize) < 14) result.push(`text below14px: ${node.className || node.tagName}`)
+            // Site V2 uses 13px for compact teacher labels, actions and table metadata.
+            const minimum = location.pathname.startsWith('/teacher/') && node.matches('button,label,small,th') ? 13 : 14
+            if (Number.parseFloat(getComputedStyle(node).fontSize) < minimum) result.push(`text below${minimum}px: ${node.className || node.tagName}`)
           }
           for (const node of document.querySelectorAll<HTMLElement>('main [role="alert"]')) {
             if (node.getClientRects().length && /加载失败|不存在|无权访问|请求失败|Unable|not found/i.test(node.textContent || '')) result.push(`page error: ${node.textContent?.slice(0, 100)}`)
@@ -82,8 +85,12 @@ test('all registered R3 business pages have desktop, phone and 200 percent equiv
         await page.screenshot({ path: info.outputPath(screenshot), fullPage: true })
         findings.push({ name: route.name, path: route.path, actualPath: new URL(page.url()).pathname, viewport: size.label, screenshot, issues })
       }
+      if (route.persona === 'runtime') {
+        await page.locator('[data-assessment-return]').click()
+        await expect(page).toHaveURL(/\/student\/$/)
+      }
     }
-    const grouped = pages.get('r3student')!
+    const grouped = pages.get('groupstudent')!
     await grouped.goto(data.group_result)
     await expect(grouped.getByRole('region', { name: '题目结果', exact: true })).toBeVisible()
     for (const size of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }, { width: 2560, height: 1229 }]) {

@@ -107,6 +107,12 @@ test('grading columns contain long lists and keep compact question navigation us
       } }
     } else if (path === '/api/v1/courses/1/context/') {
       data = { id: 1, name: 'EDA技术', code: 'KT01', term: '2026年秋' }
+    } else if (path === '/api/v1/teacher/courses/') {
+      data = { items: [{
+        id: 1, name: 'EDA技术', code: 'KT01', term: '2026年秋', description: '',
+        owner_name: '验收教师', status: 'active', status_label: '进行中',
+        class_count: 1, bank_count: 1, experiment_count: 1, detail_url: '/teacher/courses/1/',
+      }], create_url: '/teacher/courses/create/' }
     } else if (path === '/api/v1/teacher/class-tasks/1/grading/') {
       data = {
         task: { id: 1, experiment_id: 1, experiment_name: '简答题批改布局验收', class_id: 1, class_name: '验收班级' },
@@ -148,7 +154,7 @@ test('grading columns contain long lists and keep compact question navigation us
     const boxes = [...element.children].map(child => child.getBoundingClientRect())
     return boxes.map(box => ({ x: box.x, y: box.y, width: box.width, bottom: box.bottom }))
   })
-  expect(columns[0]!.width).toBe(160)
+  expect(columns[0]!.width).toBe(190)
   expect(columns[1]!.x).toBeGreaterThan(columns[0]!.x + columns[0]!.width)
   expect(columns[2]!.x).toBeGreaterThan(columns[1]!.x + columns[1]!.width)
   expect(Math.abs(columns[0]!.y - columns[2]!.y)).toBeLessThan(1)

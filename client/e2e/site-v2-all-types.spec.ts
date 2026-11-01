@@ -139,7 +139,7 @@ async function answerUnit(page: Page, unit: Unit) {
       await article.locator('[name="answer"]').blur()
     }
     if (unit.kind === 'essay') {
-      await expect(article.locator('textarea')).toHaveAttribute('rows', '10')
+      await expect(article.locator('textarea')).toHaveAttribute('rows', '12')
       await expect(page.locator('[data-word-count]')).toContainText(String(String(item.answer).split(/\s+/).length))
     }
     if (unit.kind === 'translation') await expect(article.getByText('你的译文', { exact: true })).toBeVisible()
@@ -275,7 +275,7 @@ test('Site v2 answers all eleven types as twelve whole questions and preserves t
     await expect(teacher.locator('[data-collection-participants]')).toContainText('SITE-V2-TYPES-001')
     await captureViews(teacher, info, 'all-types-collection')
     await teacher.goto(`/teacher/courses/${fixture.course_id}/experiments/`)
-    await expect(teacher.getByRole('link', { name: 'Site v2 all question types', exact: true })).toBeVisible()
+    await expect(teacher.getByRole('region', { name: '实验列表', exact: true }).getByRole('link', { name: 'Site v2 all question types', exact: true })).toBeVisible()
     await captureViews(teacher, info, 'all-types-experiments')
 
     const workers = { ADVANCED_DATA_MATERIALIZED_ENABLED: '1', ADVANCED_DATA_MATERIALIZED_COURSE_IDS: String(fixture.course_id) }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError } from '@/api/client'
 import Alert from '@/design-system/components/Alert.vue'
@@ -55,11 +55,9 @@ const selectedGroupIds = ref<string[]>([])
 const activeRowId = ref<string>()
 const detailOpen = ref(false)
 const mobileDetailOpen = ref(false)
-const compact = ref(false)
 const detailPanel = ref<HTMLElement>()
 const closeDetailButton = ref<HTMLButtonElement>()
 let detailTrigger: HTMLElement | undefined
-let viewport: MediaQueryList | undefined
 const error = ref('')
 const busy = ref(false)
 
@@ -305,14 +303,7 @@ function detailKeydown(event: KeyboardEvent) {
   if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
 }
-function resize() { compact.value = viewport?.matches ?? false }
 watch([filter, search, questionType, pageSize], () => { page.value = 1 })
-onMounted(() => {
-  viewport = window.matchMedia?.('(max-width: 1199px)')
-  resize()
-  viewport?.addEventListener('change', resize)
-})
-onBeforeUnmount(() => viewport?.removeEventListener('change', resize))
 </script>
 
 <template>
