@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ api: { list: vi.fn() } }))
+const mocks = vi.hoisted(() => ({ api: { list: vi.fn(), restore: vi.fn() } }))
 
 vi.mock('@/app/bootstrap', () => ({
   getBootstrapContext: () => ({ csrf_token: 'csrf-token', user: { display_name: '李老师', username: 'teacher' } }),
@@ -101,4 +101,25 @@ describe('TeacherCourseList', () => {
     expect(wrapper.find('.kt-teacher-course-empty').exists()).toBe(false)
   })
 
+})
+
+it('restores an archived course using the server-provided action and removes it from the archive', async () => {
+  mocks.api.list.mockResolvedValue({ create_url: '/teacher/courses/create/', items: [{ id: 8, name: '历史课程', code: 'H1', status: 'archived', status_label: '已归档', detail_url: '/teacher/courses/8/', restore_url: '/api/v1/teacher/courses/8/restore/' }] })
+  mocks.api.restore.mockResolvedValue({ course: { status: 'active', status_label: '进行中' } })
+  const { wrapper } = await render('/teacher/courses/?view=archived')
+  await wrapper.get('[data-course-restore="8"]').trigger('click')
+  await flushPromises()
+  expect(mocks.api.restore).toHaveBeenCalledWith('/api/v1/teacher/courses/8/restore/')
+  expect(wrapper.find('[data-course-card="8"]').exists()).toBe(false)
+  expect(wrapper.text()).toContain('课程已恢复')
+})
+
+it('keeps the archived course visible when restoring fails', async () => {
+  mocks.api.list.mockResolvedValue({ create_url: '/teacher/courses/create/', items: [{ id: 8, name: '历史课程', code: 'H1', status: 'archived', detail_url: '/teacher/courses/8/', restore_url: '/api/v1/teacher/courses/8/restore/' }] })
+  mocks.api.restore.mockRejectedValue(new Error('恢复失败'))
+  const { wrapper } = await render('/teacher/courses/?view=archived')
+  await wrapper.get('[data-course-restore="8"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.get('[data-course-card="8"]').text()).toContain('历史课程')
+  expect(wrapper.get('[role="alert"]').text()).toBe('恢复失败')
 })

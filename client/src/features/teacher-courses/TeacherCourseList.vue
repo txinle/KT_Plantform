@@ -18,6 +18,24 @@ const visibleCourses = computed(() => courses.value.filter(course => archived.va
 const createUrl = ref('/teacher/courses/create/')
 const loading = ref(true)
 const error = ref('')
+const restoreError = ref('')
+const restored = ref('')
+const restoringId = ref<number | null>(null)
+
+async function restoreCourse(course: TeacherCourseCard) {
+  if (!course.restore_url || restoringId.value !== null) return
+  restoringId.value = course.id
+  restoreError.value = ''
+  restored.value = ''
+  try {
+    const response = await getTeacherCourseApi().restore(course.restore_url)
+    courses.value = courses.value.map(item => item.id === course.id
+      ? { ...item, status: response.course.status, status_label: response.course.status_label, restore_url: null } : item)
+    restored.value = `课程已恢复：${course.name}，可在“我的课程”中继续使用。`
+  } catch (caught) {
+    restoreError.value = caught instanceof Error ? caught.message : '课程恢复失败，请重试。'
+  } finally { restoringId.value = null }
+}
 
 onMounted(async () => {
   try {
@@ -56,6 +74,8 @@ onMounted(async () => {
           </div>
         </header>
 
+        <p v-if="restored" role="status">{{ restored }}</p>
+        <p v-if="restoreError" class="kt-alert kt-alert--danger" role="alert">{{ restoreError }}</p>
         <p v-if="loading" role="status">正在加载课程…</p>
         <p v-else-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
         <div v-else-if="visibleCourses.length" class="kt-teacher-course-grid">
@@ -69,6 +89,7 @@ onMounted(async () => {
             </div>
             <span v-if="course.term" class="kt-teacher-course-card__term">{{ course.term }}</span>
             <RouterLink class="kt-button kt-button--secondary" :to="course.detail_url">{{ archived ? '查看课程' : '进入课程' }} →</RouterLink>
+            <button v-if="archived && course.restore_url" class="kt-button kt-button--secondary kt-teacher-course-restore" :data-course-restore="course.id" type="button" :disabled="restoringId !== null" @click="restoreCourse(course)">{{ restoringId === course.id ? '正在恢复…' : '恢复课程' }}</button>
           </article>
         </div>
         <section v-else class="kt-card kt-teacher-course-empty">

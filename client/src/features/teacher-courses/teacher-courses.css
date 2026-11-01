@@ -11,7 +11,7 @@
 .kt-teacher-course-overview-header span { display: block; max-width: 720px; color: var(--kt-muted); line-height: 1.65; }
 .kt-teacher-course-overview-header small { display: block; margin-top: 12px; color: var(--kt-muted); font-size: 0.875rem; }
 .kt-course-list-breadcrumb { margin-bottom: 14px; color: var(--kt-muted); font-size: 14px; }
-.kt-teacher-course-directory { max-width: 1120px; margin-inline: auto; }
+.kt-teacher-course-directory { width: 100%; }
 .kt-teacher-course-directory .kt-teacher-courses-heading { align-items: center; gap: 24px; margin: 8px 0 30px; }
 .kt-teacher-courses-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .kt-teacher-courses .kt-course-list-breadcrumb span { display: inline; }
@@ -23,6 +23,7 @@
 .kt-teacher-course-card p { margin: 0; color: var(--kt-muted); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
 .kt-teacher-course-card__term { grid-column: 1; color: var(--kt-muted); font-size: 13px; overflow-wrap: anywhere; }
 .kt-teacher-course-card > .kt-button { grid-column: 2; }
+.kt-teacher-course-card > .kt-teacher-course-restore { grid-column: 1 / -1; }
 @media (max-width: 767px) {
   .kt-teacher-course-directory .kt-teacher-courses-heading { align-items: stretch; margin: 4px 0 24px; gap: 18px; }
   .kt-teacher-course-directory .kt-teacher-courses-actions > .kt-button { flex: 1; width: auto; }

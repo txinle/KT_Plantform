@@ -7,7 +7,7 @@ const props = defineProps<{ courseName: string; csrfToken: string }>()
 const router = getCurrentInstance()?.appContext.config.globalProperties.$router as Router | undefined
 const path = computed(() => router?.currentRoute.value.path || window.location.pathname)
 const currentId = computed(() => /^\/teacher\/courses\/(\d+)\//.exec(path.value)?.[1] || '')
-const courses = ref<Array<{ id: number; name: string; detail_url: string }>>([])
+const courses = ref<Array<{ id: number; name: string; status: string; detail_url: string }>>([])
 const loading = ref(false)
 const error = ref('')
 const api = createApiClient({ getCsrfToken: () => props.csrfToken })
@@ -17,7 +17,7 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    courses.value = (await api.get<{ items: typeof courses.value }>('/api/v1/teacher/courses/')).items
+    courses.value = (await api.get<{ items: typeof courses.value }>('/api/v1/teacher/courses/')).items.filter(course => course.status === 'active')
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '课程列表加载失败。'
   } finally { loading.value = false }
@@ -39,8 +39,8 @@ onMounted(load)
 <template>
   <div v-if="currentId" class="kt-course-switcher">
     <label for="workspace-course">当前课程</label>
-    <select id="workspace-course" aria-label="切换课程" :value="currentId" :disabled="loading || !courses.length" @change="change">
-      <option v-if="!courses.some(course => String(course.id) === currentId)" :value="currentId">{{ courseName }}</option>
+    <select id="workspace-course" aria-label="切换课程" :value="courses.some(course => String(course.id) === currentId) ? currentId : ''" :disabled="loading || !courses.length" @change="change">
+      <option v-if="!courses.some(course => String(course.id) === currentId)" value="" disabled>切换到进行中的课程</option>
       <option v-for="course in courses" :key="course.id" :value="String(course.id)">{{ course.name }}</option>
     </select>
     <span v-if="error" role="alert">{{ error }} <button type="button" @click="load">重试</button></span>

@@ -11,8 +11,9 @@ async function render(path = '/teacher/courses/7/banks/12/') {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { template: '<div />' } }] })
   await router.push(path)
   mocks.get.mockResolvedValue({ items: [
-    { id: 7, name: '英语', detail_url: '/teacher/courses/7/' },
-    { id: 9, name: 'EDA', detail_url: '/teacher/courses/9/' },
+    { id: 7, status: 'active', name: '英语', detail_url: '/teacher/courses/7/' },
+    { id: 9, status: 'active', name: 'EDA', detail_url: '/teacher/courses/9/' },
+    { id: 11, status: 'archived', name: '历史课程', detail_url: '/teacher/courses/11/' },
   ] })
   const wrapper = mount(CourseSwitcher, { props: { courseName: '英语', csrfToken: 'token' }, global: { plugins: [router] } })
   await flushPromises()
@@ -44,4 +45,11 @@ it('retains current course and offers retry when the list cannot be loaded', asy
   await flushPromises()
   expect(wrapper.find('[role="alert"]').exists()).toBe(false)
   expect(wrapper.findAll('option')).toHaveLength(2)
+})
+
+it('excludes an archived current course from switch destinations', async () => {
+  const { wrapper } = await render('/teacher/courses/11/')
+  expect(wrapper.find('option[value="11"]').exists()).toBe(false)
+  expect(wrapper.findAll('option').map(option => option.text())).not.toContain('历史课程')
+  expect(wrapper.get('option[value=""]').attributes('disabled')).toBeDefined()
 })

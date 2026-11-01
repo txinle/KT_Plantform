@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     TeacherCourseArchiveView,
+    TeacherCourseRestoreView,
     TeacherCourseCollectionView,
     TeacherCourseDetailView,
     TeacherCoursePurgeCreateView,
@@ -11,6 +12,7 @@ from .views import (
 
 
 urlpatterns = [
+    path("<int:course_id>/restore/", TeacherCourseRestoreView.as_view(), name="teacher-course-restore"),
     path("", TeacherCourseCollectionView.as_view(), name="teacher-course-collection"),
     path("<int:course_id>/", TeacherCourseDetailView.as_view(), name="teacher-course-detail"),
     path(

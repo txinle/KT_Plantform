@@ -29,6 +29,7 @@ class TeacherCourseSummarySerializer(serializers.Serializer):
     bank_count = serializers.IntegerField(min_value=0)
     experiment_count = serializers.IntegerField(min_value=0)
     detail_url = serializers.CharField()
+    restore_url = serializers.CharField(allow_null=True)
 
 
 class TeacherCourseCollectionSerializer(serializers.Serializer):
@@ -168,3 +169,7 @@ class TeacherCoursePurgeCreateRequestSerializer(serializers.Serializer):
 
 class TeacherCoursePurgeExecuteRequestSerializer(serializers.Serializer):
     confirmation = serializers.ChoiceField(choices=("execute",))
+
+
+class TeacherCourseRestoreRequestSerializer(serializers.Serializer):
+    confirmation = serializers.ChoiceField(choices=("restore",))

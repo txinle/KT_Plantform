@@ -2444,6 +2444,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/courses/{course_id}/restore/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["teacher_course_restore"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/courses/{course_id}/settings/": {
         parameters: {
             query?: never;
@@ -6516,6 +6532,14 @@ export interface components {
             status_label: string;
             detail_url: string;
         };
+        TeacherCourseRestoreRequest: {
+            confirmation: components["schemas"]["TeacherCourseRestoreRequestConfirmationEnum"];
+        };
+        /**
+         * @description * `restore` - restore
+         * @enum {string}
+         */
+        TeacherCourseRestoreRequestConfirmationEnum: "restore";
         TeacherCourseSettings: {
             course: components["schemas"]["TeacherCourseSettingsCourse"];
             form: components["schemas"]["TeacherCourseSettingsForm"];
@@ -6567,6 +6591,7 @@ export interface components {
             bank_count: number;
             experiment_count: number;
             detail_url: string;
+            restore_url: string | null;
         };
         TeacherCourseTeacherOption: {
             id: number;
@@ -15850,6 +15875,38 @@ export interface operations {
                 "application/json": components["schemas"]["TeacherCoursePurgeExecuteRequest"];
                 "application/x-www-form-urlencoded": components["schemas"]["TeacherCoursePurgeExecuteRequest"];
                 "multipart/form-data": components["schemas"]["TeacherCoursePurgeExecuteRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["TeacherCourseSettings"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_course_restore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeacherCourseRestoreRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["TeacherCourseRestoreRequest"];
+                "multipart/form-data": components["schemas"]["TeacherCourseRestoreRequest"];
             };
         };
         responses: {

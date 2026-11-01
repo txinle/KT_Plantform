@@ -13954,6 +13954,51 @@ paths:
                       request_id:
                         type: string
           description: ''
+  /api/v1/teacher/courses/{course_id}/restore/:
+    post:
+      operationId: teacher_course_restore
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeacherCourseRestoreRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TeacherCourseRestoreRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TeacherCourseRestoreRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/TeacherCourseSettings'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
   /api/v1/teacher/courses/{course_id}/settings/:
     get:
       operationId: teacher_course_settings
@@ -25803,6 +25848,18 @@ components:
       - question_bank_name
       - status
       - status_label
+    TeacherCourseRestoreRequest:
+      type: object
+      properties:
+        confirmation:
+          $ref: '#/components/schemas/TeacherCourseRestoreRequestConfirmationEnum'
+      required:
+      - confirmation
+    TeacherCourseRestoreRequestConfirmationEnum:
+      enum:
+      - restore
+      type: string
+      description: '* `restore` - restore'
     TeacherCourseSettings:
       type: object
       properties:
@@ -25943,6 +26000,9 @@ components:
           minimum: 0
         detail_url:
           type: string
+        restore_url:
+          type: string
+          nullable: true
       required:
       - bank_count
       - class_count
@@ -25953,6 +26013,7 @@ components:
       - id
       - name
       - owner_name
+      - restore_url
       - status
       - status_label
       - term

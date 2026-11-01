@@ -237,3 +237,21 @@ class TeacherCourseApiTests(TestCase):
             self.post_json(f"{self.detail_url}archive/", {"confirmation": "archive"}).status_code,
             404,
         )
+
+    def test_restore_requires_access_and_confirmation_and_is_idempotent(self):
+        self.course.status = Course.Status.ARCHIVED
+        self.course.save(update_fields=["status"])
+        url = f"{self.detail_url}restore/"
+        item = domain_payload(self.client.get(self.collection_url))["items"][0]
+        self.assertEqual(item["restore_url"], url)
+        self.assertEqual(self.post_json(url, {}).status_code, 400)
+        self.client.force_login(self.outsider)
+        self.assertEqual(self.post_json(url, {"confirmation": "restore"}).status_code, 404)
+        self.client.force_login(self.owner)
+        for _ in range(2):
+            self.assertEqual(self.post_json(url, {"confirmation": "restore"}).status_code, 200)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.status, Course.Status.ACTIVE)
+        self.assertEqual(AuditLog.objects.filter(action="course.restore", object_id=str(self.course.pk)).count(), 1)
+        item = domain_payload(self.client.get(self.collection_url))["items"][0]
+        self.assertIsNone(item["restore_url"])

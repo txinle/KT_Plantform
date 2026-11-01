@@ -35,6 +35,7 @@ from .serializers import (
     TeacherCourseCreateResponseSerializer,
     TeacherCourseDetailSerializer,
     TeacherCourseArchiveRequestSerializer,
+    TeacherCourseRestoreRequestSerializer,
     TeacherCoursePurgeCreateRequestSerializer,
     TeacherCoursePurgeExecuteRequestSerializer,
     TeacherCourseSettingsRequestSerializer,
@@ -71,7 +72,7 @@ def _form_data(payload, *, include_teachers=False):
     return data
 
 
-def _course_summary(course):
+def _course_summary(course, user=None):
     class_count = (
         course.class_count if hasattr(course, "class_count") else course.classes.count()
     )
@@ -97,6 +98,7 @@ def _course_summary(course):
         "class_count": class_count,
         "bank_count": bank_count,
         "experiment_count": experiment_count,
+        "restore_url": reverse("teacher-course-restore", args=[course.pk]) if user and course.can_manage(user) and course.status == Course.Status.ARCHIVED else None,
         "detail_url": reverse("courses:detail", args=[course.pk]),
     }
 
@@ -252,7 +254,7 @@ class TeacherCourseCollectionView(TeacherCourseApiView):
             experiment_count=Count("experiments", distinct=True),
         )
         payload = {
-            "items": [_course_summary(course) for course in courses],
+            "items": [_course_summary(course, request.user) for course in courses],
             "create_url": reverse("courses:create"),
         }
         return Response(TeacherCourseCollectionSerializer(payload).data)
@@ -384,6 +386,29 @@ class TeacherCourseArchiveView(TeacherCourseApiView):
                 course.status = Course.Status.ARCHIVED
                 course.save(update_fields=["status", "updated_at"])
                 log_action(request, "course.archive", course)
+        return Response(
+            TeacherCourseSettingsSerializer(_course_settings_payload(course)).data
+        )
+
+
+class TeacherCourseRestoreView(TeacherCourseApiView):
+    @extend_schema(
+        operation_id="teacher_course_restore",
+        request=TeacherCourseRestoreRequestSerializer,
+        responses=TeacherCourseSettingsSerializer,
+    )
+    def post(self, request, course_id):
+        serializer = TeacherCourseRestoreRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        course = get_accessible_course(request.user, course_id)
+        require_course_manager(course, request.user)
+        with transaction.atomic():
+            course = lock_course(course)
+            require_course_manager(course, request.user)
+            if course.status == Course.Status.ARCHIVED:
+                course.status = Course.Status.ACTIVE
+                course.save(update_fields=["status", "updated_at"])
+                log_action(request, "course.restore", course)
         return Response(
             TeacherCourseSettingsSerializer(_course_settings_payload(course)).data
         )
