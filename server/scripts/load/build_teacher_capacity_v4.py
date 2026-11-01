@@ -136,6 +136,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkout", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--node-directory", default=r"C:\Users\31606\Downloads\ATOP-tooling\node-v24.20.0-win-x64")
+    parser.add_argument("--node-directory", default=str(Path(os.environ["LOCALAPPDATA"]) / "KT——platform/runtime" / 'node-v24.20.0-win-x64'))
     args = parser.parse_args()
     print(json.dumps(build(args.checkout, args.output, args.node_directory), indent=2))

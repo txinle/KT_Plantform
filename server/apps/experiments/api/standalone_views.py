@@ -96,7 +96,7 @@ def _choice_payload():
         "feedback_release_policies": _choice_rows(
             Experiment.FeedbackReleasePolicy.choices
         ),
-        "time_modes": _choice_rows(Experiment.TimeMode.choices),
+        "time_modes": _choice_rows([(value, label) for value, label in Experiment.TimeMode.choices if value != Experiment.TimeMode.PER_QUESTION]),
         "resume_modes": _choice_rows(Experiment.ResumeMode.choices),
         "confidence_modes": _choice_rows(Experiment.ConfidenceMode.choices),
         "confidence_sampling_units": _choice_rows(
@@ -263,7 +263,7 @@ def _detail_projection(experiment, user):
             "delete_url": api_base,
             "can_edit": experiment.status == Experiment.Status.DRAFT,
             "can_assign": experiment.status == Experiment.Status.DRAFT,
-            "can_publish": experiment.status == Experiment.Status.DRAFT,
+            "can_publish": experiment.status == Experiment.Status.DRAFT and experiment.time_mode != Experiment.TimeMode.PER_QUESTION,
             "can_sync_questions": experiment.status == Experiment.Status.DRAFT,
         },
         "choices": _choice_payload(),

@@ -29,8 +29,11 @@ def experiment_activity_map(experiments, *, can_grade):
     for task in tasks:
         row = result[task.experiment_id]
         count = pending.get(task.pk, 0)
+        had_pending = row["pending_grading_count"] > 0
         row["pending_grading_count"] += count
-        if count and can_grade and row["grading_url"] is None:
+        if can_grade and task.pk in manual_task_ids and (
+            row["grading_url"] is None or (count > 0 and not had_pending)
+        ):
             course_id = experiments[task.experiment_id].course_id
             row["grading_url"] = f"/teacher/courses/{course_id}/experiments/{task.experiment_id}/class-tasks/{task.pk}/grading/"
         schedule = next(iter(task.activity_schedules), None)

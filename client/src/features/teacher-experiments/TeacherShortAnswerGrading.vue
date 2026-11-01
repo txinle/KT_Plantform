@@ -149,9 +149,9 @@ onMounted(load)
       <div class="kt-experiment-page-header__copy">
         <nav class="kt-experiment-breadcrumb" aria-label="层级目录">
           <a :href="`/teacher/courses/${courseId}/experiments/${experimentId}/`">实验详情</a>
-          <span aria-hidden="true">/</span><span aria-current="page">简答题批改</span>
+          <span aria-hidden="true">/</span><span aria-current="page">人工批改</span>
         </nav>
-        <h1>简答题批改</h1>
+        <h1>人工批改</h1>
         <p v-if="overview">{{ overview.task.experiment_name }} · {{ overview.task.class_name }}</p>
       </div>
       <a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/`">返回实验</a>
@@ -163,14 +163,14 @@ onMounted(load)
       <p v-if="notice" class="kt-alert kt-alert--success" role="status">{{ notice }}</p>
 
       <div v-if="overview" class="kt-grading-summary" aria-label="批改进度">
-        <div><span>简答题</span><strong>{{ overview.totals.short_answer_questions }}</strong></div>
+        <div><span>人工批改题目</span><strong>{{ overview.totals.short_answer_questions }}</strong></div>
         <div><span>已提交</span><strong>{{ overview.totals.submitted }}</strong></div>
         <div><span>待批改</span><strong>{{ overview.totals.pending }}</strong></div>
         <div><span>已批改</span><strong>{{ overview.totals.graded }}</strong></div>
       </div>
 
       <div v-if="overview?.questions.length" class="kt-grading-layout">
-        <aside class="kt-card kt-grading-questions" aria-label="简答题列表">
+        <aside class="kt-card kt-grading-questions" aria-label="人工批改题目列表">
           <header class="kt-grading-panel-heading">
             <h2>题目</h2><small>{{ overview.questions.length }} 题</small>
           </header>
@@ -217,7 +217,7 @@ onMounted(load)
           </div>
 
           <div ref="submissionList" class="kt-grading-submissions">
-            <p v-if="!rows.length" class="kt-grading-empty">当前筛选下没有正式提交的简答题答案。</p>
+            <p v-if="!rows.length" class="kt-grading-empty">当前筛选下没有正式提交的答案。</p>
             <article v-for="row in rows" :key="row.submission_id" class="kt-grading-row" data-grading-row>
               <header>
                 <div><strong>{{ row.display_name }}</strong><span>{{ row.student_number }}</span></div>
@@ -252,7 +252,7 @@ onMounted(load)
           </nav>
         </section>
       </div>
-      <p v-else-if="overview" class="kt-card kt-grading-empty">当前任务还没有可批改的正式简答题提交。</p>
+      <p v-else-if="overview" class="kt-card kt-grading-empty">当前任务还没有可人工批改的正式提交。</p>
     </div>
   </div>
 </template>

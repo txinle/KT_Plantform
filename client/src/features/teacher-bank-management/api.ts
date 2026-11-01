@@ -49,9 +49,10 @@ export interface BankEditor {
 }
 
 export interface QuestionEditor {
-  course: CourseReference
+  course?: CourseReference
   bank: { id: number; name: string }
   question: {
+    updated_at?: string
     title?: string
     instructions?: string
     educational_type?: string
@@ -265,7 +266,7 @@ export function createTeacherBankManagementApi(client: ApiClient) {
     updateQuestion(courseId: number, bankId: number, questionId: number, body: Record<string, unknown>) {
       return client.mutate<QuestionEditor>(
         `/api/v1/teacher/courses/${courseId}/banks/${bankId}/questions/${questionId}/editor/`,
-        { method: 'PUT', body },
+        { method: questionId ? 'PUT' : 'POST', body },
       )
     },
     recheckQuestions(courseId: number, bankId: number) {

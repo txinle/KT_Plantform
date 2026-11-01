@@ -23,7 +23,7 @@ class FrontendGatewayContractTests(TestCase):
 
     def test_every_gateway_uses_whitelist_and_preserves_api_proxy(self):
         for name in ('kt-school.conf', 'kt-platform.conf'):
-            source = (ROOT / 'deploy/nginx' / name).read_text()
+            source = (ROOT / 'deploy/nginx' / name).read_text(encoding='utf-8')
             self.assertIn('include /etc/nginx/frontend-pages.conf;', source)
             self.assertIn('if ($frontend_page) { rewrite ^ /__frontend/index.html last; }', source)
             self.assertIn('location / {', source)

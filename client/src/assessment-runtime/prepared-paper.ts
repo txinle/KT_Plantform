@@ -8,7 +8,7 @@ export interface PreparedNavigationItem {
   assignment_id: number; attempt_id: number; sequence_index: number; status: string; url: string; current: boolean
   response_version: number; active_response_event_id: string | null; content: StaticContentDescriptor
 }
-export interface PresentationUnit { group_id: string | null; kind: string; title: string; assignment_ids: number[] }
+export interface PresentationUnit { group_id: string | null; kind: string; title: string; assignment_ids: number[]; member_count?: number; answered_count?: number; status?: string; maximum_score?: string }
 export interface PreparedManifest { version: 1 | 2; session_id: number; content_version: string; navigation: PreparedNavigationItem[]; question_count: number; presentation_units?: PresentationUnit[] }
 export interface ExpectedAttemptVersion { attempt_id: number; response_version: number; target_event_id: string | null }
 export interface PaperSummary { session_id: number; expected_versions: ExpectedAttemptVersion[]; submission_status_url: string }

@@ -13,7 +13,7 @@ PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/server" && pwd -P)"
 cd "$PROJECT_ROOT"
 
 APP_URL="http://127.0.0.1:8000/"
-VENV_DIR="$PROJECT_ROOT/.venv"
+VENV_DIR="$LAUNCHER_ROOT/.venv"
 REQUIREMENTS_STAMP="$VENV_DIR/.requirements.sha256"
 : "${CLASS_CENTER_ENABLED:=1}"
 : "${STUDENT_LEARNING_ANALYTICS_ENABLED:=1}"
@@ -36,6 +36,26 @@ fail() {
 
 port_is_in_use() {
     (exec 3<>/dev/tcp/127.0.0.1/"$1") >/dev/null 2>&1
+}
+
+release_port() {
+    local port="$1" pids attempt
+    port_is_in_use "$port" || return 0
+    command -v lsof >/dev/null || fail "lsof is required to stop the process using port $port."
+    pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN)" || fail "Cannot identify the process using port $port."
+    [[ -n "$pids" ]] || fail "Cannot identify the process using port $port."
+    printf '[INFO] Stopping process(es) %s using port %s...\n' "$pids" "$port"
+    kill -TERM $pids 2>/dev/null || true
+    for attempt in {1..10}; do
+        port_is_in_use "$port" || return 0
+        sleep 0.2
+    done
+    kill -KILL $pids 2>/dev/null || true
+    for attempt in {1..20}; do
+        port_is_in_use "$port" || return 0
+        sleep 0.2
+    done
+    fail "Could not release port $port. Check process permissions."
 }
 
 discover_python() {
@@ -67,26 +87,24 @@ discover_python() {
 }
 
 find_venv_python() {
-    if [[ -f "$PROJECT_ROOT/.venv/bin/python" ]]; then
-        printf '%s\n' "$PROJECT_ROOT/.venv/bin/python"
+    if [[ -f "$VENV_DIR/bin/python" ]]; then
+        printf '%s\n' "$VENV_DIR/bin/python"
         return 0
     fi
-    if [[ -f "$PROJECT_ROOT/.venv/Scripts/python.exe" ]]; then
-        printf '%s\n' "$PROJECT_ROOT/.venv/Scripts/python.exe"
+    if [[ -f "$VENV_DIR/Scripts/python.exe" ]]; then
+        printf '%s\n' "$VENV_DIR/Scripts/python.exe"
         return 0
     fi
     return 1
 }
 
 remove_incomplete_venv() {
-    [[ "$VENV_DIR" == "$PROJECT_ROOT/.venv" ]] || fail "Refusing to remove an unexpected path: $VENV_DIR"
+    [[ "$VENV_DIR" == "$LAUNCHER_ROOT/.venv" ]] || fail "Refusing to remove an unexpected path: $VENV_DIR"
     rm -rf -- "$VENV_DIR"
 }
 
 for port in 8000 8001; do
-    if port_is_in_use "$port"; then
-        fail "Port $port is already in use. Stop the existing local server first."
-    fi
+    release_port "$port"
 done
 command -v pg_isready >/dev/null || fail "PostgreSQL 17 tools must be on PATH."
 pg_isready -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" >/dev/null || fail "Start the configured PostgreSQL server before retrying."

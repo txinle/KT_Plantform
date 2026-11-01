@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import AppHeader from './AppHeader.vue'
+import CourseSwitcher from './CourseSwitcher.vue'
 import InitialPasswordReminder from '@/app/InitialPasswordReminder.vue'
+import SiteRegistrationFooter from '@/app/SiteRegistrationFooter.vue'
 import WorkspaceNavigation from './WorkspaceNavigation'
 import '../workspace.css'
 
@@ -78,19 +80,21 @@ onBeforeUnmount(() => {
     <a class="kt-skip-link" :href="`#${mainId}`">跳到主要内容</a>
     <AppHeader :user-name="userName" :user-meta="userMeta" :csrf-token="csrfToken" :password-change-url="passwordChangeUrl" show-logout :inert="mobile && open">
       <button ref="trigger" type="button" class="kt-workspace-menu" data-workspace-menu aria-controls="workspace-sidebar" :aria-expanded="open" @click="open = true">菜单</button>
+      <CourseSwitcher v-if="courseName" :course-name="courseName" :csrf-token="csrfToken" />
     </AppHeader>
     <InitialPasswordReminder v-if="initialPasswordReminderPending" />
     <div v-if="mobile && open" class="kt-workspace-shade" @click="close" />
     <aside id="workspace-sidebar" ref="panel" class="kt-workspace-sidebar" :class="{ 'is-open': open }" :inert="mobile && !open" :role="mobile && open ? 'dialog' : undefined" :aria-modal="mobile && open ? true : undefined" aria-label="工作区导航" @keydown="keydown" @click="navigationClick">
       <button ref="closeButton" type="button" class="kt-workspace-close" data-workspace-close @click="close">关闭菜单</button>
       <div class="kt-workspace-context">
-        <span class="kt-workspace-emblem" aria-hidden="true">{{ courseName ? '课' : userName.slice(0, 1) }}</span>
         <strong>{{ courseName || userName }}</strong>
         <span v-if="courseMeta || userMeta">{{ courseMeta || userMeta }}</span>
       </div>
+      <p class="kt-workspace-nav-label">{{ courseName ? '教学工作区' : '工作区' }}</p>
       <WorkspaceNavigation :register-secondary="element => secondary = element">
         <slot name="navigation" />
       </WorkspaceNavigation>
+      <SiteRegistrationFooter sidebar />
     </aside>
     <main :id="mainId" class="kt-workspace-main" tabindex="-1" :inert="mobile && open"><slot /></main>
   </div>

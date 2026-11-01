@@ -34,6 +34,7 @@ from .models import (
     PublishPlan,
     PublishOperationJob,
     QuestionSnapshot,
+    ScheduleRevision,
 )
 from .presentation_instances import get_or_create_default_item_instance
 from .publication_jobs import run_publish_operation
@@ -79,6 +80,15 @@ class TeacherExperimentApiTests(TestCase):
 
     def api_url(self, suffix=""):
         return f"/api/v1/teacher/courses/{self.course.pk}/experiments/{suffix}"
+
+    def test_list_name_search_filters_before_pagination(self):
+        self.client.force_login(self.teacher)
+        Experiment.objects.create(name="其他实验", course=self.course, question_bank=self.bank, owner=self.teacher)
+        response = self.client.get(self.api_url(), {"q": "已有"})
+        self.assertEqual(response.status_code, 200)
+        payload = domain_payload(response)
+        self.assertEqual(payload["page"]["total_items"], 1)
+        self.assertEqual([row["id"] for row in payload["items"]], [self.experiment.pk])
 
     def test_list_is_paginated_and_excludes_system_managed_fields(self):
         self.client.force_login(self.teacher)
@@ -1967,13 +1977,15 @@ class TeacherPublishPlanApiTests(TestCase):
         self.experiment.time_mode = Experiment.TimeMode.PER_QUESTION
         self.experiment.per_question_time_limit_seconds = 60
         self.experiment.save()
-        plan, _ = self.preview_two_classes()
-        commit = self.client.post(
-            self.plan_url(plan, "commit/"),
-            data=json.dumps({"expected_revision": plan.plan_revision}),
-            content_type="application/json",
-        )
-        self.complete_operation(commit)
+        # Reconstruct a historical release created before single-question timing was retired.
+        with patch("apps.experiments.services.validate_new_time_configuration"):
+            plan, _ = self.preview_two_classes()
+            commit = self.client.post(
+                self.plan_url(plan, "commit/"),
+                data=json.dumps({"expected_revision": plan.plan_revision}),
+                content_type="application/json",
+            )
+            self.complete_operation(commit)
         task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
         task.schedule_revisions.filter(revision_no=1).update(opens_at=timezone.now() - timedelta(minutes=1))
         url = f"/api/v1/teacher/class-tasks/{task.pk}/schedule-revisions/"
@@ -1987,7 +1999,7 @@ class TeacherPublishPlanApiTests(TestCase):
             }),
             content_type="application/json",
         )
-        self.assertEqual(rejected.status_code, 409, rejected.content)
+        self.assertEqual(rejected.status_code, 400, rejected.content)
         self.assertEqual(task.schedule_revisions.count(), 1)
 
         extended = self.client.post(
@@ -1999,8 +2011,8 @@ class TeacherPublishPlanApiTests(TestCase):
             }),
             content_type="application/json",
         )
-        self.assertEqual(extended.status_code, 201, extended.content)
-        self.assertEqual(task.schedule_revisions.get(revision_no=2).per_question_time_limit_seconds, 90)
+        self.assertEqual(extended.status_code, 400, extended.content)
+        self.assertEqual(task.schedule_revisions.count(), 1)
 
     def test_closed_task_can_extend_then_reopen_after_manual_close_without_erasing_history(self):
         plan, _ = self.preview_two_classes()
@@ -2188,9 +2200,11 @@ class TeacherPublishPlanApiTests(TestCase):
         self.experiment.time_mode = Experiment.TimeMode.PER_QUESTION
         self.experiment.per_question_time_limit_seconds = 30
         self.experiment.save()
-        plan, _ = self.preview_two_classes()
-        commit = self.client.post(self.plan_url(plan, "commit/"), data=json.dumps({"expected_revision": plan.plan_revision}), content_type="application/json")
-        self.complete_operation(commit)
+        # Reconstruct a historical release created before single-question timing was retired.
+        with patch("apps.experiments.services.validate_new_time_configuration"):
+            plan, _ = self.preview_two_classes()
+            commit = self.client.post(self.plan_url(plan, "commit/"), data=json.dumps({"expected_revision": plan.plan_revision}), content_type="application/json")
+            self.complete_operation(commit)
         task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
         task.schedule_revisions.filter(revision_no=1).update(opens_at=timezone.now() - timedelta(hours=1))
         student = User.objects.get(student_number="PUB-001")
@@ -2200,7 +2214,12 @@ class TeacherPublishPlanApiTests(TestCase):
         Attempt.objects.filter(pk=attempt.pk).update(item_deadline_at=old_deadline, initial_effective_deadline_at=old_deadline, active_seconds=30)
         attempt.refresh_from_db()
         _terminate_for_deadline(session, attempt=attempt, now=old_deadline, reason="item_time_limit")
-        append_schedule_revision(task, self.teacher, expected_revision=1, per_question_time_limit_seconds=90, reason="增加单题时限")
+        original_schedule = task.schedule_revisions.get(revision_no=1)
+        ScheduleRevision.objects.create(
+            class_task=task, revision_no=2, opens_at=original_schedule.opens_at,
+            closes_at=original_schedule.closes_at, per_question_time_limit_seconds=90,
+            created_by=self.teacher, reason="历史单题延时记录",
+        )
 
         resumed_at = timezone.now()
         resumed = resume_task_session(task, student, request_received_at=resumed_at)
@@ -2219,16 +2238,23 @@ class TeacherPublishPlanApiTests(TestCase):
         self.experiment.time_mode = Experiment.TimeMode.PER_QUESTION
         self.experiment.per_question_time_limit_seconds = 30
         self.experiment.save()
-        plan, _ = self.preview_two_classes()
-        commit = self.client.post(self.plan_url(plan, "commit/"), data=json.dumps({"expected_revision": plan.plan_revision}), content_type="application/json")
-        self.complete_operation(commit)
+        # Reconstruct a historical release created before single-question timing was retired.
+        with patch("apps.experiments.services.validate_new_time_configuration"):
+            plan, _ = self.preview_two_classes()
+            commit = self.client.post(self.plan_url(plan, "commit/"), data=json.dumps({"expected_revision": plan.plan_revision}), content_type="application/json")
+            self.complete_operation(commit)
         task = ClassExperimentTask.objects.get(experiment=self.experiment, class_group=self.class_a)
         task.schedule_revisions.filter(revision_no=1).update(opens_at=timezone.now() - timedelta(hours=1))
         student = User.objects.get(student_number="PUB-001")
         session = get_or_create_session(self.experiment, student, class_task=task)
         attempt = record_visit(session.pk, session.assignments.get().pk)
         original = attempt.initial_effective_deadline_at
-        append_schedule_revision(task, self.teacher, expected_revision=1, per_question_time_limit_seconds=90, reason="单题补时")
+        original_schedule = task.schedule_revisions.get(revision_no=1)
+        ScheduleRevision.objects.create(
+            class_task=task, revision_no=2, opens_at=original_schedule.opens_at,
+            closes_at=original_schedule.closes_at, per_question_time_limit_seconds=90,
+            created_by=self.teacher, reason="历史单题延时记录",
+        )
 
         resumed = resume_task_session(task, student)
         attempt.refresh_from_db()

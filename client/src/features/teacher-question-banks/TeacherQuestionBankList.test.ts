@@ -1,9 +1,9 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   api: { list: vi.fn(), courseConcepts: vi.fn(), createBank: vi.fn(), createCourseConcept: vi.fn(), previewCourseConceptImport: vi.fn(), confirmCourseConceptImport: vi.fn() },
-  managementApi: { archiveBank: vi.fn(), updateCourseConcept: vi.fn(), setCourseConceptStatus: vi.fn() },
+  managementApi: { bankEditor: vi.fn(), updateBank: vi.fn(), archiveBank: vi.fn(), updateCourseConcept: vi.fn(), setCourseConceptStatus: vi.fn() },
   push: vi.fn(),
   route: { params: { courseId: '7' }, query: {} as Record<string, string> },
 }))
@@ -19,7 +19,71 @@ vi.mock('@/app/bootstrap', () => ({ getBootstrapContext: () => ({ csrf_token: 'c
 
 import TeacherQuestionBankList from './TeacherQuestionBankList.vue'
 
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
+})
+
 describe('TeacherQuestionBankList', () => {
+  it('confirms bank archiving in a centered modal before sending the request', async () => {
+    const wrapper = mount(TeacherQuestionBankList)
+    await flushPromises()
+    await wrapper.get('[data-bank-archive]').trigger('click')
+    await flushPromises()
+    const dialog = wrapper.get('dialog[aria-label="归档题库"]')
+    expect(mocks.managementApi.archiveBank).not.toHaveBeenCalled()
+    await dialog.trigger('cancel')
+    await flushPromises()
+    expect(mocks.managementApi.archiveBank).not.toHaveBeenCalled()
+    await wrapper.get('[data-bank-archive]').trigger('click')
+    await wrapper.get('[data-confirm-bank-archive]').trigger('click')
+    await flushPromises()
+    expect(mocks.managementApi.archiveBank).toHaveBeenCalledWith(7, 11)
+    wrapper.unmount()
+  })
+
+  it('edits bank metadata in place without navigating away or saving on cancellation', async () => {
+    mocks.managementApi.bankEditor.mockResolvedValue({ id: 11, name: '演示题库', description: '', visibility: 'private', visibility_choices: [{ value: 'private', label: '私有' }], course: { code: 'KT101', term: '秋' } })
+    mocks.managementApi.updateBank.mockResolvedValue({ detail_url: '/teacher/courses/7/banks/11/' })
+    const wrapper = mount(TeacherQuestionBankList)
+    await flushPromises()
+    await wrapper.get('[data-edit-bank="11"]').trigger('click')
+    await flushPromises()
+    let dialog = wrapper.get('dialog[aria-label="编辑题库"]')
+    await dialog.get('#bank-name').setValue('取消的修改')
+    await dialog.trigger('cancel')
+    await flushPromises()
+    expect(mocks.managementApi.updateBank).not.toHaveBeenCalled()
+    await wrapper.get('[data-edit-bank="11"]').trigger('click')
+    await flushPromises()
+    dialog = wrapper.get('dialog[aria-label="编辑题库"]')
+    expect(dialog.get<HTMLInputElement>('#bank-name').element.value).toBe('演示题库')
+    await dialog.get('#bank-name').setValue('新的题库名')
+    await dialog.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.managementApi.updateBank).toHaveBeenCalledWith(7, 11, expect.objectContaining({ name: '新的题库名' }))
+    expect(mocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('uses the four Site module entries and a native modal for creating a bank', async () => {
+    const wrapper = mount(TeacherQuestionBankList)
+    await flushPromises()
+    expect(wrapper.get('.kt-bank-module-tabs').text()).toContain('共享题库')
+    expect(wrapper.get('.kt-bank-module-tabs').text()).toContain('已归档')
+    expect(wrapper.find('#course-bank-heading').exists()).toBe(false)
+    await wrapper.get('.kt-qb-title-actions button').trigger('click')
+    await flushPromises()
+    const dialog = wrapper.get('dialog[aria-label="创建题库"]')
+    expect(dialog.attributes()).toHaveProperty('open')
+    await dialog.get('input[name="name"]').setValue('不应保存')
+    await dialog.trigger('cancel')
+    await flushPromises()
+    expect(mocks.api.createBank).not.toHaveBeenCalled()
+    expect(dialog.attributes()).not.toHaveProperty('open')
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.route.query = {}
@@ -40,7 +104,7 @@ describe('TeacherQuestionBankList', () => {
     mocks.managementApi.setCourseConceptStatus.mockResolvedValue({ id: 23, status: 'archived' })
   })
 
-  it('uses the confirmed two-tab bank-management desktop structure by default', async () => {
+  it('keeps course KC management and archive access in the Site module structure', async () => {
     const wrapper = mount(TeacherQuestionBankList)
     await flushPromises()
     expect(wrapper.get('h1').text()).toBe('题库')
@@ -48,12 +112,13 @@ describe('TeacherQuestionBankList', () => {
     expect(wrapper.get('[aria-label="题库模块"]').classes()).toContain('kt-sidebar-secondary-nav')
     expect(wrapper.get('[data-tab="banks"]').classes()).toContain('is-active')
     expect(wrapper.find('[data-panel="course-kcs"]').exists()).toBe(false)
-    expect(wrapper.get('[data-panel="banks"] h2').text()).toBe('课程题库')
+    expect(wrapper.get('[aria-label="课程题库"]').text()).toContain('演示题库')
     expect(wrapper.text()).toContain('演示题库')
     expect(wrapper.text()).toContain('课程 KC 总库')
-    expect(wrapper.get('a[href="/teacher/courses/7/banks/archived/"]').text()).toContain('2')
+    expect(wrapper.get('a[href="/teacher/courses/7/banks/archived/"]').text()).toBe('已归档')
     expect(wrapper.get('form[data-create-bank] input[name="name"]')).toBeTruthy()
     await wrapper.get('[data-bank-archive]').trigger('click')
+    await wrapper.get('[data-confirm-bank-archive]').trigger('click')
     await flushPromises()
     expect(mocks.managementApi.archiveBank).toHaveBeenCalledWith(7, 11)
   })

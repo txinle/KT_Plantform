@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  api: { previewQuestionImport: vi.fn(), confirmQuestionImport: vi.fn() },
+  api: { detail: vi.fn(), previewQuestionImport: vi.fn(), confirmQuestionImport: vi.fn() },
   push: vi.fn(),
 }))
 vi.mock('vue-router', () => ({
@@ -10,21 +10,22 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push: mocks.push }),
   RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
 }))
-vi.mock('./standalone-api', () => ({ getTeacherStandaloneQuestionBankApi: () => mocks.api }))
+vi.mock('./standalone-api', () => ({ getTeacherStandaloneQuestionBankApi: () => mocks.api, isStandaloneBankRedirect: (response: object) => 'redirect_url' in response }))
 
 import TeacherStandaloneQuestionImport from './TeacherStandaloneQuestionImport.vue'
 
 describe('TeacherStandaloneQuestionImport', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.api.detail.mockResolvedValue({ bank: { name: '独立题库' } })
     mocks.api.previewQuestionImport.mockResolvedValue({
       preview_id: 'preview-1',
-      preview: { rows: [
-        { sequence: 1, text: '完整题目', question_type: 'short_answer', question_type_label: '简答题', option_count: 0, teacher_difficulty: null, classification: 'ready', draft_reasons: [] },
-        { sequence: 2, text: '', question_type: 'short_answer', question_type_label: '简答题', option_count: 0, teacher_difficulty: null, classification: 'draft', draft_reasons: ['题干为空。'] },
+      preview: { confirmable: true, summary: { ready: 1, draft: 1, duplicate: 0, invalid: 0 }, rows: [
+        { row_id: 'r1', errors: [], options: [], accepted_answers: [], sequence: 1, text: '完整题目', question_type: 'short_answer', question_type_label: '简答题', option_count: 0, teacher_difficulty: null, classification: 'ready', draft_reasons: [] },
+        { row_id: 'r2', errors: ['题干为空。'], options: [], accepted_answers: [], sequence: 2, text: '', question_type: 'short_answer', question_type_label: '简答题', option_count: 0, teacher_difficulty: null, classification: 'draft', draft_reasons: ['题干为空。'] },
       ] },
     })
-    mocks.api.confirmQuestionImport.mockResolvedValue({ created: 2, active: 1, draft: 1, detail_url: '/teacher/banks/11/' })
+    mocks.api.confirmQuestionImport.mockResolvedValue({ created: 2, active: 1, draft: 1, rows: [], detail_url: '/teacher/banks/11/' })
   })
 
   it('labels complete and incomplete rows as server-classified valid imports', async () => {
@@ -43,13 +44,13 @@ describe('TeacherStandaloneQuestionImport', () => {
   })
 
   it('confirms groups explicitly and never selects their child rows individually', async () => {
-    mocks.api.previewQuestionImport.mockResolvedValue({ preview_id: 'group-preview', preview: { rows: [{ row_id: 'r1', group_id: 'g1', sequence: 1, text: 'Why?', question_type: 'single_choice', options: [], classification: 'ready' }], groups: [{ group_id: 'g1', source_group_code: 'R001', kind: 'reading', title: 'Garden', material: 'Garden.', material_segments: [], instructions: '', content_language: 'en', member_row_ids: ['r1'], classification: 'ready', errors: [], item_count: 1, total_max_score: '2.00' }] } })
+    mocks.api.previewQuestionImport.mockResolvedValue({ preview_id: 'group-preview', preview: { confirmable: true, summary: { ready: 1, draft: 0, duplicate: 0, invalid: 0 }, rows: [{ row_id: 'r1', group_id: 'g1', sequence: 1, text: 'Why?', question_type: 'single_choice', options: [], classification: 'ready' }], groups: [{ group_id: 'g1', source_group_code: 'R001', kind: 'reading', title: 'Garden', material: 'Garden.', material_segments: [], instructions: '', content_language: 'en', member_row_ids: ['r1'], classification: 'ready', errors: [], item_count: 1, total_max_score: '2.00' }] } })
     const wrapper = mount(TeacherStandaloneQuestionImport)
     const input = wrapper.get('input[type="file"]')
     Object.defineProperty(input.element, 'files', { value: [new File(['rows'], 'group.docx')], configurable: true })
     await input.trigger('change')
     await flushPromises()
-    expect(wrapper.findComponent({ name: 'QuestionGroupImportPreview' }).exists()).toBe(true)
+    expect(wrapper.get('[data-import-row="group:g1"]').text()).toContain('Garden')
     await wrapper.get('[data-confirm-standalone-import]').trigger('click')
     await flushPromises()
     expect(mocks.api.confirmQuestionImport).toHaveBeenCalledWith(11, 'group-preview', [], ['g1'])

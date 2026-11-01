@@ -65,7 +65,7 @@ class SchoolRuntimeTests(SimpleTestCase):
 
     def test_nginx_routes_resolve_and_methods_keep_pool_boundaries(self):
         self.assertTrue((Path(settings.REPOSITORY_DIR) / "deploy" / "nginx/kt-school.conf").exists(), "School routing config missing")
-        config = (Path(settings.REPOSITORY_DIR) / "deploy" / "nginx/kt-school.conf").read_text()
+        config = (Path(settings.REPOSITORY_DIR) / "deploy" / "nginx/kt-school.conf").read_text(encoding="utf-8")
         # Evaluate the actual map's regex rows, then verify each business path in Django.
         rows = re.findall(r'~(\^[^\s]+)\s+(auth|assessment|startup|capture|student_read|teacher_read);', config)
         self.assertTrue(rows)
@@ -102,7 +102,7 @@ class SchoolRuntimeTests(SimpleTestCase):
         self.assertNotIn("proxy_cache", config)
 
     def test_exact_teacher_status_and_export_create_use_teacher_pool(self):
-        config=(Path(settings.REPOSITORY_DIR) / "deploy" / 'nginx/kt-school.conf').read_text()
+        config=(Path(settings.REPOSITORY_DIR) / "deploy" / 'nginx/kt-school.conf').read_text(encoding="utf-8")
         rows=re.findall(r'~(\^[^\s]+)\s+(auth|assessment|startup|capture|student_read|teacher_read);',config)
         job='/api/v1/teacher/courses/2/data/export-jobs/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/'
         for method,path,expected in (
@@ -121,7 +121,7 @@ class SchoolRuntimeTests(SimpleTestCase):
             self.assertEqual(actual,expected,(method,path))
 
     def test_export_artifacts_are_private_and_authorized_download_uses_teacher_pool(self):
-        config = (Path(settings.REPOSITORY_DIR) / "deploy" / 'nginx/kt-school.conf').read_text()
+        config = (Path(settings.REPOSITORY_DIR) / "deploy" / 'nginx/kt-school.conf').read_text(encoding="utf-8")
         for prefix in ('/media/exports/', '/media/research-assets/'):
             self.assertRegex(config, rf'location\s+\^~\s+{re.escape(prefix)}\s*\{{\s*return\s+404;\s*\}}')
         self.assertRegex(config, r'location\s+/media/\s*\{\s*alias\s+/media/;')

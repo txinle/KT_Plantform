@@ -22,5 +22,5 @@ export interface QuestionGroupView {
   content_language: string
   members: GroupMemberView[]
 }
-export interface GroupActivationIntent { itemKey: string; answer?: unknown; hasAnswer?: boolean }
+export interface GroupActivationIntent { itemKey: string; answer?: unknown; hasAnswer?: boolean; confidence?: string }
 export interface GroupAnswerChange { itemKey: string; answer: unknown }

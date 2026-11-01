@@ -60,6 +60,9 @@ describe('TeacherShortAnswerGrading', () => {
     const wrapper = mount(TeacherShortAnswerGrading)
     await flushPromises()
 
+    expect(wrapper.get('h1').text()).toBe('人工批改')
+    expect(wrapper.get('[aria-current="page"]').text()).toBe('人工批改')
+    expect(wrapper.get('[aria-label="批改进度"]').text()).toContain('人工批改题目')
     expect(wrapper.text()).toContain('学生甲')
     expect(wrapper.text()).toContain('S-001')
     expect(wrapper.text()).toContain('参考答案')
@@ -84,7 +87,7 @@ describe('TeacherShortAnswerGrading', () => {
     const wrapper = mount(TeacherShortAnswerGrading)
     await flushPromises()
 
-    const navigation = wrapper.get('[aria-label="简答题列表"]')
+    const navigation = wrapper.get('[aria-label="人工批改题目列表"]')
     const questions = navigation.findAll('button')
     expect(questions.map(button => button.text())).toEqual([
       'SA-1待批 1', 'SA-2待批 0',

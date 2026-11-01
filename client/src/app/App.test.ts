@@ -32,6 +32,21 @@ function context(researchConsentRequired: boolean) {
 describe('App research consent gate', () => {
   afterEach(() => clearBootstrapContext())
 
+  it('reloads course-bound components when switching courses without reusing old course data', async () => {
+    acceptBootstrapContext({ ...context(false), user: { ...context(false).user, role: 'teacher' } })
+    const setup = vi.fn(() => ({}))
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/teacher/courses/:courseId/banks/', component: { setup, template: '<div data-bank-list />' } },
+    ] })
+    await router.push('/teacher/courses/7/banks/')
+    const wrapper = mount(App, { global: { plugins: [router] } })
+    await flushPromises()
+    await router.push('/teacher/courses/9/banks/')
+    await flushPromises()
+    expect(setup).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
   it('does not inject a global or header deletion receipt UI for a saved operation', async () => {
     const storageKey = 'kt-teacher-deletion:v1:71:7:experiment:13'
     const saved = JSON.stringify({ submitted: true, input: {
@@ -54,6 +69,9 @@ describe('App research consent gate', () => {
       expect(wrapper.find('.kt-deletion-recovery').exists()).toBe(false)
       expect(wrapper.find('[data-deletion-recover]').exists()).toBe(false)
       expect(wrapper.get('.kt-site-root__content').element.firstElementChild).toBe(wrapper.get('.kt-workspace').element)
+      expect(wrapper.findAll('[data-site-registration-footer]')).toHaveLength(1)
+      expect(wrapper.find('.kt-workspace-sidebar [data-site-registration-footer]').exists()).toBe(true)
+      expect(wrapper.get('.kt-site-root').element.lastElementChild).toBe(wrapper.get('.kt-site-root__content').element)
       expect(sessionStorage.getItem(storageKey)).toBe(saved)
     } finally {
       wrapper.unmount()
@@ -102,12 +120,13 @@ describe('App research consent gate', () => {
     expect(wrapper.find('[data-research-consent-gate]').exists()).toBe(true)
     wrapper.unmount()
   })
-  it('renders the site registration footer', () => {
+  it('renders the page-bottom registration only on login', () => {
     acceptBootstrapContext(context(false))
     const wrapper = mount(App, {
-      global: { provide: routeProvider, stubs: { RouterView: { template: '<div data-route-content />' } } },
+      global: { provide: { [routeLocationKey as symbol]: { path: '/login/' } }, stubs: { RouterView: { template: '<div data-route-content />' } } },
     })
 
+    expect(wrapper.get('.kt-site-root').classes()).toContain('kt-site-root--login')
     const footer = wrapper.get('[data-site-registration-footer]')
     const icpLink = footer.get('[data-icp-registration]')
     const policeLink = footer.get('[data-police-registration]')
@@ -119,6 +138,16 @@ describe('App research consent gate', () => {
       'https://beian.mps.gov.cn/#/query/webSearch?code=43010302002391',
     )
     expect(policeLink.get('img').attributes('src')).toBe('/static/spa-assets/icons/beian-police.png')
+  })
+
+  it.each(['/student/', '/teacher/courses/7/experiments/', '/teacher/courses/7/experiments/13/student-preview/'])('does not append a full-width registration footer on %s', path => {
+    acceptBootstrapContext(context(false))
+    const wrapper = mount(App, {
+      global: { provide: { [routeLocationKey as symbol]: { path } }, stubs: { RouterView: { template: '<div data-route-content />' } } },
+    })
+    expect(wrapper.find('[data-site-registration-footer]').exists()).toBe(false)
+    expect(wrapper.get('.kt-site-root').classes()).not.toContain('kt-site-root--login')
+    wrapper.unmount()
   })
 
   it('does not mount the requested route while consent is required', () => {

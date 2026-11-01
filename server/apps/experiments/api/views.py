@@ -79,6 +79,7 @@ from .serializers import (
     TeacherExperimentCollectionSerializer,
     TeacherExperimentReadinessSerializer,
     TeacherExperimentSerializer,
+    TeacherExperimentInputSerializer,
     TeacherSamplingInventoryRequestSerializer,
     TeacherSamplingInventoryResponseSerializer,
 )
@@ -444,7 +445,7 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
 class TeacherExperimentCollectionView(TeacherExperimentApiMixin, APIView):
     @extend_schema(
         operation_id="teacher_experiment_list",
-        parameters=[OpenApiParameter('archived', bool, description='Return archived experiments only; defaults to current experiments.')],
+        parameters=[OpenApiParameter('archived', bool, description='Return archived experiments only; defaults to current experiments.'), OpenApiParameter('q', str, description='Filter experiment names before pagination.')],
         responses=TeacherExperimentCollectionSerializer,
     )
     def get(self, request, course_id):
@@ -457,6 +458,9 @@ class TeacherExperimentCollectionView(TeacherExperimentApiMixin, APIView):
         ).prefetch_related("question_quotas", "question_bank_links__question_bank", "sampling_kcs__concept")
         queryset = (queryset.filter(status=Experiment.Status.ARCHIVED) if archived in {'1', 'true'}
                     else queryset.exclude(status=Experiment.Status.ARCHIVED))
+        query = request.query_params.get('q', '').strip()
+        if query:
+            queryset = queryset.filter(name__icontains=query)
         can_manage = course.can_manage(request.user) and course.status == course.Status.ACTIVE
         paginator = FixedPageNumberPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
@@ -493,14 +497,14 @@ class TeacherExperimentCollectionView(TeacherExperimentApiMixin, APIView):
 
     @extend_schema(
         operation_id="teacher_experiment_create",
-        request=TeacherExperimentSerializer,
+        request=TeacherExperimentInputSerializer,
         responses={201: TeacherExperimentSerializer},
     )
     def post(self, request, course_id):
         course = self.get_course()
         with transaction.atomic():
             course = lock_writable_course(course)
-            serializer = TeacherExperimentSerializer(
+            serializer = TeacherExperimentInputSerializer(
                 data=request.data,
                 context={"request": request, "course": course},
             )
@@ -542,7 +546,7 @@ class TeacherExperimentDetailView(TeacherExperimentApiMixin, APIView):
 
     @extend_schema(
         operation_id="teacher_experiment_update",
-        request=TeacherExperimentSerializer,
+        request=TeacherExperimentInputSerializer,
         responses=TeacherExperimentSerializer,
     )
     def patch(self, request, course_id, experiment_id):
@@ -555,7 +559,7 @@ class TeacherExperimentDetailView(TeacherExperimentApiMixin, APIView):
                     "实验定义已冻结，不能再修改。",
                     code="EXPERIMENT_FROZEN",
                 )
-            serializer = TeacherExperimentSerializer(
+            serializer = TeacherExperimentInputSerializer(
                 experiment,
                 data=request.data,
                 partial=True,

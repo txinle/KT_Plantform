@@ -21,8 +21,8 @@ import capacity_retest
 import student_capacity_protocol_v3 as protocol
 
 BRIDGE = '/home/ktdata/capacity-retest-bridge-20261016'
-NODE = r'C:\Users\31606\Downloads\ATOP-tooling\node-v24.20.0-win-x64\node.exe'
-BROWSERS = r'C:\Users\31606\Downloads\ATOP-tooling\pw-fresh-browsers'
+NODE = str(Path(os.environ["LOCALAPPDATA"]) / "KT——platform/runtime" / 'node-v24.20.0-win-x64/node.exe')
+BROWSERS = str(Path(os.environ["LOCALAPPDATA"]) / "KT——platform/runtime" / 'pw-fresh-browsers')
 BASE_URL = 'http://127.0.0.1:18085'
 CELL_PATTERN = r'[A-Za-z0-9_-]{20}'
 HASH_PATTERN = r'[0-9a-f]{64}'

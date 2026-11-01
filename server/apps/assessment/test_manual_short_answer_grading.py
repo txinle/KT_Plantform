@@ -14,6 +14,7 @@ from apps.experiments.models import (
     Experiment,
     ExperimentClassSnapshot,
     ExperimentVersion,
+    ExperimentVersionParticipantSnapshot,
     QuestionSnapshot,
 )
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
@@ -148,6 +149,47 @@ class ManualShortAnswerGradingTests(TransactionTestCase):
             grading_method="manual_binary_v1",
             grading_version="manual_binary_v1",
         )
+
+    def test_mixed_paper_overview_counts_only_assigned_manual_questions(self):
+        objective_question = Question.objects.create(
+            bank=self.bank, sequence=2, code="SC-1", question_type="single_choice",
+            text="Choose one.", correct_answer="A",
+        )
+        unassigned_question = Question.objects.create(
+            bank=self.bank, sequence=3, code="SA-2", question_type="short_answer",
+            text="Unassigned manual question.", correct_answer="Reference",
+        )
+        objective = QuestionSnapshot.objects.create(
+            version=self.version, source_question=objective_question, source_sequence=2, code="SC-1",
+            question_type="single_choice", text="Choose one.",
+            correct_answer="A", primary_kc="KC",
+        )
+        unassigned = QuestionSnapshot.objects.create(
+            version=self.version, source_question=unassigned_question, source_sequence=3, code="SA-2",
+            question_type="short_answer", text="Unassigned manual question.",
+            correct_answer="Reference", primary_kc="KC",
+        )
+        ExperimentVersionParticipantSnapshot.objects.create(
+            version=self.version, student=self.student, class_task=self.task,
+            assignment_snapshot=[
+                {"question_snapshot_id": self.snapshot.pk},
+                {"question_snapshot_id": objective.pk},
+            ],
+        )
+        self.client.force_login(self.teacher)
+        response = self.client.get(f"/api/v1/teacher/class-tasks/{self.task.pk}/grading/")
+        self.assertEqual(response.status_code, 200)
+        overview = domain_payload(response)
+        self.assertEqual(overview["totals"]["short_answer_questions"], 1)
+        self.assertEqual(
+            [row["question_snapshot_id"] for row in overview["questions"]],
+            [self.snapshot.pk],
+        )
+        for snapshot_id in (objective.pk, unassigned.pk):
+            response = self.client.get(
+                f"/api/v1/teacher/class-tasks/{self.task.pk}/grading/questions/{snapshot_id}/"
+            )
+            self.assertEqual(response.status_code, 404)
 
     def test_service_appends_binary_grade_and_requires_reason_for_regrade(self):
         grade = grade_task_short_answer(

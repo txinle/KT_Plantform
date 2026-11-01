@@ -573,3 +573,53 @@
   .kt-question-import .qimp-main,
   .kt-question-import .qimp-detail { transition: none; }
 }
+
+/* Site v2 import controls, complete-question table and detail surfaces. */
+.kt-question-import { font-family:"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif; color:#26364c; }
+.kt-question-import .qimp-heading h1 { font-size:25px; font-weight:650; letter-spacing:-.7px; color:#182d49; }
+.kt-question-import .qimp-heading p { font-size:15px; color:#637388; }
+.kt-question-import .kt-import-flow { display:flex; gap:18px; flex-wrap:wrap; margin-bottom:24px; font-size:14px; color:#637388; }
+.kt-question-import .qimp-file, .kt-question-import .qimp-preview { border:1px solid #e3e9f0; border-radius:10px; background:#fff; box-shadow:none; padding:24px; }
+.kt-question-import .qimp-file { grid-template-columns:minmax(0,1fr) auto; }
+.kt-question-import .qimp-file h2 { font-size:19px; font-weight:650; color:#182d49; }
+.kt-question-import .qimp-file-menu-content { border:0; box-shadow:none; background:none; }
+.kt-question-import .qimp-file-menu-content a { font-size:14px; font-weight:400; }
+.kt-question-import .qimp-button, .kt-question-import .qimp-filter { font:400 15px/1.5 "Segoe UI","Microsoft YaHei","PingFang SC",sans-serif; border:1px solid #d4ddeb; border-radius:6px; min-height:44px; padding:10px 17px; box-shadow:none; }
+.kt-question-import .qimp-button.is-primary { background:#285dbb; border-color:#285dbb; color:#fff; }
+.kt-question-import .qimp-filter { font-size:13px; padding:7px 11px; min-height:34px; background:white; color:#26364c; }
+.kt-question-import .qimp-filter.is-active { color:#285dbb; background:#edf3ff; border-color:#b8cdeb; }
+.kt-question-import .qimp-toolbar { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:14px; padding:0; border:0; }
+.kt-question-import .qimp-search input { border:1px solid #cdd7e3; border-radius:6px; min-height:44px; padding:10px 12px; font-size:15px; }
+.kt-question-import .qimp-table { font-size:15px; border-collapse:collapse; }
+.kt-question-import .qimp-table th { font-weight:500; font-size:14px; background:#fafbfd; color:#637388; padding:12px 16px; border-bottom:1px solid #e3e9f0; }
+.kt-question-import .qimp-table td { padding:14px 16px; border-bottom:1px solid #e3e9f0; }
+.kt-question-import .qimp-footer { padding:16px 20px; border:1px solid #e3e9f0; border-radius:8px; background:#fff; margin-top:15px; box-shadow:0 -3px 12px #152e4a05; }
+.kt-question-import .qimp-status { font-size:12px; font-weight:500; }
+.kt-question-import .qimp-detail { border:1px solid #e3e9f0; box-shadow:none; background:white; }
+@media(max-width:760px) { .kt-question-import .qimp-file, .kt-question-import .qimp-preview { padding:20px 16px; } .kt-question-import .qimp-file { grid-template-columns:1fr; } }
+
+.kt-question-import.has-detail .qimp-main { margin-right:0; }
+.kt-question-import .qimp-detail-shade { display:block; position:fixed; inset:0; z-index:79; background:#182d4966; }
+.kt-question-import .qimp-detail { position:fixed; z-index:80; top:50%; left:50%; right:auto; bottom:auto; transform:translate(-50%,-50%); width:min(1060px,calc(100vw - 32px)); max-height:calc(100vh - 32px); height:auto; border-radius:10px; display:flex; flex-direction:column; }
+.kt-question-import .qimp-detail-body { overflow:auto; min-height:0; }
+.kt-question-import .qimp-detail>header { padding:23px 24px; }
+.kt-question-import .qimp-detail-footer { padding:16px 24px; }
+
+.kt-question-import .qimp-detail.is-mobile-open { transform:translate(-50%,-50%); visibility:visible; }
+.kt-question-import .qimp-file.kt-site-import-upload { display:block; }
+.kt-question-import .kt-site-import-controls { display:flex; align-items:end; gap:12px; flex-wrap:wrap; }
+.kt-question-import .kt-site-import-controls label { display:grid; gap:9px; font-size:14px; font-weight:600; }
+.kt-question-import .kt-site-import-controls input, .kt-question-import .kt-site-import-controls select { border:1px solid #cdd7e3; border-radius:6px; min-height:44px; padding:10px 12px; background:#fff; font:400 16px/1.5 "Segoe UI","Microsoft YaHei","PingFang SC",sans-serif; }
+.kt-question-import .kt-site-import-templates { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:18px; font-size:13px; color:#637388; }
+.kt-question-import .kt-site-import-templates a { font-size:15px; color:#285dbb; }
+.kt-question-import .kt-site-import-templates [data-file-summary] { margin-left:auto; }
+.kt-question-import .kt-site-import-upload .qimp-summary { margin-top:16px; font-size:13px; }
+.kt-question-import .qimp-detail-body h3 { font-size:17px; font-weight:600; }
+
+.kt-question-import .qimp-heading-row{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.kt-question-import .qimp-heading-row h1{margin:0}
+.kt-question-import .qimp-heading-row a{font-size:14px;white-space:nowrap}
+.kt-question-import .qimp-empty-import{padding:48px 24px;text-align:center;background:#fff;border:1px solid #e3e9f0;border-radius:10px;margin-top:20px}
+.kt-question-import .qimp-empty-import h2{margin:0 0 8px;font-size:19px;font-weight:650;color:#182d49}
+.kt-question-import .qimp-empty-import p{margin:0;color:#637388;font-size:15px;line-height:1.7}
+.kt-question-import .qimp-button.is-primary{background:#182d49;border-color:#182d49;box-shadow:none}

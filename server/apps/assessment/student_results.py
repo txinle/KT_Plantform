@@ -113,7 +113,7 @@ def result_groups(attempts, items, submissions, grades, *, show_scores):
             members.append(member)
         group = {'group_id': str(frozen.pk), 'source_group_id': frozen.source_group_id, 'kind': frozen.kind,
             'title': frozen.title, 'instructions': frozen.instructions, 'material': frozen.material,
-            'content_language': frozen.content_language, 'members': members, 'item_count': len(members),
+            'content_language': frozen.content_language, 'word_bank': list(frozen.word_bank), 'members': members, 'item_count': len(members),
             'material_segments': material_segments(frozen, members)}
         if show_scores:
             group['score_progress'] = score_progress(group_attempts, submissions, grades)

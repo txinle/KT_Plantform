@@ -80,6 +80,9 @@ export function nextEntryRequest(intent: NavigationClickContext & { assignmentId
 }
 
 export type StudentRuntimeQuestionEntry = components['schemas']['StudentRuntimeQuestionEntry'] & {
+  presentation_units?: import('./prepared-paper').PresentationUnit[]
+  presentation_progress?: { total: number; answered: number; maximum_score: string }
+  group_member_state?: Record<string, { status: string; response_write_allowed: boolean; has_response: boolean; pending_confidence: unknown; inline_confidence?: { probability: number | null; answer_event_id: string | null } }>
   question_group_runtime_version?: number
   question_group?: import('@/question-content/question-group-content').QuestionGroupView
   group_responses?: Record<string, unknown>
@@ -121,6 +124,9 @@ export interface EntryReceipt {
 }
 
 export interface DraftMutationResponse extends ProcessConfirmation {
+  presentation_units?: import('./prepared-paper').PresentationUnit[]
+  presentation_progress?: StudentRuntimeQuestionEntry['presentation_progress']
+  group_member_state?: StudentRuntimeQuestionEntry['group_member_state']
   response_version?: number
   active_response_event_id?: string | null
   success: boolean

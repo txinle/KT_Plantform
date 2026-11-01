@@ -31,7 +31,7 @@ KT 交互数据采集平台是一个以课程为中心的 Django 实验管理与
 
 ## 一键本地运行
 
-启动脚本会发现 Python 3.13 与 Node 24、创建或复用项目内的 `server/.venv`、按需安装依赖、执行 PostgreSQL 数据库迁移，仅在数据库没有用户时写入演示数据，不重置已有题库。脚本先构建前端，再启动构建监听、Django 后端、同源 Node 网关，以及调度/导出、研究数据物化、实验发布和学生比较后台任务。页面就绪后自动打开 `http://127.0.0.1:8000/`。根目录启动器调用 `server/scripts/run_dev.py`，请保留 `server`、`client` 和 `contracts` 的并列结构。
+启动脚本会发现 Python 3.13 与 Node 24 及以上版本、创建或复用项目根目录的 `.venv`、按需安装依赖、执行 PostgreSQL 数据库迁移，仅在数据库没有用户时写入演示数据，不重置已有题库。脚本先构建前端，再启动构建监听、Django 后端、同源 Node 网关，以及调度/导出、研究数据物化、实验发布和学生比较后台任务。页面就绪后自动打开 `http://127.0.0.1:8000/`。根目录启动器调用 `server/scripts/run_dev.py`，请保留 `server`、`client` 和 `contracts` 的并列结构。
 
 ### Windows
 
@@ -41,13 +41,13 @@ KT 交互数据采集平台是一个以课程为中心的 Django 实验管理与
 .\run_local.bat
 ```
 
-本机工具默认位于 `E:\ATOP\ATOP-tooling`，可通过 `KT_TOOLING_ROOT` 指定其他位置；npm、pip 和临时文件缓存也写入该目录的 `cache` 子目录。PostgreSQL 使用已初始化的本机实例 `127.0.0.1:55432`、数据库 `kt_platform`。Git Bash 中运行 `./run_local.sh` 会调用同一 Windows 启动器。
+本机工具默认位于 `%LOCALAPPDATA%\KT——platform\runtime`；Node 优先复用本机已安装的 24 及以上版本，不设置主版本上限。兼容环境直接复用，缺失或不兼容时自动下载备用版本并核对 SHA-256 后使用。可通过 `KT_TOOLING_ROOT` 指定其他位置；npm、pip 和临时文件缓存也写入该目录的 `cache` 子目录。PostgreSQL 自动准备并复用本机实例 `127.0.0.1:55432`、数据库 `kt_platform`。Git Bash 中运行 `./run_local.sh` 会调用同一 Windows 启动器。
 
 在脚本窗口按 `Ctrl+C` 会同步关闭本次启动的 Django、构建监听、Node 网关、后台任务及其子进程；若出现 `Terminate batch job (Y/N)?`，输入 `Y` 关闭启动器。项目 PostgreSQL 实例保持运行，供下次启动复用。
 
 ### Linux / macOS
 
-先安装 Python 3.13、Node 24 和 PostgreSQL 17，并将 PostgreSQL 工具加入 `PATH`。脚本要求已有可连接的数据库，默认连接 `127.0.0.1:5432`，账号 `kt_user`、密码 `kt_password`、数据库 `kt_platform`；可通过 `POSTGRES_HOST/PORT/USER/PASSWORD/DB` 覆盖。不使用 SQLite 回退。
+先安装 Python 3.13、Node 24 及以上版本和 PostgreSQL 17，并将 PostgreSQL 工具加入 `PATH`。脚本要求已有可连接的数据库，默认连接 `127.0.0.1:5432`，账号 `kt_user`、密码 `kt_password`、数据库 `kt_platform`；可通过 `POSTGRES_HOST/PORT/USER/PASSWORD/DB` 覆盖。不使用 SQLite 回退。
 
 ```bash
 chmod +x run_local.sh
@@ -66,14 +66,14 @@ chmod +x run_local.sh
 
 ## 手工分别启动前后端
 
-先用当前 checkout 的 `server/.venv` 安装 `server/requirements.txt`，在 `client` 执行 `npm ci`。前端构建与 API 类型检查只读取 `contracts`，不需要 Python 或 Django。数据库迁移与演示造数在 `server` 目录执行；已有数据库不必重复执行 `seed_demo`。
+先用当前 checkout 根目录的 `.venv` 安装 `server/requirements.txt`，在 `client` 执行 `npm ci`。前端构建与 API 类型检查只读取 `contracts`，不需要 Python 或 Django。数据库迁移与演示造数在 `server` 目录执行；已有数据库不必重复执行 `seed_demo`。
 
 以下 PowerShell 命令在项目根目录分别打开三个终端执行。所有业务页面统一访问 `http://127.0.0.1:8000/`；内部 Django 端口只提供 API、授权下载和运维页面。
 
 后端终端：
 
 ```powershell
-$postgresBin = "E:\ATOP\ATOP-tooling\PostgreSQL-17.11-portable\pgsql\bin"
+$postgresBin = (Join-Path $env:LOCALAPPDATA "KT——platform\runtime\PostgreSQL-17.11-portable\pgsql\bin")
 $env:PATH = "$postgresBin;$env:PATH"
 $env:POSTGRES_HOST = "127.0.0.1"
 $env:POSTGRES_PORT = "55432"
@@ -83,13 +83,13 @@ $env:POSTGRES_DB = "kt_platform"
 $env:CLASS_CENTER_ENABLED = "1"
 $env:STUDENT_LEARNING_ANALYTICS_ENABLED = "1"
 Set-Location .\server
-.\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8001
+..\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8001
 ```
 
 前端构建与监听终端：
 
 ```powershell
-$nodeDir = "E:\ATOP\ATOP-tooling\node-v24.20.0-win-x64"
+$nodeDir = (Join-Path $env:LOCALAPPDATA "KT——platform\runtime\node-v24.20.0-win-x64")
 $env:PATH = "$nodeDir;$env:PATH"
 Set-Location .\client
 & "$nodeDir\npm.cmd" run build
@@ -99,7 +99,7 @@ Set-Location .\client
 同源网关终端：
 
 ```powershell
-$nodeDir = "E:\ATOP\ATOP-tooling\node-v24.20.0-win-x64"
+$nodeDir = (Join-Path $env:LOCALAPPDATA "KT——platform\runtime\node-v24.20.0-win-x64")
 $env:PATH = "$nodeDir;$env:PATH"
 $env:KT_GATEWAY_PORT = "8000"
 $env:KT_BACKEND_ORIGIN = "http://127.0.0.1:8001"
@@ -289,7 +289,7 @@ install -m 600 server/apps/accounts/management/commands/add_admin.py "$HOME/.loc
 
 师生业务页面使用独立构建的 Vue HTML；Django 保留 Session 认证、DRF API、文件下载和 `/admin/`。业务 URL 沿用原路径，未知 API 不会返回前端 HTML。
 
-- 本地启动：当前 checkout 的 `server/.venv` 运行 `server/scripts/run_dev.py`。启动器先构建前端，再启动构建监听、内部 Django API 服务与同源 Node 网关。Node 网关按 `contracts/frontend-routes.json` 提供登记页面，API 和受限下载交给 Django。
+- 本地启动：当前 checkout 根目录的 `.venv` 运行 `server/scripts/run_dev.py`。启动器先构建前端，再启动构建监听、内部 Django API 服务与同源 Node 网关。Node 网关按 `contracts/frontend-routes.json` 提供登记页面，API 和受限下载交给 Django。
 - 前端与后端可分别构建。生产网关使用 `deploy/nginx/kt-platform.conf` 和 `frontend-pages.conf`；只有登记页面的 GET/HEAD 请求获得前端 HTML。Django 保留页面反向 URL 名称，不读取客户端构建产物；旧表单入口已退役。
 - 采集器及离线 Worker 随前端构建，Worker 继续使用原 URL 和 scope。Nginx 的 `frontend_assets` 持久卷保留旧哈希资源及版本化作答壳，启动脚本追加新版本文件；发布及回滚不删除该卷，不清理 IndexedDB 或待上传队列。
 - 本轮便携 PostgreSQL 与本地浏览器验证不替代生产 Nginx 容器联调、真实中文输入法或真实浏览器 200% 缩放检查。当前验证范围及未通过门槛见 [执行记录](docs/superpowers/plans/2026-10-11-unified-frontend-backend-architecture.md)。

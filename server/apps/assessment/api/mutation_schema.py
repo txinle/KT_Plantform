@@ -119,6 +119,9 @@ DRAFT_RECEIPT = obj({
     'active_response_event_id': nullable(UUID), 'response_snapshot_id': UUID,
     'content_hash': STRING, 'content_length': COUNTER, 'state_hash': STRING,
     'response_state_after': {'nullable': True, 'type': 'object', 'additionalProperties': True},
+    'presentation_units': {'type': 'array', 'items': {'type': 'object', 'additionalProperties': True}},
+    'presentation_progress': {'type': 'object', 'additionalProperties': True},
+    'group_member_state': {'type': 'object', 'additionalProperties': True},
 }, ['success', 'saved_at', 'response_version', 'active_response_event_id'])
 NAVIGATION_RECEIPT = obj({
     'receipt_version': {'type': 'integer', 'enum': [2]},

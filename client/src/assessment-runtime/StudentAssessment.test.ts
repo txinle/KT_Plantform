@@ -6,9 +6,9 @@ const mocks = vi.hoisted(() => ({
   routeQuery: {} as Record<string, string>,
   bootstrapUser: undefined as import('@/app/bootstrap').AuthenticatedUser | undefined,
   rememberEnteredQuestion: vi.fn(), takeEnteredQuestion: vi.fn(), takeStartedQuestion: vi.fn(),
-  pendingEntry: vi.fn(), confirmLeave: vi.fn(), recoverClosedSubmission: vi.fn(), confirmEntry: vi.fn(), offlineBootstrapRecovery: false,
+  pendingEntry: vi.fn(), freezeEntry: vi.fn(), confirmLeave: vi.fn(), recoverClosedSubmission: vi.fn(), confirmEntry: vi.fn(), offlineBootstrapRecovery: false,
   metadata: new Map<string, unknown>(),
-  preparedManifest: undefined as undefined | import('./prepared-paper').PreparedManifest,
+  preparedManifest: undefined as undefined | import('./prepared-paper').PreparedManifest | Promise<import('./prepared-paper').PreparedManifest>,
   paperPrefetch: vi.fn(),
   api: {
     finishPaper: vi.fn(), paperSubmissionStatus: vi.fn(), paperSummary: vi.fn(),
@@ -87,8 +87,7 @@ vi.mock('./api', () => ({ getStudentAssessmentApi: () => mocks.api,
 vi.mock('./session-controller', () => ({
   createProcessRuntime: (...args: unknown[]) => mocks.createProcessRuntime(...args),
   disposeSessionController: vi.fn(),
-  getSessionController: async () => ({ store: { readMetadata: async (key: string) => mocks.metadata.get(key), writeMetadata: async (key: string, value: unknown) => { mocks.metadata.set(key, structuredClone(value)) } }, freezeEntry: async (_session: number, assignmentId: number, reason: string, click?: unknown) => ({ assignmentId, reason,
-    navigationId: crypto.randomUUID(), clientOccurredAt: new Date().toISOString(), clientMonotonicMs: performance.now(), clientTimeOrigin: new Date(performance.timeOrigin).toISOString(), ...(click as object || {}) }), pendingEntry: mocks.pendingEntry, confirmLeave: mocks.confirmLeave, recoverClosedSubmission: mocks.recoverClosedSubmission, validateEntry: vi.fn(), confirmEntry: mocks.confirmEntry, cancelEntry: vi.fn(),
+  getSessionController: async () => ({ store: { readMetadata: async (key: string) => mocks.metadata.get(key), writeMetadata: async (key: string, value: unknown) => { mocks.metadata.set(key, structuredClone(value)) } }, freezeEntry: mocks.freezeEntry, pendingEntry: mocks.pendingEntry, confirmLeave: mocks.confirmLeave, recoverClosedSubmission: mocks.recoverClosedSubmission, validateEntry: vi.fn(), confirmEntry: mocks.confirmEntry, cancelEntry: vi.fn(),
     rememberEnteredQuestion: mocks.rememberEnteredQuestion, takeEnteredQuestion: mocks.takeEnteredQuestion, takeStartedQuestion: mocks.takeStartedQuestion }),
 }))
 vi.mock('./prepared-paper', async (original) => {
@@ -188,6 +187,39 @@ const confidenceOnlyContract = {
 }
 
 describe('StudentAssessment', () => {
+  it('clears a multiple-choice response as one empty transition', async () => {
+    mocks.api.question.mockResolvedValue(captureV2Question({ question: { ...questionState.question, question_type: 'multiple_choice' }, draft_answer: ['A', 'B'] }))
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      await wrapper.get('[data-clear-response]').trigger('click')
+      await flushPromises()
+      expect(wrapper.findAll<HTMLInputElement>('input[name="answer"]').every(input => !input.element.checked)).toBe(true)
+      const transitions = mocks.runtime.record.mock.calls.filter(call => call[0] === 'response_transition')
+      expect(transitions).toHaveLength(1)
+      expect(await transitions[0]![2].materialize()).toEqual(expect.objectContaining({ after_state: { question_type: 'multiple_choice', value: [] }, input_type: 'clear' }))
+    } finally { wrapper.unmount() }
+  })
+  it('uses server whole-question navigation and completion while preserving member identities', async () => {
+    mocks.api.question.mockResolvedValue(captureV2Question({
+      presentation_units: [
+        { group_id: '3', kind: 'reading', title: 'Garden', assignment_ids: [11, 12], member_count: 2, answered_count: 1, status: 'partial', maximum_score: '4.00' },
+        { group_id: null, kind: 'essay', title: 'Writing', assignment_ids: [14], member_count: 1, answered_count: 0, status: 'unanswered', maximum_score: '10.00' },
+      ],
+      presentation_progress: { total: 2, answered: 0, maximum_score: '14.00' },
+      navigation: [...questionState.navigation, { assignment_id: 14, sequence_index: 3, status: 'unvisited', url: '/student/sessions/7/questions/14/', current: false }],
+    }))
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(wrapper.findAll('[data-whole-question-tab]')).toHaveLength(2)
+      expect(wrapper.findAll('.kt-assessment-nav [data-nav-assignment]')).toHaveLength(2)
+      expect(wrapper.get('[data-whole-question-progress]').text()).toContain('0/2')
+      await wrapper.get('[data-next-question]').trigger('click')
+      await flushPromises()
+      expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ path: '/student/sessions/7/questions/14/' }))
+    } finally { wrapper.unmount() }
+  })
   it.each([['translation', '英汉互译'], ['essay', '作文']])('shows frozen %s title and instructions with the existing text response', async (educationalType, label) => {
     mocks.api.question.mockResolvedValue(captureV2Question({ question: { ...questionState.question,
       question_type: 'short_answer', educational_type: educationalType, title: 'A school visit',
@@ -199,6 +231,11 @@ describe('StudentAssessment', () => {
       expect(wrapper.get('[data-question-content-title]').text()).toBe('A school visit')
       expect(wrapper.get('[data-question-instructions]').text()).toContain('Write 80 words.')
       expect(wrapper.find('textarea[name="answer"]').exists()).toBe(true)
+      expect(wrapper.get('.kt-assessment-layout').attributes('data-question-layout')).toBe('writing')
+      expect(wrapper.get('textarea[name="answer"]').attributes('rows')).toBe(educationalType === 'essay' ? '12' : '6')
+      expect(wrapper.find('.kt-assessment-question-body textarea').exists()).toBe(true)
+      expect(wrapper.find('.kt-assessment-question-body .kt-assessment-paper-actions').exists()).toBe(false)
+      expect(wrapper.get('.kt-assessment-question').element.lastElementChild).toBe(wrapper.get('.kt-assessment-paper-actions').element)
     } finally { wrapper.unmount() }
   })
   it('renders the server-frozen group and restores sibling responses without fabricating visits', async () => {
@@ -211,9 +248,110 @@ describe('StudentAssessment', () => {
     try {
       await flushPromises()
       expect(wrapper.find('[data-group-id="3"]').exists()).toBe(true)
+      expect(wrapper.get('.kt-assessment-layout').attributes('data-question-layout')).toBe('reading')
       expect(wrapper.text()).toContain('A shared garden.')
       expect(wrapper.get<HTMLInputElement>('[data-group-question="12"] input[value="A"]').element.checked).toBe(true)
       expect(mocks.runtime.record.mock.calls.filter(row => row[0] === 'item_rendered')).toHaveLength(1)
+    } finally { wrapper.unmount() }
+  })
+  it('renders only assigned per-member confidence and records the active answer link without entering siblings', async () => {
+    vi.useFakeTimers()
+    const head = '00000000-0000-4000-8000-000000000091'
+    mocks.api.question.mockResolvedValue(captureV2Question({
+      pending_confidence: confidenceOnlyContract,
+      process: { ...captureV2Question().process, active_response_event_id: head },
+      question_group_runtime_version: 1, group_responses: { '11': 'B', '12': 'A' },
+      question_group: { group_id: '3', kind: 'reading', title: 'Garden', instructions: '', content_language: 'en', material: 'A shared garden.', material_segments: [], members: [11, 12].map((id, index) => ({ item_key: String(id), assignment_id: id, attempt_id: id + 2, question_type: 'single_choice', text: `Why ${index + 1}?`, options: [{ key: 'A', text: 'First' }, { key: 'B', text: 'Second' }], group_order: index + 1, blank_id: '' })) },
+      group_member_state: {
+        '11': { status: 'draft', response_write_allowed: true, has_response: true, pending_confidence: confidenceOnlyContract, inline_confidence: { probability: null, answer_event_id: head } },
+        '12': { status: 'draft', response_write_allowed: true, has_response: true, pending_confidence: null },
+      },
+    }))
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(wrapper.findAll('[data-group-confidence]')).toHaveLength(1)
+      expect(mocks.api.question).toHaveBeenCalledOnce()
+      await wrapper.get('[data-group-confidence="11"]').setValue('0')
+      await wrapper.get('[data-group-confidence="11"]').trigger('blur')
+      await flushPromises()
+      expect(mocks.runtime.record).toHaveBeenCalledWith('confidence_observed', expect.objectContaining({ probability: 0, answer_event_id: head, confidence_assignment_id: '31' }), { eventVersion: 2 })
+      expect(mocks.api.saveDraft).toHaveBeenLastCalledWith(expect.any(String), 'B', expect.any(String), expect.objectContaining({ inline_confidence: { probability: 0, answer_event_id: head } }))
+      expect(mocks.metadata.get('group-pending-confidence:7')).toEqual({})
+      expect(mocks.push).not.toHaveBeenCalled()
+    } finally { wrapper.unmount() }
+  })
+  it.each(['manifest', 'entry confirmation'])('preserves three rapid group selections while the next sibling %s is pending', async pendingStage => {
+    vi.useFakeTimers()
+    mocks.runtime.writerLease = { cachedCredentials: () => undefined, beforePointerWrite: vi.fn().mockResolvedValue({}), release: vi.fn().mockResolvedValue(undefined), invalidate: vi.fn() }
+    const saved: Record<string, unknown> = { '11': null, '12': null, '13': null }
+    const entry = (id: number) => captureV2Question({
+      remaining_seconds: null, draft_answer: saved[String(id)],
+      assignment: { assignment_id: id, attempt_id: id + 10, status: 'visited', sequence_index: id - 10 },
+      actions: { ...questionState.actions, save_draft_url: `/student/attempts/${id + 10}/draft/` },
+      question_group_runtime_version: 1, group_responses: { ...saved },
+      navigation: [11, 12, 13].map(key => ({ assignment_id: key, sequence_index: key - 10, current: key === id,
+        status: 'visited', url: `/student/sessions/7/questions/${key}/` })),
+      question_group: { group_id: '3', kind: 'reading', title: 'Reading', instructions: '', content_language: 'en', material: 'Read.', material_segments: [],
+        members: [11, 12, 13].map((key, index) => ({ item_key: String(key), assignment_id: key, attempt_id: key + 10,
+          question_type: 'single_choice', text: `Item ${index + 1}`, options: ['A', 'B', 'C'].map(value => ({ key: value, text: value })), group_order: index + 1, blank_id: '' })) },
+    })
+    mocks.api.question.mockImplementation((_session, id) => Promise.resolve(entry(Number(id))))
+    mocks.api.saveDraft.mockImplementation((url, value) => {
+      saved[String(Number(String(url).match(/attempts\/(\d+)/)![1]) - 10)] = value
+      return Promise.resolve({ success: true, response_version: 1 })
+    })
+    let releaseEntry!: () => void
+    let releaseManifest!: (manifest: import('./prepared-paper').PreparedManifest) => void
+    let releaseConfirmation!: () => void
+    let confirmationPending = false
+    const manifest: import('./prepared-paper').PreparedManifest = { version: 2, session_id: 7, content_version: 'v1', question_count: 3,
+      navigation: [11, 12, 13].map(id => ({ assignment_id: id, attempt_id: id + 10, sequence_index: id - 10, current: false, status: 'visited',
+        url: `/student/sessions/7/questions/${id}/`, response_version: 0, active_response_event_id: null, content: {} as never })) }
+    mocks.prepareOfflineQuestion.mockImplementation(dto => Number(dto.assignment.assignment_id) === 12
+      ? new Promise<void>(resolve => { releaseEntry = resolve }) : Promise.resolve())
+    mocks.push.mockImplementation(async target => {
+      const id = String(target.path).match(/questions\/(\d+)/)![1]!
+      const to = { params: { sessionId: '7', assignmentId: id }, query: target.query }
+      await mocks.beforeRouteUpdate!(to)
+      mocks.afterRouteEach!(to)
+    })
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      await wrapper.get('[data-group-question="11"] input[value="B"]').setValue()
+      if (pendingStage === 'manifest') mocks.preparedManifest = new Promise(resolve => { releaseManifest = resolve })
+      else {
+        mocks.preparedManifest = manifest
+        mocks.confirmEntry.mockImplementation((_session, id) => {
+          if (id !== 12) return Promise.resolve()
+          confirmationPending = true
+          return new Promise<void>(resolve => { releaseConfirmation = () => { confirmationPending = false; resolve() } })
+        })
+        const freeze = mocks.freezeEntry.getMockImplementation()!
+        mocks.freezeEntry.mockImplementation((...args) => {
+          if (args[1] === 13 && confirmationPending) throw new Error('上一次进入结果尚未确认，请先核验原题目。')
+          return freeze(...args)
+        })
+      }
+      mocks.api.question.mockImplementation((_session, id) => Promise.resolve({ ...entry(Number(id)), navigation: [] }))
+      await wrapper.get('[data-group-question="12"] input[value="C"]').trigger('focus')
+      await wrapper.get('[data-group-question="12"] input[value="C"]').setValue()
+      await flushPromises()
+      expect(wrapper.attributes('data-init-state')).toBe('preparing')
+      await wrapper.get('[data-group-question="13"] input[value="A"]').trigger('focus')
+      await wrapper.get('[data-group-question="13"] input[value="A"]').setValue()
+      releaseEntry()
+      await flushPromises()
+      expect(wrapper.attributes('data-init-state')).toBe('ready')
+      if (pendingStage === 'manifest') releaseManifest(manifest)
+      else releaseConfirmation()
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('有输入保留在本机')
+      expect(saved).toEqual({ '11': 'B', '12': 'C', '13': 'A' })
+      expect(mocks.metadata.get('group-pending-input:7')).toEqual({})
     } finally { wrapper.unmount() }
   })
   it('removes a confirmed cleared group input from durable pending recovery before showing saved', async () => {
@@ -265,7 +403,7 @@ describe('StudentAssessment', () => {
       expect(header.get('[data-assessment-student]').text()).toContain('测试学生')
       expect(header.get('[data-assessment-student]').text()).toContain('20260001')
       expect(header.find('a[href="/password/change/"]').exists()).toBe(false)
-      expect(header.get('[data-assessment-countdown] [data-save-status]').text()).toBe('尚未保存')
+      expect(wrapper.get('.kt-assessment-submit-panel [data-save-status]').text()).toBe('尚未保存')
       expect(header.get('[data-assessment-countdown] [role="timer"]').text()).toContain('10:00')
       await vi.advanceTimersByTimeAsync(1000)
       expect(header.get('[data-assessment-countdown] [role="timer"]').text()).toContain('09:59')
@@ -287,7 +425,7 @@ describe('StudentAssessment', () => {
       await flushPromises()
       expect(wrapper.get('[data-assessment-countdown] > span').text()).toBe('不限时')
       expect(wrapper.find('[role="timer"]').exists()).toBe(false)
-      expect(wrapper.get('[data-assessment-student]').text()).toContain('学号：未提供')
+      expect(wrapper.get('[data-assessment-student]').text()).toBe('测试学生')
       expect(wrapper.get('[data-assessment-student]').text()).not.toContain('not-a-student-number')
     } finally { wrapper.unmount() }
   })
@@ -330,6 +468,9 @@ describe('StudentAssessment', () => {
     mocks.runtime.closesWriterLease = false
     mocks.offlineBootstrapRecovery = false
     mocks.pendingEntry.mockResolvedValue(null)
+    mocks.freezeEntry.mockImplementation(async (_session: number, assignmentId: number, reason: string, click?: unknown) => ({ assignmentId, reason,
+      navigationId: crypto.randomUUID(), clientOccurredAt: new Date().toISOString(), clientMonotonicMs: performance.now(), clientTimeOrigin: new Date(performance.timeOrigin).toISOString(), ...(click as object || {}) }))
+    mocks.confirmEntry.mockResolvedValue(undefined)
     mocks.rememberEnteredQuestion.mockResolvedValue(true)
     mocks.takeEnteredQuestion.mockReturnValue(undefined)
     mocks.takeStartedQuestion.mockReturnValue(undefined)
@@ -417,15 +558,15 @@ describe('StudentAssessment', () => {
     wrapper.unmount()
   })
 
-  it('shows server-assigned inline confidence between navigation buttons and saves automatically', async () => {
+  it('shows server-assigned inline confidence in the per-item panel and saves automatically', async () => {
     vi.useFakeTimers()
     mocks.api.question.mockResolvedValue(captureV2Question({ draft_answer: null, remaining_seconds: 600, pending_confidence: confidenceOnlyContract }))
     const wrapper = mount(StudentAssessment)
     try {
       await flushPromises()
       expect(wrapper.find('[data-save-draft]').exists()).toBe(false)
-      expect(wrapper.get('[data-inline-confidence]').element.parentElement?.previousElementSibling?.textContent).toBe('上一题')
-      expect(wrapper.get('[data-inline-confidence]').element.parentElement?.nextElementSibling?.textContent).toBe('下一题')
+      expect(wrapper.get('.kt-assessment-confidence-panel').text()).toContain('作答信心（可选）')
+      expect(wrapper.find('.kt-assessment-confidence-panel [data-inline-confidence]').exists()).toBe(true)
       await wrapper.get('input[value="B"]').setValue(true)
       await vi.advanceTimersByTimeAsync(100)
       expect(mocks.api.saveDraft).toHaveBeenCalledOnce()
@@ -449,7 +590,7 @@ describe('StudentAssessment', () => {
     const wrapper = mount(StudentAssessment, { attachTo: document.body })
     try {
       await flushPromises()
-      expect(wrapper.get('[data-next-question]').text()).toBe('提交试卷')
+      expect(wrapper.get('[data-next-question]').text()).toBe('检查并提交')
       if (entry === 'mobile-navigation') {
         await wrapper.get('[data-mobile-navigation-trigger]').trigger('click')
         await wrapper.get('[role="dialog"][aria-label="题目导航"]').findAll('button').find(button => button.text() === '提交试卷')!.trigger('click')
@@ -1024,10 +1165,10 @@ describe('StudentAssessment', () => {
     await flushPromises()
 
     expect(mocks.api.question).toHaveBeenCalledWith(7, 11, 'resume', expect.any(Object))
-    expect(wrapper.get('h1').text()).toBe('第 1/2 题')
+    expect(wrapper.get('#assessment-question-title').text()).toBe('第 1 题 · 单选题')
     expect(wrapper.text()).toContain('反馈策略实验')
     expect(wrapper.text()).toContain('2 + 2 等于多少？')
-    expect(wrapper.get('[aria-current="step"]').text()).toContain('第 1 题')
+    expect(wrapper.get('[data-whole-question-tab][aria-current="step"]').text()).toContain('01')
     expect(wrapper.findAll('input[name="answer"]')).toHaveLength(2)
     expect(wrapper.get('[role="timer"]').text()).toContain('10:00')
     expect(wrapper.text()).not.toContain('回答正确')
@@ -1083,7 +1224,7 @@ describe('StudentAssessment', () => {
   it('places the answer before the number card and moving the drawer does not collect an answer', async () => {
     const wrapper = mount(StudentAssessment)
     await flushPromises()
-    expect(wrapper.get('.kt-assessment-question__header').text()).toContain('反馈策略实验')
+    expect(wrapper.get('[data-assessment-topbar]').text()).toContain('反馈策略实验')
     expect(wrapper.get('[data-assessment-return]').text()).toBe('返回作业列表')
     const question = wrapper.get('.kt-assessment-question').element
     const navigation = wrapper.get('.kt-assessment-nav').element
@@ -1127,7 +1268,7 @@ describe('StudentAssessment', () => {
 
     expect(trigger.attributes('aria-expanded')).toBe('true')
     const drawer = wrapper.get('[role="dialog"][aria-label="题目导航"]')
-    expect(drawer.text()).toContain('第 1 题')
+    expect(drawer.findAll('nav a')[0]!.text()).toContain('1')
     expect(drawer.text()).toContain('未访问')
 
     await drawer.get('button').trigger('click')
@@ -1599,9 +1740,9 @@ describe('StudentAssessment', () => {
     expect(mocks.runtime.closeAttempt).toHaveBeenCalledWith('navigation', 12)
     expect(mocks.runtime.dispose).toHaveBeenCalledOnce()
     expect(mocks.api.question).toHaveBeenLastCalledWith(7, 12, 'navigation_click', expect.any(Object))
-    expect(wrapper.get('h1').text()).toBe('第 2/2 题')
+    expect(wrapper.get('#assessment-question-title').text()).toBe('第 2 题 · 单选题')
     expect(wrapper.text()).toContain('3 + 3 等于多少？')
-    expect(wrapper.get('[aria-current="step"]').text()).toContain('第 2 题')
+    expect(wrapper.get('[data-whole-question-tab][aria-current="step"]').text()).toContain('02')
   })
 
   it('defers routed-question offline preparation until the route guard has committed', async () => {
@@ -2264,11 +2405,12 @@ describe('StudentAssessment', () => {
       await flushPromises()
       await wrapper.get('[data-finish-request]').trigger('click')
       await flushPromises()
-      await wrapper.get('[data-paper-submit-confirm]').trigger('click')
-      await flushPromises()
-      expect(wrapper.get('[data-paper-submission-status]').text()).toBe('正在保存作答材料…')
+      expect(wrapper.find('[data-paper-submit-confirm]').exists()).toBe(false)
+      expect(wrapper.get('[data-save-status]').text()).toBe('正在保存')
       expect(mocks.api.finishPaper).not.toHaveBeenCalled()
       save({ success: true, response_version: 1 })
+      await flushPromises()
+      await wrapper.get('[data-paper-submit-confirm]').trigger('click')
       await flushPromises()
       expect(wrapper.get('[data-paper-submission-status]').text()).toBe('正在提交试卷，等待服务器确认…')
       accept({ success: true, submission_id: 'receipt', status: 'queued', accepted_at: new Date().toISOString(), status_url: '/status/', next_url: '/student/' })
@@ -2285,9 +2427,9 @@ describe('StudentAssessment', () => {
       await flushPromises()
       await wrapper.get('[data-finish-request]').trigger('click')
       await flushPromises()
-      await wrapper.get('[data-paper-submit-confirm]').trigger('click')
-      await flushPromises()
-      expect(wrapper.get('[data-paper-submission-status]').text()).toBe('作答材料尚未确认保存，请重试。')
+      expect(wrapper.find('[data-paper-submit-confirm]').exists()).toBe(false)
+      expect(wrapper.get('[data-save-status]').text()).toBe('草稿保存失败')
+      expect(wrapper.text()).toContain('network unavailable')
       expect(mocks.api.finishPaper).not.toHaveBeenCalled()
       expect(wrapper.text()).not.toContain('试卷已受理')
     } finally { wrapper.unmount() }
@@ -2334,7 +2476,7 @@ describe('StudentAssessment', () => {
     await flushPromises()
     await wrapper.get('[data-finish-request]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[data-paper-missing-confirm]').text()).toContain('还有 1 道题未作答')
+    expect(wrapper.get('[data-paper-missing-confirm]').text()).toContain('还有 1 个作答项未作答')
     expect(mocks.api.finishPaper).not.toHaveBeenCalled()
     wrapper.unmount()
   })

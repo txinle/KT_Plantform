@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick, reactive } from 'vue'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   operationId: '',
@@ -77,7 +77,34 @@ function collectionResult(displayName: string, query: string) {
   }
 }
 
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
+})
+
 describe('TeacherExperimentDetail', () => {
+  it('keeps the Site overview actions in the header and research tools in the sidebar', async () => {
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
+    await flushPromises()
+    expect(wrapper.get('.kt-experiment-page-header__actions').text()).toContain('返回实验')
+    expect(wrapper.get('.kt-experiment-side-stack').text()).toContain('研究工具与数据')
+    expect(wrapper.get('.kt-definition-summary').text()).not.toContain('研究工具配置')
+    wrapper.unmount()
+  })
+
+  it('matches the compact Site V2 overview with two content rows and three sidebar cards', async () => {
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
+    await flushPromises()
+    expect(wrapper.get('[data-experiment-meta]').text()).toContain('草稿')
+    expect(wrapper.get('[data-experiment-meta]').text()).toContain('45 分钟')
+    expect(wrapper.findAll('.kt-definition-content-facts > div').map(row => row.find('dt').text())).toEqual(['题库', '题型构成'])
+    expect(wrapper.findAll('.kt-experiment-side-stack > section')).toHaveLength(3)
+    expect(wrapper.get('.kt-definition-settings-facts').text()).toContain('抽题')
+    expect(wrapper.get('.kt-definition-summary [data-definition-notice]').text()).toContain('首次正式发布后')
+    expect(wrapper.find('.kt-experiment-overview > .kt-alert').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     sessionStorage.clear()
@@ -108,7 +135,7 @@ describe('TeacherExperimentDetail', () => {
       resume_mode_label: '允许断点续答',
       confidence_mode_label: '不采集',
       can_edit: true,
-      can_manage: true,
+      can_manage: true, can_publish: true,
       updated_at: '2026-08-30T00:00:00Z',
     })
     mocks.api.readiness.mockResolvedValue({ ready: true, issues: [], candidate_count: 12, participant_count: 0 })
@@ -144,7 +171,7 @@ describe('TeacherExperimentDetail', () => {
     mocks.api.classTasks.mockResolvedValueOnce({ items: [
       { id: 31, class_name: '一班', participant_count: 36, available_actions: [] },
     ] })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     expect(wrapper.get('h1').text()).toBe('认知诊断实验')
@@ -164,7 +191,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('renders authoritative readiness and resumes the server publish plan', async () => {
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     expect(wrapper.text()).toContain('认知诊断实验')
@@ -181,7 +208,7 @@ describe('TeacherExperimentDetail', () => {
     mocks.api.classTasks.mockResolvedValue({ items: [{ id: 31, class_id: 5, class_name: '一班', available_actions: [] }] })
     mocks.api.progress.mockResolvedValue({ total_participants: 60, not_started: 10, in_progress: 5, completed: 40, expired: 4, invalidated: 1 })
     mocks.api.collectionParticipants.mockResolvedValue(collectionResult('单页学生', 'new'))
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
     await wrapper.get('#experiment-tab-collection').trigger('click')
     await flushPromises()
@@ -194,36 +221,36 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('uses local definition, publishing, and collection tabs for a draft experiment', async () => {
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     const tabs = wrapper.get('.kt-experiment-tabs').findAll('[role="tab"]')
-    expect(tabs.map((tab) => tab.text())).toEqual(['概况', '班级发布', '采集状态'])
-    expect(wrapper.get('.kt-experiment-tabs').classes()).toContain('kt-sidebar-secondary-nav')
+    expect(tabs.map((tab) => tab.text())).toEqual(['概况', '班级与排期', '学生作答'])
+    expect(wrapper.get('.kt-experiment-tabs').classes()).toContain('kt-sitev2-tabs')
     expect(wrapper.find('.kt-experiment-draft-grid').exists()).toBe(true)
     expect(tabs[0]?.attributes('aria-selected')).toBe('true')
-    expect(wrapper.findAll('[data-summary-icon]')).toHaveLength(10)
+    expect(wrapper.get('.kt-definition-settings-facts').text()).toContain('抽题')
     expect(wrapper.get('.kt-definition-summary').text()).toContain('排除已提交或已分配题目')
     expect(wrapper.get('.kt-definition-summary').text()).not.toContain('时限模式')
     expect(wrapper.get('.kt-definition-summary').text()).toContain('总限时')
     expect(wrapper.get('.kt-definition-summary').text()).toContain('45 分钟')
-    expect(wrapper.get('.kt-definition-summary').text()).toContain('单题限时')
-    expect(wrapper.get('.kt-definition-summary').text()).toContain('90 秒')
+    expect(wrapper.get('.kt-definition-summary').text()).not.toContain('单题限时')
+    expect(wrapper.get('.kt-definition-summary').text()).not.toContain('90 秒')
     expect(wrapper.find('.kt-definition-summary__action').exists()).toBe(true)
-    expect(wrapper.find('.kt-publish-empty-illustration').exists()).toBe(true)
+    expect(wrapper.find('.kt-publish-empty-illustration').exists()).toBe(false)
     expect(wrapper.findAll('.kt-readiness-checklist li').length).toBeGreaterThanOrEqual(3)
   })
 
   it('shows the current shared class time beside the frozen definition time', async () => {
     mocks.api.detail.mockResolvedValue({
       id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布',
-      total_time_limit_minutes: 30, can_edit: false, can_manage: true,
+      total_time_limit_minutes: 30, can_edit: false, can_manage: true, can_publish: true,
     })
     mocks.api.classTasks.mockResolvedValue({ items: [
       { id: 31, class_id: 5, class_name: '一班', business_status: 'open', total_time_limit_minutes: 35, available_actions: [], grading: {} },
       { id: 32, class_id: 6, class_name: '二班', business_status: 'open', total_time_limit_minutes: 35, available_actions: [], grading: {} },
     ] })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
     await wrapper.get('#experiment-tab-definition').trigger('click')
 
@@ -234,21 +261,22 @@ describe('TeacherExperimentDetail', () => {
 
   it('opens published experiments on overview and preserves explicit task links', async () => {
     mocks.api.detail.mockResolvedValue({ id: 11, name: '已发布实验', status: 'published', status_label: '已发布' })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
     expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toBe('概况')
+    expect(wrapper.get('.kt-definition-summary [data-definition-notice]').text()).toContain('实验定义已经冻结')
     await wrapper.get('#experiment-tab-tasks').trigger('click')
     await flushPromises()
     expect(mocks.replace).toHaveBeenLastCalledWith({ query: { tab: 'tasks' } })
     wrapper.unmount()
     mocks.route.query = reactive({ tab: 'tasks' })
-    const deepLink = mount(TeacherExperimentDetail)
+    const deepLink = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
     expect(deepLink.get('#experiment-tab-tasks').attributes('aria-selected')).toBe('true')
   })
 
   it('deletes an experiment after preview and returns to the experiment list', async () => {
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     await wrapper.get('[data-delete-experiment]').trigger('click')
@@ -266,9 +294,9 @@ describe('TeacherExperimentDetail', () => {
       status: 'draft', status_label: '草稿', selection_mode_label: '全量题池', ordering_mode_label: '固定顺序',
       feedback_mode_label: '不反馈', feedback_release_policy_label: '个人完成后', total_time_limit_minutes: null,
       per_question_time_limit_seconds: null, resume_mode_label: '允许断点续答', confidence_mode_label: '不采集',
-      can_edit: true, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+      can_edit: true, can_manage: true, can_publish: true, updated_at: '2026-08-30T00:00:00Z',
     })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     expect(wrapper.get('.kt-definition-summary').text()).toContain('未选择题库')
@@ -308,10 +336,10 @@ describe('TeacherExperimentDetail', () => {
     })
     mocks.api.progress.mockResolvedValue({ total_participants: 36, not_started: 11, in_progress: 8, completed: 17 })
 
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
-    expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toBe('班级发布')
+    expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toBe('班级与排期')
     expect(wrapper.get('.kt-published-task-table').text()).toContain('实验班')
     expect(wrapper.get('[data-action="revise-schedule"]').text()).toBe('修订排期')
     expect(wrapper.get('[data-action="manual-close"]').text()).toBe('提前结束')
@@ -329,7 +357,7 @@ describe('TeacherExperimentDetail', () => {
   it('adds student minutes without changing the class cutoff after the task starts', async () => {
     mocks.route.query = reactive({ tab: 'tasks' })
     mocks.api.detail.mockResolvedValue({
-      id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_edit: false, can_manage: true,
+      id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_edit: false, can_manage: true, can_publish: true,
       time_mode_label: '实验总时限', total_time_limit_minutes: 15,
     })
     mocks.api.classTasks.mockResolvedValue({ items: [{
@@ -340,11 +368,13 @@ describe('TeacherExperimentDetail', () => {
       recoverable_count: 3, grading: {}, available_actions: ['adjust_time'],
     }] })
     mocks.api.reviseSchedule.mockResolvedValue({ schedule_revision: 3 })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     expect(wrapper.text()).toContain('可恢复 3 人')
     await wrapper.get('[data-action="adjust-time"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('dialog[open] form.kt-time-adjust-panel').exists()).toBe(true)
     expect(wrapper.text()).toContain('学生作答时间延长（当前时长：15 分钟）')
     expect(wrapper.text()).toContain('延长本班实验截止时间')
     expect(wrapper.text()).toContain('实际可答至个人时限与本班截止时间中较早者')
@@ -366,7 +396,7 @@ describe('TeacherExperimentDetail', () => {
 
   it('uses the latest total limit when adding student minutes again', async () => {
     mocks.route.query = reactive({ tab: 'tasks' })
-    mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true })
+    mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true, can_publish: true })
     mocks.api.classTasks.mockResolvedValue({ items: [{
       id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
       opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-10-03T00:00:00Z',
@@ -375,7 +405,7 @@ describe('TeacherExperimentDetail', () => {
       grading: {}, available_actions: ['adjust_time'],
     }] })
     mocks.api.reviseSchedule.mockResolvedValue({ schedule_revision: 4 })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     await wrapper.get('[data-action="adjust-time"]').trigger('click')
@@ -390,9 +420,9 @@ describe('TeacherExperimentDetail', () => {
     }))
   })
 
-  it('adds seconds in per-question mode and allows a later class cutoff together', async () => {
+  it('keeps historical question timing read-only while allowing a later class cutoff', async () => {
     mocks.route.query = reactive({ tab: 'tasks' })
-    mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true })
+    mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true, can_publish: true })
     mocks.api.classTasks.mockResolvedValue({ items: [{
       id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
       opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-10-03T00:00:00Z',
@@ -401,27 +431,27 @@ describe('TeacherExperimentDetail', () => {
       grading: {}, available_actions: ['adjust_time'],
     }] })
     mocks.api.reviseSchedule.mockResolvedValue({ schedule_revision: 3 })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     await wrapper.get('[data-action="adjust-time"]').trigger('click')
-    expect(wrapper.text()).toContain('每题作答时间延长（当前时长：30 秒）')
-    await wrapper.get('[data-action="item-time-extension"]').setValue('15')
+    expect(wrapper.text()).toContain('历史单题时限：30 秒（只读）')
+    expect(wrapper.find('[data-action="item-time-extension"]').exists()).toBe(false)
     await wrapper.get('[data-action="class-cutoff"]').setValue('2026-10-04T00:00')
-    expect(wrapper.text()).toContain('调整后：45 秒')
-    await wrapper.get('.kt-time-adjust-panel input[maxlength="500"]').setValue('单题补时')
+    await wrapper.get('.kt-time-adjust-panel input[maxlength="500"]').setValue('延长班级截止')
     await wrapper.get('form.kt-time-adjust-panel').trigger('submit')
     await flushPromises()
 
     expect(mocks.api.reviseSchedule).toHaveBeenCalledWith(31, expect.objectContaining({
-      expected_revision: 2, per_question_time_limit_seconds: 45,
+      expected_revision: 2,
       closes_at: new Date('2026-10-04T00:00').toISOString(),
     }))
+    expect(mocks.api.reviseSchedule.mock.calls[0]?.[1]).not.toHaveProperty('per_question_time_limit_seconds')
   })
 
   it('keeps absolute time editing before a task starts', async () => {
     mocks.route.query = reactive({ tab: 'tasks' })
-    mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true })
+    mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true, can_publish: true })
     mocks.api.classTasks.mockResolvedValue({ items: [{
       id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
       opens_at: '2026-10-02T00:00:00Z', closes_at: '2026-10-03T00:00:00Z',
@@ -430,7 +460,7 @@ describe('TeacherExperimentDetail', () => {
       grading: {}, available_actions: ['revise_schedule', 'adjust_time'],
     }] })
     mocks.api.reviseSchedule.mockResolvedValue({ schedule_revision: 2 })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     await wrapper.get('[data-action="revise-schedule"]').trigger('click')
@@ -449,7 +479,7 @@ describe('TeacherExperimentDetail', () => {
 
   it('reopens a naturally closed class with a later cutoff and no personal limit field', async () => {
     mocks.route.query = reactive({ tab: 'tasks' })
-    mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true })
+    mocks.api.detail.mockResolvedValue({ id: 11, name: '认知诊断实验', status: 'published', status_label: '已发布', can_manage: true, can_publish: true })
     mocks.api.classTasks.mockResolvedValue({ items: [{
       id: 31, class_id: 5, class_name: '实验班', participant_count: 36,
       opens_at: '2026-09-01T00:00:00Z', closes_at: '2026-09-03T00:00:00Z',
@@ -458,7 +488,7 @@ describe('TeacherExperimentDetail', () => {
       grading: {}, available_actions: ['adjust_time'],
     }] })
     mocks.api.reviseSchedule.mockResolvedValue({ schedule_revision: 3 })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     await wrapper.get('[data-action="adjust-time"]').trigger('click')
@@ -480,7 +510,7 @@ describe('TeacherExperimentDetail', () => {
       id: 11, name: '认知诊断实验', description: '比较两种反馈策略', question_bank: { id: 3, name: '代数题库' },
       status: 'published', status_label: '已发布', selection_mode_label: '全量题池', ordering_mode_label: '固定顺序',
       feedback_mode_label: '仅显示已提交', feedback_release_policy_label: '教师人工发布', time_mode_label: '无时限',
-      resume_mode_label: '允许断点续答', confidence_mode_label: '不采集', can_edit: false, can_manage: true,
+      resume_mode_label: '允许断点续答', confidence_mode_label: '不采集', can_edit: false, can_manage: true, can_publish: true,
       updated_at: '2026-08-30T00:00:00Z',
     })
     mocks.api.classTasks.mockResolvedValue({ items: [{
@@ -508,7 +538,7 @@ describe('TeacherExperimentDetail', () => {
       ],
     })
 
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     expect(mocks.api.collectionParticipants).not.toHaveBeenCalled()
@@ -565,9 +595,9 @@ describe('TeacherExperimentDetail', () => {
       id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
       selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
       feedback_release_policy_label: '教师人工发布', time_mode_label: '无时限', resume_mode_label: '允许断点续答',
-      confidence_mode_label: '不采集', can_edit: false, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+      confidence_mode_label: '不采集', can_edit: false, can_manage: true, can_publish: true, updated_at: '2026-08-30T00:00:00Z',
     })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
     await wrapper.get('#experiment-tab-collection').trigger('click')
     await flushPromises()
@@ -585,7 +615,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('groups each collection filter label with its control', async () => {
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
     await wrapper.get('#experiment-tab-collection').trigger('click')
     await flushPromises()
@@ -605,9 +635,9 @@ describe('TeacherExperimentDetail', () => {
       id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
       selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
       feedback_release_policy_label: '教师人工发布', time_mode_label: '无时限', resume_mode_label: '允许断点续答',
-      confidence_mode_label: '不采集', can_edit: false, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+      confidence_mode_label: '不采集', can_edit: false, can_manage: true, can_publish: true, updated_at: '2026-08-30T00:00:00Z',
     })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     expect(wrapper.get('#experiment-tab-collection').attributes('aria-selected')).toBe('true')
@@ -622,14 +652,14 @@ describe('TeacherExperimentDetail', () => {
       id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
       selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
       feedback_release_policy_label: '教师人工发布', time_mode_label: '无时限', resume_mode_label: '允许断点续答',
-      confidence_mode_label: '不采集', can_edit: false, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+      confidence_mode_label: '不采集', can_edit: false, can_manage: true, can_publish: true, updated_at: '2026-08-30T00:00:00Z',
     })
     mocks.api.collectionParticipants.mockResolvedValueOnce({
       items: [], page: { number: 1, size: 25, total_items: 0, total_pages: 1, start: 0, end: 0 },
       filters: { class_id: 5, status: 'expired', q: 'S019' }, class_choices: [{ id: 5, name: '实验班' }],
       status_choices: [{ value: 'expired', label: '已超时' }],
     })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
     expect(wrapper.text()).toContain('当前筛选条件下没有学生')
@@ -647,7 +677,7 @@ describe('TeacherExperimentDetail', () => {
       id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
       selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
       feedback_release_policy_label: '教师人工发布', time_mode_label: '无时限', resume_mode_label: '允许断点续答',
-      confidence_mode_label: '不采集', can_edit: false, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+      confidence_mode_label: '不采集', can_edit: false, can_manage: true, can_publish: true, updated_at: '2026-08-30T00:00:00Z',
     })
     mocks.api.collectionParticipants.mockResolvedValueOnce({
       items: [{
@@ -658,7 +688,7 @@ describe('TeacherExperimentDetail', () => {
       page: { number: 1, size: 25, total_items: 1, total_pages: 1, start: 1, end: 1 }, filters: { class_id: null, status: '', q: '' },
       class_choices: [{ id: 5, name: '实验班' }], status_choices: [{ value: 'expired', label: '已超时' }],
     })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
     expect(wrapper.text()).toContain('超时学生')
 
@@ -676,7 +706,7 @@ describe('TeacherExperimentDetail', () => {
       id: 11, name: '认知诊断实验', description: '', question_bank: { id: 3, name: '代数题库' }, status: 'published', status_label: '已发布',
       selection_mode_label: '全量题池', ordering_mode_label: '固定顺序', feedback_mode_label: '仅显示已提交',
       feedback_release_policy_label: '教师人工发布', time_mode_label: '无时限', resume_mode_label: '允许断点续答',
-      confidence_mode_label: '不采集', can_edit: false, can_manage: true, updated_at: '2026-08-30T00:00:00Z',
+      confidence_mode_label: '不采集', can_edit: false, can_manage: true, can_publish: true, updated_at: '2026-08-30T00:00:00Z',
     })
     mocks.api.collectionParticipants.mockResolvedValue({
       items: [{
@@ -687,7 +717,7 @@ describe('TeacherExperimentDetail', () => {
       filters: { class_id: 5, status: 'expired', q: 'S019' }, class_choices: [{ id: 5, name: '实验班' }],
       status_choices: [{ value: 'expired', label: '已超时' }],
     })
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
     await wrapper.get('[data-next]').trigger('click')
     await flushPromises()
@@ -701,7 +731,7 @@ describe('TeacherExperimentDetail', () => {
   })
 
   it('ignores a stale collection failure after a newer route request succeeds', async () => {
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await flushPromises()
     const oldRequest = deferred<ReturnType<typeof collectionResult>>()
     const newRequest = deferred<ReturnType<typeof collectionResult>>()
@@ -735,7 +765,7 @@ describe('TeacherExperimentDetail', () => {
       (_experimentId: number, filters: { query?: string }) => filters.query === 'old' ? oldRequest.promise : newRequest.promise,
     )
 
-    const wrapper = mount(TeacherExperimentDetail)
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true } } })
     await vi.waitFor(() => expect(mocks.api.collectionParticipants).toHaveBeenCalledWith(11, { query: 'old', page: 1 }))
     mocks.route.query.q = 'new'
     await nextTick()

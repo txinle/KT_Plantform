@@ -624,7 +624,15 @@ def _lock_experiment_question_bank(experiment):
     return lock_experiment_question_bank(experiment.question_bank_id, experiment.course)
 
 
+def validate_new_time_configuration(time_mode, per_question_time_limit_seconds=None):
+    if time_mode == Experiment.TimeMode.PER_QUESTION or per_question_time_limit_seconds is not None:
+        raise ValidationError({
+            "time_mode": "单题计时已停用。草稿请选择无时限或实验总时限；已冻结实验请复制为新实验后重新设置。"
+        })
+
+
 def validate_for_publish(experiment, question_bank=None, participant_count=None):
+    validate_new_time_configuration(experiment.time_mode, experiment.per_question_time_limit_seconds)
     if experiment.course_id:
         from .question_bank_selection import validate_question_banks
         banks = validate_question_banks(experiment.course, experiment.selected_question_bank_ids, lock=True)

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
+import { createApiClient } from '@/api/client'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { getBootstrapContext } from '@/app/bootstrap'
 import WorkspaceShell from '@/design-system/components/WorkspaceShell.vue'
@@ -8,6 +10,13 @@ import './teacher-question-banks.css'
 const route = useRoute()
 const courseId = Number(route.params.courseId)
 const bootstrap = getBootstrapContext()
+const course = ref<{ name: string; code: string; term: string }>()
+const contextError = ref('')
+onMounted(async () => {
+  try {
+    course.value = await createApiClient({ getCsrfToken: () => bootstrap.csrf_token }).get(`/api/v1/courses/${courseId}/context/`)
+  } catch (caught) { contextError.value = caught instanceof Error ? caught.message : '课程信息加载失败，请刷新重试。' }
+})
 </script>
 
 <template>
@@ -16,6 +25,8 @@ const bootstrap = getBootstrapContext()
       :user-name="bootstrap.user.display_name"
       :user-meta="bootstrap.user.username"
       :csrf-token="bootstrap.csrf_token"
+      :course-name="course?.name || '课程'"
+      :course-meta="course ? `${course.code} · ${course.term}` : undefined"
       main-id="question-bank-main"
     >
       <template #navigation>
@@ -27,6 +38,7 @@ const bootstrap = getBootstrapContext()
         <a :href="`/teacher/courses/${courseId}/data/`">数据</a>
         <a :href="`/teacher/courses/${courseId}/settings/`">设置</a>
       </template>
+      <p v-if="contextError" role="alert">{{ contextError }}</p>
       <RouterView />
     </WorkspaceShell>
   </div>

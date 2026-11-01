@@ -42,9 +42,9 @@ onMounted(async () => {
       <section class="kt-teacher-courses-page">
         <header class="kt-teacher-courses-heading">
           <div>
-            <p>教师工作区</p>
+            <nav class="kt-course-list-breadcrumb" aria-label="层级目录"><span aria-current="page">我的课程</span></nav>
             <h1>我的课程</h1>
-            <span>进入课程后管理题库、班级、实验与研究数据。</span>
+            <span>进入课程后管理题库、班级、实验与数据。</span>
           </div>
           <RouterLink class="kt-button" :to="createUrl">新建课程</RouterLink>
         </header>
@@ -53,15 +53,11 @@ onMounted(async () => {
         <p v-else-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
         <div v-else-if="courses.length" class="kt-teacher-course-grid">
           <article v-for="course in courses" :key="course.id" :data-course-card="course.id" class="kt-card kt-teacher-course-card">
-            <div class="kt-teacher-course-card__cover" aria-hidden="true"><span>{{ course.code }}</span></div>
-            <div class="kt-teacher-course-card__body">
-              <div class="kt-teacher-course-card__meta"><span>{{ course.term }}</span><span class="kt-status kt-status--neutral">{{ course.status_label }}</span></div>
-              <h2>{{ course.name }}</h2>
-              <p>{{ course.description || '未填写课程说明' }}</p>
-              <small>负责人：{{ course.owner_name }}</small>
-              <dl><div><dt>班级</dt><dd>{{ course.class_count }}</dd></div><div><dt>题库</dt><dd>{{ course.bank_count }}</dd></div><div><dt>实验</dt><dd>{{ course.experiment_count }}</dd></div></dl>
-            </div>
-            <RouterLink class="kt-button kt-button--secondary" :to="course.detail_url">进入课程</RouterLink>
+            <span v-if="course.term" class="kt-teacher-course-card__term">{{ course.term }}</span>
+            <span v-if="course.status !== 'active'" class="kt-status kt-status--neutral">{{ course.status_label }}</span>
+            <h2>{{ course.name }}</h2>
+            <p>{{ course.code }}<template v-if="course.description"> · {{ course.description }}</template></p>
+            <RouterLink class="kt-button" :to="course.detail_url">进入课程 →</RouterLink>
           </article>
         </div>
         <section v-else class="kt-card kt-teacher-course-empty">

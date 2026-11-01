@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('published class timing controls remain usable on desktop, mobile and 200% effective viewport', async ({ page }, info) => {
+test('published class timing controls remain usable on desktop, mobile and small viewport', async ({ page }, info) => {
   await page.route('**/api/v1/teacher/experiments/1/class-tasks/', async (route) => {
     const response = await route.fetch()
     const envelope = await response.json()
@@ -20,10 +20,11 @@ test('published class timing controls remain usable on desktop, mobile and 200% 
   await page.getByLabel('密码').fill('teacher123')
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\//)
-  await page.goto('/teacher/courses/1/experiments/1/')
+  await page.goto('/teacher/courses/1/experiments/1/?tab=tasks')
+  await page.locator('#experiment-panel-tasks button[popovertarget]').first().click()
   await expect(page.locator('[data-action="adjust-time"]').first()).toBeVisible()
   await page.locator('[data-action="adjust-time"]').first().click()
-  const form = page.locator('.kt-inline-panel').filter({ hasText: '调整该班时间' })
+  const form = page.getByRole('dialog', { name: '调整班级时间', exact: true })
   await expect(form.getByLabel(/延长本班实验截止时间/)).toBeVisible()
   await expect(form.getByLabel(/学生作答时间延长/)).toBeVisible()
   await form.getByLabel(/学生作答时间延长/).fill('10')
@@ -40,6 +41,6 @@ test('published class timing controls remain usable on desktop, mobile and 200% 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
     const panel = await form.boundingBox()
     expect(panel?.width).toBeLessThanOrEqual(viewport.width)
-    await page.screenshot({ path: info.outputPath(`adjust-time-${viewport.width === 720 ? 'zoom-200-equivalent' : viewport.width}.png`), fullPage: true })
+    await page.screenshot({ path: info.outputPath(`adjust-time-${viewport.width === 720 ? 'small-viewport' : viewport.width}.png`), fullPage: true })
   }
 })

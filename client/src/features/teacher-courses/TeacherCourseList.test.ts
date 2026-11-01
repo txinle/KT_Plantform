@@ -30,9 +30,10 @@ describe('TeacherCourseList', () => {
     expect(wrapper.get('h1').text()).toBe('我的课程')
     expect(wrapper.get('a[href="/teacher/courses/create/"]').text()).toContain('新建课程')
     expect(wrapper.get('[data-course-card="7"]').text()).toContain('研究方法')
-    expect(wrapper.get('[data-course-card="7"] dt').text()).toBe('班级')
-    expect(wrapper.get('[data-course-card="7"] dd').text()).toBe('2')
-    expect(wrapper.get('[data-course-card="7"] dl > div:nth-child(3) dd').text()).toBe('4')
+    expect(wrapper.get('[data-course-card="7"] .kt-teacher-course-card__term').text()).toBe('2026 秋')
+    expect(wrapper.get('[data-course-card="7"] p').text()).toBe('RM101 · 研究设计课程')
+    expect(wrapper.find('.kt-teacher-course-card__cover').exists()).toBe(false)
+    expect(wrapper.find('[data-course-card="7"] dl').exists()).toBe(false)
     expect(wrapper.get('[data-course-card="7"] a[href="/teacher/courses/7/"]').text()).toContain('进入课程')
   })
 

@@ -94,7 +94,9 @@ class PreparedProjectionRemediationTests(PreparedFixtureMixin, TestCase):
         from .prepared_services import activate_prepared_session
         from apps.experiments.models import Experiment, ScheduleRevision
         create_experiment = Experiment.objects.create
-        with patch.object(Experiment.objects, 'create', side_effect=lambda **values:
+        # Reconstruct a historical release; current publication rejects this retired mode.
+        with patch('apps.experiments.services.validate_new_time_configuration'), patch.object(
+                Experiment.objects, 'create', side_effect=lambda **values:
                 create_experiment(**values, time_mode='per_question', per_question_time_limit_seconds=30)):
             _, recovery_task = self.publish_task(name='recovery reads', feedback_mode='none')
         session, _ = activate_prepared_session(student=self.student, task_id=recovery_task.pk,

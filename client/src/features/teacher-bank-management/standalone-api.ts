@@ -18,6 +18,8 @@ export interface StandaloneBank {
 }
 
 export interface StandaloneQuestion {
+  unit_key?: string
+  member_kc_mappings?: Array<{ id: number; order: number; mapping: StandaloneQuestion['kc_mapping'] }>
   group_id?: number | null
   title?: string
   instructions?: string
@@ -64,6 +66,7 @@ export interface StandaloneConceptCollection {
 export interface StandaloneQuestionEditor {
   bank: { id: number; name: string }
   question: {
+    updated_at?: string
     title?: string
     instructions?: string
     educational_type?: string
@@ -143,6 +146,7 @@ export type StandaloneBankDetailResponse = {
   bank: StandaloneBank
   can_edit_metadata: boolean
   can_edit_content: boolean
+  question_page?: import('./api').PageMeta
   questions: StandaloneQuestion[]
 } | StandaloneCanonicalRedirect
 
@@ -172,9 +176,14 @@ export function createTeacherStandaloneQuestionBankApi(client: ApiClient) {
     },
     detail(
       bankId: number,
-      options: { destination?: StandaloneBankDestination; questionId?: number } = {},
+      options: { destination?: StandaloneBankDestination; questionId?: number; completeOnly?: boolean; query?: string; questionType?: string; status?: string; page?: number } = {},
     ) {
       const params = new URLSearchParams()
+      if (options.completeOnly) params.set('complete_only', '1')
+      if (options.query) params.set('q', options.query)
+      if (options.questionType) params.set('question_type', options.questionType)
+      if (options.status) params.set('status', options.status)
+      if (options.page) params.set('page', String(options.page))
       if (options.destination && options.destination !== 'detail') params.set('destination', options.destination)
       if (options.questionId) params.set('question_id', String(options.questionId))
       const query = params.size ? `?${params.toString()}` : ''
@@ -195,7 +204,7 @@ export function createTeacherStandaloneQuestionBankApi(client: ApiClient) {
     updateQuestion(bankId: number, questionId: number, body: Record<string, unknown>) {
       return client.mutate<StandaloneQuestionEditor>(
         `/api/v1/teacher/banks/${bankId}/questions/${questionId}/editor/`,
-        { method: 'PUT', body },
+        { method: questionId ? 'PUT' : 'POST', body },
       )
     },
     recheckQuestions(bankId: number) {

@@ -39,7 +39,9 @@ def task_short_answer_snapshot_ids(task):
             snapshot_id = item.get("question_snapshot_id")
             if snapshot_id:
                 snapshot_ids.add(snapshot_id)
-    return snapshot_ids
+    return set(task.release_snapshot.question_snapshots.filter(
+        pk__in=snapshot_ids, question_type="short_answer",
+    ).values_list("pk", flat=True))
 
 
 def task_grading_summary(task):

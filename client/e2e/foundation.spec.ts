@@ -70,7 +70,7 @@ test('teacher creates an experiment and saves a resumable publish draft', async 
   await page.getByLabel('实验名称').fill(`渐进式发布验证-${browserName}`)
   await page.locator('#experiment-bank').click()
   await page.getByRole('checkbox', { name: '演示题库', exact: true }).check()
-  await page.locator('#experiment-bank').click()
+  await page.getByRole('button', { name: '应用题库', exact: true }).click()
   await selectFirstKnowledgeComponent(page)
   // This journey checks resumable drafts, independently of earlier student submissions.
   await page.locator('input[name="cross_experiment_item_policy"][value="unrestricted"]').check()
@@ -96,7 +96,7 @@ test('teacher previews and atomically publishes a class task', async ({ browserN
   await page.getByLabel('实验名称').fill('正式发布浏览器验收')
   await page.locator('#experiment-bank').click()
   await page.getByRole('checkbox', { name: '演示题库', exact: true }).check()
-  await page.locator('#experiment-bank').click()
+  await page.getByRole('button', { name: '应用题库', exact: true }).click()
   await selectFirstKnowledgeComponent(page)
   await page.locator('input[name="cross_experiment_item_policy"][value="unrestricted"]').check()
   await page.getByRole('button', { name: '保存草稿', exact: true }).click()

@@ -24,6 +24,21 @@ describe('workspace navigation', () => {
     expect(wrapper.findAll('a[href="/teacher/courses/7/settings/"] svg')).toHaveLength(1)
   })
 
+  it('keeps both registration links at the bottom of the workspace sidebar', async () => {
+    const wrapper = mount(WorkspaceShell, {
+      props: { userName: '教师', csrfToken: 'token', mainId: 'content' },
+      slots: { navigation: '<a href="/teacher/courses/">我的课程</a>', default: '<p>正文</p>' },
+    })
+    await flushPromises()
+    const footer = wrapper.get('.kt-workspace-sidebar [data-site-registration-footer]')
+    expect(footer.classes()).toContain('kt-site-registration--sidebar')
+    expect(footer.get('[data-icp-registration]').text()).toBe('湘ICP备2026036826号-1')
+    expect(footer.get('[data-police-registration]').text()).toContain('湘公网安备43010302002391号')
+    expect(wrapper.get('aside').element.lastElementChild).toBe(footer.element)
+    expect(wrapper.find('main [data-site-registration-footer]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('does not add teacher course icons to student navigation', async () => {
     const wrapper = mount(WorkspaceShell, {
       props: { userName: '学生', csrfToken: 'token', mainId: 'content' },
@@ -78,7 +93,7 @@ describe('workspace navigation', () => {
     await trigger.trigger('click')
     expect(wrapper.get('aside').attributes('aria-modal')).toBe('true')
     expect(wrapper.get('main').attributes()).toHaveProperty('inert')
-    const lastLink = wrapper.get('aside a')
+    const lastLink = wrapper.get('aside [data-police-registration]')
     ;(lastLink.element as HTMLElement).focus()
     await lastLink.trigger('keydown', { key: 'Tab' })
     expect(document.activeElement).toBe(wrapper.get('[data-workspace-close]').element)

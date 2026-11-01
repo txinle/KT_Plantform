@@ -37,6 +37,7 @@ import {
   mergeTextObservation,
   type TextObservation,
 } from './text-observation'
+import { useQuestionLayout } from './question-layout'
 import './student-assessment.css'
 
 const route = useRoute()
@@ -44,15 +45,18 @@ const assessmentUser = getBootstrapContext().user
 const initialPasswordReminderPending = getBootstrapContext().user?.initial_password_reminder_pending === true
 const router = useRouter()
 const state = ref<StudentRuntimeQuestionEntry>()
+const { questionBody, questionTabs, questionNumbers } = useQuestionLayout(() => state.value?.question_group
+  ? `group-${state.value.question_group.group_id}` : state.value?.assignment.assignment_id)
 const answer = ref<unknown>(null)
 const groupBuffers = ref<Record<string, unknown>>({})
+const groupConfidenceInputs = ref<Record<string, string>>({})
 const groupRecoveryPending = ref(false)
 const groupActivationPending = ref<string>()
 const presentationUnits = ref<PresentationUnit[]>([])
 const groupAnswers = computed(() => ({ ...state.value?.group_responses,
   ...(state.value && !loading.value ? { [String(state.value.assignment.assignment_id)]: answer.value } : {}), ...groupBuffers.value }))
 const groupInputIntents = new Set<Promise<unknown>>()
-const groupReadonly = computed(() => taskClosed.value || paperConfirmOpen.value || Boolean(paperSubmission.value)
+const groupReadonly = computed(() => taskClosed.value || paperConfirmOpen.value || paperConfirmPreparing.value || Boolean(paperSubmission.value)
   || answerLocked.value || initializationState.value === 'failed'
   || state.value?.session_status !== 'in_progress' || Boolean(responseConflict.value) || groupRecoveryPending.value)
 const paperFlow = computed(() => state.value?.assessment_flow_version === 1)
@@ -61,6 +65,7 @@ const inlineConfidenceInput = ref<string>()
 const inlineConfidenceError = ref('')
 const paperSubmission = ref<PaperSubmissionIntent>()
 const paperConfirmOpen = ref(false)
+const paperConfirmPreparing = ref(false)
 let paperConfirmTrigger: HTMLElement | null = null
 const paperStatus = ref('')
 let paperManifest: Promise<PreparedManifest> | undefined
@@ -73,10 +78,25 @@ let paperResponsePresence: Record<number, boolean> = {}
 let inlineConfidenceWrites: Promise<unknown> = Promise.resolve()
 let saveMaximumTimer: ReturnType<typeof setTimeout> | undefined
 const inlineContract = computed(() => paperFlow.value ? confidenceContract(state.value?.pending_confidence) : undefined)
-const previousQuestion = computed(() => state.value?.navigation.find(row => row.sequence_index === (state.value?.assignment.sequence_index || 0) - 1))
-const nextQuestion = computed(() => state.value?.navigation.find(row => row.sequence_index === (state.value?.assignment.sequence_index || 0) + 1))
+const activeUnitIndex = computed(() => presentationUnits.value.findIndex(unit => unit.assignment_ids.includes(state.value?.assignment.assignment_id || 0)))
+const wholeQuestionCount = computed(() => state.value?.presentation_progress?.total ?? (presentationUnits.value.length || state.value?.progress.total || 0))
+const wholeAnsweredCount = computed(() => state.value?.presentation_progress?.answered ?? answeredQuestionCount.value)
+const activeUnit = computed(() => presentationUnits.value[activeUnitIndex.value])
+const unitNavigation = computed(() => presentationUnits.value.length ? presentationUnits.value.flatMap((unit, index) => {
+  const row = state.value?.navigation.find(item => item.assignment_id === unit.assignment_ids[0])
+  return row ? [{ ...row, sequence_index: index + 1, current: unit.assignment_ids.includes(state.value?.assignment.assignment_id || 0), status: unit.status || row.status, member_count: unit.member_count || unit.assignment_ids.length }] : []
+}) : state.value?.navigation || [])
+const previousQuestion = computed(() => presentationUnits.value.length ? unitNavigation.value[activeUnitIndex.value - 1] : state.value?.navigation.find(row => row.sequence_index === (state.value?.assignment.sequence_index || 0) - 1))
+const nextQuestion = computed(() => presentationUnits.value.length ? unitNavigation.value[activeUnitIndex.value + 1] : state.value?.navigation.find(row => row.sequence_index === (state.value?.assignment.sequence_index || 0) + 1))
+const groupMemberWriteAllowed = computed(() => Object.fromEntries(Object.entries(state.value?.group_member_state || {}).map(([key, member]) => [key, member.response_write_allowed])))
+const groupConfidenceRows = computed(() => (state.value?.question_group?.members || []).flatMap(member => {
+  const memberState = state.value?.group_member_state?.[member.item_key]
+  const contract = confidenceContract(memberState?.pending_confidence)
+  return contract ? [{ ...member, contract, memberState }] : []
+}))
+const essayWordCount = computed(() => String(answer.value ?? '').trim().split(/\s+/).filter(Boolean).length)
 const answeredQuestionCount = computed(() => state.value?.navigation.length ? state.value.navigation.filter(row => row.current ? hasLocalResponse.value : ['draft', 'submitted'].includes(row.status)).length : hasLocalResponse.value ? 1 : 0)
-const missingAnswerCount = computed(() => state.value?.navigation.filter(row => row.current ? !hasLocalResponse.value : !['draft', 'submitted'].includes(row.status)).length || 0)
+const missingAnswerCount = computed(() => state.value?.presentation_progress ? presentationUnits.value.reduce((count, unit) => count + (unit.member_count || 0) - (unit.answered_count || 0), 0) : state.value?.navigation.filter(row => row.current ? !hasLocalResponse.value : !['draft', 'submitted'].includes(row.status)).length || 0)
 const hasLocalResponse = computed(() => Array.isArray(answer.value) ? answer.value.length > 0 : answer.value !== null && answer.value !== undefined && answer.value !== '')
 const loading = ref(true)
 const error = ref('')
@@ -141,10 +161,6 @@ interface ConfidenceContract {
   skip_url: string
 }
 
-const sequenceLabel = computed(() => {
-  if (!state.value) return ''
-  return `第 ${state.value.assignment.sequence_index}/${state.value.progress.total} 题`
-})
 const answerLocked = computed(() => (
   !!state.value
   && (
@@ -154,8 +170,8 @@ const answerLocked = computed(() => (
   )
 ))
 const transitionBusy = computed(() => navigating.value || finishing.value)
-const actionBusy = computed(() => transitionBusy.value || toolsPending.value)
-const responseDisabled = computed(() => answerLocked.value || taskClosed.value || transitionBusy.value || navigationUncertain.value || paperConfirmOpen.value || !!paperSubmission.value || loading.value || !!responseConflict.value
+const actionBusy = computed(() => transitionBusy.value || toolsPending.value || paperConfirmPreparing.value)
+const responseDisabled = computed(() => answerLocked.value || taskClosed.value || transitionBusy.value || navigationUncertain.value || paperConfirmOpen.value || paperConfirmPreparing.value || !!paperSubmission.value || loading.value || !!responseConflict.value
   || !captureReady.value)
 
 function interactionAllowed() {
@@ -164,6 +180,7 @@ function interactionAllowed() {
 
 function statusLabel(status: string) {
   return {
+    answered: '已作答', partial: '部分作答',
     unvisited: '未访问',
     visited: '已访问',
     draft: '已有草稿',
@@ -176,6 +193,7 @@ function statusLabel(status: string) {
 
 function questionTypeLabel(questionType: string) {
   return {
+    reading: '阅读理解', cloze: '短文填空', words: '选词填空', translation: '英汉互译', essay: '作文',
     single_choice: '单选题',
     multiple_choice: '多选题',
     numeric: '数值题',
@@ -426,6 +444,9 @@ async function saveDraft(force = false) {
       if (!fixedTrajectory && questionType === 'short_answer') await recordTextSnapshot(response, force)
       if (response.response_version !== undefined && fixedRuntime) fixedRuntime.responseVersion = response.response_version
       if (state.value !== currentState || processRuntime !== fixedRuntime) return
+      if (response.presentation_units) presentationUnits.value = response.presentation_units
+      if (response.presentation_progress) state.value.presentation_progress = response.presentation_progress
+      if (response.group_member_state) state.value.group_member_state = response.group_member_state
       if (paperFlow.value) await rememberPaperReceipt(currentState.assignment.attempt_id, response.response_version ?? fixedRuntime?.responseVersion ?? 0, response.active_response_event_id ?? targetEventId ?? null, hasMeaningfulResponse(fixedAnswer))
       lastSavedAnswer = serialized
       lastSavedHead = targetEventId
@@ -463,6 +484,7 @@ async function persistGroupBuffer() {
   const sessionId = Number(route.params.sessionId)
   const controller = await getSessionController(sessionId, getBootstrapContext().csrf_token)
   await controller.store.writeMetadata(`group-pending-input:${sessionId}`, { ...groupBuffers.value })
+  await controller.store.writeMetadata(`group-pending-confidence:${sessionId}`, { ...groupConfidenceInputs.value })
 }
 
 function waitForGroupEntry(itemKey: string): Promise<void> {
@@ -480,7 +502,10 @@ function waitForGroupEntry(itemKey: string): Promise<void> {
 const groupActivation = createGroupActivationQueue({
   active: () => captureReady.value ? String(state.value?.assignment.assignment_id) : undefined,
   activate: async itemKey => {
+    // The interactive render precedes durable entry confirmation; finish it before freezing another entry.
+    await preparationPromise
     if (String(state.value?.assignment.assignment_id) !== itemKey) {
+      if (!state.value?.navigation.some(row => String(row.assignment_id) === itemKey) && paperManifest) await paperManifest
       const destination = state.value?.navigation.find(row => String(row.assignment_id) === itemKey)
       if (!destination) throw new Error('目标小题不在当前授权试卷中。')
       await navigateToAssignment(destination)
@@ -492,7 +517,46 @@ const groupActivation = createGroupActivationQueue({
     if (state.value?.question.question_type === 'single_choice') return chooseSingle(change.answer === null ? null : String(change.answer))
     updateText({ target: { value: String(change.answer ?? '') }, inputType: 'insertText', isComposing: false })
   },
+  applyConfidence: async (itemKey, value) => {
+    updateInlineConfidence({ target: { value } } as unknown as Event)
+    if (inlineConfidenceError.value) throw new Error(inlineConfidenceError.value)
+    await commitInlineConfidence()
+    await saveDraft(true)
+    if (groupConfidenceInputs.value[itemKey] === value) {
+      const remaining = { ...groupConfidenceInputs.value }
+      delete remaining[itemKey]
+      groupConfidenceInputs.value = remaining
+      await persistGroupBuffer()
+    }
+  },
 })
+
+function groupConfidenceValue(itemKey: string) {
+  return groupConfidenceInputs.value[itemKey] ?? (String(state.value?.assignment.assignment_id) === itemKey
+    ? inlineConfidenceInput.value ?? inlineProbability.value ?? ''
+    : state.value?.group_member_state?.[itemKey]?.inline_confidence?.probability ?? '')
+}
+
+function updateGroupConfidence(itemKey: string, event: Event) {
+  const value = (event.target as HTMLInputElement).value
+  groupConfidenceInputs.value = { ...groupConfidenceInputs.value, [itemKey]: value }
+  validateGroupConfidence(itemKey, value)
+  void persistGroupBuffer().catch(handleLocalInputError)
+}
+
+function validateGroupConfidence(itemKey: string, value: string) {
+  const contract = groupConfidenceRows.value.find(member => member.item_key === itemKey)?.contract
+  if (!contract) return false
+  const probability = value === '' ? null : Number(value)
+  const invalid = probability !== null && (!Number.isInteger(probability) || probability < contract.minimum || probability > contract.maximum || (probability - contract.minimum) % contract.step !== 0)
+  inlineConfidenceError.value = invalid ? `请输入 ${contract.minimum} 到 ${contract.maximum} 之间、间隔为 ${contract.step} 的整数。` : ''
+  return !invalid
+}
+
+function commitGroupConfidence(itemKey: string) {
+  const confidence = groupConfidenceInputs.value[itemKey]
+  if (confidence !== undefined && validateGroupConfidence(itemKey, confidence)) return requestGroupActivation({ itemKey, confidence })
+}
 
 function requestGroupActivation(intent: GroupActivationIntent) {
   if (groupReadonly.value) return
@@ -518,6 +582,10 @@ async function recoverGroupInputs() {
     await requestGroupActivation({ itemKey, answer: value, hasAnswer: true })
     if (groupRecoveryPending.value) return
   }
+  for (const [itemKey, confidence] of Object.entries(groupConfidenceInputs.value)) {
+    await requestGroupActivation({ itemKey, confidence })
+    if (groupRecoveryPending.value) return
+  }
 }
 
 async function acknowledgeGroupBuffer(key: string, confirmedAnswer: unknown) {
@@ -539,6 +607,16 @@ async function chooseSingle(value: string | null) {
   captureChange(value, value === null ? 'clear' : 'select', { option_key: value, option_action: value === null ? 'clear' : 'select' })
   if (paperFlow.value) scheduleTextSave()
   else await saveDraft().catch(() => undefined)
+}
+
+function clearSelection() {
+  if (state.value?.question.question_type !== 'multiple_choice') return chooseSingle(null)
+  if (!interactionAllowed() || responseDisabled.value) return
+  answer.value = []
+  invalidateInlineConfidence()
+  void noteInputStarted()
+  captureChange([], 'clear', { option_key: null, option_action: 'clear' })
+  scheduleTextSave()
 }
 
 async function toggleMultiple(value: string, selected: boolean) {
@@ -816,6 +894,13 @@ async function navigateToAssignment(item: StudentRuntimeQuestionEntry['navigatio
   } finally { navigating.value = false }
 }
 
+async function navigateToUnit(item: StudentRuntimeQuestionEntry['navigation'][number]) {
+  await Promise.all([...groupInputIntents])
+  await groupActivation.settled()
+  if (groupRecoveryPending.value || inlineConfidenceError.value) return
+  await navigateToAssignment(item)
+}
+
 async function saveAndLeave(item: StudentRuntimeQuestionEntry['navigation'][number], navigation?: NavigationClickContext & { clientInstanceId?: string }) {
   if (!state.value || !processRuntime || !trajectory) throw new Error('切题记录器尚未准备完成。')
   const runtime = processRuntime
@@ -932,7 +1017,7 @@ async function recoverNavigation() {
 async function navigateFromDrawer(item: StudentRuntimeQuestionEntry['navigation'][number]) {
   if (!interactionAllowed()) return
   navigationOpen.value = false
-  await navigateToAssignment(item)
+  await navigateToUnit(item)
 }
 
 function requestFinishFromDrawer() {
@@ -1039,17 +1124,22 @@ function acceptToolInlineConfidence(receipt: NonNullable<StudentRuntimeQuestionE
 }
 
 async function requestPaperSubmit() {
+  for (const itemKey of Object.keys(groupConfidenceInputs.value)) await commitGroupConfidence(itemKey)
   await Promise.all([...groupInputIntents])
   await groupActivation.settled()
   if (groupRecoveryPending.value) { error.value = '请先恢复并确认等待同步的小题输入。'; return }
   if (!interactionAllowed() || actionBusy.value || paperConfirmOpen.value || paperSubmission.value || !state.value || inlineConfidenceError.value) return
+  paperConfirmPreparing.value = true
   try {
     if (paperManifest) await paperManifest
+    await flushAnswerBoundary('submit')
+    if (!answerLocked.value) await saveDraft(true)
     paperConfirmTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
     paperConfirmOpen.value = true
     await nextTick()
     document.querySelector<HTMLButtonElement>('[data-paper-submit-cancel]')?.focus()
   } catch (caught) { error.value = caught instanceof Error ? caught.message : '试卷清单尚未加载，请重试。' }
+  finally { paperConfirmPreparing.value = false }
 }
 
 function cancelPaperSubmit() {
@@ -1466,6 +1556,7 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
     loadedState = hydrated.dto
     paperManifest = hydrated.manifest
     state.value = loadedState
+    presentationUnits.value = loadedState.presentation_units || []
     inlineProbability.value = loadedState.inline_confidence?.probability ?? null
     inlineConfidenceInput.value = undefined
     inlineConfidenceError.value = ''
@@ -1479,7 +1570,7 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
       paperSubmission.value = await controller.store.readMetadata<PaperSubmissionIntent>(paperMetadataKey('submission')) || undefined
       if (paperManifest) void paperManifest.then(manifest => {
         if (generation !== initializationGeneration || !state.value) return
-        presentationUnits.value = manifest.presentation_units || []
+        presentationUnits.value = state.value.presentation_units || manifest.presentation_units || []
         state.value.navigation = manifest.navigation.map(row => ({ ...row, current: row.assignment_id === assignmentId, status: paperResponsePresence[row.attempt_id] === undefined ? row.status : paperResponsePresence[row.attempt_id] ? 'draft' : 'visited' }))
         const start = () => { void hydrated.cache?.prefetch(manifest.navigation.filter(row => row.assignment_id !== assignmentId).map(row => row.content)).catch(() => undefined) }
         if (operablePaperGeneration === generation) start()
@@ -1489,6 +1580,11 @@ async function loadQuestion(targetRoute = route, deferCapturePreparation = false
     pendingNavigationClick = pendingEntry?.sourceAssignmentId === assignmentId ? pendingEntry : undefined
     answer.value = cloneJson(state.value.draft_answer)
     if (state.value.question_group) {
+      const savedConfidence = await controller.store.readMetadata<Record<string, string>>(`group-pending-confidence:${sessionId}`)
+      if (savedConfidence && !Object.keys(groupConfidenceInputs.value).length && Object.keys(savedConfidence).length) {
+        groupConfidenceInputs.value = savedConfidence
+        groupRecoveryPending.value = true
+      }
       const saved = await controller.store.readMetadata<Record<string, unknown>>(`group-pending-input:${sessionId}`)
       if (saved && !Object.keys(groupBuffers.value).length) {
         const unresolved = Object.fromEntries(Object.entries(saved).filter(([key, value]) => JSON.stringify(state.value?.group_responses?.[key]) !== JSON.stringify(value)))
@@ -1724,26 +1820,17 @@ onBeforeUnmount(() => {
       <p>{{ error }}</p><button type="button" class="kt-button" @click="loadQuestion()">重试进入原题目</button>
       <a href="/student/">返回任务列表</a>
     </section>
-    <div v-else-if="state" class="kt-assessment-layout">
+    <div v-else-if="state" class="kt-assessment-layout" :data-question-layout="state.question_group?.kind === 'reading' ? 'reading' : state.question_group ? 'passage' : state.question.question_type === 'short_answer' ? 'writing' : 'compact'">
       <header class="kt-assessment-topbar" data-assessment-topbar>
-        <a class="kt-assessment-topbar__return" data-assessment-return href="/student/" @click.prevent="router.push('/student/')">返回作业列表</a>
-        <div class="kt-assessment-topbar__countdown" data-assessment-countdown>
-          <span v-if="secondsRemaining !== null" role="timer" aria-live="off">剩余 {{ timerLabel(secondsRemaining) }}</span>
-          <span v-else>不限时</span>
-          <p class="kt-assessment-save-status" role="status" data-save-status>{{ saveStatus }}</p>
-        </div>
-        <div class="kt-assessment-topbar__status">
-          <div class="kt-assessment-topbar__student" data-assessment-student>
-            <strong>姓名：{{ assessmentUser?.display_name || '未提供' }}</strong>
-            <span>学号：{{ assessmentUser?.student_number || '未提供' }}</span>
-          </div>
-        </div>
+        <div><h1>{{ state.experiment_name }}</h1><p>共 {{ wholeQuestionCount }} 道题<span v-if="state.presentation_progress"> · {{ state.presentation_progress.maximum_score }} 分</span><span data-assessment-countdown> · <span v-if="secondsRemaining !== null" role="timer" aria-live="off">剩余 {{ timerLabel(secondsRemaining) }}</span><span v-else>不限时</span></span></p></div>
+        <div class="kt-assessment-topbar__status"><div data-assessment-student>{{ assessmentUser?.display_name || '学生' }}<span v-if="assessmentUser?.student_number"> · {{ assessmentUser.student_number }}</span></div><a data-assessment-return href="/student/" @click.prevent="router.push('/student/')">返回作业列表</a></div>
       </header>
+      <nav v-if="unitNavigation.length" ref="questionTabs" class="kt-group-tabs" aria-label="题目切换"><button v-for="(item, index) in unitNavigation" :key="item.assignment_id" type="button" data-whole-question-tab :aria-current="item.current ? 'step' : undefined" :disabled="actionBusy || !captureReady" @click="navigateToUnit(item)">{{ String(index + 1).padStart(2, '0') }} {{ presentationUnits[index]?.kind ? questionTypeLabel(presentationUnits[index]!.kind) : '题目' }}</button></nav>
       <FocusAssessmentHeader
         class="kt-assessment-mobile-header"
         data-mobile-assessment-header
-        :current="state.assignment.sequence_index"
-        :total="state.progress.total"
+        :current="activeUnitIndex >= 0 ? activeUnitIndex + 1 : state.assignment.sequence_index"
+        :total="wholeQuestionCount"
       >
         <button
           type="button"
@@ -1759,105 +1846,114 @@ onBeforeUnmount(() => {
       </FocusAssessmentHeader>
 
       <section class="kt-assessment-question" aria-labelledby="assessment-question-title">
-        <nav v-if="presentationUnits.length" class="kt-group-tabs" aria-label="题组切换"><button v-for="(unit, index) in presentationUnits" :key="unit.group_id || unit.assignment_ids[0]" type="button" :aria-current="unit.assignment_ids.includes(state.assignment.assignment_id) ? 'step' : undefined" :disabled="actionBusy || !captureReady" @click="requestGroupActivation({ itemKey: String(unit.assignment_ids[0]) })">{{ index + 1 }}. {{ unit.title }}</button></nav>
-        <header class="kt-assessment-question__header" :class="{ 'kt-group-task-heading': state.question_group }">
-          <div>
-            <p class="kt-kicker">{{ state.experiment_name }}</p>
-            <h1 id="assessment-question-title">{{ state.question_group ? (state.question_group.kind === 'reading' ? '阅读理解' : state.question_group.kind === 'words' ? '选词填空' : '短文填空') : sequenceLabel }}</h1>
-          </div>
+        <header class="kt-assessment-question__header">
+          <div><h2 id="assessment-question-title">第 {{ activeUnitIndex >= 0 ? activeUnitIndex + 1 : state.assignment.sequence_index }} 题 · {{ questionTypeLabel(state.question_group?.kind || state.question.educational_type || state.question.question_type) }}</h2></div><span v-if="activeUnit?.maximum_score" class="kt-assessment-score">{{ activeUnit.maximum_score }} 分</span>
         </header>
-        <p v-if="!state.question_group" class="kt-assessment-context">
-          题型：{{ state.question.educational_type === 'translation' ? '英汉互译' : state.question.educational_type === 'essay' ? '作文' : questionTypeLabel(state.question.question_type) }}<span v-if="state.question.primary_kc"> 主 KC：{{ state.question.primary_kc }}</span>
-        </p>
-        <QuestionGroupContent v-if="state.question_group" :group="state.question_group" :responses-by-item-key="groupAnswers" :active-item-key="captureReady ? String(state.assignment.assignment_id) : null" :pending-item-key="groupActivationPending" :readonly="groupReadonly" @request-activate="requestGroupActivation" @answer-change="changeGroupAnswer" />
-        <template v-else>
-          <h2 v-if="state.question.title" data-question-content-title>{{ state.question.title }}</h2>
-          <p v-if="state.question.instructions" data-question-instructions class="kt-assessment-stem">{{ state.question.instructions }}</p>
-          <p class="kt-assessment-stem">{{ state.question.text }}</p>
-          <fieldset v-if="['single_choice', 'multiple_choice', 'true_false'].includes(state.question.question_type)">
-            <legend class="kt-visually-hidden">请选择答案</legend>
-            <label v-for="option in state.question.options" :key="option.key" class="kt-assessment-option">
-              <input
-                name="answer"
-                :type="state.question.question_type === 'multiple_choice' ? 'checkbox' : 'radio'"
-                :value="option.key"
-                :disabled="responseDisabled"
-                :checked="state.question.question_type === 'multiple_choice' ? Array.isArray(answer) && answer.map(String).includes(option.key) : answer === option.key"
-                @change="state.question.question_type === 'multiple_choice' ? toggleMultipleFromEvent(option.key, $event) : chooseSingle(option.key)"
-              >
-              <strong>{{ option.key }}</strong>
-              <span>{{ option.text }}</span>
+        <div ref="questionBody" class="kt-assessment-question-body" tabindex="0" role="region" aria-label="题目内容">
+          <p v-if="!state.question_group" class="kt-assessment-context">
+            题型：{{ state.question.educational_type === 'translation' ? '英汉互译' : state.question.educational_type === 'essay' ? '作文' : questionTypeLabel(state.question.question_type) }}<span v-if="state.question.primary_kc"> 主 KC：{{ state.question.primary_kc }}</span>
+          </p>
+          <QuestionGroupContent v-if="state.question_group" :group="state.question_group" :responses-by-item-key="groupAnswers" :active-item-key="captureReady ? String(state.assignment.assignment_id) : null" :pending-item-key="groupActivationPending" :readonly="groupReadonly" :member-write-allowed="groupMemberWriteAllowed" @request-activate="requestGroupActivation" @answer-change="changeGroupAnswer" />
+          <div v-else class="kt-assessment-article">
+            <h2 v-if="state.question.title" data-question-content-title>{{ state.question.title }}</h2>
+            <p v-if="state.question.instructions" data-question-instructions class="kt-assessment-stem">{{ state.question.instructions }}</p>
+            <p class="kt-assessment-stem">{{ state.question.text }}</p>
+            <fieldset v-if="['single_choice', 'multiple_choice', 'true_false'].includes(state.question.question_type)">
+              <legend class="kt-visually-hidden">请选择答案</legend>
+              <label v-for="option in state.question.options" :key="option.key" class="kt-assessment-option">
+                <input
+                  name="answer"
+                  :type="state.question.question_type === 'multiple_choice' ? 'checkbox' : 'radio'"
+                  :value="option.key"
+                  :disabled="responseDisabled"
+                  :checked="state.question.question_type === 'multiple_choice' ? Array.isArray(answer) && answer.map(String).includes(option.key) : answer === option.key"
+                  @change="state.question.question_type === 'multiple_choice' ? toggleMultipleFromEvent(option.key, $event) : chooseSingle(option.key)"
+                >
+                <strong>{{ option.key }}</strong>
+                <span>{{ option.text }}</span>
+              </label>
+              <button v-if="trajectory" type="button" class="kt-button kt-button--secondary" data-clear-response :disabled="responseDisabled || !hasLocalResponse" @click="clearSelection">清除选择</button>
+            </fieldset>
+            <label v-else class="kt-assessment-text-answer">
+              <span>{{ state.question.educational_type === 'essay' ? '你的作文' : state.question.educational_type === 'translation' ? '你的译文' : '你的答案' }}</span>
+              <textarea v-if="state.question.question_type === 'short_answer'" name="answer" :rows="state.question.educational_type === 'essay' ? 12 : state.question.educational_type === 'translation' ? 6 : 4" :disabled="responseDisabled" :value="String(answer ?? '')" @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition" @compositionend="finishComposition" @blur="flushTextInputOnBlur" />
+              <input v-else name="answer" :disabled="responseDisabled" :inputmode="state.question.question_type === 'numeric' ? 'decimal' : undefined" :value="String(answer ?? '')" @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition" @compositionend="finishComposition" @blur="flushTextInputOnBlur">
             </label>
-            <button v-if="trajectory && state.question.question_type !== 'multiple_choice'" type="button" class="kt-button kt-button--secondary" data-clear-response :disabled="responseDisabled || answer === null" @click="chooseSingle(null)">清除选择</button>
-          </fieldset>
-          <label v-else class="kt-assessment-text-answer">
-            <span>你的答案</span>
-            <textarea v-if="state.question.question_type === 'short_answer'" name="answer" rows="6" :disabled="responseDisabled" :value="String(answer ?? '')" @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition" @compositionend="finishComposition" @blur="flushTextInputOnBlur" />
-            <input v-else name="answer" :disabled="responseDisabled" :inputmode="state.question.question_type === 'numeric' ? 'decimal' : undefined" :value="String(answer ?? '')" @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition" @compositionend="finishComposition" @blur="flushTextInputOnBlur">
-          </label>
-        </template>
-        <section v-if="groupRecoveryPending" class="kt-alert kt-alert--warning" role="alert"><p>有输入保留在本机，尚未确认保存。请恢复后继续作答。</p><button class="kt-button" type="button" @click="recoverGroupInputs">恢复未确认输入</button></section>
-        <div v-if="paperFlow" class="kt-assessment-paper-actions">
-          <button type="button" class="kt-button kt-button--secondary" data-previous-question :disabled="!previousQuestion || !captureReady || actionBusy || navigationUncertain || !!paperSubmission" @click="previousQuestion && navigateToAssignment(previousQuestion)">上一题</button>
-          <label v-if="inlineContract" class="kt-assessment-inline-confidence">
-            <span>作答信心（可选）</span>
-            <input data-inline-confidence type="number" :value="inlineConfidenceInput ?? inlineProbability ?? ''" :min="inlineContract.minimum" :max="inlineContract.maximum" :step="inlineContract.step" :disabled="responseDisabled || !hasLocalResponse" placeholder="未评价" @input="updateInlineConfidence" @blur="commitInlineConfidence" @keydown.enter.prevent="commitInlineConfidence">
-            <span>%</span>
-            <small v-if="inlineConfidenceError" role="alert">{{ inlineConfidenceError }}</small>
-          </label>
-          <button type="button" class="kt-button" data-next-question :disabled="!captureReady || actionBusy || navigationUncertain || !!paperSubmission" @click="nextQuestion ? navigateToAssignment(nextQuestion) : requestPaperSubmit()">{{ nextQuestion ? '下一题' : '提交试卷' }}</button>
-        </div>
-        <StudentResearchTools v-if="trajectory && processRuntime && state.actions.research_tools_url && !answerLocked && captureReady && online && !transitionBusy && !navigationUncertain" :endpoint="state.actions.research_tools_url" :runtime="processRuntime" :answer-event-id="trajectory.head" :initial-configuration="state.offline_recovery ? undefined : state.research_tools" :wait-for-capture="() => trajectory!.settled()" @interaction="noteInputStarted" @pending="toolsPending = $event" @inline-confidence="acceptToolInlineConfidence" />
-        <p v-if="initializationState === 'preparing'" class="kt-alert kt-alert--info" role="status" data-init-preparing>正在准备安全作答环境，请稍候…</p>
-        <section v-else-if="initializationState === 'failed' && initializationError" class="kt-alert kt-alert--danger" role="alert" data-init-failure>
-          <h2>安全作答环境准备失败</h2>
-          <p>{{ initializationError.message }}</p>
-          <p data-init-technical-details><strong>技术信息：</strong><code>{{ initializationError.technicalDetails }}</code></p>
-          <div class="kt-assessment-actions">
-            <button type="button" class="kt-button" data-init-retry @click="retryCaptureInitialization">重新准备</button>
-            <a class="kt-button kt-button--secondary" data-init-return href="/student/">返回任务列表</a>
+            <p v-if="state.question.educational_type === 'essay'" class="kt-assessment-wordcount" data-word-count>当前 {{ essayWordCount }} 词</p>
           </div>
-        </section>
-        <p v-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
-        <button v-if="navigationUncertain" type="button" class="kt-button" data-navigation-retry :disabled="actionBusy" @click="recoverNavigation">重新核验切题保存结果</button>
-        <button v-if="trajectory && online && captureReady && !answerLocked && saveStatus.includes('失败')" class="kt-button kt-button--secondary" type="button" @click="saveDraft(true).catch(() => undefined)">重试同步</button>
-        <section v-if="responseConflict" class="kt-alert kt-alert--warning" aria-label="选择答案版本">
-          <p>另一设备保存了不同答案。请选择接下来使用的版本。</p>
-          <p>已保存版本：{{ formatCorrectAnswer(responseConflict.current_answer) }}</p>
-          <button class="kt-button kt-button--secondary" type="button" :disabled="!captureReady" @click="chooseResponseBranch('current')">继续使用已保存版本</button>
-          <p>本机版本：{{ formatCorrectAnswer(responseConflict.candidate_answer) }}</p>
-          <button class="kt-button" type="button" :disabled="!captureReady" @click="chooseResponseBranch('candidate')">继续使用本机版本</button>
-        </section>
-        <p v-if="!online" class="kt-alert kt-alert--warning" role="status" data-connectivity-status>当前离线。答案保留在本页，恢复网络后将自动保存。</p>
-        <p v-if="answerLocked" class="kt-alert kt-alert--info">本题已提交并锁定，答案不可再修改。</p>
-        <p v-if="paperFlow && paperStatus" role="status" data-paper-submission-status>{{ paperStatus }}</p>
-        <button v-if="paperFlow && paperSubmission && !finishing" type="button" class="kt-button" data-paper-submission-retry @click="pollPaperSubmission(true)">{{ paperSubmission.reconcile_required ? '重新核对并交卷' : '核验提交状态' }}</button>
+          <section v-if="groupRecoveryPending" class="kt-alert kt-alert--warning" role="alert"><p>有输入保留在本机，尚未确认保存。请恢复后继续作答。</p><button class="kt-button" type="button" @click="recoverGroupInputs">恢复未确认输入</button></section>
+          <section v-if="groupConfidenceRows.length || inlineContract" class="kt-assessment-confidence-panel" aria-label="作答信心">
+            <h3>作答信心（可选）</h3><p>你认为这次答案正确的可能性是多少？每个作答项分别记录。</p>
+            <div v-if="groupConfidenceRows.length" class="kt-assessment-confidence-items">
+              <label v-for="member in groupConfidenceRows" :key="member.item_key">作答项 {{ member.group_order }}<span><input type="number" :data-group-confidence="member.item_key" :aria-label="`作答项 ${member.group_order} 信心`" :value="groupConfidenceValue(member.item_key)" :min="member.contract.minimum" :max="member.contract.maximum" :step="member.contract.step" :disabled="groupReadonly || member.memberState?.response_write_allowed === false || !(String(state.assignment.assignment_id) === member.item_key ? hasLocalResponse : member.memberState?.has_response)" placeholder="未评价" @input="updateGroupConfidence(member.item_key, $event)" @blur="commitGroupConfidence(member.item_key)" @keydown.enter.prevent="commitGroupConfidence(member.item_key)"><span v-if="member.contract.maximum === 100"> %</span></span></label>
+            </div>
+            <label v-else-if="inlineContract" class="kt-assessment-inline-confidence">作答项 1<input data-inline-confidence type="number" :value="inlineConfidenceInput ?? inlineProbability ?? ''" :min="inlineContract.minimum" :max="inlineContract.maximum" :step="inlineContract.step" :disabled="responseDisabled || !hasLocalResponse" placeholder="未评价" @input="updateInlineConfidence" @blur="commitInlineConfidence" @keydown.enter.prevent="commitInlineConfidence"><span v-if="inlineContract.maximum === 100">%</span></label>
+            <p v-if="inlineConfidenceError" role="alert">{{ inlineConfidenceError }}</p>
+          </section>
+          <StudentResearchTools v-if="trajectory && processRuntime && state.actions.research_tools_url && !answerLocked && captureReady && online && !transitionBusy && !navigationUncertain" :endpoint="state.actions.research_tools_url" :runtime="processRuntime" :answer-event-id="trajectory.head" :initial-configuration="state.offline_recovery ? undefined : state.research_tools" :wait-for-capture="() => trajectory!.settled()" @interaction="noteInputStarted" @pending="toolsPending = $event" @inline-confidence="acceptToolInlineConfidence" />
+          <p v-if="initializationState === 'preparing'" class="kt-alert kt-alert--info" role="status" data-init-preparing>正在准备安全作答环境，请稍候…</p>
+          <section v-else-if="initializationState === 'failed' && initializationError" class="kt-alert kt-alert--danger" role="alert" data-init-failure>
+            <h2>安全作答环境准备失败</h2>
+            <p>{{ initializationError.message }}</p>
+            <p data-init-technical-details><strong>技术信息：</strong><code>{{ initializationError.technicalDetails }}</code></p>
+            <div class="kt-assessment-actions">
+              <button type="button" class="kt-button" data-init-retry @click="retryCaptureInitialization">重新准备</button>
+              <a class="kt-button kt-button--secondary" data-init-return href="/student/">返回任务列表</a>
+            </div>
+          </section>
+          <p v-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
+          <button v-if="navigationUncertain" type="button" class="kt-button" data-navigation-retry :disabled="actionBusy" @click="recoverNavigation">重新核验切题保存结果</button>
+          <button v-if="trajectory && online && captureReady && !answerLocked && saveStatus.includes('失败')" class="kt-button kt-button--secondary" type="button" @click="saveDraft(true).catch(() => undefined)">重试同步</button>
+          <section v-if="responseConflict" class="kt-alert kt-alert--warning" aria-label="选择答案版本">
+            <p>另一设备保存了不同答案。请选择接下来使用的版本。</p>
+            <p>已保存版本：{{ formatCorrectAnswer(responseConflict.current_answer) }}</p>
+            <button class="kt-button kt-button--secondary" type="button" :disabled="!captureReady" @click="chooseResponseBranch('current')">继续使用已保存版本</button>
+            <p>本机版本：{{ formatCorrectAnswer(responseConflict.candidate_answer) }}</p>
+            <button class="kt-button" type="button" :disabled="!captureReady" @click="chooseResponseBranch('candidate')">继续使用本机版本</button>
+          </section>
+          <p v-if="!online" class="kt-alert kt-alert--warning" role="status" data-connectivity-status>当前离线。答案保留在本页，恢复网络后将自动保存。</p>
+          <p v-if="answerLocked" class="kt-alert kt-alert--info">本题已提交并锁定，答案不可再修改。</p>
+          <p v-if="paperFlow && paperStatus" role="status" data-paper-submission-status>{{ paperStatus }}</p>
+          <button v-if="paperFlow && paperSubmission && !finishing" type="button" class="kt-button" data-paper-submission-retry @click="pollPaperSubmission(true)">{{ paperSubmission.reconcile_required ? '重新核对并交卷' : '核验提交状态' }}</button>
+        </div>
+        <div v-if="paperFlow" class="kt-assessment-paper-actions">
+          <span>第 {{ activeUnitIndex >= 0 ? activeUnitIndex + 1 : state.assignment.sequence_index }} / {{ wholeQuestionCount }} 题</span><div>
+            <button type="button" class="kt-button kt-button--secondary" data-previous-question :disabled="!previousQuestion || !captureReady || actionBusy || navigationUncertain || !!paperSubmission" @click="previousQuestion && navigateToUnit(previousQuestion)">上一题</button>
+            <button type="button" class="kt-button kt-button--secondary" data-next-question :disabled="!captureReady || actionBusy || navigationUncertain || !!paperSubmission" @click="nextQuestion ? navigateToUnit(nextQuestion) : requestPaperSubmit()">{{ nextQuestion ? '下一题 →' : '检查并提交' }}</button>
+          </div>
+        </div>
       </section>
       <aside class="kt-assessment-nav" aria-labelledby="assessment-navigation-title">
-        <div class="kt-assessment-nav__header">
-          <h2 id="assessment-navigation-title">题目导航</h2>
-          <span>{{ answeredQuestionCount }}/{{ state.progress.total }}</span>
-        </div>
-        <nav aria-label="题目状态">
-          <a
-            v-for="item in state.navigation"
-            :key="item.assignment_id"
-            :href="captureReady && !actionBusy ? item.url : undefined"
-            class="kt-assessment-nav__item"
-            :data-answer-status="item.status"
-            :data-has-response="item.current ? hasLocalResponse : ['draft', 'submitted'].includes(item.status)"
-            :aria-current="item.current ? 'step' : undefined"
-            :aria-disabled="!captureReady || actionBusy ? 'true' : undefined"
-            :tabindex="!captureReady || actionBusy ? -1 : undefined"
-            :data-nav-assignment="item.assignment_id"
-            @click.prevent="navigateToAssignment(item)"
-          >
-            <span>第 {{ item.sequence_index }} 题</span>
-            <small>{{ item.current && hasLocalResponse && !answerLocked ? '待提交' : statusLabel(item.status) }}</small>
-          </a>
-        </nav>
-        <p v-if="navigating" role="status" data-navigation-status>正在切换题目…</p>
-        <button type="button" class="kt-button kt-button--danger-secondary" data-finish-request :disabled="actionBusy || !captureReady" @click="requestPaperSubmit">提交试卷</button>
+        <section class="kt-assessment-nav-card">
+          <div class="kt-assessment-nav__header">
+            <h2 id="assessment-navigation-title">答题卡</h2>
+            <span data-whole-question-progress>{{ wholeAnsweredCount }}/{{ wholeQuestionCount }}</span>
+          </div>
+          <div class="kt-assessment-progress"><i :style="{ width: `${wholeAnsweredCount / Math.max(1, wholeQuestionCount) * 100}%` }" /></div><p class="kt-assessment-nav-note">按完整题目统计已保存进度</p>
+          <nav ref="questionNumbers" aria-label="题目状态">
+            <a
+              v-for="item in unitNavigation"
+              :key="item.assignment_id"
+              :href="captureReady && !actionBusy ? item.url : undefined"
+              class="kt-assessment-nav__item"
+              :data-answer-status="item.status"
+              :data-has-response="presentationUnits.length ? item.status === 'answered' : item.current ? hasLocalResponse : ['draft', 'submitted'].includes(item.status)"
+              :aria-current="item.current ? 'step' : undefined"
+              :aria-disabled="!captureReady || actionBusy ? 'true' : undefined"
+              :tabindex="!captureReady || actionBusy ? -1 : undefined"
+              :data-nav-assignment="item.assignment_id"
+              @click.prevent="navigateToUnit(item)"
+            >
+              <span>{{ item.sequence_index }}</span>
+              <small>{{ !presentationUnits.length && item.current && hasLocalResponse && !answerLocked ? '待提交' : statusLabel(item.status) }}</small>
+            </a>
+          </nav>
+          <p v-if="activeUnit" class="kt-assessment-nav-note">{{ activeUnit.assignment_ids.length }} 处作答属于当前这一道题</p>
+        </section><section class="kt-assessment-submit-panel">
+          <p class="kt-assessment-save-status" role="status" data-save-status>{{ saveStatus }}</p><p class="kt-assessment-nav-note">以服务器确认的保存结果为准。</p>
+          <p v-if="navigating" role="status" data-navigation-status>正在切换题目…</p>
+          <button type="button" class="kt-button" data-finish-request :disabled="actionBusy || !captureReady" @click="requestPaperSubmit">提交试卷</button>
+        </section>
       </aside>
 
       <Drawer
@@ -1866,22 +1962,22 @@ onBeforeUnmount(() => {
         title="题目导航"
         @close="navigationOpen = false"
       >
-        <p class="kt-assessment-drawer-progress">已作答 {{ answeredQuestionCount }}/{{ state.progress.total }}</p>
+        <p class="kt-assessment-drawer-progress">已作答 {{ wholeAnsweredCount }}/{{ wholeQuestionCount }}</p>
         <nav aria-label="移动端题目状态">
           <a
-            v-for="item in state.navigation"
+            v-for="item in unitNavigation"
             :key="item.assignment_id"
             :href="captureReady && !actionBusy ? item.url : undefined"
             class="kt-assessment-nav__item"
             :data-answer-status="item.status"
-            :data-has-response="item.current ? hasLocalResponse : ['draft', 'submitted'].includes(item.status)"
+            :data-has-response="presentationUnits.length ? item.status === 'answered' : item.current ? hasLocalResponse : ['draft', 'submitted'].includes(item.status)"
             :aria-current="item.current ? 'step' : undefined"
             :aria-disabled="!captureReady || actionBusy ? 'true' : undefined"
             :tabindex="!captureReady || actionBusy ? -1 : undefined"
             @click.prevent="navigateFromDrawer(item)"
           >
-            <span>第 {{ item.sequence_index }} 题</span>
-            <small>{{ item.current && hasLocalResponse && !answerLocked ? '待提交' : statusLabel(item.status) }}</small>
+            <span>{{ item.sequence_index }}</span>
+            <small>{{ !presentationUnits.length && item.current && hasLocalResponse && !answerLocked ? '待提交' : statusLabel(item.status) }}</small>
           </a>
         </nav>
         <button
@@ -1897,7 +1993,7 @@ onBeforeUnmount(() => {
     <div v-if="paperFlow && paperConfirmOpen" class="kt-dialog-backdrop">
       <section class="kt-dialog" role="dialog" aria-modal="true" aria-labelledby="paper-submit-dialog-title" aria-describedby="paper-submit-dialog-description" :data-paper-missing-confirm="missingAnswerCount > 0 ? '' : undefined" @keydown.tab="trapPaperConfirmationFocus" @keydown.esc="cancelPaperSubmit">
         <h2 id="paper-submit-dialog-title">确认提交试卷</h2>
-        <p v-if="missingAnswerCount > 0">还有 {{ missingAnswerCount }} 道题未作答。仍要提交试卷吗？</p>
+        <p v-if="missingAnswerCount > 0">还有 {{ missingAnswerCount }} 个作答项未作答。仍要提交试卷吗？</p>
         <p id="paper-submit-dialog-description">提交后试卷将锁定，不能继续修改答案。</p>
         <div class="kt-dialog__actions">
           <button type="button" class="kt-button kt-button--secondary" data-paper-submit-cancel @click="cancelPaperSubmit">继续作答</button>

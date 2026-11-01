@@ -5660,6 +5660,17 @@ paths:
                           nullable: true
                           type: object
                           additionalProperties: true
+                        presentation_units:
+                          type: array
+                          items:
+                            type: object
+                            additionalProperties: true
+                        presentation_progress:
+                          type: object
+                          additionalProperties: true
+                        group_member_state:
+                          type: object
+                          additionalProperties: true
                       additionalProperties: false
                       required:
                       - active_response_event_id
@@ -9034,6 +9045,55 @@ paths:
                       request_id:
                         type: string
           description: ''
+    post:
+      operationId: teacher_banks_questions_editor_create
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: question_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionEditorRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionEditorRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionEditorRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ManagementStandaloneQuestionEditorResponse'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
     put:
       operationId: teacher_standalone_question_bank_question_editor_update
       parameters:
@@ -11072,6 +11132,60 @@ paths:
                       request_id:
                         type: string
           description: ''
+    post:
+      operationId: teacher_courses_banks_questions_editor_create
+      parameters:
+      - in: path
+        name: bank_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: question_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionEditorRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionEditorRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ManagementQuestionEditorRequest'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ManagementQuestionEditorResponse'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
     put:
       operationId: teacher_question_bank_question_editor_update
       parameters:
@@ -13015,6 +13129,11 @@ paths:
         schema:
           type: integer
         required: true
+      - in: query
+        name: q
+        schema:
+          type: string
+        description: Filter experiment names before pagination.
       tags:
       - teacher
       security:
@@ -13053,13 +13172,13 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TeacherExperiment'
+              $ref: '#/components/schemas/TeacherExperimentInput'
           application/x-www-form-urlencoded:
             schema:
-              $ref: '#/components/schemas/TeacherExperiment'
+              $ref: '#/components/schemas/TeacherExperimentInput'
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/TeacherExperiment'
+              $ref: '#/components/schemas/TeacherExperimentInput'
         required: true
       security:
       - SessionAuth: []
@@ -13140,13 +13259,13 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PatchedTeacherExperiment'
+              $ref: '#/components/schemas/PatchedTeacherExperimentInput'
           application/x-www-form-urlencoded:
             schema:
-              $ref: '#/components/schemas/PatchedTeacherExperiment'
+              $ref: '#/components/schemas/PatchedTeacherExperimentInput'
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/PatchedTeacherExperiment'
+              $ref: '#/components/schemas/PatchedTeacherExperimentInput'
       security:
       - SessionAuth: []
       responses:
@@ -13653,6 +13772,44 @@ paths:
                       fields:
                         type: object
                         additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+  /api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/student-preview/:
+    get:
+      operationId: teacher_experiment_student_preview
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: experiment_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/TeacherStudentPreview'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
                       request_id:
                         type: string
           description: ''
@@ -19341,6 +19498,10 @@ components:
     ManagementQuestionEditorQuestion:
       type: object
       properties:
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
         id:
           type: integer
         sequence:
@@ -19421,9 +19582,13 @@ components:
       - text
       - text_match_case_sensitive
       - text_match_policy_version
+      - updated_at
     ManagementQuestionEditorRequest:
       type: object
       properties:
+        expected_updated_at:
+          type: string
+          format: date-time
         text:
           type: string
         title:
@@ -19875,6 +20040,7 @@ components:
     ManagementStandaloneBankDetail:
       type: object
       properties:
+        question_page: {}
         unit_summary: {}
         groups:
           type: array
@@ -19955,6 +20121,13 @@ components:
     ManagementStandaloneQuestion:
       type: object
       properties:
+        unit_key:
+          type: string
+        unit_kind:
+          $ref: '#/components/schemas/UnitKindEnum'
+        member_kc_mappings:
+          type: array
+          items: {}
         group_id:
           type: integer
           nullable: true
@@ -19988,7 +20161,7 @@ components:
         educational_type:
           $ref: '#/components/schemas/EducationalTypeEnum'
         question_type:
-          $ref: '#/components/schemas/QuestionType128Enum'
+          type: string
         question_type_label:
           type: string
         status:
@@ -20006,6 +20179,7 @@ components:
           $ref: '#/components/schemas/QuestionKCMapping'
         edit_url:
           type: string
+          nullable: true
       required:
       - blank_id
       - code
@@ -20539,7 +20713,7 @@ components:
         feedback_release_policy:
           $ref: '#/components/schemas/FeedbackReleasePolicyEnum'
         time_mode:
-          $ref: '#/components/schemas/TimeModeEnum'
+          $ref: '#/components/schemas/TimeMode5aaEnum'
         total_time_limit_minutes:
           type: integer
           minimum: 1
@@ -20602,7 +20776,7 @@ components:
           type: boolean
         show_trend:
           type: boolean
-    PatchedTeacherExperiment:
+    PatchedTeacherExperimentInput:
       type: object
       properties:
         id:
@@ -20633,7 +20807,7 @@ components:
           readOnly: true
         status:
           allOf:
-          - $ref: '#/components/schemas/TeacherExperimentStatusEnum'
+          - $ref: '#/components/schemas/StatusE40Enum'
           readOnly: true
         status_label:
           type: string
@@ -20700,7 +20874,7 @@ components:
           type: string
           readOnly: true
         time_mode:
-          $ref: '#/components/schemas/TimeModeEnum'
+          $ref: '#/components/schemas/TimeMode5aaEnum'
         time_mode_label:
           type: string
           readOnly: true
@@ -20740,6 +20914,9 @@ components:
         can_manage:
           type: boolean
           readOnly: true
+        can_publish:
+          type: boolean
+          readOnly: true
         can_archive:
           type: boolean
           readOnly: true
@@ -20749,6 +20926,10 @@ components:
         activity:
           allOf:
           - $ref: '#/components/schemas/ExperimentActivity'
+          readOnly: true
+        student_preview_url:
+          type: string
+          nullable: true
           readOnly: true
         created_at:
           type: string
@@ -21597,6 +21778,7 @@ components:
     QuestionBankSummary:
       type: object
       properties:
+        unit_summary: {}
         id:
           type: integer
         name:
@@ -22108,6 +22290,13 @@ components:
     QuestionSummary:
       type: object
       properties:
+        unit_key:
+          type: string
+        unit_kind:
+          $ref: '#/components/schemas/UnitKindEnum'
+        member_kc_mappings:
+          type: array
+          items: {}
         title:
           type: string
         instructions:
@@ -22699,9 +22888,6 @@ components:
         total_time_limit_minutes:
           type: integer
           minimum: 1
-        per_question_time_limit_seconds:
-          type: integer
-          minimum: 1
         reason:
           type: string
           maxLength: 500
@@ -22809,6 +22995,14 @@ components:
         * `empty` - empty
         * `incomplete` - incomplete
         * `complete` - complete
+    SourceEnum:
+      enum:
+      - draft
+      - frozen
+      type: string
+      description: |-
+        * `draft` - draft
+        * `frozen` - frozen
     StandaloneChoice:
       type: object
       properties:
@@ -23013,7 +23207,7 @@ components:
         feedback_release_policy:
           $ref: '#/components/schemas/FeedbackReleasePolicyEnum'
         time_mode:
-          $ref: '#/components/schemas/TimeModeEnum'
+          $ref: '#/components/schemas/TimeMode5aaEnum'
         total_time_limit_minutes:
           type: integer
           minimum: 1
@@ -23240,6 +23434,20 @@ components:
         * `draft` - draft
         * `active` - active
         * `archived` - archived
+    StatusE40Enum:
+      enum:
+      - draft
+      - frozen
+      - published
+      - closed
+      - archived
+      type: string
+      description: |-
+        * `draft` - 草稿
+        * `frozen` - 已冻结
+        * `published` - 已发布
+        * `closed` - 已关闭
+        * `archived` - 已归档
     StudentAdmissionStatus:
       type: object
       properties:
@@ -24100,6 +24308,25 @@ components:
       - executing
       type: string
       description: '* `executing` - executing'
+    StudentPreviewUnit:
+      type: object
+      properties:
+        key:
+          type: string
+        kind:
+          type: string
+        maximum_score:
+          type: string
+        question:
+          nullable: true
+        group:
+          nullable: true
+      required:
+      - group
+      - key
+      - kind
+      - maximum_score
+      - question
     StudentProjectionStatus:
       type: object
       properties:
@@ -24635,6 +24862,9 @@ components:
           type: integer
         question_group: {}
         group_responses: {}
+        group_member_state: {}
+        presentation_units: {}
+        presentation_progress: {}
         assessment_flow_version:
           type: integer
         prepared_paper: {}
@@ -24738,6 +24968,8 @@ components:
       type: object
       properties:
         result: {}
+        presentation_question_count:
+          type: integer
         session_id:
           type: integer
         experiment_name:
@@ -25768,7 +26000,7 @@ components:
           readOnly: true
         status:
           allOf:
-          - $ref: '#/components/schemas/TeacherExperimentStatusEnum'
+          - $ref: '#/components/schemas/StatusE40Enum'
           readOnly: true
         status_label:
           type: string
@@ -25835,7 +26067,7 @@ components:
           type: string
           readOnly: true
         time_mode:
-          $ref: '#/components/schemas/TimeModeEnum'
+          $ref: '#/components/schemas/TeacherExperimentTimeModeEnum'
         time_mode_label:
           type: string
           readOnly: true
@@ -25875,6 +26107,9 @@ components:
         can_manage:
           type: boolean
           readOnly: true
+        can_publish:
+          type: boolean
+          readOnly: true
         can_archive:
           type: boolean
           readOnly: true
@@ -25884,6 +26119,10 @@ components:
         activity:
           allOf:
           - $ref: '#/components/schemas/ExperimentActivity'
+          readOnly: true
+        student_preview_url:
+          type: string
+          nullable: true
           readOnly: true
         created_at:
           type: string
@@ -25898,6 +26137,7 @@ components:
       - can_archive
       - can_edit
       - can_manage
+      - can_publish
       - can_restore
       - confidence_mode_label
       - confidence_sampling_unit_label
@@ -25920,6 +26160,7 @@ components:
       - selection_mode_label
       - status
       - status_label
+      - student_preview_url
       - time_mode_label
       - updated_at
     TeacherExperimentClassOption:
@@ -25957,6 +26198,200 @@ components:
       - items
       - page
       - summary
+    TeacherExperimentInput:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 180
+        description:
+          type: string
+        question_bank:
+          allOf:
+          - $ref: '#/components/schemas/QuestionBankReference'
+          readOnly: true
+          nullable: true
+        question_bank_id:
+          type: integer
+          writeOnly: true
+        question_bank_ids:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+        question_banks:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionBankReference'
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusE40Enum'
+          readOnly: true
+        status_label:
+          type: string
+          readOnly: true
+        selection_mode:
+          allOf:
+          - $ref: '#/components/schemas/SelectionModeEnum'
+          readOnly: true
+        selection_mode_label:
+          type: string
+          readOnly: true
+        question_quotas:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionQuota'
+          readOnly: true
+        sampling_mode:
+          readOnly: true
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/SamplingModeEnum'
+          - $ref: '#/components/schemas/NullEnum'
+        sampling_mode_label:
+          type: string
+          readOnly: true
+          nullable: true
+        sampling_total_count:
+          type: integer
+          readOnly: true
+          nullable: true
+        sampling_match_scope:
+          allOf:
+          - $ref: '#/components/schemas/SamplingMatchScopeEnum'
+          readOnly: true
+        sampling_kcs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SamplingKC'
+          readOnly: true
+        sampling:
+          $ref: '#/components/schemas/SamplingDefinition'
+        cross_experiment_item_policy:
+          allOf:
+          - $ref: '#/components/schemas/CrossExperimentItemPolicyEnum'
+          default: exclude_previous
+        review_count:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        ordering_mode:
+          $ref: '#/components/schemas/OrderingModeEnum'
+        ordering_mode_label:
+          type: string
+          readOnly: true
+        feedback_mode:
+          $ref: '#/components/schemas/FeedbackMode433Enum'
+        feedback_release_policy:
+          $ref: '#/components/schemas/FeedbackReleasePolicyEnum'
+        research_tools: {}
+        feedback_mode_label:
+          type: string
+          readOnly: true
+        feedback_release_policy_label:
+          type: string
+          readOnly: true
+        time_mode:
+          $ref: '#/components/schemas/TimeMode5aaEnum'
+        time_mode_label:
+          type: string
+          readOnly: true
+        total_time_limit_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          nullable: true
+        per_question_time_limit_seconds:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          nullable: true
+        resume_mode:
+          $ref: '#/components/schemas/ResumeModeEnum'
+        resume_mode_label:
+          type: string
+          readOnly: true
+        confidence_mode:
+          $ref: '#/components/schemas/ConfidenceModeEnum'
+        confidence_mode_label:
+          type: string
+          readOnly: true
+        confidence_sampling_unit:
+          $ref: '#/components/schemas/ConfidenceSamplingUnitEnum'
+        confidence_sampling_unit_label:
+          type: string
+          readOnly: true
+        confidence_probability:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,1}(?:\.\d{0,3})?$
+          nullable: true
+        can_edit:
+          type: boolean
+          readOnly: true
+        can_manage:
+          type: boolean
+          readOnly: true
+        can_publish:
+          type: boolean
+          readOnly: true
+        can_archive:
+          type: boolean
+          readOnly: true
+        can_restore:
+          type: boolean
+          readOnly: true
+        activity:
+          allOf:
+          - $ref: '#/components/schemas/ExperimentActivity'
+          readOnly: true
+        student_preview_url:
+          type: string
+          nullable: true
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - activity
+      - can_archive
+      - can_edit
+      - can_manage
+      - can_publish
+      - can_restore
+      - confidence_mode_label
+      - confidence_sampling_unit_label
+      - created_at
+      - feedback_mode_label
+      - feedback_release_policy_label
+      - id
+      - name
+      - ordering_mode_label
+      - question_bank
+      - question_banks
+      - question_quotas
+      - resume_mode_label
+      - sampling_kcs
+      - sampling_match_scope
+      - sampling_mode
+      - sampling_mode_label
+      - sampling_total_count
+      - selection_mode
+      - selection_mode_label
+      - status
+      - status_label
+      - student_preview_url
+      - time_mode_label
+      - updated_at
     TeacherExperimentInventoryBucket:
       type: object
       properties:
@@ -26191,20 +26626,6 @@ components:
       description: |-
         * `canonical` - canonical
         * `legacy_report` - legacy_report
-    TeacherExperimentStatusEnum:
-      enum:
-      - draft
-      - frozen
-      - published
-      - closed
-      - archived
-      type: string
-      description: |-
-        * `draft` - 草稿
-        * `frozen` - 已冻结
-        * `published` - 已发布
-        * `closed` - 已关闭
-        * `archived` - 已归档
     TeacherExperimentSummary:
       type: object
       properties:
@@ -26235,6 +26656,16 @@ components:
       - analysis_url
       - class_name
       - class_snapshot_name
+    TeacherExperimentTimeModeEnum:
+      enum:
+      - none
+      - total
+      - per_question
+      type: string
+      description: |-
+        * `none` - 无时限
+        * `total` - 实验总时限
+        * `per_question` - 单题时限
     TeacherQuestionBankReference:
       type: object
       properties:
@@ -26412,6 +26843,24 @@ components:
       required:
       - label
       - value
+    TeacherStudentPreview:
+      type: object
+      properties:
+        experiment_id:
+          type: integer
+        experiment_name:
+          type: string
+        source:
+          $ref: '#/components/schemas/SourceEnum'
+        units:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentPreviewUnit'
+      required:
+      - experiment_id
+      - experiment_name
+      - source
+      - units
     TeachingLegacyAttempt:
       type: object
       properties:
@@ -26634,16 +27083,14 @@ components:
       - text-exact-v1
       type: string
       description: '* `text-exact-v1` - text-exact-v1'
-    TimeModeEnum:
+    TimeMode5aaEnum:
       enum:
       - none
       - total
-      - per_question
       type: string
       description: |-
         * `none` - 无时限
         * `total` - 实验总时限
-        * `per_question` - 单题时限
     TimingQuality:
       type: object
       properties:
@@ -26700,6 +27147,14 @@ components:
       required:
       - enabled
       - version
+    UnitKindEnum:
+      enum:
+      - question
+      - group
+      type: string
+      description: |-
+        * `question` - question
+        * `group` - group
     VisibilityE8aEnum:
       enum:
       - private

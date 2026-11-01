@@ -293,6 +293,9 @@ def draft_response(attempt):
     response = {'success': True, 'saved_at': attempt.draft_saved_at.isoformat(),
         'response_version': attempt.response_version,
         'active_response_event_id': str(attempt.active_response_event_id) if attempt.active_response_event_id else None}
+    if attempt.session.version.configuration.get('question_group_runtime_version'):
+        from .group_runtime import presentation_runtime_projection
+        response.update(presentation_runtime_projection(attempt.session, attempt))
     if hasattr(attempt, '_inline_confidence_receipt'):
         response['inline_confidence'] = attempt._inline_confidence_receipt
     snapshot = attempt.saved_response_snapshot

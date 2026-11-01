@@ -1,7 +1,6 @@
 import hashlib
 import os
 import subprocess
-import socket
 import sys
 import tarfile
 import tempfile
@@ -9,7 +8,7 @@ import time
 from pathlib import Path
 from unittest import TestCase
 from unittest import skipUnless
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from scripts import run_dev
 
@@ -53,9 +52,11 @@ class PortableLauncherContractTests(TestCase):
         self.assertIn('MSYS_NO_PATHCONV=1', unix)
         self.assertIn('run_local.bat', unix)
 
-    def test_windows_launcher_uses_moved_tools_and_project_caches(self):
+    def test_windows_launcher_uses_shared_runtime_and_project_caches(self):
         source = (ROOT.parent / 'run_local.bat').read_text(encoding='utf-8')
-        self.assertIn(r'E:\ATOP\ATOP-tooling', source)
+        self.assertIn(r'%LOCALAPPDATA%\KT——platform\runtime', source)
+        self.assertIn(r'prepare_local_runtime.ps1" -RuntimeRoot "%KT_TOOLING_ROOT%"', source)
+        self.assertIn(r'call "%KT_TOOLING_ROOT%\environment.cmd"', source)
         self.assertNotIn(r'%USERPROFILE%\Downloads\ATOP-tooling', source)
         for name in ('KT_NODE_DIR', 'PIP_CACHE_DIR', 'npm_config_cache', 'TEMP', 'TMP', 'PLAYWRIGHT_BROWSERS_PATH'):
             self.assertIn(name, source)
@@ -66,23 +67,25 @@ class PortableLauncherContractTests(TestCase):
         process = Mock(returncode=0)
         process.poll.return_value = 0
         with (
-            socket.socket() as listener,
+            patch.object(run_dev.socket, 'socket') as socket_factory,
             patch.object(run_dev, 'find_node_directory', return_value=(Path('node'), Path('npm.cmd'))),
             patch.object(run_dev, 'ensure_frontend_dependencies') as install,
             patch.object(run_dev.subprocess, 'run'),
             patch.object(run_dev.subprocess, 'Popen', return_value=process),
         ):
-            listener.bind(('127.0.0.1', 8001))
-            listener.listen()
+            probe = socket_factory.return_value.__enter__.return_value
+            probe.bind.side_effect = [None, OSError('backend port is occupied')]
             with self.assertRaisesRegex(SystemExit, '8001'):
                 run_dev.main()
             install.assert_not_called()
+            self.assertEqual(probe.bind.call_args_list, [call(('127.0.0.1', 8000)), call(('127.0.0.1', 8001))])
 
     def test_runner_builds_client_then_starts_private_backend_and_node_gateway(self):
         process = Mock(returncode=0)
         process.poll.return_value = 0
         with (
             patch.dict(run_dev.os.environ, {'POSTGRES_HOST': '127.0.0.1'}, clear=True),
+            patch.object(run_dev, 'ensure_ports_available'),
             patch.object(run_dev, 'find_node_directory', return_value=(Path('node'), Path('npm.cmd'))),
             patch.object(run_dev, 'ensure_frontend_dependencies') as install,
             patch.object(run_dev, 'wait_for_startup', create=True),
@@ -109,6 +112,7 @@ class PortableLauncherContractTests(TestCase):
         phases = []
         with (
             patch.dict(run_dev.os.environ, {'POSTGRES_HOST': '127.0.0.1'}, clear=True),
+            patch.object(run_dev, 'ensure_ports_available'),
             patch.object(run_dev, 'find_node_directory', return_value=(Path('node'), Path('npm.cmd'))),
             patch.object(run_dev, 'ensure_frontend_dependencies'),
             patch.object(run_dev.subprocess, 'run'),
@@ -175,18 +179,22 @@ class PortableLauncherContractTests(TestCase):
         source = (ROOT.parent / "run_local.bat").read_text(encoding="utf-8")
 
         for token in (
-            "PostgreSQL-17.11-portable\\pgsql\\bin",
-            "PostgreSQL-17.11-data",
             'set "POSTGRES_HOST=127.0.0.1"',
             'set "POSTGRES_PORT=55432"',
             'set "POSTGRES_USER=kt_user"',
             'set "POSTGRES_PASSWORD=kt_password"',
             'set "POSTGRES_DB=kt_platform"',
             "pg_isready.exe",
-            "pg_ctl.exe",
+            r"%KT_POSTGRES_BIN%\pg_isready.exe",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, source)
+
+        provisioner = (ROOT / "scripts" / "prepare_local_runtime.ps1").read_text(encoding="utf-8")
+        for token in ("PostgreSQL-17.11-portable", r"pgsql\bin\pg_isready.exe",
+                      "PostgreSQL-17.11-data", "pg_ctl.exe", "KT_POSTGRES_BIN=$pgBin"):
+            with self.subTest(provisioner_token=token):
+                self.assertIn(token, provisioner)
 
     def test_windows_launcher_shell_checks_are_safe_for_cmd_delayed_expansion(self):
         source = (ROOT.parent / "run_local.bat").read_text(encoding="utf-8")
@@ -211,8 +219,9 @@ class PortableLauncherContractTests(TestCase):
             "set -Eeuo pipefail",
             "sys.version_info[:2] == (3, 13)",
             "import ensurepip",
-            ".venv/bin/python",
-            ".venv/Scripts/python.exe",
+            'VENV_DIR="$LAUNCHER_ROOT/.venv"',
+            "$VENV_DIR/bin/python",
+            "$VENV_DIR/Scripts/python.exe",
             ".requirements.sha256",
             "manage.py migrate --noinput",
             "call_command('seed_demo')",

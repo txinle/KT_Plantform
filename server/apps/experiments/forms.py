@@ -121,8 +121,11 @@ class ExperimentForm(forms.ModelForm):
             cleaned["selection_mode"] = Experiment.SelectionMode.ALL
         if cleaned.get("time_mode") == Experiment.TimeMode.TOTAL and not cleaned.get("total_time_limit_minutes"):
             self.add_error("total_time_limit_minutes", "总时限模式必须填写分钟数")
-        if cleaned.get("time_mode") == Experiment.TimeMode.PER_QUESTION and not cleaned.get("per_question_time_limit_seconds"):
-            self.add_error("per_question_time_limit_seconds", "单题时限模式必须填写秒数")
+        from .services import validate_new_time_configuration
+        try:
+            validate_new_time_configuration(cleaned.get("time_mode"), cleaned.get("per_question_time_limit_seconds"))
+        except ValidationError as exc:
+            self.add_error("time_mode", exc.message_dict["time_mode"])
         self.quota_amounts = {
             question_type: cleaned.get(f"quota_{question_type}") or 0
             for question_type in Question.Type.values

@@ -24,7 +24,7 @@ class GroupResultContentTests(SimpleTestCase):
 
     def test_reading_group_options_use_public_presentation_without_answer_markers(self):
         from apps.assessment.student_results import result_groups
-        group = SimpleNamespace(pk=1, source_group_id=7, kind='reading', title='Reading', instructions='', material='A passage.', content_language='en')
+        group = SimpleNamespace(pk=1, source_group_id=7, kind='reading', title='Reading', instructions='', material='A passage.', content_language='en', word_bank=[])
         question = SimpleNamespace(pk=2, group_snapshot_id=1, group_snapshot=group, group_order=1, blank_id='', max_score=Decimal('2.50'),
             question_type='single_choice', text='Which one?', options=[{'key': 'A', 'text': 'First'}, {'key': 'B', 'text': 'Second'}])
         attempt = SimpleNamespace(pk=3, assignment=SimpleNamespace(snapshot=question))

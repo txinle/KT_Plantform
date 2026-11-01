@@ -110,7 +110,13 @@ class LatestQuestionPersistenceTests(TestCase):
         self.assertEqual(member.concept_links.get().concept.code, 'KC1')
         collection = self.client.get(f'/api/v1/teacher/courses/{self.course.pk}/banks/{bank.pk}/questions/?complete_only=1')
         from apps.api.test_support import domain_payload
-        self.assertEqual(domain_payload(collection)['items'], [])
+        items = domain_payload(collection)['items']
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['unit_key'], f'group:{member.group_id}')
+        self.assertEqual(items[0]['question_type'], 'words')
+        self.assertEqual(items[0]['max_score'], '2.50')
+        self.assertEqual(items[0]['member_kc_mappings'][0]['id'], member.pk)
+        self.assertEqual(items[0]['member_kc_mappings'][0]['mapping']['root_kc_code'], 'KC1')
         detail = domain_payload(self.client.get(f'/api/v1/teacher/courses/{self.course.pk}/banks/{bank.pk}/'))
         self.assertEqual(detail['unit_summary']['complete_count'], 1)
         self.assertEqual(detail['unit_summary']['types'], [{'value': 'words', 'label': '选词填空', 'count': 1}])

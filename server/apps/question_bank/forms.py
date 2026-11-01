@@ -188,7 +188,7 @@ class QuestionEditForm(forms.ModelForm):
                     ],
                 }
             nodes = mapping.get("nodes") or []
-            if self.manage_concepts and nodes and self.instance.pk:
+            if self.manage_concepts and nodes:
                 from .services.question_kc_mapping import validate_question_kc_mapping
 
                 try:

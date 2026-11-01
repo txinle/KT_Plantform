@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   api: { detail: vi.fn(), questions: vi.fn(), bankConcepts: vi.fn() },
@@ -20,7 +20,38 @@ vi.mock('@/app/bootstrap', () => ({
 
 import TeacherQuestionBankDetail from './TeacherQuestionBankDetail.vue'
 
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
+})
+
 describe('TeacherQuestionBankDetail', () => {
+  it('opens a cancellable modal instead of an inline disclosure for deleting a complete question', async () => {
+    const wrapper = mount(TeacherQuestionBankDetail)
+    await flushPromises()
+    await wrapper.get('[data-request-delete-question]').trigger('click')
+    await flushPromises()
+    const dialog = wrapper.get('dialog[aria-label="删除完整题目"]')
+    expect(dialog.attributes()).toHaveProperty('open')
+    expect(mocks.managementApi.deleteQuestion).not.toHaveBeenCalled()
+    await dialog.trigger('cancel')
+    await flushPromises()
+    expect(mocks.managementApi.deleteQuestion).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('places Site navigation, bank facts and a single question toolbar above the compact table', async () => {
+    const wrapper = mount(TeacherQuestionBankDetail)
+    await flushPromises()
+    expect(wrapper.find('.kt-bank-course-context').exists()).toBe(false)
+    expect(wrapper.get('.kt-bank-module-nav').text()).toContain('共享题库')
+    expect(wrapper.get('.kt-bank-detail-header').text()).toContain('新建题目')
+    expect(wrapper.get('.kt-bank-meta-line').text()).toContain('复核草稿')
+    expect(wrapper.findAll('thead th').map(cell => cell.text())).toContain('难度 / 分值')
+    expect(wrapper.find('.kt-bank-inventory__facts').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.api.detail.mockResolvedValue({
@@ -93,24 +124,26 @@ describe('TeacherQuestionBankDetail', () => {
 
     expect(wrapper.get('h1').text()).toBe('演示题库')
     expect(wrapper.get('[aria-label="层级目录"]').text()).toContain('演示题库')
-    expect(wrapper.get('.kt-bank-course-context').text()).toContain('KT101 · 2026 秋')
+    expect(wrapper.get('[aria-label="层级目录"]').text()).toContain('研究方法')
     expect(wrapper.text()).toContain('2 + 2 等于多少？')
     expect(wrapper.text()).not.toContain('C000007-Q000051')
     expect(wrapper.text()).not.toContain('Q001')
-    expect(wrapper.findAll('.kt-bank-question-section th').map((cell) => cell.text())).toEqual(['题库内序号', '题目', '题型', '知识点结构', '分值', '难度', '状态', '操作'])
+    expect(wrapper.findAll('.kt-bank-question-section th').map((cell) => cell.text())).toEqual(['序号', '题目', '题型', '知识点结构', '难度 / 分值', '状态', '操作'])
     expect(wrapper.get('.kt-bank-question-section').findAll('td')[0]?.text()).toBe('7')
-    expect(wrapper.get('.kt-mobile-question-card').text()).toContain('第 7 题')
+    expect(wrapper.get('.kt-bank-question-section .kt-table-scroll').classes()).not.toContain('kt-desktop-only')
     expect(wrapper.get('.kt-bank-concept-section').get('a').text()).toBe('第 7 题')
     expect(wrapper.text()).toContain('基础运算')
     expect(wrapper.text()).not.toContain('correct_answer')
     expect(wrapper.get('[data-bank-edit]').attributes('href')).toBe('/teacher/courses/7/banks/11/edit/')
     expect(wrapper.get('[data-question-import]').attributes('href')).toBe('/teacher/courses/7/banks/11/import/')
-    expect(wrapper.get('[data-question-import]').text()).toBe('导入题库')
+    expect(wrapper.get('[data-question-import]').text()).toBe('导入题目')
     expect(wrapper.find('[data-kc-import]').exists()).toBe(false)
     await wrapper.get('[data-bank-archive]').trigger('click')
+    await wrapper.get('[data-confirm-bank-action]').trigger('click')
     await flushPromises()
     expect(mocks.managementApi.archiveBank).toHaveBeenCalledWith(7, 11)
 
+    await wrapper.get('[data-request-delete-question]').trigger('click')
     await wrapper.get('[data-delete-question]').trigger('click')
     await flushPromises()
     expect(mocks.managementApi.deleteQuestion).toHaveBeenCalledWith(7, 11, 31)

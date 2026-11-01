@@ -6,9 +6,10 @@ import Alert from '@/design-system/components/Alert.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import PageHeader from '@/design-system/components/PageHeader.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
+import QuestionPreviewDialog from './QuestionPreviewDialog.vue'
 import QuestionBankInventory from './QuestionBankInventory.vue'
 import type { BankUnitSummary } from './api'
-import QuestionGroupEditor from './QuestionGroupEditor.vue'
+import Paginator from '@/design-system/components/Paginator.vue'
 import type { GroupEditorDocument } from './group-api'
 
 import {
@@ -26,18 +27,21 @@ const data = ref<{
   bank: StandaloneBank
   can_edit_metadata: boolean
   can_edit_content: boolean
+  question_page?: import('./api').PageMeta
   questions: StandaloneQuestion[]
   unit_summary?: BankUnitSummary
   groups?: GroupEditorDocument[]
 }>()
+const previewQuestion = ref<{ id: number; group: boolean }>()
 const error = ref('')
 const success = ref('')
 const updatingVisibility = ref(false)
 const rechecking = ref(false)
-const editingGroup = ref(false)
-const selectedGroupId = ref<number>()
-const questionFilter = ref({ query: '', type: '' })
-const shownQuestions = computed(() => (data.value?.questions || []).filter(question => !question.group_id && (!questionFilter.value.type || (question.educational_type && question.educational_type !== 'standard' ? question.educational_type : question.question_type) === questionFilter.value.type) && `${question.title || ''} ${question.text} ${question.instructions || ''}`.toLocaleLowerCase().includes(questionFilter.value.query.toLocaleLowerCase())))
+const questionFilter = ref({ query: '', type: '', status: '' })
+const page = ref(1)
+const shownQuestions = computed(() => data.value?.questions || [])
+async function filterQuestions(value: typeof questionFilter.value) { questionFilter.value = value; page.value = 1; await load() }
+async function navigate(value: number) { page.value = value; await load() }
 const canEditContent = computed(() => Boolean(data.value?.can_edit_content))
 
 function statusTone(status: string) {
@@ -49,15 +53,14 @@ function statusTone(status: string) {
 async function load() {
   error.value = ''
   try {
-    const response = await api.detail(bankId)
+    const response = await api.detail(bankId, { completeOnly: true, query: questionFilter.value.query, questionType: questionFilter.value.type, status: questionFilter.value.status, page: page.value })
     if (isStandaloneBankRedirect(response)) {
       await router.replace(response.redirect_url)
       return
     }
     data.value = response
     if (route.query?.edit_group && response.groups?.some(group => group.id === Number(route.query.edit_group))) {
-      selectedGroupId.value = Number(route.query.edit_group)
-      editingGroup.value = true
+      await router.replace(`/teacher/banks/${bankId}/questions/0/edit/?group=${route.query.edit_group}`)
     }
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '独立题库详情加载失败。'
@@ -109,8 +112,7 @@ onMounted(load)
         <RouterLink class="kt-button kt-button--secondary" to="/teacher/banks/">返回题库</RouterLink>
       </template>
     </PageHeader>
-    <QuestionBankInventory :summary="data.unit_summary" :groups="data.groups" :can-edit="canEditContent" @filter="questionFilter = $event" @edit="id => { selectedGroupId = id; editingGroup = true }" />
-    <QuestionGroupEditor v-if="editingGroup" :key="selectedGroupId || 'new'" :bank-id="bankId" :group-id="selectedGroupId" @saved="editingGroup = false; load()" @close="editingGroup = false" />
+    <QuestionBankInventory :summary="data.unit_summary" :groups="data.groups" :can-edit="canEditContent" @filter="filterQuestions" @edit="router.push(`/teacher/banks/${bankId}/questions/0/edit/`)" />
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
     <Alert v-if="success" tone="success">{{ success }}</Alert>
     <Alert v-if="data.bank.visibility === 'archived'" tone="warning">题库已归档，题目与导入操作保持只读。</Alert>
@@ -141,20 +143,22 @@ onMounted(load)
               <tr><th>题库内序号</th><th>题目</th><th>题型</th><th>知识点</th><th>分值</th><th>状态</th><th>操作</th></tr>
             </thead>
             <tbody>
-              <tr v-for="question in shownQuestions" :key="question.id">
+              <tr v-for="question in shownQuestions" :key="question.unit_key || `question:${question.id}`">
                 <td class="kt-mono">{{ question.sequence }}</td>
                 <td><strong>{{ question.title || question.text }}</strong><p v-if="question.instructions">{{ question.instructions }}</p><ul v-if="question.draft_reasons.length" class="kt-draft-reasons"><li v-for="reason in question.draft_reasons" :key="reason">{{ reason }}</li></ul></td>
                 <td>{{ question.question_type_label }}</td>
-                <td>{{ question.kc_mapping.nodes.map((node) => node.name).join('、') || '未映射' }}</td>
+                <td>{{ question.kc_mapping.nodes.map((node) => node.name).join('、') || (question.member_kc_mappings?.length ? '成员 KC' : '未映射') }}<details v-if="question.member_kc_mappings?.length"><summary>查看 {{ question.member_kc_mappings.length }} 个作答项</summary><p v-for="member in question.member_kc_mappings" :key="member.id">{{ member.order }}. {{ member.mapping.nodes.map(node => node.name).join(' → ') }}</p></details></td>
                 <td>{{ question.max_score || '1.00' }} 分</td>
                 <td><StatusBadge :label="question.status_label" :tone="statusTone(question.status)" /></td>
-                <td><RouterLink v-if="canEditContent" :to="question.edit_url">编辑</RouterLink><span v-else>只读</span></td>
+                <td><button class="kt-bank-view-link" type="button" @click="previewQuestion = { id: question.id, group: Boolean(question.group_id) }">查看</button> <RouterLink v-if="canEditContent" :to="question.edit_url">编辑</RouterLink><span v-else>只读</span></td>
               </tr>
             </tbody>
           </table>
         </div>
       </div>
+      <Paginator v-if="data.question_page" :page="data.question_page.number" :total-pages="data.question_page.total_pages" @navigate="navigate" />
     </section>
+    <QuestionPreviewDialog v-if="previewQuestion" :id="previewQuestion.id" :bank-id="bankId" :group="previewQuestion.group" @close="previewQuestion = undefined" />
   </template>
   <p v-else role="status">正在加载独立题库详情…</p>
 </template>

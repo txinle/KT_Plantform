@@ -70,6 +70,7 @@ class QuestionBankPageMetadataSerializer(serializers.Serializer):
 
 
 class QuestionBankSummarySerializer(serializers.Serializer):
+    unit_summary = serializers.JSONField(required=False)
     id = serializers.IntegerField()
     name = serializers.CharField()
     description = serializers.CharField()
@@ -191,6 +192,9 @@ class QuestionKCMappingSerializer(serializers.Serializer):
 
 
 class QuestionSummarySerializer(serializers.Serializer):
+    unit_key = serializers.CharField(required=False)
+    unit_kind = serializers.ChoiceField(choices=('question', 'group'), required=False)
+    member_kc_mappings = serializers.ListField(child=serializers.JSONField(), required=False)
     title = serializers.CharField(allow_blank=True, required=False)
     instructions = serializers.CharField(allow_blank=True, required=False)
     educational_type = serializers.CharField()

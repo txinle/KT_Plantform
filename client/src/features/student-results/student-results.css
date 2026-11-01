@@ -1,0 +1,24 @@
+.kt-experiment-feedback, .kt-session-summary { color: var(--kt-ink); min-width: 0; }
+.kt-experiment-feedback .kt-feedback-page-header, .kt-session-summary__header { display: flex; flex-wrap: wrap; align-items: center; gap: 20px; justify-content: space-between; margin-bottom: 26px; }
+.kt-experiment-feedback .kt-feedback-page-header h1, .kt-session-summary__header h1 { font-size: 25px; font-weight: 600; margin: 0 0 5px; }
+.kt-experiment-feedback .kt-feedback-page-header p, .kt-session-summary__header p { margin: 0; font-size: 15px; line-height: 1.5; color: var(--kt-muted); }
+.kt-experiment-feedback .kt-feedback-table-card, .kt-session-summary__items, .kt-session-summary__comparison { border: 1px solid var(--kt-border); background: var(--kt-surface); border-radius: 10px; overflow: hidden; margin-top: 24px; }
+.kt-experiment-feedback .kt-feedback-table, .kt-session-summary__items table { border-collapse: collapse; width: 100%; font-size: 15px; }
+.kt-experiment-feedback .kt-feedback-table th, .kt-session-summary__items th { text-align: left; font-size: 14px; font-weight: 500; color: var(--kt-muted); background: #fafbfd; padding: 12px 16px; border-bottom: 1px solid var(--kt-border); }
+.kt-experiment-feedback .kt-feedback-table td, .kt-session-summary__items td { padding: 14px 16px; border-bottom: 1px solid var(--kt-border); vertical-align: middle; overflow-wrap: anywhere; }
+.kt-experiment-feedback .kt-feedback-table tr:last-child td, .kt-session-summary__items tr:last-child td { border-bottom: 0; }
+.kt-session-summary__items td { white-space: pre-wrap; }
+.kt-session-summary__items h2, .kt-session-summary__comparison h2 { font-size: 18px; font-weight: 600; padding: 22px 24px; margin: 0; border-bottom: 1px solid var(--kt-border); }
+.kt-session-summary__comparison p { padding: 0 24px; }
+.kt-session-summary__metrics { display: flex; flex-wrap: wrap; gap: 28px 40px; padding: 28px 30px; margin: 0; border: 1px solid var(--kt-border); border-radius: 10px; background: var(--kt-surface); }
+.kt-session-summary__metrics dt { font-size: 14px; color: var(--kt-muted); }
+.kt-session-summary__metrics dd { font-size: 30px; font-weight: 500; line-height: 1.2; color: var(--kt-brand-900); margin: 10px 0 0; font-variant-numeric: tabular-nums; }
+.kt-session-summary__table-scroll { max-width: 100%; overflow-x: auto; }
+.kt-experiment-feedback .kt-feedback-metrics { border: 1px solid var(--kt-border); border-radius: 10px; background: var(--kt-surface); padding: 28px 30px; }
+.kt-experiment-feedback .kt-feedback-metric strong { font-size: 30px; font-weight: 500; color: var(--kt-brand-900); }
+@media (max-width: 760px) {
+  .kt-experiment-feedback .kt-feedback-page-header h1, .kt-session-summary__header h1 { font-size: 24px; }
+  .kt-session-summary__metrics, .kt-experiment-feedback .kt-feedback-metrics { padding: 24px; gap: 22px; }
+  .kt-session-summary__items table { min-width: 620px; }
+  .kt-session-summary__items h2 { padding: 18px 20px; }
+}

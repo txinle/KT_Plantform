@@ -1,4 +1,5 @@
 <script setup lang="ts">
+defineProps<{ sidebar?: boolean }>()
 const policeRegistrationIcon = '/static/spa-assets/icons/beian-police.png'
 </script>
 
@@ -6,6 +7,7 @@ const policeRegistrationIcon = '/static/spa-assets/icons/beian-police.png'
   <footer
     data-site-registration-footer
     class="kt-site-registration"
+    :class="{ 'kt-site-registration--sidebar': sidebar }"
     aria-label="网站备案信息"
   >
     <div class="kt-site-registration__inner">
@@ -69,6 +71,25 @@ const policeRegistrationIcon = '/static/spa-assets/icons/beian-police.png'
   display: block;
   flex: none;
 }
+
+.kt-site-registration--sidebar {
+  margin-top: auto;
+  padding: 18px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.kt-site-registration--sidebar .kt-site-registration__inner {
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.kt-site-registration--sidebar .kt-site-registration__divider { display: none; }
+.kt-site-registration--sidebar .kt-site-registration__police { align-items: flex-start; gap: 4px; }
+.kt-site-registration--sidebar .kt-site-registration__police img { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+.kt-site-registration--sidebar a { min-width: 0; overflow-wrap: anywhere; }
 
 @media (max-width: 480px) {
   .kt-site-registration__inner {

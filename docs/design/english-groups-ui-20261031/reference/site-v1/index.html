@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>英语组合题 · KT Data Lab</title>
+  <meta name="description" content="体验阅读理解与短文填空的学生作答界面。">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#exercise-title">跳到作答区</a>
+  <header class="site-header"><div class="header-inner">
+    <a class="brand" href="#reading" aria-label="KT Data Lab 阅读理解"><span class="brand-mark">KT<span></span></span><span>Data Lab<small>学习与测评</small></span></a>
+    <span class="header-divider"></span><span class="course">英语 · 综合练习</span>
+    <div class="header-right"><span class="demo-badge">交互演示</span><span class="student-avatar" aria-hidden="true">S</span><span class="student-label">学生视角</span></div>
+  </div></header>
+  <main class="page">
+    <div class="page-heading"><div><div class="breadcrumb">学习任务 <span>/</span> 英语组合题体验</div><h1>在语境中，读懂与表达。</h1><p>两篇文章，18 个小题。你可以自由切换，答案会保留在当前浏览器。</p></div><button class="text-button reset-button" id="reset">重新体验 <span aria-hidden="true">↺</span></button></div>
+    <nav class="exercise-tabs" aria-label="习题类型">
+      <button class="exercise-tab active" id="tab-reading" data-view="reading" aria-current="page"><span class="tab-index">01</span><span><strong>阅读理解</strong><small>共享文章 · 3 道单选题</small></span><span class="tab-count" id="reading-tab-count">0 / 3</span></button>
+      <button class="exercise-tab" id="tab-cloze" data-view="cloze"><span class="tab-index">02</span><span><strong>短文填空</strong><small>在原文中作答 · 15 个空</small></span><span class="tab-count" id="cloze-tab-count">0 / 15</span></button>
+    </nav>
+    <div class="workspace">
+      <section class="exercise-shell" aria-labelledby="exercise-title">
+        <div class="exercise-top"><div><span class="section-kicker" id="section-kicker">PART 01 · READING</span><h2 id="exercise-title" tabindex="-1">阅读理解</h2></div><span class="points" id="points">3 小题 · 每题 2 分</span></div>
+        <p class="instructions" id="instructions">阅读左侧短文，根据文章内容，为每个问题选择一个最佳答案。</p>
+        <div id="reading-view" class="reading-layout">
+          <article class="reading-material" aria-labelledby="reading-title"><div class="material-label"><span>阅读材料</span><button id="text-size" class="text-button" aria-pressed="false" aria-label="放大文章字号">Aa <span>字号</span></button></div><h3 id="reading-title" lang="en">A Garden for Everyone</h3><p class="article-deck" lang="en">How a small idea brought a neighbourhood together.</p><div class="passage" lang="en">
+            <p><span class="paragraph-number">1</span>When Maya moved to a new neighbourhood, she noticed an empty piece of land behind the library. People often walked past it without stopping. Maya thought it could become a place where neighbours could grow vegetables and spend time together.</p>
+            <p><span class="paragraph-number">2</span>At first, only five people joined her. They cleared the rubbish, prepared the soil and planted tomatoes. Mr Chen, a retired gardener, showed the children how to care for the plants. Each Saturday, the group met to water the garden and share what they had learned.</p>
+            <p><span class="paragraph-number">3</span>Not everything went well. During a dry week, some plants began to die. Instead of giving up, the group collected rainwater in large containers and made a watering schedule. Soon, more neighbours offered to help.</p>
+            <p><span class="paragraph-number">4</span>By the end of summer, the garden was full of vegetables. The group gave part of the harvest to a local food bank. But Maya felt that the friendships were even more valuable than the vegetables. “We grew something more than food,” she said.</p>
+          </div><div class="material-footer">原创示例材料 <span>主题：社区与合作</span></div></article>
+          <div class="question-list" id="reading-questions" aria-label="阅读理解小题"></div>
+        </div>
+        <div id="cloze-view" class="cloze-layout" hidden>
+          <article class="cloze-material" aria-labelledby="cloze-title"><div class="material-label"><span>短文填空</span><span class="quiet">每空限填一个单词</span></div><h3 id="cloze-title" lang="en">A Different Kind of Saturday</h3><p class="article-deck" lang="en">A small act of kindness can make a difference.</p><div id="cloze-passage" class="passage cloze-passage" lang="en"></div><div class="material-footer">原创示例材料 <span>主题：志愿服务</span></div></article>
+          <div class="cloze-tip"><span class="tip-icon" aria-hidden="true">↹</span><span>按 <kbd>Tab</kbd> 跳到下一空；点击答题卡中的空位编号，可返回对应位置。</span></div>
+          <div id="cloze-feedback" class="cloze-feedback" hidden></div>
+        </div>
+        <footer class="exercise-footer"><span id="group-progress">本组已作答 0 / 3</span><button class="text-button next-group" id="next-group">下一组：短文填空 <span aria-hidden="true">→</span></button></footer>
+      </section>
+      <aside class="sidebar" aria-label="答题进度与提交">
+        <section class="answer-card"><div class="card-title"><h2>答题卡</h2><span id="total-counter">0 <span>/ 18</span></span></div><div class="progress-track" role="progressbar" aria-label="整体作答进度" aria-valuemin="0" aria-valuemax="18" aria-valuenow="0"><span id="progress-fill"></span></div><p id="progress-copy" class="progress-copy">还有 18 个小题待完成</p><div class="answer-group"><div class="answer-group-title"><button class="text-button" data-view="reading">01 阅读理解</button><span id="reading-count">0/3</span></div><div class="number-grid reading-grid" id="reading-map"></div></div><div class="answer-group"><div class="answer-group-title"><button class="text-button" data-view="cloze">02 短文填空</button><span id="cloze-count">0/15</span></div><div class="number-grid" id="cloze-map"></div></div><div class="map-legend"><span><i></i>未答</span><span><i class="filled"></i>已答</span><span id="lock-legend" hidden>提交后锁定</span></div><button id="jump-missing" class="missing-link">定位下一处未答 <span aria-hidden="true">↗</span></button></section>
+        <section class="save-card" aria-label="保存状态"><div><span class="save-icon" aria-hidden="true">✓</span><strong id="save-label" role="status">本机草稿已就绪</strong></div><p id="save-detail">选择或输入后自动保存</p></section>
+        <section class="submit-card"><button class="primary-button" id="submit">提交练习 <span aria-hidden="true">→</span></button><p id="submit-hint">提交后锁定答案，并展示本次练习反馈。</p></section>
+        <section class="result-card" id="result-card" hidden aria-live="polite"></section>
+        <p class="demo-note">此页面为交互演示，答案仅保存在本机浏览器，不计入正式测评。</p>
+      </aside>
+    </div>
+    <div class="page-footer"><span>KT DATA LAB</span><span>让每一道小题，都有清晰的作答记录。</span></div>
+  </main>
+  <dialog id="submit-dialog" aria-labelledby="dialog-title"><form method="dialog"><button class="dialog-close" value="cancel" aria-label="关闭">×</button><span class="section-kicker">READY TO SUBMIT</span><h2 id="dialog-title">准备提交这次练习？</h2><p id="dialog-summary"></p><div class="dialog-note">提交后，两个题组的答案将锁定。你可以查看每道小题的答案与解析。</div><div class="dialog-actions"><button class="secondary-button" value="cancel">继续检查</button><button class="primary-button" id="confirm-submit" value="submit">确认提交</button></div></form></dialog>
+  <dialog id="reset-dialog" aria-labelledby="reset-title"><form method="dialog"><h2 id="reset-title">重新开始体验？</h2><p>将清空此演示中已填写的答案和反馈。</p><div class="dialog-actions"><button class="secondary-button" value="cancel">保留答案</button><button class="primary-button" value="reset">清空并开始</button></div></form></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

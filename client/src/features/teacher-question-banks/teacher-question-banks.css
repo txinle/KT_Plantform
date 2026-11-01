@@ -263,7 +263,7 @@ input.kt-qb-visually-hidden { position: absolute; width: 1px !important; min-hei
   .kt-teacher-question-banks .kt-editor-section-toggle h2 { flex: 1; }
 }
 .kt-teacher-question-banks .kt-question-editor-page-header { margin-bottom: 16px; gap: 16px; }
-.kt-teacher-question-banks .kt-question-editor-page-header h1 { font-size: 1.5rem; margin-block: 6px; }
+.kt-teacher-question-banks .kt-question-editor-page-header h1 { font-size: var(--kt-font-title); margin-block: 6px; }
 .kt-teacher-question-banks .kt-question-editor-page-header p { font-size: 0.875rem; margin-top: 6px; }
 .kt-teacher-question-banks .kt-question-editor { gap: 12px; font-size: 0.875rem; }
 .kt-teacher-question-banks .kt-question-editor > .kt-card { display: grid; grid-template-columns: minmax(0, 1fr); padding: 16px; gap: 12px; min-width: 0; }
@@ -335,3 +335,75 @@ input.kt-qb-visually-hidden { position: absolute; width: 1px !important; min-hei
 }
 
 .kt-teacher-question-banks .kt-bank-question-description { margin: .35rem 0 0; max-width: 42rem; color: var(--kt-muted); font-size: .85rem; line-height: 1.6; }
+
+/* Site v2 question-bank surfaces. */
+.kt-teacher-question-banks { font-family:"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif; font-size:16px; line-height:1.5; background:#f5f7fa; color:#26364c; }
+.kt-teacher-question-banks .kt-qb-titlebar h1 { font-size:25px; font-weight:650; letter-spacing:-.7px; color:#182d49; margin-bottom:5px; }
+.kt-teacher-question-banks .kt-qb-titlebar p { font-size:15px; color:#637388; }
+.kt-teacher-question-banks .kt-qb-card, .kt-teacher-question-banks .kt-table-card { background:#fff; border:1px solid #e3e9f0; border-radius:10px; box-shadow:none; overflow:hidden; }
+.kt-teacher-question-banks .kt-qb-card h2 { font-size:19px; font-weight:650; color:#182d49; }
+.kt-teacher-question-banks .kt-qb-grid[data-panel=banks] { display:block; }
+.kt-teacher-question-banks .kt-bank-module-tabs .kt-qb-tabs { display:flex; gap:24px; border:0; border-bottom:1px solid #e3e9f0; border-radius:0; background:none; margin:0 0 16px; padding:0; }
+.kt-teacher-question-banks .kt-bank-module-tabs .kt-qb-tabs button { border:0; border-bottom:3px solid transparent; border-radius:0; padding:10px 1px; color:#637388; background:none; font-size:15px; font-weight:400; }
+.kt-teacher-question-banks .kt-bank-module-tabs .kt-qb-tabs button.is-active { border-bottom-color:#285dbb; color:#285dbb; font-weight:600; }
+.kt-teacher-question-banks .kt-site-bank-toolbar { display:flex; gap:14px; align-items:center; margin-bottom:14px; }
+.kt-teacher-question-banks .kt-site-bank-toolbar input { width:300px; }
+.kt-teacher-question-banks .kt-site-bank-toolbar span { margin-left:auto; color:#637388; font-size:13px; }
+.kt-teacher-question-banks .kt-site-bank-toolbar input, .kt-teacher-question-banks .kt-site-bank-toolbar select { border:1px solid #cdd7e3; border-radius:6px; min-height:44px; padding:10px 12px; background:white; font:inherit; }
+.kt-teacher-question-banks .kt-qb-table, .kt-teacher-question-banks .kt-bank-question-section .kt-table { border-collapse:collapse; font-size:15px; width:100%; }
+.kt-teacher-question-banks .kt-qb-table th, .kt-teacher-question-banks .kt-bank-question-section .kt-table th { padding:12px 16px; color:#637388; background:#fafbfd; font-size:14px; font-weight:500; border-bottom:1px solid #e3e9f0; }
+.kt-teacher-question-banks .kt-qb-table td, .kt-teacher-question-banks .kt-bank-question-section .kt-table td { padding:14px 16px; border-bottom:1px solid #e3e9f0; vertical-align:middle; }
+.kt-teacher-question-banks .kt-qb-table td small { font-size:13px; color:#637388; display:block; margin-top:6px; }
+.kt-teacher-question-banks .kt-qb-table strong { font-weight:600; color:#182d49; }
+.kt-teacher-question-banks .kt-qb-row-actions { gap:2px 13px; }
+.kt-teacher-question-banks .kt-qb-row-actions .kt-qb-btn { min-height:30px; border:0; background:none; padding:3px 0; color:#285dbb; font-size:13px; font-weight:400; }
+.kt-teacher-question-banks .kt-site-bank-types { display:flex; gap:4px 10px; flex-wrap:wrap; max-width:260px; font-size:13px; }
+.kt-teacher-question-banks .kt-site-bank-types span { white-space:nowrap; }
+.kt-teacher-question-banks .kt-site-bank-types b { color:#637388; font-weight:500; }
+.kt-teacher-question-banks .kt-site-bank-create { position:fixed; z-index:80; left:50%; top:50%; transform:translate(-50%,-50%); width:min(540px,calc(100vw - 32px)); max-height:calc(100vh - 32px); overflow:auto; padding:24px; box-shadow:0 0 0 100vmax #182d4966; }
+.kt-teacher-question-banks .kt-bank-question-description { font-size:13px; line-height:1.5; color:#637388; margin:6px 0 0; }
+.kt-teacher-question-banks .kt-bank-question-section .kt-kc-node { background:none; border:0; border-radius:0; padding:0; font-size:13px; }
+@media(max-width:760px) { .kt-teacher-question-banks .kt-site-bank-toolbar { flex-wrap:wrap; } .kt-teacher-question-banks .kt-site-bank-toolbar input { width:100%; } .kt-teacher-question-banks .kt-qb-desktop-table { display:block; overflow:auto; } .kt-teacher-question-banks .kt-qb-bank-card .kt-qb-mobile-list { display:none; } .kt-teacher-question-banks .kt-bank-module-tabs .kt-qb-tabs { overflow:auto; } }
+
+.kt-teacher-question-banks .kt-bank-view-link { border:0; background:none; padding:3px 0; color:#285dbb; font:inherit; cursor:pointer; }
+
+/* Site workflow structure: one header, one module nav, one compact filter row. */
+.kt-teacher-question-banks .kt-qb-titlebar{padding-top:0;margin-top:0;margin-bottom:20px}
+.kt-teacher-question-banks .kt-qb-titlebar h1{margin-top:0}
+.kt-teacher-question-banks .kt-site-bank-toolbar input{width:300px;flex:0 1 300px;min-width:0}
+.kt-teacher-question-banks .kt-site-bank-toolbar select{width:auto;flex:0 0 auto;max-width:220px}
+.kt-teacher-question-banks .kt-site-bank-toolbar>span{white-space:nowrap}
+.kt-teacher-question-banks .kt-qb-bank-table{table-layout:auto}
+.kt-teacher-question-banks .kt-qb-bank-table td:nth-child(2){min-width:180px}
+.kt-teacher-question-banks .kt-qb-bank-table td:last-child{min-width:180px}
+.kt-teacher-question-banks .kt-qb-kc-entry{margin-top:16px}
+.kt-teacher-question-banks .kt-bank-module-tabs .kt-qb-tabs>a,.kt-teacher-question-banks .kt-bank-module-nav a{padding:10px 1px;text-decoration:none;color:#637388;font-size:15px;white-space:nowrap;border-bottom:3px solid transparent}
+.kt-teacher-question-banks .kt-bank-module-nav{display:flex;gap:24px;border-bottom:1px solid #e3e9f0;margin-bottom:16px;overflow-x:auto}
+.kt-teacher-question-banks .kt-bank-module-nav a[aria-current]{border-bottom-color:#285dbb;color:#285dbb;font-weight:600}
+.kt-teacher-question-banks .kt-bank-meta-line{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:0 0 16px;margin:0 0 16px;border-bottom:1px solid #e3e9f0;font-size:13px;color:#637388}
+.kt-teacher-question-banks .kt-bank-meta-actions{display:flex;align-items:center;gap:12px;margin-left:auto}
+.kt-teacher-question-banks .kt-bank-meta-actions button{font-size:13px;min-height:34px;padding:6px 10px}
+.kt-teacher-question-banks .kt-bank-question-section{margin-top:0}
+.kt-teacher-question-banks .kt-bank-modal-form{display:grid;gap:18px}
+.kt-teacher-question-banks .kt-bank-modal-form label{display:grid;gap:7px;font-size:14px}
+.kt-teacher-question-banks .kt-bank-modal-form label>span{display:none}
+.kt-teacher-question-banks .kt-bank-modal-form input,.kt-teacher-question-banks .kt-bank-modal-form textarea,.kt-teacher-question-banks .kt-bank-modal-form select{box-sizing:border-box;width:100%;border:1px solid #cdd7e3;border-radius:6px;padding:10px 12px;font:inherit;background:#fff}
+@media(max-width:760px){.kt-teacher-question-banks .kt-site-bank-toolbar input{flex:1 1 100%}.kt-teacher-question-banks .kt-bank-module-nav{gap:20px}.kt-teacher-question-banks .kt-bank-meta-actions{margin-left:0}}
+
+.kt-teacher-question-banks .kt-qb-titlebar{min-height:0;align-items:center}
+.kt-teacher-question-banks .kt-qb-bank-card{padding:0}
+.kt-teacher-question-banks .kt-qb-bank-card .kt-qb-table-wrap{border:0;border-radius:0}
+.kt-teacher-question-banks .kt-qb-bank-card .kt-qb-table th{height:auto}
+.kt-teacher-question-banks .kt-qb-grid[data-panel=banks] .kt-qb-main-column{gap:0}
+.kt-teacher-question-banks .kt-qb-bank-card .kt-qb-table{font-size:14px}
+.kt-teacher-question-banks .kt-bank-question-section .kt-inline-actions{display:flex;align-items:center;gap:12px;flex-wrap:nowrap}
+.kt-teacher-question-banks .kt-bank-question-section .kt-inline-actions>*{white-space:nowrap}
+.kt-teacher-question-banks .kt-bank-question-section a{text-decoration:none}
+.kt-teacher-question-banks .kt-bank-question-section a:hover{text-decoration:underline}
+.kt-teacher-question-banks .kt-qb-breadcrumb,.kt-teacher-question-banks .kt-bank-breadcrumb{font-size:13px;min-height:0;line-height:20px;margin-bottom:12px;gap:9px}
+.kt-teacher-question-banks .kt-bank-detail-header{margin-bottom:20px}
+
+.kt-teacher-question-banks .kt-bank-detail-header .kt-kicker:empty{display:none}
+
+.kt-teacher-question-banks .kt-bank-secondary-table{padding:0}
+.kt-teacher-question-banks .kt-bank-secondary-table .kt-inline-actions{display:flex;align-items:center;gap:12px}

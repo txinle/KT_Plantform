@@ -1,6 +1,7 @@
 import { createApiClient } from '@/api/client'
 import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
+import type { GroupMemberView, QuestionGroupView } from '@/question-content/question-group-content'
 
 export type TeacherExperiment = components['schemas']['TeacherExperiment']
 export type TeacherExperimentCollection = components['schemas']['TeacherExperimentCollection']
@@ -30,7 +31,7 @@ export type SamplingInventory = {
     item_count: number; question_bank_id: number
   }>
 }
-export type ExperimentDefinitionInput = Omit<components['schemas']['PatchedTeacherExperiment'], 'sampling'> & {
+export type ExperimentDefinitionInput = Omit<components['schemas']['PatchedTeacherExperimentInput'], 'sampling'> & {
   name: string
   question_bank_ids: number[]
   sampling?: {
@@ -124,13 +125,32 @@ export type ManualGradeResponse = {
   task_progress: ManualGradingTotals
 }
 
+export interface StudentPreviewQuestion extends GroupMemberView {
+  educational_type: string
+  title: string
+  instructions: string
+}
+export interface StudentPreviewUnit {
+  key: string
+  kind: string
+  maximum_score: string
+  question: StudentPreviewQuestion | null
+  group: QuestionGroupView | null
+}
+export interface TeacherStudentPreview {
+  experiment_id: number
+  experiment_name: string
+  source: 'draft' | 'frozen'
+  units: StudentPreviewUnit[]
+}
+
 type ApiClient = ReturnType<typeof createApiClient>
 
 export function createTeacherExperimentApi(client: ApiClient) {
   return {
-    list(courseId: number, page = 1, archived = false) {
+    list(courseId: number, page = 1, archived = false, query = '') {
       return client.get<TeacherExperimentCollection>(
-        `/api/v1/teacher/courses/${courseId}/experiments/?page=${page}${archived ? '&archived=1' : ''}`,
+        `/api/v1/teacher/courses/${courseId}/experiments/?page=${page}${archived ? '&archived=1' : ''}${query.trim() ? `&q=${encodeURIComponent(query.trim())}` : ''}`,
       )
     },
     archive(courseId: number, experimentId: number) {
@@ -144,6 +164,9 @@ export function createTeacherExperimentApi(client: ApiClient) {
         `/api/v1/teacher/courses/${courseId}/experiments/${experimentId}/restore/`,
         { method: 'POST' },
       )
+    },
+    studentPreview(courseId: number, experimentId: number) {
+      return client.get<TeacherStudentPreview>(`/api/v1/teacher/courses/${courseId}/experiments/${experimentId}/student-preview/`)
     },
     detail(courseId: number, experimentId: number) {
       return client.get<TeacherExperiment>(

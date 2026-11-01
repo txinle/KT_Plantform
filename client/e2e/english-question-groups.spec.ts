@@ -33,7 +33,6 @@ interface Preview {
   }
 }
 interface Plan { id: number; plan_revision: number; can_preview: boolean; blocking_issues: unknown[] }
-interface PublicationJob { status: string; status_url: string; error_message: string; error_code: string }
 interface Runtime {
   session_id: number; question_group: Group; group_responses: Record<string, unknown>
   actions: { save_draft_url: string }
@@ -47,6 +46,7 @@ interface ExportJob { job_id: string; status: string; download_url: string | nul
 
 const baseURL = process.env.KT_E2E_BASE_URL || 'http://127.0.0.1:8000'
 const clozeAnswers = ['Saturday', 'museum', 'bus', 'nine', 'pairs', 'maps', 'notes', 'lunch', 'tree', 'warm', 'water', 'guide', 'wrong', 'wrong', 'wrong']
+test.use({ actionTimeout: 20_000 })
 
 function django(args: string[], environment: Record<string, string> = {}) {
   const result = spawnSync(requireServerPython(), ['manage.py', ...args], {
@@ -96,6 +96,10 @@ async function screenshots(page: Page, info: TestInfo, prefix: string, content: 
     const layout = await page.evaluate(() => {
       const workarea = document.querySelector('.kt-assessment-layout')?.getBoundingClientRect()
       const question = document.querySelector('.kt-assessment-question')?.getBoundingClientRect()
+      const tabs = document.querySelector('.kt-group-tabs')?.getBoundingClientRect()
+      const answerCard = document.querySelector('.kt-assessment-nav')?.getBoundingClientRect()
+      const detail = document.querySelector<HTMLElement>('[data-question-detail]')
+      const detailBox = detail?.getClientRects().length ? detail.getBoundingClientRect() : undefined
       const overflowingNavigation = Array.from(document.querySelectorAll<HTMLElement>('.kt-assessment-nav__item'))
         .filter(element => element.getClientRects().length && element.scrollWidth > element.clientWidth + 1)
         .map(element => ({ text: element.textContent, scrollWidth: element.scrollWidth, width: element.clientWidth }))
@@ -103,7 +107,10 @@ async function screenshots(page: Page, info: TestInfo, prefix: string, content: 
         scrollWidth: document.documentElement.scrollWidth, viewport: innerWidth,
         headerHeight: document.querySelector('.kt-app-header')?.getBoundingClientRect().height,
         mainWidth: document.querySelector('main')?.getBoundingClientRect().width,
-        workareaWidth: workarea?.width, questionTop: question?.top, overflowingNavigation,
+        workareaWidth: workarea?.width, questionTop: question?.top,
+        tabsBottom: tabs?.bottom, answerCardWidth: answerCard?.width, answerCardTop: answerCard?.top, overflowingNavigation,
+        detailBox: detailBox && { left: detailBox.left, right: detailBox.right, top: detailBox.top, bottom: detailBox.bottom, width: detailBox.width },
+        bodyFont: getComputedStyle(document.body).fontFamily,
       }
     })
     const fonts = await content.locator('p, legend, label, button, small, input, textarea, select, th, td').evaluateAll(elements => elements
@@ -113,16 +120,28 @@ async function screenshots(page: Page, info: TestInfo, prefix: string, content: 
         class: element.getAttribute('class') || '', text: (element.textContent || (element instanceof HTMLInputElement ? element.value : '')).trim().slice(0, 120),
         fontSize: Number.parseFloat(getComputedStyle(element).fontSize) })))
     const minimumFont = Math.min(...fonts.map(element => element.fontSize))
-    const lowFontNodes = fonts.filter(element => element.fontSize < 14)
+    const lowFontNodes = fonts.filter(element => element.fontSize < 12)
     const metrics = info.outputPath(`${prefix}-${size.label}-layout.json`)
     writeFileSync(metrics, JSON.stringify({ ...layout, minimumFont, lowFontNodes }))
     await info.attach(`${prefix}-${size.label}-layout`, { path: metrics, contentType: 'application/json' })
     await page.screenshot({ path: info.outputPath(`${prefix}-${size.label}.png`), fullPage: true })
     expect(layout.scrollWidth, `${prefix} ${size.label}: horizontal page overflow`).toBeLessThanOrEqual(layout.viewport + 1)
-    expect(minimumFont, `${prefix} ${size.label}: business text below 14px`).toBeGreaterThanOrEqual(14)
+    // Site v2 uses 12px status labels and 13px import filters; body/table text stays larger.
+    expect(minimumFont, `${prefix} ${size.label}: text smaller than the Site v2 minimum`).toBeGreaterThanOrEqual(12)
+    expect(layout.bodyFont).toMatch(/Segoe UI.*Microsoft YaHei.*PingFang SC.*sans-serif/)
+    if (size.label === 'desktop-1440x900' && layout.headerHeight) expect(layout.headerHeight).toBe(68)
+    if (layout.detailBox) {
+      expect(layout.detailBox.left).toBeGreaterThanOrEqual(15)
+      expect(layout.detailBox.right).toBeLessThanOrEqual(size.width - 15)
+      expect(layout.detailBox.top).toBeGreaterThanOrEqual(15)
+      expect(layout.detailBox.bottom).toBeLessThanOrEqual(size.height - 15)
+      expect(layout.detailBox.width).toBeCloseTo(Math.min(1060, size.width - 32), 0)
+    }
     if (layout.workareaWidth && size.label === 'desktop-1440x900') {
       expect(layout.workareaWidth / layout.viewport).toBeGreaterThanOrEqual(0.9)
-      expect(layout.questionTop).toBeLessThanOrEqual(144)
+      expect(layout.answerCardWidth).toBeCloseTo(260, 0)
+      expect(layout.questionTop).toBeCloseTo(layout.answerCardTop!, 0)
+      if (layout.tabsBottom) expect(layout.questionTop! - layout.tabsBottom).toBeCloseTo(22, 0)
       expect(layout.overflowingNavigation).toEqual([])
     }
   }
@@ -147,6 +166,12 @@ async function importGroups(page: Page, fixture: Fixture, scope: 'course' | 'sta
   expect(fullPreview.preview.rows).toHaveLength(22)
   expect(fullPreview.preview.summary).toEqual({ ready: 22, draft: 0, duplicate: 0, invalid: 0 })
   expect(fullPreview.preview.groups.map(group => group.kind).sort()).toEqual(['cloze', 'reading', 'words'])
+  await expect(page.locator('[data-import-preview] .kt-desktop-only [data-import-row]')).toHaveCount(10)
+  await page.getByRole('button', { name: '下一页', exact: true }).click()
+  await expect(page.locator('[data-import-preview] .kt-desktop-only [data-import-row]')).toHaveCount(2)
+  await page.getByRole('combobox', { name: /每页题目数/ }).selectOption('20')
+  await expect(page.locator('[data-import-preview] .kt-desktop-only [data-import-row]')).toHaveCount(12)
+  await expect(page.getByLabel('预览状态汇总')).toContainText('12 道完整题')
   await screenshots(page, info, `${scope}-all-eleven-types`, page.locator('main'))
   // A stable 18-item stress fixture exercises long grouped input independently of downloadable examples.
   const csv = readFileSync(new URL('./fixtures/english-group-stress.csv', import.meta.url), 'utf8')
@@ -163,16 +188,21 @@ async function importGroups(page: Page, fixture: Fixture, scope: 'course' | 'sta
     ['reading-3', 'reading', 3, 6, 'ready'], ['cloze-15', 'cloze', 15, 15, 'ready'],
   ])
   expect(preview.preview.rows.every(row => row.classification === 'ready')).toBe(true)
-  const groupPreview = page.getByRole('region', { name: '题组预览', exact: true })
-  await expect(groupPreview.getByRole('checkbox', { name: '选择整个题组 reading-3', exact: true })).toBeChecked()
-  await expect(groupPreview.getByRole('checkbox', { name: '选择整个题组 cloze-15', exact: true })).toBeChecked()
+  const rows = page.locator('[data-import-preview] .kt-desktop-only [data-import-row]')
+  await expect(rows).toHaveCount(2)
+  for (const group of preview.preview.groups) await expect(page.locator(`.kt-desktop-only [data-import-row="group:${group.group_id}"] input[type="checkbox"]`)).toBeChecked()
+  await rows.nth(0).getByRole('button', { name: /查看/ }).click()
+  const groupPreview = page.locator('[data-question-detail]').getByRole('region', { name: '完整题目预览', exact: true })
   await groupPreview.locator('[data-student-group-preview]').click()
   await expect(groupPreview.locator('[data-group-question]')).toHaveCount(3)
   await expect(groupPreview).not.toContainText('答案：')
   await screenshots(page, info, `${scope}-import-reading`, groupPreview)
-  await groupPreview.getByRole('button', { name: /cloze-15 A class visit/ }).click()
+  await page.getByRole('button', { name: '关闭题目详情', exact: true }).click()
+  await rows.nth(1).getByRole('button', { name: /查看/ }).click()
+  await groupPreview.locator('[data-student-group-preview]').click()
   await expect(groupPreview.locator('[data-group-item]')).toHaveCount(15)
   await screenshots(page, info, `${scope}-import-cloze`, groupPreview)
+  await page.getByRole('button', { name: '关闭题目详情', exact: true }).click()
   const confirmResponse = page.waitForResponse(result => new URL(result.url()).pathname === `${api}imports/questions/confirm/` && result.request().method() === 'POST')
   await page.locator(scope === 'course' ? '[data-confirm-import]' : '[data-confirm-standalone-import]').click()
   const confirmed = await confirmResponse
@@ -182,15 +212,15 @@ async function importGroups(page: Page, fixture: Fixture, scope: 'course' | 'sta
   expect(groups).toHaveLength(2)
   expect(groups.reduce((count, group) => count + group.members.length, 0)).toBe(18)
   for (const group of groups) {
-    await page.goto(`${path}?edit_group=${group.id}`)
-    const editor = page.getByRole('region', { name: '整组编辑', exact: true })
-    await expect(editor.getByLabel('材料标题', { exact: true })).toHaveValue(group.title)
+    await page.goto(`${path}questions/0/edit/?group=${group.id}`)
+    const editor = page.getByRole('region', { name: '完整题目编辑', exact: true })
+    await expect(editor.getByLabel('题目标题', { exact: true })).toHaveValue(group.title)
     await expect(editor.locator('[data-group-max-score]')).toHaveCount(group.members.length)
     const instructions = `${group.instructions}\nAnswer every item.`
     await editor.getByLabel('作答说明', { exact: true }).fill(instructions)
     await screenshots(page, info, `${scope}-edit-${group.kind}`, editor)
     const saved = page.waitForResponse(result => new URL(result.url()).pathname === `${api}groups/${group.id}/` && result.request().method() === 'PUT')
-    await editor.getByRole('button', { name: '保存整个题组', exact: true }).click()
+    await editor.getByRole('button', { name: '保存题目', exact: true }).click()
     const response = await saved
     expect(response.status(), await response.text()).toBe(200)
     const updated = (await response.json()).data as Group
@@ -202,19 +232,12 @@ async function importGroups(page: Page, fixture: Fixture, scope: 'course' | 'sta
   return { bank, api }
 }
 
-async function waitPublication(page: Page, job: PublicationJob) {
-  await expect.poll(async () => {
-    const current = await data<PublicationJob>(await page.request.get(job.status_url))
-    expect(['failed', 'stale'], `${current.error_code}: ${current.error_message}`).not.toContain(current.status)
-    return current.status
-  }, { timeout: 90_000, intervals: [300, 700, 1500] }).toBe('succeeded')
-}
-
 async function publishCourse(page: Page, fixture: Fixture, info: TestInfo) {
   await page.goto(`/teacher/courses/${fixture.course_id}/experiments/${fixture.course_experiment_id}/edit/`)
-  const fullPool = page.locator('input[name="sampling_mode"][value="all"]')
+  await page.locator('#sampling-advanced-mode').selectOption('total_count')
+  const fullPool = page.getByLabel('每位学生总题数', { exact: true })
   await expect(fullPool).toBeEnabled()
-  await fullPool.check()
+  await fullPool.fill('2')
   const description = 'R3 English groups configured through the teacher form.'
   await page.getByLabel('实验描述（可选）', { exact: true }).fill(description)
   await screenshots(page, info, 'course-publish-form', page.locator('form').filter({ has: fullPool }))
@@ -224,20 +247,27 @@ async function publishCourse(page: Page, fixture: Fixture, info: TestInfo) {
   const response = await saved
   expect(response.status(), await response.text()).toBe(200)
   expect(response.request().postDataJSON()).toMatchObject({ description,
-    sampling: { mode: null, total_count: null, match_scope: 'any_level', nodes: [], type_quotas: [] } })
-  expect((await response.json()).data.sampling.mode).toBeNull()
+    sampling: { mode: 'total_count', total_count: 2, match_scope: 'any_level', nodes: [], type_quotas: [] } })
+  expect((await response.json()).data.sampling.mode).toBe('total_count')
   await expect(page).toHaveURL(new RegExp(`/teacher/courses/${fixture.course_id}/experiments/${fixture.course_experiment_id}/$`))
-  let plan = await mutation<Plan>(page, `/api/v1/teacher/courses/${fixture.course_id}/experiments/${fixture.course_experiment_id}/publish-plans/`, {}, 'POST', [200, 201])
-  plan = await mutation<Plan>(page, `/api/v1/teacher/publish-plans/${plan.id}/setup/`, {
-    expected_revision: plan.plan_revision, classes: [{ class_id: fixture.class_id, excluded_student_ids: [] }],
-    default_schedule: { opens_at: null, closes_at: null }, schedules: [{ class_id: fixture.class_id, mode: 'default', opens_at: null, closes_at: null }],
-  }, 'PUT')
+  await page.getByRole('button', { name: '发布到班级', exact: true }).click()
+  const classRow = page.locator('.kt-publish-class-table tbody tr').filter({ has: page.locator(`#publish-class-${fixture.class_id}`) })
+  await classRow.locator('input[type="checkbox"]').check()
+  const savedPlan = page.waitForResponse(result => /\/publish-plans\/\d+\/setup\/$/.test(new URL(result.url()).pathname) && result.request().method() === 'PUT')
+  await page.locator('[data-action="save-draft"]').click()
+  const plan = await data<Plan>(await savedPlan)
   expect(plan.can_preview, JSON.stringify(plan.blocking_issues)).toBe(true)
-  await waitPublication(page, await mutation<PublicationJob>(page, `/api/v1/teacher/publish-plans/${plan.id}/preview/`, { expected_revision: plan.plan_revision }, 'POST', [202]))
+  await screenshots(page, info, 'course-class-schedule', page.locator('.kt-sitev2-plan-layout'))
+  await page.locator('[data-action="run-preview"]').click()
+  await expect(page.locator('[data-action="enter-confirmation"]')).toBeVisible({ timeout: 90_000 })
   const review = await data<{ plan: Plan; preview: { item_count: number; participant_count: number } }>(await page.request.get(`/api/v1/teacher/publish-plans/${plan.id}/review/`))
   expect(review.preview.item_count).toBe(18)
   expect(review.preview.participant_count).toBe(1)
-  await waitPublication(page, await mutation<PublicationJob>(page, `/api/v1/teacher/publish-plans/${plan.id}/commit/`, { expected_revision: review.plan.plan_revision }, 'POST', [202]))
+  await screenshots(page, info, 'course-publication-review', page.locator('main'))
+  await page.locator('[data-action="enter-confirmation"]').click()
+  await screenshots(page, info, 'course-publication-confirmation', page.locator('main'))
+  await page.locator('[data-action="commit-publish"]').click()
+  await expect(page).toHaveURL(new RegExp(`/teacher/courses/${fixture.course_id}/experiments/${fixture.course_experiment_id}/$`), { timeout: 90_000 })
   const tasks = await data<{ items: Array<{ id: number; class_id: number }> }>(await page.request.get(`/api/v1/teacher/experiments/${fixture.course_experiment_id}/class-tasks/`))
   expect(tasks.items).toHaveLength(1)
   expect(tasks.items[0]!.class_id).toBe(fixture.class_id)
@@ -303,7 +333,7 @@ async function answerPaper(page: Page, fixture: Fixture, info: TestInfo) {
     const radio = reading.locator('[data-group-question]').nth(index).locator(`input[value="${choices[index]}"]`)
     await save(page, choices[index]!, () => radio.check())
   }
-  await page.getByRole('navigation', { name: '题组切换', exact: true }).getByRole('button', { name: /A class visit/ }).click()
+  await page.getByRole('navigation', { name: '题目切换', exact: true }).getByRole('button', { name: /短文填空/ }).click()
   const cloze = page.locator('.kt-question-group--cloze')
   await expect(cloze.locator('[data-group-item]')).toHaveCount(15)
   noGradingFields((await currentRuntime(page)).question_group)
@@ -319,12 +349,12 @@ async function answerPaper(page: Page, fixture: Fixture, info: TestInfo) {
     await save(page, clozeAnswers[index]!, () => field.fill(clozeAnswers[index]!))
   }
   await screenshots(page, info, `${scope}-student-cloze`, cloze)
-  await page.getByRole('navigation', { name: '题组切换', exact: true }).getByRole('button', { name: /A helpful reader/ }).click()
+  await page.getByRole('navigation', { name: '题目切换', exact: true }).getByRole('button', { name: /阅读理解/ }).click()
   for (let index = 0; index < choices.length; index += 1) await expect(reading.locator('[data-group-question]').nth(index).locator(`input[value="${choices[index]}"]`)).toBeChecked()
   await page.reload()
   await expect(page.locator('.kt-assessment-focus')).toHaveAttribute('data-init-state', 'ready', { timeout: 30_000 })
   await expect(reading.locator('input[value="A"]').first()).toBeChecked()
-  await page.getByRole('navigation', { name: '题组切换', exact: true }).getByRole('button', { name: /A class visit/ }).click()
+  await page.getByRole('navigation', { name: '题目切换', exact: true }).getByRole('button', { name: /短文填空/ }).click()
   for (let index = 0; index < clozeAnswers.length; index += 1) await expect(cloze.getByRole('textbox', { name: `第 ${index + 1} 空`, exact: true })).toHaveValue(clozeAnswers[index]!)
   await submitWholePaper(page)
   const summary = await data<Summary>(await page.request.get(`/api/v1/student/sessions/${runtime.session_id}/summary/`))
@@ -338,7 +368,7 @@ async function answerPaper(page: Page, fixture: Fixture, info: TestInfo) {
   expect(summary.result.groups.map(group => group.members.length)).toEqual([3, 15])
   expect(summary.result.items.filter(item => item.is_correct)).toHaveLength(14)
   expect(summary.result.groups.flatMap(group => group.members).every(member => 'response_value' in member)).toBe(true)
-  const results = page.getByRole('region', { name: '题组结果', exact: true })
+  const results = page.getByRole('region', { name: '题目结果', exact: true })
   await expect(results.locator('.kt-question-group--reading input[value="A"]').first()).toBeChecked()
   await expect(results.locator('.kt-question-group--reading input[value="B"]').nth(1)).toBeChecked()
   await expect(results.getByRole('textbox', { name: '第 1 空', exact: true })).toHaveValue('Saturday')

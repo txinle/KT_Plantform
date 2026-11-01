@@ -9,6 +9,7 @@ import QuestionGroupResults from '@/question-content/QuestionGroupResults.vue'
 import type { StudentLearningExperiment } from '../student-courses/api'
 import { getStudentCourseApi } from '../student-courses/api'
 import { useComparisonPolling } from '../student-learning/useComparisonPolling'
+import './student-results.css'
 
 const route = useRoute()
 const courseId = Number(route.params.courseId)

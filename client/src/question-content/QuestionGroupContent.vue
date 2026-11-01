@@ -9,7 +9,8 @@ const props = withDefaults(defineProps<{
   activeItemKey?: string | null
   pendingItemKey?: string | null
   readonly?: boolean
-}>(), { activeItemKey: null, pendingItemKey: null, readonly: false })
+  memberWriteAllowed?: Record<string, boolean>
+}>(), { activeItemKey: null, pendingItemKey: null, readonly: false, memberWriteAllowed: () => ({}) })
 const emit = defineEmits<{
   'request-activate': [intent: GroupActivationIntent]
   'answer-change': [change: GroupAnswerChange]
@@ -17,10 +18,11 @@ const emit = defineEmits<{
 const members = computed(() => new Map(props.group.members.map(member => [member.item_key, member])))
 const composing = new Set<string>()
 function activate(itemKey: string) {
-  if (!props.readonly && itemKey !== props.activeItemKey) emit('request-activate', { itemKey })
+  if (editable(itemKey) && itemKey !== props.activeItemKey) emit('request-activate', { itemKey })
 }
+function editable(itemKey: string) { return !props.readonly && props.memberWriteAllowed?.[itemKey] !== false }
 function change(itemKey: string, answer: unknown) {
-  if (props.readonly || composing.has(itemKey)) return
+  if (!editable(itemKey) || composing.has(itemKey)) return
   if (itemKey !== props.activeItemKey) emit('request-activate', { itemKey, answer, hasAnswer: true })
   else emit('answer-change', { itemKey, answer })
 }
@@ -33,31 +35,32 @@ function finishComposition(itemKey: string, event: Event) {
 
 <template>
   <section class="kt-question-group" :class="`kt-question-group--${group.kind}`" :aria-busy="Boolean(pendingItemKey)" :data-group-id="group.group_id">
-    <header v-if="group.title || group.instructions" class="kt-question-group__heading">
-      <h2 v-if="group.title" :lang="group.content_language">{{ group.title }}</h2>
+    <header v-if="group.instructions" class="kt-question-group__heading">
       <p v-if="group.instructions">{{ group.instructions }}</p>
     </header>
-    <p v-if="group.kind === 'words'" class="kt-question-group__word-bank" aria-label="共享词库">{{ group.word_bank?.join(' · ') }}</p>
     <div class="kt-question-group__body">
       <article class="kt-question-group__material" :lang="group.content_language" aria-label="共享材料">
+        <h2 v-if="group.title">{{ group.title }}</h2>
+        <div v-if="group.kind === 'words'" class="kt-question-group__word-bank" aria-label="共享词库"><span v-for="word in group.word_bank" :key="word">{{ word }}</span></div>
         <template v-if="group.kind === 'cloze' || group.kind === 'words'">
           <template v-for="(segment, index) in group.material_segments" :key="index">
             <span v-if="segment.kind === 'text'">{{ segment.text }}</span>
             <label v-else class="kt-question-group__blank" :class="{ 'is-active': activeItemKey === segment.item_key }">
               <span>{{ members.get(segment.item_key)?.group_order }}</span>
-              <select v-if="group.kind === 'words'" :data-group-item="segment.item_key" :aria-label="`第 ${members.get(segment.item_key)?.group_order} 空`" :value="value(segment.item_key)" :disabled="readonly" @focus="activate(segment.item_key)" @change="change(segment.item_key, ($event.target as HTMLSelectElement).value)">
+              <select v-if="group.kind === 'words'" :data-group-item="segment.item_key" :aria-label="`第 ${members.get(segment.item_key)?.group_order} 空`" :value="value(segment.item_key)" :disabled="!editable(segment.item_key)" @focus="activate(segment.item_key)" @change="change(segment.item_key, ($event.target as HTMLSelectElement).value)">
                 <option value="">请选择</option><option v-for="word in group.word_bank" :key="word" :value="word">{{ word }}</option>
               </select>
-              <input v-else :data-group-item="segment.item_key" :aria-label="`第 ${members.get(segment.item_key)?.group_order} 空`" :value="value(segment.item_key)" :disabled="readonly" autocomplete="off" autocapitalize="off" :spellcheck="false" @focus="activate(segment.item_key)" @input="change(segment.item_key, ($event.target as HTMLInputElement).value)" @compositionstart="composing.add(segment.item_key)" @compositionend="finishComposition(segment.item_key, $event)">
+              <input v-else :data-group-item="segment.item_key" :aria-label="`第 ${members.get(segment.item_key)?.group_order} 空`" :value="value(segment.item_key)" :disabled="!editable(segment.item_key)" autocomplete="off" autocapitalize="off" :spellcheck="false" @focus="activate(segment.item_key)" @input="change(segment.item_key, ($event.target as HTMLInputElement).value)" @compositionstart="composing.add(segment.item_key)" @compositionend="finishComposition(segment.item_key, $event)">
             </label>
           </template>
         </template>
         <template v-else>{{ group.material }}</template>
       </article>
       <div v-if="group.kind === 'reading'" class="kt-question-group__questions">
-        <fieldset v-for="member in group.members" :key="member.item_key" :data-group-question="member.item_key" :disabled="readonly" :class="{ 'is-active': activeItemKey === member.item_key }">
-          <legend><span>{{ member.group_order }}.</span> {{ member.text }}</legend>
-          <span v-if="member.max_score" class="kt-question-group__score">{{ member.max_score }} 分</span>
+        <fieldset v-for="member in group.members" :key="member.item_key" :data-group-question="member.item_key" :disabled="!editable(member.item_key)" :class="{ 'is-active': activeItemKey === member.item_key }">
+          <legend class="kt-question-group__legend">小题 {{ member.group_order }}</legend>
+          <div class="kt-question-group__meta"><span>小题 {{ member.group_order }}<template v-if="member.max_score"> · {{ member.max_score }} 分</template></span><button v-if="!readonly" type="button" :data-clear-group-item="member.item_key" :disabled="!editable(member.item_key) || !responsesByItemKey[member.item_key]" @click="change(member.item_key, null)">清除</button></div>
+          <h3>{{ member.text }}</h3>
           <label v-for="option in member.options" :key="option.key" class="kt-question-group__option" :class="{ 'is-selected': responsesByItemKey[member.item_key] === option.key }">
             <input type="radio" :name="`group-${group.group_id}-${member.item_key}`" :value="option.key" :checked="responsesByItemKey[member.item_key] === option.key" @focus="activate(member.item_key)" @change="change(member.item_key, option.key)">
             <strong>{{ option.key }}</strong><span>{{ option.text }}</span>
@@ -65,5 +68,6 @@ function finishComposition(itemKey: string, event: Event) {
         </fieldset>
       </div>
     </div>
+    <div v-if="!readonly && group.kind !== 'reading'" class="kt-question-group__clear-blanks"><button v-for="member in group.members" :key="member.item_key" type="button" :data-clear-group-item="member.item_key" :disabled="!editable(member.item_key) || !responsesByItemKey[member.item_key]" @click="change(member.item_key, '')">清除第 {{ member.group_order }} 空</button></div>
   </section>
 </template>

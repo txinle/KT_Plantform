@@ -136,6 +136,7 @@ onMounted(load)
     </header>
 
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
+    <Alert v-if="detail.experiment.time_mode === 'per_question'" tone="warning">历史单题时限：{{ detail.experiment.per_question_time_limit_seconds }} 秒。草稿需明确改选无时限或实验总时限后发布；已冻结实验的历史作答规则保持不变。</Alert>
     <ol class="kt-standalone-lifecycle" aria-label="实验生命周期"><li class="is-complete">配置草稿</li><li :class="{ 'is-current': detail.experiment.status === 'draft', 'is-complete': detail.experiment.status !== 'draft' }">发布快照</li><li :class="{ 'is-complete': ['closed', 'archived'].includes(detail.experiment.status) }">结束采集</li></ol>
     <form v-if="showDelete" class="kt-inline-panel kt-inline-panel--danger" @submit.prevent="remove"><h2>确认永久删除实验</h2><p>这会删除实验、发布版本、会话和作答记录。输入 <code>delete</code> 后确认。</p><label>确认<input v-model="deleteConfirmation" autocomplete="off"></label><div class="kt-inline-actions"><Button type="submit" :disabled="working || deleteConfirmation !== 'delete'">{{ working ? '正在删除…' : '永久删除' }}</Button><button class="kt-text-button" type="button" @click="showDelete = false">取消</button></div></form>
 

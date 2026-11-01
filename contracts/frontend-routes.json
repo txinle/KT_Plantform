@@ -198,6 +198,10 @@
       "path": "teacher/courses/<int:course_pk>/experiments/<int:pk>/"
     },
     {
+      "name": "courses:experiment_student_preview",
+      "path": "teacher/courses/<int:course_pk>/experiments/<int:pk>/student-preview/"
+    },
+    {
       "name": "courses:experiment_edit",
       "path": "teacher/courses/<int:course_pk>/experiments/<int:pk>/edit/"
     },

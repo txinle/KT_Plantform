@@ -10,6 +10,14 @@ const cloze = {
 }
 
 describe('QuestionGroupContent', () => {
+  it('clears one reading response without touching siblings and previews never emit input', async () => {
+    const group = { ...cloze, kind: 'reading' as const, members: [member('a1', 1), member('a2', 2)] }
+    const wrapper = mount(QuestionGroupContent, { props: { group, responsesByItemKey: { a1: 'A', a2: 'B' }, activeItemKey: 'a1' } })
+    await wrapper.get('[data-clear-group-item="a2"]').trigger('click')
+    expect(wrapper.emitted('request-activate')?.at(-1)).toEqual([{ itemKey: 'a2', answer: null, hasAnswer: true }])
+    await wrapper.setProps({ readonly: true })
+    expect(wrapper.find('[data-clear-group-item]').exists()).toBe(false)
+  })
   it('records selected word values through the existing per-item answer event', async () => {
     const wrapper = mount(QuestionGroupContent, { props: { group: { ...cloze, kind: 'words', word_bank: ['went', 'came'] }, responsesByItemKey: {}, activeItemKey: 'a1' } })
     await wrapper.get('select[data-group-item="a1"]').setValue('went')

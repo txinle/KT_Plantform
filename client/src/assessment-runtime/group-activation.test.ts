@@ -25,3 +25,16 @@ it('keeps a failed activation from applying an answer to the outgoing attempt', 
   await expect(queue.enqueue({ itemKey: 'a2', answer: '', hasAnswer: true })).rejects.toThrow('save failed')
   expect(applied).toEqual([])
 })
+
+it('serializes each member confidence after its actual entry and before another member answer', async () => {
+  let entered = 'a1'
+  const operations: string[] = []
+  const queue = createGroupActivationQueue({
+    active: () => entered,
+    activate: async key => { operations.push(`enter:${key}`); entered = key },
+    apply: change => { operations.push(`answer:${entered}:${change.answer}`) },
+    applyConfidence: async (key, value) => { expect(entered).toBe(key); operations.push(`confidence:${key}:${value}`) },
+  })
+  await Promise.all([queue.enqueue({ itemKey: 'a2', confidence: '0' }), queue.enqueue({ itemKey: 'a1', answer: '', hasAnswer: true })])
+  expect(operations).toEqual(['enter:a2', 'confidence:a2:0', 'enter:a1', 'answer:a1:'])
+})

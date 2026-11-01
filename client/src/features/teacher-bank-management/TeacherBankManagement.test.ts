@@ -26,6 +26,16 @@ import TeacherSharedBanks from './TeacherSharedBanks.vue'
 const routerLink = { props: ['to'], template: '<a :href="to"><slot /></a>' }
 
 describe('Teacher bank-management Vue views', () => {
+  it('shows the real target bank, return action and Site empty import state before file selection', async () => {
+    const wrapper = mount(TeacherQuestionImport, { global: { stubs: { RouterLink: routerLink } } })
+    await flushPromises()
+    expect(wrapper.get('input[aria-label="目标题库"]').element).toHaveProperty('value', '原题库')
+    expect(wrapper.get('[data-import-empty]').text()).toContain('选择文件后先检查内容')
+    expect(wrapper.get('.qimp-heading a').attributes('href')).toBe('/teacher/courses/7/banks/11/')
+    expect(mocks.api.previewQuestionImport).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.api.bankEditor.mockResolvedValue({
@@ -118,7 +128,7 @@ describe('Teacher bank-management Vue views', () => {
     expect(wrapper.get('[data-question-template="docx"]').attributes('href')).toBe('/api/v1/teacher/import-templates/question-groups.docx')
     expect(input.attributes('accept')).toBe('.csv,.xlsx')
 
-    await wrapper.get('#question-import-format-docx').setValue()
+    await wrapper.get('#question-import-format').setValue('docx')
     expect(input.attributes('accept')).toBe('.docx')
 
     const file = new File(['导入题目'], 'questions.docx')
@@ -139,6 +149,7 @@ describe('Teacher bank-management Vue views', () => {
     expect(readyDesktop.text()).toContain('共 5 个 KC · 4 条关系')
     expect(readyMobile.text()).toContain('共 5 个 KC · 4 条关系')
     expect(readyDesktop.get('.kt-question-import__multiline').text()).toContain('导入题目\n第二行')
+    await readyDesktop.get('button[aria-label="查看题目 1"]').trigger('click')
     const detail = wrapper.get('[data-question-detail]')
     expect(detail.text()).toContain('题目 1 详细信息')
     expect(detail.text()).toContain('这是解析说明。\n第二行。')
@@ -158,7 +169,7 @@ describe('Teacher bank-management Vue views', () => {
     expect(wrapper.find('[data-import-row="row-invalid"]').exists()).toBe(true)
   })
 
-  it('includes grouped members in the file summary while filtering only standalone rows', async () => {
+  it('filters and selects each complete group once alongside ordinary questions', async () => {
     const row = { row_id: 'group-row', sequence: 1, text: 'Why?', question_type: 'single_choice', question_type_label: '单选题', options: [{ key: 'A', text: 'Because' }], answer: 'A', accepted_answers: [], classification: 'ready', errors: [], group_order: 1 }
     mocks.api.previewQuestionImport.mockResolvedValue({ preview_id: 'group-preview', preview: {
       rows: [row, { ...row, row_id: 'standalone-row', sequence: 2 }],
@@ -171,8 +182,14 @@ describe('Teacher bank-management Vue views', () => {
     await input.trigger('change')
     await flushPromises()
     expect(wrapper.get('[aria-label="预览状态汇总"] .is-ready').text()).toContain('导入后可用 2')
-    expect(wrapper.get('[data-import-filter="ready"]').text()).toContain('导入后可用 1')
-    expect(wrapper.get('[data-confirm-import]').text()).toBe('确认导入 2 道题')
+    expect(wrapper.get('[data-import-filter="ready"]').text()).toContain('导入后可用 2')
+    expect(wrapper.find('[data-import-row="group-row"]').exists()).toBe(false)
+    expect(wrapper.get('[data-import-row="group:g1"]').text()).toContain('阅读理解')
+    await wrapper.get('[data-import-row="group:g1"] input[type=checkbox]').setValue(false)
+    expect(wrapper.get('[data-confirm-import]').text()).toBe('确认导入 1 道题')
+    await wrapper.get('[data-confirm-import]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.confirmQuestionImport).toHaveBeenCalledWith(7, 11, 'group-preview', ['standalone-row'], [])
     wrapper.unmount()
   })
 
@@ -285,6 +302,7 @@ describe('Teacher bank-management Vue views', () => {
     expect(wrapper.get('[data-file-summary]').text()).toContain('questions.xlsx')
     expect(wrapper.get('[data-confirm-import]').text()).toContain('确认导入 3 道题')
     await wrapper.get('[data-import-row="row-second"] input[type="checkbox"]').setValue(false)
+    await wrapper.get('[data-import-row="row-ready"] button').trigger('click')
     await wrapper.get('[data-next-question]').trigger('click')
     await wrapper.get('[data-next-question]').trigger('click')
     expect(wrapper.get('[data-question-detail]').text()).toContain('题目 3 详细信息')

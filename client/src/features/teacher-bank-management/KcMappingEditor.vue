@@ -152,28 +152,29 @@ watch(editing, observeCards)
 </template>
 
 <style scoped>
-.kt-kc-editor { --node-pad: 12px; --node-gap: 10px; --node-font: 15px; --node-control: 36px; --tree-gap: 20px; display: grid; gap: 16px; min-width: 0; }
+.kt-kc-editor { border:1px solid #e3e9f0; border-radius:8px; padding:16px; margin:20px 0; background:#fff; --node-pad: 12px; --node-gap: 10px; --node-font: 15px; --node-control: 36px; --tree-gap: 20px; display: grid; gap: 16px; min-width: 0; }
 .kt-kc-editor.is-compact { --node-pad: 10px; --node-gap: 8px; --node-font: 14px; --node-control: 34px; --tree-gap: 16px; }
 .kt-kc-editor.is-dense { --node-pad: 8px; --node-gap: 6px; --node-control: 32px; --tree-gap: 12px; }
+.kt-kc-editor h2 { font-size:17px; font-weight:650; }
 .kt-kc-clear { color: var(--kt-danger); border-color: var(--kt-danger); }
 .kt-kc-editor-canvas { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 40px; align-items: center; outline-offset: 8px; }
-.kt-kc-connectors { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; color: var(--kt-action-600); }
-.kt-kc-connectors path { fill: none; stroke: currentColor; stroke-width: 1.5px; }
+.kt-kc-connectors { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; color: #a7bbd6; }
+.kt-kc-connectors path { fill: none; stroke: currentColor; stroke-width: 1px; }
 .kt-kc-connectors circle { fill: currentColor; stroke: var(--kt-surface); stroke-width: 1px; }
 .kt-kc-editor-branches, .kt-kc-editor-leaves { display: grid; gap: var(--tree-gap); min-width: 0; }
 .kt-kc-editor-branch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px; align-items: center; }
-:deep(.kt-kc-editor-node) { position: relative; display: grid; gap: var(--node-gap); min-width: 0; padding: 0 var(--node-pad) var(--node-pad); border: 1px solid color-mix(in srgb, var(--kt-action-600) 32%, white); border-radius: 10px; background: var(--kt-surface); }
-:deep(.kt-kc-editor-node__heading) { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; min-height: 32px; margin: 0 calc(-1 * var(--node-pad)); padding: 4px var(--node-pad); border-radius: 9px 9px 0 0; background: var(--kt-selection-bg, #f0efff); color: var(--kt-muted); font-size: 14px; }
+:deep(.kt-kc-editor-node) { position: relative; display: grid; gap: var(--node-gap); min-width: 0; padding: 0 var(--node-pad) var(--node-pad); border: 1px solid #becde1; border-radius: 7px; background: #fff; }
+:deep(.kt-kc-editor-node__heading) { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; min-height: 32px; margin: 0 calc(-1 * var(--node-pad)); padding: 4px var(--node-pad); border-radius: 9px 9px 0 0; background: #edf3ff; color: var(--kt-muted); font-size: 14px; }
 :deep(.kt-kc-editor-node__name) { overflow-wrap: anywhere; font-size: var(--node-font); line-height: 1.45; }
 :deep(.kt-kc-editor-node select), :deep(.kt-kc-editor-node input) { min-width: 0; max-width: 100%; min-height: var(--node-control); padding: 6px 8px; font-size: 14px; line-height: 1.4; }
 :deep(.kt-kc-editor-node button), :deep(.kt-kc-editor-node summary) { min-height: var(--node-control); font-size: 14px; line-height: 1.4; }
 :deep(.kt-kc-editor-node [data-remove]) { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; border: 0; background: transparent; padding: 4px 0; color: var(--kt-danger); cursor: pointer; }
-:deep(.kt-kc-editor-add) { border: 0; border-radius: 6px; padding: 6px 10px; text-align: left; color: var(--kt-action-600); background: var(--kt-selection-bg, #f0efff); font-weight: 600; }
+:deep(.kt-kc-editor-add) { border: 0; border-radius: 6px; padding: 6px 10px; text-align: left; color: var(--kt-action-600); background: #edf3ff; font-weight: 600; }
 :deep(.kt-kc-editor-add:disabled) { opacity: .5; }
 :deep(.kt-kc-editor-details) { border-top: 1px solid var(--kt-border); padding-top: 4px; }
 :deep(.kt-kc-editor-details summary) { display: list-item; padding: 6px 0; color: var(--kt-muted); cursor: pointer; }
 :deep(.kt-kc-editor-details label) { display: grid; gap: 6px; margin-bottom: 8px; font-size: 14px; }
-.kt-kc-editor-summary { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border-radius: 8px; background: var(--kt-selection-bg, #f0efff); font-size: 14px; overflow-wrap: anywhere; }
+.kt-kc-editor-summary { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border-radius: 0; background: #f5f7fa; font-size: 14px; overflow-wrap: anywhere; }
 .kt-kc-editor-summary span { min-width: 0; flex: 1; }
 .kt-kc-editor-summary { align-items: center; }
 .kt-kc-editor-empty { color: var(--kt-muted); font-size: 14px; }
@@ -192,7 +193,7 @@ watch(editing, observeCards)
 .kt-kc-dialog-scroll { overflow: auto; max-height: 62dvh; padding: 4px; }
 .kt-kc-dialog:not(.is-editing) .kt-kc-editor-canvas { min-width: 680px; }
 .kt-kc-dialog footer { display: flex; justify-content: center; gap: 12px; border-top: 1px solid var(--kt-border); margin-top: 20px; padding-top: 16px; }
-:deep(.kt-kc-editor-node.is-readonly) { padding-bottom: 12px; min-height: 80px; background: var(--kt-selection-bg, #f0efff); }
+:deep(.kt-kc-editor-node.is-readonly) { padding-bottom: 12px; min-height: 80px; background: #fff; }
 .kt-kc-pan-hint { display: none; }
 @media (max-width: 767px) { .kt-kc-dialog { padding: 16px; } .kt-kc-pan-hint { display: block; } }
 </style>

@@ -99,6 +99,19 @@ describe('TeacherExperimentPublishPlan', () => {
     })
   })
 
+  it('keeps schedule and roster as separate Site panels and labels open-ended selected schedules', async () => {
+    const wrapper = mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+    expect(wrapper.get('#publish-roster').element.closest('.kt-publish-plan-panel')).toBeNull()
+    expect(wrapper.get('.kt-publish-plan-panel').findAll('h2')[0]?.text()).toBe('班级与排期')
+    await wrapper.get('#publish-class-5').setValue(true)
+    const row = wrapper.get('.kt-publish-class-table tbody tr')
+    expect(row.text()).toContain('立即开放')
+    expect(row.text()).toContain('无截止')
+    expect(mocks.api.saveSetup).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('shows setup before the participant page finishes loading', async () => {
     let resolveParticipants!: (value: unknown) => void
     mocks.api.participants.mockReturnValueOnce(new Promise((resolve) => { resolveParticipants = resolve }))
@@ -434,8 +447,8 @@ describe('TeacherExperimentPublishPlan', () => {
     expect(wrapper.get('.kt-publish-confirmation').text()).toContain('不采集')
     expect(wrapper.get('.kt-publish-confirmation').text()).toContain('总限时')
     expect(wrapper.get('.kt-publish-confirmation').text()).toContain('45 分钟')
-    expect(wrapper.get('.kt-publish-confirmation').text()).toContain('单题限时')
-    expect(wrapper.get('.kt-publish-confirmation').text()).toContain('90 秒')
+    expect(wrapper.get('.kt-publish-confirmation').text()).not.toContain('单题限时')
+    expect(wrapper.get('.kt-publish-confirmation').text()).not.toContain('90 秒')
     await wrapper.get('[data-action="commit-publish"]').trigger('click')
     await wrapper.get('[data-action="commit-publish"]').trigger('click')
     expect(mocks.api.commit).toHaveBeenCalledTimes(1)

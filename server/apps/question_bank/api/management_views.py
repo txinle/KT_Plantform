@@ -192,25 +192,25 @@ def _question_answer_text(question):
 
 
 def _question_content_metadata(question):
-    return {'group_id': question.group_id, 'group_order': question.group_order, 'blank_id': question.blank_id,
+    return {'updated_at': question.updated_at, 'group_id': question.group_id, 'group_order': question.group_order, 'blank_id': question.blank_id,
         'title': question.title, 'instructions': question.instructions, 'educational_type': question.educational_type, 'max_score': format(question.max_score, '.2f'), 'content_language': question.content_language,
         'text_match_case_sensitive': question.text_match_case_sensitive, 'text_match_policy_version': question.text_match_policy_version}
 
 
 def _question_editor_payload(course, bank, question):
-    options = {item.key.lower(): item.text for item in question.options.all()}
+    options = {item.key.lower(): item.text for item in question.options.all()} if question.pk else {}
     return {
         "course": _course_payload(course),
         "bank": {"id": bank.pk, "name": bank.name},
         "question": {
             **_question_content_metadata(question),
-            "id": question.pk,
+            "id": question.pk or 0,
             "sequence": question.sequence,
             "code": question.code,
             "text": question.text,
             "question_type": question.question_type,
             "status": question.status,
-            "draft_reasons": readiness_issues(question) if question.status == Question.Status.DRAFT else [],
+            "draft_reasons": readiness_issues(question) if question.pk and question.status == Question.Status.DRAFT else [],
             "teacher_difficulty": (
                 format(question.teacher_difficulty, "f")
                 if question.teacher_difficulty is not None
@@ -230,7 +230,7 @@ def _question_editor_payload(course, bank, question):
             "correct_answer_text": _question_answer_text(question),
             "accepted_answers_text": ";".join(question.accepted_answers or []),
             "options": {key: options.get(key, "") for key in "abcdef"},
-            "kc_mapping": project_question_kc_mapping(question),
+            "kc_mapping": project_question_kc_mapping(question) if question.pk else {'schema_version': 'question-kc-tree-v2', 'root_kc_code': None, 'nodes': [], 'mapping_hash': ''},
         },
         "question_types": [
             {"value": value, "label": label}
@@ -337,18 +337,18 @@ def _standalone_bank_payload(bank):
 
 
 def _standalone_question_editor_payload(bank, question):
-    options = {item.key.lower(): item.text for item in question.options.all()}
+    options = {item.key.lower(): item.text for item in question.options.all()} if question.pk else {}
     return {
         "bank": {"id": bank.pk, "name": bank.name},
         "question": {
             **_question_content_metadata(question),
-            "id": question.pk,
+            "id": question.pk or 0,
             "sequence": question.sequence,
             "code": question.code,
             "text": question.text,
             "question_type": question.question_type,
             "status": question.status,
-            "draft_reasons": readiness_issues(question) if question.status == Question.Status.DRAFT else [],
+            "draft_reasons": readiness_issues(question) if question.pk and question.status == Question.Status.DRAFT else [],
             "teacher_difficulty": (
                 format(question.teacher_difficulty, "f")
                 if question.teacher_difficulty is not None
@@ -724,7 +724,10 @@ class TeacherQuestionEditorView(TeacherQuestionBankManagementApiView):
     def get(self, request, course_id, bank_id, question_id):
         course = _course_for_teacher(request.user, course_id)
         bank = _bank_for_course(course, bank_id)
-        require_writable_bank_content(bank)
+        if request.query_params.get('readonly') != '1':
+            require_writable_bank_content(bank)
+        if question_id == 0:
+            return Response(_question_editor_payload(course, bank, Question(bank=bank, sequence=1, question_type='single_choice', correct_answer='', status='draft')))
         question = get_object_or_404(
             bank.questions.prefetch_related("options", "concept_links__concept"),
             pk=question_id,
@@ -747,6 +750,10 @@ class TeacherQuestionEditorView(TeacherQuestionBankManagementApiView):
             )
             if question.group_id:
                 return _api_error_response('question_group_editor_required', '题组成员请通过题组编辑器整体编辑。', status.HTTP_409_CONFLICT)
+            if request.data.get('expected_updated_at'):
+                from django.utils.dateparse import parse_datetime
+                if parse_datetime(str(request.data['expected_updated_at'])) != question.updated_at:
+                    return _api_error_response('question_revision_conflict', '题目已被其他操作更新，请重新加载后再保存。', status.HTTP_409_CONFLICT)
             form = QuestionEditForm(
                 _query_data(request.data), instance=question, course=course
             )
@@ -758,6 +765,22 @@ class TeacherQuestionEditorView(TeacherQuestionBankManagementApiView):
             pk=question.pk
         )
         return Response(_question_editor_payload(course, bank, question))
+
+    @extend_schema(request=ManagementQuestionEditorRequestSerializer, responses={201: ManagementQuestionEditorResponseSerializer})
+    def post(self, request, course_id, bank_id, question_id):
+        if question_id != 0:
+            return self.http_method_not_allowed(request)
+        course = _course_for_teacher(request.user, course_id)
+        bank = _bank_for_course(course, bank_id)
+        with transaction.atomic():
+            course, bank = lock_writable_course_bank(course, bank, content=True)
+            sequence = (bank.questions.aggregate(value=Max('sequence'))['value'] or 0) + 1
+            form = QuestionEditForm(_query_data(request.data), instance=Question(bank=bank, sequence=sequence, correct_answer='', status='draft'), course=course)
+            if not form.is_valid():
+                return _form_error_response(form)
+            question = form.save()
+            log_action(request, 'question.create', question, {'course_id': course.pk})
+        return Response(_question_editor_payload(course, bank, question), status=status.HTTP_201_CREATED)
 
 
 class TeacherQuestionImportPreviewView(TeacherQuestionBankManagementApiView):
@@ -1272,6 +1295,13 @@ class TeacherStandaloneQuestionBankDetailView(TeacherQuestionBankManagementApiVi
         can_edit_metadata = _can_edit_standalone_bank(request.user, bank)
         from apps.question_bank.services.question_groups import project_question_group, project_bank_unit_summary
         groups = [project_question_group(group) for group in bank.groups.all()]
+        extra = {}
+        if request.query_params.get('complete_only') == '1':
+            from ..services.complete_questions import complete_questions
+            rows = complete_questions(bank, query=request.query_params.get('q', '').strip(), question_type=request.query_params.get('question_type', ''), status=request.query_params.get('status', ''))
+            paginator = FixedPageNumberPagination()
+            page = paginator.paginate_queryset(rows, request, view=self)
+            extra = {'questions': page, 'question_page': paginator.get_paginated_response(page).data['page']}
         return Response(
             {
                 "bank": _standalone_bank_payload(bank),
@@ -1284,7 +1314,7 @@ class TeacherStandaloneQuestionBankDetailView(TeacherQuestionBankManagementApiVi
                     _standalone_question_payload(bank, question)
                     for question in questions
                 ],
-                "groups": groups, "unit_summary": project_bank_unit_summary(bank, groups),
+                "groups": groups, "unit_summary": project_bank_unit_summary(bank, groups), **extra,
             }
         )
 
@@ -1322,7 +1352,10 @@ class TeacherStandaloneQuestionEditorView(TeacherQuestionBankManagementApiView):
     )
     def get(self, request, bank_id, question_id):
         bank = _standalone_bank_for_user(request.user, bank_id)
-        require_writable_bank_content(bank)
+        if request.query_params.get('readonly') != '1':
+            require_writable_bank_content(bank)
+        if question_id == 0:
+            return Response(_standalone_question_editor_payload(bank, Question(bank=bank, sequence=1, question_type='single_choice', correct_answer='', status='draft')))
         question = get_object_or_404(
             bank.questions.prefetch_related("options", "concept_links__concept"),
             pk=question_id,
@@ -1344,6 +1377,10 @@ class TeacherStandaloneQuestionEditorView(TeacherQuestionBankManagementApiView):
             )
             if question.group_id:
                 return _api_error_response('question_group_editor_required', '题组成员请通过题组编辑器整体编辑。', status.HTTP_409_CONFLICT)
+            if request.data.get('expected_updated_at'):
+                from django.utils.dateparse import parse_datetime
+                if parse_datetime(str(request.data['expected_updated_at'])) != question.updated_at:
+                    return _api_error_response('question_revision_conflict', '题目已被其他操作更新，请重新加载后再保存。', status.HTTP_409_CONFLICT)
             form = QuestionEditForm(_query_data(request.data), instance=question)
             if not form.is_valid():
                 return _form_error_response(form)
@@ -1352,6 +1389,21 @@ class TeacherStandaloneQuestionEditorView(TeacherQuestionBankManagementApiView):
             pk=question.pk
         )
         return Response(_standalone_question_editor_payload(bank, question))
+
+
+    @extend_schema(request=ManagementQuestionEditorRequestSerializer, responses={201: ManagementStandaloneQuestionEditorResponseSerializer})
+    def post(self, request, bank_id, question_id):
+        if question_id != 0:
+            return self.http_method_not_allowed(request)
+        with transaction.atomic():
+            bank = lock_writable_bank_content(_standalone_bank_for_user(request.user, bank_id))
+            sequence = (bank.questions.aggregate(value=Max('sequence'))['value'] or 0) + 1
+            form = QuestionEditForm(_query_data(request.data), instance=Question(bank=bank, sequence=sequence, correct_answer='', status='draft'))
+            if not form.is_valid():
+                return _form_error_response(form)
+            question = form.save()
+            log_action(request, 'question.create', question, {'bank_id': bank.pk})
+        return Response(_standalone_question_editor_payload(bank, question), status=status.HTTP_201_CREATED)
 
 
 class TeacherStandaloneQuestionImportPreviewView(TeacherQuestionBankManagementApiView):

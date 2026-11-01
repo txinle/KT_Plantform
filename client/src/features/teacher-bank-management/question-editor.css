@@ -1,0 +1,18 @@
+.kt-question-document { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); gap:24px; align-items:start; }
+.kt-question-document .kt-question-editor { display:grid; gap:20px; padding:24px; border:1px solid #e3e9f0; border-radius:10px; background:#fff; }
+.kt-question-document .kt-question-editor > .kt-card { padding:0; border:0; border-radius:0; box-shadow:none; }
+.kt-question-document .kt-question-editor-heading { display:block; margin-bottom:12px; }
+.kt-question-document .kt-question-editor-heading > svg { display:none; }
+.kt-question-document h2 { font-size:19px; font-weight:650; }
+.kt-question-document label, .kt-question-document .kt-field-label { font-size:14px; font-weight:600; }
+.kt-question-document input:not([type=checkbox]):not([type=radio]), .kt-question-document textarea, .kt-question-document select { width:100%; border:1px solid #cdd7e3; border-radius:6px; padding:10px 12px; background:#fff; font:inherit; color:#26364c; }
+.kt-document-preview { min-width:0; position:sticky; top:91px; border:1px solid #e3e9f0; border-radius:10px; background:#fff; overflow:hidden; }
+.kt-document-preview > header { display:flex; justify-content:space-between; gap:14px; padding:14px 20px; border-bottom:1px solid #e3e9f0; color:#637388; font-size:14px; }
+.kt-document-preview > section { padding:28px; }
+.kt-document-preview .kt-document-material { white-space:pre-wrap; overflow-wrap:anywhere; font:20px/1.85 Georgia,"Times New Roman",serif; color:#2c394d; }
+.kt-document-preview h2 { font:600 29px/1.35 Georgia,"Times New Roman",serif; margin-bottom:22px; }
+.kt-document-instructions { font-size:14px; color:#637388; white-space:pre-wrap; }
+.kt-document-preview .kt-document-option { display:flex; align-items:flex-start; gap:11px; border:1px solid #e3e9f0; padding:12px; border-radius:6px; line-height:1.6; font-size:16px; margin-top:9px; }
+.kt-document-preview footer { padding:14px 20px; background:#fafbfd; border-top:1px solid #e3e9f0; color:#637388; font-size:13px; }
+@media(max-width:1000px) { .kt-question-document { grid-template-columns:1fr; } .kt-document-preview { position:static; } }
+@media(max-width:760px) { .kt-question-document .kt-question-editor { padding:20px 16px; } .kt-document-preview > section { padding:24px 20px; } }

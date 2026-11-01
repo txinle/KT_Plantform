@@ -99,6 +99,7 @@ class ExperimentActivitySerializer(serializers.Serializer):
 
 
 class TeacherExperimentSerializer(serializers.ModelSerializer):
+    student_preview_url = serializers.SerializerMethodField()
     activity = serializers.SerializerMethodField()
     cross_experiment_item_policy = serializers.ChoiceField(
         choices=Experiment.CrossExperimentItemPolicy.choices,
@@ -150,6 +151,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
     )
     can_edit = serializers.SerializerMethodField()
     can_manage = serializers.SerializerMethodField()
+    can_publish = serializers.SerializerMethodField()
     can_archive = serializers.SerializerMethodField()
     can_restore = serializers.SerializerMethodField()
 
@@ -196,9 +198,11 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "confidence_probability",
             "can_edit",
             "can_manage",
+            "can_publish",
             "can_archive",
             "can_restore",
             "activity",
+            "student_preview_url",
             "created_at",
             "updated_at",
         )
@@ -224,6 +228,11 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             self._activity_map = experiment_activity_map(instances, can_grade=self.get_can_manage(experiment))
         return ExperimentActivitySerializer(self._activity_map[experiment.pk]).data
 
+    def get_student_preview_url(self, experiment) -> str | None:
+        if not self.get_can_manage(experiment):
+            return None
+        return f"/teacher/courses/{experiment.course_id}/experiments/{experiment.pk}/student-preview/"
+
     def get_can_manage(self, experiment) -> bool:
         if 'can_manage' in self.context:
             return self.context['can_manage']
@@ -233,6 +242,12 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
 
     def get_can_archive(self, experiment) -> bool:
         return self.get_can_manage(experiment) and experiment.status != Experiment.Status.ARCHIVED
+
+    def get_can_publish(self, experiment) -> bool:
+        configuration = experiment.frozen_release_snapshot.configuration if experiment.frozen_release_snapshot_id else {}
+        return bool(self.get_can_manage(experiment)
+                    and experiment.status != Experiment.Status.ARCHIVED
+                    and configuration.get("time_mode", experiment.time_mode) != Experiment.TimeMode.PER_QUESTION)
 
     def get_can_restore(self, experiment) -> bool:
         return self.get_can_manage(experiment) and experiment.status == Experiment.Status.ARCHIVED
@@ -511,6 +526,11 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             )
 
         time_mode = self._effective_value(attrs, "time_mode")
+        from ..services import validate_new_time_configuration
+        try:
+            validate_new_time_configuration(time_mode, attrs.get("per_question_time_limit_seconds"))
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict) from exc
         total_limit = self._effective_value(attrs, "total_time_limit_minutes")
         question_limit = self._effective_value(
             attrs, "per_question_time_limit_seconds"
@@ -623,6 +643,13 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         if instance.selected_question_bank_ids != original_bank_ids:
             sync_experiment_questions(instance)
         return instance
+
+
+class TeacherExperimentInputSerializer(TeacherExperimentSerializer):
+    time_mode = serializers.ChoiceField(
+        choices=[(value, label) for value, label in Experiment.TimeMode.choices if value != Experiment.TimeMode.PER_QUESTION],
+        required=False,
+    )
 
 
 class PageMetadataSerializer(serializers.Serializer):
@@ -1071,10 +1098,11 @@ class ScheduleRevisionInputSerializer(serializers.Serializer):
     extend_minutes = serializers.IntegerField(min_value=1, max_value=10080, required=False)
     reopen = serializers.BooleanField(required=False, default=False)
     total_time_limit_minutes = serializers.IntegerField(min_value=1, required=False)
-    per_question_time_limit_seconds = serializers.IntegerField(min_value=1, required=False)
     reason = serializers.CharField(max_length=500, allow_blank=True, required=False)
 
     def validate(self, attrs):
+        if "per_question_time_limit_seconds" in self.initial_data:
+            raise serializers.ValidationError({"per_question_time_limit_seconds": "单题计时已停用，历史单题时限不可修改。"})
         if (
             attrs.get("opens_at") is not None
             and attrs.get("closes_at") is not None

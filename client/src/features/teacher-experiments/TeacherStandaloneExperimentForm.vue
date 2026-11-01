@@ -102,9 +102,7 @@ function definitionInput(): StandaloneExperimentInput {
     feedback_release_policy: form.feedback_release_policy,
     time_mode: form.time_mode,
     total_time_limit_minutes: form.time_mode === 'total' ? form.total_time_limit_minutes : null,
-    per_question_time_limit_seconds: form.time_mode === 'per_question'
-      ? form.per_question_time_limit_seconds
-      : null,
+    per_question_time_limit_seconds: null,
     resume_mode: form.resume_mode,
     confidence_mode: form.confidence_mode,
     confidence_sampling_unit: form.confidence_sampling_unit,
@@ -148,6 +146,10 @@ async function load() {
 }
 
 async function submit() {
+  if (form.time_mode === 'per_question') {
+    error.value = '历史草稿使用单题计时，请明确选择无时限或实验总时限。'
+    return
+  }
   saving.value = true
   error.value = ''
   fieldErrors.value = {}
@@ -216,8 +218,8 @@ onMounted(load)
     <section class="kt-numbered-form-section" aria-labelledby="standalone-definition-runtime">
       <div class="kt-numbered-form-section__heading"><span aria-hidden="true">3</span><h2 id="standalone-definition-runtime">时间与续答</h2></div>
       <div class="kt-card kt-numbered-form-section__content">
-        <fieldset class="kt-radio-group kt-compact-form-row"><legend>时间模式</legend><div class="kt-radio-options"><label v-for="choice in choices?.time_modes || []" :key="choice.value"><input v-model="form.time_mode" name="time_mode" type="radio" :value="choice.value"><span>{{ choice.label }}</span></label></div></fieldset>
-        <div class="kt-form-grid"><FormField for-id="standalone-total-time" label="实验总时限（分钟）" :error="fieldErrors.total_time_limit_minutes"><input id="standalone-total-time" v-model.number="form.total_time_limit_minutes" type="number" min="1" :disabled="form.time_mode !== 'total'"></FormField><FormField for-id="standalone-question-time" label="单题时限（秒）" :error="fieldErrors.per_question_time_limit_seconds"><input id="standalone-question-time" v-model.number="form.per_question_time_limit_seconds" type="number" min="1" :disabled="form.time_mode !== 'per_question'"></FormField></div>
+        <fieldset class="kt-radio-group kt-compact-form-row"><legend>时间模式</legend><div class="kt-radio-options"><label v-for="choice in (choices?.time_modes || []).filter(choice => choice.value !== 'per_question')" :key="choice.value"><input v-model="form.time_mode" name="time_mode" type="radio" :value="choice.value"><span>{{ choice.label }}</span></label></div></fieldset>
+        <Alert v-if="form.time_mode === 'per_question'" tone="warning">历史单题时限：{{ form.per_question_time_limit_seconds }} 秒。请明确选择无时限或实验总时限。</Alert><div class="kt-form-grid"><FormField for-id="standalone-total-time" label="实验总时限（分钟）" :error="fieldErrors.total_time_limit_minutes"><input id="standalone-total-time" v-model.number="form.total_time_limit_minutes" type="number" min="1" :disabled="form.time_mode !== 'total'"></FormField></div>
         <fieldset class="kt-radio-group kt-compact-form-row"><legend>断点续答</legend><div class="kt-radio-options"><label v-for="choice in choices?.resume_modes || []" :key="choice.value"><input v-model="form.resume_mode" name="resume_mode" type="radio" :value="choice.value"><span>{{ choice.label }}</span></label></div></fieldset>
       </div>
     </section>

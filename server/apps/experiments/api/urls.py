@@ -1,5 +1,6 @@
 from django.urls import include, path
 
+from .student_preview_views import TeacherStudentPreviewView
 from .archive_views import TeacherExperimentArchiveView, TeacherExperimentRestoreView
 from .deletion_views import (
     TeacherClassExperimentRemoveView,
@@ -49,6 +50,8 @@ from .standalone_views import (
 
 
 urlpatterns = [
+    path("courses/<int:course_id>/experiments/<int:experiment_id>/student-preview/",
+         TeacherStudentPreviewView.as_view(), name="teacher-experiment-student-preview"),
     path("courses/<int:course_id>/experiments/<int:experiment_id>/restore/",
          TeacherExperimentRestoreView.as_view(), name="teacher-experiment-restore"),
     path("courses/<int:course_id>/experiments/<int:experiment_id>/archive/",

@@ -383,6 +383,12 @@ function openScheduleEditor(classId: number) {
   scheduleEditClassId.value = classId
 }
 
+function displayClassSchedule(option: ClassOption, boundary: 'opens_at' | 'closes_at') {
+  if (!selected[option.id]) return '未安排'
+  const value = classScheduleTime(option, boundary)
+  return value ? displayDate(value) : boundary === 'opens_at' ? '立即开放' : '无截止'
+}
+
 function displayDate(value: string | null | undefined) {
   return value ? new Date(value).toLocaleString('zh-CN') : '未设置'
 }
@@ -430,11 +436,14 @@ onMounted(async () => {
       <div class="kt-experiment-title-row"><h1>{{ step === 1 ? '发布到班级' : (confirmCommit ? '发布确认' : '发布前检查') }}</h1></div>
       <p>{{ step === 1 ? '先选择参与班级并设置开放时段，保存草稿不会运行发布检查。' : '检查当前发布计划，再确认创建正式班级任务。' }}</p>
     </div>
+    <div class="kt-experiment-page-header__actions"><a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/`">返回实验详情</a></div>
   </header>
 
-  <ol class="kt-publish-stepper" aria-label="发布进度">
-    <li :aria-current="step === 1 ? 'step' : undefined" :class="{ 'is-current': step === 1, 'is-complete': step === 2 }"><span>{{ step === 2 ? '✓' : '01' }}</span><strong>班级与排期</strong></li>
-    <li :aria-current="step === 2 ? 'step' : undefined" :class="{ 'is-current': step === 2 }"><span>02</span><strong>发布确认</strong></li>
+  <ol class="kt-sitev2-steps" aria-label="发布进度">
+    <li class="done"><span>01</span>实验定义</li>
+    <li :class="{ current: step === 1, done: step === 2 }" :aria-current="step === 1 ? 'step' : undefined"><span>02</span>班级与排期</li>
+    <li :class="{ current: step === 2 && !confirmCommit, done: confirmCommit }" :aria-current="step === 2 && !confirmCommit ? 'step' : undefined"><span>03</span>发布前检查</li>
+    <li :class="{ current: confirmCommit }" :aria-current="confirmCommit ? 'step' : undefined"><span>04</span>确认发布</li>
   </ol>
 
   <p v-if="loading" role="status">正在加载发布计划…</p>
@@ -455,48 +464,51 @@ onMounted(async () => {
     <Alert v-else-if="!error && plan.can_preview === true" tone="success">设置完整，可以执行发布检查。</Alert>
     <Alert v-else-if="!error" tone="warning">当前草稿尚不完整，仍可保存并稍后继续。<span v-if="plan.missing_requirements.length">缺少：{{ plan.missing_requirements.join('、') }}</span></Alert>
 
-    <section v-if="plan.global_inventory?.candidate_count || plan.student_inventory?.checked" class="kt-card kt-publish-inventory" aria-labelledby="publish-inventory-title">
-      <div class="kt-section-heading"><div><h2 id="publish-inventory-title">抽题库存检查</h2><p>全局候选未按学生历史过滤；学生级库存用于本次发布资格判断。</p></div></div>
-      <div class="kt-publish-inventory__grid">
-        <div><strong>题库全局候选</strong><span>{{ plan.global_inventory?.candidate_count ?? 0 }} 道，计划 {{ plan.global_inventory?.requested_count ?? 0 }} 道</span></div>
-        <div><strong>本次学生过滤后</strong><span v-if="plan.student_inventory?.checked">{{ plan.student_inventory.minimum_candidate_count }} 道（参与者 {{ plan.student_inventory.participant_count }} 人）</span><span v-else>选择班级后检查</span></div>
-      </div>
-      <div v-if="plan.student_inventory?.checked && plan.student_inventory.question_types.length" class="kt-table-scroll">
-        <table class="kt-table kt-publish-inventory__table">
-          <thead><tr><th>题型</th><th>全局可用</th><th>本次最低可用</th><th>不足学生</th></tr></thead>
-          <tbody><tr v-for="row in plan.student_inventory?.question_types || []" :key="String(row.question_type)"><td>{{ questionTypeLabels[String(row.question_type)] || row.question_type }}</td><td>{{ plan.global_inventory?.question_types.find((item) => item.question_type === row.question_type)?.available ?? 0 }}</td><td>{{ row.minimum_available }}</td><td>{{ row.insufficient_student_count }}</td></tr></tbody>
-        </table>
-      </div>
-    </section>
+    <div class="kt-sitev2-plan-layout">
+      <div class="kt-sitev2-plan-main">
+        <section class="kt-card kt-publish-plan-panel" aria-labelledby="publish-classes">
+          <div class="kt-section-heading"><div><h2 id="publish-classes">班级与排期</h2><p>计划版本 {{ plan.plan_revision }}</p></div><span>{{ classes.length }} 个可选班级</span></div>
+          <div class="kt-publish-batch-schedule">
+            <label for="publish-default-opens-at">批量设置开始<input id="publish-default-opens-at" v-model="defaultSchedule.opens_at" type="datetime-local"></label>
+            <label for="publish-default-closes-at">批量设置截止<input id="publish-default-closes-at" v-model="defaultSchedule.closes_at" type="datetime-local"></label>
+            <button data-action="apply-selected-schedule" class="kt-button kt-button--secondary" type="button" :disabled="!classes.some((option) => selected[option.id])" @click="applyDefaultScheduleToSelected">应用到已选班级</button>
+            <p>留空开始表示立即开放；留空截止表示不设置截止。</p>
+          </div>
+          <div class="kt-table-scroll"><table class="kt-table kt-publish-class-table"><thead><tr><th>选择</th><th>班级</th><th>当前成员</th><th>默认参与</th><th>排除</th><th>开始</th><th>截止</th><th>排期状态</th><th>操作</th></tr></thead><tbody><tr v-for="option in classes" :key="option.id"><td><input :id="`publish-class-${option.id}`" v-model="selected[option.id]" type="checkbox" :aria-label="`选择 ${option.name}`"></td><td><label :for="`publish-class-${option.id}`"><strong>{{ option.academic_year }} {{ option.name }}</strong></label></td><td>{{ option.student_count }}</td><td>{{ participantCount(option) }}</td><td>{{ exclusionCount(option) }}</td><td>{{ displayClassSchedule(option, 'opens_at') }}</td><td>{{ displayClassSchedule(option, 'closes_at') }}</td><td><span class="kt-schedule-status">{{ scheduleLabel(option) }}</span></td><td><div class="kt-table-actions"><button v-if="participants.length" data-action="manage-exclusions" class="kt-text-button" type="button" @click="rosterExpanded = true">管理排除</button><span v-else class="kt-muted">保存后管理排除</span><button v-if="selected[option.id]" class="kt-text-button" type="button" @click="openScheduleEditor(option.id)">修改时间</button></div></td></tr></tbody></table></div>
 
-    <section class="kt-card kt-publish-plan-panel" aria-labelledby="publish-classes">
-      <div class="kt-publish-batch-schedule">
-        <label for="publish-default-opens-at">批量设置开始<input id="publish-default-opens-at" v-model="defaultSchedule.opens_at" type="datetime-local"></label>
-        <label for="publish-default-closes-at">批量设置截止<input id="publish-default-closes-at" v-model="defaultSchedule.closes_at" type="datetime-local"></label>
-        <button data-action="apply-selected-schedule" class="kt-button kt-button--secondary" type="button" :disabled="!classes.some((option) => selected[option.id])" @click="applyDefaultScheduleToSelected">应用到已选班级</button>
-        <p>留空开始表示立即开放；留空截止表示不设置截止。</p>
-      </div>
-      <div class="kt-section-heading"><div><h2 id="publish-classes">班级与排期</h2><p>计划版本 {{ plan.plan_revision }}</p></div><span>{{ classes.length }} 个可选班级</span></div>
-      <div class="kt-table-scroll"><table class="kt-table kt-publish-class-table"><thead><tr><th>选择</th><th>班级</th><th>当前成员</th><th>默认参与</th><th>排除</th><th>开始</th><th>截止</th><th>排期状态</th><th>操作</th></tr></thead><tbody><tr v-for="option in classes" :key="option.id"><td><input :id="`publish-class-${option.id}`" v-model="selected[option.id]" type="checkbox" :aria-label="`选择 ${option.name}`"></td><td><label :for="`publish-class-${option.id}`"><strong>{{ option.academic_year }} {{ option.name }}</strong></label></td><td>{{ option.student_count }}</td><td>{{ participantCount(option) }}</td><td>{{ exclusionCount(option) }}</td><td>{{ displayDate(classScheduleTime(option, 'opens_at')) }}</td><td>{{ displayDate(classScheduleTime(option, 'closes_at')) }}</td><td><span class="kt-schedule-status">{{ scheduleLabel(option) }}</span></td><td><div class="kt-table-actions"><button v-if="participants.length" data-action="manage-exclusions" class="kt-text-button" type="button" @click="rosterExpanded = true">管理排除</button><span v-else class="kt-muted">保存后管理排除</span><button v-if="selected[option.id]" class="kt-text-button" type="button" @click="openScheduleEditor(option.id)">修改时间</button></div></td></tr></tbody></table></div>
+          <div v-for="option in classes.filter((item) => selected[item.id] && scheduleEditClassId === item.id)" :key="option.id" class="kt-publish-schedule-editor">
+            <div><strong>{{ option.academic_year }} {{ option.name }}</strong><span>{{ scheduleLabel(option) }}</span></div>
+            <select v-model="scheduleMode[option.id]" :aria-label="`${option.name}排期方式`"><option value="default">沿用批量排期</option><option value="custom">自定义排期</option></select><div v-if="scheduleMode[option.id] === 'custom'" class="kt-form-grid"><label>开放时间<input v-model="classOpensAt[option.id]" type="datetime-local"></label><label>截止时间<input v-model="classClosesAt[option.id]" type="datetime-local"></label></div>
+          </div>
+        </section>
+        <section id="publish-roster" class="kt-card kt-publish-roster" aria-labelledby="publish-roster-title">
+          <div class="kt-section-heading"><div><h3 id="publish-roster-title">参与者与排除名单</h3><p>名册由服务端按当前计划返回；保存草稿后可调整是否纳入。</p></div><button data-action="toggle-roster" class="kt-button kt-button--secondary" type="button" @click="rosterExpanded = !rosterExpanded">{{ rosterExpanded ? '收起名单' : `查看名单（${participantPage?.total_items ?? '—'}）` }}</button></div>
+          <template v-if="rosterExpanded">
+            <p v-if="participantsLoading" role="status">正在加载参与者…</p>
+            <Alert v-else-if="participantsError" tone="danger">{{ participantsError }} <button class="kt-text-button" type="button" @click="loadParticipants(participantPageNumber)">重试</button></Alert>
+            <p v-else-if="!participants.length" class="kt-publish-empty-row">选择班级并保存草稿后，服务端会返回该班当前有效名册。</p>
+            <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>学号</th><th>姓名</th><th>班级</th><th>参与</th></tr></thead><tbody><tr v-for="participant in participants" :key="`${participant.class_id}-${participant.id}`"><td>{{ participant.student_number }}</td><td>{{ participant.display_name }}</td><td>{{ participant.class_name }}</td><td><label class="kt-check-inline"><input type="checkbox" :checked="!excludedStudentIds[participant.class_id]?.has(participant.id)" @change="setExcluded(participant, !($event.target as HTMLInputElement).checked)">纳入</label></td></tr></tbody></table></div>
+            <Paginator v-if="participantPage && !participantsLoading && !participantsError" :page="participantPage.number" :total-pages="participantPage.total_pages" @navigate="loadParticipants" />
+          </template>
+        </section>
 
-      <div v-for="option in classes.filter((item) => selected[item.id] && scheduleEditClassId === item.id)" :key="option.id" class="kt-publish-schedule-editor">
-        <div><strong>{{ option.academic_year }} {{ option.name }}</strong><span>{{ scheduleLabel(option) }}</span></div>
-        <select v-model="scheduleMode[option.id]" :aria-label="`${option.name}排期方式`"><option value="default">沿用批量排期</option><option value="custom">自定义排期</option></select><div v-if="scheduleMode[option.id] === 'custom'" class="kt-form-grid"><label>开放时间<input v-model="classOpensAt[option.id]" type="datetime-local"></label><label>截止时间<input v-model="classClosesAt[option.id]" type="datetime-local"></label></div>
-      </div>
-
-      <section id="publish-roster" class="kt-publish-roster" aria-labelledby="publish-roster-title">
-        <div class="kt-section-heading"><div><h3 id="publish-roster-title">参与者与排除名单</h3><p>名册由服务端按当前计划返回；保存草稿后可调整是否纳入。</p></div><button data-action="toggle-roster" class="kt-button kt-button--secondary" type="button" @click="rosterExpanded = !rosterExpanded">{{ rosterExpanded ? '收起名单' : `查看名单（${participantPage?.total_items ?? '—'}）` }}</button></div>
-        <template v-if="rosterExpanded">
-          <p v-if="participantsLoading" role="status">正在加载参与者…</p>
-          <Alert v-else-if="participantsError" tone="danger">{{ participantsError }} <button class="kt-text-button" type="button" @click="loadParticipants(participantPageNumber)">重试</button></Alert>
-          <p v-else-if="!participants.length" class="kt-publish-empty-row">选择班级并保存草稿后，服务端会返回该班当前有效名册。</p>
-          <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>学号</th><th>姓名</th><th>班级</th><th>参与</th></tr></thead><tbody><tr v-for="participant in participants" :key="`${participant.class_id}-${participant.id}`"><td>{{ participant.student_number }}</td><td>{{ participant.display_name }}</td><td>{{ participant.class_name }}</td><td><label class="kt-check-inline"><input type="checkbox" :checked="!excludedStudentIds[participant.class_id]?.has(participant.id)" @change="setExcluded(participant, !($event.target as HTMLInputElement).checked)">纳入</label></td></tr></tbody></table></div>
-          <Paginator v-if="participantPage && !participantsLoading && !participantsError" :page="participantPage.number" :total-pages="participantPage.total_pages" @navigate="loadParticipants" />
-        </template>
-      </section>
-    </section>
-
-    <div class="kt-publish-actions"><a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/`">返回实验详情</a><div><button data-action="save-draft" class="kt-button kt-button--secondary" type="button" :disabled="working" @click="saveDraft()">保存草稿</button><Button data-action="run-preview" :disabled="working" @click="runPreview">运行发布前检查</Button></div></div>
+        <div class="kt-publish-actions"><a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/`">返回实验详情</a><div><button data-action="save-draft" class="kt-button kt-button--secondary" type="button" :disabled="working" @click="saveDraft()">保存草稿</button><Button data-action="run-preview" :disabled="working" @click="runPreview">运行发布前检查</Button></div></div>
+      </div><aside class="kt-experiment-config-summary">
+        <section class="kt-card"><h2>本次发布计划</h2><dl><div><dt>班级</dt><dd>{{ classes.filter(option => selected[option.id]).length }} 个</dd></div><div><dt>参与学生</dt><dd>{{ plan.classes.reduce((sum, row) => sum + row.participant_count, 0) }} 人</dd></div><div><dt>计划版本</dt><dd>{{ plan.plan_revision }}</dd></div></dl><p>{{ hasUnsavedChanges ? '有未保存修改；人数以已保存计划为准。' : '保存允许暂不完整，发布检查使用当前保存版本。' }}</p></section>    <section v-if="plan.global_inventory?.candidate_count || plan.student_inventory?.checked" class="kt-card kt-publish-inventory" aria-labelledby="publish-inventory-title">
+          <div class="kt-section-heading"><div><h2 id="publish-inventory-title">抽题库存检查</h2><p>全局候选未按学生历史过滤；学生级库存用于本次发布资格判断。</p></div></div>
+          <div class="kt-publish-inventory__grid">
+            <div><strong>题库全局候选</strong><span>{{ plan.global_inventory?.candidate_count ?? 0 }} 道，计划 {{ plan.global_inventory?.requested_count ?? 0 }} 道</span></div>
+            <div><strong>本次学生过滤后</strong><span v-if="plan.student_inventory?.checked">{{ plan.student_inventory.minimum_candidate_count }} 道（参与者 {{ plan.student_inventory.participant_count }} 人）</span><span v-else>选择班级后检查</span></div>
+          </div>
+          <div v-if="plan.student_inventory?.checked && plan.student_inventory.question_types.length" class="kt-table-scroll">
+            <table class="kt-table kt-publish-inventory__table">
+              <thead><tr><th>题型</th><th>全局可用</th><th>本次最低可用</th><th>不足学生</th></tr></thead>
+              <tbody><tr v-for="row in plan.student_inventory?.question_types || []" :key="String(row.question_type)"><td>{{ questionTypeLabels[String(row.question_type)] || row.question_type }}</td><td>{{ plan.global_inventory?.question_types.find((item) => item.question_type === row.question_type)?.available ?? 0 }}</td><td>{{ row.minimum_available }}</td><td>{{ row.insufficient_student_count }}</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </aside>
+    </div>
   </template>
 
   <template v-if="!loading && plan && step === 2 && review">
@@ -513,8 +525,8 @@ onMounted(async () => {
       <h2 id="confirmation-title">发布确认</h2>
       <p>请确认本次将创建的班级任务；提交后将跳转回实验详情。</p>
       <div class="kt-publish-confirmation-grid">
-        <section class="kt-card"><h3>实验定义</h3><dl v-if="experiment" class="kt-description-list kt-definition-summary__list"><div><dt>题库</dt><dd>{{ experiment.question_banks?.map((bank) => bank.name).join('、') || experiment.question_bank?.name || '未选择题库' }}</dd></div><div><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}<span v-if="experiment.sampling_mode === 'total_count'"> · {{ experiment.sampling_total_count }} 题</span></dd></div><div><dt>跨实验题目</dt><dd>{{ experiment.cross_experiment_item_policy === 'mixed_review' ? `混合复测 · ${experiment.review_count} 题` : (experiment.cross_experiment_item_policy === 'exclude_previous' ? '排除已提交或已分配题目' : '不限制历史题目') }}</dd></div><div><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div><div><dt>反馈</dt><dd>{{ experiment.feedback_mode_label }}</dd></div><div><dt>总限时</dt><dd>{{ displayLimit(experiment.total_time_limit_minutes, '分钟') }}</dd></div><div><dt>单题限时</dt><dd>{{ displayLimit(experiment.per_question_time_limit_seconds, '秒') }}</dd></div><div><dt>中断续答</dt><dd>{{ experiment.resume_mode_label }}</dd></div><div><dt>作答信心</dt><dd>{{ experiment.confidence_mode_label }}</dd></div></dl></section>
-        <section class="kt-card"><h3>本次班级任务</h3><table class="kt-confirm-task-table"><thead><tr><th>班级</th><th>参与者</th><th>开放时段</th></tr></thead><tbody><tr v-for="row in review.plan.classes" :key="row.class_id"><td>{{ row.academic_year }} {{ row.class_name }}</td><td>{{ row.participant_count }}</td><td>{{ displayDate(row.opens_at) }} — {{ displayDate(row.closes_at) }}</td></tr></tbody></table></section>
+        <section class="kt-card"><h3>实验定义</h3><dl v-if="experiment" class="kt-description-list kt-definition-summary__list"><div><dt>题库</dt><dd>{{ experiment.question_banks?.map((bank) => bank.name).join('、') || experiment.question_bank?.name || '未选择题库' }}</dd></div><div><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}<span v-if="experiment.sampling_mode === 'total_count'"> · {{ experiment.sampling_total_count }} 题</span></dd></div><div><dt>跨实验题目</dt><dd>{{ experiment.cross_experiment_item_policy === 'mixed_review' ? `混合复测 · ${experiment.review_count} 题` : (experiment.cross_experiment_item_policy === 'exclude_previous' ? '排除已提交或已分配题目' : '不限制历史题目') }}</dd></div><div><dt>题目顺序</dt><dd>{{ experiment.ordering_mode_label }}</dd></div><div><dt>反馈</dt><dd>{{ experiment.feedback_mode_label }}</dd></div><div><dt>总限时</dt><dd>{{ displayLimit(experiment.total_time_limit_minutes, '分钟') }}</dd></div><div v-if="experiment.time_mode === 'per_question'"><dt>历史单题限时</dt><dd>{{ displayLimit(experiment.per_question_time_limit_seconds, '秒') }}</dd></div><div><dt>中断续答</dt><dd>{{ experiment.resume_mode_label }}</dd></div><div><dt>作答信心</dt><dd>{{ experiment.confidence_mode_label }}</dd></div></dl></section>
+        <section class="kt-card"><h3>本次班级任务</h3><div class="kt-table-scroll"><table class="kt-confirm-task-table"><thead><tr><th>班级</th><th>参与者</th><th>开放时段</th></tr></thead><tbody><tr v-for="row in review.plan.classes" :key="row.class_id"><td>{{ row.academic_year }} {{ row.class_name }}</td><td>{{ row.participant_count }}</td><td>{{ displayDate(row.opens_at) }} — {{ displayDate(row.closes_at) }}</td></tr></tbody></table></div></section>
       </div>
       <Alert tone="info">确认后将按本次检查过的发布计划创建正式班级任务和参与者快照。</Alert>
       <div class="kt-publish-actions kt-publish-actions--center"><button class="kt-button kt-button--secondary" type="button" @click="confirmCommit = false">返回检查</button><button data-action="commit-publish" class="kt-button" type="button" :disabled="working" @click="commit">{{ working ? '正在发布…' : '确认发布' }}</button></div>

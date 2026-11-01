@@ -1150,7 +1150,7 @@ export interface paths {
         };
         get: operations["teacher_standalone_question_bank_question_editor_retrieve"];
         put: operations["teacher_standalone_question_bank_question_editor_update"];
-        post?: never;
+        post: operations["teacher_banks_questions_editor_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1678,7 +1678,7 @@ export interface paths {
         };
         get: operations["teacher_question_bank_question_editor_retrieve"];
         put: operations["teacher_question_bank_question_editor_update"];
-        post?: never;
+        post: operations["teacher_courses_banks_questions_editor_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2374,6 +2374,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["teacher_experiment_session_word"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teacher/courses/{course_id}/experiments/{experiment_id}/student-preview/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_experiment_student_preview"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4014,6 +4030,8 @@ export interface components {
             f: string;
         };
         ManagementQuestionEditorQuestion: {
+            /** Format: date-time */
+            updated_at: string | null;
             id: number;
             sequence: number;
             code: string;
@@ -4042,6 +4060,8 @@ export interface components {
             text_match_policy_version: string;
         };
         ManagementQuestionEditorRequest: {
+            /** Format: date-time */
+            expected_updated_at?: string;
             text: string;
             title?: string;
             instructions?: string;
@@ -4214,6 +4234,7 @@ export interface components {
             visibility?: components["schemas"]["VisibilityE8aEnum"];
         };
         ManagementStandaloneBankDetail: {
+            question_page?: unknown;
             unit_summary?: unknown;
             groups?: components["schemas"]["QuestionGroupResponse"][];
             redirect_url?: string;
@@ -4246,6 +4267,9 @@ export interface components {
             preview: components["schemas"]["ManagementStandaloneKCImportPreviewPayload"];
         };
         ManagementStandaloneQuestion: {
+            unit_key?: string;
+            unit_kind?: components["schemas"]["UnitKindEnum"];
+            member_kc_mappings?: unknown[];
             group_id: number | null;
             group_order: number | null;
             blank_id: string;
@@ -4260,14 +4284,14 @@ export interface components {
             title?: string;
             instructions?: string;
             educational_type?: components["schemas"]["EducationalTypeEnum"];
-            question_type: components["schemas"]["QuestionType128Enum"];
+            question_type: string;
             question_type_label: string;
             status: components["schemas"]["StatusB97Enum"];
             status_label: string;
             draft_reasons: string[];
             teacher_difficulty: string | null;
             kc_mapping: components["schemas"]["QuestionKCMapping"];
-            edit_url: string;
+            edit_url: string | null;
         };
         ManagementStandaloneQuestionEditorResponse: {
             bank: components["schemas"]["ManagementBankReference"];
@@ -4477,7 +4501,7 @@ export interface components {
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             feedback_mode?: components["schemas"]["FeedbackMode433Enum"];
             feedback_release_policy?: components["schemas"]["FeedbackReleasePolicyEnum"];
-            time_mode?: components["schemas"]["TimeModeEnum"];
+            time_mode?: components["schemas"]["TimeMode5aaEnum"];
             total_time_limit_minutes?: number | null;
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
@@ -4505,7 +4529,7 @@ export interface components {
             show_kc_rates?: boolean;
             show_trend?: boolean;
         };
-        PatchedTeacherExperiment: {
+        PatchedTeacherExperimentInput: {
             readonly id?: number;
             name?: string;
             description?: string;
@@ -4513,7 +4537,7 @@ export interface components {
             question_bank_id?: number;
             question_bank_ids?: number[];
             readonly question_banks?: components["schemas"]["QuestionBankReference"][];
-            readonly status?: components["schemas"]["TeacherExperimentStatusEnum"];
+            readonly status?: components["schemas"]["StatusE40Enum"];
             readonly status_label?: string;
             readonly selection_mode?: components["schemas"]["SelectionModeEnum"];
             readonly selection_mode_label?: string;
@@ -4534,7 +4558,7 @@ export interface components {
             research_tools?: unknown;
             readonly feedback_mode_label?: string;
             readonly feedback_release_policy_label?: string;
-            time_mode?: components["schemas"]["TimeModeEnum"];
+            time_mode?: components["schemas"]["TimeMode5aaEnum"];
             readonly time_mode_label?: string;
             total_time_limit_minutes?: number | null;
             per_question_time_limit_seconds?: number | null;
@@ -4548,9 +4572,11 @@ export interface components {
             confidence_probability?: string | null;
             readonly can_edit?: boolean;
             readonly can_manage?: boolean;
+            readonly can_publish?: boolean;
             readonly can_archive?: boolean;
             readonly can_restore?: boolean;
             readonly activity?: components["schemas"]["ExperimentActivity"];
+            readonly student_preview_url?: string | null;
             /** Format: date-time */
             readonly created_at?: string;
             /** Format: date-time */
@@ -4844,6 +4870,7 @@ export interface components {
             readonly name: string;
         };
         QuestionBankSummary: {
+            unit_summary?: unknown;
             id: number;
             name: string;
             description: string;
@@ -5028,6 +5055,9 @@ export interface components {
             amount: number;
         };
         QuestionSummary: {
+            unit_key?: string;
+            unit_kind?: components["schemas"]["UnitKindEnum"];
+            member_kc_mappings?: unknown[];
             title?: string;
             instructions?: string;
             educational_type: string;
@@ -5282,7 +5312,6 @@ export interface components {
             /** @default false */
             reopen: boolean;
             total_time_limit_minutes?: number;
-            per_question_time_limit_seconds?: number;
             reason?: string;
         };
         /**
@@ -5335,6 +5364,12 @@ export interface components {
          * @enum {string}
          */
         SetupStatusEnum: "empty" | "incomplete" | "complete";
+        /**
+         * @description * `draft` - draft
+         *     * `frozen` - frozen
+         * @enum {string}
+         */
+        SourceEnum: "draft" | "frozen";
         StandaloneChoice: {
             value: string;
             label: string;
@@ -5413,7 +5448,7 @@ export interface components {
             ordering_mode?: components["schemas"]["OrderingModeEnum"];
             feedback_mode?: components["schemas"]["FeedbackMode433Enum"];
             feedback_release_policy?: components["schemas"]["FeedbackReleasePolicyEnum"];
-            time_mode?: components["schemas"]["TimeModeEnum"];
+            time_mode?: components["schemas"]["TimeMode5aaEnum"];
             total_time_limit_minutes?: number | null;
             per_question_time_limit_seconds?: number | null;
             resume_mode?: components["schemas"]["ResumeModeEnum"];
@@ -5512,6 +5547,15 @@ export interface components {
          * @enum {string}
          */
         StatusB97Enum: "draft" | "active" | "archived";
+        /**
+         * @description * `draft` - 草稿
+         *     * `frozen` - 已冻结
+         *     * `published` - 已发布
+         *     * `closed` - 已关闭
+         *     * `archived` - 已归档
+         * @enum {string}
+         */
+        StatusE40Enum: "draft" | "frozen" | "published" | "closed" | "archived";
         StudentAdmissionStatus: {
             admission_token: string;
             action: components["schemas"]["ActionA44Enum"];
@@ -5869,6 +5913,13 @@ export interface components {
          * @enum {string}
          */
         StudentPreparedStartPendingStatusEnum: "executing";
+        StudentPreviewUnit: {
+            key: string;
+            kind: string;
+            maximum_score: string;
+            question: unknown;
+            group: unknown;
+        };
         StudentProjectionStatus: {
             version: string;
             comparison_status?: components["schemas"]["ComparisonStatusEnum"];
@@ -6112,6 +6163,9 @@ export interface components {
             question_group_runtime_version?: number;
             question_group?: unknown;
             group_responses?: unknown;
+            group_member_state?: unknown;
+            presentation_units?: unknown;
+            presentation_progress?: unknown;
             assessment_flow_version?: number;
             prepared_paper?: unknown;
             initial_writer_lease?: unknown;
@@ -6151,6 +6205,7 @@ export interface components {
         };
         StudentSessionSummary: {
             result?: unknown;
+            presentation_question_count?: number;
             session_id: number;
             experiment_name: string;
             status: string;
@@ -6526,7 +6581,7 @@ export interface components {
             question_bank_id?: number;
             question_bank_ids?: number[];
             readonly question_banks: components["schemas"]["QuestionBankReference"][];
-            readonly status: components["schemas"]["TeacherExperimentStatusEnum"];
+            readonly status: components["schemas"]["StatusE40Enum"];
             readonly status_label: string;
             readonly selection_mode: components["schemas"]["SelectionModeEnum"];
             readonly selection_mode_label: string;
@@ -6547,7 +6602,7 @@ export interface components {
             research_tools?: unknown;
             readonly feedback_mode_label: string;
             readonly feedback_release_policy_label: string;
-            time_mode?: components["schemas"]["TimeModeEnum"];
+            time_mode?: components["schemas"]["TeacherExperimentTimeModeEnum"];
             readonly time_mode_label: string;
             total_time_limit_minutes?: number | null;
             per_question_time_limit_seconds?: number | null;
@@ -6561,9 +6616,11 @@ export interface components {
             confidence_probability?: string | null;
             readonly can_edit: boolean;
             readonly can_manage: boolean;
+            readonly can_publish: boolean;
             readonly can_archive: boolean;
             readonly can_restore: boolean;
             readonly activity: components["schemas"]["ExperimentActivity"];
+            readonly student_preview_url: string | null;
             /** Format: date-time */
             readonly created_at: string;
             /** Format: date-time */
@@ -6580,6 +6637,59 @@ export interface components {
             page: components["schemas"]["PageMetadata"];
             summary: components["schemas"]["TeacherExperimentSummary"];
             capabilities: components["schemas"]["ExperimentManagementCapabilities"];
+        };
+        TeacherExperimentInput: {
+            readonly id: number;
+            name: string;
+            description?: string;
+            readonly question_bank: components["schemas"]["QuestionBankReference"] | null;
+            question_bank_id?: number;
+            question_bank_ids?: number[];
+            readonly question_banks: components["schemas"]["QuestionBankReference"][];
+            readonly status: components["schemas"]["StatusE40Enum"];
+            readonly status_label: string;
+            readonly selection_mode: components["schemas"]["SelectionModeEnum"];
+            readonly selection_mode_label: string;
+            readonly question_quotas: components["schemas"]["QuestionQuota"][];
+            readonly sampling_mode: (components["schemas"]["SamplingModeEnum"] | components["schemas"]["NullEnum"]) | null;
+            readonly sampling_mode_label: string | null;
+            readonly sampling_total_count: number | null;
+            readonly sampling_match_scope: components["schemas"]["SamplingMatchScopeEnum"];
+            readonly sampling_kcs: components["schemas"]["SamplingKC"][];
+            sampling?: components["schemas"]["SamplingDefinition"];
+            /** @default exclude_previous */
+            cross_experiment_item_policy: components["schemas"]["CrossExperimentItemPolicyEnum"];
+            review_count?: number;
+            ordering_mode?: components["schemas"]["OrderingModeEnum"];
+            readonly ordering_mode_label: string;
+            feedback_mode?: components["schemas"]["FeedbackMode433Enum"];
+            feedback_release_policy?: components["schemas"]["FeedbackReleasePolicyEnum"];
+            research_tools?: unknown;
+            readonly feedback_mode_label: string;
+            readonly feedback_release_policy_label: string;
+            time_mode?: components["schemas"]["TimeMode5aaEnum"];
+            readonly time_mode_label: string;
+            total_time_limit_minutes?: number | null;
+            per_question_time_limit_seconds?: number | null;
+            resume_mode?: components["schemas"]["ResumeModeEnum"];
+            readonly resume_mode_label: string;
+            confidence_mode?: components["schemas"]["ConfidenceModeEnum"];
+            readonly confidence_mode_label: string;
+            confidence_sampling_unit?: components["schemas"]["ConfidenceSamplingUnitEnum"];
+            readonly confidence_sampling_unit_label: string;
+            /** Format: decimal */
+            confidence_probability?: string | null;
+            readonly can_edit: boolean;
+            readonly can_manage: boolean;
+            readonly can_publish: boolean;
+            readonly can_archive: boolean;
+            readonly can_restore: boolean;
+            readonly activity: components["schemas"]["ExperimentActivity"];
+            readonly student_preview_url: string | null;
+            /** Format: date-time */
+            readonly created_at: string;
+            /** Format: date-time */
+            readonly updated_at: string;
         };
         TeacherExperimentInventoryBucket: {
             kc_code: string;
@@ -6665,15 +6775,6 @@ export interface components {
          * @enum {string}
          */
         TeacherExperimentSessionResolutionKindEnum: "canonical" | "legacy_report";
-        /**
-         * @description * `draft` - 草稿
-         *     * `frozen` - 已冻结
-         *     * `published` - 已发布
-         *     * `closed` - 已关闭
-         *     * `archived` - 已归档
-         * @enum {string}
-         */
-        TeacherExperimentStatusEnum: "draft" | "frozen" | "published" | "closed" | "archived";
         TeacherExperimentSummary: {
             question_banks: components["schemas"]["QuestionBankReference"][];
             classes: components["schemas"]["TeacherExperimentClassOption"][];
@@ -6684,6 +6785,13 @@ export interface components {
             class_snapshot_name: string;
             analysis_url: string;
         };
+        /**
+         * @description * `none` - 无时限
+         *     * `total` - 实验总时限
+         *     * `per_question` - 单题时限
+         * @enum {string}
+         */
+        TeacherExperimentTimeModeEnum: "none" | "total" | "per_question";
         TeacherQuestionBankReference: {
             id: number;
             name: string;
@@ -6744,6 +6852,12 @@ export interface components {
         TeacherSessionStatusChoice: {
             value: string;
             label: string;
+        };
+        TeacherStudentPreview: {
+            experiment_id: number;
+            experiment_name: string;
+            source: components["schemas"]["SourceEnum"];
+            units: components["schemas"]["StudentPreviewUnit"][];
         };
         TeachingLegacyAttempt: {
             id: number;
@@ -6827,10 +6941,9 @@ export interface components {
         /**
          * @description * `none` - 无时限
          *     * `total` - 实验总时限
-         *     * `per_question` - 单题时限
          * @enum {string}
          */
-        TimeModeEnum: "none" | "total" | "per_question";
+        TimeMode5aaEnum: "none" | "total";
         TimingQuality: {
             submitted_count: number;
             exact_count: number;
@@ -6853,6 +6966,12 @@ export interface components {
             enabled: boolean;
             version: number;
         };
+        /**
+         * @description * `question` - question
+         *     * `group` - group
+         * @enum {string}
+         */
+        UnitKindEnum: "question" | "group";
         /**
          * @description * `private` - private
          *     * `shared` - shared
@@ -9903,6 +10022,15 @@ export interface operations {
                             response_state_after?: {
                                 [key: string]: unknown;
                             } | null;
+                            presentation_units?: {
+                                [key: string]: unknown;
+                            }[];
+                            presentation_progress?: {
+                                [key: string]: unknown;
+                            };
+                            group_member_state?: {
+                                [key: string]: unknown;
+                            };
                         } | {
                             /** @enum {integer} */
                             receipt_version?: 2;
@@ -12403,6 +12531,39 @@ export interface operations {
             };
         };
     };
+    teacher_banks_questions_editor_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                question_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagementQuestionEditorRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManagementQuestionEditorRequest"];
+                "multipart/form-data": components["schemas"]["ManagementQuestionEditorRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ManagementStandaloneQuestionEditorResponse"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
     teacher_banks_questions_recheck_create: {
         parameters: {
             query?: never;
@@ -13829,6 +13990,40 @@ export interface operations {
             };
         };
     };
+    teacher_courses_banks_questions_editor_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bank_id: number;
+                course_id: number;
+                question_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagementQuestionEditorRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ManagementQuestionEditorRequest"];
+                "multipart/form-data": components["schemas"]["ManagementQuestionEditorRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ManagementQuestionEditorResponse"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
     teacher_courses_banks_questions_recheck_create: {
         parameters: {
             query?: never;
@@ -15099,6 +15294,8 @@ export interface operations {
             query?: {
                 /** @description Return archived experiments only; defaults to current experiments. */
                 archived?: boolean;
+                /** @description Filter experiment names before pagination. */
+                q?: string;
             };
             header?: never;
             path: {
@@ -15134,9 +15331,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TeacherExperiment"];
-                "application/x-www-form-urlencoded": components["schemas"]["TeacherExperiment"];
-                "multipart/form-data": components["schemas"]["TeacherExperiment"];
+                "application/json": components["schemas"]["TeacherExperimentInput"];
+                "application/x-www-form-urlencoded": components["schemas"]["TeacherExperimentInput"];
+                "multipart/form-data": components["schemas"]["TeacherExperimentInput"];
             };
         };
         responses: {
@@ -15194,9 +15391,9 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["PatchedTeacherExperiment"];
-                "application/x-www-form-urlencoded": components["schemas"]["PatchedTeacherExperiment"];
-                "multipart/form-data": components["schemas"]["PatchedTeacherExperiment"];
+                "application/json": components["schemas"]["PatchedTeacherExperimentInput"];
+                "application/x-www-form-urlencoded": components["schemas"]["PatchedTeacherExperimentInput"];
+                "multipart/form-data": components["schemas"]["PatchedTeacherExperimentInput"];
             };
         };
         responses: {
@@ -15540,6 +15737,33 @@ export interface operations {
                             fields: {
                                 [key: string]: unknown;
                             };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_experiment_student_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: number;
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["TeacherStudentPreview"];
+                        meta: {
                             request_id: string;
                         };
                     };

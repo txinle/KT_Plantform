@@ -125,7 +125,7 @@ class SchoolCapturePriorityTests(SimpleTestCase):
         self.assertIn('deque(maxlen=720)', text)
 
     def test_nginx_metrics_exclude_identity_and_include_elapsed_proxy_time(self):
-        text = (Path(settings.REPOSITORY_DIR) / "deploy" / 'nginx/kt-school.conf').read_text()
+        text = (Path(settings.REPOSITORY_DIR) / "deploy" / 'nginx/kt-school.conf').read_text(encoding="utf-8")
         metric_format = text.split('log_format school_pressure', 1)[1].split(';', 1)[0]
         for secret in ('$request_uri', '$args', '$request_body', '$remote_user', '$http_cookie'):
             self.assertNotIn(secret, metric_format)

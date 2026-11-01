@@ -2,14 +2,14 @@ import { createApiClient } from '@/api/client'
 import type { components } from '@/api/generated/schema'
 import { getBootstrapContext } from '@/app/bootstrap'
 
-export type QuestionBankCollection = Omit<components['schemas']['QuestionBankCollection'], 'items'> & { items: Array<components['schemas']['QuestionBankCollection']['items'][number] & { complete_question_count?: number }> }
+export type QuestionBankCollection = Omit<components['schemas']['QuestionBankCollection'], 'items'> & { items: Array<components['schemas']['QuestionBankCollection']['items'][number] & { complete_question_count?: number; unit_summary?: import('../teacher-bank-management/api').BankUnitSummary }> }
 export type CourseConceptCollection = components['schemas']['CourseConceptCollection'] & {
   summary: { total: number; active: number; used: number; archived: number }
 }
 export type QuestionBankDetail = components['schemas']['QuestionBankDetail'] & { unit_summary?: import('../teacher-bank-management/api').BankUnitSummary; groups?: import('../teacher-bank-management/group-api').GroupEditorDocument[] }
 type GeneratedQuestionCollection = components['schemas']['QuestionCollection']
 export type QuestionCollection = Omit<GeneratedQuestionCollection, 'items'> & {
-  items: Array<GeneratedQuestionCollection['items'][number] & { draft_reasons: string[]; title?: string; instructions?: string; max_score?: string; group_id?: number | null }>
+  items: Array<GeneratedQuestionCollection['items'][number] & { unit_key?: string; unit_kind?: 'question' | 'group'; member_kc_mappings?: Array<{ id: number; order: number; mapping: GeneratedQuestionCollection['items'][number]['kc_mapping'] }>; draft_reasons: string[]; title?: string; instructions?: string; max_score?: string; group_id?: number | null }>
 }
 export type BankConceptCollection = components['schemas']['BankConceptCollection']
 export interface CourseConceptImportRow {
@@ -25,7 +25,7 @@ export interface CourseConceptImportPreview {
 }
 
 type ApiClient = ReturnType<typeof createApiClient>
-type PageQuery = { page?: number; query?: string; all?: boolean }
+type PageQuery = { page?: number; query?: string; all?: boolean; visibility?: string }
 type QuestionQuery = PageQuery & { questionType?: string; status?: string; completeOnly?: boolean }
 
 function queryString(input: Record<string, string | number | undefined>) {
@@ -41,7 +41,7 @@ export function createTeacherQuestionBankApi(client: ApiClient) {
   return {
     list(courseId: number, input: PageQuery = {}) {
       return client.get<QuestionBankCollection>(
-        `/api/v1/teacher/courses/${courseId}/banks/${queryString({ page: input.page, q: input.query })}`,
+        `/api/v1/teacher/courses/${courseId}/banks/${queryString({ page: input.page, q: input.query, visibility: input.visibility })}`,
       )
     },
     createBank(courseId: number, input: { name: string; description: string; visibility: string }) {

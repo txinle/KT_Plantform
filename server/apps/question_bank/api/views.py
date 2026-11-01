@@ -294,12 +294,19 @@ class TeacherQuestionBankCollectionView(APIView):
                 | Q(created_by__username__icontains=query)
             )
 
+        visibility = request.query_params.get('visibility', '')
+        if visibility:
+            if visibility not in ('private', 'shared'):
+                raise ValidationError({'visibility': '未知可见性。'})
+            banks = banks.filter(visibility=visibility)
         paginator = FixedPageNumberPagination()
         page = paginator.paginate_queryset(banks, request, view=self)
         items = []
+        from ..services.question_groups import project_bank_unit_summary, project_question_group
         for bank in page:
             items.append(
                 {
+                    "unit_summary": project_bank_unit_summary(bank, [project_question_group(group) for group in bank.groups.all()]),
                     "id": bank.pk,
                     "name": bank.name,
                     "description": bank.description,
@@ -586,6 +593,19 @@ class TeacherQuestionCollectionView(APIView):
             raise ValidationError({"question_type": "未知题型。"})
         if status and status not in status_values:
             raise ValidationError({"status": "未知题目状态。"})
+
+        if request.query_params.get("complete_only") == "1":
+            from ..services.complete_questions import complete_questions
+            rows = complete_questions(bank, query=query, question_type=question_type, status=status)
+            paginator = FixedPageNumberPagination()
+            page = paginator.paginate_queryset(rows, request, view=self)
+            return _serialize_page(paginator, page, {
+                'bank': {'id': bank.pk, 'name': bank.name},
+                'filters': {'query': query, 'question_type': question_type, 'status': status,
+                    'question_types': [{'value': value, 'label': label} for value, label in Question.Type.choices] + [
+                        {'value': value, 'label': label} for value, label in [('translation', '翻译题'), ('essay', '作文题'), ('reading', '阅读理解'), ('words', '选词填空'), ('cloze', '短文填空')]],
+                    'statuses': [{'value': value, 'label': label} for value, label in Question.Status.choices]},
+            })
 
         questions = (
             bank.questions.select_related("course_identity")

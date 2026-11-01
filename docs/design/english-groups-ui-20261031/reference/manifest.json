@@ -1,0 +1,44 @@
+{
+  "spec": "R3",
+  "created": "2026-10-31",
+  "site_url": "https://kt-english-exercise-demo-1031.mythicflea258.chatgpt.site",
+  "project_id": "appgprj_6ae5c6080e048191b73f04292bf503c7",
+  "version": 1,
+  "version_id": "appgprj_6ae5c6080e048191b73f04292bf503c7~appgver_de7818d807ac81918c7397f6ea1ae5c9",
+  "site_source_commit": "22ca1da5e778761eb11e3315cd6b82836ec16427",
+  "repository_baseline": "8f5ad282d201c14a4e6281e663a43b11abfcdd21",
+  "files": [
+    {
+      "path": "site-v1/app.js",
+      "sha256": "26F174C7DAE459F7C060C5FA43649F30ADD6DF66976C83D78E46D4841432149D",
+      "original_source": "C:\\Users\\31606\\.codex\\visualizations\\2026\\10\\31\\01a19187-55f6-7632-bb30-a6c526da3bdb\\english-exercise-demo\\dist\\app.js"
+    },
+    {
+      "path": "site-v1/index.html",
+      "sha256": "1F279BCCDC43719D1041CFFB6920291D51EDA37634FEC3BD9017E65715B188BF",
+      "original_source": "C:\\Users\\31606\\.codex\\visualizations\\2026\\10\\31\\01a19187-55f6-7632-bb30-a6c526da3bdb\\english-exercise-demo\\dist\\index.html"
+    },
+    {
+      "path": "site-v1/styles.css",
+      "sha256": "6812258D2673D4865D0E67FBFC3FE354E74AA85A7B79F38D7EE85142D1F3848B",
+      "original_source": "C:\\Users\\31606\\.codex\\visualizations\\2026\\10\\31\\01a19187-55f6-7632-bb30-a6c526da3bdb\\english-exercise-demo\\dist\\styles.css"
+    },
+    {
+      "path": "annotations/redundant-heading.png",
+      "sha256": "F001D6551E05B65F5BC6DA21F50F6E39B4710772FBB94C8DACC5B6BE357137CB",
+      "original_source": "user annotation, temporary clipboard source"
+    },
+    {
+      "path": "annotations/workspace-proportion.png",
+      "sha256": "37CF4F4F012B91042CC02283A4DE5E8DEBA69561BA0544300CB44B4F3C98A7C0",
+      "original_source": "user annotation, temporary clipboard source"
+    }
+  ],
+  "precedence": [
+    "latest user instructions",
+    "R3 dimensions and behavior",
+    "user annotations",
+    "Sites v1 archive",
+    "repository design rules"
+  ]
+}

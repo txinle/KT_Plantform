@@ -227,7 +227,7 @@ def _presentation_units(attempts):
             grouped[identity]['assignment_ids'].append(attempt.assignment_id)
             continue
         group = snapshot.group_snapshot if identity else None
-        unit = {'group_id': identity, 'kind': group.kind if group else 'single',
+        unit = {'group_id': identity, 'kind': group.kind if group else (snapshot.educational_type if snapshot.educational_type != 'standard' else snapshot.question_type),
             'title': group.title if group else snapshot.code, 'assignment_ids': [attempt.assignment_id]}
         units.append(unit)
         if identity:
@@ -448,6 +448,9 @@ def prepared_runtime(attempt, visit_entry=None, *, request_received_at=None, dec
     if payload.get('question_group_runtime_version'):
         from .group_runtime import group_runtime_projection
         payload['group_responses'] = group_runtime_projection(attempt).get('group_responses', {})
+    if session.version.configuration.get('question_group_runtime_version'):
+        from .group_runtime import presentation_runtime_projection
+        payload.update(presentation_runtime_projection(session, attempt))
     return payload
 
 
@@ -594,6 +597,9 @@ def activate_prepared_session(*, student, task_id, client_instance_id, navigatio
             entry_event_id=str(entry_event.pk), navigation_id=str(navigation_id))
         runtime['initial_writer_lease'] = {'writer_lease_token': str(attempt.writer_lease_token),
             'writer_client_instance_id': str(client_id), 'expires_at': attempt.writer_lease_expires_at.isoformat()}
+        if config.get('question_group_runtime_version'):
+            from .group_runtime import presentation_runtime_projection
+            runtime.update(presentation_runtime_projection(session, attempt))
         receipt = {'task_id': task_id, 'session_id': session.pk,
             'question_url': reverse('assessment:question', args=[session.pk, assignment.pk]),
             'runtime': runtime, 'admission_execution_id': str(execution_id) if execution_id else None}

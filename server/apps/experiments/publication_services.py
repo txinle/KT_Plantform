@@ -110,6 +110,9 @@ def get_or_create_publish_plan(experiment, actor):
         pk=experiment.pk
     )
     experiment = Experiment.objects.select_for_update().get(pk=experiment.pk)
+    from .services import validate_new_time_configuration
+    configuration = experiment.frozen_release_snapshot.configuration if experiment.frozen_release_snapshot_id else {}
+    validate_new_time_configuration(configuration.get("time_mode", experiment.time_mode))
     if experiment.status == Experiment.Status.ARCHIVED:
         raise PublicationConflict("归档实验不能继续发布班级。", code="EXPERIMENT_ARCHIVED")
     grouped_pool = (bool(experiment.frozen_release_snapshot_id and experiment.frozen_release_snapshot.configuration.get('question_group_runtime_version'))
@@ -1651,6 +1654,9 @@ def generate_preview(plan, actor, *, expected_revision, progress=None):
         expected_revision=expected_revision,
     )
     plan.experiment = experiment
+    from .services import validate_new_time_configuration
+    configuration = experiment.frozen_release_snapshot.configuration if experiment.frozen_release_snapshot_id else {}
+    validate_new_time_configuration(configuration.get("time_mode", experiment.time_mode))
     if experiment.status == Experiment.Status.ARCHIVED:
         raise PublicationConflict("归档实验不能继续发布班级。", code="EXPERIMENT_ARCHIVED")
     plan_classes = list(
@@ -2395,6 +2401,9 @@ def commit_publish_plan(plan, actor, *, expected_revision, progress=None):
     _assert_plan_editor(plan, actor)
     if plan.plan_revision != expected_revision:
         raise PublicationConflict("发布计划已被更新，请刷新后重试。", code="PUBLISH_PLAN_STALE")
+    from .services import validate_new_time_configuration
+    configuration = experiment.frozen_release_snapshot.configuration if experiment.frozen_release_snapshot_id else {}
+    validate_new_time_configuration(configuration.get("time_mode", experiment.time_mode))
     if experiment.status == Experiment.Status.ARCHIVED:
         raise PublicationConflict("归档实验不能继续发布班级。", code="EXPERIMENT_ARCHIVED")
     preview_run = PublishPreviewRun.objects.select_for_update().get(pk=plan.preview_run_id)
@@ -2533,6 +2542,8 @@ def append_schedule_revision(
     expected_revision=None, extend_minutes=None, reopen=False,
     total_time_limit_minutes=None, per_question_time_limit_seconds=None,
 ):
+    if per_question_time_limit_seconds is not None:
+        raise ValidationError({"per_question_time_limit_seconds": "单题计时已停用，历史单题时限不可修改。"})
     task = ClassExperimentTask.objects.select_for_update().get(pk=task.pk)
     now = database_now()
     current = task.schedule_revisions.select_for_update().order_by("-revision_no").first()

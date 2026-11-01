@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"group_snapshot_id":{"type":"integer","minimum":1},"next_group_snapshot_id":{"type":["integer","null"],"minimum":1}},"required":["group_snapshot_id","next_group_snapshot_id"],"additionalProperties":false}

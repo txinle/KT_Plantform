@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 from pathlib import Path
 import signal
 import shutil
@@ -19,27 +20,28 @@ FRONTEND = ROOT.parent / "client"
 def find_node_directory():
     configured = os.getenv("KT_NODE_DIR")
     candidates = [Path(configured)] if configured else []
+    discovered = shutil.which("node")
+    if discovered:
+        candidates.append(Path(discovered).parent)
     if os.name == "nt":
         candidates.extend(
             sorted(
-                Path(os.getenv("KT_TOOLING_ROOT", "E:/ATOP/ATOP-tooling")).glob(
-                    "node-v24*-win-x64"
+                Path(os.getenv("KT_TOOLING_ROOT", str(Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData/Local")) / "KT——platform/runtime"))).glob(
+                    "node-v*-win-x64"
                 ),
                 reverse=True,
             )
         )
-    discovered = shutil.which("node")
-    if discovered:
-        candidates.append(Path(discovered).parent)
     for directory in candidates:
         executable = directory / ("node.exe" if os.name == "nt" else "node")
         npm = directory / ("npm.cmd" if os.name == "nt" else "npm")
         if not executable.exists() or not npm.exists():
             continue
         version = subprocess.check_output([str(executable), "--version"], text=True).strip()
-        if version.startswith("v24."):
+        match = re.match(r"^v(\d+)\.", version)
+        if match and int(match.group(1)) >= 24:
             return directory, npm
-    raise SystemExit("Node 24 LTS was not found. Install it or set KT_NODE_DIR.")
+    raise SystemExit("Node 24 or newer was not found. Install it or set KT_NODE_DIR.")
 
 
 def ensure_frontend_dependencies(npm, *, environment):

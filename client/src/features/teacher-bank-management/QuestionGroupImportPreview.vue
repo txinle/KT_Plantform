@@ -8,6 +8,7 @@ const props = withDefaults(defineProps<{
   groups: QuestionImportPreviewGroup[]
   rows: Array<Partial<QuestionImportPreviewRow>>
   modelValue: string[]
+  detailOnly?: boolean
   disabled?: boolean
 }>(), { disabled: false })
 const emit = defineEmits<{ 'update:modelValue': [ids: string[]] }>()
@@ -28,16 +29,16 @@ const labels = { ready: '导入后可用', draft: '保存为草稿', invalid: '�
 </script>
 
 <template>
-  <section v-if="groups.length" class="qimp-groups" aria-label="题组预览">
-    <div class="qimp-groups__list">
-      <h2>{{ groups.length }} 个题组</h2>
+  <section v-if="groups.length" :class="['qimp-groups', { 'is-detail-only': detailOnly }]" aria-label="完整题目预览">
+    <div v-if="!detailOnly" class="qimp-groups__list">
+      <h2>{{ groups.length }} 道完整题目</h2>
       <div v-for="group in groups" :key="group.group_id" class="qimp-groups__row" :class="{ 'is-active': active?.group_id === group.group_id }">
-        <input type="checkbox" :aria-label="`选择整个题组 ${group.source_group_code}`" :checked="modelValue.includes(group.group_id)" :disabled="disabled || !['ready', 'draft'].includes(group.classification)" @change="select(group.group_id, ($event.target as HTMLInputElement).checked)">
+        <input type="checkbox" :aria-label="`选择完整题目 ${group.source_group_code}`" :checked="modelValue.includes(group.group_id)" :disabled="disabled || !['ready', 'draft'].includes(group.classification)" @change="select(group.group_id, ($event.target as HTMLInputElement).checked)">
         <button type="button" @click="inspect(group.group_id)"><strong>{{ group.source_group_code }} {{ group.title }}</strong><span>{{ group.item_count }} 小题 · {{ group.total_max_score }} 分 · {{ labels[group.classification] }}</span></button>
       </div>
     </div>
     <div v-if="active && view" class="qimp-groups__detail">
-      <nav aria-label="题组核对视图"><button class="kt-button" :class="{ 'kt-button--secondary': student }" type="button" @click="student = false">教师核对</button><button data-student-group-preview class="kt-button" :class="{ 'kt-button--secondary': !student }" type="button" @click="student = true">学生效果</button></nav>
+      <nav aria-label="题目核对视图"><button class="kt-button" :class="{ 'kt-button--secondary': student }" type="button" @click="student = false">教师核对</button><button data-student-group-preview class="kt-button" :class="{ 'kt-button--secondary': !student }" type="button" @click="student = true">学生效果</button></nav>
       <ul v-if="!student && active.errors.length" role="alert"><li v-for="issue in active.errors" :key="issue">{{ issue }}</li></ul>
       <QuestionGroupContent v-if="student" :group="view" :responses-by-item-key="responses" @request-activate="intent => { if (intent.hasAnswer) responses[intent.itemKey] = intent.answer }" @answer-change="change => responses[change.itemKey] = change.answer" />
       <template v-else>
@@ -59,6 +60,7 @@ const labels = { ready: '导入后可用', draft: '保存为草稿', invalid: '�
 
 <style scoped>
 .qimp-groups { display: grid; grid-template-columns: minmax(240px, 22%) minmax(0, 1fr); margin-block: 1rem; border: 1px solid var(--kt-border); border-radius: 10px; background: var(--kt-surface); overflow: hidden; }
+.qimp-groups.is-detail-only { display:block; border:0; margin:0; }
 .qimp-groups__list { padding: 1rem; border-right: 1px solid var(--kt-border); }
 .qimp-groups__row { display: flex; align-items: flex-start; gap: .5rem; margin-top: .5rem; padding: .75rem; border-radius: 6px; }
 .qimp-groups__row.is-active { background: var(--kt-action-050); }
@@ -70,5 +72,6 @@ const labels = { ready: '导入后可用', draft: '保存为草稿', invalid: '�
 .qimp-groups__material { white-space: pre-wrap; font: 1.25rem/1.8 var(--kt-font-article); }
 .qimp-groups__member { padding-block: 1rem; border-top: 1px solid var(--kt-border); }
 .qimp-groups__member p { margin-bottom: .5rem; overflow-wrap: anywhere; }
-@media (max-width: 63.99rem) { .qimp-groups { grid-template-columns: 1fr; } .qimp-groups__list { border-right: 0; border-bottom: 1px solid var(--kt-border); } }
+@media (max-width: 63.99rem) { .qimp-groups { grid-template-columns: 1fr; } .qimp-groups.is-detail-only { display:block; border:0; margin:0; }
+.qimp-groups__list { border-right: 0; border-bottom: 1px solid var(--kt-border); } }
 </style>

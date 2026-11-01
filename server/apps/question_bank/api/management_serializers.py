@@ -141,6 +141,7 @@ class ManagementQuestionEditorOptionsSerializer(serializers.Serializer):
 
 
 class ManagementQuestionEditorQuestionSerializer(serializers.Serializer):
+    updated_at = serializers.DateTimeField(allow_null=True)
     id = serializers.IntegerField()
     sequence = serializers.IntegerField(min_value=1)
     code = serializers.CharField()
@@ -186,6 +187,7 @@ class ManagementQuestionEditorResponseSerializer(serializers.Serializer):
 
 
 class ManagementQuestionEditorRequestSerializer(serializers.Serializer):
+    expected_updated_at = serializers.DateTimeField(required=False)
     text = serializers.CharField(allow_blank=True)
     title = serializers.CharField(max_length=240, allow_blank=True, required=False)
     instructions = serializers.CharField(allow_blank=True, required=False)
@@ -465,6 +467,9 @@ class ManagementStandaloneBankCollectionSerializer(serializers.Serializer):
 
 
 class ManagementStandaloneQuestionSerializer(serializers.Serializer):
+    unit_key = serializers.CharField(required=False)
+    unit_kind = serializers.ChoiceField(choices=('question', 'group'), required=False)
+    member_kc_mappings = serializers.ListField(child=serializers.JSONField(), required=False)
     title = serializers.CharField(max_length=240, allow_blank=True, required=False)
     instructions = serializers.CharField(allow_blank=True, required=False)
     educational_type = serializers.CharField()
@@ -482,17 +487,18 @@ class ManagementStandaloneQuestionSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=240, allow_blank=True, required=False)
     instructions = serializers.CharField(allow_blank=True, required=False)
     educational_type = serializers.ChoiceField(choices=('standard', 'translation', 'essay'), required=False)
-    question_type = serializers.ChoiceField(choices=QUESTION_TYPE_CHOICES)
+    question_type = serializers.CharField()
     question_type_label = serializers.CharField()
     status = serializers.ChoiceField(choices=QUESTION_STATUS_CHOICES)
     status_label = serializers.CharField()
     draft_reasons = serializers.ListField(child=serializers.CharField())
     teacher_difficulty = serializers.CharField(allow_null=True)
     kc_mapping = QuestionKCMappingSerializer()
-    edit_url = serializers.CharField()
+    edit_url = serializers.CharField(allow_null=True)
 
 
 class ManagementStandaloneBankDetailSerializer(serializers.Serializer):
+    question_page = serializers.JSONField(required=False)
     unit_summary = serializers.JSONField(required=False)
     groups = QuestionGroupResponseSerializer(many=True, required=False)
     redirect_url = serializers.CharField(required=False)

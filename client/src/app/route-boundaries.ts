@@ -65,6 +65,11 @@ export const migratedRoutes: RouteRecordRaw[] = [
     ],
   },
   {
+    path: '/teacher/courses/:courseId/experiments/:experimentId/student-preview/',
+    name: 'teacher-experiment-student-preview',
+    component: () => import('@/features/teacher-experiments/TeacherStudentPreview.vue'),
+  },
+  {
     path: '/teacher/courses/:courseId/experiments/',
     component: TeacherExperimentsLayout,
     children: [

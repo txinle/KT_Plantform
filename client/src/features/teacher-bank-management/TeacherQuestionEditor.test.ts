@@ -20,6 +20,18 @@ async function setup(data = fixture()) {
   return wrapper
 }
 describe('question editor disclosure preserves saved fields', () => {
+  it('previews unsaved content and requires confirmation before saving a changed type as a new question', async () => {
+    const wrapper = await setup()
+    await wrapper.get('#question-text').setValue('Unsaved new material')
+    expect(wrapper.get('.kt-document-preview').text()).toContain('Unsaved new material')
+    await wrapper.get('#question-type').setValue('translation')
+    await wrapper.get('form').trigger('submit')
+    expect(mocks.save).not.toHaveBeenCalled()
+    await wrapper.get('label.kt-alert input[type=checkbox]').setValue(true)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.save).toHaveBeenCalledWith(1, 2, 0, expect.objectContaining({ question_type: 'short_answer', educational_type: 'translation', text: 'Unsaved new material', kc_mapping_json: JSON.stringify(mapping) }))
+  })
   it('sends the configured maximum score for an ordinary question', async () => {
     const wrapper = await setup()
     await wrapper.get('[data-question-max-score]').setValue('3.50')

@@ -45,7 +45,7 @@ class StandaloneExperimentInputSerializer(serializers.Serializer):
         required=False,
     )
     time_mode = serializers.ChoiceField(
-        choices=Experiment.TimeMode.choices,
+        choices=[(value, label) for value, label in Experiment.TimeMode.choices if value != Experiment.TimeMode.PER_QUESTION],
         required=False,
     )
     total_time_limit_minutes = serializers.IntegerField(
@@ -106,6 +106,11 @@ class StandaloneExperimentInputSerializer(serializers.Serializer):
         if len(question_types) != len(set(question_types)):
             raise serializers.ValidationError("同一题型只能设置一个配额。")
         return quotas
+
+    def validate(self, attrs):
+        if attrs.get("per_question_time_limit_seconds") is not None:
+            raise serializers.ValidationError({"per_question_time_limit_seconds": "单题计时已停用。"})
+        return attrs
 
 
 class StandaloneExperimentListItemSerializer(serializers.Serializer):
