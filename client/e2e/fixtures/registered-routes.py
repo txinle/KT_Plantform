@@ -9,7 +9,7 @@ from django.db import connection, transaction
 from django.urls import reverse
 from django.utils import timezone
 from apps.accounts.models import Course, ClassGroup, User
-from apps.question_bank.models import QuestionBank
+from apps.question_bank.models import Question, QuestionBank
 from apps.experiments.models import Experiment, ClassExperimentTask, PublishPlan
 from apps.assessment.models import ExperimentSession, SubmissionEvent
 from apps.assessment.services import save_draft
@@ -77,7 +77,12 @@ student = User.objects.get(username='S002')
 course = Course.objects.get(code='KT101', term='2026春')
 class_group = ClassGroup.objects.get(course=course, name='认知追踪实验班')
 bank = QuestionBank.objects.get(course=course, name='演示题库')
-standalone_bank = QuestionBank.objects.filter(course=None, owner=teacher).first()
+standalone_bank, _ = QuestionBank.objects.get_or_create(
+    course=None, owner=teacher, name='Route standalone bank')
+standalone_question, _ = Question.objects.get_or_create(
+    bank=standalone_bank, sequence=1,
+    defaults={'question_type': Question.Type.NUMERIC, 'text': '2 + 2 = ?',
+        'correct_answer': '4', 'status': Question.Status.DRAFT})
 feedback = Experiment.objects.get(course=course, name='完整反馈视觉验证')
 feedback_session = ExperimentSession.objects.get(version__experiment=feedback, student=student)
 question = feedback_session.assignments.order_by('assigned_sequence_index').first().snapshot
@@ -105,7 +110,7 @@ for route in routes:
         persona = 'anonymous'
     if name.startswith('question_bank:') and '<int:' in path:
         facts.update(pk=standalone_bank.pk, bank_pk=standalone_bank.pk,
-            question_pk=standalone_bank.questions.order_by('pk').first().pk)
+            question_pk=standalone_question.pk)
     if name.startswith('courses:') and '/banks/' in path:
         facts['pk'] = bank.pk
     if name.startswith('courses:class_question_'):
