@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Prefetch
 
 from ..models import Question, QuestionGroup
 
@@ -17,7 +17,25 @@ def _get(value, key, default=None):
 
 
 def _members(group, members):
+    if members is None and hasattr(group, '_read_members'):
+        for member in group._read_members:
+            member.group = group
+            if member.bank_id == group.bank_id:
+                member.bank = group.bank
+        return group._read_members
     return list(members) if members is not None else list(group.members.order_by('group_order', 'pk').prefetch_related('options'))
+
+
+def question_groups_for_read(queryset):
+    from .question_kc_mapping import question_kc_mapping_prefetch
+    members = Question.objects.order_by('group_order', 'pk').prefetch_related(
+        'options', question_kc_mapping_prefetch(include_children=True))
+    return queryset.select_related('bank__course').prefetch_related(
+        Prefetch('members', queryset=members, to_attr='_read_members'))
+
+
+def project_group_status(group):
+    return {'kind': group.kind, 'status': 'draft' if group_readiness_issues(group) else 'active'}
 
 
 def validate_group_structure(group, members=None):

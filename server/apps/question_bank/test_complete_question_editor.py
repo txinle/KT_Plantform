@@ -1,6 +1,9 @@
 import json
+from unittest.mock import patch
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from apps.accounts.models import Course, User
 from apps.api.test_support import domain_payload
 from .models import Concept, Question, QuestionBank
@@ -38,6 +41,74 @@ class CompleteQuestionEditorTests(TestCase):
         self.assertEqual(result['page']['total_items'], 1)
         self.assertEqual(len(result['items'][0]['member_kc_mappings']), 2)
         self.assertEqual(domain_payload(self.client.get(self.base + 'questions/?complete_only=1&status=draft'))['page']['total_items'], 1)
+
+    def test_complete_collection_projects_only_the_requested_page(self):
+        from .services.question_kc_mapping import project_question_kc_mapping
+        for sequence in range(1, 46):
+            Question.objects.create(bank=self.bank, sequence=sequence, text=f'Ordinary {sequence}',
+                question_type='short_answer', correct_answer='Answer', status='draft')
+        with patch('apps.question_bank.services.complete_questions.project_question_kc_mapping',
+                   wraps=project_question_kc_mapping) as project, CaptureQueriesContext(connection) as queries:
+            result = domain_payload(self.client.get(self.base + 'questions/?complete_only=1&page=2'))
+        self.assertEqual(result['page']['total_items'], 45)
+        self.assertEqual([row['sequence'] for row in result['items']], list(range(21, 41)))
+        self.assertEqual(project.call_count, 20)
+        self.assertLess(len(queries), 35)
+
+    def test_bank_list_summary_does_not_project_member_details(self):
+        self.create()
+        with patch('apps.question_bank.services.question_groups.project_question_group',
+                   side_effect=AssertionError('List summary must not generate full group documents')):
+            result = domain_payload(self.client.get(f'/api/v1/teacher/courses/{self.course.pk}/banks/'))
+        summary = result['items'][0]['unit_summary']
+        self.assertEqual((summary['complete_count'], summary['response_item_count'], summary['usable_count']), (1, 2, 1))
+
+    def test_group_detail_queries_are_batched_and_readiness_stays_live(self):
+        for _ in range(5):
+            self.create()
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(self.base)
+        self.assertEqual(response.status_code, 200, response.content)
+        result = domain_payload(response)
+        self.assertEqual(len(result['groups']), 5)
+        self.assertEqual(result['unit_summary']['usable_count'], 5)
+        self.assertLess(len(queries), 40)
+        Concept.objects.filter(course=self.course).update(status='archived')
+        result = domain_payload(self.client.get(self.base))
+        self.assertEqual(result['unit_summary']['usable_count'], 0)
+        self.assertTrue(all(group['status'] == 'draft' for group in result['groups']))
+
+    def test_mixed_pagination_and_search_preserve_whole_groups(self):
+        from .services.question_groups import project_question_group
+        for sequence in range(1, 21):
+            Question.objects.create(bank=self.bank, sequence=sequence, text=f'Ordinary {sequence}',
+                question_type='short_answer', correct_answer='', status='draft')
+        group = self.create()
+        with patch('apps.question_bank.services.complete_questions.project_question_group',
+                   wraps=project_question_group) as project:
+            result = domain_payload(self.client.get(self.base + 'questions/?complete_only=1&page=2'))
+        self.assertEqual(result['page']['total_items'], 21)
+        self.assertEqual([row['unit_key'] for row in result['items']], [f'group:{group["id"]}'])
+        self.assertEqual(len(result['items'][0]['member_kc_mappings']), 2)
+        self.assertEqual(project.call_count, 1)
+        for query in ('Vocabulary', 'KC1', 'Cities'):
+            result = domain_payload(self.client.get(self.base + 'questions/', {'complete_only': '1', 'q': query}))
+            self.assertEqual([row['unit_key'] for row in result['items']], [f'group:{group["id"]}'])
+        result = domain_payload(self.client.get(self.base + 'questions/?complete_only=1&status=active'))
+        self.assertEqual(result['page']['total_items'], 1)
+        Concept.objects.filter(course=self.course).update(status='archived')
+        result = domain_payload(self.client.get(self.base + 'questions/?complete_only=1&status=draft&page=2'))
+        self.assertEqual(result['page']['total_items'], 21)
+        self.assertEqual(result['items'][0]['status'], 'draft')
+
+    def test_batched_group_read_does_not_mask_a_foreign_bank_member(self):
+        group = self.create()
+        other_bank = QuestionBank.objects.create(course=self.course, owner=self.teacher, name='Other')
+        Question.objects.filter(pk=group['members'][0]['id']).update(status='draft')
+        Question.objects.filter(pk=group['members'][0]['id']).update(bank=other_bank)
+        result = domain_payload(self.client.get(self.base))
+        self.assertEqual(result['groups'][0]['status'], 'draft')
+        self.assertIn('题组成员必须属于同一题库。', result['groups'][0]['readiness_issues'])
 
     def test_create_and_conflict_preserve_original(self):
         url = self.base + 'questions/0/editor/'

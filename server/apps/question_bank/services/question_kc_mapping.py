@@ -12,17 +12,20 @@ SCHEMA_VERSION = "question-kc-tree-v2"
 _PREFETCHED_LINKS_ATTR = "_prefetched_question_kc_mapping_links"
 
 
-def question_kc_mapping_prefetch():
+def question_kc_mapping_prefetch(*, include_children=False):
+    links = QuestionConcept.objects.select_related("concept", "parent_link__concept").order_by(
+        "display_order", "concept__code", "pk"
+    )
+    if include_children:
+        links = links.prefetch_related("concept__children")
     return Prefetch(
         "concept_links",
-        queryset=QuestionConcept.objects.select_related(
-            "concept", "parent_link__concept"
-        ).order_by("display_order", "concept__code", "pk"),
+        queryset=links,
         to_attr=_PREFETCHED_LINKS_ATTR,
     )
 
 
-def _validated_tree(question, *, root_kc_code, nodes):
+def _validated_tree(question, *, root_kc_code, nodes, concepts=None):
     rows = [
         {
             "kc_code": str(row.get("kc_code") or "").strip(),
@@ -73,13 +76,10 @@ def _validated_tree(question, *, root_kc_code, nodes):
     for code in codes:
         depth_for(code)
 
-    concepts = {
-        concept.code: concept
-        for concept in Concept.objects.filter(
-            course_id=question.bank.course_id,
-            code__in=codes,
-        )
-    }
+    if concepts is None:
+        concepts = Concept.objects.filter(course_id=question.bank.course_id, code__in=codes)
+    concepts = {concept.code: concept for concept in concepts
+                if concept.course_id == question.bank.course_id and concept.code in codes}
     if set(concepts) != set(codes):
         raise ValidationError("题目 KC 映射包含不属于当前课程的 kc_code。")
     archived = sorted(
@@ -91,8 +91,8 @@ def _validated_tree(question, *, root_kc_code, nodes):
     return rows, concepts, depths
 
 
-def validate_question_kc_mapping(question, *, root_kc_code, nodes):
-    _validated_tree(question, root_kc_code=root_kc_code, nodes=nodes)
+def validate_question_kc_mapping(question, *, root_kc_code, nodes, concepts=None):
+    _validated_tree(question, root_kc_code=root_kc_code, nodes=nodes, concepts=concepts)
 
 
 @transaction.atomic
@@ -129,7 +129,7 @@ def replace_question_kc_mapping(question, *, root_kc_code, nodes):
     return project_question_kc_mapping(question)
 
 
-def project_question_kc_mapping(question):
+def question_kc_mapping_links(question):
     links = getattr(question, _PREFETCHED_LINKS_ATTR, None)
     if links is None:
         links = list(
@@ -137,6 +137,11 @@ def project_question_kc_mapping(question):
                 "display_order", "concept__code", "pk"
             )
         )
+    return links
+
+
+def project_question_kc_mapping(question):
+    links = question_kc_mapping_links(question)
     if not links:
         return {
             "schema_version": SCHEMA_VERSION,

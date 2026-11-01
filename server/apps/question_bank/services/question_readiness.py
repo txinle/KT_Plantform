@@ -126,7 +126,8 @@ def readiness_issues(question, *, require_primary=None, include_group=True):
         require_primary = course_required or question.group_id is not None
     if not course_required and not require_primary:
         return issues
-    links = list(question.concept_links.select_related("concept", "parent_link__concept"))
+    from .question_kc_mapping import question_kc_mapping_links
+    links = question_kc_mapping_links(question)
     primary = [link for link in links if link.is_primary]
     if len(primary) != 1:
         issues.append("课程可用题目必须有且仅有一个主 KC。" if course_required else "题目缺少主知识点。")
@@ -139,10 +140,10 @@ def readiness_issues(question, *, require_primary=None, include_group=True):
     if course_required:
         from .question_kc_mapping import validate_question_kc_mapping
         try:
-            question._validate_active_course_mapping()
+            question._validate_active_course_mapping(links=links)
             if any(link.parent_link_id and link.parent_link.question_id != question.pk for link in links):
                 raise ValidationError("题目 KC 的父节点必须属于当前题目。")
-            validate_question_kc_mapping(question, root_kc_code=primary[0].concept.code, nodes=[
+            validate_question_kc_mapping(question, root_kc_code=primary[0].concept.code, concepts=[link.concept for link in links], nodes=[
                 {"kc_code": link.concept.code, "parent_kc_code": link.parent_link.concept.code if link.parent_link_id else None, "order": link.display_order}
                 for link in links
             ])

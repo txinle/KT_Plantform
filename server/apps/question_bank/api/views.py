@@ -302,11 +302,11 @@ class TeacherQuestionBankCollectionView(APIView):
         paginator = FixedPageNumberPagination()
         page = paginator.paginate_queryset(banks, request, view=self)
         items = []
-        from ..services.question_groups import project_bank_unit_summary, project_question_group
+        from ..services.question_groups import project_bank_unit_summary, project_group_status, question_groups_for_read
         for bank in page:
             items.append(
                 {
-                    "unit_summary": project_bank_unit_summary(bank, [project_question_group(group) for group in bank.groups.all()]),
+                    "unit_summary": project_bank_unit_summary(bank, [project_group_status(group) for group in question_groups_for_read(bank.groups.all())]),
                     "id": bank.pk,
                     "name": bank.name,
                     "description": bank.description,
@@ -521,8 +521,8 @@ class TeacherQuestionBankDetailView(APIView):
         course = _course_for_teacher(request.user, course_id)
         bank = _bank_for_course(course, bank_id)
         bank.question_count = bank.questions.count()
-        from ..services.question_groups import project_question_group, project_bank_unit_summary
-        groups = [project_question_group(group) for group in bank.groups.all()]
+        from ..services.question_groups import project_question_group, project_bank_unit_summary, question_groups_for_read
+        groups = [project_question_group(group) for group in question_groups_for_read(bank.groups.all())]
         capabilities = _metadata_capabilities(request.user, course, bank)
         can_edit_content = (
             course.status == Course.Status.ACTIVE
@@ -596,9 +596,9 @@ class TeacherQuestionCollectionView(APIView):
 
         if request.query_params.get("complete_only") == "1":
             from ..services.complete_questions import complete_questions
-            rows = complete_questions(bank, query=query, question_type=question_type, status=status)
             paginator = FixedPageNumberPagination()
-            page = paginator.paginate_queryset(rows, request, view=self)
+            page = complete_questions(bank, query=query, question_type=question_type, status=status,
+                paginate=lambda rows: paginator.paginate_queryset(rows, request, view=self))
             return _serialize_page(paginator, page, {
                 'bank': {'id': bank.pk, 'name': bank.name},
                 'filters': {'query': query, 'question_type': question_type, 'status': status,

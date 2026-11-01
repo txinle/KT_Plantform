@@ -407,13 +407,12 @@ class Question(models.Model):
 
             ensure_course_question_identity(self)
 
-    def _validate_active_course_mapping(self):
-        primary_links = list(
-            self.concept_links.filter(is_primary=True).select_related("concept")
-        )
+    def _validate_active_course_mapping(self, *, links=None):
+        if links is None:
+            links = list(self.concept_links.select_related("concept"))
+        primary_links = [link for link in links if link.is_primary]
         if len(primary_links) != 1:
             raise ValidationError("课程可用题目必须有且仅有一个主 KC。")
-        links = list(self.concept_links.select_related("concept"))
         if any(link.concept.course_id != self.bank.course_id for link in links):
             raise ValidationError("题目 KC 必须属于题库所在课程。")
         if any(link.concept.children.exists() for link in links):
