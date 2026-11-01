@@ -29,7 +29,7 @@ class TeacherStudentPreviewView(TeacherExperimentApiMixin, APIView):
     @extend_schema(operation_id="teacher_experiment_student_preview", responses=TeacherStudentPreviewSerializer)
     def get(self, request, course_id, experiment_id):
         course = self.get_course()
-        if not course.can_manage(request.user):
+        if not course.can_manage(request.user, capability="experiment"):
             raise Http404
         experiment = self.get_experiment(course)
         try:

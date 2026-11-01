@@ -215,6 +215,16 @@ def _delete_artifact(item):
             raise ValueError("导出文件路径不在允许的导出目录内。")
         path.unlink(missing_ok=True)
         return None
+    if kind == "research_asset":
+        from .models import ResearchExportAsset
+        root = (Path(settings.MEDIA_ROOT) / "research-assets").resolve()
+        path = Path(value).resolve()
+        if not path.is_relative_to(root) or path == root:
+            raise ValueError("研究资产路径不在允许的研究资产目录内。")
+        if ResearchExportAsset.objects.filter(artifact_path=value).exists():
+            return "still_referenced"
+        path.unlink(missing_ok=True)
+        return None
     if kind != "storage":
         raise ValueError("无法识别文件清理类型。")
     key = PurePosixPath(value)
@@ -320,7 +330,7 @@ def cleanup_state(cleanup_id):
 
 def retire_research_exports(*, course_id, experiment_ids=None, class_id=None,
                             question_ids=None, coverage_run_ids=(), reason, actor=None,
-                            extra_files=()):
+                            extra_files=(), whole_course=False):
     if not transaction.get_connection().in_atomic_block:
         raise RuntimeError("研究数据清理必须位于课程事务内。")
     # A repeatable-read export waiting for this course lock must serialize/retry,
@@ -328,6 +338,9 @@ def retire_research_exports(*, course_id, experiment_ids=None, class_id=None,
     Course.objects.filter(pk=course_id).update(updated_at=timezone.now())
     snapshots = affected_export_snapshots(course_id=course_id, experiment_ids=experiment_ids,
         class_id=class_id, question_ids=question_ids, coverage_run_ids=coverage_run_ids)
+    if whole_course:
+        snapshots = (ExportSnapshot.objects.filter(Q(pk__in=snapshots) | Q(course_id=course_id))
+                     if experiment_ids else ExportSnapshot.objects.filter(course_id=course_id))
     snapshot_ids = list(snapshots.values_list("pk", flat=True))
     jobs = list(ExportJob.objects.select_for_update().filter(snapshot_id__in=snapshot_ids).order_by("pk"))
     files = [{"kind": "export", "path": job.artifact_path} for job in jobs if job.artifact_path]

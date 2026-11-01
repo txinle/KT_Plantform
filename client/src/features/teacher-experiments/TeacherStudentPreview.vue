@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useExperimentPageUrl } from './experiment-page-url'
+const pageUrl = useExperimentPageUrl()
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { getBootstrapContext } from '@/app/bootstrap'
@@ -70,7 +72,7 @@ onMounted(async () => {
   <div class="kt-assessment-focus kt-student-preview">
     <AppHeader :user-name="bootstrap.user.display_name" :user-meta="bootstrap.user.username" :csrf-token="bootstrap.csrf_token" />
     <main aria-label="教师模拟学生作答">
-      <div class="kt-preview-notice" role="status"><span><strong>教师模拟学生作答</strong> · 作答仅保存在当前页面，不生成正式提交，不进入研究统计。按无个人作答历史预览，不模拟班级计时、研究工具或反馈发布。</span><a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/`">返回实验</a></div>
+      <div class="kt-preview-notice" role="status"><span><strong>教师模拟学生作答</strong> · 作答仅保存在当前页面，不生成正式提交，不进入研究统计。按无个人作答历史预览，不模拟班级计时、研究工具或反馈发布。</span><a class="kt-button kt-button--secondary" :href="pageUrl(`/teacher/courses/${courseId}/experiments/`)">返回实验</a></div>
       <p v-if="loading" role="status">正在加载模拟题目…</p>
       <p v-else-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
       <section v-else-if="finished && paper" class="kt-preview-complete" data-preview-complete aria-labelledby="preview-complete-title">
@@ -78,7 +80,7 @@ onMounted(async () => {
         <p>本次作答未提交，也不会计入学生或研究数据。</p>
         <p>已体验作答 {{ completedCount }} / {{ paper.units.length }} 道题。本次答案仅保留在当前页面，离开或重新体验后清空。</p>
         <div class="kt-preview-complete__actions">
-          <a class="kt-button" data-preview-return :href="`/teacher/courses/${courseId}/experiments/`">返回实验</a>
+          <a class="kt-button" data-preview-return :href="pageUrl(`/teacher/courses/${courseId}/experiments/`)">返回实验</a>
           <button class="kt-button kt-button--secondary" data-reset-preview type="button" @click="reset">重新体验</button>
         </div>
       </section>

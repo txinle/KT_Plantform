@@ -13,7 +13,7 @@ import {
   type DeletionTarget,
 } from './api'
 
-const props = defineProps<{ courseId: number; target: DeletionTarget; recoveryOnly?: boolean }>()
+const props = defineProps<{ courseId: number; target: DeletionTarget; recoveryOnly?: boolean; pageUrl?: (url: string) => string }>()
 const emit = defineEmits<{
   cancelled: []
   completed: [payload: { target: DeletionTarget; result: DeletionResult }]
@@ -445,7 +445,7 @@ onBeforeUnmount(() => {
               <li v-for="classGroup in experiment.classes" :key="classGroup.id"><span>{{ classGroup.name }}</span><span>{{ classGroup.session_count }} 次会话</span></li>
             </ul>
             <div v-if="preview.action === 'delete_class' && activeTarget.kind === 'class'" class="kt-deletion-related-actions">
-              <a class="kt-button kt-button--secondary" :href="experiment.detail_url">查看实验</a>
+              <a class="kt-button kt-button--secondary" :href="pageUrl ? pageUrl(experiment.detail_url) : experiment.detail_url">查看实验</a>
               <button class="kt-button kt-button--secondary" type="button" :data-remove-class-experiment="experiment.id" @click="openRelated({ kind: 'class_experiment', classId: activeTarget.classId, experimentId: experiment.id })">仅从当前班级移除</button>
               <button class="kt-button kt-button--danger" type="button" :data-delete-global-experiment="experiment.id" @click="openRelated({ kind: 'experiment', experimentId: experiment.id })">删除全部班级中的实验</button>
             </div>

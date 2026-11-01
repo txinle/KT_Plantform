@@ -24,7 +24,7 @@ class CourseClassDeletionError(ValidationError):
 
 def can_create_course_class_group(course, user):
     """Return the legacy class-list creation capability for this course user."""
-    if not course.can_manage(user):
+    if not course.can_manage(user, capability="class"):
         return False
     try:
         require_writable_course(course)

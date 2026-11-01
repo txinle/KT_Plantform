@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useExperimentPageUrl } from './experiment-page-url'
+const pageUrl = useExperimentPageUrl()
 import { onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
@@ -47,7 +49,7 @@ async function load() {
   try {
     const response = await api.detail(experimentId)
     if (response.kind === 'canonical') {
-      await router.replace(response.canonical_url)
+      await router.replace(pageUrl(response.canonical_url)!)
       return
     }
     setDetail(response)
@@ -107,7 +109,7 @@ async function remove() {
   error.value = ''
   try {
     await api.remove(experimentId)
-    await router.replace('/teacher/experiments/')
+    await router.replace(pageUrl('/teacher/experiments/')!)
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '实验删除失败。'
   } finally {
@@ -123,14 +125,14 @@ onMounted(load)
   <template v-else-if="detail">
     <header class="kt-experiment-page-header">
       <div class="kt-experiment-page-header__copy">
-        <nav class="kt-experiment-breadcrumb" aria-label="层级目录"><RouterLink to="/teacher/experiments/">实验</RouterLink><span aria-hidden="true">/</span><span aria-current="page">{{ detail.experiment.name }}</span></nav>
+        <nav class="kt-experiment-breadcrumb" aria-label="层级目录"><RouterLink :to="pageUrl('/teacher/experiments/')">实验</RouterLink><span aria-hidden="true">/</span><span aria-current="page">{{ detail.experiment.name }}</span></nav>
         <div class="kt-experiment-title-row"><h1>{{ detail.experiment.name }}</h1><StatusBadge :tone="statusTone(detail.experiment.status)" :label="detail.experiment.status_label" /></div>
         <p>{{ detail.experiment.description || '未填写实验说明。' }}</p>
         <small class="kt-standalone-updated">更新：{{ dateTime(detail.experiment.updated_at) }}</small>
       </div>
       <div class="kt-page-actions">
-        <RouterLink class="kt-button kt-button--secondary" :to="`/teacher/experiments/${experimentId}/results/`">结果与导出</RouterLink>
-        <RouterLink v-if="detail.actions.can_edit" class="kt-button kt-button--secondary" :to="`/teacher/experiments/${experimentId}/edit/`">编辑配置</RouterLink>
+        <RouterLink class="kt-button kt-button--secondary" :to="pageUrl(`/teacher/experiments/${experimentId}/results/`)">结果与导出</RouterLink>
+        <RouterLink v-if="detail.actions.can_edit" class="kt-button kt-button--secondary" :to="pageUrl(`/teacher/experiments/${experimentId}/edit/`)">编辑配置</RouterLink>
         <button class="kt-button kt-button--danger" type="button" @click="showDelete = !showDelete">删除实验</button>
       </div>
     </header>

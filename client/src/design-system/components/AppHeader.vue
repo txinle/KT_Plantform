@@ -64,10 +64,9 @@ withDefaults(defineProps<{
           <small v-if="userMeta" :title="userMeta">· {{ userMeta }}</small>
         </span>
         <a
-          v-if="passwordChangeUrl"
           class="kt-logout-button kt-account-link"
           data-password-change-link
-          :href="passwordChangeUrl"
+          :href="passwordChangeUrl || '/password/change/'"
         >修改密码</a>
         <form v-if="showLogout" data-logout @submit.prevent="signOut">
           <input type="hidden" name="csrfmiddlewaretoken" :value="csrfToken">

@@ -43,7 +43,7 @@ class TeacherTaskGradingMixin:
             ),
             pk=self.kwargs["task_id"],
         )
-        if not task.experiment.course.can_manage(self.request.user):
+        if not task.experiment.course.can_manage(self.request.user, capability="experiment"):
             raise Http404
         return task
 

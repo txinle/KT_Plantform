@@ -15,6 +15,7 @@ from apps.accounts.course_access import (
     get_accessible_course,
     lock_course,
     require_course_manager,
+    require_course_owner,
     require_writable_course,
 )
 from apps.accounts.forms import (
@@ -98,7 +99,7 @@ def _course_summary(course, user=None):
         "class_count": class_count,
         "bank_count": bank_count,
         "experiment_count": experiment_count,
-        "restore_url": reverse("teacher-course-restore", args=[course.pk]) if user and course.can_manage(user) and course.status == Course.Status.ARCHIVED else None,
+        "restore_url": reverse("teacher-course-restore", args=[course.pk]) if user and (user.is_superuser or user.role == User.Role.ADMIN or course.owner_id == user.pk) and course.status == Course.Status.ARCHIVED else None,
         "detail_url": reverse("courses:detail", args=[course.pk]),
     }
 
@@ -171,17 +172,19 @@ def _course_detail_payload(course, user):
     }
 
 
-def _course_settings_payload(course):
+def _course_settings_payload(course, user=None):
     teachers = list(
         course.teacher_links.order_by("teacher_id").values_list("teacher_id", flat=True)
     )
     teacher_options = User.objects.filter(
         role=User.Role.TEACHER,
-        is_active=True,
+        pk__in=teachers,
     ).exclude(pk=course.owner_id).order_by("pk")
     purge_requests = DataPurgeRequest.objects.filter(
         scope_definition__course_id=course.pk
     )[:10]
+    if not user or not (user.is_superuser or user.role == User.Role.ADMIN or course.owner_id == user.pk):
+        purge_requests = []
     return {
         "course": {
             "id": course.pk,
@@ -209,8 +212,9 @@ def _course_settings_payload(course):
             ],
         },
         "capabilities": {
-            "can_update": course.status == Course.Status.ACTIVE,
-            "can_archive": course.status == Course.Status.ACTIVE,
+            "can_update": course.status == Course.Status.ACTIVE and bool(user and (user.is_superuser or user.role == User.Role.ADMIN or course.owner_id == user.pk)),
+            "can_archive": course.status == Course.Status.ACTIVE and bool(user and (user.is_superuser or user.role == User.Role.ADMIN or course.owner_id == user.pk)),
+            "can_restore": course.status == Course.Status.ARCHIVED and bool(user and (user.is_superuser or user.role == User.Role.ADMIN or course.owner_id == user.pk)),
         },
         "archive_url": reverse("teacher-course-archive", args=[course.pk]),
         "purge_request_create_url": reverse(
@@ -313,7 +317,7 @@ class TeacherCourseSettingsView(TeacherCourseApiView):
     def get(self, request, course_id):
         course = self._course(request.user, course_id)
         return Response(
-            TeacherCourseSettingsSerializer(_course_settings_payload(course)).data
+            TeacherCourseSettingsSerializer(_course_settings_payload(course, request.user)).data
         )
 
     @extend_schema(
@@ -323,13 +327,14 @@ class TeacherCourseSettingsView(TeacherCourseApiView):
     )
     def post(self, request, course_id):
         course = self._course(request.user, course_id)
+        require_course_owner(course, request.user)
         data = _form_data(request.data, include_teachers=True)
         form = CourseSettingsForm(data, instance=course)
         if not form.is_valid():
             raise ValidationError(form.errors)
         with transaction.atomic():
             course = lock_course(course)
-            require_course_manager(course, request.user)
+            require_course_owner(course, request.user)
             require_writable_course(course)
             form = CourseSettingsForm(data, instance=course)
             if not course_settings_state_token_matches(
@@ -364,7 +369,7 @@ class TeacherCourseSettingsView(TeacherCourseApiView):
                     },
                 )
         return Response(
-            TeacherCourseSettingsSerializer(_course_settings_payload(course)).data
+            TeacherCourseSettingsSerializer(_course_settings_payload(course, request.user)).data
         )
 
 
@@ -378,16 +383,16 @@ class TeacherCourseArchiveView(TeacherCourseApiView):
         serializer = TeacherCourseArchiveRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         course = get_accessible_course(request.user, course_id)
-        require_course_manager(course, request.user)
+        require_course_owner(course, request.user)
         with transaction.atomic():
             course = lock_course(course)
-            require_course_manager(course, request.user)
+            require_course_owner(course, request.user)
             if course.status != Course.Status.ARCHIVED:
                 course.status = Course.Status.ARCHIVED
                 course.save(update_fields=["status", "updated_at"])
                 log_action(request, "course.archive", course)
         return Response(
-            TeacherCourseSettingsSerializer(_course_settings_payload(course)).data
+            TeacherCourseSettingsSerializer(_course_settings_payload(course, request.user)).data
         )
 
 
@@ -401,16 +406,16 @@ class TeacherCourseRestoreView(TeacherCourseApiView):
         serializer = TeacherCourseRestoreRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         course = get_accessible_course(request.user, course_id)
-        require_course_manager(course, request.user)
+        require_course_owner(course, request.user)
         with transaction.atomic():
             course = lock_course(course)
-            require_course_manager(course, request.user)
+            require_course_owner(course, request.user)
             if course.status == Course.Status.ARCHIVED:
                 course.status = Course.Status.ACTIVE
                 course.save(update_fields=["status", "updated_at"])
                 log_action(request, "course.restore", course)
         return Response(
-            TeacherCourseSettingsSerializer(_course_settings_payload(course)).data
+            TeacherCourseSettingsSerializer(_course_settings_payload(course, request.user)).data
         )
 
 
@@ -424,7 +429,7 @@ class TeacherCoursePurgeCreateView(TeacherCourseApiView):
         serializer = TeacherCoursePurgeCreateRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         course = get_accessible_course(request.user, course_id)
-        require_course_manager(course, request.user)
+        require_course_owner(course, request.user)
         from apps.assessment.models import AssessmentEvent, ExperimentSession
 
         preview = {
@@ -443,7 +448,7 @@ class TeacherCoursePurgeCreateView(TeacherCourseApiView):
             preview_counts=preview,
         )
         return Response(
-            TeacherCourseSettingsSerializer(_course_settings_payload(course)).data,
+            TeacherCourseSettingsSerializer(_course_settings_payload(course, request.user)).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -458,7 +463,7 @@ class TeacherCoursePurgeExecuteView(TeacherCourseApiView):
         serializer = TeacherCoursePurgeExecuteRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         course = get_accessible_course(request.user, course_id)
-        require_course_manager(course, request.user)
+        require_course_owner(course, request.user)
         purge = get_object_or_404(
             DataPurgeRequest,
             purge_request_id=purge_request_id,
@@ -472,5 +477,5 @@ class TeacherCoursePurgeExecuteView(TeacherCourseApiView):
             {"purge_request_id": str(purge.purge_request_id)},
         )
         return Response(
-            TeacherCourseSettingsSerializer(_course_settings_payload(course)).data
+            TeacherCourseSettingsSerializer(_course_settings_payload(course, request.user)).data
         )

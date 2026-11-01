@@ -6,6 +6,6 @@ from .course_access import get_accessible_course
 def _class_drilldown_scope(request, course_pk, class_pk):
     if not settings.CLASS_CENTER_ENABLED:
         raise Http404
-    course = get_accessible_course(request.user, course_pk)
+    course = get_accessible_course(request.user, course_pk, capability="data")
     class_group = get_object_or_404(course.classes, pk=class_pk)
     return course, class_group

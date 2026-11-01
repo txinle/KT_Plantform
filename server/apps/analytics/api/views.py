@@ -77,9 +77,9 @@ from .serializers import (
 )
 
 
-def _course_for_teacher(user, course_id):
+def _course_for_teacher(user, course_id, capability="data"):
     course = get_object_or_404(Course, pk=course_id)
-    if not course.can_manage(user):
+    if not course.can_manage(user, capability=capability):
         raise NotFound()
     return course
 
@@ -280,7 +280,7 @@ class TeacherDataCenterExportJobCreateView(APIView):
         responses={201: DataCenterExportJobMutationSerializer},
     )
     def post(self, request, course_id):
-        course = _course_for_teacher(request.user, course_id)
+        course = _course_for_teacher(request.user, course_id, capability="export")
         serializer = DataCenterExportJobCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         values = serializer.validated_data
@@ -368,7 +368,7 @@ class TeacherDataCenterExportJobDetailView(APIView):
         responses=DataCenterExportJobMutationSerializer,
     )
     def get(self, request, course_id, job_id):
-        course = _course_for_teacher(request.user, course_id)
+        course = _course_for_teacher(request.user, course_id, capability="export")
         jobs = ExportJob.objects.select_related('snapshot').only(
             'job_id', 'package', 'status', 'artifact_path', 'expires_at', 'course_id', 'snapshot_id',
             'snapshot__filter_definition', 'snapshot__source_bundle_hash', 'snapshot__invalidated_at', 'snapshot__redacted_at')
@@ -380,7 +380,7 @@ class TeacherDataCenterExportJobDetailView(APIView):
         responses=DataCenterExportJobMutationSerializer,
     )
     def delete(self, request, course_id, job_id):
-        course = _course_for_teacher(request.user, course_id)
+        course = _course_for_teacher(request.user, course_id, capability="export")
         job = get_object_or_404(ExportJob, course=course, job_id=job_id)
         job.expire_artifact(reason="user_requested_removal")
         log_action(
@@ -487,7 +487,7 @@ class TeacherDataCenterExportCatalogView(APIView):
         responses=DataCenterExportCatalogSerializer,
     )
     def get(self, request, course_id):
-        course = _course_for_teacher(request.user, course_id)
+        course = _course_for_teacher(request.user, course_id, capability="export")
         values = request.query_params.dict()
         selected_experiment = None
         scope = None
@@ -663,7 +663,7 @@ class TeacherDataCenterExportHistoryView(APIView):
         responses=DataCenterExportHistoryCollectionSerializer,
     )
     def get(self, request, course_id):
-        course = _course_for_teacher(request.user, course_id)
+        course = _course_for_teacher(request.user, course_id, capability="export")
         if request.query_params.get("scope_version") == "2":
             try:
                 scope = ExperimentExportScope.from_mapping(
@@ -847,7 +847,7 @@ class TeacherClassCollectionView(APIView):
         responses=TeacherClassCollectionSerializer,
     )
     def get(self, request, course_id):
-        course = _course_for_teacher(request.user, course_id)
+        course = _course_for_teacher(request.user, course_id, capability="class")
         query = request.query_params.get("q", "").strip()
         classes = course.classes.annotate(
             active_student_count=Count(
@@ -889,7 +889,7 @@ class TeacherClassCollectionView(APIView):
         responses={201: TeacherClassCreateResponseSerializer},
     )
     def post(self, request, course_id):
-        course = _course_for_teacher(request.user, course_id)
+        course = _course_for_teacher(request.user, course_id, capability="class")
         form = ClassGroupForm(request.data)
         class_group = create_course_class_group(
             request=request,
@@ -926,7 +926,7 @@ class TeacherClassCenterView(APIView):
     def get(self, request, course_id, class_id):
         if not settings.CLASS_CENTER_ENABLED:
             raise NotFound()
-        course = _course_for_teacher(request.user, course_id)
+        course = _course_for_teacher(request.user, course_id, capability="class")
         class_group = get_object_or_404(course.classes, pk=class_id)
 
         experiment_id = self._positive_int_or_none(

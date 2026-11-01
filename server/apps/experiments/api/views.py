@@ -342,7 +342,7 @@ class TeacherExperimentApiMixin:
 
     def get_course(self):
         return get_object_or_404(
-            accessible_courses(self.request.user),
+            accessible_courses(self.request.user, capability="experiment"),
             pk=self.kwargs["course_id"],
         )
 
@@ -461,7 +461,7 @@ class TeacherExperimentCollectionView(TeacherExperimentApiMixin, APIView):
         query = request.query_params.get('q', '').strip()
         if query:
             queryset = queryset.filter(name__icontains=query)
-        can_manage = course.can_manage(request.user) and course.status == course.Status.ACTIVE
+        can_manage = course.can_manage(request.user, capability="experiment") and course.status == course.Status.ACTIVE
         paginator = FixedPageNumberPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         serializer = TeacherExperimentSerializer(
@@ -755,7 +755,7 @@ class TeacherPublishPlanMixin:
             PublishPlan.objects.select_related("experiment__course", "preview_run"),
             pk=self.kwargs["plan_id"],
         )
-        if not plan.experiment.course.can_manage(self.request.user):
+        if not plan.experiment.course.can_manage(self.request.user, capability="experiment"):
             raise Http404
         return plan
 
@@ -913,7 +913,7 @@ class TeacherPublishOperationJobView(APIView):
             PublishOperationJob.objects.select_related("publish_plan__experiment__course"),
             pk=job_id,
         )
-        if not job.publish_plan.experiment.course.can_manage(request.user):
+        if not job.publish_plan.experiment.course.can_manage(request.user, capability="experiment"):
             raise Http404
         return Response(publish_operation_projection(job))
 
@@ -1050,7 +1050,7 @@ class TeacherClassTaskMixin:
             ),
             pk=self.kwargs["task_id"],
         )
-        if not task.experiment.course.can_manage(self.request.user):
+        if not task.experiment.course.can_manage(self.request.user, capability="experiment"):
             raise Http404
         return task
 
@@ -1064,7 +1064,7 @@ class TeacherExperimentClassTaskListView(TeacherClassTaskMixin, APIView):
         experiment = get_object_or_404(
             Experiment.objects.select_related("course"), pk=experiment_id
         )
-        if not experiment.course.can_manage(request.user):
+        if not experiment.course.can_manage(request.user, capability="experiment"):
             raise Http404
         tasks = experiment.class_tasks.select_related("class_group").order_by(
             "class_group__academic_year", "class_group__name", "pk"
@@ -1086,7 +1086,7 @@ class TeacherExperimentCollectionParticipantView(APIView):
             Experiment.objects.select_related("course"), pk=experiment_id
         )
         if experiment.course_id is None or not experiment.course.can_manage(
-            request.user
+            request.user, capability="experiment"
         ):
             raise Http404
 

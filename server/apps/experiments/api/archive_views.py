@@ -19,7 +19,7 @@ class TeacherExperimentArchiveView(APIView):
 
     @extend_schema(request=None, responses=TeacherExperimentSerializer)
     def post(self, request, course_id, experiment_id):
-        course = get_object_or_404(accessible_courses(request.user), pk=course_id)
+        course = get_object_or_404(accessible_courses(request.user, capability="experiment"), pk=course_id)
         try:
             experiment = archive_experiment(course=course, experiment_id=experiment_id, actor=request.user)
         except DjangoValidationError as error:
@@ -33,7 +33,7 @@ class TeacherExperimentRestoreView(APIView):
 
     @extend_schema(request=None, responses=TeacherExperimentSerializer)
     def post(self, request, course_id, experiment_id):
-        course = get_object_or_404(accessible_courses(request.user), pk=course_id)
+        course = get_object_or_404(accessible_courses(request.user, capability="experiment"), pk=course_id)
         try:
             experiment = restore_experiment(course=course, experiment_id=experiment_id, actor=request.user)
         except DjangoValidationError as error:

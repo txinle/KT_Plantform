@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useExperimentPageUrl } from './experiment-page-url'
+const pageUrl = useExperimentPageUrl()
 import { onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
@@ -30,7 +32,7 @@ async function load() {
   try {
     const response = await api.collection()
     if (response.kind === 'canonical') {
-      await router.replace(response.canonical_url)
+      await router.replace(pageUrl(response.canonical_url)!)
       return
     }
     collection.value = response
@@ -49,7 +51,7 @@ onMounted(load)
     <template #kicker>研究采集</template>
     <p>管理独立题库实验、参与学生和发布后的采集结果。</p>
     <template #actions>
-      <RouterLink class="kt-button" to="/teacher/experiments/create/">新建实验</RouterLink>
+      <RouterLink class="kt-button" :to="pageUrl('/teacher/experiments/create/')">新建实验</RouterLink>
     </template>
   </PageHeader>
 
@@ -57,7 +59,7 @@ onMounted(load)
   <p v-if="loading" role="status">正在加载实验…</p>
   <EmptyState v-else-if="!collection?.items.length" title="尚未创建实验">
     <p>创建实验后，可添加学生并发布不可变的研究快照。</p>
-    <RouterLink class="kt-button" to="/teacher/experiments/create/">新建实验</RouterLink>
+    <RouterLink class="kt-button" :to="pageUrl('/teacher/experiments/create/')">新建实验</RouterLink>
   </EmptyState>
   <section v-else class="kt-card kt-table-card" aria-labelledby="standalone-experiment-list-title">
     <div class="kt-section-heading">
@@ -70,7 +72,7 @@ onMounted(load)
         <tbody>
           <tr v-for="experiment in collection.items" :key="experiment.id">
             <td>
-              <RouterLink :to="`/teacher/experiments/${experiment.id}/`"><strong>{{ experiment.name }}</strong></RouterLink>
+              <RouterLink :to="pageUrl(`/teacher/experiments/${experiment.id}/`)"><strong>{{ experiment.name }}</strong></RouterLink>
               <span class="kt-cell-note">{{ experiment.description || '未填写说明' }}</span>
             </td>
             <td>{{ experiment.question_bank.name }}</td>

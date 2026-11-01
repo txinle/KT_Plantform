@@ -295,7 +295,7 @@ def create_export_job(*, course, snapshot, created_by, experiment=None,
         retry_validation = False
         with transaction.atomic():
             locked_course = lock_course(course.pk)
-            if not locked_course.can_manage(created_by):
+            if not locked_course.can_manage(created_by, capability="export"):
                 raise ExportContractError('当前用户已无权导出该课程数据。')
             if not ExportSnapshot.objects.filter(pk=snapshot.pk, invalidated_at=None, redacted_at=None).exists():
                 raise ExportContractError('导出源已删除或失效，请重新选择范围。')

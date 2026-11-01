@@ -61,7 +61,7 @@ from .serializers import (
 
 def _course_for_teacher(user, course_id):
     course = get_object_or_404(Course, pk=course_id)
-    if not course.can_manage(user):
+    if not course.can_manage(user, capability="bank"):
         raise NotFound()
     return course
 

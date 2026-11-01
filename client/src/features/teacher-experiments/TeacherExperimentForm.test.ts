@@ -218,8 +218,8 @@ describe('TeacherExperimentForm', () => {
     wrapper.unmount()
   })
 
-  it('keeps a retired timer draft unselected until the teacher explicitly chooses a current mode', async () => {
-    mocks.route.name = 'teacher-experiment-edit'
+  it.each(['teacher-experiment-edit', 'admin-course-experiment-edit'])('keeps a retired timer draft unselected until explicitly choosing a current mode (%s)', async (routeName) => {
+    mocks.route.name = routeName
     mocks.route.params = { courseId: '7', experimentId: '19' }
     mocks.api.detail.mockResolvedValue({ id: 19, name: '旧单题计时', question_bank: { id: 3, name: '题库' }, sampling_mode: 'total_count', sampling_total_count: 1, sampling_kcs: [], time_mode: 'per_question', per_question_time_limit_seconds: 30 })
     mocks.api.update.mockResolvedValue({ id: 19 })

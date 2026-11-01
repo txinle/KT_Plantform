@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useExperimentPageUrl } from './experiment-page-url'
+const pageUrl = useExperimentPageUrl()
 import { computed, inject, onMounted, reactive, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -306,7 +308,7 @@ async function startPublish() {
   error.value = ''
   try {
     const plan = await api.startPlan(courseId, experimentId)
-    await router.push(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${plan.id}/step/${plan.current_step || 1}/`)
+    await router.push(pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${plan.id}/step/${plan.current_step || 1}/`)!)
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '无法进入发布流程。'
   } finally {
@@ -316,7 +318,7 @@ async function startPublish() {
 
 async function afterDeletion() {
   deletionTarget.value = undefined
-  await router.push(`/teacher/courses/${courseId}/experiments/`)
+  await router.push(pageUrl(`/teacher/courses/${courseId}/experiments/`)!)
 }
 
 onMounted(load)
@@ -328,9 +330,9 @@ onMounted(load)
     <header class="kt-experiment-page-header">
       <div class="kt-experiment-page-header__copy">
         <nav class="kt-experiment-breadcrumb" aria-label="层级目录">
-          <a href="/teacher/courses/">我的课程</a><span aria-hidden="true">/</span>
-          <a :href="`/teacher/courses/${courseId}/`">{{ courseName }}</a><span aria-hidden="true">/</span>
-          <a :href="`/teacher/courses/${courseId}/experiments/`">实验</a><span aria-hidden="true">/</span>
+          <a :href="pageUrl('/teacher/courses/')">我的课程</a><span aria-hidden="true">/</span>
+          <a :href="pageUrl(`/teacher/courses/${courseId}/`)">{{ courseName }}</a><span aria-hidden="true">/</span>
+          <a :href="pageUrl(`/teacher/courses/${courseId}/experiments/`)">实验</a><span aria-hidden="true">/</span>
           <span aria-current="page">{{ experiment.name }}</span>
         </nav>
         <div class="kt-experiment-title-row">
@@ -339,8 +341,8 @@ onMounted(load)
         <p data-experiment-meta>{{ experiment.status_label }} · {{ overviewQuestionCount != null ? `${overviewQuestionCount} 道题` : '题量待确认' }} · {{ experiment.total_time_limit_minutes != null ? `实验 ${experiment.total_time_limit_minutes} 分钟` : '不限时' }} · {{ tasksLoading ? '正在加载班级' : `${tasks.length} 个班级` }}</p>
       </div>
       <div class="kt-experiment-page-header__actions">
-        <a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/`">返回实验</a>
-        <a v-if="experiment.can_edit" class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/edit/`">编辑实验</a>
+        <a class="kt-button kt-button--secondary" :href="pageUrl(`/teacher/courses/${courseId}/experiments/`)">返回实验</a>
+        <a v-if="experiment.can_edit" class="kt-button kt-button--secondary" :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/edit/`)">编辑实验</a>
         <Button v-if="experiment.can_publish && experiment.time_mode !== 'per_question'" aria-label="发布操作" :disabled="working" @click="startPublish">{{ isPublished ? '继续发布' : '发布到班级' }}</Button>
         <button v-if="experiment.can_manage" class="kt-text-button kt-text-button--danger" data-delete-experiment type="button" @click="deletionTarget = { kind: 'experiment', experimentId }">删除实验</button>
       </div>
@@ -350,7 +352,7 @@ onMounted(load)
       <button id="experiment-tab-definition" type="button" role="tab" :aria-selected="activeTab === 'definition'" aria-controls="experiment-panel-definition" :class="{ 'is-active': activeTab === 'definition' }" @click="selectTab('definition')">概况</button>
       <button id="experiment-tab-tasks" type="button" role="tab" :aria-selected="activeTab === 'tasks'" aria-controls="experiment-panel-tasks" :class="{ 'is-active': activeTab === 'tasks' }" @click="selectTab('tasks')">班级与排期</button>
       <button id="experiment-tab-collection" type="button" role="tab" :aria-selected="activeTab === 'collection'" aria-controls="experiment-panel-collection" :class="{ 'is-active': activeTab === 'collection' }" @click="selectTab('collection')">学生作答</button>
-      <a v-if="experiment.activity?.grading_url" :href="experiment.activity.grading_url">人工批改</a>
+      <a v-if="experiment.activity?.grading_url" :href="pageUrl(experiment.activity.grading_url)">人工批改</a>
     </nav>
 
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
@@ -388,7 +390,7 @@ onMounted(load)
               </dl>
             </details>
             <div v-if="experiment.can_edit" class="kt-definition-summary__action">
-              <a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/edit/`">编辑实验定义</a>
+              <a class="kt-button kt-button--secondary" :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/edit/`)">编辑实验定义</a>
             </div>
           </section>
           <Alert class="kt-definition-notice" data-definition-notice tone="info">{{ isPublished ? '实验定义已经冻结；如需调整内容，请按现有流程创建新的实验定义。' : '首次正式发布后，实验定义将冻结；后续可继续发布到其他班级。' }}</Alert>
@@ -405,7 +407,7 @@ onMounted(load)
           <section class="kt-card kt-overview-side-card kt-overview-research">
             <h2 class="kt-overview-section-header">研究工具与数据</h2>
             <dl class="kt-overview-side-facts kt-overview-side-body"><div><dt>已启用工具</dt><dd>{{ enabledTools || (researchTools && Object.keys(researchTools).length ? '未启用' : '未配置') }}</dd></div><div><dt>提示与规则</dt><dd>{{ researchTools?.hints?.length || 0 }} 条提示 · {{ researchTools?.rules?.length || 0 }} 条规则</dd></div></dl>
-            <div class="kt-overview-links"><a v-if="experiment.activity?.grading_url" :href="experiment.activity.grading_url">待批改：{{ experiment.activity.pending_grading_count }}</a><span v-else>待批改：{{ experiment.activity?.pending_grading_count ?? 0 }}</span><a :href="`/teacher/courses/${courseId}/data/`">进入数据中心</a></div>
+            <div class="kt-overview-links"><a v-if="experiment.activity?.grading_url" :href="pageUrl(experiment.activity.grading_url)">待批改：{{ experiment.activity.pending_grading_count }}</a><span v-else>待批改：{{ experiment.activity?.pending_grading_count ?? 0 }}</span><a :href="pageUrl(`/teacher/courses/${courseId}/data/`)">进入数据中心</a></div>
           </section>
           <section class="kt-card kt-overview-side-card kt-publish-ready-card" aria-labelledby="publish-ready-title">
             <h2 id="publish-ready-title" class="kt-overview-section-header">{{ isPublished ? '继续发布' : '发布准备' }}</h2>
@@ -437,7 +439,7 @@ onMounted(load)
         </section>
         <aside class="kt-experiment-side-stack">
           <section class="kt-card kt-publish-ready-card"><h2>继续发布</h2><p>使用当前实验定义发布到尚未覆盖的班级。</p><Button v-if="experiment.can_publish" data-action="continue-publish" :disabled="working" @click="startPublish">继续发布</Button></section>
-          <section class="kt-card kt-publish-ready-card"><h2>数据中心</h2><p>查看和导出班级采集数据与相关指标。</p><a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/data/`">查看采集数据</a></section>
+          <section class="kt-card kt-publish-ready-card"><h2>数据中心</h2><p>查看和导出班级采集数据与相关指标。</p><a class="kt-button kt-button--secondary" :href="pageUrl(`/teacher/courses/${courseId}/data/`)">查看采集数据</a></section>
         </aside>
       </div>
     </section>
@@ -482,7 +484,7 @@ onMounted(load)
         </template>
       </section>
     </section>
-    <DeletionDialog v-if="deletionTarget" :course-id="courseId" :target="deletionTarget" @cancelled="deletionTarget = undefined" @completed="afterDeletion" />
+    <DeletionDialog v-if="deletionTarget" :page-url="pageUrl" :course-id="courseId" :target="deletionTarget" @cancelled="deletionTarget = undefined" @completed="afterDeletion" />
   </template>
   <Alert v-else tone="danger">{{ error || '实验不存在或无法访问。' }}</Alert>
 </template>

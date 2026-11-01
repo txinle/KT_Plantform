@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useExperimentPageUrl } from './experiment-page-url'
+const pageUrl = useExperimentPageUrl()
 import { computed, reactive, ref, useId } from 'vue'
 import { classTaskStatusLabel } from './class-task-labels'
 import Alert from '@/design-system/components/Alert.vue'
@@ -147,7 +149,7 @@ async function releaseFeedback(taskId: number) {
                   v-if="task.available_actions.includes('grade_short_answers')"
                   data-action="grade-short-answers"
                   class="kt-text-button"
-                  :href="`/teacher/courses/${courseId}/experiments/${experimentId}/class-tasks/${task.id}/grading/`"
+                  :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/class-tasks/${task.id}/grading/`)"
                 >待批改：{{ task.grading?.pending ?? 0 }}</a>
                 <button v-if="task.available_actions.includes('revise_schedule')" data-action="revise-schedule" class="kt-text-button" type="button" @click="editSchedule(task)">修订排期</button>
                 <button v-else-if="task.available_actions.includes('adjust_time')" data-action="adjust-time" class="kt-text-button" type="button" @click="editSchedule(task)">调整时间</button>

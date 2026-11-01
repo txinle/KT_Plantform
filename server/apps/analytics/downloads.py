@@ -24,14 +24,14 @@ def _experiment(request, pk):
         qs = Experiment.objects.all()
     else:
         qs = Experiment.objects.filter(
-            Q(course__in=accessible_courses(request.user))
+            Q(course__in=accessible_courses(request.user, capability="export"))
             | Q(course__isnull=True, owner=request.user)
         )
     return get_object_or_404(qs, pk=pk)
 
 @role_required("teacher", "admin")
 def export_job_download(request, course_pk, job_id):
-    course = get_accessible_course(request.user, course_pk)
+    course = get_accessible_course(request.user, course_pk, capability="export")
     from django.db.models import Q
     from django.utils import timezone
     jobs = ExportJob.objects.filter(snapshot__invalidated_at=None, snapshot__redacted_at=None).filter(

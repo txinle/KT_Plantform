@@ -4,6 +4,11 @@ import AppHeader from './components/AppHeader.vue'
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); document.documentElement.style.removeProperty('--kt-header-height') })
 
+it.each(['教师', '学生', '管理员'])('keeps password change in the account area for %s', userName => {
+  const wrapper = mount(AppHeader, { props: { userName, passwordChangeUrl: null } })
+  expect(wrapper.get('[data-password-change-link]').attributes('href')).toBe('/password/change/')
+})
+
 it('keeps the reserved header offset equal to its actual wrapped height', () => {
   let resize: ResizeObserverCallback | undefined
   const disconnect = vi.fn()

@@ -15,6 +15,7 @@ from .views import (
 
 
 urlpatterns = [
+    path('manage/', include('apps.accounts.api.admin_workspace_urls')),
     path('auth/bootstrap/', BootstrapContextView.as_view(), name='api-bootstrap'),
     path(
         "auth/research-consent/",

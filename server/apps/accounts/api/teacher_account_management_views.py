@@ -277,14 +277,14 @@ def _require_active_class(class_group, action):
 
 
 def _course_and_class(user, course_id, class_id):
-    course = get_accessible_course(user, course_id)
+    course = get_accessible_course(user, course_id, capability="class")
     class_group = get_object_or_404(course.classes, pk=class_id)
     return course, class_group
 
 
 def _source_classes(user, course):
     return ClassGroup.objects.filter(
-        course__in=accessible_courses(user).exclude(pk=course.pk)
+        course__in=accessible_courses(user, capability="class").exclude(pk=course.pk)
     ).select_related("course").order_by(
         "course__term", "course__code", "academic_year", "name", "pk"
     )

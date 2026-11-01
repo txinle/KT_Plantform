@@ -1,4 +1,5 @@
 from django.urls import path
+from .collaboration_views import CourseCollaborationView, CourseCollaborationTeachersView
 
 from .views import (
     TeacherCourseArchiveView,
@@ -12,6 +13,8 @@ from .views import (
 
 
 urlpatterns = [
+    path("<int:course_id>/collaboration/", CourseCollaborationView.as_view()),
+    path("<int:course_id>/collaboration/teachers/", CourseCollaborationTeachersView.as_view()),
     path("<int:course_id>/restore/", TeacherCourseRestoreView.as_view(), name="teacher-course-restore"),
     path("", TeacherCourseCollectionView.as_view(), name="teacher-course-collection"),
     path("<int:course_id>/", TeacherCourseDetailView.as_view(), name="teacher-course-detail"),

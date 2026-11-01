@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useExperimentPageUrl } from './experiment-page-url'
+const pageUrl = useExperimentPageUrl()
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
@@ -148,13 +150,13 @@ onMounted(load)
     <header class="kt-experiment-page-header kt-grading-header">
       <div class="kt-experiment-page-header__copy">
         <nav class="kt-experiment-breadcrumb" aria-label="层级目录">
-          <a :href="`/teacher/courses/${courseId}/experiments/${experimentId}/`">实验详情</a>
+          <a :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)">实验详情</a>
           <span aria-hidden="true">/</span><span aria-current="page">人工批改</span>
         </nav>
         <h1>人工批改</h1>
         <p v-if="overview">{{ overview.task.experiment_name }} · {{ overview.task.class_name }}</p>
       </div>
-      <a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/`">返回实验</a>
+      <a class="kt-button kt-button--secondary" :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)">返回实验</a>
     </header>
 
     <p v-if="loading" role="status">正在加载批改任务…</p>

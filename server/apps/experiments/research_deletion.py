@@ -150,7 +150,7 @@ def _deletion_selection(*, course, action, experiment=None, class_group=None):
 
 
 def deletion_preview(*, course, action, actor, experiment=None, class_group=None, _selection=None):
-    require_course_manager(course, actor)
+    require_course_manager(course, actor, capability="experiment")
     selection = _selection or _deletion_selection(course=course, action=action, experiment=experiment, class_group=class_group)
     if action == "delete_class":
         objects = selection['objects']
@@ -342,7 +342,7 @@ def execute_deletion(*, request, course, action, confirmation_token, experiment=
     actor = request.user
     with _lock_export_generations(course=course, experiment=experiment, class_group=class_group), _deletion_transaction():
         course = require_writable_course(type(course).objects.select_for_update(nowait=True).get(pk=course.pk))
-        require_course_manager(course, actor)
+        require_course_manager(course, actor, capability="experiment")
         ids = list(class_experiments(class_group).values_list("pk", flat=True)) if action == "delete_class" else [experiment.pk]
         locked = list(experiments.Experiment.objects.select_for_update(nowait=True).filter(pk__in=ids).order_by("pk"))
         if experiment:

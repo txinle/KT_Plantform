@@ -140,6 +140,7 @@ class TeacherCoursePurgeRequestSerializer(serializers.Serializer):
 class TeacherCourseSettingsCapabilitiesSerializer(serializers.Serializer):
     can_update = serializers.BooleanField()
     can_archive = serializers.BooleanField()
+    can_restore = serializers.BooleanField()
 
 
 class TeacherCourseSettingsSerializer(serializers.Serializer):

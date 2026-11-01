@@ -347,7 +347,7 @@ describe('authentication API', () => {
     expect(refreshBootstrapContext).toHaveBeenCalledWith({ force: true })
   })
 
-  it('sends users without a password-change requirement away from that route', () => {
+  it('allows teachers to change passwords without forcing a password change', () => {
     const user = {
       id: 7,
       role: 'teacher',
@@ -361,7 +361,7 @@ describe('authentication API', () => {
         research_consent_version: '2026-09-14',
     }
 
-    expect(authenticatedEntryRedirect(user, '/password/change/')).toBe('/teacher/courses/')
+    expect(authenticatedEntryRedirect(user, '/password/change/')).toBeUndefined()
     expect(authenticatedEntryRedirect(user, '/')).toBe('/teacher/courses/')
     expect(authenticatedEntryRedirect(user, '/teacher/')).toBe('/teacher/courses/')
     expect(authenticatedEntryRedirect(user, '/teacher/courses/')).toBeUndefined()

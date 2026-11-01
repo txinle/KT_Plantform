@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useExperimentPageUrl } from './experiment-page-url'
+const pageUrl = useExperimentPageUrl()
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -42,7 +44,7 @@ const api = getTeacherExperimentApi()
 const courseId = Number(route.params.courseId)
 const courseName = ref('课程')
 const experimentId = computed(() => Number(route.params.experimentId || 0))
-const editing = computed(() => route.name === 'teacher-experiment-edit')
+const editing = computed(() => route.name === 'teacher-experiment-edit' || route.name === 'admin-course-experiment-edit')
 const loading = ref(true)
 const researchTools = ref<ResearchTools>(emptyResearchTools())
 const saving = ref(false)
@@ -515,9 +517,9 @@ async function submit(destination: 'detail' | 'publish' = 'detail') {
       : await api.create(courseId, definitionInput())
     if (destination === 'publish') {
       const plan = await api.startPlan(courseId, saved.id)
-      await router.push(`/teacher/courses/${courseId}/experiments/${saved.id}/publish-plan/${plan.id}/step/${plan.current_step || 1}/`)
+      await router.push(pageUrl(`/teacher/courses/${courseId}/experiments/${saved.id}/publish-plan/${plan.id}/step/${plan.current_step || 1}/`)!)
     } else {
-      await router.push(`/teacher/courses/${courseId}/experiments/${saved.id}/`)
+      await router.push(pageUrl(`/teacher/courses/${courseId}/experiments/${saved.id}/`)!)
     }
   } catch (caught) {
     if (caught instanceof ApiError) {
@@ -548,10 +550,10 @@ onMounted(load)
   <header class="kt-experiment-page-header">
     <div class="kt-experiment-page-header__copy">
       <nav class="kt-experiment-breadcrumb" aria-label="层级目录">
-        <a href="/teacher/courses/">我的课程</a><span aria-hidden="true">/</span>
-        <a :href="`/teacher/courses/${courseId}/`">{{ courseName }}</a><span aria-hidden="true">/</span>
-        <a :href="`/teacher/courses/${courseId}/experiments/`">实验</a><span aria-hidden="true">/</span>
-        <template v-if="editing"><a :href="`/teacher/courses/${courseId}/experiments/${experimentId}/`">{{ form.name || '实验' }}</a><span aria-hidden="true">/</span></template>
+        <a :href="pageUrl('/teacher/courses/')">我的课程</a><span aria-hidden="true">/</span>
+        <a :href="pageUrl(`/teacher/courses/${courseId}/`)">{{ courseName }}</a><span aria-hidden="true">/</span>
+        <a :href="pageUrl(`/teacher/courses/${courseId}/experiments/`)">实验</a><span aria-hidden="true">/</span>
+        <template v-if="editing"><a :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)">{{ form.name || '实验' }}</a><span aria-hidden="true">/</span></template>
         <span aria-current="page">{{ editing ? '编辑实验定义' : '创建实验' }}</span>
       </nav>
       <div class="kt-experiment-title-row"><h1>{{ editing ? '编辑实验定义' : '创建实验' }}</h1></div>
@@ -559,7 +561,7 @@ onMounted(load)
     </div>
     <div class="kt-experiment-page-header__actions">
       <button class="kt-button kt-button--secondary" type="submit" form="experiment-definition-form" :disabled="loading || saving || legacySampling || typeQuotaInvalid">{{ saving ? '正在保存…' : '保存草稿' }}</button>
-      <a class="kt-button kt-button--secondary" :href="editing ? `/teacher/courses/${courseId}/experiments/${experimentId}/` : `/teacher/courses/${courseId}/experiments/`">返回实验</a>
+      <a class="kt-button kt-button--secondary" :href="pageUrl(editing ? `/teacher/courses/${courseId}/experiments/${experimentId}/` : `/teacher/courses/${courseId}/experiments/`)">返回实验</a>
     </div>
   </header>
 

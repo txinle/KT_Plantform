@@ -279,7 +279,7 @@ class TeacherStandaloneExperimentApiMixin:
         user = self.request.user
         if not (user.is_superuser or user.role == User.Role.ADMIN):
             queryset = queryset.filter(
-                Q(owner=user) | Q(course__in=accessible_courses(user))
+                Q(course__isnull=True, owner=user) | Q(course__in=accessible_courses(user, capability="experiment"))
             )
         queryset = queryset.select_related("question_bank", "course")
         if lock:
@@ -301,7 +301,7 @@ class TeacherStandaloneExperimentCollectionView(
         responses=StandaloneExperimentCollectionSerializer,
     )
     def get(self, request):
-        if accessible_courses(request.user).exists():
+        if accessible_courses(request.user, capability="experiment").exists():
             return Response(
                 {"kind": "canonical", "canonical_url": reverse("courses:list")}
             )
@@ -350,7 +350,7 @@ class TeacherStandaloneExperimentCollectionView(
         )
         if not form.is_valid():
             raise ValidationError(_form_error_payload(form))
-        courses = accessible_courses(request.user).filter(status="active")
+        courses = accessible_courses(request.user, capability="experiment").filter(status="active")
         try:
             with transaction.atomic():
                 experiment = form.save(commit=False)

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useBankPageUrl } from './bank-page-navigation'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -19,6 +20,7 @@ type MappingNode = { kc_code: string; parent_kc_code: string | null; order: numb
 
 const props = defineProps<{ standalone?: boolean }>()
 const route = useRoute()
+const bankPageUrl = useBankPageUrl()
 const router = useRouter()
 const standaloneApi = props.standalone ? getTeacherStandaloneQuestionBankApi() : undefined
 const api = props.standalone ? {
@@ -133,7 +135,7 @@ async function save() {
         nodes: mapping.nodes,
       }),
     })
-    await router.push(saved.detail_url)
+    await router.push(bankPageUrl(saved.detail_url))
   } catch (caught) {
     setError(caught, '题目保存失败。')
   } finally {
@@ -145,11 +147,11 @@ async function save() {
 <template>
   <Alert v-if="error && !editor" tone="danger">{{ error }}</Alert>
   <template v-else-if="editor">
-    <PageHeader class="kt-question-editor-page-header" :title="activeGroupId ? '编辑题目' : questionId && !saveAsNew ? `编辑第 ${editor.question.sequence} 题` : '新建题目'"><template #kicker>{{ editor.bank.name }}</template><p>内容可不完整保存；服务器会在每次保存后自动判断题目是否可用。</p><template #actions><RouterLink class="kt-button kt-button--secondary" :to="editor.detail_url">返回题库</RouterLink><button class="kt-button" type="submit" form="question-document-form" :disabled="groupKind || activeGroupId ? groupEditor?.saveDisabled : saving || (saveAsNew && !confirmConversion)">保存题目</button></template></PageHeader>
+    <PageHeader class="kt-question-editor-page-header" :title="activeGroupId ? '编辑题目' : questionId && !saveAsNew ? `编辑第 ${editor.question.sequence} 题` : '新建题目'"><template #kicker>{{ editor.bank.name }}</template><p>内容可不完整保存；服务器会在每次保存后自动判断题目是否可用。</p><template #actions><RouterLink class="kt-button kt-button--secondary" :to="bankPageUrl(editor.detail_url)">返回题库</RouterLink><button class="kt-button" type="submit" form="question-document-form" :disabled="groupKind || activeGroupId ? groupEditor?.saveDisabled : saving || (saveAsNew && !confirmConversion)">保存题目</button></template></PageHeader>
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
     <Alert v-if="editor.question.draft_reasons.length" tone="warning"><strong>当前保存为草稿。</strong><ul><li v-for="reason in editor.question.draft_reasons" :key="reason">{{ reason }}</li></ul></Alert>
 
-    <QuestionGroupEditor v-if="groupKind || activeGroupId" ref="groupEditor" :bank-id="bankId" :course-id="standalone ? undefined : courseId" :group-id="activeGroupId" :initial-document="initialGroup" @convert="fromGroup" @saved="router.push(editor.detail_url)" @close="router.push(editor.detail_url)" />
+    <QuestionGroupEditor v-if="groupKind || activeGroupId" ref="groupEditor" :bank-id="bankId" :course-id="standalone ? undefined : courseId" :group-id="activeGroupId" :initial-document="initialGroup" @convert="fromGroup" @saved="router.push(bankPageUrl(editor.detail_url))" @close="router.push(bankPageUrl(editor.detail_url))" />
     <div v-else class="kt-question-document">
       <form id="question-document-form" class="kt-form-stack kt-question-editor" novalidate @submit.prevent="save">
         <section class="kt-card"><div class="kt-form-grid"><FormField for-id="question-max-score" label="分值" :error="fieldErrors.max_score"><input id="question-max-score" v-model="draft.max_score" data-question-max-score inputmode="decimal"></FormField><FormField for-id="question-language" label="内容语言"><select id="question-language" v-model="draft.content_language"><option value="und">未声明</option><option value="en">英语</option><option value="zh-CN">中文</option></select></FormField></div><label v-if="['fill_blank', 'short_answer'].includes(draft.question_type)"><input v-model="draft.text_match_case_sensitive" type="checkbox">区分大小写</label></section>
@@ -189,7 +191,7 @@ async function save() {
           </div>
         </section>
         <KcMappingEditor v-if="!standalone" :model-value="mapping" :concepts="editor.concepts" :error="fieldErrors.kc_mapping_json" @update:model-value="Object.assign(mapping, $event)" />
-        <label v-if="saveAsNew" class="kt-alert kt-alert--warning"><input v-model="confirmConversion" type="checkbox">确认将题型转换结果另存为新题；原题和已发布快照保留。</label><div class="kt-inline-actions"><button class="kt-button" type="submit" :disabled="saving || (saveAsNew && !confirmConversion)">{{ saving ? '正在保存…' : saveAsNew ? '另存为新题' : '保存题目' }}</button><RouterLink class="kt-button kt-button--secondary" :to="editor.detail_url">取消</RouterLink></div>
+        <label v-if="saveAsNew" class="kt-alert kt-alert--warning"><input v-model="confirmConversion" type="checkbox">确认将题型转换结果另存为新题；原题和已发布快照保留。</label><div class="kt-inline-actions"><button class="kt-button" type="submit" :disabled="saving || (saveAsNew && !confirmConversion)">{{ saving ? '正在保存…' : saveAsNew ? '另存为新题' : '保存题目' }}</button><RouterLink class="kt-button kt-button--secondary" :to="bankPageUrl(editor.detail_url)">取消</RouterLink></div>
       </form>
       <aside class="kt-document-preview" aria-label="当前未保存内容预览"><header><span>学生视角预览</span><span>{{ draft.max_score }} 分</span></header><section><h2>{{ draft.title }}</h2><p class="kt-document-instructions">{{ draft.instructions }}</p><p class="kt-document-material" :lang="draft.content_language">{{ draft.text }}</p><template v-if="choiceQuestion"><label v-for="key in 'abcdef'.split('').filter(key => draft[`option_${key}` as keyof typeof draft])" :key="key" class="kt-document-option"><input :type="draft.question_type === 'multiple_choice' ? 'checkbox' : 'radio'" :checked="draft.question_type === 'multiple_choice' ? previewChoices.includes(key) : previewAnswer === key" @change="previewChoice(key, ($event.target as HTMLInputElement).checked)"> {{ key.toUpperCase() }} {{ draft[`option_${key}` as keyof typeof draft] }}</label></template><template v-else-if="draft.question_type === 'true_false'"><label class="kt-document-option"><input v-model="previewAnswer" type="radio" value="true">正确</label><label class="kt-document-option"><input v-model="previewAnswer" type="radio" value="false">错误</label></template><textarea v-else-if="draft.question_type === 'short_answer'" v-model="previewAnswer" aria-label="预览作答区" rows="5" /><input v-else v-model="previewAnswer" aria-label="预览作答区"></section><footer>此处仅预览当前编辑内容。正确答案与评分要点不向学生展示。</footer></aside>
     </div>

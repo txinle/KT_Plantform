@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useBankPageUrl } from './bank-page-navigation'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError } from '@/api/client'
@@ -18,6 +19,7 @@ type PreviewFilter = 'all' | 'ready' | 'draft' | 'duplicate' | 'invalid'
 type Mapping = NonNullable<QuestionImportPreviewRow['kc_mapping']>
 const props = defineProps<{ standalone?: boolean }>()
 const route = useRoute()
+const bankPageUrl = useBankPageUrl()
 const router = useRouter()
 const standaloneApi = props.standalone ? getTeacherStandaloneQuestionBankApi() : undefined
 const api = props.standalone ? {
@@ -31,7 +33,7 @@ onMounted(async () => {
   try {
     if (props.standalone) {
       const result = await standaloneApi!.detail(bankId, { destination: 'question_import' })
-      if (isStandaloneBankRedirect(result)) { await router.replace(result.redirect_url); return }
+      if (isStandaloneBankRedirect(result)) { await router.replace(bankPageUrl(result.redirect_url)); return }
       bankName.value = result.bank.name
     } else { bankName.value = (await getTeacherBankManagementApi().bankEditor(courseId, bankId)).name }
   } catch (caught) {
@@ -268,7 +270,7 @@ async function confirm() {
     confirmation.value = groups.value.length
       ? await api.confirmQuestionImport(courseId, bankId, preview.value.preview_id, selectedIds.value, selectedGroupIds.value)
       : await api.confirmQuestionImport(courseId, bankId, preview.value.preview_id, selectedIds.value)
-    if (props.standalone) await router.push(confirmation.value.detail_url)
+    if (props.standalone) await router.push(bankPageUrl(confirmation.value.detail_url))
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '题库导入确认失败，请重新生成预览。'
   } finally {
@@ -310,10 +312,10 @@ watch([filter, search, questionType, pageSize], () => { page.value = 1 })
   <div class="kt-question-import" :class="{ 'has-detail': activeRow && detailOpen, 'is-mobile-inspecting': mobileDetailOpen && detailOpen }">
     <div class="qimp-main" :inert="detailOpen">
       <nav class="qimp-breadcrumb" aria-label="层级目录">
-        <RouterLink :to="detailUrl">题库</RouterLink><Icon name="chevron-right" :size="14" /><span>导入题库</span>
+        <RouterLink :to="bankPageUrl(detailUrl)">题库</RouterLink><Icon name="chevron-right" :size="14" /><span>导入题库</span>
       </nav>
       <header class="qimp-heading">
-        <div class="qimp-heading-row"><h1>导入题目</h1><RouterLink class="kt-button kt-button--secondary" :to="detailUrl">返回题库</RouterLink></div>
+        <div class="qimp-heading-row"><h1>导入题目</h1><RouterLink class="kt-button kt-button--secondary" :to="bankPageUrl(detailUrl)">返回题库</RouterLink></div>
         <p>上传完成后请仔细核对题干、选项、答案与 KC 映射，确认无误后导入系统。</p>
       </header>
       <Alert v-if="error" tone="danger">{{ error }}</Alert>
@@ -377,7 +379,7 @@ watch([filter, search, questionType, pageSize], () => { page.value = 1 })
 
       <footer v-if="preview" class="qimp-footer">
         <p><Icon name="warning" :size="23" /><span>{{ confirmation ? confirmation.failed ? '如仍有未完成行，请修正后重新上传完整文件。' : confirmedDraft ? '草稿可在题库中继续补全，保存后会自动转为可用。' : '全部所选题目已导入为可用题目。' : '确认导入前，请再次检查题目内容与 KC 映射是否正确。' }}</span></p>
-        <div><button class="qimp-button is-outline" type="button" :disabled="busy" @click="clearPreview">取消</button><button v-if="confirmation" data-return-detail class="qimp-button is-primary" type="button" @click="router.push(detailUrl)">返回题库详情</button><button v-else data-confirm-import :data-confirm-standalone-import="standalone ? '' : undefined" class="qimp-button is-primary" type="button" :disabled="!canConfirm" @click="confirm">{{ busy ? '正在确认…' : '确认导入 ' + selectedQuestionCount + ' 道题' }}</button><button v-if="confirmation" data-confirm-import class="kt-visually-hidden" disabled type="button">本预览已处理</button></div>
+        <div><button class="qimp-button is-outline" type="button" :disabled="busy" @click="clearPreview">取消</button><button v-if="confirmation" data-return-detail class="qimp-button is-primary" type="button" @click="router.push(bankPageUrl(detailUrl))">返回题库详情</button><button v-else data-confirm-import :data-confirm-standalone-import="standalone ? '' : undefined" class="qimp-button is-primary" type="button" :disabled="!canConfirm" @click="confirm">{{ busy ? '正在确认…' : '确认导入 ' + selectedQuestionCount + ' 道题' }}</button><button v-if="confirmation" data-confirm-import class="kt-visually-hidden" disabled type="button">本预览已处理</button></div>
       </footer>
     </div>
 

@@ -157,9 +157,11 @@ class CourseSettingsForm(CourseForm):
     def save(self, commit=True):
         course = super().save(commit=commit)
         if commit:
-            course.teacher_links.all().delete()
+            selected = list(self.cleaned_data["teachers"])
+            course.teacher_links.exclude(teacher__in=selected).delete()
+            existing = set(course.teacher_links.values_list("teacher_id", flat=True))
             CourseTeacher.objects.bulk_create(
-                [CourseTeacher(course=course, teacher=teacher) for teacher in self.cleaned_data["teachers"]]
+                [CourseTeacher(course=course, teacher=teacher) for teacher in selected if teacher.pk not in existing]
             )
         return course
 

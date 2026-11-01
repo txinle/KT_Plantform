@@ -32,6 +32,16 @@ function context(researchConsentRequired: boolean) {
 describe('App research consent gate', () => {
   afterEach(() => clearBootstrapContext())
 
+  it.each(['teacher', 'admin'])('shows the optional initial password reminder for %s', (role) => {
+    acceptBootstrapContext({ ...context(false), user: { ...context(false).user, role } })
+    const wrapper = mount(App, { global: {
+      provide: { [routeLocationKey as symbol]: { path: '/manage/' } },
+      stubs: { RouterView: true, InitialPasswordReminder: { template: '<div data-password-reminder />' } },
+    } })
+    expect(wrapper.find('[data-password-reminder]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('reloads course-bound components when switching courses without reusing old course data', async () => {
     acceptBootstrapContext({ ...context(false), user: { ...context(false).user, role: 'teacher' } })
     const setup = vi.fn(() => ({}))

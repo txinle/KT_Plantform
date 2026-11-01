@@ -10,6 +10,10 @@ from django.db import models, router, transaction
 from django.utils import timezone
 
 
+def default_course_permissions():
+    return ["bank", "class", "experiment", "data", "export"]
+
+
 class Course(models.Model):
     class Status(models.TextChoices):
         ACTIVE = "active", "进行中"
@@ -41,7 +45,7 @@ class Course(models.Model):
     def __str__(self):
         return f"{self.code} · {self.name} · {self.term}"
 
-    def can_manage(self, user, *, using=None, lock_teacher_link=False):
+    def can_manage(self, user, *, using=None, lock_teacher_link=False, capability=None):
         if not getattr(user, "is_authenticated", False) or not user.is_active:
             return False
         if user.is_superuser or user.role == User.Role.ADMIN:
@@ -55,11 +59,13 @@ class Course(models.Model):
             teacher_links = teacher_links.using(using)
         teacher_link = teacher_links.filter(teacher_id=user.pk)
         if lock_teacher_link:
-            return teacher_link.select_for_update().first() is not None
-        return teacher_link.exists()
+            teacher_link = teacher_link.select_for_update()
+        link = teacher_link.first()
+        return bool(link and (capability is None or capability in link.permissions))
 
 
 class CourseTeacher(models.Model):
+    permissions = models.JSONField(default=default_course_permissions)
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="teacher_links")
     teacher = models.ForeignKey("User", on_delete=models.PROTECT, related_name="course_links")
     added_at = models.DateTimeField(auto_now_add=True)
@@ -319,9 +325,7 @@ class User(AbstractUser):
     @property
     def initial_password_reminder_pending(self):
         return bool(
-            self.role == self.Role.STUDENT
-            and not self.is_superuser
-            and self.uses_initial_password
+            self.uses_initial_password
             and self.initial_password_reminder_shown_at is None
         )
 

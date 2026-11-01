@@ -16,7 +16,7 @@ def _student_queryset(user):
 def resolve_home_url(user):
     from django.urls import reverse
     if user.is_superuser or user.role == User.Role.ADMIN:
-        return reverse("admin:index")
+        return reverse("management:overview")
     if user.role == User.Role.TEACHER:
         return reverse("courses:list")
     return reverse("assessment:dashboard")

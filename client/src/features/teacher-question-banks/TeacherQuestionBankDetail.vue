@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useBankPageUrl } from '../teacher-bank-management/bank-page-navigation'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -38,6 +39,7 @@ async function confirmAction() {
 }
 async function finishBankEdit() { editBankOpen.value = false; await load() }
 const route = useRoute()
+const bankPageUrl = useBankPageUrl()
 const router = useRouter()
 const api = getTeacherQuestionBankApi()
 const managementApi = getTeacherBankManagementApi()
@@ -95,7 +97,7 @@ async function load() {
     ])
     bank.value = detail
     if (route.query.edit_group && detail.groups?.some(group => group.id === Number(route.query.edit_group))) {
-      await router.replace(`/teacher/courses/${courseId}/banks/${bankId}/questions/0/edit/?group=${route.query.edit_group}`)
+      await router.replace(bankPageUrl(`/teacher/courses/${courseId}/banks/${bankId}/questions/0/edit/?group=${route.query.edit_group}`))
     }
     questions.value = questionCollection
     concepts.value = conceptCollection
@@ -139,7 +141,7 @@ async function deleteBank() {
   error.value = ''
   try {
     await managementApi.deleteBank(courseId, bankId)
-    await router.push(`/teacher/courses/${courseId}/banks/`)
+    await router.push(bankPageUrl(`/teacher/courses/${courseId}/banks/`))
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '删除题库失败。'
   }
@@ -186,25 +188,25 @@ onMounted(load)
     </ModalDialog>
     <ModalDialog v-if="editBankOpen" :open="true" title="编辑题库" @close="editBankOpen = false"><TeacherBankEditor :bank-id="bankId" embedded @saved="finishBankEdit" @cancelled="editBankOpen = false" /></ModalDialog>
     <nav class="kt-bank-breadcrumb" aria-label="层级目录">
-      <a href="/teacher/courses/">我的课程</a><span aria-hidden="true">/</span>
-      <a :href="`/teacher/courses/${courseId}/`">{{ bank.course.name }}</a><span aria-hidden="true">/</span>
-      <a :href="bank.list_url">题库</a><span aria-hidden="true">/</span>
+      <a :href="bankPageUrl('/teacher/courses/')">{{ route.path?.startsWith('/manage/resources/') ? '课程管理' : '我的课程' }}</a><span aria-hidden="true">/</span>
+      <a :href="bankPageUrl(`/teacher/courses/${courseId}/`)">{{ bank.course.name }}</a><span aria-hidden="true">/</span>
+      <a :href="bankPageUrl(bank.list_url)">题库</a><span aria-hidden="true">/</span>
       <strong aria-current="page">{{ bank.name }}</strong>
     </nav>
     <PageHeader class="kt-bank-detail-header" :title="bank.name">
       <p>{{ bank.description || '未填写题库说明。' }}</p>
       <template #actions>
-        <a v-if="bank.edit_url" data-bank-edit class="kt-button kt-button--secondary" :href="bank.edit_url" @click.prevent="editBankOpen = true">编辑题库</a>
+        <a v-if="bank.edit_url" data-bank-edit class="kt-button kt-button--secondary" :href="bankPageUrl(bank.edit_url)" @click.prevent="editBankOpen = true">编辑题库</a>
         <button v-if="bank.restore_url" data-bank-restore class="kt-button kt-button--secondary" type="button" @click="restoreBank">恢复为私有</button>
 
-        <a v-if="bank.question_import_url" data-question-import class="kt-button kt-button--secondary" :href="bank.question_import_url">导入题目</a>
+        <a v-if="bank.question_import_url" data-question-import class="kt-button kt-button--secondary" :href="bankPageUrl(bank.question_import_url)">导入题目</a>
 
-        <a v-if="bank.can_edit_content" class="kt-button" :href="`/teacher/courses/${courseId}/banks/${bankId}/questions/0/edit/`">新建题目</a>
+        <a v-if="bank.can_edit_content" class="kt-button" :href="bankPageUrl(`/teacher/courses/${courseId}/banks/${bankId}/questions/0/edit/`)">新建题目</a>
       </template>
     </PageHeader>
 
 
-    <nav class="kt-bank-module-nav" aria-label="题库模块"><a :href="bank.list_url" aria-current="page">题库管理</a><a :href="`${bank.list_url}?tab=course-kcs`">课程 KC 总库</a><a :href="`${bank.list_url}shared/`">共享题库</a><a :href="`${bank.list_url}archived/`">已归档</a></nav>
+    <nav class="kt-bank-module-nav" aria-label="题库模块"><a :href="bankPageUrl(bank.list_url)" aria-current="page">题库管理</a><a :href="bankPageUrl(`${bank.list_url}?tab=course-kcs`)">课程 KC 总库</a><a :href="bankPageUrl(`${bank.list_url}shared/`)">共享题库</a><a :href="bankPageUrl(`${bank.list_url}archived/`)">已归档</a></nav>
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
     <Alert v-if="success" tone="success">{{ success }}</Alert>
     <div class="kt-bank-meta-line" aria-label="题库概要">
@@ -219,7 +221,7 @@ onMounted(load)
     <Alert v-if="bank.visibility === 'archived'" tone="warning">题库已归档。可查看历史题目与 KC 映射，但不能修改题目内容。</Alert>
 
 
-    <QuestionBankInventory :compact="true" :result-count="questions.page.total_items" :summary="bank.unit_summary" :groups="bank.groups" :can-edit="bank.can_edit_content" @filter="filterQuestions" @edit="router.push(`/teacher/courses/${courseId}/banks/${bankId}/questions/0/edit/`)" />
+    <QuestionBankInventory :compact="true" :result-count="questions.page.total_items" :summary="bank.unit_summary" :groups="bank.groups" :can-edit="bank.can_edit_content" @filter="filterQuestions" @edit="router.push(bankPageUrl(`/teacher/courses/${courseId}/banks/${bankId}/questions/0/edit/`))" />
     <section class="kt-section kt-bank-question-section" aria-labelledby="question-list-title">
       <h2 id="question-list-title" class="kt-visually-hidden">完整题目</h2>
       <EmptyState v-if="!questions.items.length" title="没有符合条件的题目"><p>调整筛选条件，或通过题目文件导入。</p></EmptyState>
@@ -227,7 +229,7 @@ onMounted(load)
         <div class="kt-table-scroll">
           <table class="kt-table">
             <thead><tr><th>序号</th><th>题目</th><th>题型</th><th>知识点结构</th><th>难度 / 分值</th><th>状态</th><th>操作</th></tr></thead><tbody>
-              <tr v-for="question in questions.items" :key="question.unit_key || `question:${question.id}`"><td class="kt-mono">{{ question.sequence }}</td><td><a v-if="question.edit_url" :href="question.edit_url"><strong>{{ question.title || question.text }}</strong></a><strong v-else>{{ question.title || question.text }}</strong><p v-if="question.instructions" class="kt-bank-question-description">{{ question.instructions }}</p><ul v-if="question.draft_reasons.length" class="kt-draft-reasons"><li v-for="reason in question.draft_reasons" :key="reason">{{ reason }}</li></ul></td><td>{{ question.question_type_label }}</td><td><div class="kt-kc-structure" :aria-label="`知识点结构：${mappingText(question.kc_mapping)}`"><span v-for="node in question.kc_mapping.nodes" :key="node.kc_code" class="kt-kc-node" :data-depth="node.depth">{{ node.name }}</span><span v-if="!question.kc_mapping.nodes.length && !question.member_kc_mappings?.length">未映射</span><details v-if="question.member_kc_mappings?.length"><summary>{{ question.member_kc_mappings.length }} 个作答项 KC</summary><p v-for="member in question.member_kc_mappings" :key="member.id">{{ member.order }}. {{ mappingText(member.mapping) }}</p></details></div></td><td>{{ question.teacher_difficulty ?? '未设置' }}<small class="kt-cell-note">{{ question.max_score || '1.00' }} 分</small></td><td><StatusBadge :label="question.status_label" :tone="statusTone(question.status)" /></td><td><div class="kt-inline-actions"><button class="kt-bank-view-link" type="button" @click="previewQuestion = { id: question.id, group: question.unit_kind === 'group' }">查看</button><a v-if="question.edit_url" :href="question.edit_url">编辑</a><button v-if="question.delete_url" class="kt-text-button kt-text-button--danger" type="button" data-request-delete-question @click="error = ''; confirmation = { kind: 'question', questionId: question.id, unitKind: question.unit_kind, label: `第 ${question.sequence} 题` }">删除</button></div></td></tr>
+              <tr v-for="question in questions.items" :key="question.unit_key || `question:${question.id}`"><td class="kt-mono">{{ question.sequence }}</td><td><a v-if="question.edit_url" :href="bankPageUrl(question.edit_url)"><strong>{{ question.title || question.text }}</strong></a><strong v-else>{{ question.title || question.text }}</strong><p v-if="question.instructions" class="kt-bank-question-description">{{ question.instructions }}</p><ul v-if="question.draft_reasons.length" class="kt-draft-reasons"><li v-for="reason in question.draft_reasons" :key="reason">{{ reason }}</li></ul></td><td>{{ question.question_type_label }}</td><td><div class="kt-kc-structure" :aria-label="`知识点结构：${mappingText(question.kc_mapping)}`"><span v-for="node in question.kc_mapping.nodes" :key="node.kc_code" class="kt-kc-node" :data-depth="node.depth">{{ node.name }}</span><span v-if="!question.kc_mapping.nodes.length && !question.member_kc_mappings?.length">未映射</span><details v-if="question.member_kc_mappings?.length"><summary>{{ question.member_kc_mappings.length }} 个作答项 KC</summary><p v-for="member in question.member_kc_mappings" :key="member.id">{{ member.order }}. {{ mappingText(member.mapping) }}</p></details></div></td><td>{{ question.teacher_difficulty ?? '未设置' }}<small class="kt-cell-note">{{ question.max_score || '1.00' }} 分</small></td><td><StatusBadge :label="question.status_label" :tone="statusTone(question.status)" /></td><td><div class="kt-inline-actions"><button class="kt-bank-view-link" type="button" @click="previewQuestion = { id: question.id, group: question.unit_kind === 'group' }">查看</button><a v-if="question.edit_url" :href="bankPageUrl(question.edit_url)">编辑</a><button v-if="question.delete_url" class="kt-text-button kt-text-button--danger" type="button" data-request-delete-question @click="error = ''; confirmation = { kind: 'question', questionId: question.id, unitKind: question.unit_kind, label: `第 ${question.sequence} 题` }">删除</button></div></td></tr>
             </tbody>
           </table>
         </div>
@@ -239,7 +241,7 @@ onMounted(load)
     <section class="kt-section kt-bank-concept-section" aria-labelledby="bank-concept-title">
       <div class="kt-section-heading"><div><p class="kt-kicker">当前题库</p><h2 id="bank-concept-title">KC 使用情况</h2></div><span>{{ concepts.page.total_items }} 个 KC</span></div>
       <EmptyState v-if="!concepts.items.length" title="本题库尚未建立 KC 映射"><p>可通过 KC 对应表批量维护，或在单题编辑页选择课程 KC。</p></EmptyState>
-      <div v-else class="kt-card kt-table-card"><div class="kt-table-scroll kt-desktop-only"><table class="kt-table"><thead><tr><th>KC</th><th>一级</th><th>二级</th><th>三级</th><th>关联题目</th></tr></thead><tbody><tr v-for="concept in concepts.items" :key="concept.id"><td><strong>{{ concept.name }}</strong><span class="kt-cell-note kt-mono">{{ concept.kc_code }}</span></td><td>{{ concept.level_1_count }}</td><td>{{ concept.level_2_count }}</td><td>{{ concept.level_3_count }}</td><td><span v-for="(question, index) in concept.questions" :key="question.id"><a v-if="question.edit_url" class="kt-mono" :href="question.edit_url">第 {{ question.sequence }} 题</a><span v-else class="kt-mono">第 {{ question.sequence }} 题</span><span v-if="index < concept.questions.length - 1">、</span></span></td></tr></tbody></table></div><MobileCardList class="kt-mobile-only"><li v-for="concept in concepts.items" :key="concept.id" class="kt-mobile-bank-card"><h3>{{ concept.name }} <span class="kt-mono">{{ concept.kc_code }}</span></h3><p>一级 {{ concept.level_1_count }} · 二级 {{ concept.level_2_count }} · 三级 {{ concept.level_3_count }}</p><div class="kt-bank-tags"><a v-for="question in concept.questions" :key="question.id" :href="question.edit_url || undefined">第 {{ question.sequence }} 题</a></div></li></MobileCardList><Paginator :page="concepts.page.number" :total-pages="concepts.page.total_pages" @navigate="navigate('concept', $event)" /></div>
+      <div v-else class="kt-card kt-table-card"><div class="kt-table-scroll kt-desktop-only"><table class="kt-table"><thead><tr><th>KC</th><th>一级</th><th>二级</th><th>三级</th><th>关联题目</th></tr></thead><tbody><tr v-for="concept in concepts.items" :key="concept.id"><td><strong>{{ concept.name }}</strong><span class="kt-cell-note kt-mono">{{ concept.kc_code }}</span></td><td>{{ concept.level_1_count }}</td><td>{{ concept.level_2_count }}</td><td>{{ concept.level_3_count }}</td><td><span v-for="(question, index) in concept.questions" :key="question.id"><a v-if="question.edit_url" class="kt-mono" :href="bankPageUrl(question.edit_url)">第 {{ question.sequence }} 题</a><span v-else class="kt-mono">第 {{ question.sequence }} 题</span><span v-if="index < concept.questions.length - 1">、</span></span></td></tr></tbody></table></div><MobileCardList class="kt-mobile-only"><li v-for="concept in concepts.items" :key="concept.id" class="kt-mobile-bank-card"><h3>{{ concept.name }} <span class="kt-mono">{{ concept.kc_code }}</span></h3><p>一级 {{ concept.level_1_count }} · 二级 {{ concept.level_2_count }} · 三级 {{ concept.level_3_count }}</p><div class="kt-bank-tags"><a v-for="question in concept.questions" :key="question.id" :href="bankPageUrl(question.edit_url || undefined)">第 {{ question.sequence }} 题</a></div></li></MobileCardList><Paginator :page="concepts.page.number" :total-pages="concepts.page.total_pages" @navigate="navigate('concept', $event)" /></div>
     </section>
     <QuestionPreviewDialog v-if="previewQuestion" :id="previewQuestion.id" :course-id="courseId" :bank-id="bankId" :group="previewQuestion.group" @close="previewQuestion = undefined" />
   </template>

@@ -8,8 +8,7 @@ from ..models import PublishPlan
 
 def preview_export(request, plan_id):
     plan = get_object_or_404(PublishPlan.objects.select_related('experiment__course', 'preview_run'), pk=plan_id)
-    # Preserve the old page's accessible-course boundary, including read-only collaborators.
-    get_accessible_course(request.user, plan.experiment.course_id)
+    get_accessible_course(request.user, plan.experiment.course_id, capability='experiment')
     return _preview_export_response(plan)
 
 

@@ -83,8 +83,8 @@ class ResearchDeletionView(APIView):
     action = "delete_experiment"
 
     def context(self, request, course_id, experiment_id=None, class_id=None):
-        course = get_object_or_404(accessible_courses(request.user), pk=course_id)
-        require_course_manager(course, request.user)
+        course = get_object_or_404(accessible_courses(request.user, capability="experiment"), pk=course_id)
+        require_course_manager(course, request.user, capability="experiment")
         experiment = get_object_or_404(course.experiments, pk=experiment_id) if experiment_id is not None else None
         class_group = get_object_or_404(course.classes, pk=class_id) if class_id is not None else None
         return {"course": course, "action": self.action, "experiment": experiment, "class_group": class_group}
@@ -96,8 +96,8 @@ class ResearchDeletionView(APIView):
 
     @extend_schema(request=ResearchDeletionInputSerializer, responses=ResearchDeletionResultSerializer)
     def post(self, request, **kwargs):
-        course = get_object_or_404(accessible_courses(request.user), pk=kwargs['course_id'])
-        require_course_manager(course, request.user)
+        course = get_object_or_404(accessible_courses(request.user, capability="experiment"), pk=kwargs['course_id'])
+        require_course_manager(course, request.user, capability="experiment")
         serializer = ResearchDeletionInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         if 'operation_id' not in serializer.validated_data:
@@ -145,7 +145,7 @@ class TeacherDeletionOperationCollectionView(APIView):
 
     @extend_schema(request=ResearchDeletionOperationInputSerializer, responses={200: ResearchDeletionOperationSerializer, 201: ResearchDeletionOperationSerializer})
     def post(self, request, course_id):
-        course = get_object_or_404(accessible_courses(request.user), pk=course_id)
+        course = get_object_or_404(accessible_courses(request.user, capability="experiment"), pk=course_id)
         serializer = ResearchDeletionOperationInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
@@ -161,8 +161,8 @@ class TeacherDeletionOperationDetailView(APIView):
 
     @extend_schema(responses=ResearchDeletionOperationSerializer)
     def get(self, request, course_id, operation_id):
-        course = get_object_or_404(accessible_courses(request.user), pk=course_id)
-        require_course_manager(course, request.user)
+        course = get_object_or_404(accessible_courses(request.user, capability="experiment"), pk=course_id)
+        require_course_manager(course, request.user, capability="experiment")
         operation = get_object_or_404(ResearchDeletionOperation, pk=operation_id, course=course, actor=request.user)
         return Response(ResearchDeletionOperationSerializer(operation_payload(operation)).data)
 
@@ -185,8 +185,8 @@ class TeacherDeletionCleanupView(APIView):
 
     @extend_schema(responses=ResearchDeletionCleanupSerializer)
     def get(self, request, course_id, cleanup_id):
-        course = get_object_or_404(accessible_courses(request.user), pk=course_id)
-        require_course_manager(course, request.user)
+        course = get_object_or_404(accessible_courses(request.user, capability="experiment"), pk=course_id)
+        require_course_manager(course, request.user, capability="experiment")
         cleanup = get_object_or_404(DataPurgeRequest, purge_request_id=cleanup_id,
             scope_type=ARTIFACT_CLEANUP_SCOPE, scope_definition__course_id=course_id)
         state = cleanup_state(cleanup.purge_request_id)

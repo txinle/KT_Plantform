@@ -144,6 +144,7 @@ def update_class_student_analytics_policy(*, class_group, actor, changes):
             fresh_actor,
             using=using,
             lock_teacher_link=True,
+            capability="class",
         ):
             raise PermissionDenied("没有管理该课程学生分析策略的权限。")
 

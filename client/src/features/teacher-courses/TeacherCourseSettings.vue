@@ -1,132 +1,197 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
-
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ApiError } from '@/api/client'
-import { getBootstrapContext } from '@/app/bootstrap'
-import WorkspaceShell from '@/design-system/components/WorkspaceShell.vue'
-
+import SiteWorkspaceShell from '@/features/management-shared/SiteWorkspaceShell.vue'
+import SiteDialog from '@/features/management-shared/SiteDialog.vue'
+import { getAdminApi } from '@/features/admin-workspace/api'
 import type { TeacherCourseSettingsResponse } from './api'
 import { getTeacherCourseApi } from './api'
-import './teacher-courses.css'
+import { collaborationApi, type CollaborationMember, type CollaborationPerson, type CourseCollaboration } from './collaboration-api'
 
-const bootstrap = getBootstrapContext()
 const route = useRoute()
 const courseId = Number(route.params.courseId)
+const isAdminWorkspace = computed(() => route.path.startsWith('/manage/'))
 const settings = ref<TeacherCourseSettingsResponse>()
+const collaboration = ref<CourseCollaboration>()
 const form = reactive({ name: '', code: '', term: '', description: '', state_token: '', teachers: [] as number[] })
 const fieldErrors = ref<Record<string, unknown>>({})
 const error = ref('')
 const saved = ref('')
-const saving = ref(false)
-const governanceBusy = ref('')
+const busy = ref(false)
+const modal = ref<'member' | 'remove' | 'archive' | 'transfer' | 'purge' | 'purge-execute' | ''>('')
+const modalError = ref('')
+const editing = ref<CollaborationMember>()
+const selected = ref<CollaborationPerson>()
+const query = ref('')
+const results = ref<CollaborationPerson[]>([])
+const searched = ref(false)
+const searching = ref(false)
+const selectedPermissions = ref<string[]>([])
+const transferReason = ref('')
+const keepPrevious = ref(true)
 const purgeReason = ref('research_withdrawal')
-
-function hydrate(response: TeacherCourseSettingsResponse) {
-  settings.value = response
-  Object.assign(form, {
-    name: response.form.name,
-    code: response.form.code,
-    term: response.form.term,
-    description: response.form.description,
-    state_token: response.form.state_token,
-    teachers: [...response.form.teachers],
-  })
-}
-
-function errorText(value: unknown) {
-  return Array.isArray(value) ? value.join(' ') : String(value || '')
-}
-
-onMounted(async () => {
-  try {
-    hydrate(await getTeacherCourseApi().settings(courseId))
-  } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '课程设置加载失败。'
-  }
-})
-
-async function submit() {
-  if (!settings.value?.capabilities.can_update) return
-  saving.value = true
+const purgeId = ref('')
+let searchSequence = 0
+const archived = computed(() => settings.value?.course.status === 'archived')
+const canGovern = computed(() => collaboration.value?.capabilities.can_manage_members || (archived.value && settings.value?.capabilities.can_restore))
+const permissionDescriptions: Record<string, string> = { bank: '维护题目、题库与知识点', class: '管理班级与学生选课', experiment: '配置、发布和管理实验', data: '查看本课程统计与结果', export: '下载本课程授权范围的数据' }
+const permissionName = (key: string) => collaboration.value?.permission_options.find(option => option.key === key)?.label || key
+const errorText = (value: unknown) => Array.isArray(value) ? value.join(' ') : String(value || '')
+function hydrate(response: TeacherCourseSettingsResponse) { settings.value = response; Object.assign(form, response.form, { teachers: [...response.form.teachers] }) }
+async function load() {
   error.value = ''
-  saved.value = ''
-  fieldErrors.value = {}
   try {
-    hydrate(await getTeacherCourseApi().saveSettings(courseId, { ...form, teachers: [...form.teachers] }))
+    if (isAdminWorkspace.value) await getAdminApi().get('access/')
+    const [response, members] = await Promise.all([getTeacherCourseApi().settings(courseId), collaborationApi.get(courseId)])
+    hydrate(response); collaboration.value = members
+  }
+  catch (caught) { error.value = caught instanceof Error ? caught.message : '课程设置加载失败。' }
+}
+onMounted(load)
+async function submit() {
+  if (!settings.value?.capabilities.can_update || busy.value) return
+  busy.value = true; error.value = ''; saved.value = ''; fieldErrors.value = {}
+  try {
+    hydrate(await getTeacherCourseApi().saveSettings(courseId, { name: form.name, code: form.code, term: form.term, description: form.description, state_token: form.state_token, teachers: [...form.teachers] }))
+    collaboration.value = await collaborationApi.get(courseId)
     saved.value = '课程设置已保存。'
   } catch (caught) {
     if (caught instanceof ApiError) fieldErrors.value = caught.fields
     error.value = caught instanceof Error ? caught.message : '课程设置保存失败。'
-  } finally {
-    saving.value = false
-  }
+  } finally { busy.value = false }
 }
-
-async function runGovernance(action: 'archive' | 'create-purge' | 'execute-purge', purgeRequestId = '') {
-  governanceBusy.value = action === 'execute-purge' ? purgeRequestId : action
-  error.value = ''
-  saved.value = ''
+function openMember(member?: CollaborationMember) {
+  editing.value = member; selected.value = member; selectedPermissions.value = [...(member?.permissions || [])]
+  query.value = ''; results.value = []; searched.value = false; modalError.value = ''; modal.value = 'member'
+}
+function openRemove(member: CollaborationMember) { editing.value = member; modalError.value = ''; modal.value = 'remove' }
+function openTransfer() { selected.value = undefined; query.value = ''; results.value = []; searched.value = false; transferReason.value = ''; keepPrevious.value = true; modalError.value = ''; modal.value = 'transfer' }
+function openGovernance(value: 'archive' | 'purge' | 'purge-execute', id = '') { purgeId.value = id; modalError.value = ''; modal.value = value }
+async function searchTeachers() {
+  const sequence = ++searchSequence
+  if (!query.value.trim()) { results.value = []; searched.value = false; return }
+  searching.value = true; modalError.value = ''
+  try {
+    const response = await collaborationApi.search(courseId, query.value.trim())
+    if (sequence === searchSequence) { results.value = response.items; searched.value = true }
+  } catch (caught) { if (sequence === searchSequence) modalError.value = caught instanceof Error ? caught.message : '教师查询失败。' }
+  finally { if (sequence === searchSequence) searching.value = false }
+}
+function adjustPermission(key: string) {
+  if (key === 'export' && selectedPermissions.value.includes('export') && !selectedPermissions.value.includes('data')) selectedPermissions.value.push('data')
+  if (key === 'data' && !selectedPermissions.value.includes('data')) selectedPermissions.value = selectedPermissions.value.filter(value => value !== 'export')
+}
+async function mutateMember(action: 'add' | 'update' | 'remove' | 'transfer') {
+  if (!collaboration.value || busy.value) return
+  const teacher = action === 'remove' ? editing.value : selected.value
+  if (!teacher) { modalError.value = '请先搜索并选择一位教师。'; return }
+  if (['add', 'update'].includes(action) && !selectedPermissions.value.length) { modalError.value = '请至少选择一项功能权限。'; return }
+  if (action === 'transfer' && !transferReason.value.trim()) { modalError.value = '请填写移交原因。'; return }
+  busy.value = true; modalError.value = ''
+  try {
+    const response = await collaborationApi.mutate(courseId, {
+      action, teacher_id: teacher.id, state_token: collaboration.value.state_token,
+      ...(['add', 'update'].includes(action) ? { permissions: [...selectedPermissions.value] } : {}),
+      ...(action === 'transfer' ? { keep_previous: keepPrevious.value, reason: transferReason.value.trim() } : {}),
+    })
+    collaboration.value = response
+    if (response.redirect_url && !isAdminWorkspace.value) { window.location.assign(response.redirect_url); return }
+    hydrate(await getTeacherCourseApi().settings(courseId))
+    modal.value = ''; saved.value = { add: '协作教师已添加。', update: '协作权限已更新。', remove: '协作成员已移除。', transfer: '课程负责人已移交。' }[action]
+  } catch (caught) { modalError.value = caught instanceof Error ? caught.message : '协作变更失败，请刷新后重试。' }
+  finally { busy.value = false }
+}
+async function governance() {
+  if (busy.value) return
+  busy.value = true; modalError.value = ''
   try {
     const api = getTeacherCourseApi()
-    if (action === 'archive') {
-      hydrate(await api.archive(courseId))
-      saved.value = '课程已归档并切换为只读。'
-    } else if (action === 'create-purge') {
-      hydrate(await api.createPurgeRequest(courseId, purgeReason.value))
-      saved.value = '清除影响预览已生成。'
+    if (modal.value === 'archive') {
+      hydrate(archived.value ? await api.restore(`/api/v1/teacher/courses/${courseId}/restore/`) : await api.archive(courseId))
+      saved.value = '课程状态已更新。'
+    } else if (modal.value === 'purge') {
+      hydrate(await api.createPurgeRequest(courseId, purgeReason.value)); saved.value = '数据清除影响预览已生成，请核对清除请求。'
     } else {
-      hydrate(await api.executePurgeRequest(courseId, purgeRequestId))
-      saved.value = '清除请求已执行。'
+      hydrate(await api.executePurgeRequest(courseId, purgeId.value)); saved.value = '数据清除请求已执行。'
     }
-  } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '课程治理操作失败。'
-  } finally {
-    governanceBusy.value = ''
-  }
+    collaboration.value = await collaborationApi.get(courseId); modal.value = ''
+  } catch (caught) { modalError.value = caught instanceof Error ? caught.message : '课程治理操作失败。' }
+  finally { busy.value = false }
 }
 </script>
 
 <template>
-  <div class="kt-teacher-courses">
-    <WorkspaceShell
-      :user-name="bootstrap.user.display_name"
-      :user-meta="bootstrap.user.username"
-      :csrf-token="bootstrap.csrf_token"
-      :course-name="settings?.course.name || '课程'"
-      :course-meta="settings ? `${settings.course.code} · ${settings.course.term}` : undefined"
-      main-id="teacher-course-settings-main"
-    >
-      <template #navigation>
-        <a href="/teacher/courses/">我的课程</a>
-        <a :href="`/teacher/courses/${courseId}/`">概览</a>
-        <a :href="`/teacher/courses/${courseId}/banks/`">题库</a>
-        <a :href="`/teacher/courses/${courseId}/classes/`">班级</a>
-        <a :href="`/teacher/courses/${courseId}/experiments/`">实验</a>
-        <a :href="`/teacher/courses/${courseId}/data/`">数据</a>
-        <RouterLink :to="`/teacher/courses/${courseId}/settings/`" aria-current="page">设置</RouterLink>
-      </template>
-      <p v-if="!settings && !error" role="status">正在加载课程设置…</p>
-      <p v-else-if="error && !settings" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
-      <template v-else-if="settings">
-        <header class="kt-teacher-courses-heading"><div><p>{{ settings.course.code }} · {{ settings.course.term }}</p><h1>课程设置</h1><span>负责人和协作教师可共同维护课程资源、协作成员与归档状态；变更由服务器记录并同步给其他管理者。</span></div></header>
-        <div class="kt-teacher-course-settings-grid">
-          <form class="kt-card kt-teacher-course-form" data-course-settings @submit.prevent="submit">
-            <p v-if="error" class="kt-alert kt-alert--danger" role="alert">{{ errorText(fieldErrors.__all__ || fieldErrors.non_field_errors) || error }}</p>
-            <p v-if="saved" class="kt-alert kt-alert--success" role="status">{{ saved }}</p>
-            <input v-model="form.state_token" type="hidden" name="state_token">
-            <label>课程名称<input v-model="form.name" name="name" maxlength="160" required :disabled="!settings.capabilities.can_update"><small v-if="fieldErrors.name">{{ errorText(fieldErrors.name) }}</small></label>
-            <label>课程代码<input v-model="form.code" name="code" maxlength="64" required :disabled="!settings.capabilities.can_update"><small v-if="fieldErrors.code">{{ errorText(fieldErrors.code) }}</small></label>
-            <label>学期<input v-model="form.term" name="term" maxlength="64" required :disabled="!settings.capabilities.can_update"><small v-if="fieldErrors.term">{{ errorText(fieldErrors.term) }}</small></label>
-            <label>课程说明<textarea v-model="form.description" name="description" rows="5" :disabled="!settings.capabilities.can_update" /><small v-if="fieldErrors.description">{{ errorText(fieldErrors.description) }}</small></label>
-            <fieldset :disabled="!settings.capabilities.can_update"><legend>协作教师</legend><label v-for="teacher in settings.form.teacher_options" :key="teacher.id" class="kt-teacher-course-checkbox"><input v-model="form.teachers" type="checkbox" :value="teacher.id">{{ teacher.display_name }} <small>{{ teacher.username }}</small></label><small v-if="fieldErrors.teachers">{{ errorText(fieldErrors.teachers) }}</small></fieldset>
-            <div class="kt-teacher-course-form__actions"><button class="kt-button" type="submit" :disabled="saving || !settings.capabilities.can_update">{{ saving ? '正在保存…' : '保存设置' }}</button><a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/`">返回课程</a></div>
+  <SiteWorkspaceShell :mode="isAdminWorkspace ? 'admin' : 'course'" :active="isAdminWorkspace ? 'course' : 'settings'" :course-id="courseId" :course-name="settings?.course.name" :course-meta="settings ? `${settings.course.code} · ${settings.course.term}` : ''" :permissions="collaboration?.granted_permissions || []" :main-id="isAdminWorkspace ? 'admin-course-settings-main' : 'teacher-course-settings-main'">
+    <p v-if="!settings && !error" role="status">正在加载课程设置…</p>
+    <p v-if="error" class="error-block" role="alert">{{ errorText(fieldErrors.__all__ || fieldErrors.non_field_errors) || error }} <button class="link" @click="load">重新加载</button></p>
+    <p v-if="saved" class="success-note" role="status">{{ saved }}</p>
+    <template v-if="settings && collaboration">
+      <div class="eyebrow">{{ settings.course.code }} / {{ settings.course.term }}</div>
+      <div class="heading"><div><h1>课程设置</h1><p>维护课程信息，为每位协作教师分配合适的工作范围。</p></div><span class="badge" :class="{ gray: archived }">{{ archived ? '已归档 · 只读' : '● 进行中' }}</span></div>
+      <div class="course-grid">
+        <div class="course-main">
+          <form class="card course-basics" data-course-settings @submit.prevent="submit">
+            <div class="card-header"><div><h2>基本信息</h2><p>课程标识与教学安排</p></div><button v-if="settings.capabilities.can_update" class="link" type="submit" :disabled="busy">{{ busy ? '正在保存…' : '保存信息' }}</button><span v-else class="badge gray">只读</span></div>
+            <div class="info-grid">
+              <label>课程名称<input v-model="form.name" name="name" maxlength="160" required :disabled="!settings.capabilities.can_update"><small v-if="fieldErrors.name" class="error">{{ errorText(fieldErrors.name) }}</small></label>
+              <label>课程代码<input v-model="form.code" name="code" maxlength="64" required :disabled="!settings.capabilities.can_update"><small v-if="fieldErrors.code" class="error">{{ errorText(fieldErrors.code) }}</small></label>
+              <label>学期<input v-model="form.term" name="term" maxlength="64" required :disabled="!settings.capabilities.can_update"></label>
+              <label>课程负责人<input :value="`${collaboration.owner.display_name} · ${collaboration.owner.username}`" readonly></label>
+            </div>
+            <details class="course-description"><summary>课程说明</summary><label class="field">说明内容<textarea v-model="form.description" name="description" rows="3" :disabled="!settings.capabilities.can_update" /></label></details>
           </form>
-          <aside class="kt-card kt-teacher-course-danger"><h2>课程归档</h2><p>归档后课程只读，学生不能开始新的实验会话。</p><button v-if="settings.capabilities.can_archive" class="kt-button kt-button--danger" data-course-archive type="button" :disabled="Boolean(governanceBusy)" @click="runGovernance('archive')">{{ governanceBusy === 'archive' ? '正在归档…' : '归档课程' }}</button><span v-else class="kt-status kt-status--neutral">{{ settings.course.status_label }}</span></aside>
+          <section class="card collaboration-card">
+            <div class="card-header"><div><h2>协作教师 <span class="member-count">{{ collaboration.members.length }} 位</span></h2><p>仅显示本课程成员，由负责人分配功能权限。</p></div><button v-if="collaboration.capabilities.can_manage_members" class="primary" data-add-collaborator @click="openMember()">＋ 添加协作教师</button></div>
+            <div class="owner"><span class="avatar">{{ collaboration.owner.display_name.slice(0, 1) }}</span><div><strong>{{ collaboration.owner.display_name }}</strong><p>{{ collaboration.owner.username }} · 负责课程与成员授权</p></div><span class="badge blue">负责人 · 全部功能</span></div>
+            <div v-for="member in collaboration.members" :key="member.id" class="member"><div class="person"><span class="avatar">{{ member.display_name.slice(0, 1) }}</span><div><strong>{{ member.display_name }} <span v-if="member.is_active === false" class="badge gray">账号已停用</span></strong><small>{{ member.username }}</small><div class="permission-tags"><span v-for="permission in member.permissions" :key="permission">{{ permissionName(permission) }}</span></div></div></div><div v-if="collaboration.capabilities.can_manage_members" class="member-actions"><button class="link" :data-edit-collaborator="member.id" @click="openMember(member)">调整权限</button><button class="link danger" :data-remove-collaborator="member.id" @click="openRemove(member)">移除</button></div></div>
+            <div v-if="!collaboration.members.length" class="empty">暂未添加协作教师。</div>
+          </section>
+          <div class="policy-note"><span>ⓘ</span><div><strong>账号与课程授权分开管理</strong><br>管理员创建教师账号后，教师不会自动加入课程。协作权限只在当前课程生效，移除成员不删除账号和历史操作。</div></div>
         </div>
-        <section class="kt-card kt-teacher-course-governance"><h2>身份与数据治理</h2><p>课程导出包含学生学号和姓名等直接身份数据。课程协作教师只能在授权范围内生成和下载，后续共享前需自行完成去标识化处理。</p><h3>受控数据清除</h3><p>普通实验页面不提供硬删除。先生成影响预览，执行后仅保留最小审计记录。</p><label>原因<select v-model="purgeReason" name="reason_code"><option value="research_withdrawal">学生退出研究</option><option value="collection_error">错误采集纠正</option><option value="retention_expired">保留期限结束</option></select></label><button class="kt-button kt-button--secondary" data-purge-create type="button" :disabled="Boolean(governanceBusy)" @click="runGovernance('create-purge')">{{ governanceBusy === 'create-purge' ? '正在生成…' : '生成清除预览' }}</button></section>
-        <section class="kt-card kt-teacher-course-purge"><h2>清除请求</h2><div v-if="settings.purge_requests.length" class="kt-table-scroll"><table><thead><tr><th>清除请求</th><th>预览数量</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="request in settings.purge_requests" :key="request.purge_request_id"><td>{{ request.purge_request_id }}</td><td>{{ request.preview_session_count }} 会话 · {{ request.preview_event_count }} 事件</td><td>{{ request.status_label }}</td><td><button v-if="request.execute_url" class="kt-button kt-button--danger" :data-purge-execute="request.purge_request_id" type="button" :disabled="Boolean(governanceBusy)" @click="runGovernance('execute-purge', request.purge_request_id)">{{ governanceBusy === request.purge_request_id ? '正在执行…' : '执行清除' }}</button></td></tr></tbody></table></div><p v-else>尚无清除请求。</p></section>
+        <div class="course-side">
+          <section class="card side-card"><div class="eyebrow">ACCESS CONTROL</div><h2>让协作范围清晰可见</h2><p>课程负责人按实际分工勾选主要功能，可随时调整。</p><ul><li v-for="option in collaboration.permission_options" :key="option.key">{{ option.label }}</li></ul><div class="divider" /><small>协作成员授权、负责人变更与课程删除不包含在这些勾选项中。数据导出须明确授权，并同时拥有数据查看权限。</small><button v-if="collaboration.capabilities.can_transfer" class="link transfer-owner" @click="openTransfer">移交课程负责人</button></section>
+          <section class="card side-card"><h2>课程{{ archived ? '恢复' : '归档' }}</h2><p>{{ archived ? '恢复后可继续管理成员与教学安排。历史排期不会自动延长。' : '归档后课程进入只读状态，保留已有成员、教学记录与数据。' }}</p><button v-if="collaboration.capabilities.can_archive || settings.capabilities.can_restore" class="wide" :class="{ danger: !archived }" data-course-archive @click="openGovernance('archive')">{{ archived ? '恢复课程' : '归档课程' }}</button><small v-else>由课程负责人或平台管理员操作。</small></section>
+        </div>
+      </div>
+      <details v-if="canGovern" class="card course-governance"><summary>身份与数据治理</summary><div class="governance-body"><h2>受控数据清除</h2><p>课程导出包含学生学号和姓名等身份数据。清除会话与采集数据不等于删除课程，执行前需生成并核对服务端影响预览。</p><button data-purge-create @click="openGovernance('purge')">生成清除预览</button><h3>清除请求</h3><div v-if="settings.purge_requests.length" class="table-scroll"><table><thead><tr><th>清除请求</th><th>预览数量</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="request in settings.purge_requests" :key="request.purge_request_id"><td>{{ request.purge_request_id }}</td><td>{{ request.preview_session_count }} 会话 · {{ request.preview_event_count }} 事件</td><td>{{ request.status_label }}</td><td><button v-if="request.execute_url" class="link danger" :data-purge-execute="request.purge_request_id" @click="openGovernance('purge-execute', request.purge_request_id)">执行清除</button></td></tr></tbody></table></div><p v-else>尚无清除请求。</p></div></details>
+    </template>
+
+    <SiteDialog :open="modal === 'member' || modal === 'transfer'" :title="modal === 'transfer' ? '移交课程负责人' : editing ? '调整协作权限' : '添加协作教师'" :subtitle="`${settings?.course.name || '课程'} · 授权仅对当前课程生效`" @close="!busy && (modal = '')">
+      <template v-if="!editing || modal === 'transfer'">
+        <div class="step-label"><span>1</span>{{ modal === 'transfer' ? '搜索新负责人' : '搜索教师' }}</div>
+        <form class="teacher-search" data-search-teachers @submit.prevent="searchTeachers"><div class="search"><input v-model="query" aria-label="搜索教师姓名或账号" placeholder="输入教师姓名或登录账号" autocomplete="off"></div><button type="submit" :disabled="searching">{{ searching ? '查询中…' : '查询' }}</button></form>
+        <div class="results"><div v-if="!searched" class="empty">输入姓名或账号后查询，不展示全平台教师名单。</div><div v-else-if="!results.length" class="empty">没有找到启用的教师账号。</div><button v-for="person in results" :key="person.id" class="result" :class="{ chosen: selected?.id === person.id }" :data-teacher-id="person.id" :disabled="modal === 'member' && collaboration?.members.some(member => member.id === person.id)" @click="selected = person"><span class="avatar">{{ person.display_name.slice(0, 1) }}</span><div class="person"><div><strong>{{ person.display_name }}</strong><small>{{ person.username }}</small></div></div><span v-if="collaboration?.members.some(member => member.id === person.id)" class="badge gray">已有成员</span><span v-else-if="selected?.id === person.id" class="badge blue">已选择</span></button></div>
       </template>
-    </WorkspaceShell>
-  </div>
+      <div v-else class="selected-person"><div class="person"><span class="avatar">{{ editing.display_name.slice(0, 1) }}</span><div><strong>{{ editing.display_name }}</strong><small>{{ editing.username }}</small></div></div></div>
+      <template v-if="modal === 'member'"><div class="step-label"><span>{{ editing ? '✓' : '2' }}</span>选择可使用的功能</div><div class="permission-grid"><label v-for="option in collaboration?.permission_options" :key="option.key" class="permission-option"><input v-model="selectedPermissions" type="checkbox" :value="option.key" @change="adjustPermission(option.key)"><div><strong>{{ option.label }}</strong><small>{{ permissionDescriptions[option.key] }}</small></div></label></div><p class="hint">至少选择一项功能。数据查看与导出分开授权；选择导出时会同时启用数据查看。成员管理与课程删除不在授权范围内。</p></template>
+      <template v-else><label class="permission-option"><input v-model="keepPrevious" type="checkbox"><div><strong>原负责人保留为协作教师</strong><small>仅在原账号仍启用时保留，授予题库、班级、实验及数据查看权限。</small></div></label><label class="field transfer-reason">移交原因<textarea v-model="transferReason" rows="3" required placeholder="说明人员或教学安排变化" /></label><p class="hint">课程历史记录保持不变。未保留原负责人时，其本课程管理权限将被移除。</p></template>
+      <p v-if="modalError" class="error" role="alert">{{ modalError }}</p>
+      <template #footer><small>由课程负责人授权</small><button :disabled="busy" @click="modal = ''">取消</button><button class="primary" data-save-collaborator :disabled="busy" @click="mutateMember(modal === 'transfer' ? 'transfer' : editing ? 'update' : 'add')">{{ busy ? '正在保存…' : modal === 'transfer' ? '确认移交' : editing ? '保存权限' : '确认添加' }}</button></template>
+    </SiteDialog>
+    <SiteDialog :open="modal === 'remove'" title="移除协作教师" :subtitle="editing ? `${editing.display_name} · ${editing.username}` : ''" @close="!busy && (modal = '')"><p>移除后，该教师将失去本课程的协作访问权限。其平台账号、其他课程权限与历史操作记录均保留。</p><p v-if="modalError" class="error" role="alert">{{ modalError }}</p><template #footer><button :disabled="busy" @click="modal = ''">取消</button><button class="primary" data-confirm-remove :disabled="busy" @click="mutateMember('remove')">{{ busy ? '正在移除…' : '确认移除' }}</button></template></SiteDialog>
+    <SiteDialog :open="modal === 'archive'" :title="archived ? '恢复课程' : '归档课程'" :subtitle="settings?.course.name" @close="!busy && (modal = '')"><p>{{ archived ? '恢复后可继续调整协作成员和功能权限。历史任务排期不会自动延长。' : '归档后课程只读，已有成员与历史数据保留。归档不等同于结束所有班级任务，请先核对教学安排。' }}</p><p v-if="modalError" class="error" role="alert">{{ modalError }}</p><template #footer><button :disabled="busy" @click="modal = ''">取消</button><button class="primary" data-confirm-archive :disabled="busy" @click="governance">{{ busy ? '正在处理…' : archived ? '确认恢复' : '确认归档' }}</button></template></SiteDialog>
+    <SiteDialog :open="modal === 'purge' || modal === 'purge-execute'" :title="modal === 'purge' ? '生成数据清除预览' : '确认执行数据清除'" @close="!busy && (modal = '')"><label v-if="modal === 'purge'" class="field">清除原因<select v-model="purgeReason" name="reason_code"><option value="research_withdrawal">学生退出研究</option><option value="collection_error">错误采集纠正</option><option value="retention_expired">保留期限结束</option></select></label><p v-else>将执行清除请求 {{ purgeId }}。请核对上方请求中的会话和事件数量，清除后无法恢复相关原始记录。</p><p v-if="modalError" class="error" role="alert">{{ modalError }}</p><template #footer><button :disabled="busy" @click="modal = ''">取消</button><button class="primary" :disabled="busy" @click="governance">{{ busy ? '正在处理…' : modal === 'purge' ? '生成影响预览' : '确认执行清除' }}</button></template></SiteDialog>
+  </SiteWorkspaceShell>
 </template>
+
+<style scoped>
+.course-main{display:flex;flex-direction:column;gap:22px}
+.course-main>.card+.card{margin-top:0}
+.course-main>.policy-note{margin-top:0}
+.member-count{font-size:12px;color:#8799ad;font-weight:400}
+.owner strong{font-size:13px;font-weight:500}
+.member-actions{display:flex;flex-shrink:0}
+.course-description{padding:0 25px 18px;font-size:12px;color:#738095}
+.course-description summary{cursor:pointer}
+.course-description label{margin-top:12px}
+.transfer-owner{margin-top:14px}
+.teacher-search{display:flex;gap:9px}
+.teacher-search .search{flex:1;width:auto}
+.transfer-reason{margin-top:18px}
+.course-governance{margin-top:25px;padding:20px 25px;font-size:13px}
+.course-governance>summary{cursor:pointer;color:#536b8a}
+.governance-body{padding-top:20px}
+.governance-body>button{margin-top:15px}
+@media(max-width:700px){.member-actions{display:grid}.course-description{padding-inline:18px}.course-governance{padding:18px}.member{gap:6px}.member .person{gap:8px}.owner{flex-wrap:wrap}.owner>.badge{margin-left:0}.info-grid{grid-template-columns:1fr}.teacher-search{align-items:stretch}}
+</style>

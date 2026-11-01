@@ -1,0 +1,9 @@
+import { createApiClient } from '@/api/client'
+import { getBootstrapContext } from '@/app/bootstrap'
+export interface AdminRow { id: number | string; name?: string; title?: string; username?: string; student_number?: string; role?: string; is_active?: boolean; email?: string; course_count?: number; code?: string; term?: string; description?: string; status?: string; status_label?: string; owner_id?: number; owner_name?: string; class_count?: number; student_count?: number; bank_count?: number; experiment_count?: number; course_id?: number; course_name?: string; academic_year?: string; detail_url?: string; settings_url?: string; download_url?: string; action?: string; actor_name?: string; target?: string; created_at?: string; question_count?: number; visibility?: string; experiment_name?: string; class_name?: string; submitted_count?: number; participant_count?: number; [key: string]: unknown }
+export interface Overview { metrics: Record<string, number>; tasks: AdminRow[]; recent_audit: AdminRow[] }
+interface Client { get<T>(path:string):Promise<T>; mutate<T>(path:string, options:{method:'POST';body:unknown}):Promise<T> }
+export function createAdminApi(client:Client) { return { get:<T>(path:string)=>client.get<T>('/api/v1/manage/'+path), post:<T>(path:string,body:unknown)=>client.mutate<T>('/api/v1/manage/'+path,{method:'POST',body}) } }
+export function getAdminApi() { return createAdminApi(createApiClient({getCsrfToken:()=>getBootstrapContext().csrf_token})) }
+export const statusLabel = (row:AdminRow) => row.status_label || ({active:'进行中',archived:'已归档',draft:'草稿',published:'已发布',succeeded:'已完成',failed:'失败',pending:'等待中',running:'处理中',private:'私有',shared:'共享'} as Record<string,string>)[String(row.status || row.visibility)] || row.status || row.visibility || '—'
+export const roleLabel = (role?:string) => ({teacher:'教师',student:'学生',admin:'管理员'} as Record<string,string>)[role || ''] || role

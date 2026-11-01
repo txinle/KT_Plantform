@@ -5,6 +5,7 @@ import { useRoute } from 'vue-router'
 import { bootstrapContext, getAuthenticationGeneration } from './bootstrap'
 import ResearchConsentDialog from './ResearchConsentDialog.vue'
 import SiteRegistrationFooter from './SiteRegistrationFooter.vue'
+import InitialPasswordReminder from './InitialPasswordReminder.vue'
 
 const route = useRoute()
 const showPageRegistration = computed(() => route.path === '/login/')
@@ -13,6 +14,9 @@ const courseBoundary = computed(() => route.params?.courseId
 const consentRequired = computed(() => route.path !== '/login/'
   && bootstrapContext.value?.user.role === 'student'
   && bootstrapContext.value.user.research_consent_required)
+const staffPasswordReminder = computed(() => !['/login/', '/password/change/'].includes(route.path)
+  && bootstrapContext.value?.user.role !== 'student'
+  && bootstrapContext.value?.user.initial_password_reminder_pending)
 </script>
 
 <template>
@@ -30,6 +34,7 @@ const consentRequired = computed(() => route.path !== '/login/'
       />
       <template v-else>
         <RouterView :key="courseBoundary" />
+        <InitialPasswordReminder v-if="staffPasswordReminder" :key="getAuthenticationGeneration()" />
       </template>
     </div>
     <SiteRegistrationFooter v-if="showPageRegistration" />

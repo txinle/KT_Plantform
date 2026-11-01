@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useExperimentPageUrl } from './experiment-page-url'
+const pageUrl = useExperimentPageUrl()
 import { computed, inject, onMounted, ref, type Ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
@@ -126,7 +128,7 @@ async function startPublish(experiment: TeacherExperiment) {
   error.value = ''
   try {
     const plan = await api.startPlan(courseId, experiment.id)
-    await router.push(`/teacher/courses/${courseId}/experiments/${experiment.id}/publish-plan/${plan.id}/step/${plan.current_step || 1}/`)
+    await router.push(pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/publish-plan/${plan.id}/step/${plan.current_step || 1}/`)!)
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '发布计划加载失败。'
   } finally { publishingId.value = undefined }
@@ -171,10 +173,10 @@ onMounted(() => load())
 
 <template>
   <PageHeader title="实验">
-    <template #kicker><nav class="kt-experiment-breadcrumb" aria-label="层级目录"><a href="/teacher/courses/">我的课程</a><span>/</span><a :href="`/teacher/courses/${courseId}/`">{{ course?.name || '课程' }}</a><span>/</span><span aria-current="page">实验</span></nav></template>
+    <template #kicker><nav class="kt-experiment-breadcrumb" aria-label="层级目录"><a :href="pageUrl('/teacher/courses/')">我的课程</a><span>/</span><a :href="pageUrl(`/teacher/courses/${courseId}/`)">{{ course?.name || '课程' }}</a><span>/</span><span aria-current="page">实验</span></nav></template>
     <p>按实验管理发布时间、作答时限、班级任务和人工批改。</p>
     <template #actions>
-      <RouterLink class="kt-button" :to="`/teacher/courses/${courseId}/experiments/create/`">
+      <RouterLink class="kt-button" :to="pageUrl(`/teacher/courses/${courseId}/experiments/create/`)">
         创建实验
       </RouterLink>
     </template>
@@ -195,22 +197,22 @@ onMounted(() => load())
           <template v-for="experiment in collection.items" :key="experiment.id">
             <tr>
               <td>
-                <div class="kt-experiment-name-row"><RouterLink :to="`/teacher/courses/${courseId}/experiments/${experiment.id}/`"><strong>{{ experiment.name }}</strong></RouterLink><a v-if="experiment.activity?.grading_url" data-pending-grading class="kt-experiment-pending" :href="experiment.activity.grading_url">待批改：{{ experiment.activity.pending_grading_count }}</a><span v-else class="kt-experiment-pending">待批改：{{ experiment.activity?.pending_grading_count ?? 0 }}</span></div>
+                <div class="kt-experiment-name-row"><RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/`)"><strong>{{ experiment.name }}</strong></RouterLink><a v-if="experiment.activity?.grading_url" data-pending-grading class="kt-experiment-pending" :href="pageUrl(experiment.activity.grading_url)">待批改：{{ experiment.activity.pending_grading_count }}</a><span v-else class="kt-experiment-pending">待批改：{{ experiment.activity?.pending_grading_count ?? 0 }}</span></div>
                 <span class="kt-cell-note"><template v-if="experiment.sampling_total_count != null">{{ experiment.sampling_total_count }} 道题 · </template>更新 {{ displayDate(experiment.updated_at, '—') }}</span>
               </td>
               <td><div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id" class="kt-experiment-schedule-cell"><span>{{ displayDate(schedule.opens_at, '立即开放') }}</span><small v-if="(experiment.activity?.schedules.length || 0) > 1">{{ schedule.class_name }}</small></div><span v-if="!experiment.activity?.schedules.length">未安排</span></td>
               <td><div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id" class="kt-experiment-schedule-cell"><span>{{ displayDate(schedule.closes_at, '无截止') }}</span><small v-if="(experiment.activity?.schedules.length || 0) > 1">{{ schedule.class_name }}</small></div><span v-if="!experiment.activity?.schedules.length">未安排</span></td>
               <td><div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id" class="kt-experiment-schedule-cell"><span>{{ displayLimit(schedule.total_time_limit_minutes, schedule.per_question_time_limit_seconds) }}</span><small v-if="(experiment.activity?.schedules.length || 0) > 1">{{ schedule.class_name }}</small></div><span v-if="!experiment.activity?.schedules.length">{{ displayLimit(experiment.total_time_limit_minutes, experiment.per_question_time_limit_seconds) }}</span></td>
               <td><StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" /></td>
-              <td><RouterLink :to="`/teacher/courses/${courseId}/experiments/${experiment.id}/?tab=tasks`">{{ experiment.activity?.schedules.length || 0 }} 个</RouterLink></td>
+              <td><RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/?tab=tasks`)">{{ experiment.activity?.schedules.length || 0 }} 个</RouterLink></td>
               <td v-if="canManage">
                 <button class="kt-button kt-button--secondary" type="button" :popovertarget="`experiment-menu-${experiment.id}`" :aria-label="`${experiment.name}操作`" @click="positionActionMenu($event, experiment.id)">操作 ⌄</button>
                 <div :id="`experiment-menu-${experiment.id}`" popover="auto" class="kt-experiment-row-menu">
-                  <RouterLink :to="`/teacher/courses/${courseId}/experiments/${experiment.id}/`">详情</RouterLink>
-                  <RouterLink v-if="experiment.can_edit" :to="`/teacher/courses/${courseId}/experiments/${experiment.id}/edit/`">编辑定义</RouterLink>
+                  <RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/`)">详情</RouterLink>
+                  <RouterLink v-if="experiment.can_edit" :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/edit/`)">编辑定义</RouterLink>
                   <button v-if="experiment.activity?.schedules.length" type="button" class="kt-text-button" :data-expand-schedules="experiment.id" :aria-expanded="expandedId === experiment.id" @click="toggleSchedules(experiment)">{{ expandedId === experiment.id ? '收起班级操作' : '修改排期 / 延时' }}</button>
-                  <RouterLink v-if="experiment.student_preview_url" :to="experiment.student_preview_url">模拟学生作答</RouterLink>
-                  <a v-if="experiment.activity?.grading_url" :href="experiment.activity.grading_url">人工批改</a>
+                  <RouterLink v-if="experiment.student_preview_url" :to="pageUrl(experiment.student_preview_url)">模拟学生作答</RouterLink>
+                  <a v-if="experiment.activity?.grading_url" :href="pageUrl(experiment.activity.grading_url)">人工批改</a>
                   <button v-if="experiment.can_publish" class="kt-text-button" type="button" :data-publish-experiment="experiment.id" :disabled="publishingId !== undefined" @click="startPublish(experiment)">{{ publishingId === experiment.id ? '正在进入…' : '发布到班级' }}</button>
                   <button v-if="experiment.can_restore" class="kt-text-button" type="button" :data-restore-experiment="experiment.id" :disabled="restoringId !== undefined" @click="restore(experiment)">{{ restoringId === experiment.id ? '恢复中…' : '恢复' }}</button>
                   <button v-if="experiment.can_archive" class="kt-text-button" type="button" :data-archive-experiment="experiment.id" @click="requestArchive(experiment)">归档</button>
@@ -225,13 +227,13 @@ onMounted(() => load())
     <MobileCardList class="kt-mobile-only">
       <li v-for="experiment in collection.items" :key="experiment.id" class="kt-mobile-experiment-card">
         <div class="kt-section-heading">
-          <RouterLink :to="`/teacher/courses/${courseId}/experiments/${experiment.id}/`">
+          <RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/`)">
             <strong>{{ experiment.name }}</strong>
           </RouterLink>
           <StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" />
         </div>
         <p>{{ experiment.description || '无说明' }}</p>
-        <a v-if="experiment.activity?.grading_url" class="kt-experiment-pending" :href="experiment.activity.grading_url">待批改：{{ experiment.activity.pending_grading_count }}</a>
+        <a v-if="experiment.activity?.grading_url" class="kt-experiment-pending" :href="pageUrl(experiment.activity.grading_url)">待批改：{{ experiment.activity.pending_grading_count }}</a>
         <span v-else class="kt-cell-note">待批改：{{ experiment.activity?.pending_grading_count ?? 0 }}</span>
         <dl>
           <div><dt>题库</dt><dd>{{ experiment.question_banks?.map((bank) => bank.name).join('、') || experiment.question_bank?.name || '未选择题库' }}</dd></div>
@@ -240,7 +242,7 @@ onMounted(() => load())
         </dl>
         <div v-if="canManage" class="kt-inline-actions">
           <button v-if="experiment.activity?.schedules.length" type="button" class="kt-text-button" :data-expand-schedules="experiment.id" :aria-expanded="expandedId === experiment.id" @click="toggleSchedules(experiment)">{{ expandedId === experiment.id ? '收起班级操作' : '修改排期 / 延时' }}</button>
-          <RouterLink v-if="experiment.student_preview_url" class="kt-text-button" :to="experiment.student_preview_url">模拟学生作答</RouterLink>
+          <RouterLink v-if="experiment.student_preview_url" class="kt-text-button" :to="pageUrl(experiment.student_preview_url)">模拟学生作答</RouterLink>
           <button v-if="experiment.can_publish" class="kt-text-button" type="button" :disabled="publishingId !== undefined" @click="startPublish(experiment)">发布到班级</button>
           <button v-if="experiment.can_restore" class="kt-text-button" type="button" :data-restore-experiment="experiment.id" :disabled="restoringId !== undefined" @click="restore(experiment)">{{ restoringId === experiment.id ? '恢复中…' : '恢复实验' }}</button>
           <button v-if="experiment.can_archive" class="kt-text-button" type="button" :data-archive-experiment="experiment.id" @click="requestArchive(experiment)">归档实验</button>

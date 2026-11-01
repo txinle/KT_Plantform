@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useBankPageUrl } from './bank-page-navigation'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -20,6 +21,7 @@ import {
 } from './standalone-api'
 
 const route = useRoute()
+const bankPageUrl = useBankPageUrl()
 const router = useRouter()
 const api = getTeacherStandaloneQuestionBankApi()
 const bankId = Number(route.params.bankId)
@@ -55,12 +57,12 @@ async function load() {
   try {
     const response = await api.detail(bankId, { completeOnly: true, query: questionFilter.value.query, questionType: questionFilter.value.type, status: questionFilter.value.status, page: page.value })
     if (isStandaloneBankRedirect(response)) {
-      await router.replace(response.redirect_url)
+      await router.replace(bankPageUrl(response.redirect_url))
       return
     }
     data.value = response
     if (route.query?.edit_group && response.groups?.some(group => group.id === Number(route.query.edit_group))) {
-      await router.replace(`/teacher/banks/${bankId}/questions/0/edit/?group=${route.query.edit_group}`)
+      await router.replace(bankPageUrl(`/teacher/banks/${bankId}/questions/0/edit/?group=${route.query.edit_group}`))
     }
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '独立题库详情加载失败。'
@@ -106,13 +108,13 @@ onMounted(load)
       <template #kicker>独立题库</template>
       <p>{{ data.bank.description || '未填写题库说明。' }}</p>
       <template #actions>
-        <RouterLink v-if="canEditContent" class="kt-button" :to="data.bank.question_import_url">导入题目文件</RouterLink>
-        <RouterLink v-if="canEditContent" class="kt-button kt-button--secondary" :to="data.bank.kc_import_url">导入 KC 对应表</RouterLink>
+        <RouterLink v-if="canEditContent" class="kt-button" :to="bankPageUrl(data.bank.question_import_url)">导入题目文件</RouterLink>
+        <RouterLink v-if="canEditContent" class="kt-button kt-button--secondary" :to="bankPageUrl(data.bank.kc_import_url)">导入 KC 对应表</RouterLink>
         <button v-if="canEditContent" data-recheck-drafts class="kt-button kt-button--secondary" type="button" :disabled="rechecking" @click="recheckDrafts">{{ rechecking ? '正在复核…' : '复核草稿' }}</button>
-        <RouterLink class="kt-button kt-button--secondary" to="/teacher/banks/">返回题库</RouterLink>
+        <RouterLink class="kt-button kt-button--secondary" :to="bankPageUrl('/teacher/banks/')">返回题库</RouterLink>
       </template>
     </PageHeader>
-    <QuestionBankInventory :summary="data.unit_summary" :groups="data.groups" :can-edit="canEditContent" @filter="filterQuestions" @edit="router.push(`/teacher/banks/${bankId}/questions/0/edit/`)" />
+    <QuestionBankInventory :summary="data.unit_summary" :groups="data.groups" :can-edit="canEditContent" @filter="filterQuestions" @edit="router.push(bankPageUrl(`/teacher/banks/${bankId}/questions/0/edit/`))" />
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
     <Alert v-if="success" tone="success">{{ success }}</Alert>
     <Alert v-if="data.bank.visibility === 'archived'" tone="warning">题库已归档，题目与导入操作保持只读。</Alert>
@@ -150,7 +152,7 @@ onMounted(load)
                 <td>{{ question.kc_mapping.nodes.map((node) => node.name).join('、') || (question.member_kc_mappings?.length ? '成员 KC' : '未映射') }}<details v-if="question.member_kc_mappings?.length"><summary>查看 {{ question.member_kc_mappings.length }} 个作答项</summary><p v-for="member in question.member_kc_mappings" :key="member.id">{{ member.order }}. {{ member.mapping.nodes.map(node => node.name).join(' → ') }}</p></details></td>
                 <td>{{ question.max_score || '1.00' }} 分</td>
                 <td><StatusBadge :label="question.status_label" :tone="statusTone(question.status)" /></td>
-                <td><button class="kt-bank-view-link" type="button" @click="previewQuestion = { id: question.id, group: Boolean(question.group_id) }">查看</button> <RouterLink v-if="canEditContent" :to="question.edit_url">编辑</RouterLink><span v-else>只读</span></td>
+                <td><button class="kt-bank-view-link" type="button" @click="previewQuestion = { id: question.id, group: Boolean(question.group_id) }">查看</button> <RouterLink v-if="canEditContent" :to="bankPageUrl(question.edit_url)">编辑</RouterLink><span v-else>只读</span></td>
               </tr>
             </tbody>
           </table>

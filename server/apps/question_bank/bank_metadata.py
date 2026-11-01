@@ -12,8 +12,8 @@ def can_edit_bank_metadata(user, course, bank):
     return bool(
         user.is_superuser
         or user.role == User.Role.ADMIN
-        or course.can_manage(user)
-        or bank.owner_id == user.id
+        or course.can_manage(user, capability="bank")
+        or (bank.course_id is None and bank.owner_id == user.id)
     )
 
 def _metadata_question_bank_form(data=None, *, instance):

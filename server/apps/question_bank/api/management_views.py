@@ -276,7 +276,7 @@ def _legacy_bank_for_user(user, bank_id):
     queryset = QuestionBank.objects.all()
     if not (user.is_superuser or user.role == User.Role.ADMIN):
         queryset = queryset.filter(
-            Q(owner=user) | Q(course__in=accessible_courses(user))
+            Q(course__isnull=True, owner=user) | Q(course__in=accessible_courses(user, capability="bank"))
         )
     return get_object_or_404(queryset.select_related("course"), pk=bank_id)
 
@@ -694,7 +694,7 @@ class TeacherQuestionDraftRecheckView(TeacherQuestionBankManagementApiView):
         bank = _bank_for_course(course, bank_id)
         with transaction.atomic():
             course, bank = lock_writable_course_bank(course, bank, content=True)
-            if not course.can_manage(request.user, lock_teacher_link=True):
+            if not course.can_manage(request.user, lock_teacher_link=True, capability="bank"):
                 raise PermissionDenied("当前账号不能修改该课程题库。")
             result = recheck_bank_drafts(bank)
             log_action(request, "question.readiness_recheck", bank, {"course_id": course.pk, **result})
@@ -1103,7 +1103,7 @@ class TeacherCourseConceptEditorView(TeacherQuestionBankManagementApiView):
         data.is_valid(raise_exception=True)
         with transaction.atomic():
             course = lock_writable_course(course)
-            if not course.can_manage(request.user, lock_teacher_link=True):
+            if not course.can_manage(request.user, lock_teacher_link=True, capability="bank"):
                 raise PermissionDenied("当前账号不能修改该课程 KC。")
             concept = get_object_or_404(course.concepts.select_for_update(), pk=concept_id)
             target = data.validated_data["status"]
@@ -1206,7 +1206,7 @@ class TeacherStandaloneQuestionBankCollectionView(TeacherQuestionBankManagementA
         responses=ManagementStandaloneBankCollectionSerializer,
     )
     def get(self, request):
-        if accessible_courses(request.user).filter(
+        if accessible_courses(request.user, capability="bank").filter(
             status=Course.Status.ACTIVE
         ).exists():
             return Response({"redirect_url": reverse("courses:list")})
@@ -1563,7 +1563,7 @@ class TeacherStandaloneConceptCollectionView(TeacherQuestionBankManagementApiVie
         responses=ManagementStandaloneConceptCollectionSerializer,
     )
     def get(self, request):
-        if accessible_courses(request.user).exists():
+        if accessible_courses(request.user, capability="bank").exists():
             return Response({"redirect_url": reverse("courses:list")})
         if request.user.is_superuser or request.user.role == User.Role.ADMIN:
             concepts = Concept.objects.all()

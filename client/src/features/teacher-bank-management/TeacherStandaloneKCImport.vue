@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useBankPageUrl } from './bank-page-navigation'
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 
@@ -8,6 +9,7 @@ import PageHeader from '@/design-system/components/PageHeader.vue'
 import { getTeacherStandaloneQuestionBankApi, type StandaloneKCImportPreview } from './standalone-api'
 
 const route = useRoute()
+const bankPageUrl = useBankPageUrl()
 const api = getTeacherStandaloneQuestionBankApi()
 const bankId = Number(route.params.bankId)
 const fileInput = ref<HTMLInputElement>()
@@ -49,7 +51,7 @@ async function confirm() {
   <PageHeader title="导入 KC 对应表">
     <template #kicker>独立题库 {{ bankId }}</template>
     <p>可以上传文件检查预览；知识点映射导入需要课程题库，独立题库无法确认写入。</p>
-    <template #actions><RouterLink class="kt-button kt-button--secondary" :to="`/teacher/banks/${bankId}/`">返回题库</RouterLink></template>
+    <template #actions><RouterLink class="kt-button kt-button--secondary" :to="bankPageUrl(`/teacher/banks/${bankId}/`)">返回题库</RouterLink></template>
   </PageHeader>
   <Alert tone="warning">KC 对应表需要课程 KC 总库。请将题库放在课程中后再完成 KC 映射。</Alert>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>

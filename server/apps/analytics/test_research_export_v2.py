@@ -694,6 +694,34 @@ class ResearchExportJobV2Tests(TestCase):
         )
 
 
+class AdminResearchExportContractTests(TestCase):
+    def setUp(self):
+        ResearchExportJobV2Tests.setUp(self)
+        self.admin = User.objects.create_user(username='research-export-admin', role=User.Role.ADMIN)
+        self.client.force_login(self.admin)
+
+    def test_admin_uses_existing_v2_api_and_exact_eight_file_contract(self):
+        from .research_contract import FILES
+        from .services import claim_export_job, run_export_job
+        payload = ResearchExportJobV2Tests.payload(self, class_mode='all')
+        created = self.client.post(f'/api/v1/teacher/courses/{self.course.pk}/data/export-jobs/', payload, content_type='application/json')
+        self.assertEqual(created.status_code, 201, created.content[:500])
+        job = ExportJob.objects.get(pk=domain_payload(created)['job_id'])
+        self.assertEqual(job.package, 'experiment')
+        self.assertEqual(job.snapshot.source_bundle['version'], 2)
+        self.assertIn('research_export_v2', job.snapshot.source_bundle)
+        finished = run_export_job(claim_export_job(worker_id='admin-research-v2'))
+        with zipfile.ZipFile(finished.artifact_path) as archive:
+            self.assertEqual(set(archive.namelist()), {item['path'] for item in FILES})
+            self.assertEqual(len(archive.namelist()), 8)
+
+    def test_unapproved_course_export_entrypoints_are_not_available(self):
+        for action in ('export-preview', 'export'):
+            with self.subTest(action=action):
+                response = self.client.post(f'/api/v1/manage/courses/{self.course.pk}/{action}/', {}, content_type='application/json')
+                self.assertEqual(response.status_code, 404, response.content[:500])
+
+
 class ResearchExportSnapshotIsolationTests(TransactionTestCase):
     def setUp(self):
         fixtures.TeacherDataCenterApiTests.setUp(self)

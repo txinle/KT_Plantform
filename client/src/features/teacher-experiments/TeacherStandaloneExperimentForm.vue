@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useExperimentPageUrl } from './experiment-page-url'
+const pageUrl = useExperimentPageUrl()
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
@@ -18,7 +20,7 @@ const route = useRoute()
 const router = useRouter()
 const api = getStandaloneExperimentApi()
 const experimentId = computed(() => Number(route.params.experimentId || 0))
-const editing = computed(() => route.name === 'teacher-standalone-experiment-edit')
+const editing = computed(() => route.name === 'teacher-standalone-experiment-edit' || route.name === 'admin-standalone-experiment-edit')
 const loading = ref(true)
 const initialized = ref(false)
 const saving = ref(false)
@@ -122,7 +124,7 @@ async function load() {
     if (editing.value) {
       const detail = await api.detail(experimentId.value, 'edit')
       if (detail.kind === 'canonical') {
-        await router.replace(detail.canonical_url)
+        await router.replace(pageUrl(detail.canonical_url)!)
         return
       }
       questionBanks.value = detail.question_banks
@@ -131,7 +133,7 @@ async function load() {
     } else {
       const collection = await api.collection()
       if (collection.kind === 'canonical') {
-        await router.replace(collection.canonical_url)
+        await router.replace(pageUrl(collection.canonical_url)!)
         return
       }
       questionBanks.value = collection.question_banks
@@ -158,10 +160,10 @@ async function submit() {
       ? await api.update(experimentId.value, definitionInput())
       : await api.create(definitionInput())
     if (response.kind === 'canonical') {
-      await router.replace(response.canonical_url)
+      await router.replace(pageUrl(response.canonical_url)!)
       return
     }
-    await router.push(`/teacher/experiments/${response.experiment.id}/`)
+    await router.push(pageUrl(`/teacher/experiments/${response.experiment.id}/`)!)
   } catch (caught) {
     if (caught instanceof ApiError) {
       fieldErrors.value = Object.fromEntries(
@@ -235,7 +237,7 @@ onMounted(load)
     </section>
 
     <div class="kt-form-actions kt-experiment-form-actions">
-      <RouterLink class="kt-button kt-button--secondary" :to="editing ? `/teacher/experiments/${experimentId}/` : '/teacher/experiments/'">取消</RouterLink>
+      <RouterLink class="kt-button kt-button--secondary" :to="pageUrl(editing ? `/teacher/experiments/${experimentId}/` : '/teacher/experiments/')">取消</RouterLink>
       <Button type="submit" :disabled="saving">{{ saving ? '正在保存…' : (editing ? '保存实验配置' : '创建并载入题库题目') }}</Button>
     </div>
   </form>

@@ -84,7 +84,7 @@ class ParticipantRuleSaveResult:
 @transaction.atomic
 def archive_experiment(*, course, experiment_id, actor):
     course = lock_course(course.pk)
-    if not course.can_manage(actor, lock_teacher_link=True):
+    if not course.can_manage(actor, lock_teacher_link=True, capability="experiment"):
         raise PermissionDenied
     if course.status != Course.Status.ACTIVE:
         raise ValidationError("课程已归档，不能归档实验。", code="COURSE_READ_ONLY")
@@ -108,7 +108,7 @@ def archive_experiment(*, course, experiment_id, actor):
 @transaction.atomic
 def restore_experiment(*, course, experiment_id, actor):
     course = lock_course(course.pk)
-    if not course.can_manage(actor, lock_teacher_link=True):
+    if not course.can_manage(actor, lock_teacher_link=True, capability="experiment"):
         raise PermissionDenied
     if course.status != Course.Status.ACTIVE:
         raise ValidationError("课程已归档，不能恢复实验。", code="COURSE_READ_ONLY")

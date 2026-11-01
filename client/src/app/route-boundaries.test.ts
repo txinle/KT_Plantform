@@ -5,6 +5,12 @@ import { migratedRoutes } from './route-boundaries'
 import { router } from './router'
 
 describe('Vue route boundaries', () => {
+  it('registers independent administrator bank and question editing routes', () => {
+    for (const path of ['/manage/resources/courses/1/banks/2/', '/manage/resources/courses/1/banks/2/import/', '/manage/resources/courses/1/banks/2/questions/3/edit/', '/manage/resources/banks/2/', '/manage/resources/banks/2/questions/3/edit/']) {
+      expect(router.resolve(path).name).not.toBe('not-found')
+      expect(router.resolve(path).matched[0]?.props.default).toEqual({ active: 'bank' })
+    }
+  })
   it('registers every business route in the independent gateway page catalog', () => {
     const pages = new Set(routeCatalog.routes.map(route => `/${route.path}`.replace(/<int:\w+>/g, ':id')))
     const missing = router.getRoutes().map(route => route.path)
@@ -45,7 +51,7 @@ describe('Vue route boundaries', () => {
       ':experimentId/class-tasks/:taskId/grading/',
       ':experimentId/publish-plan/:planId/step/:step/',
     ])
-    expect(migratedRoutes.find((route) => route.path.endsWith('/data/'))?.children?.map((route) => route.path)).toEqual([
+    expect(migratedRoutes.find((route) => route.path === '/teacher/courses/:courseId/data/')?.children?.map((route) => route.path)).toEqual([
       '',
       'export/',
       'exports/',

@@ -180,7 +180,6 @@ export function authenticatedEntryRedirect(
   user: AuthenticatedUser,
   pathname: string,
 ): string | undefined {
-  if (pathname === PASSWORD_CHANGE_PATH && user.role !== 'student') return user.home_url
   if (['/login/', '/', '/teacher/'].includes(pathname) && pathname !== user.home_url) return user.home_url
   return undefined
 }

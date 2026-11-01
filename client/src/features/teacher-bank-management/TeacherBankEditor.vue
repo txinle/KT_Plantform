@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useBankPageUrl } from './bank-page-navigation'
 import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -12,6 +13,7 @@ import { getTeacherBankManagementApi, type BankEditor } from './api'
 const props = defineProps<{ bankId?: number; embedded?: boolean }>()
 const emit = defineEmits<{ saved: []; cancelled: [] }>()
 const route = useRoute()
+const bankPageUrl = useBankPageUrl()
 const router = useRouter()
 const api = getTeacherBankManagementApi()
 const courseId = Number(route.params.courseId)
@@ -49,7 +51,7 @@ async function save() {
   try {
     const saved = await api.updateBank(courseId, bankId, { ...draft })
     if (props.embedded) emit('saved')
-    else await router.push(saved.detail_url)
+    else await router.push(bankPageUrl(saved.detail_url))
   } catch (caught) {
     setError(caught, '题库信息保存失败。')
   } finally {
@@ -61,13 +63,13 @@ async function save() {
 <template>
   <Alert v-if="error && !editor" tone="danger">{{ error }}</Alert>
   <template v-else-if="editor">
-    <PageHeader v-if="!embedded" title="编辑题库"><template #kicker>{{ editor.course.code }} · {{ editor.course.term }}</template><p>题目和 KC 映射保持不变；此处只修改题库名称、说明和可见性。</p><template #actions><RouterLink class="kt-button kt-button--secondary" :to="editor.detail_url">取消</RouterLink></template></PageHeader>
+    <PageHeader v-if="!embedded" title="编辑题库"><template #kicker>{{ editor.course.code }} · {{ editor.course.term }}</template><p>题目和 KC 映射保持不变；此处只修改题库名称、说明和可见性。</p><template #actions><RouterLink class="kt-button kt-button--secondary" :to="bankPageUrl(editor.detail_url)">取消</RouterLink></template></PageHeader>
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
     <form class="kt-form-stack" :class="{ 'kt-card': !embedded, 'kt-bank-modal-form': embedded }" novalidate @submit.prevent="save">
       <FormField for-id="bank-name" label="题库名称" :error="fieldErrors.name"><input id="bank-name" v-model="draft.name" maxlength="160" required></FormField>
       <FormField for-id="bank-description" label="说明" :error="fieldErrors.description"><textarea id="bank-description" v-model="draft.description" rows="5" /></FormField>
       <FormField for-id="bank-visibility" label="可见性" :error="fieldErrors.visibility"><select id="bank-visibility" v-model="draft.visibility"><option v-for="choice in editor.visibility_choices" :key="choice.value" :value="choice.value">{{ choice.label }}</option></select></FormField>
-      <div class="kt-inline-actions"><button class="kt-button" type="submit" :disabled="saving">{{ saving ? '正在保存…' : '保存题库信息' }}</button><button v-if="embedded" class="kt-button kt-button--secondary" type="button" :disabled="saving" @click="emit('cancelled')">取消</button><RouterLink v-else class="kt-button kt-button--secondary" :to="editor.detail_url">取消</RouterLink></div>
+      <div class="kt-inline-actions"><button class="kt-button" type="submit" :disabled="saving">{{ saving ? '正在保存…' : '保存题库信息' }}</button><button v-if="embedded" class="kt-button kt-button--secondary" type="button" :disabled="saving" @click="emit('cancelled')">取消</button><RouterLink v-else class="kt-button kt-button--secondary" :to="bankPageUrl(editor.detail_url)">取消</RouterLink></div>
     </form>
   </template>
   <p v-else role="status">正在加载题库编辑信息…</p>

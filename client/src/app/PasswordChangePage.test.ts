@@ -7,7 +7,10 @@ const mocks = vi.hoisted(() => ({
   changePassword: vi.fn(),
   logout: vi.fn(),
   redirectPasswordChangeAuthenticationRequired: vi.fn(),
+  homeUrl: '/manage/',
 }))
+
+vi.mock('./bootstrap', () => ({ getBootstrapContext: () => ({ user: { home_url: mocks.homeUrl } }) }))
 
 vi.mock('./auth', () => ({
   changePassword: mocks.changePassword,
@@ -21,6 +24,33 @@ describe('PasswordChangePage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.redirectPasswordChangeAuthenticationRequired.mockReturnValue(false)
+    mocks.homeUrl = '/manage/'
+    window.history.replaceState({}, '')
+    vi.spyOn(document, 'referrer', 'get').mockReturnValue('')
+  })
+
+  it('offers cancellation back to the originating workspace without submitting passwords', async () => {
+    window.history.replaceState({ back: '/manage/data/?tab=exports' }, '')
+    const wrapper = mount(PasswordChangePage)
+    const cancel = wrapper.get('[data-password-change-cancel]')
+    expect(cancel.text()).toBe('取消并返回')
+    expect(cancel.attributes('href')).toBe('/manage/data/?tab=exports')
+    expect(mocks.changePassword).not.toHaveBeenCalled()
+    expect(mocks.logout).not.toHaveBeenCalled()
+  })
+
+  it.each(['/manage/', '/teacher/courses/', '/student/courses/'])('returns direct visitors to their home %s', (home) => {
+    mocks.homeUrl = home
+    expect(mount(PasswordChangePage).get('[data-password-change-cancel]').attributes('href')).toBe(home)
+  })
+
+  it('uses a same-origin referrer for a full page entry, but never an external or password page', () => {
+    vi.spyOn(document, 'referrer', 'get').mockReturnValue(`${window.location.origin}/teacher/courses/7/settings/`)
+    expect(mount(PasswordChangePage).get('[data-password-change-cancel]').attributes('href')).toBe('/teacher/courses/7/settings/')
+    vi.spyOn(document, 'referrer', 'get').mockReturnValue('https://example.com/')
+    expect(mount(PasswordChangePage).get('[data-password-change-cancel]').attributes('href')).toBe('/manage/')
+    window.history.replaceState({ back: '/password/change/' }, '')
+    expect(mount(PasswordChangePage).get('[data-password-change-cancel]').attributes('href')).toBe('/manage/')
   })
 
   it('submits the current password and two accessible new-password fields', async () => {

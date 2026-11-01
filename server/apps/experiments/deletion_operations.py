@@ -38,7 +38,7 @@ def _context(course, *, action, object_id, class_id):
 
 
 def register_deletion_operation(*, course, actor, operation_id, action, object_id, class_id, confirmation_token):
-    require_course_manager(course, actor)
+    require_course_manager(course, actor, capability="experiment")
     require_writable_course(course)
     if action == 'delete_class':
         class_id = object_id
@@ -81,7 +81,7 @@ def _reject(operation, code, message):
 
 
 def execute_registered_deletion(*, request, course, operation_id, action, object_id, class_id, confirmation_token):
-    require_course_manager(course, request.user)
+    require_course_manager(course, request.user, capability="experiment")
     if action == 'delete_class':
         class_id = object_id
     failure = None

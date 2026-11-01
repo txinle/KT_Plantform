@@ -7,7 +7,7 @@ from django.utils import timezone
 class ResearchDeletionOperation(models.Model):
     operation_id = models.UUIDField(primary_key=True)
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
-    course = models.ForeignKey('accounts.Course', on_delete=models.PROTECT)
+    course = models.ForeignKey('accounts.Course', null=True, on_delete=models.SET_NULL)
     action = models.CharField(max_length=32)
     object_id = models.PositiveBigIntegerField()
     class_id = models.PositiveBigIntegerField(null=True)

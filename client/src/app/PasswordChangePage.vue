@@ -4,11 +4,22 @@ import { reactive, ref } from 'vue'
 import { ApiError } from '@/api/client'
 
 import { changePassword, logout, redirectPasswordChangeAuthenticationRequired } from './auth'
+import { getBootstrapContext } from './bootstrap'
 
 const passwords = reactive({ current_password: '', new_password1: '', new_password2: '' })
 const errors = ref<string[]>([])
 const submitting = ref(false)
 const loggingOut = ref(false)
+const returnUrl = (() => {
+  const home = getBootstrapContext().user.home_url
+  const previous = window.history.state?.back || document.referrer
+  if (!previous) return home
+  try {
+    const target = new URL(previous, window.location.origin)
+    if (target.origin !== window.location.origin || ['/password/change/', '/login/'].includes(target.pathname)) return home
+    return `${target.pathname}${target.search}${target.hash}`
+  } catch { return home }
+})()
 
 function errorMessages(caught: unknown, fallback: string): string[] {
   if (caught instanceof ApiError) {
@@ -80,6 +91,7 @@ async function signOut() {
           {{ submitting ? '正在保存…' : '保存新密码' }}
         </button>
       </form>
+      <a v-if="!submitting && !loggingOut" class="kt-button kt-button--secondary kt-password-change-card__cancel" data-password-change-cancel :href="returnUrl">取消并返回</a>
       <button class="kt-button kt-button--secondary kt-password-change-card__logout" data-password-change-logout type="button" :disabled="submitting || loggingOut" @click="signOut">
         {{ loggingOut ? '正在退出…' : '退出登录' }}
       </button>
@@ -117,6 +129,7 @@ async function signOut() {
 }
 
 .kt-password-change-card__submit,
+.kt-password-change-card__cancel,
 .kt-password-change-card__logout {
   width: 100%;
 }
@@ -125,6 +138,7 @@ async function signOut() {
   margin-top: .5rem;
 }
 
+.kt-password-change-card__cancel,
 .kt-password-change-card__logout {
   margin-top: .75rem;
 }

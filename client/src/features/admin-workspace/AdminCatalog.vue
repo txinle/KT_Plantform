@@ -1,0 +1,42 @@
+<script setup lang="ts">
+import {computed,onMounted,ref,watch} from 'vue'
+import {useRoute} from 'vue-router'
+import SiteDialog from '@/features/management-shared/SiteDialog.vue'
+import AdminQuestionDialog from './AdminQuestionDialog.vue'
+import AdminConceptDialog from './AdminConceptDialog.vue'
+import AdminTaskDialog from './AdminTaskDialog.vue'
+import AdminBankDialog from './AdminBankDialog.vue'
+import AdminExportDialog from './AdminExportDialog.vue'
+import {getAdminApi,statusLabel,type AdminRow} from './api'
+const props=defineProps<{section:'bank'|'data'|'audit'}>()
+const route=useRoute()
+const api=getAdminApi(),collection=ref<Record<string,AdminRow[]>>({}),tab=ref('banks'),query=ref(''),course=ref('all'),status=ref('all'),error=ref(''),selected=ref<AdminRow>(),loading=ref(false),bankOpen=ref(false),exportOpen=ref(false)
+const tabs=computed(()=>props.section==='bank'?[['banks','题库目录'],['questions','题目检索'],['concepts','课程知识点']]:props.section==='data'?[['experiments','实验目录'],['tasks','班级任务'],['exports','导出任务'],['purge_requests','数据清除']]:[['items','操作记录']])
+const rows=computed(()=>{const all=collection.value[tab.value]||[];if(tab.value!=='questions')return all;const seen=new Set<unknown>();return all.filter(row=>{if(!row.group_id)return true;if(seen.has(row.group_id))return false;seen.add(row.group_id);return true})})
+const filtered=computed(()=>rows.value.filter(x=>(course.value==='all'||String(x.course_id)===course.value)&&(status.value==='all'||String(x.status||x.visibility)===status.value)&&Object.values(x).filter(v=>typeof v!=='object').join(' ').toLowerCase().includes(query.value.trim().toLowerCase())))
+const courses=computed(()=>[...new Map(Object.values(collection.value).flat().filter(x=>x.course_id).map(x=>[x.course_id,x.course_name])).entries()])
+const titles={bank:['教学资源','汇总题库、题目与课程知识点，维护可复用的教学材料。','TEACHING RESOURCES'],data:['实验与数据','按课程查看实验定义、班级任务与数据导出。','EXPERIMENTS & DATA'],audit:['操作记录','追踪管理操作、变更对象与服务端执行结果。','AUDIT LOG']}
+function applyLocation(){const q=route.query||{};if(tabs.value.some(([key])=>key===q.tab))tab.value=String(q.tab);course.value=typeof q.course_id==='string'?q.course_id:'all';status.value=typeof q.visibility==='string'?q.visibility:'all';const target=q.task_id||q.concept_id||q.job_id;selected.value=target?(collection.value[tab.value]||[]).find(row=>String(row.id)===String(target)):undefined}
+watch(()=>route.query,applyLocation)
+async function load(){loading.value=true;error.value='';tab.value=tabs.value[0]?.[0]||'items';try{collection.value=await api.get<Record<string,AdminRow[]>>((props.section==='bank'?'resources':props.section)+'/');applyLocation()}catch(e){error.value=(e as Error).message}finally{loading.value=false}}
+onMounted(load);watch(()=>props.section,load)
+function display(row:AdminRow){return row.name||row.title||row.experiment_name||row.action||String(row.id)}
+const detailLabels:Record<string,string>={id:'编号',name:'名称',course_name:'所属课程',status:'状态',status_label:'状态',visibility:'可见性',owner_name:'负责人',created_at:'创建时间',actor_name:'操作者',target:'操作对象',action:'操作代码',details:'变更详情',description:'说明',question_count:'题目数',class_name:'班级',submitted_count:'已提交',participant_count:'参与人数',failure_reason:'失败原因',error:'错误说明'}
+</script>
+<template>
+  <div class="eyebrow">{{ titles[section][2] }}</div><header class="heading"><div><h1>{{ titles[section][0] }}</h1><p>{{ titles[section][1] }}</p></div><button v-if="section==='bank'" class="primary" @click="selected=undefined;bankOpen=true">＋ 新建题库</button><button v-else-if="section==='data'" class="primary" @click="exportOpen=true">＋ 创建数据导出</button><button v-else @click="load">刷新记录</button></header>
+  <p v-if="error" class="error-block" role="alert">{{ error }}</p>
+  <div v-if="section==='bank'" class="stats resource-stats"><div v-for="[key,label] in tabs" :key="key" class="stat"><div class="stat-top">{{ label }}</div><strong>{{ collection[key!]?.length ?? 0 }}</strong><small>全平台真实资源</small></div><div class="stat"><div class="stat-top">关联课程</div><strong>{{ courses.length }}</strong><small>按所属课程管理</small></div></div>
+  <div v-if="section==='audit'" class="audit-banner"><span class="audit-shield">✓</span><div><strong>服务端记录 · 只读查看</strong><p>操作记录用于追踪变更，异步任务是否完成以任务状态和回执为准。</p></div><span class="badge blue">审计记录</span></div>
+  <section class="card">
+    <div v-if="tabs.length>1" class="tabs scroll-tabs"><button v-for="[key,label] in tabs" :key="key" :class="{active:tab===key}" @click="tab=key!;status='all';query=''">{{ label }} <em>{{ collection[key!]?.length ?? 0 }}</em></button></div><div class="toolbar multi-filter"><div class="search"><input v-model="query" :aria-label="'搜索'+titles[section][0]" placeholder="搜索名称、编号或操作者"></div><div class="filter-group"><select v-if="section!=='audit'" v-model="course" aria-label="筛选课程"><option value="all">全部课程</option><option v-for="[id,name] in courses" :key="id" :value="String(id)">{{ name }}</option></select><select v-if="section!=='audit'" v-model="status" aria-label="状态筛选"><option value="all">全部状态</option><option v-for="s in [...new Set(rows.map(x=>x.status||x.visibility).filter(Boolean))]" :key="s" :value="s">{{ statusLabel({id:0,status:s}) }}</option></select></div></div>
+    <div class="table-scroll"><table><thead><tr v-if="section==='audit'"><th>时间</th><th>操作者</th><th>操作</th><th>对象</th><th>详情</th></tr><tr v-else><th>{{ tab==='questions'?'题目':tab==='concepts'?'知识点':tab==='tasks'?'实验 / 班级':'名称' }}</th><th>所属课程</th><th>{{ tab==='banks'?'题目数':tab==='tasks'?'提交进度':'编号 / 时间' }}</th><th>状态</th><th>管理</th></tr></thead><tbody><tr v-for="row in filtered" :key="row.id"><template v-if="section==='audit'"><td class="muted">{{ row.created_at }}</td><td>{{ row.actor_name }}</td><td>{{ row.action }}</td><td>{{ row.target || `${row.object_type} #${row.object_id}` }}</td></template><template v-else><td><strong class="cell-title">{{ display(row) }}</strong><small class="cell-sub">{{ row.class_name || row.description }}</small></td><td>{{ row.course_name || '独立资源' }}</td><td>{{ tab==='banks'?`${row.question_count ?? 0} 道`:tab==='tasks'?`${row.submitted_count ?? 0} / ${row.participant_count ?? 0}`:row.created_at || row.id }}</td><td><span class="badge" :class="{gray:['archived','draft','private'].includes(String(row.status||row.visibility)),red:row.status==='failed'}">{{ statusLabel(row) }}</span></td></template><td><button class="link" @click="selected=row;if(tab==='banks')bankOpen=true">{{ section==='audit'?'查看变更':'查看详情' }}</button><a v-if="row.detail_url" class="management-text-link" :href="row.detail_url">管理 →</a><a v-if="row.download_url" class="management-text-link" :href="row.download_url">下载</a></td></tr><tr v-if="!filtered.length"><td colspan="5" class="empty">{{ loading?'正在读取服务端数据…':'没有匹配的记录。' }}</td></tr></tbody></table></div><div class="table-footer"><span>共 {{ filtered.length }} 条记录</span><span>当前筛选仅影响列表展示</span></div>
+  </section>
+  <div v-if="section==='data'" class="policy-note"><div><strong>标准实验数据包 · 7 CSV + 1 JSON</strong><br>选择单个实验或全部实验；全部实验分别创建标准包，单个实验可选择班级范围。当前列表筛选不会自动改变导出范围。<div class="permission-tags"><a v-for="[id,name] in courses" :key="id" :href="`/manage/data/?tab=exports&course_id=${id}`">{{ name }} · 数据导出 →</a></div></div></div>
+  <SiteDialog :open="Boolean(selected) && tab!=='tasks' && tab!=='banks' && tab!=='questions' && tab!=='concepts'" :title="selected?display(selected):''" :subtitle="section==='audit'?'只读操作记录':'服务端当前记录'" @close="selected=undefined"><dl class="detail-list"><template v-for="(value,key) in selected" :key="key"><div v-if="detailLabels[key]&&value!==null&&value!==undefined"><dt>{{ detailLabels[key] }}</dt><dd>{{ typeof value==='object'?JSON.stringify(value,null,2):value }}</dd></div></template></dl><template #footer><button @click="selected=undefined">关闭</button><a v-if="selected?.detail_url" class="management-action-link primary" :href="selected.detail_url">进入管理</a><a v-if="selected?.download_url" class="management-action-link primary" :href="selected.download_url">下载文件</a></template></SiteDialog>
+
+  <AdminTaskDialog :row="tab==='tasks'?selected:undefined" @close="selected=undefined" @changed="load" />
+
+  <AdminBankDialog :open="bankOpen" :row="selected" @close="bankOpen=false;selected=undefined" @changed="load" /><AdminExportDialog :open="exportOpen" @close="exportOpen=false" @changed="load" />
+  <AdminQuestionDialog :row="tab==='questions'?selected:undefined" @close="selected=undefined" /><AdminConceptDialog :row="tab==='concepts'?selected:undefined" @close="selected=undefined" @changed="load" />
+</template>

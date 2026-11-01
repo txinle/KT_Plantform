@@ -86,7 +86,7 @@ def _lock_context(course_id, class_id, request, *, confirmation=False, adding=Fa
     class_group = ClassGroup.objects.select_for_update().filter(pk=class_id, course_id=course_id).first()
     if (
         course is None or class_group is None or course.status != Course.Status.ACTIVE
-        or (request is not None and not course.can_manage(request.user, lock_teacher_link=True))
+        or (request is not None and not course.can_manage(request.user, lock_teacher_link=True, capability="class"))
         or (adding and not class_group.is_active)
     ):
         if confirmation:

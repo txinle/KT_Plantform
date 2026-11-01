@@ -237,7 +237,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
         if 'can_manage' in self.context:
             return self.context['can_manage']
         request = self.context.get("request")
-        return bool(request and experiment.course and experiment.course.can_manage(request.user)
+        return bool(request and experiment.course and experiment.course.can_manage(request.user, capability="experiment")
                     and experiment.course.status == experiment.course.Status.ACTIVE)
 
     def get_can_archive(self, experiment) -> bool:

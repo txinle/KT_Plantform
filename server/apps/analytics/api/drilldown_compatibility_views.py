@@ -32,7 +32,7 @@ class TeacherExperimentCompatibilityApiView(APIView):
         ):
             raise NotFound()
         try:
-            course = get_accessible_course(user, course_id)
+            course = get_accessible_course(user, course_id, capability="data")
         except (Http404, PermissionDenied) as error:
             raise NotFound() from error
         experiment = get_object_or_404(course.experiments, pk=experiment_id)

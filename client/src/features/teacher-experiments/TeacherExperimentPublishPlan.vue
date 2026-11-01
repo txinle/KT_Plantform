@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useExperimentPageUrl } from './experiment-page-url'
+const pageUrl = useExperimentPageUrl()
 import { computed, inject, onMounted, reactive, ref, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -136,9 +138,9 @@ async function resumeStoredJob() {
       review.value = await api.review(planId)
       hydratePlan(review.value.plan)
       void loadParticipants()
-      await router.push(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/2/`)
+      await router.push(pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/2/`)!)
     } else {
-      await router.push(`/teacher/courses/${courseId}/experiments/${experimentId}/`)
+      await router.push(pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)!)
     }
   } catch (caught) {
     await recover(caught, '后台发布任务状态恢复失败。')
@@ -215,7 +217,7 @@ async function load() {
     void loadParticipants()
     if (Number(route.params.step) === 2 && nextPlan.current_step === 1) {
       rememberJob(undefined)
-      await router.replace(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/1/`)
+      await router.replace(pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/1/`)!)
     } else if (step.value === 2) {
       reviewLoading.value = true
       review.value = await api.review(planId)
@@ -329,7 +331,7 @@ async function runPreview() {
     review.value = await api.review(planId)
     hydratePlan(review.value.plan)
     void loadParticipants()
-    await router.push(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/2/`)
+    await router.push(pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/2/`)!)
   } catch (caught) {
     await recover(caught, '发布检查失败。')
   } finally {
@@ -409,7 +411,7 @@ async function commit() {
     )
     rememberJob(job)
     await waitForJob(job)
-    await router.push(`/teacher/courses/${courseId}/experiments/${experimentId}/`)
+    await router.push(pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)!)
   } catch (caught) {
     await recover(caught, '正式发布失败。')
   } finally {
@@ -427,16 +429,16 @@ onMounted(async () => {
   <header class="kt-experiment-page-header">
     <div class="kt-experiment-page-header__copy">
       <nav class="kt-experiment-breadcrumb" aria-label="层级目录">
-        <a href="/teacher/courses/">我的课程</a><span aria-hidden="true">/</span>
-        <a :href="`/teacher/courses/${courseId}/`">{{ courseName }}</a><span aria-hidden="true">/</span>
-        <a :href="`/teacher/courses/${courseId}/experiments/`">实验</a><span aria-hidden="true">/</span>
-        <a :href="`/teacher/courses/${courseId}/experiments/${experimentId}/`">{{ experiment?.name || '实验' }}</a><span aria-hidden="true">/</span>
+        <a :href="pageUrl('/teacher/courses/')">我的课程</a><span aria-hidden="true">/</span>
+        <a :href="pageUrl(`/teacher/courses/${courseId}/`)">{{ courseName }}</a><span aria-hidden="true">/</span>
+        <a :href="pageUrl(`/teacher/courses/${courseId}/experiments/`)">实验</a><span aria-hidden="true">/</span>
+        <a :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)">{{ experiment?.name || '实验' }}</a><span aria-hidden="true">/</span>
         <span aria-current="page">{{ step === 1 ? '发布到班级' : '发布确认' }}</span>
       </nav>
       <div class="kt-experiment-title-row"><h1>{{ step === 1 ? '发布到班级' : (confirmCommit ? '发布确认' : '发布前检查') }}</h1></div>
       <p>{{ step === 1 ? '先选择参与班级并设置开放时段，保存草稿不会运行发布检查。' : '检查当前发布计划，再确认创建正式班级任务。' }}</p>
     </div>
-    <div class="kt-experiment-page-header__actions"><a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/`">返回实验详情</a></div>
+    <div class="kt-experiment-page-header__actions"><a class="kt-button kt-button--secondary" :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)">返回实验详情</a></div>
   </header>
 
   <ol class="kt-sitev2-steps" aria-label="发布进度">
@@ -492,7 +494,7 @@ onMounted(async () => {
           </template>
         </section>
 
-        <div class="kt-publish-actions"><a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/`">返回实验详情</a><div><button data-action="save-draft" class="kt-button kt-button--secondary" type="button" :disabled="working" @click="saveDraft()">保存草稿</button><Button data-action="run-preview" :disabled="working" @click="runPreview">运行发布前检查</Button></div></div>
+        <div class="kt-publish-actions"><a class="kt-button kt-button--secondary" :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)">返回实验详情</a><div><button data-action="save-draft" class="kt-button kt-button--secondary" type="button" :disabled="working" @click="saveDraft()">保存草稿</button><Button data-action="run-preview" :disabled="working" @click="runPreview">运行发布前检查</Button></div></div>
       </div><aside class="kt-experiment-config-summary">
         <section class="kt-card"><h2>本次发布计划</h2><dl><div><dt>班级</dt><dd>{{ classes.filter(option => selected[option.id]).length }} 个</dd></div><div><dt>参与学生</dt><dd>{{ plan.classes.reduce((sum, row) => sum + row.participant_count, 0) }} 人</dd></div><div><dt>计划版本</dt><dd>{{ plan.plan_revision }}</dd></div></dl><p>{{ hasUnsavedChanges ? '有未保存修改；人数以已保存计划为准。' : '保存允许暂不完整，发布检查使用当前保存版本。' }}</p></section>    <section v-if="plan.global_inventory?.candidate_count || plan.student_inventory?.checked" class="kt-card kt-publish-inventory" aria-labelledby="publish-inventory-title">
           <div class="kt-section-heading"><div><h2 id="publish-inventory-title">抽题库存检查</h2><p>全局候选未按学生历史过滤；学生级库存用于本次发布资格判断。</p></div></div>
@@ -516,9 +518,9 @@ onMounted(async () => {
       <div class="kt-publish-precheck__metrics"><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="classes" :size="19" /></span><strong>{{ review.preview.class_count }}</strong><span>参与班级</span></div><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="data" :size="19" /></span><strong>{{ review.preview.participant_count }}</strong><span>参与者</span></div><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="definition" :size="19" /></span><strong>{{ review.preview.question_count }}</strong><span>完整题 · {{ review.preview.item_count }} 个作答项</span></div><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="publish" :size="19" /></span><strong>{{ configuredScheduleCount }}</strong><span>已配置排期</span></div><div><span data-precheck-metric-icon class="kt-precheck-metric-icon"><Icon name="status" :size="19" /></span><strong>{{ review.preview.randomization_validation }}</strong><span>随机化校验</span></div></div>
       <h2 id="precheck-title">发布前检查结果</h2>
       <section class="kt-card kt-precheck-results"><div class="kt-section-heading"><h3>系统检查结果</h3><StatusBadge label="检查完成" tone="success" /></div><ul class="kt-precheck-effects"><li v-for="effect in review.effects" :key="effect">{{ effect }}</li><li v-if="!review.effects.length">{{ review.preview.randomization_validation }}</li></ul><details class="kt-randomization-details"><summary>查看随机化详情</summary><p>{{ review.preview.randomization_validation }}</p><p>预览版本：{{ review.preview.plan_revision }}</p></details></section>
-      <section class="kt-card kt-precheck-participants"><div class="kt-section-heading"><div><h3>参与者检查结果</h3><p>{{ experiment?.cross_experiment_item_policy === 'mixed_review' ? `混合复测：每人复测 ${experiment.review_count} 题` : (experiment?.cross_experiment_item_policy === 'exclude_previous' ? '排除已提交或其他正式任务曾分配的题目' : '不限制历史题目') }}</p></div><a :href="api.participantExportUrl(planId)">导出 CSV</a></div><p v-if="participantsLoading" role="status">正在加载参与者…</p><Alert v-else-if="participantsError" tone="danger">{{ participantsError }} <button class="kt-text-button" type="button" @click="loadParticipants(participantPageNumber)">重试</button></Alert><div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>学号</th><th>姓名</th><th>完整题数</th><th>作答项数</th><th>复测题</th><th>新题</th><th>校验</th></tr></thead><tbody><tr v-for="participant in participants" :key="participant.id"><td>{{ participant.class_name }}</td><td>{{ participant.student_number }}</td><td>{{ participant.display_name }}</td><td>{{ participant.question_count }}</td><td>{{ participant.item_count }}</td><td>{{ participant.review_question_count }}</td><td>{{ participant.new_question_count }}</td><td>{{ participant.is_valid ? '有效' : '需处理' }}</td></tr></tbody></table></div><Paginator v-if="participantPage && !participantsLoading && !participantsError" :page="participantPage.number" :total-pages="participantPage.total_pages" @navigate="loadParticipants" /></section>
+      <section class="kt-card kt-precheck-participants"><div class="kt-section-heading"><div><h3>参与者检查结果</h3><p>{{ experiment?.cross_experiment_item_policy === 'mixed_review' ? `混合复测：每人复测 ${experiment.review_count} 题` : (experiment?.cross_experiment_item_policy === 'exclude_previous' ? '排除已提交或其他正式任务曾分配的题目' : '不限制历史题目') }}</p></div><a :href="pageUrl(api.participantExportUrl(planId))">导出 CSV</a></div><p v-if="participantsLoading" role="status">正在加载参与者…</p><Alert v-else-if="participantsError" tone="danger">{{ participantsError }} <button class="kt-text-button" type="button" @click="loadParticipants(participantPageNumber)">重试</button></Alert><div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>学号</th><th>姓名</th><th>完整题数</th><th>作答项数</th><th>复测题</th><th>新题</th><th>校验</th></tr></thead><tbody><tr v-for="participant in participants" :key="participant.id"><td>{{ participant.class_name }}</td><td>{{ participant.student_number }}</td><td>{{ participant.display_name }}</td><td>{{ participant.question_count }}</td><td>{{ participant.item_count }}</td><td>{{ participant.review_question_count }}</td><td>{{ participant.new_question_count }}</td><td>{{ participant.is_valid ? '有效' : '需处理' }}</td></tr></tbody></table></div><Paginator v-if="participantPage && !participantsLoading && !participantsError" :page="participantPage.number" :total-pages="participantPage.total_pages" @navigate="loadParticipants" /></section>
       <Alert tone="info">本次预览使用服务端返回的发布计划和检查结果；正式提交会使用同一计划版本。</Alert>
-      <div class="kt-publish-actions kt-publish-actions--center"><a class="kt-button kt-button--secondary" :href="`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/1/`">返回班级与排期</a><Button data-action="enter-confirmation" @click="confirmCommit = true">进入发布确认</Button></div>
+      <div class="kt-publish-actions kt-publish-actions--center"><a class="kt-button kt-button--secondary" :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/publish-plan/${planId}/step/1/`)">返回班级与排期</a><Button data-action="enter-confirmation" @click="confirmCommit = true">进入发布确认</Button></div>
     </section>
 
     <section v-else class="kt-publish-confirmation" aria-labelledby="confirmation-title">

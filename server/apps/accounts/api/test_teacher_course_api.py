@@ -111,7 +111,7 @@ class TeacherCourseApiTests(TestCase):
         state = domain_payload(settings)["form"]
         self.assertEqual(
             domain_payload(settings)["capabilities"],
-            {"can_update": True, "can_archive": True},
+            {"can_update": True, "can_archive": True, "can_restore": False},
         )
         self.assertEqual(state["teachers"], [self.collaborator.pk])
         self.assertIn(self.collaborator.pk, [option["id"] for option in state["teacher_options"]])
@@ -166,7 +166,7 @@ class TeacherCourseApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             domain_payload(response)["capabilities"],
-            {"can_update": False, "can_archive": False},
+            {"can_update": False, "can_archive": False, "can_restore": True},
         )
 
     def test_course_archive_is_a_json_mutation_with_audit(self):

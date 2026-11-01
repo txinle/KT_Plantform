@@ -301,7 +301,7 @@ class StudentPasswordTests(TestCase):
         response = self.client.get("/student/")
         self.assertNotEqual(getattr(response, "url", None), "/password/change/")
 
-    def test_reminder_confirmation_is_idempotent_and_only_students_can_use_it(self):
+    def test_reminder_confirmation_is_idempotent_for_all_authenticated_roles(self):
         self.client.force_login(self.student)
         url = "/api/v1/auth/password/reminder-shown/"
         first = self.client.post(url, "{}", content_type="application/json")
@@ -315,8 +315,10 @@ class StudentPasswordTests(TestCase):
         self.student.refresh_from_db()
         self.assertEqual(self.student.initial_password_reminder_shown_at, shown_at)
         self.client.force_login(self.teacher)
-        denied = self.client.post(url, "{}", content_type="application/json")
-        self.assertEqual(denied.status_code, 403)
+        acknowledged = self.client.post(url, "{}", content_type="application/json")
+        self.assertEqual(acknowledged.status_code, 200)
+        self.teacher.refresh_from_db()
+        self.assertIsNone(self.teacher.initial_password_reminder_shown_at)
 
     def test_failed_reminder_confirmation_does_not_mark_the_reminder_as_shown(self):
         self.client.force_login(self.student)

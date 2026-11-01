@@ -46,10 +46,6 @@ def reset_student_initial_password(*, request, student_id, course_id=None, class
 @transaction.atomic
 def acknowledge_initial_password_reminder(*, request):
     student = get_object_or_404(User.objects.select_for_update(), pk=request.user.pk)
-    if student.role != User.Role.STUDENT or student.is_superuser:
-        raise StudentIdentityError(
-            "STUDENT_ACCOUNT_REQUIRED", "只有学生账号可以确认初始密码提醒。", status=403
-        )
     if student.initial_password_reminder_pending:
         student.initial_password_reminder_shown_at = timezone.now()
         student.save(update_fields=["initial_password_reminder_shown_at"])
@@ -59,10 +55,6 @@ def acknowledge_initial_password_reminder(*, request):
 def change_student_password(*, request, data):
     with transaction.atomic():
         student = get_object_or_404(User.objects.select_for_update(), pk=request.user.pk)
-        if student.role != User.Role.STUDENT or student.is_superuser:
-            raise StudentIdentityError(
-                "STUDENT_ACCOUNT_REQUIRED", "只有学生账号可以修改学生密码。", status=403
-            )
         if not constant_time_compare(request.session.get(HASH_SESSION_KEY, ""), student.get_session_auth_hash()):
             raise StudentIdentityError("AUTHENTICATION_REQUIRED", "登录状态已失效，请重新登录。", status=401)
         form = StudentPasswordChangeForm(data, user=student)
@@ -79,7 +71,7 @@ def change_student_password(*, request, data):
             "initial_password_state_recorded_at",
             "must_change_password",
         ])
-        log_action(request, "student.password_change", student, {
+        log_action(request, "student.password_change" if student.role == User.Role.STUDENT else "account.password_change", student, {
             "used_initial_password": used_initial_password
         })
     update_session_auth_hash(request, student)

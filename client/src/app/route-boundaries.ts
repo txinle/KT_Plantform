@@ -1,4 +1,7 @@
 import type { RouteRecordRaw } from 'vue-router'
+import { adminBankRoutes } from '@/features/admin-workspace/admin-bank-routes'
+import { adminCourseRoutes } from '@/features/admin-workspace/admin-course-routes'
+import { adminExperimentRoutes } from '@/features/teacher-experiments/admin-experiment-routes'
 import { teacherStandaloneExperimentRoutes } from '@/features/teacher-experiments/standalone-routes'
 import { teacherTeachingDataRoutes } from '@/features/teacher-teaching-data/routes'
 import { teacherStandaloneQuestionBankRoutes } from '@/features/teacher-bank-management/standalone-routes'
@@ -37,6 +40,14 @@ const TeacherClassList = () => import('@/features/teacher-classes/TeacherClassLi
 const TeacherClassesLayout = () => import('@/features/teacher-classes/TeacherClassesLayout.vue')
 
 export const migratedRoutes: RouteRecordRaw[] = [
+  ...adminBankRoutes,
+  ...adminCourseRoutes,
+  ...adminExperimentRoutes,
+  ...['', 'users/', 'courses/', 'resources/', 'data/', 'audit/'].map(section => ({
+    path: `/manage/${section}`,
+    name: `management-${section.replace('/', '') || 'overview'}`,
+    component: () => import('@/features/admin-workspace/AdminWorkspace.vue'),
+  })),
   ...teacherStandaloneExperimentRoutes,
   ...teacherTeachingDataRoutes,
   ...teacherAccountManagementRoutes,

@@ -100,6 +100,7 @@ export interface TeacherCourseSettingsResponse {
   capabilities: {
     can_update: boolean
     can_archive: boolean
+    can_restore?: boolean
   }
   archive_url: string
   purge_request_create_url: string

@@ -2,8 +2,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/client'
 
-const mocks = vi.hoisted(() => ({ load: vi.fn(), save: vi.fn(), push: vi.fn() }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ params: { courseId: '1', bankId: '2', questionId: '3' } }), useRouter: () => ({ push: mocks.push }) }))
+const mocks = vi.hoisted(() => ({ load: vi.fn(), save: vi.fn(), push: vi.fn(), path: undefined as string | undefined }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ path: mocks.path, params: { courseId: '1', bankId: '2', questionId: '3' } }), useRouter: () => ({ push: mocks.push }) }))
 vi.mock('./api', () => ({ getTeacherBankManagementApi: () => ({ questionEditor: mocks.load, updateQuestion: mocks.save }) }))
 import TeacherQuestionEditor from './TeacherQuestionEditor.vue'
 
@@ -32,6 +32,13 @@ describe('question editor disclosure preserves saved fields', () => {
     await flushPromises()
     expect(mocks.save).toHaveBeenCalledWith(1, 2, 0, expect.objectContaining({ question_type: 'short_answer', educational_type: 'translation', text: 'Unsaved new material', kc_mapping_json: JSON.stringify(mapping) }))
   })
+  it('returns administrator edits to the administrator bank while keeping the same API', async () => {
+    mocks.path = '/manage/resources/courses/1/banks/2/questions/3/edit/'
+    const wrapper = await setup()
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.save).toHaveBeenCalledWith(1, 2, 3, expect.any(Object))
+    expect(mocks.push).toHaveBeenCalledWith('/manage/resources/courses/1/banks/2/')
+  })
   it('sends the configured maximum score for an ordinary question', async () => {
     const wrapper = await setup()
     await wrapper.get('[data-question-max-score]').setValue('3.50')
@@ -39,7 +46,7 @@ describe('question editor disclosure preserves saved fields', () => {
     await flushPromises()
     expect(mocks.save).toHaveBeenCalledWith(1, 2, 3, expect.objectContaining({ max_score: '3.50' }))
   })
-  beforeEach(() => { vi.resetAllMocks(); mocks.save.mockResolvedValue({ detail_url: '/teacher/courses/1/banks/2/' }) })
+  beforeEach(() => { vi.resetAllMocks(); mocks.path = undefined; mocks.save.mockResolvedValue({ detail_url: '/teacher/courses/1/banks/2/' }) })
   it('defaults to an answer summary and preserves edits across collapse', async () => {
     const wrapper = await setup()
     expect(wrapper.get('h1').text()).toBe('编辑第 7 题')

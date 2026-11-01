@@ -44,6 +44,7 @@ vi.mock('@/app/bootstrap', () => ({
 }))
 
 import TeacherExperimentDetail from './TeacherExperimentDetail.vue'
+import { experimentPageUrl, experimentPageUrlKey } from './experiment-page-url'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -161,6 +162,17 @@ describe('TeacherExperimentDetail', () => {
       experiments: [], counts: { class_count: 0, session_count: 0, export_count: 0, member_count: 0 }, confirmation_token: 'token-11',
     })
     mocks.deletion.deleteExperiment.mockImplementation(async () => ({ deleted: true, cleanup_pending: false, cleanup_id: null, operation_id: mocks.operationId }))
+  })
+
+  it('keeps administrator detail links and publication navigation in the management workspace', async () => {
+    const wrapper = mount(TeacherExperimentDetail, { global: { stubs: { Teleport: true }, provide: { [experimentPageUrlKey as symbol]: (url: string) => experimentPageUrl(url, true) } } })
+    await flushPromises()
+    expect(wrapper.findAll('a[href]').every(link => !link.attributes('href')?.startsWith('/teacher/'))).toBe(true)
+    expect(wrapper.find('a[href="/manage/courses/7/experiments/11/edit/"]').exists()).toBe(true)
+    await wrapper.get('[data-action="publish-from-definition"]').trigger('click')
+    await flushPromises()
+    expect(mocks.push).toHaveBeenCalledWith('/manage/courses/7/experiments/11/publish-plan/23/step/1/')
+    wrapper.unmount()
   })
 
   it('shows detail and tasks while readiness and progress load independently', async () => {
