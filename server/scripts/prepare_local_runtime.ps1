@@ -110,7 +110,8 @@ try {
                 if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL initialization failed.' }
             } finally { Remove-Item -LiteralPath $passwordFile -Force }
         }
-        & (Join-Path $pgBin 'pg_ctl.exe') -D $pgData -l (Join-Path $pgData 'server.log') -o "-p $env:POSTGRES_PORT -h 127.0.0.1" -w start
+        # local_postgres.py isolates pg_ctl.exe from Ctrl+C and waits for recovery.
+        & $python -X utf8 (Join-Path $PSScriptRoot 'local_postgres.py') --bin $pgBin --data $pgData --host $env:POSTGRES_HOST --port $env:POSTGRES_PORT --user $env:POSTGRES_USER
         if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL startup failed.' }
     }
     $connection = @('-X','-w','-h',$env:POSTGRES_HOST,'-p',$env:POSTGRES_PORT,'-U',$env:POSTGRES_USER,'-d','postgres','-A','-t')
