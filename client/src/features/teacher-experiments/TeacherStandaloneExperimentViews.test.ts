@@ -49,6 +49,7 @@ vi.mock('./standalone-api', async () => {
 import TeacherStandaloneExperimentDetail from './TeacherStandaloneExperimentDetail.vue'
 import TeacherStandaloneExperimentForm from './TeacherStandaloneExperimentForm.vue'
 import TeacherStandaloneExperimentResults from './TeacherStandaloneExperimentResults.vue'
+import { experimentPageUrl, experimentPageUrlKey } from './experiment-page-url'
 
 const choices = {
   selection_modes: [{ value: 'all', label: '全量题池' }, { value: 'quota', label: '按题型配额抽题' }],
@@ -264,5 +265,15 @@ describe('standalone experiment compatibility views', () => {
     await wrapper.get('.kt-inline-panel').trigger('submit')
     await flushPromises()
     expect(mocks.api.results).toHaveBeenLastCalledWith(17, 'completed')
+  })
+
+  it('keeps canonical course result resolution in the administrator student-response view', async () => {
+    mocks.route.params = { experimentId: '17' }
+    mocks.api.results.mockResolvedValueOnce({ kind: 'canonical', canonical_url: '/teacher/courses/7/experiments/17/results/?status=completed' })
+    mount(TeacherStandaloneExperimentResults, {
+      global: { provide: { [experimentPageUrlKey as symbol]: (url: string) => experimentPageUrl(url, true) } },
+    })
+    await flushPromises()
+    expect(mocks.replace).toHaveBeenCalledWith('/manage/courses/7/experiments/17/?status=completed&tab=collection')
   })
 })

@@ -9,7 +9,7 @@ test('teacher business deep links render the independent entry at desktop and mo
   test.setTimeout(240_000)
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
-  await openLoginPage(page)
+  await openLoginPage(page, info.project.use.baseURL)
   await page.getByLabel('账号或学号').fill('teacher')
   await page.getByLabel('密码').fill('teacher123')
   await page.getByRole('button', { name: '登录', exact: true }).click()
@@ -40,7 +40,8 @@ test('teacher business deep links render the independent entry at desktop and mo
       await page.waitForLoadState('networkidle')
       const heading = page.locator('[data-vue-shell] h1').first()
       await expect(heading, path).toBeVisible()
-      await expect(heading, path).toHaveCSS('font-size', '25px')
+      const headingSize = path.endsWith('/settings/') ? (width === 390 ? '23px' : '27px') : '25px'
+      await expect(heading, path).toHaveCSS('font-size', headingSize)
       await expect(page.locator('#kt-bootstrap')).toHaveCount(0)
       if (path === '/teacher/courses/1/classes/') {
         await expect(page.locator(width === 390 ? '.kt-desktop-only' : '.kt-mobile-only')).toBeHidden()

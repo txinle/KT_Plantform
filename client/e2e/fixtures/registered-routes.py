@@ -121,6 +121,17 @@ for route in routes:
         facts['pk'] = feedback.pk
     if name.startswith('experiments:'):
         facts['pk'] = experiment.pk
+    if name.startswith('management:'):
+        persona = 'admin'
+        facts.update(courseId=course.pk, bankId=bank.pk,
+            questionId=bank.questions.order_by('pk').first().pk,
+            experimentId=experiment.pk,
+            taskId=ClassExperimentTask.objects.get(experiment=manual, class_group=class_group).pk,
+            planId=PublishPlan.objects.filter(experiment=experiment).first().pk)
+        if path.startswith('manage/resources/banks/'):
+            facts.update(bankId=standalone_bank.pk, questionId=standalone_question.pk)
+        if '/grading/' in path:
+            facts['experimentId'] = manual.pk
     if name.startswith('assessment:') or name == 'password-change':
         persona = 'student'
     if name == 'assessment:question':

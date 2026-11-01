@@ -13,27 +13,37 @@ async function login(page: Page, user: string, password: string) {
 }
 
 async function inspect(page: Page, info: TestInfo, name: string) {
-  await expect(page.locator('.kt-workspace-main')).toBeVisible()
+  await expect(page.locator('.kt-workspace-main, .management-workspace .workspace-content')).toBeVisible()
   await page.waitForLoadState('networkidle')
+  const siteWorkspace = await page.locator('.management-workspace').count() === 1
   for (const size of [{ width: 2534, height: 1088 }, { width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 720, height: 450 }]) {
     await page.setViewportSize(size)
     await page.screenshot({ path: info.outputPath(`${name}-${size.width}.png`), fullPage: true })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${name} ${size.width} overflow`).toBe(true)
     if (size.width >= 1024) {
-      const sidebar = await page.locator('.kt-workspace-sidebar').boundingBox()
-      const main = await page.locator('.kt-workspace-main').boundingBox()
-      const expectedSidebarWidth = await page.locator('.kt-workspace').evaluate(
+      const sidebar = await page.locator(siteWorkspace ? '.workspace-sidebar' : '.kt-workspace-sidebar').boundingBox()
+      const main = await page.locator(siteWorkspace ? '.workspace-content' : '.kt-workspace-main').boundingBox()
+      const expectedSidebarWidth = siteWorkspace ? (size.width <= 1100 ? 210 : 250) : await page.locator('.kt-workspace').evaluate(
         element => element.matches('.kt-data-center') ? 236 : 216,
       )
       expect(sidebar?.width).toBe(expectedSidebarWidth)
       expect(main!.x).toBeGreaterThanOrEqual(sidebar!.x + sidebar!.width)
     }
   }
-  const trigger = page.locator('[data-workspace-menu]')
-  await trigger.click()
-  await expect(page.locator('.kt-workspace-sidebar')).toHaveAttribute('aria-modal', 'true')
-  await page.keyboard.press('Escape')
-  await expect(trigger).toBeFocused()
+  if (siteWorkspace) {
+    await page.setViewportSize({ width: 390, height: 844 })
+    const navigation = page.getByRole('navigation', { name: '工作区导航', exact: true })
+    await expect(navigation).toBeVisible()
+    const settings = navigation.getByRole('link', { name: '课程设置', exact: true })
+    await settings.scrollIntoViewIfNeeded()
+    await expect(settings).toBeInViewport()
+  } else {
+    const trigger = page.locator('[data-workspace-menu]')
+    await trigger.click()
+    await expect(page.locator('.kt-workspace-sidebar')).toHaveAttribute('aria-modal', 'true')
+    await page.keyboard.press('Escape')
+    await expect(trigger).toBeFocused()
+  }
   await page.setViewportSize({ width: 1440, height: 900 })
 }
 
@@ -149,10 +159,10 @@ test('Vue course forms create, save and reject stale edits through the existing 
   await stalePage.goto(`${coursePath}settings/`)
   await expect(stalePage.getByLabel('课程名称', { exact: true })).toHaveValue('课程管理浏览器验收')
   await page.getByLabel('课程名称', { exact: true }).fill('课程管理浏览器验收已保存')
-  await page.getByRole('button', { name: '保存设置', exact: true }).click()
+  await page.getByRole('button', { name: '保存信息', exact: true }).click()
   await expect(page.getByRole('status')).toContainText('课程设置已保存')
   await stalePage.getByLabel('课程名称', { exact: true }).fill('不应覆盖较新设置')
-  await stalePage.getByRole('button', { name: '保存设置', exact: true }).click()
+  await stalePage.getByRole('button', { name: '保存信息', exact: true }).click()
   await expect(stalePage.getByRole('alert')).toContainText('课程设置已被其他管理者更新')
   await stalePage.close()
   await page.reload()
@@ -162,10 +172,11 @@ test('Vue course forms create, save and reject stale edits through the existing 
     && response.url().endsWith(`${coursePath}archive/`)
   ))
   await page.getByRole('button', { name: '归档课程', exact: true }).click()
+  await page.getByRole('dialog', { name: '归档课程', exact: true }).getByRole('button', { name: '确认归档', exact: true }).click()
   expect((await archived).status()).toBe(200)
-  await expect(page.getByRole('status')).toContainText('课程已归档并切换为只读')
+  await expect(page.getByRole('status')).toContainText('课程状态已更新')
   await page.goto(`${coursePath}settings/`)
-  await expect(page.getByRole('button', { name: '保存设置', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '保存信息', exact: true })).toHaveCount(0)
   await expect(page.getByLabel('课程名称', { exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: '归档课程', exact: true })).toHaveCount(0)
   await inspect(page, info, 'teacher-readonly')

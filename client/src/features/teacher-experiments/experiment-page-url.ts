@@ -11,6 +11,13 @@ export function experimentPageUrl(url: string | undefined | null, admin?: boolea
 export function experimentPageUrl(url: string | undefined | null, admin = false): string | undefined {
   if (!url || !admin) return url ?? undefined
   const [path, suffix = ''] = url.split(/(?=[?#])/, 2)
+  const courseResults = /^\/teacher\/courses\/(\d+)\/experiments\/(\d+)\/results\/$/.exec(path!)
+  if (courseResults) {
+    const target = new URL(url, 'http://localhost')
+    target.pathname = `/manage/courses/${courseResults[1]}/experiments/${courseResults[2]}/`
+    target.searchParams.set('tab', 'collection')
+    return `${target.pathname}${target.search}${target.hash}`
+  }
   if (/^\/teacher\/courses\/\d+\/experiments\/(?:create\/|\d+\/(?:edit\/|student-preview\/|class-tasks\/\d+\/grading\/|publish-plan\/\d+\/step\/\d+\/)?)?$/.test(path!)) return url.replace('/teacher/', '/manage/')
   if (/^\/teacher\/experiments\/(?:create\/|\d+\/(?:edit\/|results\/)?)?$/.test(path!)) return url.replace('/teacher/', '/manage/')
   const course = /^\/teacher\/courses\/(\d+)\/(.*)$/.exec(path!)

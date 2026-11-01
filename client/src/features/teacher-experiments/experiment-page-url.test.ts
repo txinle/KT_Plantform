@@ -7,6 +7,7 @@ describe('administrator experiment navigation', () => {
       expect(experimentPageUrl(`/teacher/courses/2/experiments/${tail}`, true)).toBe(`/manage/courses/2/experiments/${tail}`)
     }
     expect(experimentPageUrl('/teacher/experiments/8/results/?status=completed', true)).toBe('/manage/experiments/8/results/?status=completed')
+    expect(experimentPageUrl('/teacher/courses/2/experiments/8/results/?status=completed', true)).toBe('/manage/courses/2/experiments/8/?status=completed&tab=collection')
     expect(experimentPageUrl('/teacher/courses/2/data/exports/', true)).toBe('/manage/data/?course_id=2')
     expect(experimentPageUrl('/teacher/courses/2/banks/', true)).toBe('/manage/resources/?course_id=2')
     expect(experimentPageUrl('/teacher/courses/2/classes/', true)).toBe('/manage/courses/?tab=classes&course_id=2')

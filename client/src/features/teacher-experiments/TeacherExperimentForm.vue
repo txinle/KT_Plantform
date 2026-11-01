@@ -623,9 +623,9 @@ onMounted(load)
           <Alert v-if="inventoryError" tone="danger">{{ inventoryError }}</Alert>
           <p v-if="fieldErrors.sampling_kcs" class="kt-field__error" role="alert">{{ fieldErrors.sampling_kcs }}</p>
           <Alert v-if="samplingChanged && !legacySampling" tone="warning">抽题配置尚未保存。保存后将按所选题库、匹配层级和配额重新进行发布预检。</Alert>
-          <div v-if="readiness && !legacySampling && !samplingChanged" aria-label="已保存抽题配置库存预检">
+          <div v-if="readiness && !legacySampling && !samplingChanged" class="kt-experiment-readiness" aria-label="已保存抽题配置库存预检">
             <Alert :tone="readiness.ready ? 'success' : 'danger'">已保存配置：计划抽取 {{ readiness.requested_count ?? '—' }} 题，题库全局候选 {{ readiness.candidate_count }} 题，尚未按学生历史过滤。<span v-if="readiness.issues.length"> {{ readiness.issues.join('；') }}</span></Alert>
-            <table v-if="readiness.inventory_buckets.length" class="kt-table"><thead><tr><th>KC</th><th>匹配层级</th><th>计划题数</th><th>可用题数</th></tr></thead><tbody><tr v-for="bucket in readiness.inventory_buckets" :key="bucket.kc_code"><td><span class="kt-mono">{{ bucket.kc_code }}</span> {{ bucket.kc_name }}</td><td>{{ bucket.match_scope === 'primary' ? '仅根 KC' : '任意层级' }}</td><td>{{ bucket.requested ?? '范围' }}</td><td>{{ bucket.available }}</td></tr></tbody></table>
+            <div v-if="readiness.inventory_buckets.length" class="kt-table-scroll"><table class="kt-table"><thead><tr><th>KC</th><th>匹配层级</th><th>计划题数</th><th>可用题数</th></tr></thead><tbody><tr v-for="bucket in readiness.inventory_buckets" :key="bucket.kc_code"><td><span class="kt-mono">{{ bucket.kc_code }}</span> {{ bucket.kc_name }}</td><td>{{ bucket.match_scope === 'primary' ? '仅根 KC' : '任意层级' }}</td><td>{{ bucket.requested ?? '范围' }}</td><td>{{ bucket.available }}</td></tr></tbody></table></div>
             <small class="kt-muted">库存数据对应当前已保存版本；保存本页更改后会重新计算。</small>
           </div>
         </div>
@@ -760,5 +760,6 @@ onMounted(load)
 </template>
 
 <style scoped>
+.kt-experiment-readiness{min-width:0}
 .kt-pinned-question-list,.kt-question-picker-list{list-style:none;padding:0;margin:12px 0}.kt-pinned-question-list li{display:flex;justify-content:space-between;gap:16px;padding:6px 0;border-bottom:1px solid var(--kt-border)}.kt-question-picker-filters{display:grid;grid-template-columns:1fr 150px;gap:12px;margin:18px 0}.kt-question-picker-filters label{display:grid;gap:6px;font-size:14px}.kt-question-picker-list li{border-bottom:1px solid var(--kt-border);padding:12px 0}.kt-question-picker-list label{display:flex;align-items:flex-start;gap:12px;cursor:pointer}.kt-question-picker-list label>span{display:grid;gap:5px;min-width:0}.kt-question-picker-list small{color:var(--kt-text-muted)}.kt-question-picker-list label>span>span{font-size:14px;white-space:pre-line;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.kt-question-picker-list input{margin-top:4px}.kt-question-picker-list strong{font-size:15px}@media(max-width:600px){.kt-question-picker-filters{grid-template-columns:1fr}}
 </style>

@@ -10,12 +10,12 @@ interface RouteCase { name: string; pattern: string; path: string; persona: stri
 interface Finding { name: string; path: string; actualPath: string; viewport: string; screenshot: string; issues: string[] }
 
 async function login(page: Page, username: string, password: string) {
-  await openLoginPage(page)
+  await openLoginPage(page, test.info().project.use.baseURL)
   await page.getByLabel('账号或学号').fill(username)
   await page.getByLabel('密码').fill(password)
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page).not.toHaveURL(/\/login\//)
-  if (username !== 'teacher' && username !== 'r3-english-teacher') await acceptResearchConsentIfRequired(page)
+  if (!['teacher', 'r3-english-teacher', 'admin'].includes(username)) await acceptResearchConsentIfRequired(page)
 }
 
 test('all registered R3 business pages have desktop, phone and 200 percent equivalent evidence', async ({ browser }, info) => {
@@ -30,7 +30,7 @@ test('all registered R3 business pages have desktop, phone and 200 percent equiv
   const registry = JSON.parse(readFileSync(new URL('../../contracts/frontend-routes.json', import.meta.url), 'utf8')) as { routes: Array<{ name: string }> }
   expect(data.routes.map(route => route.name)).toEqual(registry.routes.map(route => route.name))
   const identities: Record<string, [string, string] | null> = {
-    anonymous: null, teacher: ['teacher', 'teacher123'], student: ['S002', 'student123'],
+    anonymous: null, admin: ['admin', 'admin123'], teacher: ['teacher', 'teacher123'], student: ['S002', 'student123'],
     runtime: ['S001', 'student123'],
     groupstudent: ['site-v2-types-student', 'SiteV2Student123!'],
   }
@@ -39,7 +39,7 @@ test('all registered R3 business pages have desktop, phone and 200 percent equiv
   const findings: Finding[] = []
   try {
     for (const [persona, credentials] of Object.entries(identities)) {
-      const context = await browser.newContext({ baseURL: 'http://127.0.0.1:8000', viewport: { width: 1440, height: 900 } })
+      const context = await browser.newContext({ baseURL: info.project.use.baseURL, viewport: { width: 1440, height: 900 } })
       contexts.push(context)
       const page = await context.newPage()
       pages.set(persona, page)
@@ -57,6 +57,7 @@ test('all registered R3 business pages have desktop, phone and 200 percent equiv
       const page = pages.get(route.persona)!
       await page.goto(route.path)
       await page.waitForLoadState('networkidle')
+      if (route.persona === 'admin') expect(new URL(page.url()).pathname, route.path).toMatch(/^\/manage\//)
       for (const size of [
         { width: 1440, height: 900, label: 'desktop' },
         { width: 390, height: 844, label: 'mobile' },
@@ -72,8 +73,9 @@ test('all registered R3 business pages have desktop, phone and 200 percent equiv
           for (const node of document.querySelectorAll<HTMLElement>('main button, main label, main input, main textarea, main small, main th, main td')) {
             if (!node.getClientRects().length || node.closest('svg,[aria-hidden="true"],.kt-visually-hidden,details:not([open])')) continue
             if (!node.textContent?.trim() && !node.matches('input,textarea')) continue
-            // Site V2 uses 13px for compact teacher labels, actions and table metadata.
-            const minimum = location.pathname.startsWith('/teacher/') && node.matches('button,label,small,th') ? 13 : 14
+            // The approved management/collaboration Site uses 11px compact metadata and actions.
+            const minimum = node.closest('.management-workspace') ? 11
+              : location.pathname.startsWith('/teacher/') && node.matches('button,label,small,th') ? 13 : 14
             if (Number.parseFloat(getComputedStyle(node).fontSize) < minimum) result.push(`text below${minimum}px: ${node.className || node.tagName}`)
           }
           for (const node of document.querySelectorAll<HTMLElement>('main [role="alert"]')) {
