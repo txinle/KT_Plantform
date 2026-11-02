@@ -122,7 +122,7 @@ async function governance() {
 </script>
 
 <template>
-  <SiteWorkspaceShell :mode="isAdminWorkspace ? 'admin' : 'course'" :active="isAdminWorkspace ? 'course' : 'settings'" :course-id="courseId" :course-name="settings?.course.name" :course-meta="settings ? `${settings.course.code} · ${settings.course.term}` : ''" :permissions="collaboration?.granted_permissions || []" :main-id="isAdminWorkspace ? 'admin-course-settings-main' : 'teacher-course-settings-main'">
+  <SiteWorkspaceShell class="course-settings-workspace" :mode="isAdminWorkspace ? 'admin' : 'course'" :active="isAdminWorkspace ? 'course' : 'settings'" :course-id="courseId" :course-name="settings?.course.name" :course-meta="settings ? `${settings.course.code} · ${settings.course.term}` : ''" :permissions="collaboration?.granted_permissions || []" :main-id="isAdminWorkspace ? 'admin-course-settings-main' : 'teacher-course-settings-main'">
     <p v-if="!settings && !error" role="status">正在加载课程设置…</p>
     <p v-if="error" class="error-block" role="alert">{{ errorText(fieldErrors.__all__ || fieldErrors.non_field_errors) || error }} <button class="link" @click="load">重新加载</button></p>
     <p v-if="saved" class="success-note" role="status">{{ saved }}</p>
@@ -143,9 +143,11 @@ async function governance() {
           </form>
           <section class="card collaboration-card">
             <div class="card-header"><div><h2>协作教师 <span class="member-count">{{ collaboration.members.length }} 位</span></h2><p>仅显示本课程成员，由负责人分配功能权限。</p></div><button v-if="collaboration.capabilities.can_manage_members" class="primary" data-add-collaborator @click="openMember()">＋ 添加协作教师</button></div>
-            <div class="owner"><span class="avatar">{{ collaboration.owner.display_name.slice(0, 1) }}</span><div><strong>{{ collaboration.owner.display_name }}</strong><p>{{ collaboration.owner.username }} · 负责课程与成员授权</p></div><span class="badge blue">负责人 · 全部功能</span></div>
-            <div v-for="member in collaboration.members" :key="member.id" class="member"><div class="person"><span class="avatar">{{ member.display_name.slice(0, 1) }}</span><div><strong>{{ member.display_name }} <span v-if="member.is_active === false" class="badge gray">账号已停用</span></strong><small>{{ member.username }}</small><div class="permission-tags"><span v-for="permission in member.permissions" :key="permission">{{ permissionName(permission) }}</span></div></div></div><div v-if="collaboration.capabilities.can_manage_members" class="member-actions"><button class="link" :data-edit-collaborator="member.id" @click="openMember(member)">调整权限</button><button class="link danger" :data-remove-collaborator="member.id" @click="openRemove(member)">移除</button></div></div>
-            <div v-if="!collaboration.members.length" class="empty">暂未添加协作教师。</div>
+            <div class="member-grid">
+              <article class="member-tile owner"><div class="person"><span class="avatar">{{ collaboration.owner.display_name.slice(0, 1) }}</span><div><strong>{{ collaboration.owner.display_name }}</strong><small>{{ collaboration.owner.username }} · 负责课程与成员授权</small></div></div><span class="badge blue">负责人 · 全部功能</span></article>
+              <article v-for="member in collaboration.members" :key="member.id" class="member-tile member"><div class="person"><span class="avatar">{{ member.display_name.slice(0, 1) }}</span><div><strong>{{ member.display_name }} <span v-if="member.is_active === false" class="badge gray">账号已停用</span></strong><small>{{ member.username }}</small></div></div><div class="permission-tags"><span v-for="permission in member.permissions" :key="permission">{{ permissionName(permission) }}</span></div><div v-if="collaboration.capabilities.can_manage_members" class="member-actions"><button class="link" :data-edit-collaborator="member.id" @click="openMember(member)">调整权限</button><button class="link danger" :data-remove-collaborator="member.id" @click="openRemove(member)">移除</button></div></article>
+              <div v-if="!collaboration.members.length" class="member-empty">暂未添加协作教师。<span v-if="collaboration.capabilities.can_manage_members">通过右上方按钮搜索并添加。</span></div>
+            </div>
           </section>
           <div class="policy-note"><span>ⓘ</span><div><strong>账号与课程授权分开管理</strong><br>管理员创建教师账号后，教师不会自动加入课程。协作权限只在当前课程生效，移除成员不删除账号和历史操作。</div></div>
         </div>
@@ -176,22 +178,46 @@ async function governance() {
 </template>
 
 <style scoped>
-.course-main{display:flex;flex-direction:column;gap:22px}
+.course-settings-workspace :deep(.workspace-content){padding:22px 28px 28px}
+.eyebrow{margin-bottom:6px}
+.heading{margin-bottom:18px}
+.course-grid{gap:16px;align-items:start}
+.course-main{display:flex;flex-direction:column;gap:14px;min-width:0}
 .course-main>.card+.card{margin-top:0}
-.course-main>.policy-note{margin-top:0}
+.course-main>.policy-note{margin-top:0;padding:10px 14px}
+.course-main .card-header{padding:14px 18px;gap:12px}
+.course-basics .info-grid{padding:16px 18px;gap:12px 16px}
+.course-basics .info-grid label{gap:6px}
+.member-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:12px;padding:14px 18px}
+.member-grid .member-tile{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;gap:10px;min-width:0;padding:14px;border:1px solid var(--line);border-radius:7px;background:#fff}
+.member-grid .owner{background:#f7faff}
+.member-tile .person{align-items:flex-start;gap:10px}
+.member-tile .person>div{min-width:0;overflow-wrap:anywhere}
+.member-tile .avatar{flex-shrink:0}
+.member-tile .permission-tags{margin:0;gap:5px;max-width:none}
+.member-tile>.badge{align-self:flex-start;margin-left:0}
+.member-empty{display:flex;flex-direction:column;justify-content:center;gap:5px;padding:14px;border:1px dashed var(--line);border-radius:7px;color:var(--muted);font-size:12px}
+.member-empty span{font-size:11px}
 .member-count{font-size:12px;color:#8799ad;font-weight:400}
 .owner strong{font-size:13px;font-weight:500}
-.member-actions{display:flex;flex-shrink:0}
-.course-description{padding:0 25px 18px;font-size:12px;color:#738095}
+.member-actions{display:flex;justify-content:flex-end;gap:4px;flex-shrink:0;margin-top:auto;padding-top:6px;border-top:1px solid var(--line)}
+.course-description{padding:0 18px 14px;font-size:12px;color:#738095}
 .course-description summary{cursor:pointer}
 .course-description label{margin-top:12px}
-.transfer-owner{margin-top:14px}
+.course-side{display:grid;gap:14px}
+.course-side .side-card{padding:18px;margin:0}
+.course-side .side-card h2{margin-bottom:8px}
+.course-side .side-card p{margin-bottom:10px;line-height:1.7}
+.course-side .side-card ul{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;margin:0;line-height:1.8}
+.course-side .side-card .divider{margin:12px 0}
+.course-side .transfer-owner{margin-top:10px}
 .teacher-search{display:flex;gap:9px}
 .teacher-search .search{flex:1;width:auto}
 .transfer-reason{margin-top:18px}
-.course-governance{margin-top:25px;padding:20px 25px;font-size:13px}
+.course-governance{margin-top:14px;padding:12px 18px;font-size:13px}
 .course-governance>summary{cursor:pointer;color:#536b8a}
 .governance-body{padding-top:20px}
 .governance-body>button{margin-top:15px}
-@media(max-width:700px){.member-actions{display:grid}.course-description{padding-inline:18px}.course-governance{padding:18px}.member{gap:6px}.member .person{gap:8px}.owner{flex-wrap:wrap}.owner>.badge{margin-left:0}.info-grid{grid-template-columns:1fr}.teacher-search{align-items:stretch}}
+@media(min-width:1600px){.course-basics .info-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(max-width:700px){.course-settings-workspace :deep(.workspace-content){padding:18px 16px}.member-grid{grid-template-columns:1fr;padding:14px}.course-main .card-header{padding:14px}.course-main .card-header button,.member-actions button{min-height:44px}.course-basics .info-grid{grid-template-columns:1fr;padding:14px}.course-basics .info-grid input{min-height:44px}.course-description{padding-inline:14px}.course-governance{padding:14px}.teacher-search{align-items:stretch}}
 </style>
