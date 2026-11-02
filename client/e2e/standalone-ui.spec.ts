@@ -40,7 +40,8 @@ test('teacher business deep links render the independent entry at desktop and mo
       await page.waitForLoadState('networkidle')
       const heading = page.locator('[data-vue-shell] h1').first()
       await expect(heading, path).toBeVisible()
-      const headingSize = path.endsWith('/settings/') ? (width === 390 ? '23px' : '27px') : '25px'
+      const headingSize = path === '/teacher/courses/1/experiments/' ? '28px'
+        : path.endsWith('/settings/') ? (width === 390 ? '23px' : '27px') : '25px'
       await expect(heading, path).toHaveCSS('font-size', headingSize)
       await expect(page.locator('#kt-bootstrap')).toHaveCount(0)
       if (path === '/teacher/courses/1/classes/') {

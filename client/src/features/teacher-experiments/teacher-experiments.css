@@ -1621,7 +1621,7 @@
 .kt-teacher-experiments .kt-experiment-list-filters input { width: 100%; min-width: 0; }
 .kt-teacher-experiments .kt-experiment-list-filters select { flex: 0 0 112px; width: 112px; min-width: 112px; }
 .kt-teacher-experiments .kt-experiment-list-filters input,
-.kt-teacher-experiments .kt-experiment-list-filters select { height: 42px; padding: 0 12px; border: 1px solid #dce4ee; border-radius: 7px; background: #fff; color: inherit; font: inherit; font-size: 13px; }
+.kt-teacher-experiments .kt-experiment-list-filters select { height: 42px; padding: 0 12px; border: 1px solid #dce4ee; border-radius: 7px; background: #fff; color: inherit; font: inherit; font-size: 14px; }
 .kt-teacher-experiments .kt-experiment-search-field input { padding-right: 40px; }
 .kt-teacher-experiments .kt-experiment-search-field input::-webkit-search-cancel-button { appearance: none; }
 .kt-teacher-experiments .kt-experiment-search-clear { position: absolute; top: 5px; right: 5px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #718198; cursor: pointer; }
@@ -1644,7 +1644,7 @@
 .kt-teacher-experiments .kt-experiment-card-classes { display: inline-flex; align-items: center; gap: 7px; border: 0; padding: 5px 0; background: none; color: #62758d; font: inherit; font-size: 13px; }
 .kt-teacher-experiments button.kt-experiment-card-classes { cursor: pointer; }
 .kt-teacher-experiments button.kt-experiment-card-classes:hover { color: #245cc1; }
-.kt-teacher-experiments .kt-experiment-card-actions { min-height: 34px; gap: 7px; padding: 5px 10px; font-size: 12px; border-radius: 5px; }
+.kt-teacher-experiments .kt-experiment-card-actions { min-height: 34px; gap: 7px; padding: 5px 10px; font-size: 13px; border-radius: 5px; }
 @media (max-width: 1450px) { .kt-teacher-experiments .kt-experiment-list-toolbar, .kt-teacher-experiments .kt-experiment-card-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1150px) { .kt-teacher-experiments .kt-experiment-list-toolbar, .kt-teacher-experiments .kt-experiment-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) {

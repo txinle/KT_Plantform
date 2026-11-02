@@ -127,7 +127,7 @@
 .kt-student-task-card-class .kt-icon { flex: none; }
 .kt-student-task-card-foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 16px; }
 .kt-student-task-card-foot strong { font-weight: 500; color: #38516e; font-variant-numeric: tabular-nums; }
-.kt-student-task-card-foot .kt-button { min-height: 44px; padding: 8px 12px; font-size: 13px; }
+.kt-student-task-card-foot .kt-button { min-height: 44px; padding: 8px 12px; font-size: 14px; }
 @media (max-width: 1450px) { .kt-student-task-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1150px) { .kt-student-task-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
