@@ -192,7 +192,7 @@ onMounted(() => load())
   <section v-else class="kt-card kt-table-card" aria-label="实验列表">
     <div class="kt-table-scroll kt-desktop-only">
       <table class="kt-table kt-experiment-list-table">
-        <thead><tr><th>实验</th><th>开始时间</th><th>截止时间</th><th>实验限时</th><th>状态</th><th>班级</th><th v-if="canManage">操作</th></tr></thead>
+        <thead><tr><th>实验</th><th colspan="3"><div class="kt-experiment-schedule-heading"><span>班级</span><span>开始时间</span><span>截止时间</span><span>总限时</span></div></th><th>状态</th><th>班级</th><th v-if="canManage">操作</th></tr></thead>
         <tbody>
           <template v-for="experiment in collection.items" :key="experiment.id">
             <tr>
@@ -200,9 +200,12 @@ onMounted(() => load())
                 <div class="kt-experiment-name-row"><RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/`)"><strong>{{ experiment.name }}</strong></RouterLink><a v-if="experiment.activity?.grading_url" data-pending-grading class="kt-experiment-pending" :href="pageUrl(experiment.activity.grading_url)">待批改：{{ experiment.activity.pending_grading_count }}</a><span v-else class="kt-experiment-pending">待批改：{{ experiment.activity?.pending_grading_count ?? 0 }}</span></div>
                 <span class="kt-cell-note"><template v-if="experiment.sampling_total_count != null">{{ experiment.sampling_total_count }} 道题 · </template>更新 {{ displayDate(experiment.updated_at, '—') }}</span>
               </td>
-              <td><div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id" class="kt-experiment-schedule-cell"><span>{{ displayDate(schedule.opens_at, '立即开放') }}</span><small v-if="(experiment.activity?.schedules.length || 0) > 1">{{ schedule.class_name }}</small></div><span v-if="!experiment.activity?.schedules.length">未安排</span></td>
-              <td><div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id" class="kt-experiment-schedule-cell"><span>{{ displayDate(schedule.closes_at, '无截止') }}</span><small v-if="(experiment.activity?.schedules.length || 0) > 1">{{ schedule.class_name }}</small></div><span v-if="!experiment.activity?.schedules.length">未安排</span></td>
-              <td><div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id" class="kt-experiment-schedule-cell"><span>{{ displayLimit(schedule.total_time_limit_minutes, schedule.per_question_time_limit_seconds) }}</span><small v-if="(experiment.activity?.schedules.length || 0) > 1">{{ schedule.class_name }}</small></div><span v-if="!experiment.activity?.schedules.length">{{ displayLimit(experiment.total_time_limit_minutes, experiment.per_question_time_limit_seconds) }}</span></td>
+              <td colspan="3">
+                <div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id" class="kt-experiment-schedule-row">
+                  <span>{{ schedule.class_name }}</span><span>{{ displayDate(schedule.opens_at, '立即开放') }}</span><span>{{ displayDate(schedule.closes_at, '无截止') }}</span><span>{{ displayLimit(schedule.total_time_limit_minutes, schedule.per_question_time_limit_seconds) }}</span>
+                </div>
+                <div v-if="!experiment.activity?.schedules.length" class="kt-experiment-schedule-empty"><span>—</span><span>未安排</span><span>未安排</span><span>{{ displayLimit(experiment.total_time_limit_minutes, experiment.per_question_time_limit_seconds) }}</span></div>
+              </td>
               <td><StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" /></td>
               <td><RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/?tab=tasks`)">{{ experiment.activity?.schedules.length || 0 }} 个</RouterLink></td>
               <td v-if="canManage">

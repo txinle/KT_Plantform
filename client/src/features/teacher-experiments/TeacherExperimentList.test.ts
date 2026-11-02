@@ -145,18 +145,28 @@ describe('TeacherExperimentList deletion', () => {
     expect(mocks.api.list).toHaveBeenNthCalledWith(3, 7, 1)
   })
 
-  it('shows the authoritative pending count and separate schedule columns', async () => {
+  it('shows the authoritative pending count and one complete schedule row per class', async () => {
     mocks.api.list.mockResolvedValue(collection([{ ...experiment, activity: {
       pending_grading_count: 8,
       grading_url: '/teacher/courses/7/experiments/13/class-tasks/31/grading/',
-      schedules: [{ task_id: 31, class_name: '一班', opens_at: '2026-11-01T01:00:00Z', closes_at: '2026-11-02T01:00:00Z', total_time_limit_minutes: 45, per_question_time_limit_seconds: null }],
+      schedules: [
+        { task_id: 31, class_name: '一班', opens_at: '2026-11-01T01:00:00Z', closes_at: '2026-11-02T01:00:00Z', total_time_limit_minutes: 45, per_question_time_limit_seconds: null },
+        { task_id: 32, class_name: '二班', opens_at: null, closes_at: null, total_time_limit_minutes: null, per_question_time_limit_seconds: 60 },
+      ],
     } }]))
     const wrapper = mount(TeacherExperimentList, { global: { stubs: { Teleport: true } } })
     await flushPromises()
     expect(wrapper.get('[data-pending-grading]').text()).toBe('待批改：8')
     expect(wrapper.get('[data-pending-grading]').attributes('href')).toBe('/teacher/courses/7/experiments/13/class-tasks/31/grading/')
-    expect(wrapper.findAll('thead th').map(cell => cell.text())).toEqual(expect.arrayContaining(['开始时间', '截止时间', '实验限时']))
-    expect(wrapper.text()).toContain('45 分钟')
+    expect(wrapper.findAll('.kt-experiment-schedule-heading span').map(cell => cell.text())).toEqual(['班级', '开始时间', '截止时间', '总限时'])
+    const rows = wrapper.findAll('.kt-experiment-schedule-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.findAll('span').map(cell => cell.text())).toEqual([
+      '一班', expect.stringContaining('2026/11/01'), expect.stringContaining('2026/11/02'), '45 分钟',
+    ])
+    expect(rows[1]!.findAll('span').map(cell => cell.text())).toEqual(['二班', '立即开放', '无截止', '每题 60 秒'])
+    expect(wrapper.get('.kt-desktop-only').text().match(/一班/g)).toHaveLength(1)
+    wrapper.unmount()
   })
 
   it('keeps both grading entry points clickable when the authorized pending count is zero', async () => {
