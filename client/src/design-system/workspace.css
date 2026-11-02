@@ -7,6 +7,9 @@
 .kt-workspace .kt-account-actions { margin-left: auto; }
 .kt-workspace .kt-user-name { font-size: 14px; }
 .kt-workspace .kt-logout-button { min-height: 44px; }
+@media (min-width: 1024px) {
+  .kt-workspace > .kt-app-header .kt-app-header__inner { display: grid; grid-template-columns: calc(var(--kt-workspace-sidebar) - 28px - 1px) minmax(0, 1fr) auto; column-gap: 0; }
+}
 .kt-workspace-sidebar { display: flex; flex-direction: column; position: fixed; z-index: 30; left: 0; top: var(--kt-workspace-header); bottom: 0; width: var(--kt-workspace-sidebar); overflow-y: auto; overscroll-behavior: contain; border-right: 1px solid var(--kt-border); background: var(--kt-surface); padding: 28px 16px; }
 .kt-workspace-sidebar > * { flex-shrink: 0; }
 .kt-workspace-sidebar > .kt-workspace-navigation { margin-bottom: 24px; }
