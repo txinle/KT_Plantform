@@ -14,6 +14,11 @@ def default_course_permissions():
     return ["bank", "class", "experiment", "data", "export"]
 
 
+class AvailableCourseManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
+
 class Course(models.Model):
     class Status(models.TextChoices):
         ACTIVE = "active", "进行中"
@@ -32,6 +37,9 @@ class Course(models.Model):
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    objects = AvailableCourseManager()
+    all_objects = models.Manager()
 
     class Meta:
         ordering = ["-term", "code", "name"]
@@ -46,6 +54,8 @@ class Course(models.Model):
         return f"{self.code} · {self.name} · {self.term}"
 
     def can_manage(self, user, *, using=None, lock_teacher_link=False, capability=None):
+        if self.deleted_at is not None:
+            return False
         if not getattr(user, "is_authenticated", False) or not user.is_active:
             return False
         if user.is_superuser or user.role == User.Role.ADMIN:
@@ -287,6 +297,7 @@ class ClassStudentAnalyticsPolicy(models.Model):
 
 
 class User(AbstractUser):
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
     def check_password(self, raw_password):
         state = pending_timing.get()
         if state is None:
@@ -625,3 +636,21 @@ class DataPurgeRequest(models.Model):
 
     class Meta:
         ordering = ["-requested_at"]
+
+
+class AdminRecycleEntry(models.Model):
+    kind = models.CharField(max_length=16, choices=[('course', '课程'), ('user', '账号')])
+    object_id = models.PositiveBigIntegerField()
+    name = models.CharField(max_length=160)
+    actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name='recycle_entries')
+    deleted_at = models.DateTimeField(default=timezone.now)
+    restore_until = models.DateTimeField()
+    restored_at = models.DateTimeField(null=True, blank=True)
+    previous_state = models.JSONField(default=dict)
+    counts = models.JSONField(default=dict)
+    confirmation_hash = models.CharField(max_length=64)
+
+    class Meta:
+        ordering = ['-deleted_at', '-pk']
+        constraints = [models.UniqueConstraint(fields=['kind', 'object_id'],
+            condition=models.Q(restored_at__isnull=True), name='unique_pending_recycle_object')]

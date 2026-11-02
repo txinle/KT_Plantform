@@ -37,17 +37,29 @@ class AdminView(APIView):
         return super().handle_exception(exc)
 
 
-def task_rows():
+def task_rows(*, limit=None):
+    from apps.assessment.models import ExperimentSession
     from apps.experiments.models import ClassExperimentTask
-    from apps.experiments.api.views import _task_projection
+    from apps.experiments.api.views import _task_projection, _task_projection_queryset
+    from apps.experiments.publication_services import database_now
+    queryset = _task_projection_queryset(ClassExperimentTask.objects.filter(experiment__course__deleted_at__isnull=True).select_related('experiment__course')).order_by('-pk')
+    tasks = list(queryset[:limit] if limit is not None else queryset)
+    session_counts = {row['class_task_id']: row for row in ExperimentSession.objects.filter(
+        class_task_id__in=[task.pk for task in tasks],
+    ).order_by().values('class_task_id').annotate(
+        submitted_count=Count('student_id', distinct=True, filter=Q(status='completed')),
+        started_count=Count('student_id', distinct=True, filter=~Q(status='prepared')),
+    )}
+    now = database_now()
     rows = []
-    for task in ClassExperimentTask.objects.select_related('experiment__course', 'class_group').order_by('-pk'):
-        row = _task_projection(task)
+    for task in tasks:
+        row = _task_projection(task, now=now)
         row['status'] = row['business_status']
         row['status_label'] = {'open': '进行中', 'scheduled': '未开始', 'closed': '已结束',
             'cancelled': '已取消', 'invalidated': '已作废', 'manual_closed': '已提前结束'}.get(row['status'], row['status'])
-        row['submitted_count'] = task.sessions.filter(status='completed').values('student_id').distinct().count()
-        row['started_count'] = task.sessions.exclude(status='prepared').values('student_id').distinct().count()
+        counts = session_counts.get(task.pk, {})
+        row['submitted_count'] = counts.get('submitted_count', 0)
+        row['started_count'] = counts.get('started_count', 0)
         row.update({'id': task.pk, 'course_id': task.experiment.course_id,
                     'course_name': task.experiment.course.name, 'experiment_id': task.experiment_id,
                     'experiment_name': task.experiment.name, 'class_name': task.class_group.name,
@@ -66,7 +78,7 @@ def experiment_rows():
              'status': e.status, 'status_label': e.get_status_display(),
              'task_count': e.class_tasks.count(),
              'detail_url': f'/manage/courses/{e.course_id}/experiments/{e.pk}/' if e.course_id else f'/manage/experiments/{e.pk}/'}
-            for e in Experiment.objects.select_related('course').order_by('-pk')]
+            for e in Experiment.objects.filter(course__deleted_at__isnull=True).select_related('course').order_by('-pk')]
 
 
 @extend_schema(responses=dict)
@@ -82,19 +94,20 @@ class AdminCatalogView(AdminView):
         from apps.experiments.models import Experiment
         from apps.analytics.models import ExportJob
         if section == 'users':
-            return Response({'items': [service.user_row(u) for u in User.objects.order_by('role', 'username')]})
+            return Response({'items': [service.user_row(u) for u in User.objects.filter(deleted_at__isnull=True).order_by('role', 'username')]})
         if section == 'courses':
             return Response({'items': [service.course_row(c) for c in Course.objects.select_related('owner')]})
         if section == 'classes':
-            return Response({'items': [service.class_row(c) for c in ClassGroup.objects.select_related('course', 'owner')]})
+            return Response({'items': [service.class_row(c) for c in ClassGroup.objects.filter(course__deleted_at__isnull=True).select_related('course', 'owner')]})
         if section == 'audit':
             return Response({'items': [service.audit_row(a) for a in AuditLog.objects.select_related('actor').all()]})
         if section == 'overview':
-            return Response({'metrics': {'users': User.objects.count(), 'teachers': User.objects.filter(role='teacher').count(),
-                'students': User.objects.filter(role='student').count(), 'courses': Course.objects.count(),
-                'classes': ClassGroup.objects.count(), 'banks': QuestionBank.objects.count(),
-                'experiments': Experiment.objects.count(), 'exports': ExportJob.objects.count()},
-                'tasks': task_rows(), 'recent_audit': [service.audit_row(a) for a in AuditLog.objects.select_related('actor').all()[:8]]})
+            return Response({'metrics': {'users': User.objects.filter(deleted_at__isnull=True).count(), 'teachers': User.objects.filter(role='teacher', deleted_at__isnull=True).count(),
+                'students': User.objects.filter(role='student', deleted_at__isnull=True).count(), 'courses': Course.objects.count(),
+                'classes': ClassGroup.objects.filter(course__deleted_at__isnull=True).count(), 'banks': QuestionBank.objects.filter(course__deleted_at__isnull=True).count(),
+                'experiments': Experiment.objects.filter(course__deleted_at__isnull=True).count(), 'exports': ExportJob.objects.filter(course__deleted_at__isnull=True).count()},
+                'tasks': task_rows(limit=4), 'tasks_scope': 'latest', 'tasks_limit': 4,
+                'recent_audit': [service.audit_row(a) for a in AuditLog.objects.select_related('actor').all()[:8]]})
         if section == 'resources':
             banks = [{'id': b.pk, 'name': b.name, 'description': b.description, 'course_id': b.course_id,
                 'course_name': b.course.name if b.course else '独立题库', 'owner_name': b.owner.shown_name if b.owner else '',
@@ -102,22 +115,22 @@ class AdminCatalogView(AdminView):
                 'visibility': b.visibility, 'question_count': b.questions.filter(group__isnull=True).count() + b.groups.count(),
                 'updated_at': b.updated_at.isoformat(),
                 'detail_url': f'/manage/resources/courses/{b.course_id}/banks/{b.pk}/' if b.course_id else f'/manage/resources/banks/{b.pk}/'}
-                for b in QuestionBank.objects.select_related('course', 'owner')]
+                for b in QuestionBank.objects.filter(course__deleted_at__isnull=True).select_related('course', 'owner')]
             questions = [{'id': q.pk, 'title': q.title or q.text[:100], 'bank_id': q.bank_id, 'bank_name': q.bank.name,
                 'course_id': q.bank.course_id, 'course_name': q.bank.course.name if q.bank.course else '独立题库',
                 'question_type': q.question_type, 'status': q.status, 'code': q.code, 'group_id': q.group_id,
                 'detail_url': f'/manage/resources/courses/{q.bank.course_id}/banks/{q.bank_id}/questions/{q.pk}/edit/' if q.bank.course_id else f'/manage/resources/banks/{q.bank_id}/questions/{q.pk}/edit/'}
-                for q in Question.objects.select_related('bank__course').order_by('bank_id', 'sequence')]
+                for q in Question.objects.filter(bank__course__deleted_at__isnull=True).select_related('bank__course').order_by('bank_id', 'sequence')]
             concepts = [{'id': c.pk, 'name': c.name, 'code': c.code, 'description': c.description,
                 'course_id': c.course_id, 'course_name': c.course.name if c.course else '公共知识点',
                 'status': c.status, 'question_count': c.questions.count(),
                 'detail_url': f'/manage/resources/?tab=concepts&concept_id={c.pk}'}
-                for c in Concept.objects.select_related('course')]
+                for c in Concept.objects.filter(course__deleted_at__isnull=True).select_related('course')]
             return Response({'banks': banks, 'questions': questions, 'concepts': concepts})
         if section == 'data':
             from apps.analytics.api.views import _export_job_payload
             exports = []
-            for job in ExportJob.objects.select_related('course', 'created_by', 'snapshot'):
+            for job in ExportJob.objects.filter(course__deleted_at__isnull=True).select_related('course', 'created_by', 'snapshot'):
                 row = _export_job_payload(job)
                 row['history_url'] = f'/manage/data/?tab=exports&course_id={job.course_id}&job_id={job.pk}'
                 row.update({'id': str(job.pk), 'course_id': job.course_id, 'course_name': job.course.name,
@@ -154,6 +167,11 @@ class AdminCatalogView(AdminView):
 @extend_schema(request=dict, responses=dict)
 class AdminUserActionView(AdminView):
     def post(self, request, user_id, action):
+        if action in ('delete-preview', 'delete'):
+            from apps.accounts import admin_recycle
+            if action == 'delete-preview':
+                return Response(admin_recycle.preview('user', user_id, request.user))
+            return Response(admin_recycle.remove(request, 'user', user_id, request.data))
         try:
             return Response(service.user_row(service.mutate_user(request, user_id, action, request.data)))
         except IntegrityError as exc:
@@ -195,25 +213,11 @@ class AdminCourseActionView(AdminView):
             course = transfer_course_owner(course, request.user, teacher, request.data.get('state_token', ''),
                 request=request, keep_previous=request.data.get('keep_previous', True), reason=request.data.get('reason', ''))
             return Response(service.course_row(course))
-        if action == 'delete-preview':
-            from apps.accounts.course_deletion import preview_course_deletion
-            return Response(preview_course_deletion(get_object_or_404(Course, pk=course_id), request.user))
-        if action == 'delete':
-            from apps.accounts.course_deletion import execute_course_deletion, recover_course_deletion
-            if request.data.get('confirmation') != 'DELETE' or not request.data.get('confirmation_name'):
-                raise ValidationError('请填写课程名称并明确确认删除。')
-            token = request.data.get('confirmation_token', '')
-            recovered = recover_course_deletion(course_id, request.user, token)
-            if recovered:
-                return Response(recovered)
-            course = get_object_or_404(Course, pk=course_id)
-            try:
-                return Response(execute_course_deletion(request, course, token, request.data['confirmation_name']))
-            except Course.DoesNotExist:
-                recovered = recover_course_deletion(course_id, request.user, token)
-                if recovered:
-                    return Response(recovered)
-                raise NotFound()
+        if action in ('delete-preview', 'delete'):
+            from apps.accounts import admin_recycle
+            if action == 'delete-preview':
+                return Response(admin_recycle.preview('course', course_id, request.user))
+            return Response(admin_recycle.remove(request, 'course', course_id, request.data))
         if action in ('archive', 'restore'):
             if request.data.get('confirmation') != action:
                 raise ValidationError('请明确确认课程状态变更。')
@@ -224,3 +228,18 @@ class AdminCourseActionView(AdminView):
                 log_action(request, f'course.{action}', course)
             return Response(service.course_row(course))
         raise NotFound()
+
+
+@extend_schema(responses=dict)
+class AdminRecycleView(AdminView):
+    def get(self, request):
+        from apps.accounts.admin_recycle import entry_row
+        from apps.accounts.models import AdminRecycleEntry
+        return Response({'items': [entry_row(row) for row in AdminRecycleEntry.objects.filter(restored_at__isnull=True)]})
+
+
+@extend_schema(request=dict, responses=dict)
+class AdminRecycleRestoreView(AdminView):
+    def post(self, request, entry_id):
+        from apps.accounts.admin_recycle import restore
+        return Response(restore(request, entry_id))

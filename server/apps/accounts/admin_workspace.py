@@ -9,6 +9,7 @@ from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
+from rest_framework.serializers import IntegerField
 
 from apps.audit.models import AuditLog
 from apps.audit.services import log_action
@@ -71,12 +72,25 @@ def create_user(request, values):
     name = str(values.get("name", "")).strip()
     if not name or not username:
         raise ValidationError("请填写姓名及用户名或学号。")
-    user = User(username=username, student_number=number, display_name=name, role=role,
-                email=str(values.get("email", "")).strip())
-    user.set_password(f"S{username}")
-    user.uses_initial_password = True
-    user.initial_password_state_recorded_at = timezone.now()
-    user.must_change_password = False
+    if role == User.Role.STUDENT:
+        from .student_identity import enroll_student
+        enrollment_ids = {}
+        for field in ('course_id', 'class_group_id'):
+            try:
+                enrollment_ids[field] = IntegerField(min_value=1).run_validation(values.get(field))
+            except ValidationError as exc:
+                raise ValidationError({field: exc.detail}) from exc
+        user, created = enroll_student(enrollment_ids['course_id'], enrollment_ids['class_group_id'], number, name, request=request)
+        if not created:
+            raise ValidationError({'student_number': '该学号已存在，请通过班级成员管理添加选课。'})
+        user.email = str(values.get("email", "")).strip()
+    else:
+        user = User(username=username, student_number=number, display_name=name, role=role,
+                    email=str(values.get("email", "")).strip())
+        user.set_password(f"S{username}")
+        user.uses_initial_password = True
+        user.initial_password_state_recorded_at = timezone.now()
+        user.must_change_password = False
     checked_save(user)
     log_action(request, "admin.user.create", user, {"role": role, "username": username})
     return user
@@ -86,7 +100,7 @@ def create_user(request, values):
 def mutate_user(request, user_id, action, values):
     # Serialize administrator status transitions before locking the target.
     list(User.objects.select_for_update().filter(Q(role=User.Role.ADMIN) | Q(is_superuser=True)).order_by("pk"))
-    user = get_object_or_404(User.objects.select_for_update(), pk=user_id)
+    user = get_object_or_404(User.objects.select_for_update(), pk=user_id, deleted_at__isnull=True)
     before = {"name": user.display_name, "username": user.username, "email": user.email, "is_active": user.is_active}
     if action == "status":
         active = values.get("is_active")

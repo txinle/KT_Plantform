@@ -1,0 +1,16 @@
+<script setup lang="ts">
+import {computed,ref,watch} from 'vue'
+import Paginator from '@/design-system/components/Paginator.vue'
+import SiteDialog from '@/features/management-shared/SiteDialog.vue'
+import {getAdminApi} from './api'
+interface RecycleItem{id:string|number;kind:'course'|'user';name:string;deleted_at:string;restore_until:string;can_restore:boolean;counts:Record<string,number>}
+const props=defineProps<{open:boolean;kind:'course'|'user'}>(),emit=defineEmits<{changed:[];close:[]}>(),api=getAdminApi(),items=ref<RecycleItem[]>([]),selected=ref<RecycleItem>(),busy=ref(false),error=ref(''),message=ref(''),page=ref(1)
+const filtered=computed(()=>items.value.filter(item=>item.kind===props.kind)),totalPages=computed(()=>Math.max(1,Math.ceil(filtered.value.length/20))),rows=computed(()=>filtered.value.slice((page.value-1)*20,page.value*20))
+let generation=0
+async function load(){const version=++generation;error.value='';busy.value=true;try{const data=await api.get<{items:RecycleItem[]}>('recycle/');if(version===generation&&props.open)items.value=data.items}catch(e){if(version===generation)error.value=(e as Error).message}finally{if(version===generation)busy.value=false}}
+watch(()=>[props.open,props.kind],()=>{generation++;selected.value=undefined;message.value='';page.value=1;if(props.open)void load()},{immediate:true})
+watch(totalPages,value=>{if(page.value>value)page.value=value})
+async function restore(){const item=selected.value;if(!item?.can_restore||busy.value)return;busy.value=true;error.value='';try{await api.post(`recycle/${item.id}/restore/`,{});items.value=items.value.filter(row=>row.id!==item.id);selected.value=undefined;message.value=`${item.name} 已恢复。`;emit('changed')}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
+const date=(value:string)=>value?new Date(value).toLocaleString('zh-CN'):'—'
+</script>
+<template><SiteDialog :open="open" :title="kind==='course'?'课程回收站':'账号回收站'" subtitle="删除后保留 14 天恢复期" wide @close="emit('close')"><p class="policy-note">14 天恢复期届满后不可恢复。到期不代表数据已自动物理销毁。</p><p v-if="error" role="alert" class="error-block">{{ error }}</p><p v-if="message" role="status">{{ message }}</p><template v-if="selected"><h3>确认恢复 {{ selected.name }}？</h3><p>恢复后将重新显示在管理列表。服务器会检查关联状态和恢复期限。</p></template><template v-else><div class="table-scroll"><table><thead><tr><th>名称</th><th>删除时间</th><th>恢复截止时间</th><th>操作</th></tr></thead><tbody><tr v-for="item in rows" :key="item.id"><td>{{ item.name }}</td><td>{{ date(item.deleted_at) }}</td><td>{{ date(item.restore_until) }}<small v-if="!item.can_restore" class="cell-sub">当前不可恢复</small></td><td><button class="link" :disabled="busy||!item.can_restore" @click="selected=item;error=''">恢复</button></td></tr><tr v-if="!rows.length"><td colspan="4" class="empty">{{ busy?'正在加载回收站…':'回收站暂无记录。' }}</td></tr></tbody></table></div><Paginator :page="page" :total-pages="totalPages" @navigate="page=$event"/><p class="hint">共 {{ filtered.length }} 条记录 · 每页 20 条</p></template><template #footer><button @click="selected?selected=undefined:emit('close')">{{ selected?'返回列表':'关闭' }}</button><button v-if="selected" class="primary" :disabled="busy||!selected.can_restore" @click="restore">{{ busy?'正在恢复…':'确认恢复' }}</button></template></SiteDialog></template>

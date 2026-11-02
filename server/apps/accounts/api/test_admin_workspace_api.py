@@ -88,7 +88,11 @@ class AdminWorkspaceTests(TestCase):
         self.assertTrue(self.admin.is_active)
 
     def test_student_identity_is_not_teacher_username(self):
-        response = self.client.post('/api/v1/manage/users/', {'role':'student','student_number':'2026001','name':'学生'}, format='json')
+        from apps.accounts.models import ClassGroup
+        course = Course.objects.create(name='学生课程', code='STUDENT', term='2026', owner=self.teacher)
+        group = ClassGroup.objects.create(course=course, name='学生班级')
+        response = self.client.post('/api/v1/manage/users/', {'role':'student','student_number':'2026001','name':'学生',
+            'course_id': course.pk, 'class_group_id': group.pk}, format='json')
         self.assertEqual(response.status_code, 201, response.data)
         student = User.objects.get(student_number='2026001')
         self.assertEqual(student.username, '2026001')

@@ -1,0 +1,28 @@
+.management-workspace .admin-list{min-width:0}
+.management-workspace .admin-list .table-scroll{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+.management-workspace .admin-list-table{table-layout:fixed;width:100%;min-width:960px;white-space:normal}
+.management-workspace .admin-list-col-name{width:27%}
+.management-workspace .admin-list-col-context{width:21%}
+.management-workspace .admin-list-col-summary{width:15%}
+.management-workspace .admin-list-col-status{width:12%}
+.management-workspace .admin-list-col-actions{width:25%}
+.management-workspace .admin-list-table th,.management-workspace .admin-list-table td{padding:17px 20px;vertical-align:middle;overflow-wrap:anywhere;word-break:normal}
+.management-workspace .admin-list-table th{padding-block:13px}
+.management-workspace .admin-list-table td:last-child{white-space:normal}
+.management-workspace .admin-list-table td:last-child>button,.management-workspace .admin-list-table td:last-child>a{white-space:nowrap;vertical-align:middle;padding:7px 8px;margin:2px 0;min-height:36px}
+.management-workspace .admin-list-table .person{min-width:0;align-items:flex-start}
+.management-workspace .admin-list-table .person>.avatar{flex-shrink:0}
+.management-workspace .admin-list-table .person>div{min-width:0}
+.management-workspace .admin-list-table .cell-sub,.management-workspace .admin-list-table .person small{white-space:normal;max-width:100%;overflow-wrap:anywhere;line-height:1.65}
+.management-workspace .admin-list .toolbar{flex-wrap:wrap;align-items:center}
+.management-workspace .admin-list .search{min-width:180px;max-width:100%;flex:1 1 280px}
+.management-workspace .admin-list .filter-group{min-width:0;max-width:100%;flex:0 1 auto;align-items:center;flex-wrap:wrap}
+.management-workspace .admin-list .toolbar .site-select{flex:1 1 160px;width:180px;max-width:240px}
+.management-workspace .admin-list .toolbar .site-select__label{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.management-workspace .admin-list .toolbar .site-select__trigger{min-height:44px}
+.management-workspace .admin-list .toolbar .site-select__panel{min-width:260px;max-width:calc(100vw - 64px);left:auto;right:0}
+.management-workspace .admin-list .toolbar select{width:auto;min-width:130px;max-width:240px;min-height:44px;text-overflow:ellipsis}
+.management-workspace .admin-list .kt-paginator{display:flex;align-items:center;justify-content:flex-end;gap:16px;padding:16px 20px 0;flex-wrap:wrap;font-size:12px;color:#61738b}
+.management-workspace .admin-list .kt-paginator button{min-height:40px;padding:8px 14px}
+.management-workspace .admin-list .admin-list-footer{gap:12px;flex-wrap:wrap;padding:16px 20px}
+@media(max-width:700px){.management-workspace .admin-list .filter-group{flex:1 1 100%;justify-content:flex-start}.management-workspace .admin-list .toolbar .site-select{max-width:none}.management-workspace .admin-list .toolbar .site-select__panel{left:0;right:auto}.management-workspace .admin-list-table{min-width:880px}.management-workspace .admin-list-table th,.management-workspace .admin-list-table td{padding-inline:15px}.management-workspace .admin-list .toolbar{gap:10px}.management-workspace .admin-list .toolbar select{flex:1 1 130px;max-width:100%;min-width:0}.management-workspace .admin-list .kt-paginator{justify-content:space-between;gap:8px;padding-inline:15px}.management-workspace .admin-list .kt-paginator button,.management-workspace .admin-list-table td:last-child>button,.management-workspace .admin-list-table td:last-child>a{min-height:44px}.management-workspace .admin-list .admin-list-footer{padding-inline:15px}}

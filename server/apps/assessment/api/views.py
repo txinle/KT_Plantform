@@ -83,12 +83,14 @@ def _student_enrollment(student, course_id):
         course_id=course_id,
         student=student,
         is_active=True,
+        course__deleted_at__isnull=True,
     )
 
 
 def _student_task_queryset(student, *, course_id=None, include_projection=True):
     queryset = (
         ClassExperimentTask.objects.filter(
+            experiment__course__deleted_at__isnull=True,
             participant_snapshots__student=student,
             participant_snapshots__version_id=F("release_snapshot_id"),
             participant_snapshots__class_snapshot_id=F("class_snapshot_id"),
@@ -276,6 +278,7 @@ class StudentCourseCollectionView(StudentApiMixin, APIView):
         enrollments = CourseEnrollment.objects.filter(
             student=request.user,
             is_active=True,
+            course__deleted_at__isnull=True,
         ).select_related("course", "class_group")
         return Response(
             {"items": [_course_projection(enrollment) for enrollment in enrollments]}

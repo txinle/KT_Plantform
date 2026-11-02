@@ -24,7 +24,7 @@ def get_accessible_course(user, course_pk, capability=None):
 
 
 def require_course_owner(course, user):
-    if user.is_active and (user.is_superuser or user.role == User.Role.ADMIN or course.owner_id == user.id):
+    if course.deleted_at is None and user.is_active and (user.is_superuser or user.role == User.Role.ADMIN or course.owner_id == user.id):
         return course
     raise PermissionDenied
 
@@ -36,7 +36,7 @@ def require_course_manager(course, user, capability=None):
 
 
 def require_writable_course(course):
-    if course.status != Course.Status.ACTIVE:
+    if course.deleted_at is not None or course.status != Course.Status.ACTIVE:
         raise PermissionDenied
     return course
 

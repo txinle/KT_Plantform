@@ -106,12 +106,12 @@ onUnmounted(() => { generation++; stop() })
 <template>
   <SiteDialog :open="open" title="创建标准实验数据包" subtitle="每个实验独立导出 7 个 CSV 与 1 个 JSON 文件" wide @close="!creating && emit('close')">
     <div v-if="!jobs.length" class="form-grid">
-      <SiteSelect v-model="course" label="课程" name="course" placeholder="请选择课程" :disabled="creating" :options="courses.map(c => ({ value: c.id, label: `${c.name} · ${c.term || ''}` }))" />
-      <SiteSelect v-if="catalog" v-model="experiment" label="实验" name="experiment" placeholder="请选择实验" :disabled="creating" :options="[{ value: -1, label: '全部实验' }, ...catalog.experiments.map(e => ({ value: e.id, label: e.name }))]" />
+      <SiteSelect v-model="course" searchable label="课程" name="course" placeholder="请选择课程" :disabled="creating" :options="courses.map(c => ({ value: c.id, label: `${c.name} · ${c.term || ''}` }))" />
+      <SiteSelect v-if="catalog" v-model="experiment" searchable label="实验" name="experiment" placeholder="请选择实验" :disabled="creating" :options="[{ value: -1, label: '全部实验' }, ...catalog.experiments.map(e => ({ value: e.id, label: e.name }))]" />
       <template v-if="experiment">
         <template v-if="!allExperiments">
           <SiteSelect v-model="classMode" label="班级范围" name="class_mode" :disabled="creating" :options="[{ value: 'all', label: '全部已发布班级' }, { value: 'single', label: '单个班级' }]" />
-          <SiteSelect v-if="classMode === 'single'" v-model="classId" label="班级" name="class_id" placeholder="请选择班级" :disabled="creating" :options="(catalog?.class_choices || []).map(c => ({ value: c.id, label: `${c.academic_year} ${c.name}` }))" />
+          <SiteSelect v-if="classMode === 'single'" v-model="classId" searchable label="班级" name="class_id" placeholder="请选择班级" :disabled="creating" :options="(catalog?.class_choices || []).map(c => ({ value: c.id, label: `${c.academic_year} ${c.name}` }))" />
         </template>
         <p v-else>全部实验按各自全部已发布班级分别导出，每个实验生成一个独立的标准数据包。</p>
         <button :disabled="loading || creating || classMode === 'single' && !classId" @click="loadPreview">刷新导出范围</button>

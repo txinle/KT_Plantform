@@ -417,6 +417,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/manage/choices/{kind}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["manage_choices_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/manage/courses/{course_id}/{action}/": {
         parameters: {
             query?: never;
@@ -427,6 +443,38 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["manage_courses_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/manage/recycle/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["manage_recycle_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/manage/recycle/{entry_id}/restore/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["manage_recycle_restore_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9952,6 +10000,45 @@ export interface operations {
             };
         };
     };
+    manage_choices_retrieve: {
+        parameters: {
+            query?: {
+                course_id?: number;
+                exclude_id?: number;
+                /**
+                 * @description * `0` - 0
+                 *     * `1` - 1
+                 */
+                include_archived?: "0" | "1";
+                page?: number;
+                q?: string;
+                selected_id?: number;
+            };
+            header?: never;
+            path: {
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            [key: string]: unknown;
+                        };
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
     manage_courses_create: {
         parameters: {
             query?: never;
@@ -9959,6 +10046,72 @@ export interface operations {
             path: {
                 action: string;
                 course_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-www-form-urlencoded": {
+                    [key: string]: unknown;
+                };
+                "multipart/form-data": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            [key: string]: unknown;
+                        };
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    manage_recycle_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            [key: string]: unknown;
+                        };
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    manage_recycle_restore_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entry_id: number;
             };
             cookie?: never;
         };
