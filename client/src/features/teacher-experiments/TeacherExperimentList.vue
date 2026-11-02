@@ -41,20 +41,27 @@ const expandedTasks = ref<ClassTask[]>([])
 const expandedProgress = ref<Record<number, ClassTaskProgress>>({})
 const expandedLoading = ref(false)
 const expandedError = ref('')
+const expandedProgressError = ref('')
 let expansionRequest = 0
 async function loadExpanded(experimentId: number) {
   const request = ++expansionRequest
   expandedLoading.value = true
   expandedError.value = ''
+  expandedProgressError.value = ''
   expandedTasks.value = []
   expandedProgress.value = {}
   try {
     const result = await api.classTasks(experimentId)
     if (request !== expansionRequest) return
     expandedTasks.value = result.items
+    expandedLoading.value = false
     await Promise.all(result.items.map(async task => {
-      const row = await api.progress(task.id)
-      if (request === expansionRequest) expandedProgress.value[task.id] = row
+      try {
+        const row = await api.progress(task.id)
+        if (request === expansionRequest) expandedProgress.value[task.id] = row
+      } catch {
+        if (request === expansionRequest) expandedProgressError.value = '部分作答进度加载失败，班级排期仍可查看和操作。'
+      }
     }))
   } catch (caught) {
     if (request === expansionRequest) expandedError.value = caught instanceof Error ? caught.message : '班级排期加载失败。'
@@ -220,6 +227,7 @@ onMounted(() => load())
       <h3>{{ collection?.items.find(item => item.id === expandedId)?.name }}</h3>
       <p v-if="expandedLoading" role="status">正在加载班级排期…</p>
       <Alert v-if="expandedError" tone="danger">{{ expandedError }}</Alert>
+      <Alert v-if="expandedProgressError" tone="warning">{{ expandedProgressError }}</Alert>
       <ExperimentClassTaskTable v-if="!expandedLoading && expandedTasks.length" :course-id="courseId" :experiment-id="expandedId" :tasks="expandedTasks" :progress="expandedProgress" @changed="refreshExpanded" />
       <p v-else-if="!expandedLoading && !expandedError">暂无班级排期。</p>
     </section>

@@ -2,7 +2,7 @@ import csv
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.db.models import Count, Exists, OuterRef, Q, Sum
+from django.db.models import Count, Exists, OuterRef, Prefetch, Q, Sum
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiParameter, extend_schema
@@ -38,6 +38,8 @@ from ..models import (
     PublishPlanExclusion,
     PublishPreviewParticipant,
     PublishPreviewItem,
+    ScheduleRevision,
+    TaskManualClosure,
 )
 from ..publication_jobs import (
     enqueue_publish_operation,
@@ -255,8 +257,7 @@ def _draft_participant_projection(enrollment, *, include_items=False):
     return result
 
 
-def _task_available_actions(task, *, now=None):
-    grading = task_grading_summary(task)
+def _task_available_actions(task, *, now, grading, schedule, task_state):
     grading_actions = (
         ["grade_short_answers"]
         if grading["enabled"] and grading["short_answer_questions"] > 0
@@ -264,17 +265,15 @@ def _task_available_actions(task, *, now=None):
     )
     if task.cancelled_at or task.invalidated_at:
         return grading_actions
-    now = now or database_now()
-    schedule = task.schedule_revisions.order_by("-revision_no").first()
     actions = list(grading_actions)
     actions.append("adjust_time")
-    if DeadlineDecisionService.get_task_state(task, at=now) == "manual_closed":
+    if task_state == "manual_closed":
         return actions
     if (
         schedule is not None
         and schedule.opens_at is not None
         and now < schedule.opens_at
-        and not task.sessions.exclude(status=ExperimentSession.Status.PREPARED).exists()
+        and not task.has_started_sessions
     ):
         actions.extend(("revise_schedule", "cancel"))
     actions.append("manual_close")
@@ -292,16 +291,46 @@ def _task_available_actions(task, *, now=None):
     return actions
 
 
-def _task_projection(task):
-    task = (
-        ClassExperimentTask.objects.select_related(
+def _task_projection_queryset(queryset):
+    return (
+        queryset.select_related(
             "experiment", "class_group", "release_snapshot"
         )
-        .prefetch_related("schedule_revisions")
-        .get(pk=task.pk)
+        .annotate(
+            participant_count=Count("participant_snapshots"),
+            has_started_sessions=Exists(
+                ExperimentSession.objects.filter(class_task_id=OuterRef("pk"))
+                .exclude(status=ExperimentSession.Status.PREPARED)
+            ),
+        )
+        .prefetch_related(
+            Prefetch(
+                "schedule_revisions",
+                queryset=ScheduleRevision.objects.order_by("-revision_no"),
+                to_attr="latest_schedule_revisions",
+            ),
+            Prefetch(
+                "manual_closures",
+                queryset=TaskManualClosure.objects.order_by("-closed_at", "-pk"),
+                to_attr="current_manual_closures",
+            ),
+            Prefetch(
+                "sessions",
+                queryset=ExperimentSession.objects.filter(
+                    status=ExperimentSession.Status.EXPIRED
+                ).select_related("version"),
+                to_attr="expired_sessions",
+            ),
+        )
     )
-    schedule = task.schedule_revisions.order_by("-revision_no").first()
-    now = database_now()
+
+
+def _task_projection(task, *, now=None):
+    if not hasattr(task, "latest_schedule_revisions"):
+        task = _task_projection_queryset(ClassExperimentTask.objects.all()).get(pk=task.pk)
+    schedule = next(iter(task.latest_schedule_revisions), None)
+    now = now or database_now()
+    task_state = DeadlineDecisionService.get_task_state(task, at=now)
     grading = task_grading_summary(task)
     configuration = task.release_snapshot.configuration
     time_mode = configuration.get("time_mode")
@@ -311,7 +340,7 @@ def _task_projection(task):
         "experiment_name": task.experiment.name,
         "class_id": task.class_group_id,
         "class_name": str(task.class_group),
-        "business_status": DeadlineDecisionService.get_task_state(task, at=now),
+        "business_status": task_state,
         "published_at": task.class_published_at or task.published_at,
         "opens_at": schedule.opens_at if schedule else None,
         "closes_at": schedule.closes_at if schedule else None,
@@ -326,13 +355,13 @@ def _task_projection(task):
         ),
         "recoverable_count": sum(
             can_recover_session(task, session, at=now)
-            for session in task.sessions.filter(status=ExperimentSession.Status.EXPIRED)
-            .select_related("version")
-            .prefetch_related("attempts")
+            for session in task.expired_sessions
         ),
-        "participant_count": task.participant_snapshots.count(),
+        "participant_count": task.participant_count,
         "grading": grading,
-        "available_actions": _task_available_actions(task, now=now),
+        "available_actions": _task_available_actions(
+            task, now=now, grading=grading, schedule=schedule, task_state=task_state
+        ),
     }
 
 
@@ -1066,10 +1095,11 @@ class TeacherExperimentClassTaskListView(TeacherClassTaskMixin, APIView):
         )
         if not experiment.course.can_manage(request.user, capability="experiment"):
             raise Http404
-        tasks = experiment.class_tasks.select_related("class_group").order_by(
+        tasks = _task_projection_queryset(experiment.class_tasks.all()).order_by(
             "class_group__academic_year", "class_group__name", "pk"
         )
-        return Response({"items": [_task_projection(task) for task in tasks]})
+        now = database_now()
+        return Response({"items": [_task_projection(task, now=now) for task in tasks]})
 
 
 class TeacherExperimentCollectionParticipantView(APIView):
