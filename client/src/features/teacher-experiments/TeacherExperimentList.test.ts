@@ -50,27 +50,28 @@ beforeAll(() => {
 })
 
 describe('TeacherExperimentList deletion', () => {
-  it('matches the compact Site list with an archive filter and inline grading action', async () => {
-    mocks.api.list.mockResolvedValue(collection([{ ...experiment, description: 'Do not expand the row with this description', sampling_total_count: 12, activity: { pending_grading_count: 8, grading_url: '/grade/', schedules: [] } }]))
+  it('renders one compact card per experiment with accessible filters and authorized actions', async () => {
+    mocks.api.list.mockResolvedValue(collection([{ ...experiment, description: 'Do not expand the card with this description', activity: { pending_grading_count: 8, grading_url: '/grade/', schedules: [] } }]))
     const wrapper = mount(TeacherExperimentList, { global: { stubs: { Teleport: true } } })
     await flushPromises()
-    expect(wrapper.get('input[data-show-archived]').attributes('type')).toBe('checkbox')
-    expect(wrapper.find('#experiment-list-title').exists()).toBe(false)
-    const cell = wrapper.get('tbody tr td')
-    expect(cell.find('.kt-experiment-name-row [data-pending-grading]').exists()).toBe(true)
-    expect(cell.text()).toContain('12 道题')
-    expect(cell.text()).not.toContain('Do not expand the row')
-    expect(cell.text()).not.toContain('无说明')
+    expect(wrapper.get('select[data-show-archived]').attributes('aria-label')).toBe('按归档状态筛选')
+    expect(wrapper.findAll('.kt-experiment-card')).toHaveLength(1)
+    const card = wrapper.get('.kt-experiment-card')
+    expect(card.get('h2 a').attributes('title')).toBe(experiment.name)
+    expect(card.text()).toContain('0 个班级')
+    expect(card.text()).not.toContain('Do not expand the card')
+    expect(card.get('[data-pending-grading]').attributes('href')).toBe('/grade/')
+    expect(wrapper.find('table').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('expands class operations in the list without navigating and opens the real schedule editor', async () => {
+  it('opens class operations from a card without navigating and opens the real schedule editor', async () => {
     mocks.api.list.mockResolvedValue(collection([{ ...experiment, activity: { schedules: [{ task_id: 25, class_name: '一班', opens_at: null, closes_at: null }] } }]))
     mocks.api.classTasks.mockResolvedValue({ items: [{ id: 25, class_id: 5, class_name: '一班', participant_count: 3, opens_at: null, closes_at: null, business_status: 'open', schedule_revision: 2, total_time_limit_minutes: 15, available_actions: ['adjust_time'] }] })
     mocks.api.progress.mockResolvedValue({ total_participants: 3, not_started: 2, in_progress: 1, completed: 0 })
     const wrapper = mount(TeacherExperimentList, { global: { stubs: { Teleport: true } } })
     await flushPromises()
-    await wrapper.get('[data-expand-schedules="13"]').trigger('click')
+    await wrapper.get('[data-class-schedules="13"]').trigger('click')
     await flushPromises()
     expect(mocks.push).not.toHaveBeenCalled()
     expect(mocks.api.classTasks).toHaveBeenCalledWith(13)
@@ -132,7 +133,7 @@ describe('TeacherExperimentList deletion', () => {
     const wrapper = mount(TeacherExperimentList, { global: { stubs: { Teleport: true } } })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('未选择题库')
+    expect(wrapper.get('.kt-experiment-card h2').text()).toBe(experiment.name)
     await wrapper.findAll('[data-delete-experiment="13"]')[0]!.trigger('click')
     await flushPromises()
     expect(mocks.deletion.previewExperiment).toHaveBeenCalledWith(7, 13, expect.any(AbortSignal))
@@ -145,31 +146,23 @@ describe('TeacherExperimentList deletion', () => {
     expect(mocks.api.list).toHaveBeenNthCalledWith(3, 7, 1)
   })
 
-  it('shows the authoritative pending count and one complete schedule row per class', async () => {
+  it('summarizes class schedules as a single class-count button', async () => {
     mocks.api.list.mockResolvedValue(collection([{ ...experiment, activity: {
-      pending_grading_count: 8,
-      grading_url: '/teacher/courses/7/experiments/13/class-tasks/31/grading/',
-      schedules: [
-        { task_id: 31, class_name: '一班', opens_at: '2026-11-01T01:00:00Z', closes_at: '2026-11-02T01:00:00Z', total_time_limit_minutes: 45, per_question_time_limit_seconds: null },
-        { task_id: 32, class_name: '二班', opens_at: null, closes_at: null, total_time_limit_minutes: null, per_question_time_limit_seconds: 60 },
+      pending_grading_count: 8, grading_url: '/grade/', schedules: [
+        { task_id: 31, class_name: '一班', opens_at: null, closes_at: null },
+        { task_id: 32, class_name: '二班', opens_at: null, closes_at: null },
       ],
     } }]))
     const wrapper = mount(TeacherExperimentList, { global: { stubs: { Teleport: true } } })
     await flushPromises()
-    expect(wrapper.get('[data-pending-grading]').text()).toBe('待批改：8')
-    expect(wrapper.get('[data-pending-grading]').attributes('href')).toBe('/teacher/courses/7/experiments/13/class-tasks/31/grading/')
-    expect(wrapper.findAll('.kt-experiment-schedule-heading span').map(cell => cell.text())).toEqual(['班级', '开始时间', '截止时间', '总限时'])
-    const rows = wrapper.findAll('.kt-experiment-schedule-row')
-    expect(rows).toHaveLength(2)
-    expect(rows[0]!.findAll('span').map(cell => cell.text())).toEqual([
-      '一班', expect.stringContaining('2026/11/01'), expect.stringContaining('2026/11/02'), '45 分钟',
-    ])
-    expect(rows[1]!.findAll('span').map(cell => cell.text())).toEqual(['二班', '立即开放', '无截止', '每题 60 秒'])
-    expect(wrapper.get('.kt-desktop-only').text().match(/一班/g)).toHaveLength(1)
+    expect(wrapper.get('[data-class-schedules]').text()).toBe('2 个班级')
+    expect(wrapper.get('[data-class-schedules]').attributes('aria-label')).toContain('查看 2 个班级')
+    expect(wrapper.find('[data-inline-schedules]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-pending-grading]')).toHaveLength(1)
     wrapper.unmount()
   })
 
-  it('keeps both grading entry points clickable when the authorized pending count is zero', async () => {
+  it('keeps the grading menu entry clickable when the authorized pending count is zero', async () => {
     const gradingUrl = '/teacher/courses/7/experiments/13/class-tasks/31/grading/'
     mocks.api.list.mockResolvedValue(collection([{ ...experiment, activity: {
       pending_grading_count: 0, grading_url: gradingUrl, schedules: [],
@@ -177,12 +170,9 @@ describe('TeacherExperimentList deletion', () => {
     const wrapper = mount(TeacherExperimentList, { global: { stubs: { Teleport: true } } })
     await flushPromises()
     const pending = wrapper.get('a[data-pending-grading]')
-    expect(pending.text()).toBe('待批改：0')
+    expect(pending.text()).toBe('人工批改（待批改：0）')
     expect(pending.attributes('href')).toBe(gradingUrl)
-    const manualGrading = wrapper.findAll('#experiment-menu-13 a').find(link => link.text() === '人工批改')
-    expect(manualGrading?.attributes('href')).toBe(gradingUrl)
-    const mobilePending = wrapper.findAll('.kt-mobile-only a').find(link => link.text() === '待批改：0')
-    expect(mobilePending?.attributes('href')).toBe(gradingUrl)
+    expect(wrapper.findAll('a[data-pending-grading]')).toHaveLength(1)
     wrapper.unmount()
   })
 
@@ -194,20 +184,19 @@ describe('TeacherExperimentList deletion', () => {
     await flushPromises()
     expect(wrapper.find('[data-pending-grading]').exists()).toBe(false)
     expect(wrapper.findAll('a').some(link => link.text() === '人工批改' || link.text().startsWith('待批改：'))).toBe(false)
-    expect(wrapper.get('.kt-experiment-pending').text()).toBe('待批改：0')
+    expect(wrapper.find('.kt-experiment-pending').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('offers the server-authorized student simulation from desktop and mobile operations', async () => {
+  it('offers the server-authorized student simulation from the shared card menu', async () => {
     const url = '/teacher/courses/7/experiments/13/student-preview/'
     mocks.api.list.mockResolvedValue(collection([{ ...experiment, student_preview_url: url }]))
     const wrapper = mount(TeacherExperimentList, { global: { stubs: { Teleport: true } } })
     await flushPromises()
     const links = wrapper.findAll('a').filter(link => link.text() === '模拟学生作答')
-    expect(links).toHaveLength(2)
+    expect(links).toHaveLength(1)
     expect(links.every(link => link.attributes('href') === url)).toBe(true)
     expect(wrapper.findAll('#experiment-menu-13 a').filter(link => link.text() === '模拟学生作答')).toHaveLength(1)
-    expect(wrapper.findAll('.kt-mobile-only a').filter(link => link.text() === '模拟学生作答')).toHaveLength(1)
     wrapper.unmount()
   })
 
@@ -226,7 +215,7 @@ describe('TeacherExperimentList deletion', () => {
     expect(mocks.api.archive).toHaveBeenCalledWith(7, 13)
     expect(mocks.deletion.deleteExperiment).not.toHaveBeenCalled()
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-    await wrapper.get('[data-show-archived]').setValue(true)
+    await wrapper.get('[data-show-archived]').setValue('archived')
     await flushPromises()
     expect(mocks.push).toHaveBeenLastCalledWith({ query: { archived: '1' } })
     expect(mocks.api.list).toHaveBeenLastCalledWith(7, 1, true)
@@ -271,7 +260,7 @@ describe('TeacherExperimentList deletion', () => {
     mocks.api.restore.mockResolvedValue({ ...experiment, status: 'draft' })
     const wrapper = mount(TeacherExperimentList, { global: { stubs: { Teleport: true } } })
     await flushPromises()
-    expect(wrapper.findAll('[data-restore-experiment="13"]')).toHaveLength(2)
+    expect(wrapper.findAll('[data-restore-experiment="13"]')).toHaveLength(1)
     await wrapper.findAll('[data-restore-experiment="13"]')[0]!.trigger('click')
     await flushPromises()
     expect(mocks.api.restore).toHaveBeenCalledWith(7, 13)

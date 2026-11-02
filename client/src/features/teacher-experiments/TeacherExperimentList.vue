@@ -9,8 +9,7 @@ import ExperimentClassTaskTable from './ExperimentClassTaskTable.vue'
 import Alert from '@/design-system/components/Alert.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import ModalDialog from '@/design-system/components/ModalDialog.vue'
-import MobileCardList from '@/design-system/components/MobileCardList.vue'
-import PageHeader from '@/design-system/components/PageHeader.vue'
+import Icon from '@/design-system/Icon.vue'
 import Paginator from '@/design-system/components/Paginator.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 import DeletionDialog from '@/features/teacher-deletion/DeletionDialog.vue'
@@ -61,9 +60,14 @@ async function loadExpanded(experimentId: number) {
     if (request === expansionRequest) expandedError.value = caught instanceof Error ? caught.message : '班级排期加载失败。'
   } finally { if (request === expansionRequest) expandedLoading.value = false }
 }
+function closeSchedules() {
+  expandedId.value = undefined
+  ++expansionRequest
+}
+
 async function toggleSchedules(experiment: TeacherExperiment) {
   document.getElementById(`experiment-menu-${experiment.id}`)?.hidePopover?.()
-  if (expandedId.value === experiment.id) { expandedId.value = undefined; ++expansionRequest; return }
+  if (expandedId.value === experiment.id) { closeSchedules(); return }
   expandedId.value = experiment.id
   await loadExpanded(experiment.id)
 }
@@ -77,16 +81,6 @@ function statusTone(status: string) {
   if (status === 'draft') return 'warning' as const
   if (status === 'archived') return 'neutral' as const
   return 'success' as const
-}
-
-function displayDate(value: string | null, empty: string) {
-  return value ? new Date(value).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : empty
-}
-
-function displayLimit(total: number | null | undefined, item: number | null | undefined) {
-  if (total != null) return `${total} 分钟`
-  if (item != null) return `每题 ${item} 秒`
-  return '不限时'
 }
 
 async function load(page = currentPage.value, archived = archivedView.value) {
@@ -104,6 +98,7 @@ async function load(page = currentPage.value, archived = archivedView.value) {
 }
 
 async function navigate(page: number, archived = archivedView.value) {
+  closeSchedules()
   await router.push({ query: { ...(page === 1 ? {} : { page: String(page) }), ...(archived ? { archived: '1' } : {}), ...(search.value.trim() ? { q: search.value.trim() } : {}) } })
   await load(page, archived)
 }
@@ -172,94 +167,64 @@ onMounted(() => load())
 </script>
 
 <template>
-  <PageHeader title="实验">
-    <template #kicker><nav class="kt-experiment-breadcrumb" aria-label="层级目录"><a :href="pageUrl('/teacher/courses/')">我的课程</a><span>/</span><a :href="pageUrl(`/teacher/courses/${courseId}/`)">{{ course?.name || '课程' }}</a><span>/</span><span aria-current="page">实验</span></nav></template>
-    <p>按实验管理发布时间、作答时限、班级任务和人工批改。</p>
-    <template #actions>
-      <RouterLink class="kt-button" :to="pageUrl(`/teacher/courses/${courseId}/experiments/create/`)">
-        创建实验
-      </RouterLink>
-    </template>
-  </PageHeader>
-
-  <form class="kt-experiment-list-toolbar" role="search" @submit.prevent="navigate(1)"><input v-model="search" type="search" aria-label="搜索实验名称" placeholder="搜索实验名称"><button class="kt-visually-hidden" type="submit">搜索</button><label class="kt-experiment-archive-filter"><input type="checkbox" data-show-archived :checked="archivedView" :disabled="loading" @change="navigate(1, ($event.target as HTMLInputElement).checked)">查看已归档实验</label><span v-if="collection" class="kt-muted">{{ collection.page.total_items }} 个实验</span></form>
-
+  <header class="kt-experiment-cards-heading">
+    <nav class="kt-experiment-breadcrumb" aria-label="层级目录"><RouterLink :to="pageUrl('/teacher/courses/')">我的课程</RouterLink><span>/</span><RouterLink :to="pageUrl(`/teacher/courses/${courseId}/`)">{{ course?.name || '课程' }}</RouterLink><span>/</span><span aria-current="page">实验</span></nav>
+    <div><h1>实验</h1><span v-if="collection" aria-live="polite">{{ collection.page.total_items }} 个实验</span></div>
+  </header>
+  <form class="kt-experiment-list-toolbar" role="search" @submit.prevent="navigate(1)">
+    <div class="kt-experiment-list-filters">
+      <input v-model="search" type="search" aria-label="搜索实验名称" placeholder="搜索实验名称">
+      <button class="kt-visually-hidden" type="submit">搜索</button>
+      <select aria-label="按归档状态筛选" data-show-archived :value="archivedView ? 'archived' : 'current'" :disabled="loading" @change="navigate(1, ($event.target as HTMLSelectElement).value === 'archived')">
+        <option value="current">当前实验</option><option value="archived">已归档</option>
+      </select>
+    </div>
+    <RouterLink v-if="canManage" class="kt-button" :to="pageUrl(`/teacher/courses/${courseId}/experiments/create/`)">＋ 创建实验</RouterLink>
+  </form>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <p v-if="loading" role="status">正在加载实验…</p>
-  <EmptyState v-else-if="!collection?.items.length" :title="archivedView ? '暂无归档实验' : '暂无当前实验'">
-    <p>{{ archivedView ? '归档后的实验及数据可以在这里查看。' : '创建实验后，再选择班级和排期进行发布。' }}</p>
+  <EmptyState v-else-if="!collection?.items.length" :title="search.trim() ? '没有匹配的实验' : archivedView ? '暂无归档实验' : '暂无当前实验'">
+    <p>{{ search.trim() ? '试试其他名称或筛选范围。' : archivedView ? '归档后的实验及数据可以在这里查看。' : '创建实验后，再选择班级和排期进行发布。' }}</p>
   </EmptyState>
-  <section v-else class="kt-card kt-table-card" aria-label="实验列表">
-    <div class="kt-table-scroll kt-desktop-only">
-      <table class="kt-table kt-experiment-list-table">
-        <thead><tr><th>实验</th><th colspan="3"><div class="kt-experiment-schedule-heading"><span>班级</span><span>开始时间</span><span>截止时间</span><span>总限时</span></div></th><th>状态</th><th>班级</th><th v-if="canManage">操作</th></tr></thead>
-        <tbody>
-          <template v-for="experiment in collection.items" :key="experiment.id">
-            <tr>
-              <td>
-                <div class="kt-experiment-name-row"><RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/`)"><strong>{{ experiment.name }}</strong></RouterLink><a v-if="experiment.activity?.grading_url" data-pending-grading class="kt-experiment-pending" :href="pageUrl(experiment.activity.grading_url)">待批改：{{ experiment.activity.pending_grading_count }}</a><span v-else class="kt-experiment-pending">待批改：{{ experiment.activity?.pending_grading_count ?? 0 }}</span></div>
-                <span class="kt-cell-note"><template v-if="experiment.sampling_total_count != null">{{ experiment.sampling_total_count }} 道题 · </template>更新 {{ displayDate(experiment.updated_at, '—') }}</span>
-              </td>
-              <td colspan="3">
-                <div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id" class="kt-experiment-schedule-row">
-                  <span>{{ schedule.class_name }}</span><span>{{ displayDate(schedule.opens_at, '立即开放') }}</span><span>{{ displayDate(schedule.closes_at, '无截止') }}</span><span>{{ displayLimit(schedule.total_time_limit_minutes, schedule.per_question_time_limit_seconds) }}</span>
-                </div>
-                <div v-if="!experiment.activity?.schedules.length" class="kt-experiment-schedule-empty"><span>—</span><span>未安排</span><span>未安排</span><span>{{ displayLimit(experiment.total_time_limit_minutes, experiment.per_question_time_limit_seconds) }}</span></div>
-              </td>
-              <td><StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" /></td>
-              <td><RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/?tab=tasks`)">{{ experiment.activity?.schedules.length || 0 }} 个</RouterLink></td>
-              <td v-if="canManage">
-                <button class="kt-button kt-button--secondary" type="button" :popovertarget="`experiment-menu-${experiment.id}`" :aria-label="`${experiment.name}操作`" @click="positionActionMenu($event, experiment.id)">操作 ⌄</button>
+  <section v-else aria-label="实验列表">
+    <div class="kt-experiment-card-grid">
+      <article v-for="experiment in collection.items" :key="experiment.id" class="kt-experiment-card" :aria-label="experiment.name">
+        <div class="kt-experiment-card-head">
+          <h2><RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/`)" :title="experiment.name">{{ experiment.name }}</RouterLink></h2>
+          <StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" />
+        </div>
+        <div class="kt-experiment-card-foot">
+          <button v-if="experiment.activity?.schedules.length" type="button" class="kt-experiment-card-classes" :aria-label="`${experiment.name}：查看 ${experiment.activity.schedules.length} 个班级`" :data-class-schedules="experiment.id" @click="toggleSchedules(experiment)"><Icon name="classes" :size="17" />{{ experiment.activity.schedules.length }} 个班级</button>
+          <span v-else class="kt-experiment-card-classes kt-muted"><Icon name="classes" :size="17" />0 个班级</span>
+          <template v-if="canManage">
+            <button class="kt-button kt-button--secondary kt-experiment-card-actions" type="button" :popovertarget="`experiment-menu-${experiment.id}`" :aria-label="`${experiment.name}操作`" @click="positionActionMenu($event, experiment.id)">操作 <Icon name="chevron-down" :size="13" /></button>
                 <div :id="`experiment-menu-${experiment.id}`" popover="auto" class="kt-experiment-row-menu">
                   <RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/`)">详情</RouterLink>
                   <RouterLink v-if="experiment.can_edit" :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/edit/`)">编辑定义</RouterLink>
-                  <button v-if="experiment.activity?.schedules.length" type="button" class="kt-text-button" :data-expand-schedules="experiment.id" :aria-expanded="expandedId === experiment.id" @click="toggleSchedules(experiment)">{{ expandedId === experiment.id ? '收起班级操作' : '修改排期 / 延时' }}</button>
+                  <button v-if="experiment.activity?.schedules.length" type="button" class="kt-text-button" :data-expand-schedules="experiment.id" :aria-expanded="expandedId === experiment.id" @click="toggleSchedules(experiment)">修改排期 / 延时</button>
                   <RouterLink v-if="experiment.student_preview_url" :to="pageUrl(experiment.student_preview_url)">模拟学生作答</RouterLink>
-                  <a v-if="experiment.activity?.grading_url" :href="pageUrl(experiment.activity.grading_url)">人工批改</a>
+                  <a v-if="experiment.activity?.grading_url" :href="pageUrl(experiment.activity.grading_url)" data-pending-grading>人工批改（待批改：{{ experiment.activity.pending_grading_count }}）</a>
                   <button v-if="experiment.can_publish" class="kt-text-button" type="button" :data-publish-experiment="experiment.id" :disabled="publishingId !== undefined" @click="startPublish(experiment)">{{ publishingId === experiment.id ? '正在进入…' : '发布到班级' }}</button>
                   <button v-if="experiment.can_restore" class="kt-text-button" type="button" :data-restore-experiment="experiment.id" :disabled="restoringId !== undefined" @click="restore(experiment)">{{ restoringId === experiment.id ? '恢复中…' : '恢复' }}</button>
                   <button v-if="experiment.can_archive" class="kt-text-button" type="button" :data-archive-experiment="experiment.id" @click="requestArchive(experiment)">归档</button>
                   <button class="kt-text-button kt-text-button--danger" type="button" :data-delete-experiment="experiment.id" @click="deletionTarget = { kind: 'experiment', experimentId: experiment.id }">删除</button>
                 </div>
-              </td>
-            </tr><tr v-if="expandedId === experiment.id"><td :colspan="canManage ? 7 : 6"><section class="kt-experiment-inline-tasks" :data-inline-schedules="experiment.id"><div class="kt-section-heading"><h3>{{ experiment.name }} · 班级排期与操作</h3><button class="kt-text-button" type="button" @click="toggleSchedules(experiment)">收起</button></div><p v-if="expandedLoading" role="status">正在加载班级排期…</p><Alert v-if="expandedError" tone="danger">{{ expandedError }}</Alert><ExperimentClassTaskTable v-if="!expandedLoading && expandedTasks.length" :course-id="courseId" :experiment-id="experiment.id" :tasks="expandedTasks" :progress="expandedProgress" @changed="refreshExpanded" /></section></td></tr>
           </template>
-        </tbody>
-      </table>
+        </div>
+      </article>
     </div>
-    <MobileCardList class="kt-mobile-only">
-      <li v-for="experiment in collection.items" :key="experiment.id" class="kt-mobile-experiment-card">
-        <div class="kt-section-heading">
-          <RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/`)">
-            <strong>{{ experiment.name }}</strong>
-          </RouterLink>
-          <StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" />
-        </div>
-        <p>{{ experiment.description || '无说明' }}</p>
-        <a v-if="experiment.activity?.grading_url" class="kt-experiment-pending" :href="pageUrl(experiment.activity.grading_url)">待批改：{{ experiment.activity.pending_grading_count }}</a>
-        <span v-else class="kt-cell-note">待批改：{{ experiment.activity?.pending_grading_count ?? 0 }}</span>
-        <dl>
-          <div><dt>题库</dt><dd>{{ experiment.question_banks?.map((bank) => bank.name).join('、') || experiment.question_bank?.name || '未选择题库' }}</dd></div>
-          <div><dt>选题</dt><dd>{{ experiment.sampling_mode_label || experiment.selection_mode_label }}</dd></div>
-          <div v-for="schedule in experiment.activity?.schedules || []" :key="schedule.task_id"><dt>{{ schedule.class_name }}</dt><dd>开始 {{ displayDate(schedule.opens_at, '立即开放') }}<br>截止 {{ displayDate(schedule.closes_at, '无截止') }}<br>实验限时 {{ displayLimit(schedule.total_time_limit_minutes, schedule.per_question_time_limit_seconds) }}</dd></div>
-        </dl>
-        <div v-if="canManage" class="kt-inline-actions">
-          <button v-if="experiment.activity?.schedules.length" type="button" class="kt-text-button" :data-expand-schedules="experiment.id" :aria-expanded="expandedId === experiment.id" @click="toggleSchedules(experiment)">{{ expandedId === experiment.id ? '收起班级操作' : '修改排期 / 延时' }}</button>
-          <RouterLink v-if="experiment.student_preview_url" class="kt-text-button" :to="pageUrl(experiment.student_preview_url)">模拟学生作答</RouterLink>
-          <button v-if="experiment.can_publish" class="kt-text-button" type="button" :disabled="publishingId !== undefined" @click="startPublish(experiment)">发布到班级</button>
-          <button v-if="experiment.can_restore" class="kt-text-button" type="button" :data-restore-experiment="experiment.id" :disabled="restoringId !== undefined" @click="restore(experiment)">{{ restoringId === experiment.id ? '恢复中…' : '恢复实验' }}</button>
-          <button v-if="experiment.can_archive" class="kt-text-button" type="button" :data-archive-experiment="experiment.id" @click="requestArchive(experiment)">归档实验</button>
-          <button class="kt-text-button kt-text-button--danger" type="button" :data-delete-experiment="experiment.id" @click="deletionTarget = { kind: 'experiment', experimentId: experiment.id }">删除实验</button>
-        </div>
-        <template v-if="expandedId === experiment.id"><section class="kt-experiment-inline-tasks" :data-inline-schedules="experiment.id"><div class="kt-section-heading"><h3>{{ experiment.name }} · 班级排期与操作</h3><button class="kt-text-button" type="button" @click="toggleSchedules(experiment)">收起</button></div><p v-if="expandedLoading" role="status">正在加载班级排期…</p><Alert v-if="expandedError" tone="danger">{{ expandedError }}</Alert><ExperimentClassTaskTable v-if="!expandedLoading && expandedTasks.length" :course-id="courseId" :experiment-id="experiment.id" :tasks="expandedTasks" :progress="expandedProgress" @changed="refreshExpanded" /></section></template>
-      </li>
-    </MobileCardList>
-    <Paginator
-      :page="collection.page.number"
-      :total-pages="collection.page.total_pages"
-      @navigate="navigate"
-    />
+    <Paginator :page="collection.page.number" :total-pages="collection.page.total_pages" @navigate="navigate" />
   </section>
+  <ModalDialog v-if="expandedId !== undefined" :open="true" title="班级排期与操作" wide @close="closeSchedules">
+    <section class="kt-experiment-inline-tasks" :data-inline-schedules="expandedId">
+      <h3>{{ collection?.items.find(item => item.id === expandedId)?.name }}</h3>
+      <p v-if="expandedLoading" role="status">正在加载班级排期…</p>
+      <Alert v-if="expandedError" tone="danger">{{ expandedError }}</Alert>
+      <ExperimentClassTaskTable v-if="!expandedLoading && expandedTasks.length" :course-id="courseId" :experiment-id="expandedId" :tasks="expandedTasks" :progress="expandedProgress" @changed="refreshExpanded" />
+      <p v-else-if="!expandedLoading && !expandedError">暂无班级排期。</p>
+    </section>
+    <template #footer><button class="kt-button kt-button--secondary" type="button" @click="closeSchedules">关闭</button></template>
+  </ModalDialog>
   <DeletionDialog v-if="deletionTarget" :course-id="courseId" :target="deletionTarget" @cancelled="deletionTarget = undefined" @completed="afterDeletion" />
   <ModalDialog v-if="archiveTarget" :open="true" title="归档实验" @close="!archiving && (archiveTarget = undefined)">
     <h2>归档“{{ archiveTarget?.name }}”</h2>

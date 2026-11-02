@@ -1609,10 +1609,40 @@
 .kt-teacher-experiments .kt-definition-summary > .kt-card > .kt-section-heading { padding: 12px 16px; border-bottom: 1px solid #e3e9f0; margin: 0; }
 .kt-teacher-experiments .kt-definition-content-facts { grid-template-columns: 1fr; }
 
-.kt-teacher-experiments .kt-experiment-list-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
-.kt-teacher-experiments .kt-experiment-list-toolbar input { width: 300px; min-width: 0; }
-.kt-teacher-experiments .kt-experiment-list-toolbar > span { margin-left: auto; font-size: 14px; }
-@media(max-width:760px) { .kt-teacher-experiments .kt-experiment-list-toolbar { flex-wrap: wrap; } .kt-teacher-experiments .kt-experiment-list-toolbar input { width: 100%; } }
+.kt-teacher-experiments .kt-experiment-cards-heading { margin-bottom: 20px; }
+.kt-teacher-experiments .kt-experiment-cards-heading > div { display: flex; align-items: baseline; gap: 12px; }
+.kt-teacher-experiments .kt-experiment-cards-heading h1 { margin: 0; font-size: 28px; line-height: 1.3; font-weight: 650; }
+.kt-teacher-experiments .kt-experiment-cards-heading > div > span { font-size: 12px; color: #637388; }
+.kt-teacher-experiments .kt-experiment-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.kt-teacher-experiments .kt-experiment-list-filters { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.kt-teacher-experiments .kt-experiment-list-filters input { width: 300px; min-width: 0; }
+.kt-teacher-experiments .kt-experiment-list-filters select { min-width: 140px; }
+.kt-teacher-experiments .kt-experiment-list-filters input,
+.kt-teacher-experiments .kt-experiment-list-filters select { height: 42px; padding: 0 12px; border: 1px solid #dce4ee; border-radius: 7px; background: #fff; color: inherit; font: inherit; font-size: 13px; }
+.kt-teacher-experiments .kt-experiment-card-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.kt-teacher-experiments .kt-experiment-card { display: flex; flex-direction: column; min-width: 0; min-height: 138px; padding: 17px 19px; background: #fff; border: 1px solid #e1e7ef; border-radius: 10px; }
+.kt-teacher-experiments .kt-experiment-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.kt-teacher-experiments .kt-experiment-card-head h2 { flex: 1; min-width: 0; margin: 0; font-size: 16px; font-weight: 600; line-height: 1.65; }
+.kt-teacher-experiments .kt-experiment-card-head h2 a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; color: #273d58; text-decoration: none; }
+.kt-teacher-experiments .kt-experiment-card-head h2 a:hover { color: #245cc1; }
+.kt-teacher-experiments .kt-experiment-card-head .kt-status { flex: none; margin-top: 2px; min-height: 0; padding: 4px 7px; border-radius: 4px; font-size: 11px; line-height: 1.5; white-space: nowrap; }
+.kt-teacher-experiments .kt-experiment-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: auto; padding-top: 16px; }
+.kt-teacher-experiments .kt-experiment-card-classes { display: inline-flex; align-items: center; gap: 7px; border: 0; padding: 5px 0; background: none; color: #62758d; font: inherit; font-size: 13px; }
+.kt-teacher-experiments button.kt-experiment-card-classes { cursor: pointer; }
+.kt-teacher-experiments button.kt-experiment-card-classes:hover { color: #245cc1; }
+.kt-teacher-experiments .kt-experiment-card-actions { min-height: 34px; gap: 7px; padding: 5px 10px; font-size: 12px; border-radius: 5px; }
+@media (max-width: 1450px) { .kt-teacher-experiments .kt-experiment-card-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1150px) { .kt-teacher-experiments .kt-experiment-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .kt-teacher-experiments .kt-experiment-list-toolbar { flex-wrap: wrap; }
+  .kt-teacher-experiments .kt-experiment-list-filters { width: 100%; gap: 9px; }
+  .kt-teacher-experiments .kt-experiment-list-filters input { flex: 1; width: 100%; }
+  .kt-teacher-experiments .kt-experiment-list-filters select { min-width: 117px; }
+  .kt-teacher-experiments .kt-experiment-list-toolbar > a { margin-left: auto; }
+  .kt-teacher-experiments .kt-experiment-card-grid { grid-template-columns: 1fr; gap: 12px; }
+  .kt-teacher-experiments .kt-experiment-card-classes,
+  .kt-teacher-experiments .kt-experiment-card-actions { min-height: 44px; }
+}
 
 .kt-teacher-experiments .kt-experiment-row-menu { position: fixed; inset: auto; margin: 0; padding: 6px; width: 190px; max-height: calc(100vh - 16px); overflow-y: auto; border: 1px solid #d5dfeb; border-radius: 7px; background: #fff; box-shadow: 0 8px 24px #1024401a; }
 .kt-teacher-experiments .kt-experiment-row-menu:popover-open { display: grid; gap: 2px; }
@@ -1620,6 +1650,7 @@
 .kt-teacher-experiments .kt-experiment-row-menu > button { width: 100%; display: block; padding: 9px 12px; min-height: 38px; text-align: left; border: 0; font-size: 14px; white-space: nowrap; font-weight: 400; border-radius: 4px; }
 .kt-teacher-experiments .kt-experiment-row-menu > a:hover,
 .kt-teacher-experiments .kt-experiment-row-menu > button:hover { background: #edf3fc; }
+.kt-teacher-experiments .kt-experiment-row-menu > [data-pending-grading] { white-space: normal; overflow-wrap: anywhere; }
 .kt-teacher-experiments .kt-experiment-row-menu::backdrop { background: transparent; }
 @media(max-width:760px) { .kt-teacher-experiments .kt-experiment-row-menu > a, .kt-teacher-experiments .kt-experiment-row-menu > button { min-height: 44px; } }
 

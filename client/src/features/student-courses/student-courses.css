@@ -108,55 +108,28 @@
   margin: auto 18px 18px;
 }
 
-.kt-student-task-list { display: grid; gap: 8px; }
-
-.kt-student-task-row {
-  display: grid;
-  grid-template-columns: 54px minmax(0, 1fr) minmax(110px, auto) auto;
-  align-items: center;
-  gap: 16px;
-  border: 1px solid var(--kt-color-border);
-  border-radius: 10px;
-  padding: 16px;
-  box-shadow: none;
-}
-
-.kt-student-task-row__kind {
-  display: inline-flex;
-  width: 48px;
-  min-height: 48px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  background: var(--kt-surface-subtle);
-  color: var(--kt-action-600);
-  font-size: 0.875rem;
-  font-weight: 750;
-}
-
-.kt-student-task-row__main { min-width: 0; }
-
-.kt-student-task-row__meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--kt-color-muted);
-  font-size: 0.875rem;
-}
-
-.kt-student-task-row h2 {
-  margin: 7px 0 5px;
-  font-size: 1rem;
-  font-weight: 720;
-  line-height: 1.45;
-}
-
-.kt-student-task-row p { margin: 0; color: var(--kt-color-muted); font-size: 0.875rem; }
-
-.kt-student-task-row__progress { min-width: 108px; margin: 0; text-align: right; }
-.kt-student-task-row__progress dt { color: var(--kt-color-muted); font-size: 0.875rem; }
-.kt-student-task-row__progress dd { margin: 4px 0 0; font-size: 0.9375rem; font-weight: 750; font-variant-numeric: tabular-nums; }
-.kt-student-task-row__action { display: flex; justify-content: flex-end; }
+.kt-student-task-title { display: flex; align-items: baseline; gap: 12px; }
+.kt-student-task-title > span { color: #637388; font-size: 12px; }
+.kt-student-task-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.kt-student-task-filters { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.kt-student-task-filters input { width: 300px; min-width: 0; }
+.kt-student-task-filters select { min-width: 140px; }
+.kt-student-task-filters input,
+.kt-student-task-filters select { height: 44px; padding: 0 12px; border: 1px solid #dce4ee; border-radius: 7px; background: #fff; color: inherit; font: inherit; font-size: 14px; }
+.kt-student-task-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.kt-student-task-row { display: flex; flex-direction: column; min-width: 0; min-height: 200px; padding: 17px 19px; border: 1px solid #e1e7ef; border-radius: 10px; background: #fff; box-shadow: none; }
+.kt-student-task-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.kt-student-task-card-head h2 { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; margin: 0; color: #273d58; font-size: 16px; font-weight: 600; line-height: 1.65; }
+.kt-student-task-card-head .kt-status { flex: none; margin-top: 2px; min-height: 0; padding: 4px 7px; border-radius: 4px; font-size: 11px; line-height: 1.5; white-space: nowrap; }
+.kt-student-task-row p { margin: 0; color: #62758d; font-size: 13px; }
+.kt-student-task-card-details { display: grid; gap: 5px; margin: 14px 0 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.kt-student-task-card-class { display: flex; align-items: center; gap: 7px; }
+.kt-student-task-card-class .kt-icon { flex: none; }
+.kt-student-task-card-foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 16px; }
+.kt-student-task-card-foot strong { font-weight: 500; color: #38516e; font-variant-numeric: tabular-nums; }
+.kt-student-task-card-foot .kt-button { min-height: 44px; padding: 8px 12px; font-size: 13px; }
+@media (max-width: 1450px) { .kt-student-task-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1150px) { .kt-student-task-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .kt-learning-summary-grid {
   display: grid;
@@ -415,11 +388,13 @@
   .kt-student-page-heading__context { padding: 0; text-align: left; }
   .kt-student-course-grid { grid-template-columns: 1fr; gap: 16px; }
   .kt-student-course-card { min-height: 238px; }
-  .kt-student-task-row { grid-template-columns: 48px minmax(0, 1fr); gap: 12px; padding: 16px; }
-  .kt-student-task-row__kind { width: 44px; min-height: 44px; }
-  .kt-student-task-row__progress { grid-column: 2; text-align: left; }
-  .kt-student-task-row__action { grid-column: 1 / -1; justify-content: stretch; }
-  .kt-student-task-row__action .kt-button { width: 100%; min-height: 44px; }
+  .kt-student-task-toolbar { flex-wrap: wrap; }
+  .kt-student-task-filters { width: 100%; gap: 9px; }
+  .kt-student-task-filters input { width: 100%; flex: 1; }
+  .kt-student-task-filters select { min-width: 117px; }
+  .kt-student-task-toolbar > button { margin-left: auto; }
+  .kt-student-task-list { grid-template-columns: 1fr; gap: 12px; }
+  .kt-student-task-row { padding: 16px 18px; }
   .kt-learning-summary-grid { grid-template-columns: 1fr; gap: 12px; }
   .kt-learning-kc-list li,
   .kt-learning-trend-list li { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
