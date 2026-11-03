@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { useExperimentPageUrl } from './experiment-page-url'
 const pageUrl = useExperimentPageUrl()
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import { ApiError, MutationOutcomeUnknownError } from '@/api/client'
 
 import {
   getTeacherExperimentApi,
+  type ClassTask,
   type GradingStatusFilter,
   type ManualGradingOverview,
   type ManualGradingQuestionDetail,
@@ -15,10 +16,15 @@ import {
 } from './api'
 
 const route = useRoute()
+const router = useRouter()
 const api = getTeacherExperimentApi()
 const courseId = Number(route.params.courseId)
 const experimentId = Number(route.params.experimentId)
-const taskId = Number(route.params.taskId)
+const taskId = computed(() => Number(route.params.taskId))
+const classTasks = ref<ClassTask[]>([])
+const gradingClasses = computed(() => classTasks.value.filter(task => task.available_actions.includes('grade_short_answers')))
+let loadVersion = 0
+let questionVersion = 0
 
 const overview = ref<ManualGradingOverview>()
 const detail = ref<ManualGradingQuestionDetail>()
@@ -47,10 +53,14 @@ function displayDate(value: string | null) {
 }
 
 async function loadQuestion(snapshotId: number, nextPage = 1) {
+  const requestVersion = ++questionVersion
+  const currentTaskId = taskId.value
   const questionChanged = selectedQuestionId.value !== snapshotId
   selectedQuestionId.value = snapshotId
   page.value = nextPage
-  detail.value = await api.gradingQuestion(taskId, snapshotId, statusFilter.value, nextPage)
+  const result = await api.gradingQuestion(currentTaskId, snapshotId, statusFilter.value, nextPage)
+  if (requestVersion !== questionVersion || currentTaskId !== taskId.value) return
+  detail.value = result
   for (const row of detail.value.submissions.items) {
     comments[row.submission_id] = ''
   }
@@ -60,27 +70,33 @@ async function loadQuestion(snapshotId: number, nextPage = 1) {
 }
 
 async function load() {
+  const version = ++loadVersion
   loading.value = true
   error.value = ''
   try {
-    overview.value = await api.grading(taskId)
+    const [result, tasks] = await Promise.all([api.grading(taskId.value), api.classTasks(experimentId)])
+    if (version !== loadVersion) return
+    overview.value = result
+    classTasks.value = tasks.items
     const preferred = overview.value.questions.find(
       question => question.question_snapshot_id === selectedQuestionId.value,
     ) || overview.value.questions[0]
     if (preferred) await loadQuestion(preferred.question_snapshot_id)
     else detail.value = undefined
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '批改任务加载失败。'
+    if (version === loadVersion) error.value = caught instanceof Error ? caught.message : '批改任务加载失败。'
   } finally {
-    loading.value = false
-    await nextTick()
-    const list = questionList.value
-    const selected = list?.querySelector<HTMLElement>('[aria-pressed="true"]')
-    if (list && selected) {
-      const bounds = list.getBoundingClientRect()
-      const item = selected.getBoundingClientRect()
-      if (item.top < bounds.top || item.bottom > bounds.bottom) {
-        list.scrollTop += item.top - bounds.top - (list.clientHeight - item.height) / 2
+    if (version === loadVersion) {
+      loading.value = false
+      await nextTick()
+      const list = questionList.value
+      const selected = list?.querySelector<HTMLElement>('[aria-pressed="true"]')
+      if (list && selected) {
+        const bounds = list.getBoundingClientRect()
+        const item = selected.getBoundingClientRect()
+        if (item.top < bounds.top || item.bottom > bounds.bottom) {
+          list.scrollTop += item.top - bounds.top - (list.clientHeight - item.height) / 2
+        }
       }
     }
   }
@@ -107,7 +123,7 @@ async function grade(row: ManualGradingSubmission, isCorrect: boolean) {
   notice.value = ''
   try {
     const result = await api.gradeSubmission(
-      taskId,
+      taskId.value,
       selectedQuestionId.value as number,
       row.submission_id,
       {
@@ -142,7 +158,23 @@ function defer(row: ManualGradingSubmission) {
   next?.querySelector<HTMLElement>('button')?.focus()
 }
 
-onMounted(load)
+function switchClass(event: Event) {
+  const id = Number((event.target as HTMLSelectElement).value)
+  if (id === taskId.value || !gradingClasses.value.some(task => task.id === id)) return
+  void router.push(pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/class-tasks/${id}/grading/`))
+}
+
+watch(taskId, () => {
+  ++questionVersion
+  overview.value = undefined
+  detail.value = undefined
+  selectedQuestionId.value = undefined
+  statusFilter.value = 'pending'
+  page.value = 1
+  notice.value = ''
+  for (const key of Object.keys(comments)) delete comments[Number(key)]
+  void load()
+}, { immediate: true })
 </script>
 
 <template>
@@ -153,8 +185,15 @@ onMounted(load)
           <a :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)">实验详情</a>
           <span aria-hidden="true">/</span><span aria-current="page">人工批改</span>
         </nav>
-        <h1>人工批改</h1>
-        <p v-if="overview">{{ overview.task.experiment_name }} · {{ overview.task.class_name }}</p>
+        <div class="kt-grading-heading">
+          <h1>人工批改</h1>
+          <div class="kt-grading-context">
+            <span v-if="overview">{{ overview.task.experiment_name }}</span>
+            <select v-if="gradingClasses.length" class="kt-grading-class-switch" :value="taskId" aria-label="切换班级" :disabled="loading || savingSubmissionId !== undefined" @change="switchClass">
+              <option v-for="task in gradingClasses" :key="task.id" :value="task.id">{{ task.class_name }} · 待批改：{{ task.grading.pending ?? 0 }}</option>
+            </select>
+          </div>
+        </div>
       </div>
       <a class="kt-button kt-button--secondary" :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)">返回实验</a>
     </header>

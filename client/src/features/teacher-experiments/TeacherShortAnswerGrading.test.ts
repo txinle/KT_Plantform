@@ -1,16 +1,19 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { reactive } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   api: {
+    classTasks: vi.fn(),
     grading: vi.fn(),
     gradingQuestion: vi.fn(),
     gradeSubmission: vi.fn(),
   },
+  push: vi.fn(),
   route: { params: { courseId: '7', experimentId: '11', taskId: '17' } },
 }))
 
-vi.mock('vue-router', () => ({ useRoute: () => mocks.route }))
+vi.mock('vue-router', () => ({ useRoute: () => mocks.route, useRouter: () => ({ push: mocks.push }) }))
 vi.mock('./api', () => ({ getTeacherExperimentApi: () => mocks.api }))
 
 import TeacherShortAnswerGrading from './TeacherShortAnswerGrading.vue'
@@ -18,6 +21,12 @@ import TeacherShortAnswerGrading from './TeacherShortAnswerGrading.vue'
 describe('TeacherShortAnswerGrading', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.route.params = reactive({ courseId: '7', experimentId: '11', taskId: '17' })
+    mocks.api.classTasks.mockResolvedValue({ items: [
+      { id: 17, class_name: '一班', available_actions: ['grade_short_answers'], grading: { pending: 1 } },
+      { id: 18, class_name: '二班', available_actions: ['grade_short_answers'], grading: { pending: 0 } },
+      { id: 19, class_name: '三班', available_actions: [], grading: { pending: 0 } },
+    ] })
     mocks.api.grading.mockResolvedValue({
       task: { id: 17, experiment_id: 11, experiment_name: '实验', class_id: 5, class_name: '一班' },
       totals: { enabled: true, short_answer_questions: 1, submitted: 1, pending: 1, graded: 0 },
@@ -54,6 +63,28 @@ describe('TeacherShortAnswerGrading', () => {
       },
       task_progress: { enabled: true, short_answer_questions: 1, submitted: 1, pending: 0, graded: 1 },
     })
+  })
+
+  it('switches authorized classes and reloads task-scoped grading after navigation', async () => {
+    const wrapper = mount(TeacherShortAnswerGrading)
+    await flushPromises()
+    const select = wrapper.get('select[aria-label="切换班级"]')
+    expect(select.findAll('option').map(option => option.text())).toEqual(['一班 · 待批改：1', '二班 · 待批改：0'])
+    await select.setValue('18')
+    expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/11/class-tasks/18/grading/')
+    const second = structuredClone(await mocks.api.grading())
+    second.task.id = 18
+    second.task.class_name = '二班'
+    second.totals.pending = 0
+    mocks.api.grading.mockResolvedValue(second)
+    mocks.route.params.taskId = '18'
+    await flushPromises()
+    expect(mocks.api.grading).toHaveBeenLastCalledWith(18)
+    expect(mocks.api.gradingQuestion).toHaveBeenLastCalledWith(18, 41, 'pending', 1)
+    expect(wrapper.text()).toContain('二班')
+    await wrapper.get('[data-grade="correct"]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.gradeSubmission.mock.calls[0]![0]).toBe(18)
   })
 
   it('shows frozen references and submits a binary decision', async () => {

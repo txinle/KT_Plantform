@@ -139,7 +139,7 @@ async function releaseFeedback(taskId: number) {
       <tbody>
         <template v-for="task in tasks" :key="task.id">
           <tr>
-            <td><strong>{{ task.class_name }}</strong><small>排期版本 {{ task.schedule_revision }}</small></td><td><StatusBadge :label="classTaskStatusLabel(task.business_status)" tone="neutral" /></td>
+            <td><strong>{{ task.class_name }}</strong><small class="kt-class-task-grading"><a v-if="task.available_actions.includes('grade_short_answers')" :href="pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/class-tasks/${task.id}/grading/`)">待批改：{{ task.grading?.pending ?? 0 }}</a><span v-else>待批改：{{ task.grading?.pending ?? 0 }}</span></small></td><td><StatusBadge :label="classTaskStatusLabel(task.business_status)" tone="neutral" /></td>
             <td>{{ progress[task.id]?.total_participants ?? task.participant_count }}</td><td>{{ task.opens_at ? displayDate(task.opens_at) : '立即开放' }}</td><td>{{ task.closes_at ? displayDate(task.closes_at) : '无截止' }}</td><td><span v-if="task.total_time_limit_minutes != null">{{ task.total_time_limit_minutes }} 分钟</span><span v-else-if="task.per_question_time_limit_seconds != null">每题 {{ task.per_question_time_limit_seconds }} 秒</span><span v-else>不限时</span><span v-if="task.recoverable_count" class="kt-cell-note">可恢复 {{ task.recoverable_count }} 人</span></td>
             <td>{{ progress[task.id]?.not_started ?? '—' }}</td><td>{{ progress[task.id]?.in_progress ?? '—' }}</td><td>{{ progress[task.id]?.completed ?? '—' }}</td>
             <td>

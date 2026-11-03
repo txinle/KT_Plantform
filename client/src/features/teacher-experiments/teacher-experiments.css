@@ -1178,7 +1178,7 @@
 }
 
 /* Short-answer grading workspace */
-.kt-teacher-experiments .kt-workspace-main:has(> .kt-grading-screen) { padding-bottom: 24px; }
+.kt-teacher-experiments .kt-workspace-main:has(> .kt-grading-screen) { padding-top: 24px; padding-bottom: 24px; }
 .kt-teacher-experiments .kt-grading-screen {
   display: flex;
   flex-direction: column;
@@ -1187,6 +1187,7 @@
   min-width: 0;
 }
 .kt-teacher-experiments .kt-grading-header { flex: none; }
+.kt-teacher-experiments select.kt-grading-class-switch { max-width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--kt-border); border-radius: 6px; background: white; color: inherit; font: inherit; }
 .kt-teacher-experiments .kt-grading-page { display: flex; flex-direction: column; flex: 1; gap: 16px; min-height: 0; min-width: 0; }
 .kt-teacher-experiments .kt-grading-page > .kt-alert { flex: none; margin: 0; }
 .kt-teacher-experiments .kt-grading-summary {
@@ -1721,3 +1722,13 @@
   .kt-teacher-experiments .kt-workspace-main:has(> .kt-experiment-overview) { padding-top: 16px; padding-bottom: 12px; }
   .kt-teacher-experiments .kt-workspace-main:has(> .kt-experiment-overview) > .kt-experiment-page-header { margin-bottom: 12px; }
 }
+
+/* Keep grading controls compact so the answer panels use the remaining viewport. */
+.kt-teacher-experiments .kt-experiment-page-header.kt-grading-header { margin-bottom: 12px; gap: 12px; }
+.kt-teacher-experiments .kt-grading-header .kt-experiment-breadcrumb { margin: 0 0 6px; }
+.kt-teacher-experiments .kt-grading-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; }
+.kt-teacher-experiments .kt-grading-heading h1 { margin: 0; font-size: 24px; line-height: 1.4; }
+.kt-teacher-experiments .kt-grading-context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; max-width: 100%; color: var(--kt-muted); }
+.kt-teacher-experiments .kt-grading-context > span { overflow-wrap: anywhere; }
+.kt-teacher-experiments .kt-grading-context select { width: auto; min-width: 0; margin: 0; }
+.kt-teacher-experiments .kt-class-task-grading { display: block; margin-top: 4px; font-size: 13px; line-height: 1.5; }

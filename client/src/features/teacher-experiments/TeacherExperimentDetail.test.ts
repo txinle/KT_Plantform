@@ -357,6 +357,10 @@ describe('TeacherExperimentDetail', () => {
     expect(wrapper.get('[data-action="manual-close"]').text()).toBe('提前结束')
     expect(wrapper.get('[data-action="release-feedback"]').text()).toBe('发布反馈')
     expect(wrapper.get('[data-action="grade-short-answers"]').text()).toBe('待批改：4')
+    const entry = wrapper.get('td:first-child small a')
+    expect(entry.text()).toBe('待批改：4')
+    expect(entry.attributes('href')).toBe('/teacher/courses/7/experiments/11/class-tasks/31/grading/')
+    expect(wrapper.get('.kt-published-task-table').text()).not.toContain('排期版本')
 
     await wrapper.get('[data-action="release-feedback"]').trigger('click')
     await flushPromises()
