@@ -113,6 +113,11 @@ test('grading columns contain long lists and keep compact question navigation us
         owner_name: '验收教师', status: 'active', status_label: '进行中',
         class_count: 1, bank_count: 1, experiment_count: 1, detail_url: '/teacher/courses/1/',
       }], create_url: '/teacher/courses/create/' }
+    } else if (path === '/api/v1/teacher/experiments/1/class-tasks/') {
+      data = { items: [{
+        id: 1, class_name: '验收班级', available_actions: ['grade_short_answers'],
+        grading: { pending: 7000 },
+      }] }
     } else if (path === '/api/v1/teacher/class-tasks/1/grading/') {
       data = {
         task: { id: 1, experiment_id: 1, experiment_name: '简答题批改布局验收', class_id: 1, class_name: '验收班级' },
