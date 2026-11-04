@@ -93,6 +93,16 @@ class DeploymentContractTests(TestCase):
         self.assertIn("PUBLICATION_WORKER_CPUS", compose)
         self.assertIn("PUBLICATION_WORKER_MEMORY", compose)
 
+    def test_publication_worker_shares_prepared_content_storage_with_web_and_nginx(self):
+        import yaml
+        services = yaml.safe_load(
+            (ROOT.parent / "deploy/docker-compose.yml").read_text(encoding="utf-8")
+        )["services"]
+
+        self.assertIn("media_data:/app/media", services["publication-worker"].get("volumes", []))
+        self.assertIn("media_data:/app/media", services["web"]["volumes"])
+        self.assertIn("media_data:/media:ro", services["nginx"]["volumes"])
+
     def test_analytics_worker_has_configurable_resource_limits(self):
         compose = (ROOT.parent / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")
         example = (ROOT / ".env.example").read_text(encoding="utf-8")
