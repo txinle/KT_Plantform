@@ -190,6 +190,44 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
             concept=concept,
         )
 
+    def test_selection_checks_student_ids_instead_of_enrollment_ids(self):
+        first = get_or_create_publish_plan(self.experiment, self.teacher)
+        PublishPlanClass.objects.create(publish_plan=first, class_group=self.class_group)
+        generate_preview(first, self.teacher, expected_revision=first.plan_revision)
+        first.refresh_from_db()
+        commit_publish_plan(first, self.teacher, expected_revision=first.plan_revision)
+
+        CourseEnrollment.objects.filter(student=self.student).update(
+            id=self.student_b.pk + 1000000,
+        )
+        CourseEnrollment.objects.filter(student=self.student_b).update(id=self.student.pk)
+        later = get_or_create_publish_plan(self.experiment, self.teacher)
+
+        saved = save_plan_selection(
+            later,
+            self.teacher,
+            expected_revision=later.plan_revision,
+            class_ids=[self.class_group_b.pk],
+            exclusions_by_class={},
+        )
+
+        self.assertEqual(saved.class_plans.get().class_group_id, self.class_group_b.pk)
+        CourseEnrollment.objects.filter(student=self.student_b).update(
+            id=self.student_b.pk + 1000001,
+        )
+        CourseEnrollment.objects.filter(student=self.student).update(
+            class_group=self.class_group_b,
+        )
+        with self.assertRaises(PublicationConflict) as raised:
+            save_plan_selection(
+                saved,
+                self.teacher,
+                expected_revision=saved.plan_revision,
+                class_ids=[self.class_group_b.pk],
+                exclusions_by_class={},
+            )
+        self.assertEqual(raised.exception.code, "PARTICIPANT_ALREADY_ASSIGNED")
+
     def test_empty_selection_is_a_valid_unchanged_draft(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)
         original_revision = plan.plan_revision

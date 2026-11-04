@@ -694,7 +694,9 @@ def save_plan_selection(plan, actor, *, expected_revision, class_ids, exclusions
                     code="PARTICIPANT_ALREADY_ASSIGNED",
                 )
             seen_students[enrollment.student_id] = class_group
-        _assert_participants_not_formally_assigned(experiment, students)
+        _assert_participants_not_formally_assigned(
+            experiment, [enrollment.student_id for enrollment in students]
+        )
         planned_students[class_group.pk] = student_ids
     current_selection = {
         entry.class_group_id: tuple(
