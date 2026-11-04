@@ -23253,6 +23253,10 @@ components:
           nullable: true
         match_scope:
           $ref: '#/components/schemas/MatchScopeEnum'
+        type_ranges:
+          type: array
+          items:
+            $ref: '#/components/schemas/SamplingTypeRange'
         pinned_question_ids:
           type: array
           items:
@@ -23313,6 +23317,19 @@ components:
           minimum: 1
       required:
       - amount
+      - question_type
+    SamplingTypeRange:
+      type: object
+      properties:
+        question_type:
+          $ref: '#/components/schemas/QuestionTypeD8fEnum'
+        question_ids:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+      required:
+      - question_ids
       - question_type
     ScheduleModeEnum:
       enum:
@@ -27171,6 +27188,9 @@ components:
     TeacherSamplingInventoryQuestionType:
       type: object
       properties:
+        source_available:
+          type: integer
+          minimum: 0
         question_type:
           $ref: '#/components/schemas/QuestionTypeD8fEnum'
         label:
@@ -27182,9 +27202,14 @@ components:
       - available
       - label
       - question_type
+      - source_available
     TeacherSamplingInventoryRequest:
       type: object
       properties:
+        type_ranges:
+          type: array
+          items:
+            $ref: '#/components/schemas/SamplingTypeRange'
         question_bank_ids:
           type: array
           items:
@@ -27206,6 +27231,9 @@ components:
     TeacherSamplingInventoryResponse:
       type: object
       properties:
+        source_candidate_count:
+          type: integer
+          minimum: 0
         scope:
           type: string
         candidate_count:
@@ -27234,6 +27262,7 @@ components:
       - kc_counts
       - question_types
       - scope
+      - source_candidate_count
     TeacherSessionReport:
       type: object
       properties:

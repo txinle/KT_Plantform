@@ -138,6 +138,7 @@ class Experiment(models.Model):
         "sampling_mode",
         "sampling_total_count",
         "sampling_pinned_question_ids",
+        "sampling_type_ranges",
         "sampling_match_scope",
         "cross_experiment_item_policy",
         "review_count",
@@ -251,6 +252,7 @@ class Experiment(models.Model):
     )
     sampling_total_count = models.PositiveIntegerField(null=True, blank=True)
     sampling_pinned_question_ids = models.JSONField(default=list, blank=True)
+    sampling_type_ranges = models.JSONField(default=list, blank=True)
     sampling_match_scope = models.CharField(
         max_length=16,
         choices=MatchScope.choices,

@@ -12,6 +12,7 @@ export type SamplingInventoryInput = {
   question_bank_ids: number[]
   kc_codes: string[]
   match_scope: 'primary' | 'any_level'
+  type_ranges?: Array<{ question_type: ExperimentQuestionType; question_ids: number[] }>
 }
 export type SamplingInventory = {
   candidate_count: number
@@ -47,6 +48,7 @@ export type ExperimentDefinitionInput = Omit<components['schemas']['PatchedTeach
       question_type: ExperimentQuestionType
       amount: number
     }>
+    type_ranges?: Array<{ question_type: ExperimentQuestionType; question_ids: number[] }>
     pinned_question_ids?: number[]
   }
 }

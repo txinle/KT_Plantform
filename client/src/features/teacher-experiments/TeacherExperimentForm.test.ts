@@ -89,48 +89,81 @@ describe('TeacherExperimentForm', () => {
     wrapper.unmount()
   })
 
-  it('confirms per-type pins atomically, enforces the quota, and keeps other types when choosing all random', async () => {
-    mocks.api.samplingInventory.mockResolvedValue({ candidate_count: 3, kc_counts: [], question_types: [
+  it('stages independent candidate ranges without pinning questions and saves explicit ranges', async () => {
+    mocks.api.samplingInventory.mockResolvedValue({ candidate_count: 2, kc_counts: [], question_types: [
       { question_type: 'reading', label: '阅读理解', available: 2 },
-      { question_type: 'single_choice', label: '单选题', available: 1 },
     ], questions: [
       { question_id: 41, question_type: 'reading', code: 'R1', title: 'Garden', text: 'Article one', item_count: 3, question_bank_id: 3 },
       { question_id: 56, question_type: 'reading', code: 'R2', title: 'Library', text: 'Article two', item_count: 4, question_bank_id: 3 },
-      { question_id: 8, question_type: 'single_choice', code: 'C1', title: 'Choice', text: 'Question', item_count: 1, question_bank_id: 3 },
     ] })
     const wrapper = mount(TeacherExperimentForm)
     await flushPromises()
-    await wrapper.get('#experiment-name').setValue('弹窗选择测试')
-    await wrapper.get('#sampling-total-count').setValue(2)
-    await wrapper.get('[data-select-types]').trigger('click')
-    const typeDialog = wrapper.get('dialog[aria-label="选择题型"]')
-    await typeDialog.get('input[value="reading"]').setValue(true)
-    await typeDialog.get('input[value="single_choice"]').setValue(true)
-    await typeDialog.get('[data-apply-selection]').trigger('click')
+    await wrapper.get('#experiment-name').setValue('候选范围')
+    await chooseType(wrapper, 'reading', true)
+    expect(wrapper.get('[data-select-question-type="reading"]').text()).toContain('全题库随机')
     await wrapper.get('[data-select-question-type="reading"]').trigger('click')
-    const reading = wrapper.get('dialog[aria-label="选择具体题目 · 阅读理解"]')
-    expect(reading.find('input[data-pin-question="8"]').exists()).toBe(false)
-    await reading.get('input[data-pin-question="41"]').setValue(true)
-    await reading.get('input[data-pin-question="56"]').setValue(true)
-    await reading.get('[data-apply-selection]').trigger('click')
-    expect(reading.text()).toContain('指定题目数超过该题型数量')
-    expect(reading.attributes()).toHaveProperty('open')
-    await reading.get('input[data-pin-question="56"]').setValue(false)
-    await reading.get('[data-apply-selection]').trigger('click')
-    await wrapper.get('[data-select-question-type="single_choice"]').trigger('click')
-    const single = wrapper.get('dialog[aria-label="选择具体题目 · 单选题"]')
-    await single.get('input[data-pin-question="8"]').setValue(true)
-    await single.get('[data-apply-selection]').trigger('click')
+    let dialog = wrapper.get('dialog[aria-label="抽题范围 · 阅读理解"]')
+    await dialog.get('[data-range-custom]').setValue(true)
+    await dialog.get('[data-apply-range]').trigger('click')
+    expect(dialog.text()).toContain('至少选择')
+    await dialog.get('[data-range-question="41"]').setValue(true)
+    await dialog.get('[data-cancel-range]').trigger('click')
+    expect(wrapper.get('[data-select-question-type="reading"]').text()).toContain('全题库随机')
     await wrapper.get('[data-select-question-type="reading"]').trigger('click')
-    await reading.get('[data-all-random]').trigger('click')
-    await reading.get('[data-cancel-selection]').trigger('click')
-    expect(wrapper.get('[data-select-question-type="reading"]').text()).toContain('已指定 1 道')
-    await wrapper.get('[data-select-question-type="reading"]').trigger('click')
-    await reading.get('[data-all-random]').trigger('click')
-    await reading.get('[data-apply-selection]').trigger('click')
+    dialog = wrapper.get('dialog[aria-label="抽题范围 · 阅读理解"]')
+    await dialog.get('[data-range-custom]').setValue(true)
+    await dialog.get('[data-range-select-page]').trigger('click')
+    await dialog.get('[data-apply-range]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-select-question-type="reading"]').text()).toContain('已选 2 道候选')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
-    expect(mocks.api.create).toHaveBeenCalledWith(7, expect.objectContaining({ sampling: expect.objectContaining({ pinned_question_ids: [8] }) }))
+    expect(mocks.api.create).toHaveBeenCalledWith(7, expect.objectContaining({ sampling: expect.objectContaining({ type_ranges: [{ question_type: 'reading', question_ids: [41, 56] }] }) }))
+    expect(mocks.api.create.mock.calls.at(-1)?.[1].sampling.pinned_question_ids).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('loads ranges and requires explicit clearing before saving another sampling mode', async () => {
+    mocks.route.name = 'teacher-experiment-edit'
+    mocks.route.params = { courseId: '7', experimentId: '19' }
+    mocks.api.detail.mockResolvedValue({ id: 19, name: '范围实验', question_bank: { id: 3, name: '题库' }, sampling_mode: 'total_count', sampling_total_count: 1, sampling_kcs: [], sampling: { type_quotas: [{ question_type: 'single_choice', amount: 1 }], type_ranges: [{ question_type: 'single_choice', question_ids: [41] }] } })
+    mocks.api.update.mockResolvedValue({ id: 19 })
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+    expect(wrapper.get('[data-select-question-type="single_choice"]').text()).toContain('已选 1 道候选')
+    expect(wrapper.text()).toContain('候选范围包含已失效题目')
+    await wrapper.get('form').trigger('submit')
+    expect(mocks.api.update).not.toHaveBeenCalled()
+    await wrapper.get('#sampling-advanced-mode').setValue('all')
+    await flushPromises()
+    await wrapper.get('form').trigger('submit')
+    expect(mocks.api.update).not.toHaveBeenCalled()
+    await wrapper.get('[data-clear-incompatible-ranges]').trigger('click')
+    await flushPromises()
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.api.update).toHaveBeenCalledWith(7, 19, expect.objectContaining({ sampling: expect.objectContaining({ type_ranges: [] }) }))
+    wrapper.unmount()
+  })
+
+  it('preserves ranges after bank changes and blocks pins outside a selected range', async () => {
+    mocks.api.samplingInventory.mockResolvedValue({ candidate_count: 2, kc_counts: [], question_types: [{ question_type: 'single_choice', available: 2 }], questions: [
+      { question_id: 41, question_type: 'single_choice', code: 'Q1', title: 'One', text: '', item_count: 1, question_bank_id: 3 },
+      { question_id: 56, question_type: 'single_choice', code: 'Q2', title: 'Two', text: '', item_count: 1, question_bank_id: 3 },
+    ] })
+    mocks.route.name = 'teacher-experiment-edit'
+    mocks.route.params = { courseId: '7', experimentId: '19' }
+    mocks.api.detail.mockResolvedValue({ id: 19, name: '范围实验', question_bank: { id: 3, name: '题库' }, sampling_mode: 'total_count', sampling_total_count: 1, sampling_kcs: [], sampling: { type_quotas: [{ question_type: 'single_choice', amount: 1 }], type_ranges: [{ question_type: 'single_choice', question_ids: [41] }], pinned_question_ids: [56] } })
+    const wrapper = mount(TeacherExperimentForm)
+    await flushPromises()
+    expect(wrapper.text()).toContain('必出题目不在候选范围内')
+    await wrapper.get('form').trigger('submit')
+    expect(mocks.api.update).not.toHaveBeenCalled()
+    await chooseBank(wrapper, 3, false)
+    expect(wrapper.get('[data-select-question-type="single_choice"]').text()).toContain('已选 1 道候选')
+    expect(wrapper.text()).toContain('候选范围包含已失效题目')
+    await wrapper.get('form').trigger('submit')
+    expect(mocks.api.update).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -247,7 +280,7 @@ describe('TeacherExperimentForm', () => {
     await chooseBank(wrapper, 3, false)
     await chooseBank(wrapper, 4, true)
     await flushPromises()
-    expect(wrapper.get('[data-select-question-type="single_choice"]').text()).toContain('单选题')
+    expect(wrapper.get('.kt-sitev2-type-row').text()).toContain('单选题')
     await wrapper.get('[data-select-types]').trigger('click')
     await wrapper.get('dialog[aria-label="选择题型"] [data-apply-selection]').trigger('click')
     expect(wrapper.get<HTMLInputElement>('input[aria-label="单选题数量"]').element.value).toBe('1')

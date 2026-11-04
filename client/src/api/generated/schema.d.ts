@@ -5414,6 +5414,7 @@ export interface components {
             mode: (components["schemas"]["Mode9dfEnum"] | components["schemas"]["NullEnum"]) | null;
             total_count?: number | null;
             match_scope?: components["schemas"]["MatchScopeEnum"];
+            type_ranges?: components["schemas"]["SamplingTypeRange"][];
             pinned_question_ids?: number[];
             nodes?: components["schemas"]["SamplingKC"][];
             type_quotas?: components["schemas"]["SamplingQuestionTypeQuota"][];
@@ -5439,6 +5440,10 @@ export interface components {
         SamplingQuestionTypeQuota: {
             question_type: components["schemas"]["QuestionTypeD8fEnum"];
             amount: number;
+        };
+        SamplingTypeRange: {
+            question_type: components["schemas"]["QuestionTypeD8fEnum"];
+            question_ids: number[];
         };
         /**
          * @description * `default` - default
@@ -6956,17 +6961,20 @@ export interface components {
             any_level_available: number;
         };
         TeacherSamplingInventoryQuestionType: {
+            source_available: number;
             question_type: components["schemas"]["QuestionTypeD8fEnum"];
             label: string;
             available: number;
         };
         TeacherSamplingInventoryRequest: {
+            type_ranges?: components["schemas"]["SamplingTypeRange"][];
             question_bank_ids?: number[];
             question_bank_id?: number;
             kc_codes: string[];
             match_scope: components["schemas"]["MatchScopeEnum"];
         };
         TeacherSamplingInventoryResponse: {
+            source_candidate_count: number;
             scope: string;
             candidate_count: number;
             question_types: components["schemas"]["TeacherSamplingInventoryQuestionType"][];

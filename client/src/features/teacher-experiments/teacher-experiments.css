@@ -1732,3 +1732,14 @@
 .kt-teacher-experiments .kt-grading-context > span { overflow-wrap: anywhere; }
 .kt-teacher-experiments .kt-grading-context select { width: auto; min-width: 0; margin: 0; }
 .kt-teacher-experiments .kt-class-task-grading { display: block; margin-top: 4px; font-size: 13px; line-height: 1.5; }
+
+.kt-teacher-experiments .kt-range-column-head,
+.kt-teacher-experiments .kt-sitev2-type-row.kt-range-type-row { display: grid; grid-template-columns: minmax(120px, .8fr) minmax(190px, 1.5fr) 86px 26px; gap: 16px; align-items: center; }
+.kt-teacher-experiments .kt-range-column-head { padding: 10px 0; color: #637388; font-size: 13px; }
+.kt-teacher-experiments .kt-range-type-name { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.kt-teacher-experiments .kt-range-type-name small, .kt-teacher-experiments .kt-range-cell>small { display: block; margin-top: 5px; font-size: 12px; color: #637388; }
+.kt-teacher-experiments .kt-range-cell { min-width: 0; }
+.kt-teacher-experiments .kt-range-trigger { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 10px 12px; background: white; color: inherit; border: 1px solid #cfdbed; border-radius: 6px; text-align: left; cursor: pointer; }
+.kt-teacher-experiments .kt-range-trigger.selected { background: #f4f7ff; border-color: #a6beed; }
+.kt-teacher-experiments .kt-range-trigger small { color: #245ac6; font-size: 12px; }
+@media(max-width:1000px) { .kt-teacher-experiments .kt-range-column-head { display: none; } .kt-teacher-experiments .kt-sitev2-type-row.kt-range-type-row { grid-template-columns: minmax(0,1fr) 78px 26px; } .kt-teacher-experiments .kt-range-type-name { grid-column: 1; } .kt-teacher-experiments .kt-range-cell { grid-column: 1 / -1; grid-row: 2; } .kt-teacher-experiments .kt-range-type-row .kt-sitev2-type-quantity { grid-column: 2; grid-row: 1; } .kt-teacher-experiments .kt-range-type-row>button { grid-column: 3; grid-row: 1; } }

@@ -30,6 +30,11 @@ class SamplingQuestionTypeQuotaSerializer(serializers.Serializer):
     amount = serializers.IntegerField(min_value=1)
 
 
+class SamplingTypeRangeSerializer(serializers.Serializer):
+    question_type = serializers.ChoiceField(choices=SAMPLING_TYPE_CHOICES)
+    question_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False)
+
+
 class SamplingKCSerializer(serializers.Serializer):
     kc_code = serializers.CharField(max_length=32)
     kc_name = serializers.CharField(source="concept.name", read_only=True)
@@ -64,6 +69,7 @@ class SamplingDefinitionSerializer(serializers.Serializer):
         choices=Experiment.MatchScope.choices,
         required=False,
     )
+    type_ranges = SamplingTypeRangeSerializer(source="sampling_type_ranges", many=True, required=False)
     pinned_question_ids = serializers.ListField(source="sampling_pinned_question_ids", child=serializers.IntegerField(min_value=1), required=False)
     nodes = SamplingKCSerializer(source="sampling_kcs", many=True, required=False)
     type_quotas = SamplingQuestionTypeQuotaSerializer(many=True, required=False)
@@ -310,6 +316,7 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             "match_scope": representation["sampling_match_scope"],
             "nodes": representation["sampling_kcs"],
             "type_quotas": configuration.get("sampling_type_quotas", []),
+            "type_ranges": configuration.get("sampling_type_ranges", []),
             "pinned_question_ids": configuration.get("sampling_pinned_question_ids", []),
         }
         label_fields = {
@@ -473,6 +480,11 @@ class TeacherExperimentSerializer(serializers.ModelSerializer):
             ]
         else:
             effective_type_quotas = type_quotas or []
+        ranges = attrs.get('sampling_type_ranges', getattr(self.instance, 'sampling_type_ranges', []))
+        if ranges and (sampling_mode != Experiment.SamplingMode.TOTAL_COUNT or any(
+                row['question_type'] not in {quota['question_type'] for quota in effective_type_quotas}
+                for row in ranges)):
+            raise serializers.ValidationError({'sampling_type_ranges': '题型范围仅适用于按总题数抽题，且必须设置对应题型配额。'})
         question_types = [row["question_type"] for row in effective_type_quotas]
         if len(question_types) != len(set(question_types)):
             raise serializers.ValidationError(
@@ -717,6 +729,7 @@ class TeacherExperimentReadinessSerializer(serializers.Serializer):
 
 
 class TeacherSamplingInventoryRequestSerializer(serializers.Serializer):
+    type_ranges = SamplingTypeRangeSerializer(many=True, required=False)
     question_bank_ids = serializers.ListField(
         child=serializers.IntegerField(min_value=1), required=False
     )
@@ -745,6 +758,7 @@ class TeacherSamplingInventoryRequestSerializer(serializers.Serializer):
 
 
 class TeacherSamplingInventoryQuestionTypeSerializer(serializers.Serializer):
+    source_available = serializers.IntegerField(min_value=0)
     question_type = serializers.ChoiceField(choices=SAMPLING_TYPE_CHOICES)
     label = serializers.CharField()
     available = serializers.IntegerField(min_value=0)
@@ -757,6 +771,7 @@ class TeacherSamplingInventoryKCSerializer(serializers.Serializer):
 
 
 class TeacherSamplingInventoryResponseSerializer(serializers.Serializer):
+    source_candidate_count = serializers.IntegerField(min_value=0)
     scope = serializers.CharField()
     candidate_count = serializers.IntegerField(min_value=0)
     question_types = TeacherSamplingInventoryQuestionTypeSerializer(many=True)

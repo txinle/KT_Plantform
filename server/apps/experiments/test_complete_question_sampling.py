@@ -22,6 +22,35 @@ class PreparedCompleteQuestionTests(SimpleTestCase):
         return SamplingService(self.definition, prepared_candidates=self.questions,
             prepared_rules=[], prepared_type_quotas={}, **history)
 
+    def test_type_range_restricts_prepared_candidates_and_preserves_group(self):
+        self.questions.append(SimpleNamespace(**{**vars(self.questions[3]), 'pk': 5, 'sequence': 5}))
+        self.definition.sampling_type_ranges = [{'question_type': 'single_choice', 'question_ids': [4]}]
+        service = SamplingService(self.definition, prepared_candidates=self.questions,
+            prepared_rules=[], prepared_type_quotas={'single_choice': 1})
+        self.assertEqual([q.pk for q in service.resolve().candidates], [1, 2, 3, 4])
+        self.definition.sampling_type_ranges = [{'question_type': 'reading', 'question_ids': [1]}]
+        service.prepared_type_quotas = {'reading': 1}
+        self.assertEqual([q.pk for q in service.select('01' * 32)], [1, 2, 3])
+
+    def test_type_range_cannot_fall_back_when_history_exhausts_it(self):
+        self.questions.append(SimpleNamespace(**{**vars(self.questions[3]), 'pk': 5, 'sequence': 5}))
+        self.definition.sampling_type_ranges = [{'question_type': 'single_choice', 'question_ids': [4]}]
+        self.definition.cross_experiment_item_policy = 'exclude_previous'
+        with self.assertRaises(SamplingValidationError):
+            SamplingService(self.definition, prepared_candidates=self.questions, prepared_rules=[],
+                prepared_type_quotas={'single_choice': 1}, completed_question_ids={4}).select('01' * 32)
+
+    def test_invalid_type_ranges_are_rejected(self):
+        for rows in ([{'question_type': 'reading', 'question_ids': []}],
+                     [{'question_type': 'reading', 'question_ids': [2]}],
+                     [{'question_type': 'reading', 'question_ids': [4]}],
+                     [{'question_type': 'reading', 'question_ids': [1, 1]}],
+                     [{'question_type': 'reading', 'question_ids': [1]}] * 2):
+            with self.subTest(rows=rows), self.assertRaises(SamplingValidationError):
+                self.definition.sampling_type_ranges = rows
+                SamplingService(self.definition, prepared_candidates=self.questions,
+                    prepared_rules=[], prepared_type_quotas={'reading': 1}).resolve()
+
     def test_member_history_excludes_the_entire_unit(self):
         self.definition.cross_experiment_item_policy = 'exclude_previous'
         self.assertEqual([question.pk for question in self.service(completed_question_ids={3}).resolve().candidates], [4])
@@ -155,3 +184,137 @@ class CompleteQuestionSamplingTests(TestCase):
         data = domain_payload(response)
         self.assertEqual(data['sampling']['pinned_question_ids'], [pin])
         self.assertEqual(data['sampling']['type_quotas'], [{'question_type': 'reading', 'amount': 1}])
+
+
+class TypeRangeApiTests(TestCase):
+    setUp = test_group_snapshots.GroupSnapshotTests.setUp
+    def range_payload(self, ids=None, kind='reading'):
+        return {'name': 'Scoped range', 'question_bank_ids': [self.bank.pk],
+            'sampling': {'mode': 'total_count', 'total_count': 1, 'match_scope': 'any_level',
+                'nodes': [], 'type_quotas': [{'question_type': kind, 'amount': 1}],
+                'type_ranges': [{'question_type': kind, 'question_ids': ids if ids is not None else [self.group.members.first().pk]}]}}
+
+    def save_range(self, payload):
+        self.client.force_login(self.teacher)
+        return self.client.post(f'/api/v1/teacher/courses/{self.course.pk}/experiments/', payload, content_type='application/json')
+
+    def test_range_api_roundtrip_and_inventory(self):
+        from apps.api.test_support import domain_payload
+        payload = self.range_payload()
+        response = self.save_range(payload)
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(domain_payload(response)['sampling']['type_ranges'], payload['sampling']['type_ranges'])
+        experiment = Experiment.objects.get(pk=domain_payload(response)['id'])
+        self.assertEqual(experiment.sampling_type_ranges, payload['sampling']['type_ranges'])
+        response = self.client.post(f'/api/v1/teacher/courses/{self.course.pk}/experiments/sampling-inventory/',
+            {'question_bank_ids': [self.bank.pk], 'kc_codes': [], 'match_scope': 'any_level',
+             'type_ranges': payload['sampling']['type_ranges']}, content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(domain_payload(response)['source_candidate_count'], 2)
+        self.assertEqual(len(domain_payload(response)['questions']), 2)
+
+    def test_range_api_rejects_invalid_scope_duplicates_and_empty(self):
+        from apps.question_bank.models import QuestionBank, Question
+        other = QuestionBank.objects.create(owner=self.teacher, course=self.course, name='Other')
+        outside = Question.objects.create(bank=other, sequence=1, question_type='fill_blank', text='outside', correct_answer='x')
+        canonical = self.group.members.first().pk
+        for ids in ([], [canonical, canonical], [self.group.members.last().pk], [outside.pk], [999999]):
+            with self.subTest(ids=ids):
+                response = self.save_range(self.range_payload(ids))
+                self.assertEqual(response.status_code, 400, response.content)
+        payload = self.range_payload()
+        payload['sampling']['type_ranges'] *= 2
+        self.assertEqual(self.save_range(payload).status_code, 400)
+        payload = self.range_payload()
+        payload['sampling']['type_quotas'] = []
+        self.assertEqual(self.save_range(payload).status_code, 400)
+        self.assertEqual(Experiment.objects.count(), 0)
+
+    def test_scoped_single_question_excludes_other_same_type_and_conflicting_pin(self):
+        from apps.question_bank.models import Question, QuestionConcept
+        first = self.bank.questions.get(group__isnull=True)
+        second = Question.objects.create(bank=self.bank, sequence=5, question_type='fill_blank', text='another', correct_answer='x')
+        QuestionConcept.objects.create(question=second, concept=self.kc, is_primary=True)
+        payload = self.range_payload([first.pk], 'fill_blank')
+        response = self.save_range(payload)
+        self.assertEqual(response.status_code, 201, response.content)
+        experiment = Experiment.objects.latest('pk')
+        self.assertEqual([q.pk for q in SamplingService(experiment).resolve().candidates if q.question_type == 'fill_blank'], [first.pk])
+        payload['sampling']['pinned_question_ids'] = [second.pk]
+        self.assertEqual(self.save_range(payload).status_code, 400)
+        response = self.client.post(f'/api/v1/teacher/courses/{self.course.pk}/experiments/sampling-inventory/',
+            {'question_bank_ids': [self.bank.pk], 'kc_codes': [], 'match_scope': 'any_level',
+             'type_ranges': payload['sampling']['type_ranges']}, content_type='application/json')
+        from apps.api.test_support import domain_payload
+        data = domain_payload(response)
+        self.assertEqual((data['candidate_count'], data['source_candidate_count']), (2, 3))
+        self.assertEqual(len(data['questions']), 3)
+
+    def test_range_frozen_replay_and_fingerprint(self):
+        from apps.api.test_support import domain_payload
+        from .publication_services import (get_or_create_publish_plan, save_plan_selection, generate_preview,
+            commit_publish_plan, _select_questions, _preview_definition_fingerprint, _preview_candidates)
+        from .models import ReleaseSnapshotQuestionMapping
+        response = self.save_range(self.range_payload())
+        self.assertEqual(response.status_code, 201, response.content)
+        experiment = Experiment.objects.get(pk=domain_payload(response)['id'])
+        before = _preview_definition_fingerprint(experiment, _preview_candidates(experiment))
+        experiment.sampling_type_ranges = []
+        self.assertNotEqual(before, _preview_definition_fingerprint(experiment, _preview_candidates(experiment)))
+        experiment.refresh_from_db()
+        plan = get_or_create_publish_plan(experiment, self.teacher)
+        plan = save_plan_selection(plan, self.teacher, expected_revision=plan.plan_revision,
+            class_ids=[self.class_group.pk], exclusions_by_class={})
+        generate_preview(plan, self.teacher, expected_revision=plan.plan_revision)
+        plan.refresh_from_db()
+        commit_publish_plan(plan, self.teacher, expected_revision=plan.plan_revision)
+        experiment.refresh_from_db()
+        self.assertEqual(experiment.frozen_release_snapshot.configuration['sampling_type_ranges'], experiment.sampling_type_ranges)
+        mappings = list(ReleaseSnapshotQuestionMapping.objects.filter(release_snapshot=experiment.frozen_release_snapshot))
+        before = _select_questions(experiment, mappings, '01' * 32, '02' * 32)
+        self.group.kind = 'cloze'
+        self.group.save(update_fields=['kind'])
+        after = _select_questions(experiment, mappings, '01' * 32, '02' * 32)
+        self.assertEqual([r['candidate'].source_question_id for r in before], [r['candidate'].source_question_id for r in after])
+        self.assertEqual(len(after), 3)
+
+    def test_range_endpoint_denies_student(self):
+        self.client.force_login(self.student)
+        response = self.client.post(f'/api/v1/teacher/courses/{self.course.pk}/experiments/', self.range_payload(), content_type='application/json')
+        self.assertIn(response.status_code, (403, 404))
+
+    def test_update_preserves_ranges_and_rejects_kc_scope_change_atomically(self):
+        from apps.api.test_support import domain_payload
+        response = self.save_range(self.range_payload())
+        self.assertEqual(response.status_code, 201, response.content)
+        experiment = Experiment.objects.get(pk=domain_payload(response)['id'])
+        url = f'/api/v1/teacher/courses/{self.course.pk}/experiments/{experiment.pk}/'
+        response = self.client.patch(url, {'name': 'Renamed'}, content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(domain_payload(response)['sampling']['type_ranges'], experiment.sampling_type_ranges)
+        concept = Concept.objects.create(course=self.course, code='KC2', name='No eligible question')
+        response = self.client.patch(url, {'sampling': {'mode': 'total_count',
+            'nodes': [{'kc_code': concept.code, 'match_scope': 'any_level', 'quota': None}]}}, content_type='application/json')
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(experiment.sampling_kcs.count(), 0)
+        response = self.client.patch(url, {'sampling': {'mode': 'total_count', 'type_ranges': []}}, content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        experiment.refresh_from_db()
+        self.assertEqual(experiment.sampling_type_ranges, [])
+
+    def test_student_inventory_reports_history_exhausted_range(self):
+        from apps.api.test_support import domain_payload
+        from .publication_services import _preview_candidates, _student_inventory_check, StudentItemContext
+        response = self.save_range(self.range_payload())
+        experiment = Experiment.objects.get(pk=domain_payload(response)['id'])
+        experiment.cross_experiment_item_policy = 'exclude_previous'
+        experiment.save(update_fields=['cross_experiment_item_policy'])
+        contexts = {self.student.pk: StudentItemContext(
+            completed_question_ids=frozenset([self.group.members.last().pk]),
+            assigned_question_ids=frozenset(), active_frozen_question_ids=frozenset(), unresolved_task_ids=())}
+        inventory, issues = _student_inventory_check(experiment, _preview_candidates(experiment),
+            [self.student], contexts, {self.student.pk: self.class_group.pk})
+        self.assertEqual(inventory['blocking_issue_count'], 1)
+        reading = next(row for row in inventory['question_types'] if row['question_type'] == 'reading')
+        self.assertEqual(reading['minimum_available'], 0)
+        self.assertTrue(issues)

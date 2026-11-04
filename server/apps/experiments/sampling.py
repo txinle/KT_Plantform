@@ -50,6 +50,27 @@ def flatten_units(questions):
     return [member for question in questions for member in unit_members(question)]
 
 
+def apply_type_ranges(candidates, ranges):
+    """Validate canonical unit IDs before intersecting the eligible source pool."""
+    by_id = {question.pk: question for question in candidates}
+    allowed = {}
+    for row in ranges:
+        kind, ids = row.get('question_type'), row.get('question_ids')
+        if (kind not in SAMPLING_TYPES or kind in allowed or not isinstance(ids, list)
+                or not ids or any(type(pk) is not int or pk <= 0 for pk in ids)
+                or len(set(ids)) != len(ids)
+                or any(pk not in by_id or sampling_question_type(by_id[pk]) != kind for pk in ids)):
+            raise SamplingValidationError([{
+                'code': 'TYPE_RANGE_INVALID', 'field': 'sampling_type_ranges',
+                'message': '题型范围必须包含当前题库及知识点范围内、对应题型的完整题目代表 ID，且不得为空或重复。',
+                'class_id': None, 'kc_id': None,
+            }])
+        allowed[kind] = set(ids)
+    return [question for question in candidates
+            if sampling_question_type(question) not in allowed
+            or question.pk in allowed[sampling_question_type(question)]]
+
+
 def sample_with_pins(options, count, pinned_ids, rng):
     pinned = [question for question in options if question.pk in pinned_ids]
     return pinned + rng.sample([question for question in options if question.pk not in pinned_ids], count - len(pinned))
@@ -403,6 +424,11 @@ class SamplingService:
     def resolve(self, *, validate_inventory=True):
         mode = self.experiment.sampling_mode
         rules = self._rules()
+        ranges = getattr(self.experiment, 'sampling_type_ranges', [])
+        if ranges and (mode != Experiment.SamplingMode.TOTAL_COUNT or any(
+                row.get('question_type') not in self._type_quota_map() for row in ranges)):
+            raise SamplingValidationError([self._issue('TYPE_RANGE_MODE_INVALID',
+                '题型范围仅适用于按总题数抽题，且必须设置对应题型配额。', field='sampling_type_ranges')])
         if mode == Experiment.SamplingMode.TOTAL_COUNT:
             if not self.experiment.sampling_total_count:
                 raise SamplingValidationError([
@@ -447,7 +473,7 @@ class SamplingService:
                     match_scope=scope,
                 )
             )
-            candidates = self._filter_candidates(complete_question_units(candidates))
+            candidates = self._filter_candidates(apply_type_ranges(complete_question_units(candidates), ranges))
             self._pinned_ids(candidates)
             type_buckets = {
                 question_type: [

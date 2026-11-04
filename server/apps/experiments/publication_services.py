@@ -1014,6 +1014,7 @@ def _select_frozen_complete_questions(items, configuration, item_context, sampli
     definition = SimpleNamespace(**{key: configuration[key] for key in (
         'sampling_mode', 'sampling_total_count', 'sampling_match_scope',
         'cross_experiment_item_policy', 'review_count', 'sampling_pinned_question_ids')})
+    definition.sampling_type_ranges = configuration.get("sampling_type_ranges", [])
     service = SamplingService(definition, prepared_candidates=candidates, prepared_rules=rules,
         prepared_type_quotas={row['question_type']: row['amount'] for row in configuration['sampling_type_quotas']},
         completed_question_ids=item_context.completed_question_ids,
@@ -1425,7 +1426,7 @@ def _select_questions(
         items = selected
     if sampling_mode:
         for row in items:
-            if configuration is None and (experiment.sampling_pinned_question_ids or any(
+            if configuration is None and (experiment.sampling_type_ranges or experiment.sampling_pinned_question_ids or any(
                 question.group_id or question.educational_type != 'standard' for question in candidates
             )):
                 row['sampling_source']['algorithm_version'] = 'complete-question-v1'
@@ -1602,6 +1603,7 @@ def _preview_definition_fingerprint(experiment, candidates):
             "selection_mode": frozen.get("selection_mode") if frozen else experiment.selection_mode,
             "sampling_mode": frozen.get("sampling_mode") if frozen else experiment.sampling_mode,
             "sampling_total_count": frozen.get("sampling_total_count") if frozen else experiment.sampling_total_count,
+            "sampling_type_ranges": frozen.get("sampling_type_ranges", []) if frozen else experiment.sampling_type_ranges,
             "sampling_pinned_question_ids": frozen.get("sampling_pinned_question_ids", []) if frozen else experiment.sampling_pinned_question_ids,
             "sampling_match_scope": frozen.get("sampling_match_scope") if frozen else experiment.sampling_match_scope,
             "cross_experiment_item_policy": (
@@ -1917,8 +1919,9 @@ def _release_configuration(experiment, candidates):
         "quota_map": _quota_map(experiment),
         "candidate_count": len(candidates),
         "candidate_unit_count": len(complete_question_units(candidates)),
+        "sampling_type_ranges": experiment.sampling_type_ranges,
         "sampling_pinned_question_ids": experiment.sampling_pinned_question_ids,
-        "sampling_unit_version": ('complete-question-v1' if experiment.sampling_pinned_question_ids or any(
+        "sampling_unit_version": ('complete-question-v1' if experiment.sampling_type_ranges or experiment.sampling_pinned_question_ids or any(
             question.group_id or question.educational_type != 'standard' for question in candidates
         ) else None),
         "candidate_fingerprints": {
@@ -2072,6 +2075,7 @@ def _release_configuration(experiment, candidates):
             "candidate_scope": candidate_scope,
             "selected_nodes": configuration["sampling_kcs"],
             "type_quotas": sampling_type_quotas,
+            "type_ranges": experiment.sampling_type_ranges,
             "type_inventory": sampling_type_inventory,
             "attribution_rule": (
                 "deduplicated_question_union"

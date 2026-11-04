@@ -423,6 +423,12 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
                 for concept_id in selected_ids
             )
         ]
+        source_candidates = candidates
+        from ..sampling import apply_type_ranges
+        try:
+            candidates = apply_type_ranges(candidates, data.get('type_ranges', []))
+        except SamplingValidationError as exc:
+            raise ValidationError({'type_ranges': exc.messages}) from exc
         counts = {
             question_type: sum(
                 sampling_question_type(question) == question_type for question in candidates
@@ -432,13 +438,14 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
         return Response(
             {
                 "scope": "question_bank",
+                "source_candidate_count": len(source_candidates),
                 "candidate_count": len(candidates),
                 "questions": [
                     {"question_id": question.pk, "question_type": sampling_question_type(question),
                      "code": question.code, "title": question.group.title if question.group_id else question.text,
                      "text": question.group.material if question.group_id else question.text,
                      "item_count": len(unit_members(question)), "question_bank_id": question.bank_id}
-                    for question in candidates
+                    for question in source_candidates
                 ],
                 "bank_counts": [
                     {"question_bank_id": bank.pk, "name": bank.name,
@@ -464,6 +471,7 @@ class TeacherSamplingInventoryView(TeacherExperimentApiMixin, APIView):
                         "question_type": question_type,
                         "label": label,
                         "available": counts[question_type],
+                        "source_available": sum(sampling_question_type(q) == question_type for q in source_candidates),
                     }
                     for question_type, label in SAMPLING_TYPE_CHOICES
                 ],

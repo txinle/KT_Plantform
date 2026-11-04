@@ -11,6 +11,7 @@ import Alert from '@/design-system/components/Alert.vue'
 import Button from '@/design-system/components/Button.vue'
 import FormField from '@/design-system/components/FormField.vue'
 import ModalDialog from '@/design-system/components/ModalDialog.vue'
+import SamplingRangePicker from './SamplingRangePicker.vue'
 import ExperimentQuestionPreview from './ExperimentQuestionPreview.vue'
 import Paginator from '@/design-system/components/Paginator.vue'
 import ResearchToolsEditor from './ResearchToolsEditor.vue'
@@ -107,9 +108,6 @@ function pinType(id: number) {
   return knownQuestionTypes.get(id)
     || samplingInventory.value?.questions?.find(item => item.question_id === id)?.question_type
 }
-function typePinCount(type: ExperimentQuestionType) {
-  return form.pinned_question_ids.filter(id => pinType(id) === type).length
-}
 function openQuestionPicker(event: MouseEvent, type: ExperimentQuestionType | '' = '') {
   (event.currentTarget as HTMLElement).focus()
   questionTypeFilter.value = type
@@ -194,6 +192,7 @@ const form = reactive({
   kc_match_scopes: {} as Record<number, 'primary' | 'any_level'>,
   selected_question_types: {} as Record<ExperimentQuestionType, boolean>,
   type_quotas: {} as Record<ExperimentQuestionType, number>,
+  type_ranges: {} as Partial<Record<ExperimentQuestionType, number[]>>,
   pinned_question_ids: [] as number[],
   cross_experiment_item_policy: 'exclude_previous' as 'exclude_previous' | 'mixed_review' | 'unrestricted',
   review_count: 0,
@@ -208,6 +207,43 @@ const form = reactive({
   confidence_sampling_unit: 'attempt' as 'student' | 'session' | 'attempt',
   confidence_probability: null as number | null,
 })
+
+const rangeType = ref<ExperimentQuestionType | ''>('')
+const rangesTouched = ref(false)
+const scopedInventory = ref<SamplingInventory>()
+const rangeInventoryError = ref('')
+const typeRanges = computed(() => Object.entries(form.type_ranges).map(([question_type, question_ids]) => ({
+  question_type: question_type as ExperimentQuestionType, question_ids: [...question_ids!],
+})))
+const rangeError = computed(() => {
+  if (!typeRanges.value.length) return ''
+  if (form.sampling_mode !== 'total_count') return '当前数量规则不支持自定义抽题范围，请返回总题数模式或明确清除范围。'
+  if (inventoryLoading.value) return '正在校验候选范围…'
+  if (inventoryError.value) return inventoryError.value
+  for (const range of typeRanges.value) {
+    if (!form.selected_question_types[range.question_type]) return '自定义范围包含未选择的题型，请清除该范围。'
+    const label = questionTypeLabel(range.question_type)
+    if (!range.question_ids.length || range.question_ids.length < Number(form.type_quotas[range.question_type])) return `${label}候选范围不足，请增加候选题目或减少题量。`
+    if (range.question_ids.some(id => !samplingInventory.value?.questions?.some(q => q.question_id === id && q.question_type === range.question_type))) return `${label}候选范围包含已失效题目，请重新选择或恢复全题库随机。`
+    if (form.pinned_question_ids.some(id => pinType(id) === range.question_type && !range.question_ids.includes(id))) return `${label}必出题目不在候选范围内，请调整范围或移除必出题目。`
+  }
+  return rangeInventoryError.value
+})
+function applyRange(ids: number[] | null) {
+  if (!rangeType.value) return
+  rangesTouched.value = true
+  if (ids === null) delete form.type_ranges[rangeType.value]
+  else form.type_ranges[rangeType.value] = [...ids]
+  rangeType.value = ''
+}
+function clearRanges() {
+  form.type_ranges = {}
+  rangesTouched.value = true
+}
+function openRange(event: MouseEvent, type: ExperimentQuestionType) {
+  (event.currentTarget as HTMLElement).focus()
+  rangeType.value = type
+}
 
 const quotaTotal = computed(() => concepts.value.reduce((total, concept) => (
   form.selected_kcs[concept.id] ? total + Number(form.kc_quotas[concept.id] || 0) : total
@@ -276,7 +312,7 @@ const typeQuotaError = computed(() => {
   if (inventoryError.value) return inventoryError.value
   if (!samplingInventory.value) return '正在校验题型库存…'
   const inventory = new Map(
-    (samplingInventory.value?.question_types || []).map((item) => [item.question_type, item.available]),
+    ((typeRanges.value.length ? scopedInventory.value : samplingInventory.value)?.question_types || samplingInventory.value?.question_types || []).map((item) => [item.question_type, item.available]),
   )
   const shortage = selectedQuestionTypes.value.find(
     (item) => Number(form.type_quotas[item.value] || 0) > Number(inventory.get(item.value) || 0),
@@ -285,7 +321,7 @@ const typeQuotaError = computed(() => {
     ? `${shortage.label}库存不足：需要 ${form.type_quotas[shortage.value]}，可用 ${inventory.get(shortage.value) || 0}。`
     : ''
 })
-const typeQuotaInvalid = computed(() => Boolean(typeQuotaError.value))
+const typeQuotaInvalid = computed(() => Boolean(typeQuotaError.value || rangeError.value))
 
 function questionTypeAvailable(questionType: ExperimentQuestionType) {
   return samplingInventory.value?.question_types.find(
@@ -309,6 +345,8 @@ function setQuestionTypeSelected(questionType: ExperimentQuestionType, selected:
       form.type_quotas[questionType] = 1
     }
   } else {
+    if (form.type_ranges[questionType]) rangesTouched.value = true
+    delete form.type_ranges[questionType]
     delete form.type_quotas[questionType]
     form.pinned_question_ids = form.pinned_question_ids.filter(id => pinType(id) !== questionType)
   }
@@ -317,6 +355,8 @@ function setQuestionTypeSelected(questionType: ExperimentQuestionType, selected:
 async function refreshSamplingInventory() {
   const requestId = ++inventoryRequest
   inventoryError.value = ''
+  rangeInventoryError.value = ''
+  scopedInventory.value = undefined
   samplingInventory.value = undefined
   const kcCodes = form.sampling_mode === 'all' ? [] : selectedConcepts.value.map((concept) => concept.kc_code)
   if (!form.question_bank_ids.length) {
@@ -333,6 +373,17 @@ async function refreshSamplingInventory() {
     if (requestId === inventoryRequest) {
       samplingInventory.value = result
       for (const item of result.questions || []) knownQuestionTypes.set(item.question_id, item.question_type)
+      if (typeRanges.value.length && form.sampling_mode === 'total_count') {
+        try {
+          const scoped = await api.samplingInventory(courseId, {
+            question_bank_ids: [...form.question_bank_ids], kc_codes: kcCodes,
+            match_scope: form.sampling_match_scope, type_ranges: typeRanges.value,
+          })
+          if (requestId === inventoryRequest) scopedInventory.value = scoped
+        } catch (caught) {
+          if (requestId === inventoryRequest) rangeInventoryError.value = caught instanceof Error ? caught.message : '候选范围校验失败。'
+        }
+      }
     }
   } catch (caught) {
     if (requestId === inventoryRequest) {
@@ -413,6 +464,7 @@ function definitionInput(): ExperimentDefinitionInput {
         amount: Number(form.type_quotas[questionType.value]),
       }))
     }
+    if (typeRanges.value.length || rangesTouched.value) input.sampling.type_ranges = typeRanges.value
     if (form.pinned_question_ids.length || savedPinnedQuestionIds.value.length) {
       input.sampling.pinned_question_ids = [...form.pinned_question_ids]
     }
@@ -478,6 +530,10 @@ async function load() {
         form.selected_question_types[questionType] = true
         form.type_quotas[questionType] = quota.amount
       }
+      for (const range of experiment.sampling?.type_ranges || []) {
+        form.type_ranges[range.question_type as ExperimentQuestionType] = [...range.question_ids]
+      }
+      rangesTouched.value = typeRanges.value.length > 0
       form.pinned_question_ids = [...(experiment.sampling?.pinned_question_ids || [])]
       savedPinnedQuestionIds.value = [...form.pinned_question_ids]
       readiness.value = await api.readiness(courseId, experimentId.value)
@@ -495,7 +551,7 @@ async function load() {
 }
 
 async function submit(destination: 'detail' | 'publish' = 'detail') {
-  if (incompatiblePins.value) return
+  if (incompatiblePins.value || rangeError.value) return
   if (form.time_mode === 'per_question') {
     fieldErrors.value = { time_mode: '历史草稿使用单题计时，请明确选择无时限或实验总时限。' }
     return
@@ -535,6 +591,7 @@ async function submit(destination: 'detail' | 'publish' = 'detail') {
 
 watch(
   () => [
+    JSON.stringify(typeRanges.value),
     form.question_bank_ids.join('|'),
     form.sampling_mode,
     form.sampling_match_scope,
@@ -596,18 +653,27 @@ onMounted(load)
       <section :inert="legacySampling" class="kt-numbered-form-section" aria-labelledby="definition-selection">
         <div class="kt-numbered-form-section__heading"><span aria-hidden="true">02</span><h2 id="definition-selection">抽题设置</h2></div>
         <div class="kt-card kt-numbered-form-section__content">
+          <Alert v-if="rangeError || fieldErrors.sampling_type_ranges" tone="danger">{{ rangeError || fieldErrors.sampling_type_ranges }} <button v-if="form.sampling_mode !== 'total_count'" data-clear-incompatible-ranges type="button" class="kt-text-button" @click="clearRanges">清除自定义范围</button></Alert>
           <Alert v-if="conversionWarning" tone="warning">{{ conversionWarning }}</Alert>
           <Alert v-if="incompatiblePins" tone="danger">当前数量规则不支持指定题目。已保留 {{ form.pinned_question_ids.length }} 道指定题目，请返回总题数模式或明确移除后保存。 <button data-clear-incompatible-pins type="button" class="kt-text-button" @click="form.pinned_question_ids = []">移除指定题目</button></Alert>
           <template v-if="!legacySampling && form.sampling_mode === 'total_count'">
             <FormField class="kt-compact-form-row kt-count-field" for-id="sampling-total-count" label="每位学生总题数" :error="fieldErrors.sampling_total_count"><input id="sampling-total-count" v-model.number="form.sampling_total_count" type="number" min="1"></FormField>
             <div class="kt-type-config-panel">
               <div class="kt-sitev2-allocation-heading"><h3>题型构成</h3><button class="kt-text-button" type="button" data-type-picker data-select-types aria-haspopup="dialog" @click="openTypePicker">＋ 选择题型</button></div>
-              <div class="kt-sitev2-type-rows"><div v-for="questionType in selectedQuestionTypes" :key="questionType.value" class="kt-sitev2-type-row" :class="{ invalid: !inventoryLoading && Number(form.type_quotas[questionType.value]) > Number(questionTypeAvailable(questionType.value) || 0) }"><span class="kt-sitev2-type-symbol" aria-hidden="true">{{ questionType.label.slice(0, 1) }}</span><button type="button" class="kt-sitev2-type-select" :data-select-question-type="questionType.value" aria-haspopup="dialog" @click="openQuestionPicker($event, questionType.value)"><strong>{{ questionType.label }}</strong><small>可用 {{ questionTypeAvailable(questionType.value) ?? '—' }} 道 · {{ typePinCount(questionType.value) ? `已指定 ${typePinCount(questionType.value)} 道，其余随机` : '未指定，随机抽题' }} · 选择具体题目 →</small></button><label class="kt-sitev2-type-quantity"><input v-model.number="form.type_quotas[questionType.value]" :aria-label="`${questionType.label}数量`" type="number" min="1" :max="questionTypeAvailable(questionType.value)">道</label><button type="button" class="kt-text-button" :aria-label="`移除${questionType.label}`" @click="setQuestionTypeSelected(questionType.value, false)">×</button></div></div>
+              <div v-if="selectedQuestionTypes.length" class="kt-range-column-head"><span>题型</span><span>抽题范围</span><span>抽取数量</span><span /></div>
+              <div class="kt-sitev2-type-rows">
+                <div v-for="questionType in selectedQuestionTypes" :key="questionType.value" class="kt-sitev2-type-row kt-range-type-row">
+                  <div class="kt-range-type-name"><span class="kt-sitev2-type-symbol" aria-hidden="true">{{ questionType.label.slice(0, 1) }}</span><div><strong>{{ questionType.label }}</strong><small>{{ questionTypeAvailabilityLabel(questionType.value) }}</small></div></div>
+                  <div class="kt-range-cell"><button type="button" class="kt-range-trigger" :class="{ selected: form.type_ranges[questionType.value] }" :data-select-question-type="questionType.value" :aria-label="`${questionType.label}抽题范围`" aria-haspopup="dialog" @click="openRange($event, questionType.value)"><span>{{ form.type_ranges[questionType.value] ? `已选 ${form.type_ranges[questionType.value]!.length} 道候选` : '全题库随机' }}</span><small>设置范围 →</small></button><small>从{{ form.type_ranges[questionType.value] ? '选定候选题' : '当前题库与知识点范围' }}随机抽取</small></div>
+                  <label class="kt-sitev2-type-quantity"><input v-model.number="form.type_quotas[questionType.value]" :aria-label="`${questionType.label}数量`" type="number" min="1" :max="form.type_ranges[questionType.value]?.length ?? questionTypeAvailable(questionType.value)">道</label>
+                  <button type="button" class="kt-text-button" :aria-label="`移除${questionType.label}`" @click="setQuestionTypeSelected(questionType.value, false)">×</button>
+                </div>
+              </div>
               <template v-if="selectedQuestionTypes.length"><div class="kt-sitev2-allocation-meter"><span :style="{ width: `${Math.min(100, typeQuotaTotal / Math.max(1, Number(form.sampling_total_count)) * 100)}%`, background: typeQuotaTotal === form.sampling_total_count ? '#285dbb' : '#b6804b' }" /></div><div class="kt-selection-facts">已分配 {{ typeQuotaTotal }} / 总题数 {{ form.sampling_total_count || 0 }}</div></template>
               <div class="kt-type-allocation-status" :class="{ 'is-error': typeQuotaError || fieldErrors.sampling_type_quotas }"><span v-if="!selectedQuestionTypes.length && !fieldErrors.sampling_type_quotas">不限题型数量，从所选题库候选题中随机抽取。</span><span v-else-if="typeQuotaError || fieldErrors.sampling_type_quotas" role="alert">{{ typeQuotaError || fieldErrors.sampling_type_quotas }}</span><span v-else>题型构成有效，按各题型候选桶确定性抽取。</span></div>
             </div>
             <div class="kt-compact-form-row kt-pinned-question-config">
-              <strong class="kt-config-label">指定题目（可选）</strong>
+              <strong class="kt-config-label">必出题目（可选）</strong>
               <div>
                 <div class="kt-inline-actions"><button type="button" class="kt-button kt-button--secondary" data-select-questions aria-haspopup="dialog" @click="openQuestionPicker($event)">选择具体题目</button><span class="kt-muted">已指定 {{ form.pinned_question_ids.length }} 道，其余随机补足至 {{ form.sampling_total_count || 0 }} 道。</span></div>
                 <ul v-if="pinnedQuestions.length" class="kt-pinned-question-list"><li v-for="item in pinnedQuestions" :key="item.id"><span>{{ item.title }}<small v-if="!item.available && !inventoryLoading" class="kt-field__error"> · 已不在当前候选范围，请移除或调整范围</small></span><button class="kt-text-button" type="button" :aria-label="`移除指定题目 ${item.title}`" @click="form.pinned_question_ids = form.pinned_question_ids.filter(id => id !== item.id)">移除</button></li></ul>
@@ -617,8 +683,8 @@ onMounted(load)
           </template>
 
           <p v-if="inventoryLoading" role="status">正在加载所选题库库存…</p>
-          <div v-if="samplingInventory?.bank_counts?.length" class="kt-experiment-bank-inventory" aria-label="各题库候选库存">
-            <span v-for="bank in samplingInventory.bank_counts" :key="bank.question_bank_id">{{ bank.name }}：{{ bank.candidate_count }} 题</span>
+          <div v-if="(typeRanges.length ? scopedInventory : samplingInventory)?.bank_counts?.length" class="kt-experiment-bank-inventory" aria-label="各题库候选库存">
+            <span v-for="bank in (typeRanges.length ? scopedInventory : samplingInventory)?.bank_counts" :key="bank.question_bank_id">{{ bank.name }}：{{ bank.candidate_count }} 题</span>
           </div>
           <Alert v-if="inventoryError" tone="danger">{{ inventoryError }}</Alert>
           <p v-if="fieldErrors.sampling_kcs" class="kt-field__error" role="alert">{{ fieldErrors.sampling_kcs }}</p>
@@ -660,7 +726,7 @@ onMounted(load)
           <p class="kt-history-policy-note">{{ historyPolicyDescription }}</p>
           <div class="kt-history-resource-strip" role="status">
             <div class="kt-history-resource-strip__heading"><strong>个体题目资源检查</strong><small>选择班级后执行逐人检查</small></div>
-            <span>题库全局候选 <b>{{ samplingInventory?.candidate_count ?? '—' }}</b> 题，尚未按学生历史过滤</span>
+            <span>题库全局候选 <b>{{ (typeRanges.length ? scopedInventory : samplingInventory)?.candidate_count ?? '—' }}</b> 题，尚未按学生历史过滤</span>
             <span>本次需要 <b>{{ assignmentTotal || '—' }}</b> 题</span>
             <span>选择参与班级后，将检查每名学生的历史题、新题和有效任务占用。</span>
           </div>
@@ -714,9 +780,10 @@ onMounted(load)
     </form>
     <aside class="kt-experiment-config-summary" aria-label="当前实验配置">
       <section class="kt-card kt-sitev2-summary-panel"><header class="kt-sitev2-summary-top"><h2>本次实验</h2><div class="kt-sitev2-big-number">{{ assignmentTotal }}<small>道题</small></div><p>一篇阅读或填空文章，计为一道题。</p></header><dl><div><dt>每位学生</dt><dd>{{ assignmentTotal }} 道</dd></div><div><dt>题库</dt><dd>{{ selectedQuestionBanks.length }} 个</dd></div><div><dt>指定题目</dt><dd>{{ form.pinned_question_ids.length }} 道</dd></div><div><dt>随机补足</dt><dd>{{ Math.max(0, assignmentTotal - form.pinned_question_ids.length) }} 道</dd></div><div><dt>题型构成</dt><dd>{{ form.sampling_mode === 'kc_quota' ? '按知识点配额' : selectedQuestionTypes.map(item => `${item.label} ${form.type_quotas[item.value]}`).join('、') || '不限题型' }}</dd></div><div><dt>实验限时</dt><dd>{{ form.time_mode === 'total' ? `${form.total_time_limit_minutes || '—'} 分钟` : form.time_mode === 'none' ? '无时限' : '待重新选择' }}</dd></div></dl><footer class="kt-sitev2-summary-bottom"><Button type="button" :disabled="saving || legacySampling || typeQuotaInvalid" @click="submit('publish')">保存并进入班级排期 →</Button><p>保存定义后确认班级安排与逐人检查。</p></footer></section>
-      <section class="kt-card"><h2>候选题目</h2><dl><div><dt>当前范围</dt><dd>{{ samplingInventory?.candidate_count ?? '—' }} 道</dd></div><div v-for="bank in samplingInventory?.bank_counts || []" :key="bank.question_bank_id"><dt>{{ bank.name }}</dt><dd>{{ bank.candidate_count }} 道</dd></div></dl><p>选择班级后，发布检查将逐人核验历史题目与分配。</p></section>
+      <section class="kt-card"><h2>候选题目</h2><dl><div><dt>当前范围</dt><dd>{{ (typeRanges.length ? scopedInventory : samplingInventory)?.candidate_count ?? '—' }} 道</dd></div><div v-for="bank in (typeRanges.length ? scopedInventory : samplingInventory)?.bank_counts || []" :key="bank.question_bank_id"><dt>{{ bank.name }}</dt><dd>{{ bank.candidate_count }} 道</dd></div></dl><p>选择班级后，发布检查将逐人核验历史题目与分配。</p></section>
     </aside>
   </div>
+  <SamplingRangePicker v-if="rangeType" :question-type="rangeType" :label="questionTypeLabel(rangeType)" :course-id="courseId" :quota="form.type_quotas[rangeType]" :selected="form.type_ranges[rangeType] ?? null" :questions="samplingInventory?.questions || []" :banks="questionBanks" :loading="inventoryLoading" :error="inventoryError" @close="rangeType = ''" @apply="applyRange" />
   <ModalDialog :open="bankPickerOpen" title="选择题库" @close="bankPickerOpen = false">
     <p class="kt-picker-note">题型将根据所选题库的可用题目更新。合并题库抽题，不保证每个题库都被抽中。</p>
     <label class="kt-picker-search">搜索题库<input id="experiment-bank-search" v-model="bankSearch" type="search" placeholder="输入题库名称"></label>
