@@ -293,3 +293,9 @@ install -m 600 server/apps/accounts/management/commands/add_admin.py "$HOME/.loc
 - 前端与后端可分别构建。生产网关使用 `deploy/nginx/kt-platform.conf` 和 `frontend-pages.conf`；只有登记页面的 GET/HEAD 请求获得前端 HTML。Django 保留页面反向 URL 名称，不读取客户端构建产物；旧表单入口已退役。
 - 采集器及离线 Worker 随前端构建，Worker 继续使用原 URL 和 scope。Nginx 的 `frontend_assets` 持久卷保留旧哈希资源及版本化作答壳，启动脚本追加新版本文件；发布及回滚不删除该卷，不清理 IndexedDB 或待上传队列。
 - 本轮便携 PostgreSQL 与本地浏览器验证不替代生产 Nginx 容器联调、真实中文输入法或真实浏览器 200% 缩放检查。当前验证范围及未通过门槛见 [执行记录](docs/superpowers/plans/2026-10-11-unified-frontend-backend-architecture.md)。
+
+## 许可
+
+本项目的原创软件代码及其配套原创文档采用 [MIT License](LICENSE)。在遵守许可证要求的前提下，允许使用、复制、修改、分发、再许可和商业使用；分发软件的副本或实质性部分时，须保留版权声明和许可声明。
+
+MIT 许可不涵盖个人数据、研究数据、题库内容、商标、标志、参考图片及其他第三方材料，也不授予这些内容的使用权。第三方材料和依赖继续适用各自的许可证、版权声明及其他适用条款；需要额外授权的，应向相应权利人取得授权。此说明不表示仓库内所有内容均已完成权利清理或获准再许可。
