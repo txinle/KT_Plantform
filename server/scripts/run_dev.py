@@ -116,6 +116,11 @@ def main():
     environment = os.environ.copy()
     if not environment.get("POSTGRES_HOST"):
         raise SystemExit("POSTGRES_HOST is required. Use run_local.bat or run_local.sh; SQLite is not a local launcher fallback.")
+    environment.setdefault("ASSESSMENT_PREPARED_ADMISSION_MODE", "postgres_transaction")
+    environment.setdefault("ASSESSMENT_ADMISSION_ENABLED", "1")
+    environment.setdefault("ASSESSMENT_ADMISSION_GLOBAL_ENABLED", "1")
+    environment.setdefault("ASSESSMENT_ADMISSION_CAPACITY", environment.get("ASSESSMENT_STARTUP_WORKERS", "4")
+                           if environment["ASSESSMENT_PREPARED_ADMISSION_MODE"] == "postgres_transaction" else "1")
     node_directory, npm = find_node_directory()
     environment["PATH"] = f"{node_directory}{os.pathsep}{environment.get('PATH', '')}"
     environment["KT_GATEWAY_PORT"] = "8000"
@@ -131,7 +136,7 @@ def main():
         ([str(node_directory / ("node.exe" if os.name == "nt" else "node")), "scripts/frontend-gateway.mjs"], FRONTEND),
     ) + tuple(
         ([sys.executable, "manage.py", command], ROOT)
-        for command in ("run_scheduler", "run_research_materializations", "run_publication_jobs", "run_student_comparisons")
+        for command in ("run_scheduler", "run_research_materializations", "run_publication_jobs", "run_student_comparisons", "run_session_submissions")
     )
     children = []
     try:

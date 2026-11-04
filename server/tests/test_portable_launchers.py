@@ -103,8 +103,13 @@ class PortableLauncherContractTests(TestCase):
         self.assertEqual(start.call_args_list[2].kwargs['env']['KT_GATEWAY_PORT'], '8000')
         self.assertEqual(install.call_args.kwargs.get('environment'), start.call_args_list[2].kwargs['env'])
         commands = [call.args[0] for call in start.call_args_list]
-        for command in ('run_scheduler', 'run_research_materializations', 'run_publication_jobs', 'run_student_comparisons'):
+        for command in ('run_scheduler', 'run_research_materializations', 'run_publication_jobs', 'run_student_comparisons', 'run_session_submissions'):
             self.assertIn([sys.executable, 'manage.py', command], commands)
+        environment = start.call_args_list[1].kwargs['env']
+        self.assertEqual(environment['ASSESSMENT_ADMISSION_ENABLED'], '1')
+        self.assertEqual(environment['ASSESSMENT_ADMISSION_GLOBAL_ENABLED'], '1')
+        self.assertEqual(environment['ASSESSMENT_PREPARED_ADMISSION_MODE'], 'postgres_transaction')
+        self.assertEqual(environment['ASSESSMENT_ADMISSION_CAPACITY'], '4')
 
     def test_browser_opens_only_after_backend_and_gateway_are_ready(self):
         process = Mock(returncode=0)

@@ -112,6 +112,19 @@ def claim_publish_operation(*, worker_id):
         return None
     now = timezone.now()
     with transaction.atomic():
+        PublishOperationJob.objects.filter(
+            status=PublishOperationJob.Status.RUNNING,
+            lease_expires_at__lt=now,
+            retry_count__gte=MAX_ATTEMPTS,
+        ).update(
+            status=PublishOperationJob.Status.FAILED,
+            stage="failed",
+            error_code="WORKER_FAILED",
+            error_message="发布进程多次中断，请核对发布状态后重试。",
+            finished_at=now,
+            lease_expires_at=None,
+            locked_by="",
+        )
         job = (
             PublishOperationJob.objects.select_for_update(skip_locked=True)
             .filter(

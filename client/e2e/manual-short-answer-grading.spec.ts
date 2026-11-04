@@ -184,10 +184,20 @@ test('grading columns contain long lists and keep compact question navigation us
   await expect.poll(() => page.locator('.kt-grading-reference, .kt-grading-submissions')
     .evaluateAll(elements => elements.map(element => element.scrollTop))).toEqual([0, 0])
   await navigation.getByRole('button').nth(99).click()
+  await page.locator('[data-grading-row] textarea').nth(0).fill('本条已保存评语')
+  await page.locator('[data-grading-row] textarea').nth(1).fill('另一位学生的未保存评语')
   await page.locator('[data-grade="correct"]').first().click()
   await expect(page.getByText('判定已保存。', { exact: true })).toBeVisible()
+  await expect(page.locator('[data-grading-row] textarea').nth(0)).toHaveValue('')
+  await expect(page.locator('[data-grading-row] textarea').nth(1)).toHaveValue('另一位学生的未保存评语')
   await expect(navigation.getByRole('button').nth(99)).toHaveAttribute('aria-pressed', 'true')
   await expect(navigation.getByRole('button').nth(99)).toBeInViewport()
+  await page.route('**/grading/questions/101/**', route => route.abort('failed'))
+  await navigation.getByRole('button').nth(100).click()
+  await expect(page.getByRole('alert')).toBeVisible()
+  await expect(navigation.getByRole('button').nth(99)).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('region', { name: '题目与参考' }).getByText('Q0100').first()).toBeVisible()
+  await expect(page.locator('[data-grading-row] textarea').nth(1)).toHaveValue('另一位学生的未保存评语')
   for (const viewport of [
     { name: 'three-column-desktop', width: 1440, height: 900 },
     { name: 'three-column-mobile', width: 390, height: 844 },

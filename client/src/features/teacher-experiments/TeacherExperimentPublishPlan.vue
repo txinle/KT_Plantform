@@ -4,7 +4,7 @@ const pageUrl = useExperimentPageUrl()
 import { computed, inject, onMounted, reactive, ref, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { ApiError } from '@/api/client'
+import { ApiError, MutationOutcomeUnknownError } from '@/api/client'
 import type { components } from '@/api/generated/schema'
 import Alert from '@/design-system/components/Alert.vue'
 import Button from '@/design-system/components/Button.vue'
@@ -110,6 +110,9 @@ async function waitForJob(initial: PublishOperationJob) {
       interval = Math.min(interval + 500, 3000)
     }
   }
+  if (current.operation === 'commit') {
+    sessionStorage.removeItem(`kt-publish-commit:${planId}:${current.plan_revision}`)
+  }
   if (current.status === 'succeeded') {
     rememberJob(undefined)
     return current
@@ -212,6 +215,12 @@ async function load() {
     classes.value = collection.summary.classes
     experiment.value = definition
     hydratePlan(nextPlan)
+    if (nextPlan.status === 'committed') {
+      rememberJob(undefined)
+      sessionStorage.removeItem(`kt-publish-commit:${planId}:${nextPlan.plan_revision}`)
+      await router.replace(pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)!)
+      return
+    }
     savedSetupFingerprint.value = setupFingerprint.value
     loading.value = false
     void loadParticipants()
@@ -403,16 +412,28 @@ async function commit() {
   if (!plan.value || working.value) return
   working.value = true
   error.value = ''
+  const keyStorage = `kt-publish-commit:${planId}:${plan.value.plan_revision}`
   try {
+    const idempotencyKey = sessionStorage.getItem(keyStorage) || newIdempotencyKey('commit')
+    sessionStorage.setItem(keyStorage, idempotencyKey)
     const job = await api.commit(
       planId,
       plan.value.plan_revision,
-      newIdempotencyKey('commit'),
+      idempotencyKey,
     )
     rememberJob(job)
     await waitForJob(job)
     await router.push(pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)!)
   } catch (caught) {
+    if (caught instanceof MutationOutcomeUnknownError) {
+      const current = caught.authoritativeState as PublishPlan | undefined
+      if (current?.id === planId && current.status === 'committed') {
+        sessionStorage.removeItem(keyStorage)
+        rememberJob(undefined)
+        await router.push(pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/`)!)
+        return
+      }
+    }
     await recover(caught, '正式发布失败。')
   } finally {
     working.value = false

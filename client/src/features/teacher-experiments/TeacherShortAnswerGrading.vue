@@ -32,7 +32,9 @@ const selectedQuestionId = ref<number>()
 const statusFilter = ref<GradingStatusFilter>('pending')
 const page = ref(1)
 const loading = ref(true)
+const questionLoading = ref(false)
 const savingSubmissionId = ref<number>()
+const busy = computed(() => questionLoading.value || savingSubmissionId.value !== undefined)
 const error = ref('')
 const notice = ref('')
 const comments = reactive<Record<number, string>>({})
@@ -52,21 +54,32 @@ function displayDate(value: string | null) {
   return value ? new Date(value).toLocaleString('zh-CN') : '—'
 }
 
-async function loadQuestion(snapshotId: number, nextPage = 1) {
+async function loadQuestion(snapshotId: number, nextPage = 1, nextFilter = statusFilter.value) {
   const requestVersion = ++questionVersion
   const currentTaskId = taskId.value
   const questionChanged = selectedQuestionId.value !== snapshotId
-  selectedQuestionId.value = snapshotId
-  page.value = nextPage
-  const result = await api.gradingQuestion(currentTaskId, snapshotId, statusFilter.value, nextPage)
-  if (requestVersion !== questionVersion || currentTaskId !== taskId.value) return
-  detail.value = result
-  for (const row of detail.value.submissions.items) {
-    comments[row.submission_id] = ''
+  questionLoading.value = true
+  error.value = ''
+  try {
+    const result = await api.gradingQuestion(currentTaskId, snapshotId, nextFilter, nextPage)
+    if (requestVersion !== questionVersion || currentTaskId !== taskId.value) return
+    detail.value = result
+    selectedQuestionId.value = snapshotId
+    page.value = nextPage
+    statusFilter.value = nextFilter
+    for (const row of result.submissions.items) {
+      comments[row.submission_id] ??= ''
+    }
+    await nextTick()
+    if (questionChanged && referenceContent.value) referenceContent.value.scrollTop = 0
+    if (submissionList.value) submissionList.value.scrollTop = 0
+  } catch (caught) {
+    if (requestVersion === questionVersion && currentTaskId === taskId.value) {
+      error.value = caught instanceof Error ? caught.message : '批改列表加载失败。'
+    }
+  } finally {
+    if (requestVersion === questionVersion) questionLoading.value = false
   }
-  await nextTick()
-  if (questionChanged && referenceContent.value) referenceContent.value.scrollTop = 0
-  if (submissionList.value) submissionList.value.scrollTop = 0
 }
 
 async function load() {
@@ -103,16 +116,12 @@ async function load() {
 }
 
 async function changeFilter(value: GradingStatusFilter) {
-  statusFilter.value = value
   if (!selectedQuestionId.value) return
-  try {
-    await loadQuestion(selectedQuestionId.value)
-  } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '批改列表加载失败。'
-  }
+  await loadQuestion(selectedQuestionId.value, 1, value)
 }
 
 async function grade(row: ManualGradingSubmission, isCorrect: boolean) {
+  if (busy.value) return
   const comment = comments[row.submission_id] || ''
   if (row.current_is_correct !== null && !comment.trim()) {
     error.value = '修改已生效判定时必须填写原因。'
@@ -132,6 +141,7 @@ async function grade(row: ManualGradingSubmission, isCorrect: boolean) {
         comment,
       },
     )
+    if (comments[row.submission_id] === comment) comments[row.submission_id] = ''
     if (overview.value) overview.value.totals = result.task_progress
     await load()
     notice.value = '判定已保存。'
@@ -166,6 +176,7 @@ function switchClass(event: Event) {
 
 watch(taskId, () => {
   ++questionVersion
+  questionLoading.value = false
   overview.value = undefined
   detail.value = undefined
   selectedQuestionId.value = undefined
@@ -189,7 +200,7 @@ watch(taskId, () => {
           <h1>人工批改</h1>
           <div class="kt-grading-context">
             <span v-if="overview">{{ overview.task.experiment_name }}</span>
-            <select v-if="gradingClasses.length" class="kt-grading-class-switch" :value="taskId" aria-label="切换班级" :disabled="loading || savingSubmissionId !== undefined" @change="switchClass">
+            <select v-if="gradingClasses.length" class="kt-grading-class-switch" :value="taskId" aria-label="切换班级" :disabled="loading || busy" @change="switchClass">
               <option v-for="task in gradingClasses" :key="task.id" :value="task.id">{{ task.class_name }} · 待批改：{{ task.grading.pending ?? 0 }}</option>
             </select>
           </div>
@@ -222,6 +233,7 @@ watch(taskId, () => {
               type="button"
               :class="{ 'is-active': selectedQuestionId === question.question_snapshot_id }"
               :aria-pressed="selectedQuestionId === question.question_snapshot_id"
+              :disabled="busy"
               @click="loadQuestion(question.question_snapshot_id)"
             >
               <strong>{{ question.code }}</strong>
@@ -251,6 +263,7 @@ watch(taskId, () => {
               :key="option[0]"
               type="button"
               :aria-pressed="statusFilter === option[0]"
+              :disabled="busy"
               @click="changeFilter(option[0])"
             >
               {{ option[1] }}
@@ -279,17 +292,17 @@ watch(taskId, () => {
                 <textarea v-model="comments[row.submission_id]" rows="2" maxlength="2000" />
               </label>
               <div class="kt-grading-actions">
-                <button type="button" class="kt-button kt-button--danger" data-grade="incorrect" :disabled="savingSubmissionId === row.submission_id" @click="grade(row, false)">判为错误</button>
-                <button type="button" class="kt-button" data-grade="correct" :disabled="savingSubmissionId === row.submission_id" @click="grade(row, true)">判为正确</button>
+                <button type="button" class="kt-button kt-button--danger" data-grade="incorrect" :disabled="busy" @click="grade(row, false)">判为错误</button>
+                <button type="button" class="kt-button" data-grade="correct" :disabled="busy" @click="grade(row, true)">判为正确</button>
                 <button type="button" class="kt-text-button" @click="defer(row)">稍后处理</button>
               </div>
             </article>
           </div>
 
           <nav v-if="detail.submissions.page.total_pages > 1" class="kt-grading-pagination" aria-label="批改分页">
-            <button type="button" :disabled="page <= 1" @click="loadQuestion(selectedQuestionId as number, page - 1)">上一页</button>
+            <button type="button" :disabled="busy || page <= 1" @click="loadQuestion(selectedQuestionId as number, page - 1)">上一页</button>
             <span>第 {{ page }} / {{ detail.submissions.page.total_pages }} 页</span>
-            <button type="button" :disabled="page >= detail.submissions.page.total_pages" @click="loadQuestion(selectedQuestionId as number, page + 1)">下一页</button>
+            <button type="button" :disabled="busy || page >= detail.submissions.page.total_pages" @click="loadQuestion(selectedQuestionId as number, page + 1)">下一页</button>
           </nav>
         </section>
       </div>

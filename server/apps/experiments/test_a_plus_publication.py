@@ -724,6 +724,17 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
         self.assertEqual(ClassExperimentTask.objects.count(), 1)
         self.assertIsNotNone(completed.result_release_snapshot_id)
 
+        replay = self.client.post(
+            f"/api/v1/teacher/publish-plans/{plan.pk}/commit/",
+            {"expected_revision": plan.plan_revision},
+            content_type="application/json",
+            HTTP_IDEMPOTENCY_KEY="commit-job-1",
+        )
+        self.assertEqual(replay.status_code, 202)
+        self.assertEqual(domain_payload(replay)["job_id"], str(completed.job_id))
+        self.assertEqual(domain_payload(replay)["status"], "succeeded")
+        self.assertEqual(ClassExperimentTask.objects.count(), 1)
+
     def test_job_becomes_stale_when_plan_revision_changes_before_processing(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)
         save_plan_selection(
@@ -792,6 +803,24 @@ class APlusPreviewAndCommitTests(TransactionTestCase):
         self.assertEqual(third.status, PublishOperationJob.Status.FAILED)
         self.assertEqual(third.retry_count, 3)
         self.assertEqual(third.error_code, "WORKER_FAILED")
+
+    def test_expired_worker_lease_at_retry_limit_becomes_failed(self):
+        plan = get_or_create_publish_plan(self.experiment, self.teacher)
+        job = PublishOperationJob.objects.create(
+            publish_plan=plan,
+            operation=PublishOperationJob.Operation.PREVIEW,
+            expected_plan_revision=plan.plan_revision,
+            requested_by=self.teacher,
+            status=PublishOperationJob.Status.RUNNING,
+            retry_count=3,
+            lease_expires_at=timezone.now() - timedelta(seconds=1),
+        )
+        self.assertIsNone(claim_publish_operation(worker_id="replacement-worker"))
+        job.refresh_from_db()
+        self.assertEqual(job.status, PublishOperationJob.Status.FAILED)
+        self.assertEqual(job.error_code, "WORKER_FAILED")
+        self.assertIsNotNone(job.finished_at)
+        self.assertIsNone(job.lease_expires_at)
 
     def test_business_validation_failure_is_reported_without_retry(self):
         plan = get_or_create_publish_plan(self.experiment, self.teacher)

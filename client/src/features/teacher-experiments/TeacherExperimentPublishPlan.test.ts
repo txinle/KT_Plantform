@@ -1,5 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MutationOutcomeUnknownError } from '@/api/client'
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -456,6 +457,51 @@ describe('TeacherExperimentPublishPlan', () => {
     await flushPromises()
 
     expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/11/')
+  })
+
+  async function mountCommitPage() {
+    mocks.route.params.step = '2'
+    const plan = { ...(await mocks.api.plan()), status: 'previewed', current_step: 2, setup_status: 'complete', missing_requirements: [] }
+    mocks.api.plan.mockResolvedValue(plan)
+    mocks.api.review.mockResolvedValue({ plan, preview: { id: 41, plan_revision: 1, class_count: 1, participant_count: 1, question_count: 1, item_count: 1, randomization_validation: '通过' }, effects: [] })
+    const wrapper = mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+    await wrapper.get('[data-action="enter-confirmation"]').trigger('click')
+    return wrapper
+  }
+
+  it('reuses the commit key across a lost response and a page refresh', async () => {
+    mocks.api.commit.mockRejectedValueOnce(new MutationOutcomeUnknownError(new Error('response lost')))
+    const wrapper = await mountCommitPage()
+    await wrapper.get('[data-action="commit-publish"]').trigger('click')
+    await flushPromises()
+    const originalKey = mocks.api.commit.mock.calls[0]![2]
+    wrapper.unmount()
+    const restored = await mountCommitPage()
+    mocks.api.commit.mockResolvedValueOnce({ job_id: 'done', operation: 'commit', status: 'succeeded', plan_revision: 1 })
+    await restored.get('[data-action="commit-publish"]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.commit.mock.calls[1]![2]).toBe(originalKey)
+    expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/11/')
+  })
+
+  it('recognizes a committed authoritative plan after the response is lost', async () => {
+    const wrapper = await mountCommitPage()
+    const committed = { ...(await mocks.api.plan()), status: 'committed' }
+    mocks.api.commit.mockRejectedValueOnce(new MutationOutcomeUnknownError(new Error('response lost'), committed))
+    await wrapper.get('[data-action="commit-publish"]').trigger('click')
+    await flushPromises()
+    expect(mocks.push).toHaveBeenCalledWith('/teacher/courses/7/experiments/11/')
+    expect(wrapper.text()).not.toContain('请求响应中断')
+  })
+
+  it('returns to experiment details when a refreshed plan is already committed', async () => {
+    mocks.route.params.step = '2'
+    mocks.api.plan.mockResolvedValue({ ...(await mocks.api.plan()), status: 'committed', current_step: 2 })
+    mount(TeacherExperimentPublishPlan)
+    await flushPromises()
+    expect(mocks.replace).toHaveBeenCalledWith('/teacher/courses/7/experiments/11/')
+    expect(mocks.api.review).not.toHaveBeenCalled()
   })
 
   it('shows a specific empty-class blocker and does not call preview', async () => {
