@@ -246,6 +246,7 @@ def question_group_template_rows():
 def build_question_group_template(extension):
     from .unified_reader import GROUP_HEADERS
     rows = question_group_template_rows()
+    rows[0].update({'一级知识点': 'KC1', '二级知识点': 'KC2', '三级知识点': 'KC2>KC3'})
     if extension == 'csv':
         output = StringIO(newline='')
         writer = csv.DictWriter(output, fieldnames=GROUP_HEADERS)
@@ -265,7 +266,10 @@ def build_question_group_template(extension):
                 cell.number_format = '@'
                 cell.alignment = Alignment(wrap_text=True, vertical='top')
         sheet.freeze_panes = 'A2'
+        for header in ('一级知识点', '二级知识点', '三级知识点'):
+            sheet.cell(1, GROUP_HEADERS.index(header) + 1).comment = Comment(KC_TEMPLATE_INSTRUCTION, 'KT Data Lab')
         notes = workbook.create_sheet('填写说明')
+        notes.append([KC_TEMPLATE_INSTRUCTION])
         for line in ('11 类题型，12 道完整题，22 个作答项；包括两种翻译方向。', '课程题库须填已有 KC，空 KC 仅保存为草稿。', '同一题组共享首行材料、标题、作答说明、词库、语言和大小写规则。', '词库用 | 分隔，文章空位 {{b01}} 与空位编号逐一对应。', '简答、翻译、作文沿用实验既有评阅规则；解析中的分项分值仅为教师参考。'):
             notes.append([line])
         notes.column_dimensions['A'].width = 90
@@ -276,6 +280,7 @@ def build_question_group_template(extension):
     elif extension == 'docx':
         document = Document()
         document.add_paragraph('完整题型导入模板', style='Title')
+        document.add_paragraph('填写说明：' + KC_TEMPLATE_INSTRUCTION)
         document.add_paragraph('填写说明：本模板含 11 类题型、12 道完整题目和 22 个作答项，包括两种翻译方向。请填写当前课程已有 KC；独立题库填写已有私有或公共知识点名称或 id:知识点ID。空 KC 仅保存为草稿。简答、翻译、作文采用实验既有二元人工判定规则，解析中的维度分值为参考说明。文件序号不作为服务器题号。')
         current_code = None
         for row in rows:

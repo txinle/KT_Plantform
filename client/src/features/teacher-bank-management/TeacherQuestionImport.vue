@@ -323,7 +323,6 @@ watch([filter, search, questionType, pageSize], () => { page.value = 1 })
       <div class="kt-import-flow"><span>01 选择文件</span><span>→</span><span>02 校验预览</span><span>→</span><span>03 确认导入</span></div><section class="qimp-file kt-site-import-upload" aria-label="题库文件">
         <div class="kt-site-import-controls"><label>目标题库<input :value="bankName" aria-label="目标题库" readonly></label><label>文件格式<select id="question-import-format" v-model="format"><option value="spreadsheet">Excel / CSV</option><option value="docx">Word .docx</option></select></label><button class="qimp-button is-primary" type="button" :disabled="busy" @click="fileInput?.click()">{{ busy ? '正在校验…' : preview ? '重新选择文件' : '选择文件并预览' }}</button></div>
         <div class="kt-site-import-templates"><span>下载全题型模板：</span><a data-question-template="xlsx" href="/api/v1/teacher/import-templates/question-groups.xlsx" download="question_import_template.xlsx">Excel</a><a data-question-template="csv" href="/api/v1/teacher/import-templates/question-groups.csv" download="question_import_template.csv">CSV</a><a data-question-template="docx" href="/api/v1/teacher/import-templates/question-groups.docx" download="question_import_template.docx">Word</a><span>11 种题型 · 12 道完整题目 · 22 个作答项</span><span v-if="uploadedFile" data-file-summary>{{ uploadedFile.name }} · {{ fileSize }} · {{ uploadTime }}</span></div>
-        <div v-if="preview" class="qimp-summary" aria-label="预览状态汇总"><strong class="qimp-total">共解析 {{ rows.length }} 道完整题<span> · {{ allRows.length }} 个作答项</span></strong><span class="is-ready">{{ readyLabel }} <strong>{{ summary.ready }}</strong></span><span class="is-draft">{{ draftLabel }} <strong>{{ summary.draft }}</strong></span><span class="is-duplicate">重复 <strong>{{ summary.duplicate }}</strong></span><span class="is-invalid">需修正 <strong>{{ summary.invalid }}</strong></span></div>
         <input ref="fileInput" class="kt-visually-hidden" type="file" :accept="acceptedFileTypes" aria-label="上传题库文件" @change="selectFile">
       </section>
 
@@ -344,13 +343,14 @@ watch([filter, search, questionType, pageSize], () => { page.value = 1 })
         <div v-if="showFilters" class="qimp-extra-filters"><label>题型<select v-model="questionType"><option value="">全部题型</option><option v-for="[value, label] in questionTypes" :key="value" :value="value">{{ label }}</option></select></label><button class="qimp-link" type="button" @click="questionType = ''; search = ''; filter = 'all'">重置筛选</button></div>
         <div v-if="pageRows.length" class="kt-table-scroll qimp-table-wrap kt-desktop-only">
           <table class="qimp-table kt-question-import__table">
-            <colgroup><col class="qimp-col-check"><col class="qimp-col-number"><col class="qimp-col-text"><col class="qimp-col-type"><col class="qimp-col-answer"><col class="qimp-col-kc"><col class="qimp-col-status"><col class="qimp-col-action"></colgroup>
-            <thead><tr><th><input type="checkbox" aria-label="选择本页可导入题目" :checked="pageSelected" :indeterminate="pagePartlySelected" :disabled="Boolean(confirmation) || busy || !selectablePageRows.length" @change="togglePage(($event.target as HTMLInputElement).checked)"></th><th title="文件内预览题号，正式题号在导入后分配">题号</th><th>题目</th><th>题型</th><th>答案</th><th>KC 映射</th><th>状态</th><th>操作</th></tr></thead>
+            <colgroup><col class="qimp-col-check"><col class="qimp-col-number"><col class="qimp-col-title"><col class="qimp-col-text"><col class="qimp-col-type"><col class="qimp-col-answer"><col class="qimp-col-kc"><col class="qimp-col-status"><col class="qimp-col-action"></colgroup>
+            <thead><tr><th><input type="checkbox" aria-label="选择本页可导入题目" :checked="pageSelected" :indeterminate="pagePartlySelected" :disabled="Boolean(confirmation) || busy || !selectablePageRows.length" @change="togglePage(($event.target as HTMLInputElement).checked)"></th><th title="文件内预览题号，正式题号在导入后分配">题号</th><th>标题</th><th>题干</th><th>题型</th><th>答案</th><th>KC 映射</th><th>状态</th><th>操作</th></tr></thead>
             <tbody>
               <tr v-for="row in pageRows" :key="row.row_id" :data-import-row="row.row_id" :class="{ 'is-current': activeRowId === row.row_id && detailOpen }">
                 <td><input type="checkbox" :aria-label="'选择题目 ' + row.sequence" :checked="selected(row)" :disabled="!isSelectable(row) || Boolean(confirmation) || busy" @change="toggleRow(row.row_id, ($event.target as HTMLInputElement).checked)"></td>
                 <td>{{ row.sequence }}</td>
-                <td><p class="qimp-question-text kt-question-import__multiline">{{ row.title || row.text || '未读取到题干' }}</p></td>
+                <td data-question-title>{{ row.title || '—' }}</td>
+                <td><p class="qimp-question-text kt-question-import__multiline">{{ row.text || '未读取到题干' }}</p></td>
                 <td>{{ row.question_type_label }}</td>
                 <td data-answer><span class="qimp-answer-text">{{ formatValue(row.answer) }}</span></td>
                 <td><p v-if="row.group_id && row.row_id.startsWith('group:')">成员 KC 在详情中逐项核对</p><p v-if="rootKc(row)">主：{{ rootKc(row)?.name }}（{{ rootKc(row)?.kc_code }}）</p><p class="qimp-kc-summary"><Icon name="definition" :size="15" />{{ kcSummary(row) }}</p></td>
@@ -363,7 +363,8 @@ watch([filter, search, questionType, pageSize], () => { page.value = 1 })
         <ul v-if="pageRows.length" class="qimp-mobile-list kt-mobile-only">
           <li v-for="row in pageRows" :key="row.row_id" :data-import-mobile-row="row.row_id" class="qimp-mobile-card">
             <div class="qimp-mobile-heading"><label><input type="checkbox" :aria-label="'选择题目 ' + row.sequence" :checked="selected(row)" :disabled="!isSelectable(row) || Boolean(confirmation) || busy" @change="toggleRow(row.row_id, ($event.target as HTMLInputElement).checked)">题目 {{ row.sequence }}</label><span class="qimp-status" :class="'is-' + rowStatus(row).tone">{{ rowStatus(row).label }}</span></div>
-            <h3 class="kt-question-import__multiline">{{ row.title || row.text || '未读取到题干' }}</h3>
+            <p data-question-title>标题：{{ row.title || '—' }}</p>
+            <h3 class="kt-question-import__multiline">{{ row.text || '未读取到题干' }}</h3>
             <dl><div><dt>题型</dt><dd>{{ row.question_type_label }}</dd></div><div><dt>答案</dt><dd>{{ formatValue(row.answer) }}</dd></div></dl>
             <p v-if="rootKc(row)" class="qimp-mobile-kc">主：{{ rootKc(row)?.name }}（{{ rootKc(row)?.kc_code }}）</p><p class="qimp-kc-summary"><Icon name="definition" :size="15" />{{ kcSummary(row) }}</p>
             <p v-if="rowErrors(row).length" class="kt-question-import__errors" :class="{ 'is-draft-reasons': classification(row) === 'draft' }">{{ rowErrors(row).join('；') }}</p>

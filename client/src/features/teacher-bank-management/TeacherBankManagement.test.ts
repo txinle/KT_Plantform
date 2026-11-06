@@ -50,7 +50,7 @@ describe('Teacher bank-management Vue views', () => {
       preview: {
         rows: [
           {
-            row_id: 'row-ready', sequence: 1, source_label: '第 2 行', text: '导入题目\n第二行',
+            row_id: 'row-ready', sequence: 1, source_label: '第 2 行', title: '新增的标题', text: '导入题目\n第二行',
             question_type: 'true_false', question_type_label: '判断题', option_count: 0,
             teacher_difficulty: null, options: [], answer: true, accepted_answers: ['正确'],
             explanation: '这是解析说明。\n第二行。',
@@ -143,15 +143,22 @@ describe('Teacher bank-management Vue views', () => {
     expect(wrapper.get('[data-import-filter="draft"]').text()).toContain('保存为草稿 1')
     expect(wrapper.get('[data-import-filter="duplicate"]').text()).toContain('重复 1')
     expect(wrapper.get('[data-import-filter="invalid"]').text()).toContain('需修正 1')
+    expect(wrapper.find('[aria-label="文件解析汇总"]').exists()).toBe(false)
     const readyDesktop = wrapper.get('[data-import-row="row-ready"]')
     const readyMobile = wrapper.get('[data-import-mobile-row="row-ready"]')
+    expect(wrapper.findAll('.qimp-table th').map(cell => cell.text()).slice(1)).toEqual(['题号', '标题', '题干', '题型', '答案', 'KC 映射', '状态', '操作'])
+    expect(readyDesktop.get('[data-question-title]').text()).toBe('新增的标题')
+    expect(readyMobile.get('[data-question-title]').text()).toContain('新增的标题')
     expect(readyDesktop.text()).toContain('数学基础（KC1）')
     expect(readyDesktop.text()).toContain('共 5 个 KC · 4 条关系')
     expect(readyMobile.text()).toContain('共 5 个 KC · 4 条关系')
     expect(readyDesktop.get('.kt-question-import__multiline').text()).toContain('导入题目\n第二行')
+    expect(readyDesktop.get('.kt-question-import__multiline').text()).not.toContain('新增的标题')
+    expect(readyMobile.get('h3').text()).toContain('导入题目\n第二行')
     await readyDesktop.get('button[aria-label="查看题目 1"]').trigger('click')
     const detail = wrapper.get('[data-question-detail]')
     expect(detail.text()).toContain('题目 1 详细信息')
+    expect(detail.text()).toContain('新增的标题')
     expect(detail.text()).toContain('这是解析说明。\n第二行。')
     expect(detail.get('[aria-label="KC 对应关系"]').text()).toContain('数学基础（KC1） → 数与运算（KC2）')
     expect(detail.get('[aria-label="KC 对应关系"]').text()).toContain('知识追踪（KC5） → 核心概念（KC6）')
@@ -181,7 +188,7 @@ describe('Teacher bank-management Vue views', () => {
     Object.defineProperty(input.element, 'files', { value: [new File(['group'], 'groups.csv')], configurable: true })
     await input.trigger('change')
     await flushPromises()
-    expect(wrapper.get('[aria-label="预览状态汇总"] .is-ready').text()).toContain('导入后可用 2')
+    expect(wrapper.get('[data-import-filter="ready"]').text()).toContain('导入后可用 2')
     expect(wrapper.get('[data-import-filter="ready"]').text()).toContain('导入后可用 2')
     expect(wrapper.find('[data-import-row="group-row"]').exists()).toBe(false)
     expect(wrapper.get('[data-import-row="group:g1"]').text()).toContain('阅读理解')
@@ -260,10 +267,10 @@ describe('Teacher bank-management Vue views', () => {
     await wrapper.get('[data-confirm-import]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('[aria-label="预览状态汇总"]').text()).toContain('已创建可用 0')
-    expect(wrapper.get('[aria-label="预览状态汇总"]').text()).toContain('已创建草稿 0')
-    expect(wrapper.get('[aria-label="预览状态汇总"]').text()).toContain('重复 1')
-    expect(wrapper.get('[aria-label="预览状态汇总"]').text()).toContain('需修正 3')
+    expect(wrapper.get('[aria-label="显示预览行"]').text()).toContain('已创建可用 0')
+    expect(wrapper.get('[aria-label="显示预览行"]').text()).toContain('已创建草稿 0')
+    expect(wrapper.get('[aria-label="显示预览行"]').text()).toContain('重复 1')
+    expect(wrapper.get('[aria-label="显示预览行"]').text()).toContain('需修正 3')
     await wrapper.get('#question-import-filter-invalid').trigger('click')
     expect(wrapper.find('[data-import-row="row-ready"]').exists()).toBe(true)
     expect(wrapper.get('[data-import-row="row-ready"]').text()).toContain('KC001 已归档，无法创建。')

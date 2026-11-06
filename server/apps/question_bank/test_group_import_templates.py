@@ -75,5 +75,8 @@ class GroupTemplateDownloadTests(TestCase):
                 self.assertEqual(sum(row['题组编号'] == 'R001' for row in rows), 3)
                 self.assertEqual(sum(row['题组编号'] == 'C001' for row in rows), 5)
                 self.assertTrue(all(not row['_errors'] for row in rows))
+                self.assertEqual(rows[0]['一级知识点'], 'KC1')
+                self.assertEqual(rows[0]['二级知识点'], 'KC2')
+                self.assertEqual(rows[0]['三级知识点'], 'KC2>KC3')
                 if extension != 'docx':
                     self.assertTrue(all(header in rows[0] for header in GROUP_HEADERS))
