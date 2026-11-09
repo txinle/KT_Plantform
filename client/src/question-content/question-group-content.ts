@@ -1,4 +1,5 @@
 export interface GroupMemberView {
+  images?: import('./question-content').QuestionImages
   item_key: string
   question_type: string
   text: string
@@ -12,6 +13,7 @@ export interface GroupMemberView {
 
 export type MaterialSegment = { kind: 'text'; text: string } | { kind: 'blank'; blank_id: string; item_key: string }
 export interface QuestionGroupView {
+  images?: import('./question-content').QuestionImages
   group_id: string
   kind: 'reading' | 'cloze' | 'words'
   word_bank?: string[]

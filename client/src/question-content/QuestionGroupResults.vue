@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { toDisplayString } from 'vue'
 import QuestionGroupContent from './QuestionGroupContent.vue'
+import QuestionContent from './QuestionContent.vue'
 import type { ResultGroup, ResultMember, ScoreProgress } from './question-group-results'
 defineProps<{ groups?: ResultGroup[]; scoreProgress?: ScoreProgress }>()
 function responses(group: ResultGroup) { return Object.fromEntries(group.members.map(member => [member.item_key, member.response_value])) }
@@ -15,7 +17,7 @@ function score(member: ResultMember) {
     <article v-for="group in groups" :key="group.group_id" class="kt-group-results__group">
       <QuestionGroupContent :group="group" :responses-by-item-key="responses(group)" readonly />
       <p v-if="group.score_progress" class="kt-group-results__score" :data-group-score="group.group_id">本题得分 {{ group.score_progress.earned }} / {{ group.score_progress.paper_maximum }}<span>已评分满分 {{ group.score_progress.graded_maximum }} · 待评 {{ group.score_progress.pending_count }}</span></p>
-      <details open><summary>作答项明细</summary><div class="kt-table-scroll"><table class="kt-table"><thead><tr><th>作答项</th><th>你的答案</th><th>结果</th><th>得分</th><th>反馈</th></tr></thead><tbody><tr v-for="member in group.members" :key="member.item_key"><td>{{ member.group_order }}</td><td>{{ member.submitted_answer ?? member.final_answer ?? member.response_value ?? '未答' }}</td><td>{{ member.is_correct === true ? '正确' : member.is_correct === false ? '错误' : '未提供判定' }}</td><td>{{ score(member) }}</td><td><template v-if="'correct_answer' in member">标准答案：{{ member.correct_answer }}<p v-if="member.explanation">{{ member.explanation }}</p></template></td></tr></tbody></table></div></details>
+      <details open><summary>作答项明细</summary><div class="kt-table-scroll"><table class="kt-table"><thead><tr><th>作答项</th><th>你的答案</th><th>结果</th><th>得分</th><th>反馈</th></tr></thead><tbody><tr v-for="member in group.members" :key="member.item_key"><td>{{ member.group_order }}</td><td><QuestionContent :text="toDisplayString(member.submitted_answer ?? member.final_answer ?? member.response_value ?? '未答')" :images="{ ...group.images, ...member.images }" /></td><td>{{ member.is_correct === true ? '正确' : member.is_correct === false ? '错误' : '未提供判定' }}</td><td>{{ score(member) }}</td><td><template v-if="'correct_answer' in member">标准答案：<QuestionContent :text="toDisplayString(member.correct_answer)" :images="{ ...group.images, ...member.images }" /><p v-if="member.explanation"><QuestionContent :text="member.explanation" :images="{ ...group.images, ...member.images }" /></p></template></td></tr></tbody></table></div></details>
     </article>
   </section>
 </template>

@@ -126,10 +126,10 @@ describe('Teacher bank-management Vue views', () => {
     const input = wrapper.get('input[type="file"]')
     expect(wrapper.get('[data-question-template="xlsx"]').attributes('href')).toBe('/api/v1/teacher/import-templates/question-groups.xlsx')
     expect(wrapper.get('[data-question-template="docx"]').attributes('href')).toBe('/api/v1/teacher/import-templates/question-groups.docx')
-    expect(input.attributes('accept')).toBe('.csv,.xlsx')
+    expect(input.attributes('accept')).toBe('.csv,.xlsx,.png,.jpg,.jpeg,.webp')
 
     await wrapper.get('#question-import-format').setValue('docx')
-    expect(input.attributes('accept')).toBe('.docx')
+    expect(input.attributes('accept')).toBe('.docx,.png,.jpg,.jpeg,.webp')
 
     const file = new File(['导入题目'], 'questions.docx')
     Object.defineProperty(input.element, 'files', { value: [file], configurable: true })

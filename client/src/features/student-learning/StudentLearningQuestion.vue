@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import Icon from '@/design-system/Icon.vue'
+import QuestionContent from '@/question-content/QuestionContent.vue'
 import { createProcessRuntime, disposeSessionController, type StudentProcessRuntime } from '@/assessment-runtime/session-controller'
 import { getBootstrapContext } from '@/app/bootstrap'
 
@@ -131,7 +132,7 @@ onBeforeUnmount(() => { leaveDetail(); globalThis.removeEventListener('pagehide'
             </ul>
 
             <div class="kt-question-prompt">
-              <h3>{{ question.text }}</h3>
+              <h3><QuestionContent :text="question.text" :images="question.images" /></h3>
             </div>
 
             <div v-if="question.options.length" class="kt-feedback-options">
@@ -145,7 +146,7 @@ onBeforeUnmount(() => { leaveDetail(); globalThis.removeEventListener('pagehide'
                 }"
               >
                 <span class="kt-feedback-option__label">{{ option.label }}</span>
-                <span class="kt-feedback-option__text">{{ option.text }}</span>
+                <QuestionContent class="kt-feedback-option__text" :text="option.text" :images="question.images" option />
                 <span class="kt-feedback-option__badges">
                   <span v-if="option.selected_by_student" class="kt-option-badge kt-option-badge--student"><Icon name="user" :size="17" /> 我的作答</span>
                   <span v-if="answerExpanded && option.is_correct === true" class="kt-option-badge kt-option-badge--correct"><Icon name="check" :size="17" /> 正确答案</span>
@@ -156,20 +157,20 @@ onBeforeUnmount(() => { leaveDetail(); globalThis.removeEventListener('pagehide'
             <div class="kt-feedback-answer-pair" :class="{ 'has-full-feedback': hasFullFeedback }">
               <section class="kt-feedback-answer-panel kt-feedback-answer-panel--student">
                 <h3><span><Icon name="user" :size="18" /></span>我的正式作答</h3>
-                <p>{{ question.final_answer || '未作答' }}</p>
+                <p><QuestionContent :text="question.final_answer || '未作答'" :images="question.images" /></p>
               </section>
               <template v-if="hasFullFeedback">
                 <section class="kt-feedback-answer-panel kt-feedback-answer-panel--correct">
                   <h3><span><Icon name="check" :size="18" /></span>正确答案</h3>
                   <button v-if="!answerExpanded" class="kt-button kt-button--secondary" type="button" data-show-answer @click="expandAnswer">展开正确答案</button>
-                  <p v-else>{{ question.correct_answer || '—' }}</p>
+                  <p v-else><QuestionContent :text="question.correct_answer || '—'" :images="question.images" /></p>
                 </section>
               </template>
             </div>
             <section v-if="hasFullFeedback" class="kt-feedback-answer-panel kt-feedback-answer-panel--analysis">
               <h3><span><Icon name="analysis" :size="18" /></span>答案解析</h3>
               <button v-if="!explanationExpanded" class="kt-button kt-button--secondary" type="button" data-show-explanation :disabled="!answerExpanded" @click="expandExplanation">展开解析</button>
-              <p v-else>{{ question.explanation || '教师未填写解析' }}</p>
+              <p v-else><QuestionContent :text="question.explanation || '教师未填写解析'" :images="question.images" /></p>
             </section>
           </article>
           <section class="kt-question-metrics" aria-label="题目结果">

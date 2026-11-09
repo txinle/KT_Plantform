@@ -15,6 +15,36 @@ vi.mock('./standalone-api', () => ({ getTeacherStandaloneQuestionBankApi: () => 
 import TeacherStandaloneQuestionImport from './TeacherStandaloneQuestionImport.vue'
 
 describe('TeacherStandaloneQuestionImport', () => {
+  it('requires exactly one source document and clears a previous preview for an invalid new selection', async () => {
+    const wrapper = mount(TeacherStandaloneQuestionImport)
+    const input = wrapper.get('input[type="file"]')
+    const file = new File(['rows'], 'questions.csv')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+    expect(wrapper.find('[data-confirm-standalone-import]').exists()).toBe(true)
+    Object.defineProperty(input.element, 'files', { value: [file, new File(['rows'], 'other.xlsx')], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+    expect(mocks.api.previewQuestionImport).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('请选择一个 Word、Excel 或 CSV 题库文件')
+    expect(wrapper.find('[data-confirm-standalone-import]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+  it('keeps the existing format selector and uploads one source document with companion images', async () => {
+    const wrapper = mount(TeacherStandaloneQuestionImport)
+    const input = wrapper.get('input[type="file"]')
+    const file = new File(['rows'], 'questions.csv')
+    const image = new File(['image'], 'figure.png', { type: 'image/png' })
+    expect(input.attributes('multiple')).toBeDefined()
+    expect(input.attributes('accept')).toContain('.png')
+    expect(wrapper.get('a[href="/api/v1/teacher/import-templates/question-images.zip"]').text()).toContain('图片')
+    Object.defineProperty(input.element, 'files', { value: [image, file], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+    expect(mocks.api.previewQuestionImport).toHaveBeenCalledWith(11, file, [image])
+    wrapper.unmount()
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.api.detail.mockResolvedValue({ bank: { name: '独立题库' } })

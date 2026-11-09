@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { questionContentSummary } from '@/question-content/question-content'
 import { useBankPageUrl } from './bank-page-navigation'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -6,6 +7,7 @@ import { ApiError } from '@/api/client'
 import Alert from '@/design-system/components/Alert.vue'
 import Icon from '@/design-system/Icon.vue'
 import QuestionGroupImportPreview from './QuestionGroupImportPreview.vue'
+import QuestionContent from '@/question-content/QuestionContent.vue'
 import {
   getTeacherBankManagementApi,
   type QuestionImportConfirmation,
@@ -23,7 +25,7 @@ const bankPageUrl = useBankPageUrl()
 const router = useRouter()
 const standaloneApi = props.standalone ? getTeacherStandaloneQuestionBankApi() : undefined
 const api = props.standalone ? {
-  previewQuestionImport: async (_courseId: number, bankId: number, file: File) => await standaloneApi!.previewQuestionImport(bankId, file) as QuestionImportPreview,
+  previewQuestionImport: async (_courseId: number, bankId: number, file: File, images?: File[]) => await standaloneApi!.previewQuestionImport(bankId, file, images) as QuestionImportPreview,
   confirmQuestionImport: async (_courseId: number, bankId: number, previewId: string, rows?: string[], groups?: string[]) => await standaloneApi!.confirmQuestionImport(bankId, previewId, rows, groups) as QuestionImportConfirmation,
 } : getTeacherBankManagementApi()
 const courseId = Number(route.params.courseId)
@@ -63,7 +65,7 @@ let detailTrigger: HTMLElement | undefined
 const error = ref('')
 const busy = ref(false)
 
-const acceptedFileTypes = computed(() => format.value === 'docx' ? '.docx' : '.csv,.xlsx')
+const acceptedFileTypes = computed(() => (format.value === 'docx' ? '.docx' : '.csv,.xlsx') + ',.png,.jpg,.jpeg,.webp')
 const allRows = computed(() => preview.value?.preview.rows || [])
 const groups = computed(() => preview.value?.preview.groups || [])
 const groupedRowIds = computed(() => new Set(groups.value.flatMap(group => group.member_row_ids)))
@@ -71,7 +73,7 @@ const rows = computed<QuestionImportPreviewRow[]>(() => [
   ...allRows.value.filter(row => !groupedRowIds.value.has(row.row_id)),
   ...groups.value.map(group => ({ row_id: `group:${group.group_id}`, group_id: group.group_id,
     sequence: Math.min(...allRows.value.filter(row => group.member_row_ids.includes(row.row_id)).map(row => row.sequence)),
-    title: group.title, instructions: group.instructions, text: group.material, question_type: group.kind,
+    title: group.title, instructions: group.instructions, text: group.material, images: group.images, question_type: group.kind,
     question_type_label: ({ reading: '阅读理解', words: '选词填空', cloze: '短文填空' })[group.kind],
     max_score: group.total_max_score, source_label: group.source_group_code, option_count: 0,
     teacher_difficulty: null, options: [], answer: `${group.item_count} 个作答项`, accepted_answers: [], explanation: '',
@@ -240,13 +242,21 @@ function clearPreview() {
 }
 async function selectFile(event: Event) {
   const input = event.currentTarget as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
+  const files = Array.from(input.files || [])
+  if (!files.length) return
   clearPreview()
+  const documents = files.filter(file => /\.(docx|xlsx|csv)$/i.test(file.name))
+  if (documents.length !== 1 || files.some(file => !/\.(docx|xlsx|csv|png|jpe?g|webp)$/i.test(file.name))) {
+    error.value = '请选择一个 Word、Excel 或 CSV 题库文件，可同时选择其中引用的 PNG、JPG 或 WebP 图片。'
+    input.value = ''
+    return
+  }
+  const file = documents[0]!
+  const images = files.filter(candidate => candidate !== file)
   busy.value = true
   error.value = ''
   try {
-    preview.value = await api.previewQuestionImport(courseId, bankId, file)
+    preview.value = images.length ? await api.previewQuestionImport(courseId, bankId, file, images) : await api.previewQuestionImport(courseId, bankId, file)
     uploadedFile.value = { name: file.name, size: file.size, uploadedAt: new Date() }
     selectedIds.value = rows.value.filter(row => !row.row_id.startsWith('group:') && isSelectable(row)).map((row) => row.row_id)
     selectedGroupIds.value = groups.value.filter(group => ['ready', 'draft'].includes(group.classification)).map(group => group.group_id)
@@ -323,7 +333,9 @@ watch([filter, search, questionType, pageSize], () => { page.value = 1 })
       <div class="kt-import-flow"><span>01 选择文件</span><span>→</span><span>02 校验预览</span><span>→</span><span>03 确认导入</span></div><section class="qimp-file kt-site-import-upload" aria-label="题库文件">
         <div class="kt-site-import-controls"><label>目标题库<input :value="bankName" aria-label="目标题库" readonly></label><label>文件格式<select id="question-import-format" v-model="format"><option value="spreadsheet">Excel / CSV</option><option value="docx">Word .docx</option></select></label><button class="qimp-button is-primary" type="button" :disabled="busy" @click="fileInput?.click()">{{ busy ? '正在校验…' : preview ? '重新选择文件' : '选择文件并预览' }}</button></div>
         <div class="kt-site-import-templates"><span>下载全题型模板：</span><a data-question-template="xlsx" href="/api/v1/teacher/import-templates/question-groups.xlsx" download="question_import_template.xlsx">Excel</a><a data-question-template="csv" href="/api/v1/teacher/import-templates/question-groups.csv" download="question_import_template.csv">CSV</a><a data-question-template="docx" href="/api/v1/teacher/import-templates/question-groups.docx" download="question_import_template.docx">Word</a><span>11 种题型 · 12 道完整题目 · 22 个作答项</span><span v-if="uploadedFile" data-file-summary>{{ uploadedFile.name }} · {{ fileSize }} · {{ uploadTime }}</span></div>
-        <input ref="fileInput" class="kt-visually-hidden" type="file" :accept="acceptedFileTypes" aria-label="上传题库文件" @change="selectFile">
+        <p class="kt-picker-note">可同时选择一个题库文件及其中引用的图片。CSV 使用 <code v-pre>{{image:文件名.png}}</code> 引用同名图片。</p>
+        <a href="/api/v1/teacher/import-templates/question-images.zip" download>下载配套图片示例 ZIP</a>
+        <input ref="fileInput" class="kt-visually-hidden" type="file" multiple :accept="acceptedFileTypes" aria-label="上传题库文件" @change="selectFile">
       </section>
 
       <section v-if="!preview" data-import-empty class="qimp-empty-import"><h2>选择文件后先检查内容</h2><p>按完整题目选择；阅读小题与文章空位作为同一道题一并导入。<br>可用与草稿允许选择，重复和错误不会重复入库。</p></section>
@@ -349,10 +361,10 @@ watch([filter, search, questionType, pageSize], () => { page.value = 1 })
               <tr v-for="row in pageRows" :key="row.row_id" :data-import-row="row.row_id" :class="{ 'is-current': activeRowId === row.row_id && detailOpen }">
                 <td><input type="checkbox" :aria-label="'选择题目 ' + row.sequence" :checked="selected(row)" :disabled="!isSelectable(row) || Boolean(confirmation) || busy" @change="toggleRow(row.row_id, ($event.target as HTMLInputElement).checked)"></td>
                 <td>{{ row.sequence }}</td>
-                <td data-question-title>{{ row.title || '—' }}</td>
-                <td><p class="qimp-question-text kt-question-import__multiline">{{ row.text || '未读取到题干' }}</p></td>
+                <td data-question-title>{{ questionContentSummary(row.title || '—') }}</td>
+                <td><p class="qimp-question-text kt-question-import__multiline">{{ questionContentSummary(row.text || '未读取到题干') }}</p></td>
                 <td>{{ row.question_type_label }}</td>
-                <td data-answer><span class="qimp-answer-text">{{ formatValue(row.answer) }}</span></td>
+                <td data-answer><span class="qimp-answer-text">{{ questionContentSummary(formatValue(row.answer)) }}</span></td>
                 <td><p v-if="row.group_id && row.row_id.startsWith('group:')">成员 KC 在详情中逐项核对</p><p v-if="rootKc(row)">主：{{ rootKc(row)?.name }}（{{ rootKc(row)?.kc_code }}）</p><p class="qimp-kc-summary"><Icon name="definition" :size="15" />{{ kcSummary(row) }}</p></td>
                 <td><span class="qimp-status" :class="'is-' + rowStatus(row).tone">{{ rowStatus(row).label }}</span><p v-if="rowErrors(row).length" class="kt-question-import__errors" :class="{ 'is-draft-reasons': classification(row) === 'draft' }">{{ rowErrors(row).join('；') }}</p></td>
                 <td><button class="qimp-link" type="button" :aria-label="'查看题目 ' + row.sequence" @click="inspectRow(row, $event)">查看</button></td>
@@ -363,9 +375,9 @@ watch([filter, search, questionType, pageSize], () => { page.value = 1 })
         <ul v-if="pageRows.length" class="qimp-mobile-list kt-mobile-only">
           <li v-for="row in pageRows" :key="row.row_id" :data-import-mobile-row="row.row_id" class="qimp-mobile-card">
             <div class="qimp-mobile-heading"><label><input type="checkbox" :aria-label="'选择题目 ' + row.sequence" :checked="selected(row)" :disabled="!isSelectable(row) || Boolean(confirmation) || busy" @change="toggleRow(row.row_id, ($event.target as HTMLInputElement).checked)">题目 {{ row.sequence }}</label><span class="qimp-status" :class="'is-' + rowStatus(row).tone">{{ rowStatus(row).label }}</span></div>
-            <p data-question-title>标题：{{ row.title || '—' }}</p>
-            <h3 class="kt-question-import__multiline">{{ row.text || '未读取到题干' }}</h3>
-            <dl><div><dt>题型</dt><dd>{{ row.question_type_label }}</dd></div><div><dt>答案</dt><dd>{{ formatValue(row.answer) }}</dd></div></dl>
+            <p data-question-title>标题：{{ questionContentSummary(row.title || '—') }}</p>
+            <h3 class="kt-question-import__multiline">{{ questionContentSummary(row.text || '未读取到题干') }}</h3>
+            <dl><div><dt>题型</dt><dd>{{ row.question_type_label }}</dd></div><div><dt>答案</dt><dd>{{ questionContentSummary(formatValue(row.answer)) }}</dd></div></dl>
             <p v-if="rootKc(row)" class="qimp-mobile-kc">主：{{ rootKc(row)?.name }}（{{ rootKc(row)?.kc_code }}）</p><p class="qimp-kc-summary"><Icon name="definition" :size="15" />{{ kcSummary(row) }}</p>
             <p v-if="rowErrors(row).length" class="kt-question-import__errors" :class="{ 'is-draft-reasons': classification(row) === 'draft' }">{{ rowErrors(row).join('；') }}</p>
             <button class="qimp-link" type="button" :aria-label="'查看题目 ' + row.sequence" @click="inspectRow(row, $event)">查看完整内容与 KC 映射 <Icon name="chevron-right" :size="14" /></button>
@@ -392,11 +404,11 @@ watch([filter, search, questionType, pageSize], () => { page.value = 1 })
           <section v-if="activeRow.title"><h3>标题</h3><p>{{ activeRow.title }}</p></section>
           <section v-if="activeRow.instructions"><h3>作答说明</h3><p class="kt-question-import__multiline">{{ activeRow.instructions }}</p></section>
           <section v-if="activeRow.question_type === 'numeric'"><h3>误差容限</h3><p>绝对：{{ activeRow.absolute_tolerance ?? '未设置' }} · 相对：{{ activeRow.relative_tolerance ?? '未设置' }}</p></section>
-          <section><h3>题干</h3><p class="qimp-detail-value kt-question-import__multiline">{{ activeRow.text || '未读取到题干' }}</p></section>
-          <section v-if="activeRow.options.length"><h3>选项</h3><ul class="qimp-options"><li v-for="option in activeRow.options" :key="option.key" :data-option="option.key" :class="{ 'is-correct': isCorrectOption(option.key) }"><span>{{ option.key }}</span><p class="kt-question-import__multiline">{{ option.text }}</p></li></ul></section>
-          <section><h3>{{ activeRow.question_type === 'short_answer' ? '参考答案' : '正确答案' }}</h3><p class="qimp-detail-value kt-question-import__multiline">{{ formatValue(activeRow.answer) }}</p></section>
+          <section><h3>题干</h3><p class="qimp-detail-value kt-question-import__multiline"><QuestionContent :text="activeRow.text || '未读取到题干'" :images="activeRow.images" /></p></section>
+          <section v-if="activeRow.options.length"><h3>选项</h3><ul class="qimp-options"><li v-for="option in activeRow.options" :key="option.key" :data-option="option.key" :class="{ 'is-correct': isCorrectOption(option.key) }"><span>{{ option.key }}</span><p class="kt-question-import__multiline"><QuestionContent :text="option.text" :images="activeRow.images" option /></p></li></ul></section>
+          <section><h3>{{ activeRow.question_type === 'short_answer' ? '参考答案' : '正确答案' }}</h3><p class="qimp-detail-value kt-question-import__multiline"><QuestionContent :text="formatValue(activeRow.answer)" :images="activeRow.images" /></p></section>
           <section v-if="activeRow.accepted_answers.length"><h3>可接受答案</h3><p class="qimp-detail-value kt-question-import__multiline">{{ activeRow.accepted_answers.join('；') }}</p></section>
-          <section><h3>解析</h3><p class="qimp-detail-value kt-question-import__multiline">{{ activeRow.explanation || '未设置解析' }}</p></section>
+          <section><h3>解析</h3><p class="qimp-detail-value kt-question-import__multiline"><QuestionContent :text="activeRow.explanation || '未设置解析'" :images="activeRow.images" /></p></section>
           <section class="qimp-kc-detail">
             <h3>KC 映射</h3>
             <template v-if="activeRow.kc_mapping">

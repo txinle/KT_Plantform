@@ -7,6 +7,7 @@ from django.db import transaction
 from django.db.models import Max, Prefetch
 
 from ..models import Question, QuestionGroup
+from .question_images import IMAGE_MARKER, question_image_content, validate_existing_image_references, with_question_images
 
 
 BLANK_MARKER = re.compile(r'\{\{(b[0-9]{2,})\}\}')
@@ -60,7 +61,8 @@ def validate_group_structure(group, members=None):
     blank_ids = [_get(member, 'blank_id', '') for member in members]
     markers = BLANK_MARKER.findall(material)
     if kind in (QuestionGroup.Kind.CLOZE, QuestionGroup.Kind.WORDS):
-        malformed = '{{' in BLANK_MARKER.sub('', material) or '}}' in BLANK_MARKER.sub('', material)
+        remaining = IMAGE_MARKER.sub('', BLANK_MARKER.sub('', material))
+        malformed = '{{' in remaining or '}}' in remaining
         if malformed or any(not re.fullmatch(r'b[0-9]{2,}', blank or '') for blank in blank_ids) or len(set(blank_ids)) != len(blank_ids) or len(set(markers)) != len(markers) or sorted(markers) != sorted(blank_ids):
             errors.append('完形材料的 {{b01}} 空位必须与成员空位编号严格一一对应且不重复。')
     elif any(blank_ids) or markers:
@@ -112,7 +114,7 @@ def group_readiness_issues(group, members=None):
     return list(dict.fromkeys(issue for member in members for issue in readiness_issues(member, include_group=False)))
 
 
-def project_question_group(group, *, teacher=True):
+def project_question_group(group, *, teacher=True, include_images=True):
     from .question_kc_mapping import project_question_kc_mapping
     members = _members(group, None)
     issues = group_readiness_issues(group, members)
@@ -133,7 +135,7 @@ def project_question_group(group, *, teacher=True):
                 standalone_mapping = project_standalone_primary(member)
                 row['primary_concept_id'] = standalone_mapping['primary_concept_id'] if standalone_mapping else None
                 row['kc_mapping'] = standalone_mapping or {'scope': 'standalone', 'primary_concept_id': None, 'nodes': []}
-        projected.append(row)
+        projected.append(with_question_images(row) if include_images else row)
     try:
         segments = material_segments(group, members)
     except ValidationError:
@@ -148,7 +150,7 @@ def project_question_group(group, *, teacher=True):
     if teacher and group.bank.course_id is None:
         from .standalone_kc import available_standalone_concepts
         result['available_concepts'] = [{'id': concept.pk, 'name': concept.name, 'code': concept.code} for concept in available_standalone_concepts(group.bank)]
-    return result
+    return with_question_images(result) if include_images else result
 
 
 def project_bank_unit_summary(bank, groups):
@@ -191,6 +193,10 @@ def save_question_group(*, bank, data, group=None):
         existing = {member.pk: member for member in group.members.select_for_update().select_related('bank')}
     else:
         group = QuestionGroup(bank=bank)
+    try:
+        validate_existing_image_references([data.get('material', group.material)], [group.material])
+    except ValueError as error:
+        raise ValidationError(str(error)) from error
     for key in ('kind', 'title', 'instructions', 'material', 'content_language', 'word_bank'):
         setattr(group, key, data.get(key, getattr(group, key)))
     rows = data['members']
@@ -207,6 +213,11 @@ def save_question_group(*, bank, data, group=None):
         if question is None:
             sequence += 1
             question = Question(bank=bank, sequence=sequence, status=Question.Status.DRAFT)
+        values = [row.get('text'), row.get('explanation'), *[option['text'] for option in row.get('options', [])]]
+        try:
+            validate_existing_image_references(values, question_image_content(question))
+        except ValueError as error:
+            raise ValidationError(str(error)) from error
         for field, default in (('question_type', ''), ('text', ''), ('accepted_answers', []), ('explanation', ''),
             ('max_score', Decimal('1')), ('text_match_case_sensitive', False), ('text_match_policy_version', 'text-exact-v1'),
             ('group_order', None), ('blank_id', ''), ('content_language', group.content_language), ('teacher_difficulty', None)):

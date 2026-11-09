@@ -1,8 +1,19 @@
+from drf_spectacular.utils import OpenApiTypes, extend_schema_field
 from rest_framework import serializers
 
 
 class FileImportRequestSerializer(serializers.Serializer):
     file = serializers.FileField()
+
+
+@extend_schema_field(OpenApiTypes.BINARY)
+class UploadedFileField(serializers.FileField):
+    pass
+
+
+class QuestionFileImportRequestSerializer(serializers.Serializer):
+    file = UploadedFileField()
+    images = serializers.ListField(child=UploadedFileField(), required=False)
 
 
 class ImportPreviewResponseSerializer(serializers.Serializer):

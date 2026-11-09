@@ -4,6 +4,7 @@ from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.question_bank.services.question_images import with_question_images
 from apps.api.exceptions import ApiBusinessError, ApiConflict
 from apps.api.pagination import FixedPageNumberPagination
 from apps.api.permissions import RolePermission
@@ -118,14 +119,14 @@ class TeacherClassTaskGradingQuestionView(TeacherTaskGradingMixin, APIView):
         page_response = paginator.get_paginated_response(rows).data
         return Response(
             {
-                "question": {
+                "question": with_question_images({
                     "question_snapshot_id": snapshot.pk,
                     "code": snapshot.code,
                     "text": snapshot.text,
                     "correct_answer": snapshot.correct_answer,
                     "accepted_answers": snapshot.accepted_answers,
                     "explanation": snapshot.explanation,
-                },
+                }),
                 "submissions": page_response,
             }
         )

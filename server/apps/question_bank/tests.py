@@ -39,10 +39,16 @@ class ImportTemplateDownloadTests(TransactionTestCase):
                     self.assertEqual(response["Content-Disposition"], f'attachment; filename="{filename}"')
                     self.assertEqual(
                         b"".join(response.streaming_content),
-                        (settings.BASE_DIR / "fixtures" / filename).read_bytes(),
+                        self._expected_template_bytes(filename),
                     )
                 finally:
                     response.close()
+
+    def _expected_template_bytes(self, filename):
+        if filename == 'question_import_template.csv':
+            from .services.import_templates import build_question_import_template_csv
+            return build_question_import_template_csv()
+        return (settings.BASE_DIR / 'fixtures' / filename).read_bytes()
 
     def test_import_templates_use_utf8_bom_chinese_examples_accepted_by_parsers(self):
         question_bytes = (settings.BASE_DIR / "fixtures" / "question_import_template.csv").read_bytes()
@@ -102,6 +108,14 @@ class ImportTemplateDownloadTests(TransactionTestCase):
 
         for url, filename in self.templates:
             with self.subTest(filename=filename):
+                if filename == 'question_import_template.csv':
+                    request = RequestFactory().get(url)
+                    request.user = self.teacher
+                    response = resolve(url).func(request)
+                    stream = response.file_to_stream
+                    response.close()
+                    self.assertTrue(stream.closed)
+                    continue
                 expected_bytes = (settings.BASE_DIR / "fixtures" / filename).read_bytes()
                 stream = BytesIO(expected_bytes)
                 with patch.object(Path, "open", return_value=stream) as open_mock:
@@ -147,9 +161,10 @@ class ImportTemplateDownloadTests(TransactionTestCase):
                 for url, filename in self.templates:
                     with self.subTest(filename=filename):
                         response = self.client.get(url)
-
-                        self.assertEqual(response.status_code, 404)
-                        self.assertNotIn(directory, response.content.decode())
+                        self.assertEqual(response.status_code, 200 if filename == 'question_import_template.csv' else 404)
+                        content = b''.join(response.streaming_content) if response.streaming else response.content
+                        response.close()
+                        self.assertNotIn(directory, content.decode('utf-8-sig'))
 
 
 

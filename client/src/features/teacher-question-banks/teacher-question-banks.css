@@ -406,3 +406,9 @@ input.kt-qb-visually-hidden { position: absolute; width: 1px !important; min-hei
 
 .kt-teacher-question-banks .kt-bank-secondary-table{padding:0}
 .kt-teacher-question-banks .kt-bank-secondary-table .kt-inline-actions{display:flex;align-items:center;gap:12px}
+
+@media (min-width: 761px) {
+  .kt-teacher-question-banks .kt-bank-detail-header { flex-direction: row; flex-wrap: nowrap; align-items: flex-start; }
+  .kt-teacher-question-banks .kt-bank-detail-header .kt-page-header__copy { flex: 1; }
+  .kt-teacher-question-banks .kt-bank-detail-header .kt-page-header__actions { width: auto; flex: 0 0 auto; justify-content: flex-end; }
+}

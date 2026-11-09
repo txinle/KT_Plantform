@@ -108,6 +108,7 @@ export type ManualGradingOverview = {
 }
 export type ManualGradingQuestionDetail = {
   question: {
+    images?: Record<string, string>
     question_snapshot_id: number
     code: string
     text: string

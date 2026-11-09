@@ -9362,15 +9362,9 @@ paths:
       - teacher
       requestBody:
         content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/FileImportRequest'
-          application/x-www-form-urlencoded:
-            schema:
-              $ref: '#/components/schemas/FileImportRequest'
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/FileImportRequest'
+              $ref: '#/components/schemas/QuestionFileImportRequest'
         required: true
       security:
       - SessionAuth: []
@@ -11312,15 +11306,9 @@ paths:
       - teacher
       requestBody:
         content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/FileImportRequest'
-          application/x-www-form-urlencoded:
-            schema:
-              $ref: '#/components/schemas/FileImportRequest'
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/FileImportRequest'
+              $ref: '#/components/schemas/QuestionFileImportRequest'
         required: true
       security:
       - SessionAuth: []
@@ -15915,6 +15903,131 @@ paths:
                       request_id:
                         type: string
           description: ''
+  /api/v1/teacher/import-templates/question-images.zip:
+    get:
+      operationId: teacher_question_image_examples_zip
+      parameters:
+      - in: header
+        name: X-CSRFToken
+        schema:
+          type: string
+        description: Django CSRF token, required for unsafe methods.
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                    - code
+                    - message
+                    - fields
+                    - request_id
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                      fields:
+                        type: object
+                        additionalProperties: {}
+                      request_id:
+                        type: string
+          description: ''
   /api/v1/teacher/import-templates/questions.csv:
     get:
       operationId: teacher_question_import_template_csv
@@ -19956,6 +20069,10 @@ components:
     ManagementQuestionEditorQuestion:
       type: object
       properties:
+        images:
+          type: object
+          additionalProperties:
+            type: string
         updated_at:
           type: string
           format: date-time
@@ -20219,6 +20336,10 @@ components:
     ManagementQuestionImportPreviewRow:
       type: object
       properties:
+        images:
+          type: object
+          additionalProperties:
+            type: string
         absolute_tolerance:
           type: string
           nullable: true
@@ -20811,6 +20932,10 @@ components:
     ManualGradingQuestion:
       type: object
       properties:
+        images:
+          type: object
+          additionalProperties:
+            type: string
         question_snapshot_id:
           type: integer
         code:
@@ -22466,9 +22591,27 @@ components:
       - draft_reasons
       - id
       - status
+    QuestionFileImportRequest:
+      type: object
+      properties:
+        file:
+          type: string
+          format: binary
+        images:
+          type: array
+          items:
+            type: string
+            format: binary
+      required:
+      - file
     QuestionGroupMember:
       type: object
       properties:
+        images:
+          type: object
+          additionalProperties:
+            type: string
+          readOnly: true
         primary_concept_id:
           type: integer
           minimum: 1
@@ -22530,6 +22673,7 @@ components:
           readOnly: true
       required:
       - group_order
+      - images
       - item_key
       - question_type
       - status
@@ -22611,6 +22755,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/QuestionGroupMember'
+        images:
+          type: object
+          additionalProperties:
+            type: string
+          readOnly: true
         available_concepts:
           type: array
           items:
@@ -22638,6 +22787,7 @@ components:
             type: string
       required:
       - id
+      - images
       - item_count
       - kind
       - material
@@ -24509,6 +24659,10 @@ components:
     StudentLearningItemResult:
       type: object
       properties:
+        images:
+          type: object
+          additionalProperties:
+            type: string
         response_value:
           nullable: true
         group_id:
@@ -24621,6 +24775,10 @@ components:
     StudentLearningQuestion:
       type: object
       properties:
+        images:
+          type: object
+          additionalProperties:
+            type: string
         version:
           type: string
         generated_at:
@@ -24893,6 +25051,10 @@ components:
     StudentResultCorrectnessItem:
       type: object
       properties:
+        images:
+          type: object
+          additionalProperties:
+            type: string
         response_value:
           nullable: true
         question_id:
@@ -24990,6 +25152,10 @@ components:
     StudentResultFullItem:
       type: object
       properties:
+        images:
+          type: object
+          additionalProperties:
+            type: string
         response_value:
           nullable: true
         question_id:
@@ -25264,6 +25430,10 @@ components:
     StudentRuntimeQuestion:
       type: object
       properties:
+        images:
+          type: object
+          additionalProperties:
+            type: string
         snapshot_id:
           type: integer
         stable_code:

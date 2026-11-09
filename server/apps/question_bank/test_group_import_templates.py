@@ -1,4 +1,5 @@
 from io import BytesIO
+from zipfile import ZipFile
 
 from docx import Document
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -70,7 +71,11 @@ class GroupTemplateDownloadTests(TestCase):
                 response = self.client.get(f'/api/v1/teacher/import-templates/question-groups.{extension}')
                 self.assertEqual(response.status_code, 200, response.content)
                 content = b''.join(response.streaming_content) if response.streaming else response.content
-                rows = read_unified_rows(SimpleUploadedFile(f'groups.{extension}', content))
+                from .services.import_templates import build_question_image_examples_zip
+                with ZipFile(BytesIO(build_question_image_examples_zip())) as archive:
+                    images = [SimpleUploadedFile(name, archive.read(name)) for name in archive.namelist() if name.endswith('.png')]
+                rows = read_unified_rows(SimpleUploadedFile(f'groups.{extension}', content),
+                                         image_files=images if extension == 'csv' else [])
                 self.assertEqual(len(rows), 22)
                 self.assertEqual(sum(row['题组编号'] == 'R001' for row in rows), 3)
                 self.assertEqual(sum(row['题组编号'] == 'C001' for row in rows), 5)

@@ -5,6 +5,7 @@ import { RouterLink, useRoute } from 'vue-router'
 
 import Icon from '@/design-system/Icon.vue'
 import QuestionGroupResults from '@/question-content/QuestionGroupResults.vue'
+import QuestionContent from '@/question-content/QuestionContent.vue'
 
 import type { StudentLearningExperiment } from '../student-courses/api'
 import { getStudentCourseApi } from '../student-courses/api'
@@ -136,7 +137,7 @@ onMounted(async () => {
                       <td>{{ item.code }}</td>
                       <td>{{ item.kcs.join('、') }}</td>
                       <td><span class="kt-result-state" :class="`kt-result-state--${item.result_state}`">{{ item.result_label }}</span></td>
-                      <td>{{ item.final_answer }}</td>
+                      <td><QuestionContent :text="item.final_answer" :images="item.images" /></td>
                       <td>{{ item.score ? `${item.score.value} / ${item.score.maximum}` : '—' }}</td>
                       <td>
                         <a class="kt-feedback-action" :href="`/student/courses/${courseId}/learning/experiments/${experimentId}/questions/${item.question_id}/`">

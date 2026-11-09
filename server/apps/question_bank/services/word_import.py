@@ -11,6 +11,8 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 from lxml.etree import XMLSyntaxError
 
+from .image_import import stage_image_references, stage_word_images, word_drawing_error
+
 
 CANONICAL_KEYS = (
     "序号",
@@ -242,7 +244,7 @@ def _unsupported_object_errors(element) -> list[str]:
     for child in element.iter():
         local_name = child.tag.rsplit("}", 1)[-1]
         if local_name in {"drawing", "pict", "imagedata"}:
-            message = "包含不支持的图片对象"
+            message = word_drawing_error(child)
         elif local_name in {"oMath", "oMathPara"}:
             message = "包含不支持的公式对象"
         elif local_name in {"txbxContent", "wsp", "textbox"}:
@@ -369,7 +371,7 @@ def _read_numbered_label_rows(document):
     return rows
 
 
-def read_docx_rows(uploaded_file) -> list[dict[str, object]]:
+def read_docx_rows(uploaded_file, *, image_files=()) -> list[dict[str, object]]:
     name = getattr(uploaded_file, "name", "")
     if name and not name.lower().endswith(".docx"):
         raise ValueError("仅支持 .docx 文件")
@@ -377,10 +379,11 @@ def read_docx_rows(uploaded_file) -> list[dict[str, object]]:
         document = Document(io.BytesIO(uploaded_file.read()))
     except (BadZipFile, KeyError, OSError, PackageNotFoundError, XMLSyntaxError) as error:
         raise ValueError("无法读取 DOCX 文档") from error
+    image_assets = stage_word_images(document)
     if any('【题组开始】' in paragraph.text or '【题组结束】' in paragraph.text or '【小题】' in paragraph.text for paragraph in document.paragraphs):
-        return _read_explicit_group_rows(document)
+        return stage_image_references(_read_explicit_group_rows(document), assets=image_assets, image_files=image_files)
     if any(re.fullmatch(r'\s*序号\s*[:：]\s*\d+\s*', paragraph.text) for paragraph in document.paragraphs):
-        return _read_numbered_label_rows(document)
+        return stage_image_references(_read_numbered_label_rows(document), assets=image_assets, image_files=image_files)
     rows: list[dict[str, object]] = []
     question: _QuestionRow | None = None
     pending_preamble_errors: list[tuple[str, str]] = []
@@ -570,4 +573,4 @@ def read_docx_rows(uploaded_file) -> list[dict[str, object]]:
         raise ValueError("模板前言包含不支持的对象")
     if not rows:
         raise ValueError("文档中没有可解析的题目")
-    return rows
+    return stage_image_references(rows, assets=image_assets, image_files=image_files)

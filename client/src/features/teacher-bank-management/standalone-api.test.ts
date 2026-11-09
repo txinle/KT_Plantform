@@ -6,6 +6,15 @@ import {
 } from './standalone-api'
 
 describe('standalone question-bank API', () => {
+  it('sends companion pictures through the existing standalone import endpoint', async () => {
+    const client = { mutateForm: vi.fn().mockResolvedValue({}) }
+    const file = new File(['rows'], 'questions.csv')
+    const images = [new File(['a'], 'a.png'), new File(['b'], 'b.webp')]
+    await createTeacherStandaloneQuestionBankApi(client as never).previewQuestionImport(11, file, images)
+    const body = client.mutateForm.mock.calls[0]![1].body as FormData
+    expect(body.get('file')).toBe(file)
+    expect(body.getAll('images')).toEqual(images)
+  })
   it('uses same-origin JSON endpoints for the no-course legacy URLs', async () => {
     const client = {
       get: vi.fn().mockResolvedValue({}),

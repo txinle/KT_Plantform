@@ -13,8 +13,8 @@ export type StudentTask = components['schemas']['StudentTask']
 export type StudentTaskCollection = components['schemas']['StudentTaskCollection']
 export type StudentSessionEntry = components['schemas']['StudentSessionEntry'] & { runtime?: EnteredQuestion }
 export type StudentResult = components['schemas']['StudentResult']
-export type StudentLearningExperiment = components['schemas']['StudentLearningExperiment'] & { version?: string; groups?: import('@/question-content/question-group-results').ResultGroup[]; score_progress?: import('@/question-content/question-group-results').ScoreProgress }
-export type StudentLearningQuestion = components['schemas']['StudentLearningQuestion']
+export type StudentLearningExperiment = components['schemas']['StudentLearningExperiment'] & { item_results?: Array<NonNullable<components['schemas']['StudentLearningExperiment']['item_results']>[number] & { images?: Record<string, string> }>; version?: string; groups?: import('@/question-content/question-group-results').ResultGroup[]; score_progress?: import('@/question-content/question-group-results').ScoreProgress }
+export type StudentLearningQuestion = components['schemas']['StudentLearningQuestion'] & { images?: Record<string, string> }
 
 export interface MetricDisplay {
   percent_display?: string

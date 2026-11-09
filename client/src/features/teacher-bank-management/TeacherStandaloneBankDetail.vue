@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { questionContentSummary } from '@/question-content/question-content'
 import { useBankPageUrl } from './bank-page-navigation'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -147,7 +148,7 @@ onMounted(load)
             <tbody>
               <tr v-for="question in shownQuestions" :key="question.unit_key || `question:${question.id}`">
                 <td class="kt-mono">{{ question.sequence }}</td>
-                <td><strong>{{ question.title || question.text }}</strong><p v-if="question.instructions">{{ question.instructions }}</p><ul v-if="question.draft_reasons.length" class="kt-draft-reasons"><li v-for="reason in question.draft_reasons" :key="reason">{{ reason }}</li></ul></td>
+                <td><strong>{{ questionContentSummary(question.title || question.text) }}</strong><p v-if="question.instructions">{{ questionContentSummary(question.instructions) }}</p><ul v-if="question.draft_reasons.length" class="kt-draft-reasons"><li v-for="reason in question.draft_reasons" :key="reason">{{ reason }}</li></ul></td>
                 <td>{{ question.question_type_label }}</td>
                 <td>{{ question.kc_mapping.nodes.map((node) => node.name).join('、') || (question.member_kc_mappings?.length ? '成员 KC' : '未映射') }}<details v-if="question.member_kc_mappings?.length"><summary>查看 {{ question.member_kc_mappings.length }} 个作答项</summary><p v-for="member in question.member_kc_mappings" :key="member.id">{{ member.order }}. {{ member.mapping.nodes.map(node => node.name).join(' → ') }}</p></details></td>
                 <td>{{ question.max_score || '1.00' }} 分</td>

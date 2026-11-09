@@ -21,6 +21,7 @@ from .preview_batch import ImportPreviewBatchConflict, ImportPreviewBatchService
 from .question_kc_mapping import replace_question_kc_mapping, validate_question_kc_mapping
 from .question_readiness import content_issues, refresh_question_readiness
 from .unified_reader import HEADERS, GROUP_HEADERS, read_unified_rows
+from .question_images import image_keys, persist_image_assets, with_question_images
 from .question_groups import validate_group_structure, material_segments
 from .numeric import normalize_finite_decimal
 
@@ -368,12 +369,13 @@ def _prepare_groups(bank, rows):
 
 class UnifiedQuestionImportService:
     @staticmethod
-    def preview(*, bank, actor, session_key, uploaded):
+    def preview(*, bank, actor, session_key, uploaded, image_files=()):
         if uploaded.size > 8 * 1024 * 1024:
             raise ValueError('文件不能超过 8 MB。')
         raw_bytes = uploaded.read()
         uploaded.seek(0)
-        source = read_unified_rows(uploaded, allow_legacy=bank.course_id is None)
+        source = read_unified_rows(uploaded, allow_legacy=bank.course_id is None, image_files=image_files)
+        assets = {key: uri for raw in source for key, uri in raw.get("_image_assets", {}).items()}
         legacy_sequences = None
         if bank.course_id is None and any(raw.get('_legacy_standalone') for raw in source):
             sequence_floor = bank.questions.aggregate(value=Max('sequence'))['value'] or 0
@@ -448,20 +450,20 @@ class UnifiedQuestionImportService:
         groups = _prepare_groups(bank, rows)
         for ordinal, (row, raw) in enumerate(zip(rows, source), 1):
             summary[row['classification']] += 1
-            projected.append(_project_row(
+            projected.append(with_question_images(_project_row(
                 row,
                 ordinal,
                 raw.get('_location', f'第 {ordinal} 条'),
-            ))
+            ), assets=raw.get("_image_assets", {})))
         batch = ImportPreviewBatchService.create(
             kind=ImportPreviewBatch.Kind.QUESTION_CONTENT, course=bank.course, bank=bank, actor=actor,
-            session_key=session_key, file_bytes=raw_bytes, payload={'rows': rows, 'groups': groups}, summary=summary,
+            session_key=session_key, file_bytes=raw_bytes, payload={'rows': rows, 'groups': groups, 'image_assets': assets}, summary=summary,
         )
         return {
             'preview_id': str(batch.pk),
             'preview': {
                 'rows': projected,
-                'groups': groups,
+                'groups': [with_question_images(group, assets=assets) for group in groups],
                 'summary': summary,
                 'confirmable': summary['ready'] + summary['draft'] > 0,
             },
@@ -518,6 +520,7 @@ class UnifiedQuestionImportService:
         sequence = bank.questions.aggregate(value=Max('sequence'))['value'] or 0
         result = {'created': 0, 'updated': 0, 'active': 0, 'draft': 0, 'skipped': 0, 'failed': 0,
                   'detail_url': reverse('courses:bank_detail', args=[course.pk, bank.pk]) if course else reverse('question_bank:bank_detail', args=[bank.pk]), 'rows': [], 'groups': []}
+        created_image_keys = set()
         grouped_created = []
         for row in batch.payload['rows']:
             outcome = {'row_id': row['row_id'], 'status': 'invalid', 'errors': list(row['errors'])}
@@ -597,6 +600,7 @@ class UnifiedQuestionImportService:
                     result[question.status] += 1
                     seen[fingerprint] = question.pk
                     continue
+            created_image_keys.update(image_keys(content))
             sequence = max(sequence + 1, row.get('legacy_sequence', 0))
             question = Question.objects.create(
                 bank=bank, sequence=row.get('legacy_sequence', sequence), status=Question.Status.DRAFT, text=content['text'],
@@ -648,6 +652,9 @@ class UnifiedQuestionImportService:
             saved = saved_groups.get(group['group_id'])
             result['groups'].append({'group_id': group['group_id'], 'question_group_id': saved.pk if saved else duplicate_groups.get(group['group_id']),
                 'status': 'created' if saved else 'duplicate' if group['classification'] == 'duplicate' or group['group_id'] in duplicate_groups else 'invalid' if group['classification'] == 'invalid' else 'unselected'})
+        created_image_keys.update(image_keys([group.material for group in saved_groups.values()]))
+        staged_assets = batch.payload.pop("image_assets", {})
+        persist_image_assets({key: staged_assets[key] for key in created_image_keys if key in staged_assets})
         batch.status = ImportPreviewBatch.Status.CONSUMED
         batch.consumed_at = timezone.now()
         batch.payload['result'] = result

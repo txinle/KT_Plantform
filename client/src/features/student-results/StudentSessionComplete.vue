@@ -5,10 +5,11 @@ import { createApiClient } from '@/api/client'
 import { getBootstrapContext } from '@/app/bootstrap'
 import WorkspaceShell from '@/design-system/components/WorkspaceShell.vue'
 import QuestionGroupResults from '@/question-content/QuestionGroupResults.vue'
+import QuestionContent from '@/question-content/QuestionContent.vue'
 import type { ResultGroup, ScoreProgress } from '@/question-content/question-group-results'
 import './student-results.css'
 
-interface ResultItem { question_id: number; question_code: string; submitted_answer: string; is_correct?: boolean | null; score?: string | number; max_score?: string | number; correct_answer?: string; explanation?: string }
+interface ResultItem { images?: Record<string, string>; question_id: number; question_code: string; submitted_answer: string; is_correct?: boolean | null; score?: string | number; max_score?: string | number; correct_answer?: string; explanation?: string }
 interface ComparisonMetric { status: string; percent?: string | number; position?: number; sample_size?: number }
 
 interface Summary {
@@ -55,7 +56,7 @@ onMounted(async () => {
       <QuestionGroupResults v-if="summary.result" :groups="summary.result.groups" :score-progress="summary.result.score_progress" />
       <p v-if="summary.result?.feedback_phase === 'not_released'">反馈将在服务器确认的开放时间显示。</p>
       <p v-else-if="summary.result?.feedback_phase === 'disabled'">本次作答已结束，教师设置为仅显示提交状态。</p>
-      <section v-if="items.length" class="kt-session-summary__items"><h2>逐项作答与反馈</h2><div class="kt-session-summary__table-scroll"><table><thead><tr><th>题目 / 作答项</th><th>你的答案</th><th v-if="hasCorrectness">反馈</th><th v-if="hasScore">得分</th><th v-if="hasAnswers">参考答案与解析</th></tr></thead><tbody><tr v-for="item in items" :key="item.question_id"><td>{{ item.question_code }}</td><td>{{ item.submitted_answer }}</td><td v-if="hasCorrectness">{{ item.is_correct === true ? '正确' : item.is_correct === false ? '错误' : '未提供判定' }}</td><td v-if="hasScore">{{ item.score !== undefined ? `${item.score} / ${item.max_score}` : '—' }}</td><td v-if="hasAnswers"><template v-if="'correct_answer' in item">{{ item.correct_answer }}<p v-if="item.explanation">{{ item.explanation }}</p></template></td></tr></tbody></table></div></section>
+      <section v-if="items.length" class="kt-session-summary__items"><h2>逐项作答与反馈</h2><div class="kt-session-summary__table-scroll"><table><thead><tr><th>题目 / 作答项</th><th>你的答案</th><th v-if="hasCorrectness">反馈</th><th v-if="hasScore">得分</th><th v-if="hasAnswers">参考答案与解析</th></tr></thead><tbody><tr v-for="item in items" :key="item.question_id"><td>{{ item.question_code }}</td><td><QuestionContent :text="item.submitted_answer" :images="item.images" /></td><td v-if="hasCorrectness">{{ item.is_correct === true ? '正确' : item.is_correct === false ? '错误' : '未提供判定' }}</td><td v-if="hasScore">{{ item.score !== undefined ? `${item.score} / ${item.max_score}` : '—' }}</td><td v-if="hasAnswers"><template v-if="'correct_answer' in item"><QuestionContent :text="item.correct_answer || ''" :images="item.images" /><p v-if="item.explanation"><QuestionContent :text="item.explanation" :images="item.images" /></p></template></td></tr></tbody></table></div></section>
       <section v-if="summary.result?.comparison" class="kt-session-summary__comparison"><h2>班级比较</h2><p v-if="summary.result.comparison.class_average?.status === 'available'">班级平均得分率：{{ summary.result.comparison.class_average.percent }}%（{{ summary.result.comparison.class_average.sample_size }} 人）</p><p v-if="summary.result.comparison.rank?.status === 'available'">本次排名：第 {{ summary.result.comparison.rank.position }} / {{ summary.result.comparison.rank.sample_size }} 名</p></section>
       <p v-if="summary.result?.comparison_status === 'pending' || summary.result?.comparison_status === 'updating'" role="status">班级比较正在生成，个人作答与评分已显示。</p>
     </section>

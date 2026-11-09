@@ -67,7 +67,7 @@ def _project_complete_questions(bank, *, question_ids, group_ids):
             'delete_url': reverse('teacher-question-delete', args=[bank.course_id, bank.pk, question.pk]) if writable and bank.course_id else None,
         })
     for group in question_groups_for_read(bank.groups.filter(pk__in=group_ids)):
-        document = project_question_group(group)
+        document = project_question_group(group, include_images=False)
         members = sorted(group._read_members, key=lambda member: member.sequence)
         rows.append({
             'unit_key': f'group:{group.pk}', 'unit_kind': 'group', 'id': group.pk,

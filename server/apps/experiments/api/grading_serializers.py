@@ -48,6 +48,7 @@ class ManualGradingSubmissionSerializer(serializers.Serializer):
 
 
 class ManualGradingQuestionSerializer(serializers.Serializer):
+    images = serializers.DictField(child=serializers.CharField(), required=False)
     question_snapshot_id = serializers.IntegerField()
     code = serializers.CharField()
     text = serializers.CharField()

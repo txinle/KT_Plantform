@@ -367,7 +367,9 @@ class WordQuestionImportTests(SimpleTestCase):
         )
 
         self.assertEqual([row["序号"] for row in rows], ["1", "2", "3", "4", "5", "6"])
-        self.assertEqual(rows[0]["题目"], "2 + 2 等于多少？\n请从下列选项中选择。")
+        self.assertTrue(rows[0]["题目"].startswith("题干图展示一个串联电路。"))
+        self.assertIn('{{image:', rows[0]['题目'])
+        self.assertEqual(len(rows[0]['_image_assets']), 4)
         self.assertEqual(rows[0]["选项E"], "")
         self.assertEqual(rows[0]["选项F"], "")
         self.assertFalse(any(row["_errors"] for row in rows))

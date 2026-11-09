@@ -1,4 +1,6 @@
 from django.core.files.uploadedfile import SimpleUploadedFile
+from io import BytesIO
+from zipfile import ZipFile
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase
 
@@ -6,6 +8,14 @@ from .services.question_groups import material_segments, validate_group_structur
 from .services.unified_import import _parse_content
 from .services.import_templates import build_question_group_template
 from .services.unified_reader import read_unified_rows
+
+
+def _template_images(extension):
+    from .services.import_templates import build_question_image_examples_zip
+    if extension != 'csv':
+        return []
+    with ZipFile(BytesIO(build_question_image_examples_zip())) as archive:
+        return [SimpleUploadedFile(name, archive.read(name)) for name in archive.namelist() if name.endswith('.png')]
 
 
 class LatestQuestionContentTests(SimpleTestCase):
@@ -27,7 +37,8 @@ class LatestQuestionContentTests(SimpleTestCase):
 
     def test_complete_templates_cover_all_eleven_types_in_each_format(self):
         for extension in ('xlsx', 'csv', 'docx'):
-            rows = read_unified_rows(SimpleUploadedFile(f'questions.{extension}', build_question_group_template(extension)))
+            rows = read_unified_rows(SimpleUploadedFile(f'questions.{extension}', build_question_group_template(extension)),
+                                     image_files=_template_images(extension))
             self.assertTrue(all(not row['_errors'] for row in rows))
             self.assertEqual({row.get('题组形式') for row in rows if row.get('题组形式')}, {'reading', 'words', 'cloze'})
             ordinary = [row for row in rows if not row.get('题组编号')]
@@ -64,8 +75,11 @@ class LatestQuestionPersistenceTests(TestCase):
             Concept.objects.create(course=self.course, code=code, name=code)
 
     def test_each_template_preview_commit_and_reimport_preserves_every_content_field(self):
+        from tempfile import TemporaryDirectory
+        from django.test import override_settings
         from .models import QuestionBank
         from .services.unified_import import UnifiedQuestionImportService as service
+        self.enterContext(override_settings(MEDIA_ROOT=self.enterContext(TemporaryDirectory())))
         for extension in ('xlsx', 'csv', 'docx'):
             with self.subTest(extension=extension):
                 bank = QuestionBank.objects.create(course=self.course, owner=self.teacher, name=extension)
@@ -75,7 +89,8 @@ class LatestQuestionPersistenceTests(TestCase):
                 with patch('apps.question_bank.services.import_templates.question_group_template_rows', return_value=rows):
                     content = build_question_group_template(extension)
                 args = dict(bank=bank, actor=self.teacher, session_key='latest-types')
-                preview = service.preview(**args, uploaded=SimpleUploadedFile(f'all.{extension}', content))
+                preview = service.preview(**args, uploaded=SimpleUploadedFile(f'all.{extension}', content),
+                                          image_files=_template_images(extension))
                 self.assertEqual(preview['preview']['summary'], {'ready': 22, 'draft': 0, 'invalid': 0, 'duplicate': 0})
                 result = service.confirm(**args, preview_id=preview['preview_id'])
                 self.assertEqual(result['created'], 22)
@@ -88,7 +103,8 @@ class LatestQuestionPersistenceTests(TestCase):
                 self.assertEqual(bank.questions.get(question_type='numeric').absolute_tolerance, 0)
                 self.assertEqual(bank.questions.get(educational_type='essay').title, 'A Useful School Activity')
                 self.assertIn('100–150', bank.questions.get(educational_type='essay').instructions)
-                duplicate = service.preview(**args, uploaded=SimpleUploadedFile(f'all.{extension}', content))
+                duplicate = service.preview(**args, uploaded=SimpleUploadedFile(f'all.{extension}', content),
+                                            image_files=_template_images(extension))
                 self.assertEqual(duplicate['preview']['summary']['duplicate'], 22)
 
     def test_words_editor_enforces_vocabulary_and_preserves_member_kc_and_weight(self):

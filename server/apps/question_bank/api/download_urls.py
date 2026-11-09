@@ -4,6 +4,8 @@ from .. import downloads
 
 
 urlpatterns = [
+    path('import-templates/question-images.zip', download_view(downloads.question_image_examples, media_types=('application/zip',),
+         operation_id='teacher_question_image_examples_zip'), name='teacher-question-image-examples'),
     path('import-templates/question-groups.csv', download_view(downloads.question_group_import_template,
          operation_id='teacher_question_group_import_template_csv'), {'extension': 'csv'}, name='teacher-question-group-import-template-csv'),
     path('import-templates/question-groups.xlsx', download_view(downloads.question_group_import_template, media_types=(XLSX,),

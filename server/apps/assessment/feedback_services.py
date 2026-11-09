@@ -8,6 +8,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 
+from apps.question_bank.services.question_images import with_question_images
 from apps.audit.models import AuditLog
 from apps.experiments.models import ClassExperimentTask, Experiment
 
@@ -195,7 +196,7 @@ def frozen_feedback_payload(attempt):
                 "explanation": attempt.assignment.snapshot.explanation,
             }
         )
-    return result
+    return with_question_images(result)
 
 
 def prepare_feedback_exposure(parsed):

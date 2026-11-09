@@ -173,6 +173,11 @@ class UnifiedQuestionImportTests(TestCase):
 
 
     def test_downloaded_templates_import_identical_six_question_records(self):
+        from tempfile import TemporaryDirectory
+        from zipfile import ZipFile
+        from django.test import override_settings
+        from .services.import_templates import build_question_image_examples_zip
+        self.enterContext(override_settings(MEDIA_ROOT=self.enterContext(TemporaryDirectory())))
         for index in (4, 5, 6):
             Concept.objects.create(course=self.course, code=f'KC{index}', name=f'知识点{index}')
         for extension in ('csv', 'xlsx', 'docx'):
@@ -180,7 +185,12 @@ class UnifiedQuestionImportTests(TestCase):
                 download = self.client.get(f'/api/v1/teacher/import-templates/questions.{extension}')
                 self.assertEqual(download.status_code, 200)
                 raw = b''.join(download.streaming_content) if download.streaming else download.content
-                response = self.client.post(self.base + 'preview/', {'file': SimpleUploadedFile(f'template.{extension}', raw)})
+                payload = {'file': SimpleUploadedFile(f'template.{extension}', raw)}
+                if extension == 'csv':
+                    with ZipFile(io.BytesIO(build_question_image_examples_zip())) as archive:
+                        payload['images'] = [SimpleUploadedFile(name, archive.read(name))
+                                                  for name in archive.namelist() if name.endswith('.png')]
+                response = self.client.post(self.base + 'preview/', payload)
                 self.assertEqual(response.status_code, 200, response.content)
                 preview = domain_payload(response)
                 self.assertEqual(preview['preview']['summary']['invalid'], 0, preview)

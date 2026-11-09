@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from 'vitest'
 import { createTeacherBankManagementApi } from './api'
 
 describe('teacher bank-management API paths', () => {
+  it('sends companion images in repeated multipart fields while preserving the document field', async () => {
+    const client = { mutateForm: vi.fn().mockResolvedValue({}) }
+    const api = createTeacherBankManagementApi(client as never)
+    const file = new File(['rows'], 'questions.csv')
+    const images = [new File(['a'], 'a.png'), new File(['b'], 'b.webp')]
+    await api.previewQuestionImport(7, 11, file, images)
+    const body = client.mutateForm.mock.calls[0]![1].body as FormData
+    expect(body.get('file')).toBe(file)
+    expect(body.getAll('images')).toEqual(images)
+  })
   it('uses JSON management endpoints for archive, sharing, editors, and imports', async () => {
     const client = {
       get: vi.fn().mockResolvedValue({}),

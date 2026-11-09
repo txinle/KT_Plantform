@@ -93,6 +93,7 @@ class StudentRuntimeOptionSerializer(serializers.Serializer):
 
 
 class StudentRuntimeQuestionSerializer(serializers.Serializer):
+    images = serializers.DictField(child=serializers.CharField(), required=False)
     snapshot_id = serializers.IntegerField()
     stable_code = serializers.CharField(allow_blank=True)
     code = serializers.CharField()
@@ -274,6 +275,7 @@ class StudentResultCorrectnessSummarySerializer(serializers.Serializer):
 
 
 class StudentResultCorrectnessItemSerializer(serializers.Serializer):
+    images = serializers.DictField(child=serializers.CharField(), required=False)
     response_value = serializers.JSONField(required=False, allow_null=True)
     question_id = serializers.IntegerField()
     question_code = serializers.CharField()
@@ -415,6 +417,7 @@ class StudentLearningScoreSerializer(serializers.Serializer):
 
 
 class StudentLearningItemResultSerializer(serializers.Serializer):
+    images = serializers.DictField(child=serializers.CharField(), required=False)
     response_value = serializers.JSONField(required=False, allow_null=True)
     group_id = serializers.CharField(allow_null=True, required=False)
     group_order = serializers.IntegerField(allow_null=True, required=False)
@@ -488,6 +491,7 @@ class StudentFeedbackCaptureSerializer(serializers.Serializer):
 
 
 class StudentLearningQuestionSerializer(serializers.Serializer):
+    images = serializers.DictField(child=serializers.CharField(), required=False)
     version = serializers.CharField(required=False)
     generated_at = serializers.DateTimeField()
     course_id = serializers.IntegerField()

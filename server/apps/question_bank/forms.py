@@ -148,6 +148,12 @@ class QuestionEditForm(forms.ModelForm):
             ).values_list("concept_id", flat=True)
     def clean(self):
         cleaned = super().clean()
+        from .services.question_images import question_image_content, validate_existing_image_references
+        image_fields = ["text", "explanation", *[f"option_{key}" for key in "abcdef"]]
+        try:
+            validate_existing_image_references([cleaned.get(field) for field in image_fields], question_image_content(self.instance))
+        except ValueError as error:
+            self.add_error(None, str(error))
         if cleaned.get("question_type") != Question.Type.SHORT:
             cleaned["educational_type"] = Question.EducationalType.STANDARD
         mapping = None

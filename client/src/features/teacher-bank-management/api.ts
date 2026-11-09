@@ -52,6 +52,7 @@ export interface QuestionEditor {
   course?: CourseReference
   bank: { id: number; name: string }
   question: {
+    images?: Record<string, string>
     updated_at?: string
     title?: string
     instructions?: string
@@ -89,6 +90,7 @@ export interface QuestionEditor {
 export type QuestionImportClassification = 'ready' | 'draft' | 'duplicate' | 'invalid'
 
 export interface QuestionImportPreviewRow {
+  images?: Record<string, string>
   title?: string
   instructions?: string
   absolute_tolerance?: string | null
@@ -131,6 +133,7 @@ export interface QuestionImportPreview {
 }
 
 export interface QuestionImportPreviewGroup {
+  images?: Record<string, string>
   group_id: string
   source_group_code: string
   kind: 'reading' | 'cloze' | 'words'
@@ -275,9 +278,10 @@ export function createTeacherBankManagementApi(client: ApiClient) {
         { method: 'POST' },
       )
     },
-    previewQuestionImport(courseId: number, bankId: number, file: File) {
+    previewQuestionImport(courseId: number, bankId: number, file: File, images: File[] = []) {
       const body = new FormData()
       body.append('file', file)
+      for (const image of images) body.append('images', image)
       return client.mutateForm<QuestionImportPreview>(
         `/api/v1/teacher/courses/${courseId}/banks/${bankId}/imports/questions/preview/`,
         { method: 'POST', body },

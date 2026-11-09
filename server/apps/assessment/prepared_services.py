@@ -13,6 +13,7 @@ from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
+from apps.question_bank.services.question_images import with_question_images
 from apps.accounts.models import CourseEnrollment, Course
 from apps.experiments.models import (ClassExperimentTask, ExperimentVersionParticipantSnapshot,
                                     ItemInstance, QuestionSnapshot)
@@ -61,7 +62,13 @@ def _projection(attempt, confidence, item_count):
     }
     from .group_runtime import group_runtime_projection
     grouped = group_runtime_projection(attempt)
-    content = persist_display_content({'question': question, **({'question_group': grouped['question_group']} if grouped else {})})
+    display = {'question': with_question_images(question)}
+    if grouped:
+        group = grouped['question_group']
+        display['question_group'] = with_question_images({
+            **group, 'members': [with_question_images(member) for member in group['members']],
+        })
+    content = persist_display_content(display)
     empty_question = {**question, 'text': '', 'options': []}
     payload = {
         'assessment_flow_version': 1,

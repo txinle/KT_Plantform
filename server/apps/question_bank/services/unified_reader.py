@@ -2,9 +2,12 @@
 import csv
 import io
 from pathlib import Path
+import warnings
+from zipfile import ZipFile
 
 from openpyxl import load_workbook
 
+from .image_import import stage_excel_images, stage_image_references
 from .word_import import GROUP_KEYS, read_docx_rows
 
 
@@ -18,10 +21,11 @@ LEGACY_HEADER_VARIANTS = (
 )
 
 
-def read_unified_rows(uploaded, *, allow_legacy=False):
+def read_unified_rows(uploaded, *, allow_legacy=False, image_files=()):
     suffix = Path(uploaded.name).suffix.lower()
     if suffix == '.docx':
-        return read_docx_rows(uploaded)
+        return read_docx_rows(uploaded, image_files=image_files)
+    image_assets = {}
     if suffix == '.csv':
         raw = uploaded.read()
         try:
@@ -38,17 +42,28 @@ def read_unified_rows(uploaded, *, allow_legacy=False):
         location = '第 {number} 行'
     elif suffix == '.xlsx':
         try:
-            workbook = load_workbook(uploaded, data_only=False)
+            with ZipFile(uploaded) as archive:
+                if any(name.lower().startswith('xl/richdata/') or name.lower() == 'xl/cellimages.xml'
+                       for name in archive.namelist()):
+                    raise ValueError('Excel 的“置于单元格内”或 DISPIMG 图片尚不支持；请使用模板支持的锚定图片。')
+            uploaded.seek(0)
+            with warnings.catch_warnings():
+                warnings.filterwarnings('error', category=UserWarning, module=r'openpyxl\.reader\.drawings')
+                try:
+                    workbook = load_workbook(uploaded, data_only=False)
+                except UserWarning as error:
+                    raise ValueError('Excel 包含无法读取或不支持的图片／绘图对象；请使用模板支持的 PNG、JPEG 或 WebP 锚定图片。') from error
             sheets = [sheet for sheet in workbook.worksheets
                       if any(cell.value is not None for row in sheet for cell in row)
                       and sheet.title != '填写说明']
             if len(sheets) != 1:
                 raise ValueError('Excel 必须且只能包含一个有数据的工作表。')
             sheet = sheets[0]
-            if sheet._images or sheet._charts:
-                raise ValueError('Excel 包含图片或图表，请改用纯文本题目。')
+            if sheet._charts:
+                raise ValueError('Excel 包含不支持的图表，请改用嵌入的 PNG、JPEG 或 WebP 图片。')
+            image_assets, image_errors = stage_excel_images(sheet)
             data = [(number, [cell.value for cell in cells],
-                     ['包含公式单元格，请改为明确的文本或数值。'] if any(cell.data_type == 'f' for cell in cells) else [])
+                     [*image_errors.get(number, []), *(['包含公式单元格，请改为明确的文本或数值。'] if any(cell.data_type == 'f' for cell in cells) else [])])
                     for number, cells in enumerate(sheet.iter_rows(), 1)]
             location = f'{sheet.title} · 第 {{number}} 行'
             workbook.close()
@@ -72,7 +87,7 @@ def read_unified_rows(uploaded, *, allow_legacy=False):
         raise ValueError(f'表头必须完整且不重复：{"、".join(HEADERS)}（题目也可写为题干，列可调整顺序）。')
     rows = []
     for number, values, errors in data[1:]:
-        if not any(value is not None and str(value).strip() for value in values):
+        if not errors and not any(value is not None and str(value).strip() for value in values):
             continue
         if any(value is not None and str(value).strip() for value in values[len(headers):]):
             errors = [*errors, '存在没有对应表头的数据列。']
@@ -81,4 +96,4 @@ def read_unified_rows(uploaded, *, allow_legacy=False):
                      '_legacy_standalone': allow_legacy and set(headers) not in (set(GROUP_HEADERS), set(GROUP_HEADERS) - {'共享词库', '绝对误差容限', '相对误差容限'})})
     if not rows:
         raise ValueError('文件中没有可导入的题目。')
-    return rows
+    return stage_image_references(rows, assets=image_assets, image_files=image_files)

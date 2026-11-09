@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import QuestionGroupContent from './QuestionGroupContent.vue'
 
 const member = (key: string, order: number) => ({ item_key: key, group_order: order, blank_id: `b0${order}`, question_type: 'fill_blank', text: '', options: [], max_score: '1.00' })
@@ -8,8 +8,27 @@ const cloze = {
   material_segments: [{ kind: 'text' as const, text: 'Ella ' }, { kind: 'blank' as const, blank_id: 'b01', item_key: 'a1' }, { kind: 'text' as const, text: ' home.\nShe ' }, { kind: 'blank' as const, blank_id: 'b02', item_key: 'a2' }],
   members: [member('a1', 1), member('a2', 2)],
 }
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
+})
 
 describe('QuestionGroupContent', () => {
+  it('renders images in shared material, cloze text and reading options without changing answers', async () => {
+    const key = `${'a'.repeat(64)}.png`
+    const marker = `{{image:${key}}}`
+    const images = { [key]: 'data:image/png;base64,aGVsbG8=' }
+    const group = { ...cloze, images, material_segments: [{ kind: 'text' as const, text: marker }, ...cloze.material_segments] }
+    const wrapper = mount(QuestionGroupContent, { props: { group, responsesByItemKey: {}, activeItemKey: 'a1' } })
+    expect(wrapper.findAll('article img')).toHaveLength(1)
+    expect(wrapper.findAll('input')).toHaveLength(2)
+    await wrapper.setProps({ group: { ...group, kind: 'reading', material: marker, members: [{ ...member('a1', 1), text: marker, options: [{ key: 'A', text: marker }] }] } })
+    expect(wrapper.findAll('img')).toHaveLength(3)
+    await wrapper.get('label button').trigger('click')
+    expect(wrapper.emitted('answer-change')).toBeUndefined()
+    expect(wrapper.emitted('request-activate')).toBeUndefined()
+    wrapper.unmount()
+  })
   it('clears one reading response without touching siblings and previews never emit input', async () => {
     const group = { ...cloze, kind: 'reading' as const, members: [member('a1', 1), member('a2', 2)] }
     const wrapper = mount(QuestionGroupContent, { props: { group, responsesByItemKey: { a1: 'A', a2: 'B' }, activeItemKey: 'a1' } })

@@ -3,6 +3,7 @@ import hashlib
 from decimal import Decimal
 
 from apps.question_bank.services.question_groups import material_segments
+from apps.question_bank.services.question_images import with_question_images
 from .models import ReleaseSnapshotQuestionMapping
 from .presentation import options_for_snapshot
 from .publication_services import _preview_candidates, _select_questions
@@ -25,21 +26,21 @@ def student_preview_projection(experiment):
             options = [{"key": option.key, "text": option.text} for option in options_for_snapshot(question)]
         else:
             options = list(question.options.order_by("key", "pk").values("key", "text"))
-        content = {
+        content = with_question_images({
             "item_key": str(question.pk), "question_type": question.question_type,
             "educational_type": question.educational_type, "title": question.title,
             "instructions": question.instructions, "text": question.text, "options": options,
             "max_score": format(question.max_score, ".2f"),
             "group_order": question.group_order, "blank_id": question.blank_id,
-        }
+        })
         if group:
             if group.pk not in groups:
-                projection = {
+                projection = with_question_images({
                     "group_id": str(group.pk), "kind": group.kind, "title": group.title,
                     "instructions": group.instructions, "material": group.material,
                     "content_language": group.content_language, "word_bank": list(group.word_bank),
                     "members": [],
-                }
+                })
                 unit = {"key": f"group-{group.pk}", "kind": group.kind, "question": None, "group": projection}
                 groups[group.pk] = (unit, group)
                 units.append(unit)

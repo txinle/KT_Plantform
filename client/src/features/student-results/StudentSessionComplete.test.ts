@@ -8,6 +8,14 @@ import StudentSessionComplete from './StudentSessionComplete.vue'
 const summary = { session_id: 7, experiment_name: 'English assessment', status: 'completed', status_label: '已完成', submission_count: 3, attempt_count: 3, presentation_question_count: 2, return_url: '/student/' }
 const options = { global: { stubs: { WorkspaceShell: { template: '<main><slot /></main>' } } } }
 describe('session feedback', () => {
+  it('renders pictures carried by an authorized submitted answer and explanation', async () => {
+    const key = `${'a'.repeat(64)}.png`
+    const marker = `{{image:${key}}}`
+    mocks.get.mockResolvedValue({ ...summary, result: { feedback_phase: 'available', items: [{ question_id: 1, question_code: 'CHOICE', submitted_answer: `A ${marker}`, correct_answer: `B ${marker}`, explanation: marker, images: { [key]: 'data:image/png;base64,aGVsbG8=' } }] } })
+    const wrapper = mount(StudentSessionComplete, options)
+    await flushPromises()
+    expect(wrapper.findAll('tbody img')).toHaveLength(3)
+  })
   it('preserves every authorized response, score, correctness, explanation and comparison', async () => {
     mocks.get.mockResolvedValue({ ...summary, result: { feedback_phase: 'available', items: [
       { question_id: 1, question_code: 'READ-1', submitted_answer: 'B', is_correct: false, score: '0', max_score: '2', correct_answer: 'A', explanation: 'Frozen explanation' },

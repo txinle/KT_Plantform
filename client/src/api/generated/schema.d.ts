@@ -2796,6 +2796,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/import-templates/question-images.zip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_question_image_examples_zip"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/import-templates/questions.csv": {
         parameters: {
             query?: never;
@@ -4174,6 +4190,9 @@ export interface components {
             f: string;
         };
         ManagementQuestionEditorQuestion: {
+            images?: {
+                [key: string]: string;
+            };
             /** Format: date-time */
             updated_at: string | null;
             id: number;
@@ -4276,6 +4295,9 @@ export interface components {
             preview: components["schemas"]["ManagementQuestionImportPreviewPayload"];
         };
         ManagementQuestionImportPreviewRow: {
+            images?: {
+                [key: string]: string;
+            };
             absolute_tolerance?: string | null;
             relative_tolerance?: string | null;
             title?: string;
@@ -4489,6 +4511,9 @@ export interface components {
             end: number;
         };
         ManualGradingQuestion: {
+            images?: {
+                [key: string]: string;
+            };
             question_snapshot_id: number;
             code: string;
             text: string;
@@ -5088,7 +5113,15 @@ export interface components {
             status: string;
             draft_reasons: string[];
         };
+        QuestionFileImportRequest: {
+            /** Format: binary */
+            file: string;
+            images?: string[];
+        };
         QuestionGroupMember: {
+            readonly images: {
+                [key: string]: string;
+            };
             primary_concept_id?: number | null;
             id?: number | null;
             readonly item_key: string;
@@ -5152,6 +5185,9 @@ export interface components {
             /** @default false */
             confirm_member_deletion: boolean;
             members: components["schemas"]["QuestionGroupMember"][];
+            readonly images: {
+                [key: string]: string;
+            };
             available_concepts?: {
                 [key: string]: unknown;
             }[];
@@ -5939,6 +5975,9 @@ export interface components {
         };
         StudentLearningExperimentResponse: components["schemas"]["StudentLearningExperiment"] | components["schemas"]["StudentProjectionStatus"];
         StudentLearningItemResult: {
+            images?: {
+                [key: string]: string;
+            };
             response_value?: unknown;
             group_id?: string | null;
             group_order?: number | null;
@@ -5996,6 +6035,9 @@ export interface components {
             trend_class_average_available?: boolean;
         };
         StudentLearningQuestion: {
+            images?: {
+                [key: string]: string;
+            };
             version?: string;
             /** Format: date-time */
             generated_at: string;
@@ -6115,6 +6157,9 @@ export interface components {
          */
         StudentResultCorrectnessFeedbackModeEnum: "correctness";
         StudentResultCorrectnessItem: {
+            images?: {
+                [key: string]: string;
+            };
             response_value?: unknown;
             question_id: number;
             question_code: string;
@@ -6164,6 +6209,9 @@ export interface components {
          */
         StudentResultFullFeedbackModeEnum: "full";
         StudentResultFullItem: {
+            images?: {
+                [key: string]: string;
+            };
             response_value?: unknown;
             question_id: number;
             question_code: string;
@@ -6281,6 +6329,9 @@ export interface components {
             total: number;
         };
         StudentRuntimeQuestion: {
+            images?: {
+                [key: string]: string;
+            };
             snapshot_id: number;
             stable_code: string;
             code: string;
@@ -12899,9 +12950,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["FileImportRequest"];
-                "application/x-www-form-urlencoded": components["schemas"]["FileImportRequest"];
-                "multipart/form-data": components["schemas"]["FileImportRequest"];
+                "multipart/form-data": components["schemas"]["QuestionFileImportRequest"];
             };
         };
         responses: {
@@ -14268,9 +14317,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["FileImportRequest"];
-                "application/x-www-form-urlencoded": components["schemas"]["FileImportRequest"];
-                "multipart/form-data": components["schemas"]["FileImportRequest"];
+                "multipart/form-data": components["schemas"]["QuestionFileImportRequest"];
             };
         };
         responses: {
@@ -17350,6 +17397,96 @@ export interface operations {
                 };
                 content: {
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                            fields: {
+                                [key: string]: unknown;
+                            };
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_question_image_examples_zip: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Django CSRF token, required for unsafe methods. */
+                "X-CSRFToken"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
             400: {

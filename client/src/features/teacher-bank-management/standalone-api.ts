@@ -66,6 +66,7 @@ export interface StandaloneConceptCollection {
 export interface StandaloneQuestionEditor {
   bank: { id: number; name: string }
   question: {
+    images?: Record<string, string>
     updated_at?: string
     title?: string
     instructions?: string
@@ -100,6 +101,7 @@ export interface StandaloneQuestionImportPreview {
   preview: {
     groups?: import('./api').QuestionImportPreviewGroup[]
     rows: Array<{
+      images?: Record<string, string>
       row_id?: string
       group_id?: string | null
       group_order?: number | null
@@ -213,9 +215,10 @@ export function createTeacherStandaloneQuestionBankApi(client: ApiClient) {
         { method: 'POST' },
       )
     },
-    previewQuestionImport(bankId: number, file: File) {
+    previewQuestionImport(bankId: number, file: File, images: File[] = []) {
       const body = new FormData()
       body.append('file', file)
+      for (const image of images) body.append('images', image)
       return client.mutateForm<StandaloneQuestionImportPreview>(
         `/api/v1/teacher/banks/${bankId}/imports/questions/preview/`,
         { method: 'POST', body },

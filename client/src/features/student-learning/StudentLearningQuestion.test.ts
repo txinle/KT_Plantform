@@ -45,6 +45,29 @@ const fullQuestion = {
 }
 
 describe('StudentLearningQuestion', () => {
+  it('renders image feedback through the existing answer and explanation disclosure', async () => {
+    const key = `${'b'.repeat(64)}.png`
+    const marker = `{{image:${key}}}`
+    const source = 'data:image/png;base64,aGVsbG8='
+    mocks.api.learningQuestion.mockResolvedValue({ ...fullQuestion, text: `Question ${marker}`, images: { [key]: source },
+      options: [{ value: 'A', label: 'A', text: marker, selected_by_student: true, is_correct: true }],
+      correct_answer: `A ${marker}`, explanation: marker,
+      feedback_capture: { capture_version: 'capture-v2', mode: 'full', answer_event_id: 'answer-event', snapshot_id: 'snapshot', authorized: { correctness: true, correct_answer: true, explanation: true } },
+    })
+    const wrapper = mount(StudentLearningQuestion)
+    await flushPromises()
+    expect(wrapper.findAll('img')).toHaveLength(2)
+    expect(wrapper.get('.kt-feedback-option--student img').attributes('src')).toBe(source)
+    expect(wrapper.find('.kt-feedback-option--correct').exists()).toBe(false)
+    await wrapper.get('[data-show-answer]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('img')).toHaveLength(3)
+    expect(wrapper.get('.kt-feedback-option--correct').text()).toContain('正确答案')
+    await wrapper.get('[data-show-explanation]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('img')).toHaveLength(4)
+    wrapper.unmount()
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.api.learningExperiment.mockResolvedValue({

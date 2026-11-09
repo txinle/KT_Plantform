@@ -148,6 +148,7 @@ server {
         add_header Cache-Control "private, max-age=604800, immutable";
         add_header X-Content-Type-Options "nosniff";
     }
+    location ^~ /media/question-images/ { return 404; }
     location /media/ { alias /media/; expires 1d; }
     location / {
         proxy_pass http://$school_pool;

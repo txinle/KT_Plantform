@@ -187,6 +187,27 @@ const confidenceOnlyContract = {
 }
 
 describe('StudentAssessment', () => {
+  it('renders picture choices without making image enlargement an answer or capture operation', async () => {
+    HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+    HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
+    const key = `${'a'.repeat(64)}.png`
+    const marker = `{{image:${key}}}`
+    mocks.api.question.mockResolvedValue(captureV2Question({ question: { ...questionState.question, educational_type: 'standard', text: marker,
+      images: { [key]: 'data:image/png;base64,aGVsbG8=' }, options: [{ key: 'A', text: marker }, { key: 'B', text: 'Text option' }] } }))
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(wrapper.find('.kt-assessment-stem img').exists()).toBe(true)
+      expect(wrapper.get('#assessment-question-title').text()).toBe('第 1 题 · 单选题')
+      expect(wrapper.findAll('.kt-assessment-choices--images .kt-assessment-option')).toHaveLength(2)
+      const before = mocks.runtime.record.mock.calls.length
+      await wrapper.get('.kt-assessment-option button').trigger('click')
+      await flushPromises()
+      expect(mocks.runtime.record.mock.calls.length).toBe(before)
+      expect(wrapper.get<HTMLInputElement>('input[value="A"]').element.checked).toBe(false)
+      expect(mocks.api.saveDraft).not.toHaveBeenCalled()
+    } finally { wrapper.unmount() }
+  })
   it('clears a multiple-choice response as one empty transition', async () => {
     mocks.api.question.mockResolvedValue(captureV2Question({ question: { ...questionState.question, question_type: 'multiple_choice' }, draft_answer: ['A', 'B'] }))
     const wrapper = mount(StudentAssessment)
@@ -387,7 +408,7 @@ describe('StudentAssessment', () => {
     const wrapper = mount(StudentAssessment)
     try {
       await flushPromises()
-      expect(wrapper.get<HTMLFieldSetElement>('[data-group-question="11"]').element.disabled).toBe(true)
+      expect(wrapper.get<HTMLInputElement>('[data-group-question="11"] input').element.disabled).toBe(true)
     } finally { wrapper.unmount() }
   })
 

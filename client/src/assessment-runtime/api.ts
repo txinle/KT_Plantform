@@ -80,6 +80,7 @@ export function nextEntryRequest(intent: NavigationClickContext & { assignmentId
 }
 
 export type StudentRuntimeQuestionEntry = components['schemas']['StudentRuntimeQuestionEntry'] & {
+  question: components['schemas']['StudentRuntimeQuestionEntry']['question'] & { images?: Record<string, string> }
   presentation_units?: import('./prepared-paper').PresentationUnit[]
   presentation_progress?: { total: number; answered: number; maximum_score: string }
   group_member_state?: Record<string, { status: string; response_write_allowed: boolean; has_response: boolean; pending_confidence: unknown; inline_confidence?: { probability: number | null; answer_event_id: string | null } }>

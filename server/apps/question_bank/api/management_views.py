@@ -73,6 +73,7 @@ from apps.question_bank.services.question_kc_import import (
     preview_question_kc_trees,
 )
 from apps.question_bank.services.question_kc_mapping import project_question_kc_mapping
+from apps.question_bank.services.question_images import with_question_images
 from apps.question_bank.services.question_readiness import readiness_issues, recheck_bank_drafts
 from apps.question_bank.services.unified_import import (
     SelectedRowIdsValidationError,
@@ -120,7 +121,7 @@ from .management_serializers import (
     ManagementStandaloneQuestionEditorResponseSerializer,
     ManagementStandaloneVisibilityRequestSerializer,
 )
-from .serializers import FileImportRequestSerializer
+from .serializers import FileImportRequestSerializer, QuestionFileImportRequestSerializer
 
 
 def _form_errors(form):
@@ -202,7 +203,7 @@ def _question_editor_payload(course, bank, question):
     return {
         "course": _course_payload(course),
         "bank": {"id": bank.pk, "name": bank.name},
-        "question": {
+        "question": with_question_images({
             **_question_content_metadata(question),
             "id": question.pk or 0,
             "sequence": question.sequence,
@@ -231,7 +232,7 @@ def _question_editor_payload(course, bank, question):
             "accepted_answers_text": ";".join(question.accepted_answers or []),
             "options": {key: options.get(key, "") for key in "abcdef"},
             "kc_mapping": project_question_kc_mapping(question) if question.pk else {'schema_version': 'question-kc-tree-v2', 'root_kc_code': None, 'nodes': [], 'mapping_hash': ''},
-        },
+        }),
         "question_types": [
             {"value": value, "label": label}
             for value, label in Question.Type.choices
@@ -340,7 +341,7 @@ def _standalone_question_editor_payload(bank, question):
     options = {item.key.lower(): item.text for item in question.options.all()} if question.pk else {}
     return {
         "bank": {"id": bank.pk, "name": bank.name},
-        "question": {
+        "question": with_question_images({
             **_question_content_metadata(question),
             "id": question.pk or 0,
             "sequence": question.sequence,
@@ -368,7 +369,7 @@ def _standalone_question_editor_payload(bank, question):
             "correct_answer_text": _question_answer_text(question),
             "accepted_answers_text": ";".join(question.accepted_answers or []),
             "options": {key: options.get(key, "") for key in "abcdef"},
-        },
+        }),
         "question_types": [
             {"value": value, "label": label}
             for value, label in Question.Type.choices
@@ -786,7 +787,7 @@ class TeacherQuestionEditorView(TeacherQuestionBankManagementApiView):
 class TeacherQuestionImportPreviewView(TeacherQuestionBankManagementApiView):
     @extend_schema(
         operation_id="teacher_question_bank_question_import_preview",
-        request=FileImportRequestSerializer,
+        request={"multipart/form-data": QuestionFileImportRequestSerializer},
         responses={200: ManagementQuestionImportPreviewResponseSerializer, 400: ManagementErrorResponseSerializer},
     )
     def post(self, request, course_id, bank_id):
@@ -800,6 +801,7 @@ class TeacherQuestionImportPreviewView(TeacherQuestionBankManagementApiView):
         try:
             result = UnifiedQuestionImportService.preview(
                 bank=bank, actor=request.user, session_key=_session_key(request), uploaded=uploaded,
+                image_files=request.FILES.getlist("images"),
             )
         except ValueError as error:
             raise ValidationError({"file": str(error)}) from error
@@ -1409,7 +1411,7 @@ class TeacherStandaloneQuestionEditorView(TeacherQuestionBankManagementApiView):
 class TeacherStandaloneQuestionImportPreviewView(TeacherQuestionBankManagementApiView):
     @extend_schema(
         operation_id="teacher_standalone_question_bank_question_import_preview",
-        request=FileImportRequestSerializer,
+        request={"multipart/form-data": QuestionFileImportRequestSerializer},
         responses={200: ManagementQuestionImportPreviewResponseSerializer, 400: ManagementErrorResponseSerializer},
     )
     def post(self, request, bank_id):
@@ -1417,10 +1419,11 @@ class TeacherStandaloneQuestionImportPreviewView(TeacherQuestionBankManagementAp
         require_writable_bank_content(bank)
         uploaded = request.FILES.get("file")
         if uploaded is None:
-            raise ValidationError({"file": "请选择 CSV 或 Excel 文件。"})
+            raise ValidationError({"file": "请选择 Excel、CSV 或 Word 文件。"})
         try:
             result = UnifiedQuestionImportService.preview(
                 bank=bank, actor=request.user, session_key=_session_key(request), uploaded=uploaded,
+                image_files=request.FILES.getlist("images"),
             )
         except ValueError as error:
             raise ValidationError({"file": str(error)}) from error

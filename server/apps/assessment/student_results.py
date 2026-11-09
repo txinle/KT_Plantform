@@ -2,15 +2,28 @@ from decimal import Decimal
 
 from django.db.models import Prefetch
 
+from apps.question_bank.services.question_images import with_question_images
 from apps.accounts.models import ClassStudentAnalyticsPolicy
 from apps.experiments.models import Experiment
-from apps.experiments.presentation import display_text, format_answer, options_for_snapshot
+from apps.experiments.presentation import answer_option_values, display_text, format_answer, options_for_snapshot
 
 from .feedback_services import feedback_availability
 from .models import Attempt, ExperimentSession, GradeRecord, SubmissionEvent
 
 
 MINIMUM_COMPARISON_SAMPLE = 5
+
+
+def feedback_item_images(item, question_type, options, *answers):
+    """Resolve images from displayed frozen option text and the released explanation."""
+    selected = {key for answer in answers for key in answer_option_values(question_type, answer)}
+    content = with_question_images({
+        'options': [option.text for option in options if option.key.upper() in selected],
+        'explanation': item.get('explanation', ''),
+    })
+    if 'images' in content:
+        item['images'] = content['images']
+    return item
 
 
 def _effective_grades(attempts):
@@ -110,14 +123,14 @@ def result_groups(attempts, items, submissions, grades, *, show_scores):
             }
             if show_scores:
                 member['max_score'] = question.max_score
-            members.append(member)
+            members.append(with_question_images(member))
         group = {'group_id': str(frozen.pk), 'source_group_id': frozen.source_group_id, 'kind': frozen.kind,
             'title': frozen.title, 'instructions': frozen.instructions, 'material': frozen.material,
             'content_language': frozen.content_language, 'word_bank': list(frozen.word_bank), 'members': members, 'item_count': len(members),
             'material_segments': material_segments(frozen, members)}
         if show_scores:
             group['score_progress'] = score_progress(group_attempts, submissions, grades)
-        groups.append(group)
+        groups.append(with_question_images(group))
     return groups
 
 
@@ -275,7 +288,8 @@ def build_student_task_result(task, student):
                     options,
                 )
                 item["explanation"] = display_text(snapshot.explanation)
-            items.append(item)
+            items.append(feedback_item_images(item, snapshot.question_type, options,
+                submission.final_answer, snapshot.correct_answer if item_availability.allows_full else None))
         result["items"] = items
         if any(attempt.assignment.snapshot.group_snapshot_id for attempt in attempts):
             result['groups'] = result_groups(attempts, items, submissions, grades, show_scores=policy.show_scores)

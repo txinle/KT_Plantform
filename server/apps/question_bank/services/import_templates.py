@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import csv
 from io import BytesIO, StringIO
+from pathlib import Path
+import re
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from docx import Document
 from docx.oxml.ns import qn
-from docx.shared import RGBColor
+from docx.shared import Inches, RGBColor
 from openpyxl import Workbook
 from openpyxl.comments import Comment
+from openpyxl.drawing.image import Image as ExcelImage
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.styles import Alignment, Font
+from openpyxl.utils.units import pixels_to_EMU
 
 
 QUESTION_IMPORT_TEMPLATE_HEADERS = (
@@ -34,6 +41,68 @@ KC_TEMPLATE_INSTRUCTION = (
     "KC1、KC2、KC3、KC5、KC6 仅为示例，请替换为当前课程中已存在的 "
     "KC 编码；导入不会创建课程 KC。二级知识点用“；”分隔，三级知识点使用“二级KC>三级KC”语法。"
 )
+
+QUESTION_IMAGE_EXAMPLES_FILENAME = 'question_import_images.zip'
+IMAGE_TEMPLATE_INSTRUCTION = (
+    '图片填写说明：Word 使用嵌入型图片；Excel 将图片左上角锚定到对应题干、选项、共享材料或解析单元格。'
+    '支持 PNG、JPEG、WebP。CSV 使用双花括号包围 image:文件名.png 的引用格式。'
+    '下载 question_import_images.zip 并解压；选择 CSV 时，同时选择解压后的 4 张 PNG 图片附件一起预览。'
+    '文件名须与引用一致，不能只上传 ZIP；纯图片选项可直接保留图片，无需补写文字。'
+)
+_IMAGE_ASSETS = Path(__file__).with_name('template_assets')
+_EXAMPLE_IMAGE_REFERENCE = re.compile(r'\{\{image:(image[1-4]\.png)\}\}')
+
+
+def _image_example_rows(rows):
+    rows = [dict(row) for row in rows]
+    first = rows[0]
+    answer = first['答案']
+    filenames = ['image1.png', 'image2.png', 'image4.png']
+    for label in 'ABCD':
+        filename = 'image3.png' if label == answer else filenames.pop(0)
+        first['选项' + label] = '{{image:' + filename + '}}'
+    first.update({
+        '题目': '题干图展示一个串联电路。以下哪幅选项图使用电压表测量电阻两端的电压？\n{{image:image2.png}}',
+        '解析': '正确选项中，电压表与被测电阻并联。',
+    })
+    if '材料标题' in first:
+        first['材料标题'] = '电路图与电压测量'
+    return rows
+
+
+def build_question_image_examples_zip() -> bytes:
+    output = BytesIO()
+    with ZipFile(output, 'w', compression=ZIP_DEFLATED) as archive:
+        for number in range(1, 5):
+            filename = f'image{number}.png'
+            archive.writestr(filename, (_IMAGE_ASSETS / filename).read_bytes())
+        archive.writestr('README.txt', IMAGE_TEMPLATE_INSTRUCTION.encode('utf-8-sig'))
+    return output.getvalue()
+
+
+def _embed_excel_images(sheet):
+    for row in sheet.iter_rows(min_row=2):
+        for cell in row:
+            if not isinstance(cell.value, str):
+                continue
+            filenames = _EXAMPLE_IMAGE_REFERENCE.findall(cell.value)
+            if not filenames:
+                continue
+            cell.value = _EXAMPLE_IMAGE_REFERENCE.sub('', cell.value).strip('\n')
+            for filename in filenames:
+                image = ExcelImage(str(_IMAGE_ASSETS / filename))
+                original_width, original_height = image.width, image.height
+                image.width = 330 if cell.column == 2 else 220
+                image.height = image.width * original_height / original_width
+                text_offset = 44 if cell.value else 0
+                image.anchor = OneCellAnchor(
+                    _from=AnchorMarker(col=cell.column - 1, row=cell.row - 1, rowOff=pixels_to_EMU(text_offset)),
+                    ext=XDRPositiveSize2D(pixels_to_EMU(image.width), pixels_to_EMU(image.height)),
+                )
+                sheet.add_image(image)
+                sheet.row_dimensions[cell.row].height = max(
+                    sheet.row_dimensions[cell.row].height or 180, (text_offset + image.height + 16) * 0.75)
+            sheet.column_dimensions[cell.column_letter].width = 65 if cell.column == 2 else 36
 
 
 def _sample_row(*values: str) -> dict[str, str]:
@@ -160,7 +229,7 @@ def build_question_import_template_csv() -> bytes:
         lineterminator="\n",
     )
     writer.writeheader()
-    writer.writerows(QUESTION_IMPORT_TEMPLATE_ROWS)
+    writer.writerows(_image_example_rows(QUESTION_IMPORT_TEMPLATE_ROWS))
     return output.getvalue().encode("utf-8-sig")
 
 
@@ -169,7 +238,7 @@ def build_question_import_template_excel() -> bytes:
     sheet = workbook.active
     sheet.title = "题目导入"
     sheet.append(QUESTION_IMPORT_TEMPLATE_HEADERS)
-    for row in QUESTION_IMPORT_TEMPLATE_ROWS:
+    for row in _image_example_rows(QUESTION_IMPORT_TEMPLATE_ROWS):
         sheet.append([row[header] for header in QUESTION_IMPORT_TEMPLATE_HEADERS])
 
     for cell in sheet[1]:
@@ -182,6 +251,8 @@ def build_question_import_template_excel() -> bytes:
     for column in ("N", "O", "P"):
         sheet[f"{column}1"].comment = Comment(KC_TEMPLATE_INSTRUCTION, "KT Data Lab")
     sheet.freeze_panes = "A2"
+    sheet['B1'].comment = Comment(IMAGE_TEMPLATE_INSTRUCTION, 'KT Data Lab')
+    _embed_excel_images(sheet)
 
     output = BytesIO()
     workbook.save(output)
@@ -193,7 +264,13 @@ def _add_labeled_paragraph(document: Document, label: str, value: str):
     paragraph = document.add_paragraph()
     label_run = paragraph.add_run(f"【{label}】")
     label_run.bold = True
-    paragraph.add_run(value)
+    previous = 0
+    for match in _EXAMPLE_IMAGE_REFERENCE.finditer(value):
+        paragraph.add_run(value[previous:match.start()])
+        paragraph.add_run().add_picture(str(_IMAGE_ASSETS / match.group(1)),
+                                       width=Inches(2.8 if label.startswith('选项') else 5.5))
+        previous = match.end()
+    paragraph.add_run(value[previous:])
     return paragraph
 
 
@@ -211,8 +288,9 @@ def build_question_import_template_word() -> bytes:
     question_heading_style.paragraph_format.keep_with_next = True
     document.add_paragraph("题目与 KC 联合导入模板", style="Title")
     document.add_paragraph(f"填写说明：{KC_TEMPLATE_INSTRUCTION}")
+    document.add_paragraph('填写说明：' + IMAGE_TEMPLATE_INSTRUCTION)
 
-    for row in QUESTION_IMPORT_TEMPLATE_ROWS:
+    for row in _image_example_rows(QUESTION_IMPORT_TEMPLATE_ROWS):
         question_paragraphs = [document.add_heading(f"第{row['序号']}题", level=2)]
         for header in QUESTION_IMPORT_TEMPLATE_HEADERS[1:]:
             value = row[header]
@@ -245,7 +323,7 @@ def question_group_template_rows():
 
 def build_question_group_template(extension):
     from .unified_reader import GROUP_HEADERS
-    rows = question_group_template_rows()
+    rows = _image_example_rows(question_group_template_rows())
     rows[0].update({'一级知识点': 'KC1', '二级知识点': 'KC2', '三级知识点': 'KC2>KC3'})
     if extension == 'csv':
         output = StringIO(newline='')
@@ -266,10 +344,13 @@ def build_question_group_template(extension):
                 cell.number_format = '@'
                 cell.alignment = Alignment(wrap_text=True, vertical='top')
         sheet.freeze_panes = 'A2'
+        sheet['B1'].comment = Comment(IMAGE_TEMPLATE_INSTRUCTION, 'KT Data Lab')
+        _embed_excel_images(sheet)
         for header in ('一级知识点', '二级知识点', '三级知识点'):
             sheet.cell(1, GROUP_HEADERS.index(header) + 1).comment = Comment(KC_TEMPLATE_INSTRUCTION, 'KT Data Lab')
         notes = workbook.create_sheet('填写说明')
         notes.append([KC_TEMPLATE_INSTRUCTION])
+        notes.append([IMAGE_TEMPLATE_INSTRUCTION])
         for line in ('11 类题型，12 道完整题，22 个作答项；包括两种翻译方向。', '课程题库须填已有 KC，空 KC 仅保存为草稿。', '同一题组共享首行材料、标题、作答说明、词库、语言和大小写规则。', '词库用 | 分隔，文章空位 {{b01}} 与空位编号逐一对应。', '简答、翻译、作文沿用实验既有评阅规则；解析中的分项分值仅为教师参考。'):
             notes.append([line])
         notes.column_dimensions['A'].width = 90
@@ -281,6 +362,7 @@ def build_question_group_template(extension):
         document = Document()
         document.add_paragraph('完整题型导入模板', style='Title')
         document.add_paragraph('填写说明：' + KC_TEMPLATE_INSTRUCTION)
+        document.add_paragraph('填写说明：' + IMAGE_TEMPLATE_INSTRUCTION)
         document.add_paragraph('填写说明：本模板含 11 类题型、12 道完整题目和 22 个作答项，包括两种翻译方向。请填写当前课程已有 KC；独立题库填写已有私有或公共知识点名称或 id:知识点ID。空 KC 仅保存为草稿。简答、翻译、作文采用实验既有二元人工判定规则，解析中的维度分值为参考说明。文件序号不作为服务器题号。')
         current_code = None
         for row in rows:

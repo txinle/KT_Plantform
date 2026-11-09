@@ -4,6 +4,7 @@ import ModalDialog from '@/design-system/components/ModalDialog.vue'
 import { createApiClient } from '@/api/client'
 import { getBootstrapContext } from '@/app/bootstrap'
 import QuestionGroupContent from '@/question-content/QuestionGroupContent.vue'
+import QuestionContent from '@/question-content/QuestionContent.vue'
 import type { QuestionGroupView } from '@/question-content/question-group-content'
 import type { QuestionEditor } from './api'
 import { getQuestionGroupApi } from './group-api'
@@ -31,7 +32,7 @@ onMounted(async () => {
   <ModalDialog :open="true" title="完整题目预览" wide @close="emit('close')">
     <p v-if="error" role="alert">{{ error }}</p>
     <QuestionGroupContent v-else-if="groupView" :group="groupView" :responses-by-item-key="{}" readonly />
-    <article v-else-if="question"><h2>{{ question.title }}</h2><p>{{ question.instructions }}</p><p class="kt-preview-material">{{ question.text }}</p><p v-for="(text, key) in question.options" v-show="text" :key="key" class="kt-preview-option">{{ String(key).toUpperCase() }}. {{ text }}</p><p>分值 {{ question.max_score }} · 难度 {{ question.teacher_difficulty || '未设置' }}</p></article>
+    <article v-else-if="question"><h2>{{ question.title }}</h2><p><QuestionContent :text="question.instructions || ''" :images="question.images" /></p><p class="kt-preview-material"><QuestionContent :text="question.text" :images="question.images" /></p><p v-for="(text, key) in question.options" v-show="text" :key="key" class="kt-preview-option">{{ String(key).toUpperCase() }}. <QuestionContent :text="text" :images="question.images" option /></p><p>分值 {{ question.max_score }} · 难度 {{ question.teacher_difficulty || '未设置' }}</p></article>
     <p v-else role="status">正在加载完整题目…</p>
     <template #footer><button class="kt-button kt-button--secondary" type="button" @click="emit('close')">关闭预览</button></template>
   </ModalDialog>

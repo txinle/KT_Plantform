@@ -141,6 +141,7 @@ class ManagementQuestionEditorOptionsSerializer(serializers.Serializer):
 
 
 class ManagementQuestionEditorQuestionSerializer(serializers.Serializer):
+    images = serializers.DictField(child=serializers.CharField(), required=False)
     updated_at = serializers.DateTimeField(allow_null=True)
     id = serializers.IntegerField()
     sequence = serializers.IntegerField(min_value=1)
@@ -219,6 +220,7 @@ class QuestionGroupOptionSerializer(serializers.Serializer):
 
 
 class QuestionGroupMemberSerializer(serializers.Serializer):
+    images = serializers.DictField(child=serializers.CharField(), required=False, read_only=True)
     primary_concept_id = serializers.IntegerField(allow_null=True, required=False, min_value=1)
     id = serializers.IntegerField(allow_null=True, required=False)
     item_key = serializers.CharField(read_only=True)
@@ -258,6 +260,7 @@ class QuestionGroupRequestSerializer(serializers.Serializer):
 
 
 class QuestionGroupResponseSerializer(QuestionGroupRequestSerializer):
+    images = serializers.DictField(child=serializers.CharField(), required=False, read_only=True)
     available_concepts = serializers.ListField(child=serializers.DictField(), required=False)
     id = serializers.IntegerField()
     revision = serializers.IntegerField()
@@ -269,6 +272,7 @@ class QuestionGroupResponseSerializer(QuestionGroupRequestSerializer):
 
 
 class ManagementQuestionImportPreviewRowSerializer(serializers.Serializer):
+    images = serializers.DictField(child=serializers.CharField(), required=False)
     absolute_tolerance = serializers.CharField(allow_null=True, required=False)
     relative_tolerance = serializers.CharField(allow_null=True, required=False)
     title = serializers.CharField(max_length=240, allow_blank=True, required=False)

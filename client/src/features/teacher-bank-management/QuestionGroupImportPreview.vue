@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import QuestionGroupContent from '@/question-content/QuestionGroupContent.vue'
+import QuestionContent from '@/question-content/QuestionContent.vue'
 import type { QuestionGroupView } from '@/question-content/question-group-content'
 import type { QuestionImportPreviewGroup, QuestionImportPreviewRow } from './api'
 
@@ -19,7 +20,7 @@ const active = computed(() => props.groups.find(group => group.group_id === acti
 const groupRows = computed(() => props.rows.filter(row => row.row_id && active.value?.member_row_ids.includes(row.row_id)))
 const view = computed<QuestionGroupView | undefined>(() => active.value ? {
   ...active.value,
-  members: groupRows.value.map((row, index) => ({ item_key: row.row_id!, question_type: row.question_type || '', text: row.text || '', options: row.options || [], group_order: row.group_order || index + 1, blank_id: row.blank_id || '', max_score: row.max_score || '1.00' })),
+  members: groupRows.value.map((row, index) => ({ item_key: row.row_id!, question_type: row.question_type || '', text: row.text || '', images: row.images, options: row.options || [], group_order: row.group_order || index + 1, blank_id: row.blank_id || '', max_score: row.max_score || '1.00' })),
 } : undefined)
 function select(id: string, checked: boolean) {
   emit('update:modelValue', checked ? [...new Set([...props.modelValue, id])] : props.modelValue.filter(value => value !== id))
@@ -42,13 +43,13 @@ const labels = { ready: '导入后可用', draft: '保存为草稿', invalid: '�
       <ul v-if="!student && active.errors.length" role="alert"><li v-for="issue in active.errors" :key="issue">{{ issue }}</li></ul>
       <QuestionGroupContent v-if="student" :group="view" :responses-by-item-key="responses" @request-activate="intent => { if (intent.hasAnswer) responses[intent.itemKey] = intent.answer }" @answer-change="change => responses[change.itemKey] = change.answer" />
       <template v-else>
-        <h3>{{ active.title }}</h3><p v-if="active.word_bank?.length">共享词库：{{ active.word_bank.join(' · ') }}</p><p class="qimp-groups__material" :lang="active.content_language">{{ active.material }}</p>
+        <h3>{{ active.title }}</h3><p v-if="active.word_bank?.length">共享词库：{{ active.word_bank.join(' · ') }}</p><p class="qimp-groups__material" :lang="active.content_language"><QuestionContent :text="active.material" :images="active.images" /></p>
         <section v-for="row in groupRows" :key="row.row_id" class="qimp-groups__member">
-          <h4>{{ row.group_order }}. {{ row.text || `第 ${row.group_order} 空` }} <small>{{ row.max_score || '1.00' }} 分</small></h4>
-          <p v-for="option in row.options" :key="option.key">{{ option.key }}. {{ option.text }}</p>
-          <p>答案：{{ row.answer }}<span v-if="row.accepted_answers?.length">；可接受：{{ row.accepted_answers.join('；') }}</span></p>
+          <h4>{{ row.group_order }}. <QuestionContent :text="row.text || `第 ${row.group_order} 空`" :images="{ ...active.images, ...row.images }" /> <small>{{ row.max_score || '1.00' }} 分</small></h4>
+          <p v-for="option in row.options" :key="option.key">{{ option.key }}. <QuestionContent :text="option.text" :images="{ ...active.images, ...row.images }" option /></p>
+          <p>答案：<QuestionContent :text="String(row.answer ?? '')" :images="{ ...active.images, ...row.images }" /><span v-if="row.accepted_answers?.length">；可接受：{{ row.accepted_answers.join('；') }}</span></p>
           <p>匹配：{{ row.text_match_case_sensitive ? '区分大小写' : '忽略大小写' }}，归一化空白</p>
-          <p v-if="row.explanation">解析：{{ row.explanation }}</p>
+          <p v-if="row.explanation">解析：<QuestionContent :text="row.explanation" :images="{ ...active.images, ...row.images }" /></p>
           <p v-if="row.kc_mapping">KC：{{ row.kc_mapping.nodes.map(node => node.kc_code).join('、') }}</p>
           <p v-if="row.source_label">来源：{{ row.source_label }}</p>
           <ul v-if="row.errors?.length"><li v-for="issue in row.errors" :key="issue">{{ issue }}</li></ul>

@@ -20,7 +20,7 @@ describe('experiment inline question preview', () => {
     expect(wrapper.text()).toContain('Shared article')
     expect(wrapper.text()).toContain('Second question')
     expect(wrapper.text()).not.toContain('SECRET_')
-    expect(wrapper.findAll('fieldset').every(item => item.attributes('disabled') !== undefined)).toBe(true)
+    expect(wrapper.findAll('input[type=radio]').every(item => item.attributes('disabled') !== undefined)).toBe(true)
     wrapper.unmount()
   })
   it('shows an API failure explicitly', async () => {

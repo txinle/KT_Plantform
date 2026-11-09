@@ -1,8 +1,17 @@
+from io import BytesIO
+
 from django.conf import settings
 from django.http import FileResponse, Http404, HttpResponse
 from django.views.decorators.http import require_GET
 from apps.accounts.permissions import role_required
-from .services.import_templates import build_question_group_template, build_question_import_template_excel, build_question_import_template_word
+from .services.import_templates import (
+    QUESTION_IMAGE_EXAMPLES_FILENAME,
+    build_question_group_template,
+    build_question_image_examples_zip,
+    build_question_import_template_csv,
+    build_question_import_template_excel,
+    build_question_import_template_word,
+)
 
 def _fixture_download(filename):
     path = settings.BASE_DIR / "fixtures" / filename
@@ -23,7 +32,14 @@ def _memory_download(content, filename, content_type):
 @role_required("teacher", "admin")
 @require_GET
 def question_import_template(request):
-    return _fixture_download("question_import_template.csv")
+    return FileResponse(BytesIO(build_question_import_template_csv()), as_attachment=True,
+                        filename='question_import_template.csv', content_type='text/csv; charset=utf-8')
+
+
+@role_required('teacher', 'admin')
+@require_GET
+def question_image_examples(request):
+    return _memory_download(build_question_image_examples_zip(), QUESTION_IMAGE_EXAMPLES_FILENAME, 'application/zip')
 
 @role_required("teacher", "admin")
 @require_GET

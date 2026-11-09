@@ -9,6 +9,8 @@ import Drawer from '@/design-system/components/Drawer.vue'
 import FocusAssessmentHeader from '@/design-system/components/FocusAssessmentHeader.vue'
 import AppHeader from '@/design-system/components/AppHeader.vue'
 import QuestionGroupContent from '@/question-content/QuestionGroupContent.vue'
+import QuestionContent from '@/question-content/QuestionContent.vue'
+import { hasQuestionImage } from '@/question-content/question-content'
 import type { GroupActivationIntent, GroupAnswerChange } from '@/question-content/question-group-content'
 import { createGroupActivationQueue } from './group-activation'
 import type {
@@ -1847,7 +1849,7 @@ onBeforeUnmount(() => {
 
       <section class="kt-assessment-question" aria-labelledby="assessment-question-title">
         <header class="kt-assessment-question__header">
-          <div><h2 id="assessment-question-title">第 {{ activeUnitIndex >= 0 ? activeUnitIndex + 1 : state.assignment.sequence_index }} 题 · {{ questionTypeLabel(state.question_group?.kind || state.question.educational_type || state.question.question_type) }}</h2></div><span v-if="activeUnit?.maximum_score" class="kt-assessment-score">{{ activeUnit.maximum_score }} 分</span>
+          <div><h2 id="assessment-question-title">第 {{ activeUnitIndex >= 0 ? activeUnitIndex + 1 : state.assignment.sequence_index }} 题 · {{ questionTypeLabel(state.question_group?.kind || (state.question.educational_type !== 'standard' && state.question.educational_type) || state.question.question_type) }}</h2></div><span v-if="activeUnit?.maximum_score" class="kt-assessment-score">{{ activeUnit.maximum_score }} 分</span>
         </header>
         <div ref="questionBody" class="kt-assessment-question-body" tabindex="0" role="region" aria-label="题目内容">
           <p v-if="!state.question_group" class="kt-assessment-context">
@@ -1856,9 +1858,9 @@ onBeforeUnmount(() => {
           <QuestionGroupContent v-if="state.question_group" :group="state.question_group" :responses-by-item-key="groupAnswers" :active-item-key="captureReady ? String(state.assignment.assignment_id) : null" :pending-item-key="groupActivationPending" :readonly="groupReadonly" :member-write-allowed="groupMemberWriteAllowed" @request-activate="requestGroupActivation" @answer-change="changeGroupAnswer" />
           <div v-else class="kt-assessment-article">
             <h2 v-if="state.question.title" data-question-content-title>{{ state.question.title }}</h2>
-            <p v-if="state.question.instructions" data-question-instructions class="kt-assessment-stem">{{ state.question.instructions }}</p>
-            <p class="kt-assessment-stem">{{ state.question.text }}</p>
-            <fieldset v-if="['single_choice', 'multiple_choice', 'true_false'].includes(state.question.question_type)">
+            <p v-if="state.question.instructions" data-question-instructions class="kt-assessment-stem"><QuestionContent :text="state.question.instructions || ''" :images="state.question.images" /></p>
+            <p class="kt-assessment-stem"><QuestionContent :text="state.question.text" :images="state.question.images" /></p>
+            <fieldset v-if="['single_choice', 'multiple_choice', 'true_false'].includes(state.question.question_type)" :class="{ 'kt-assessment-choices--images': state.question.options.some(option => hasQuestionImage(option.text)) }">
               <legend class="kt-visually-hidden">请选择答案</legend>
               <label v-for="option in state.question.options" :key="option.key" class="kt-assessment-option">
                 <input
@@ -1870,7 +1872,7 @@ onBeforeUnmount(() => {
                   @change="state.question.question_type === 'multiple_choice' ? toggleMultipleFromEvent(option.key, $event) : chooseSingle(option.key)"
                 >
                 <strong>{{ option.key }}</strong>
-                <span>{{ option.text }}</span>
+                <QuestionContent :text="option.text" :images="state.question.images" option />
               </label>
               <button v-if="trajectory" type="button" class="kt-button kt-button--secondary" data-clear-response :disabled="responseDisabled || !hasLocalResponse" @click="clearSelection">清除选择</button>
             </fieldset>

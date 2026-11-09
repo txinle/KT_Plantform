@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import QuestionContent from '@/question-content/QuestionContent.vue'
 import { useExperimentPageUrl } from './experiment-page-url'
 const pageUrl = useExperimentPageUrl()
 import { computed, nextTick, reactive, ref, watch } from 'vue'
@@ -248,10 +249,10 @@ watch(taskId, () => {
           </header>
           <div ref="referenceContent" class="kt-grading-reference">
             <p class="kt-kicker">{{ detail.question.code }}</p>
-            <h3>题干</h3><p>{{ detail.question.text }}</p>
-            <h3>参考答案</h3><pre>{{ answerText(detail.question.correct_answer) }}</pre>
+            <h3>题干</h3><p><QuestionContent :text="detail.question.text || ''" :images="detail.question.images" /></p>
+            <h3>参考答案</h3><pre><QuestionContent :text="answerText(detail.question.correct_answer)" :images="detail.question.images" /></pre>
             <template v-if="detail.question.explanation">
-              <h3>解析</h3><p>{{ detail.question.explanation }}</p>
+              <h3>解析</h3><p><QuestionContent :text="detail.question.explanation" :images="detail.question.images" /></p>
             </template>
           </div>
         </section>

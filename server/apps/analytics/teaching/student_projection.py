@@ -20,7 +20,9 @@ from apps.assessment.models import (
     GradeRecord,
     SubmissionEvent,
 )
+from apps.question_bank.services.question_images import with_question_images
 from apps.assessment.feedback_services import feedback_availability
+from apps.assessment.student_results import feedback_item_images
 from apps.experiments.models import (
     ClassExperimentTask,
     Experiment,
@@ -796,6 +798,7 @@ def _item_rows(bundle, task):
         result_label = "待教师批改"
         if grade is not None and grade.is_correct is not None:
             result_label = "正确" if grade.is_correct else "错误"
+        options = options_for_snapshot(question)
         values = {
             "generated_at": bundle.context.generated_at,
             "question_id": question.pk,
@@ -807,7 +810,7 @@ def _item_rows(bundle, task):
             "final_answer": format_answer(
                 question.question_type,
                 submission.final_answer,
-                options_for_snapshot(question),
+                options,
             )
             or "（空）",
             'group_id': str(question.group_snapshot_id) if question.group_snapshot_id else None,
@@ -821,7 +824,7 @@ def _item_rows(bundle, task):
                 value=grade.score,
                 maximum=question.max_score,
             )
-        rows.append(StudentAllowListDTO(**values))
+        rows.append(StudentAllowListDTO(**feedback_item_images(values, question.question_type, options, submission.final_answer)))
     return tuple(rows)
 
 
@@ -996,6 +999,10 @@ def build_student_question_projection(
                 options,
             )
             values["explanation"] = display_text(question.explanation)
+        display = with_question_images({'text': values['text'], 'options': [o.text for o in options],
+                                        'explanation': values.get('explanation', '')})
+        if 'images' in display:
+            values['images'] = display['images']
         return StudentAllowListDTO(**values)
 
 
