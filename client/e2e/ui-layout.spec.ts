@@ -13,37 +13,27 @@ async function login(page: Page, user: string, password: string) {
 }
 
 async function inspect(page: Page, info: TestInfo, name: string) {
-  await expect(page.locator('.kt-workspace-main, .management-workspace .workspace-content')).toBeVisible()
+  await expect(page.locator('.kt-workspace-main')).toBeVisible()
   await page.waitForLoadState('networkidle')
-  const siteWorkspace = await page.locator('.management-workspace').count() === 1
   for (const size of [{ width: 2534, height: 1088 }, { width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 720, height: 450 }]) {
     await page.setViewportSize(size)
     await page.screenshot({ path: info.outputPath(`${name}-${size.width}.png`), fullPage: true })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${name} ${size.width} overflow`).toBe(true)
     if (size.width >= 1024) {
-      const sidebar = await page.locator(siteWorkspace ? '.workspace-sidebar' : '.kt-workspace-sidebar').boundingBox()
-      const main = await page.locator(siteWorkspace ? '.workspace-content' : '.kt-workspace-main').boundingBox()
-      const expectedSidebarWidth = siteWorkspace ? (size.width <= 1100 ? 210 : 250) : await page.locator('.kt-workspace').evaluate(
+      const sidebar = await page.locator('.kt-workspace-sidebar').boundingBox()
+      const main = await page.locator('.kt-workspace-main').boundingBox()
+      const expectedSidebarWidth = await page.locator('.kt-workspace').evaluate(
         element => element.matches('.kt-data-center') ? 236 : 216,
       )
       expect(sidebar?.width).toBe(expectedSidebarWidth)
       expect(main!.x).toBeGreaterThanOrEqual(sidebar!.x + sidebar!.width)
     }
   }
-  if (siteWorkspace) {
-    await page.setViewportSize({ width: 390, height: 844 })
-    const navigation = page.getByRole('navigation', { name: '工作区导航', exact: true })
-    await expect(navigation).toBeVisible()
-    const settings = navigation.getByRole('link', { name: '课程设置', exact: true })
-    await settings.scrollIntoViewIfNeeded()
-    await expect(settings).toBeInViewport()
-  } else {
-    const trigger = page.locator('[data-workspace-menu]')
-    await trigger.click()
-    await expect(page.locator('.kt-workspace-sidebar')).toHaveAttribute('aria-modal', 'true')
-    await page.keyboard.press('Escape')
-    await expect(trigger).toBeFocused()
-  }
+  const trigger = page.locator('[data-workspace-menu]')
+  await trigger.click()
+  await expect(page.locator('.kt-workspace-sidebar')).toHaveAttribute('aria-modal', 'true')
+  await page.keyboard.press('Escape')
+  await expect(trigger).toBeFocused()
   await page.setViewportSize({ width: 1440, height: 900 })
 }
 
@@ -54,15 +44,28 @@ test('teacher course and module pages share a left sidebar without losing existi
   await login(page, 'teacher', 'teacher123')
   for (const [name, path] of [
     ['teacher-courses', '/teacher/courses/'],
-    ['teacher-overview', '/teacher/courses/1/'],
     ['teacher-create', '/teacher/courses/create/'],
+    ['teacher-overview', '/teacher/courses/1/'],
     ['teacher-settings', '/teacher/courses/1/settings/'],
     ['teacher-banks', '/teacher/courses/1/banks/'],
     ['teacher-classes', '/teacher/courses/1/classes/'],
     ['teacher-experiments', '/teacher/courses/1/experiments/'],
     ['teacher-data', '/teacher/courses/1/data/'],
   ]) {
-    await page.goto(path!)
+    if (name === 'teacher-settings') {
+      const links = page.locator('.kt-workspace-navigation > a')
+      const navigation = () => links.evaluateAll(items => items.map(item => [item.textContent, item.getAttribute('href')]))
+      const headingFont = () => page.locator('h1').evaluate(el => [getComputedStyle(el).fontFamily, getComputedStyle(el).fontSize])
+      const overviewLinks = await navigation()
+      const overviewFont = await headingFont()
+      await page.getByRole('link', { name: '课程设置', exact: true }).click()
+      await expect(page.getByRole('heading', { name: '课程设置', exact: true })).toBeVisible()
+      expect(await navigation()).toEqual(overviewLinks)
+      expect(await headingFont()).toEqual(overviewFont)
+      await expect(links.filter({ hasText: /^设置$/ })).toHaveAttribute('aria-current', 'page')
+    } else {
+      await page.goto(path!)
+    }
     await inspect(page, info, name!)
   }
   await expect(page.locator('#workspace-secondary-nav')).toContainText('数据质量')

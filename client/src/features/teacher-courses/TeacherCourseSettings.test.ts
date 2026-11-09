@@ -32,7 +32,14 @@ describe('course collaboration settings', () => {
   })
   it('retains teacher navigation for the existing teacher route', async () => {
     const wrapper = mountPage(); await flushPromises()
-    expect(wrapper.findComponent({ name: 'SiteWorkspaceShell' }).props()).toMatchObject({ mode: 'course', active: 'settings' })
+    const links = wrapper.get('#workspace-sidebar .kt-workspace-navigation').findAll('a')
+    expect(links.map(link => link.text())).toEqual(['我的课程', '概览', '题库', '班级', '实验', '数据', '设置'])
+    expect(links.map(link => link.attributes('href'))).toEqual([
+      '/teacher/courses/', '/teacher/courses/7/', '/teacher/courses/7/banks/', '/teacher/courses/7/classes/',
+      '/teacher/courses/7/experiments/', '/teacher/courses/7/data/', '/teacher/courses/7/settings/',
+    ])
+    expect(links.filter(link => link.attributes('aria-current') === 'page').map(link => link.text())).toEqual(['设置'])
+    expect(wrapper.get('.kt-workspace-context').text()).toContain('RM101 · 2026 秋')
     expect(mocks.adminGet).not.toHaveBeenCalled()
   })
   it('authorizes admin context and keeps governance within the admin shell', async () => {
