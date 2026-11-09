@@ -1,3 +1,4 @@
+import { downloadTemplateImages } from './question-template-images'
 import { spawnSync } from 'node:child_process'
 import { requireServerPython } from '../scripts/e2e-runtime.mjs'
 import { writeFileSync } from 'node:fs'
@@ -57,11 +58,10 @@ test('Site v2 bank import and modal selections continue through the four publica
   writeFileSync(file, await template.body())
   const concepts = (await (await page.request.get('/api/v1/teacher/courses/1/concepts/?all=1')).json()).data.items
   const kc = concepts.find((item: { status: string }) => item.status === 'active').kc_code
-  // The downloadable template intentionally leaves KC mapping blank; this teacher-owned
-  // test fixture explicitly maps each imported item before preview, not in application code.
-  const mapped = spawnSync(requireServerPython(), ['-c', "import csv,sys; from pathlib import Path; p=Path(sys.argv[1]); rows=list(csv.DictReader(p.open(encoding='utf-8-sig',newline=''))); f=p.open('w',encoding='utf-8-sig',newline=''); w=csv.DictWriter(f,fieldnames=list(rows[0])); w.writeheader(); w.writerows({**r,'一级知识点':sys.argv[2]} for r in rows); f.close()", file, kc], { encoding: 'utf8' })
+  // Map all sample rows to the one active KC used by this publication fixture.
+  const mapped = spawnSync(requireServerPython(), ['-c', "import csv,sys; from pathlib import Path; p=Path(sys.argv[1]); rows=list(csv.DictReader(p.open(encoding='utf-8-sig',newline=''))); f=p.open('w',encoding='utf-8-sig',newline=''); w=csv.DictWriter(f,fieldnames=list(rows[0])); w.writeheader(); w.writerows({**r,'一级知识点':sys.argv[2],'二级知识点':'','三级知识点':''} for r in rows); f.close()", file, kc], { encoding: 'utf8' })
   expect(mapped.status, mapped.stderr).toBe(0)
-  await page.locator('input[type="file"]').setInputFiles(file)
+  await page.locator('input[type="file"]').setInputFiles([file, ...await downloadTemplateImages(page, info)])
   await expect(page.getByRole('button', { name: '确认导入 12 道题', exact: true })).toBeEnabled({ timeout: 30_000 })
   await capture(page, info, '04-import-preview')
   await page.getByRole('button', { name: '确认导入 12 道题', exact: true }).click()

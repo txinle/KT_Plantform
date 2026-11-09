@@ -1,3 +1,4 @@
+import { downloadTemplateImages } from './question-template-images'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -141,7 +142,7 @@ async function screenshots(page: Page, info: TestInfo, prefix: string, content: 
       expect(layout.workareaWidth / layout.viewport).toBeGreaterThanOrEqual(0.9)
       expect(layout.answerCardWidth).toBeCloseTo(260, 0)
       expect(layout.questionTop).toBeCloseTo(layout.answerCardTop!, 0)
-      if (layout.tabsBottom) expect(layout.questionTop! - layout.tabsBottom).toBeCloseTo(22, 0)
+      if (layout.tabsBottom) expect(layout.questionTop! - layout.tabsBottom).toBeCloseTo(16, 0)
       expect(layout.overflowingNavigation).toEqual([])
     }
   }
@@ -155,13 +156,16 @@ async function importGroups(page: Page, fixture: Fixture, scope: 'course' | 'sta
   const template = await page.request.get('/api/v1/teacher/import-templates/question-groups.csv')
   expect(template.status()).toBe(200)
   const fullTemplate = spawnSync(requireServerPython(), ['-c',
-    'import csv,io,sys; rows=list(csv.DictReader(io.StringIO(sys.stdin.read().lstrip(chr(65279))))); writer=csv.DictWriter(sys.stdout,fieldnames=list(rows[0])); writer.writeheader(); writer.writerows([{**row,"一级知识点":sys.argv[1]} for row in rows])',
+    'import csv,io,sys; rows=list(csv.DictReader(io.StringIO(sys.stdin.read().lstrip(chr(65279))))); writer=csv.DictWriter(sys.stdout,fieldnames=list(rows[0])); writer.writeheader(); writer.writerows([{**row,"一级知识点":sys.argv[1],"二级知识点":"","三级知识点":""} for row in rows])',
     scope === 'course' ? fixture.kc_code : `id:${fixture.private_kc_id}`],
     { input: await template.text(), encoding: 'utf8', env: { ...process.env, PYTHONUTF8: '1' } })
   expect(fullTemplate.status, fullTemplate.stderr).toBe(0)
   await page.goto(`${path}import/`)
+  const images = await downloadTemplateImages(page, info)
+  const csvPath = info.outputPath('all-eleven-types.csv')
+  writeFileSync(csvPath, fullTemplate.stdout)
   const fullPreviewResponse = page.waitForResponse(response => new URL(response.url()).pathname === `${api}imports/questions/preview/` && response.request().method() === 'POST')
-  await page.locator('input[type="file"]').first().setInputFiles({ name: 'all-eleven-types.csv', mimeType: 'text/csv', buffer: Buffer.from(fullTemplate.stdout) })
+  await page.locator('input[type="file"]').first().setInputFiles([csvPath, ...images])
   const fullPreview = await data<Preview>(await fullPreviewResponse)
   expect(fullPreview.preview.rows).toHaveLength(22)
   expect(fullPreview.preview.summary).toEqual({ ready: 22, draft: 0, duplicate: 0, invalid: 0 })
@@ -171,7 +175,7 @@ async function importGroups(page: Page, fixture: Fixture, scope: 'course' | 'sta
   await expect(page.locator('[data-import-preview] .kt-desktop-only [data-import-row]')).toHaveCount(2)
   await page.getByRole('combobox', { name: /每页题目数/ }).selectOption('20')
   await expect(page.locator('[data-import-preview] .kt-desktop-only [data-import-row]')).toHaveCount(12)
-  await expect(page.getByLabel('预览状态汇总')).toContainText('12 道完整题')
+  await expect(page.getByRole('button', { name: '确认导入 12 道题', exact: true })).toBeEnabled()
   await screenshots(page, info, `${scope}-all-eleven-types`, page.locator('main'))
   // A stable 18-item stress fixture exercises long grouped input independently of downloadable examples.
   const csv = readFileSync(new URL('./fixtures/english-group-stress.csv', import.meta.url), 'utf8')

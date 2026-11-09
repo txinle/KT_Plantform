@@ -1,3 +1,4 @@
+import { downloadTemplateImages } from './question-template-images'
 import { expect, test, type Page } from '@playwright/test'
 import { openLoginPage } from './login-navigation'
 
@@ -350,7 +351,8 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
 
   const fileInput = page.locator('input[type="file"]')
   const preview = page.locator('[data-import-preview]')
-  const summary = page.getByLabel('预览状态汇总')
+  const summary = preview.getByRole('group', { name: '显示预览行' })
+  const images = await downloadTemplateImages(page, testInfo)
   const uploadDownloadedTemplate = async (format: 'csv' | 'xlsx' | 'docx') => {
     const templateLink = page.locator(`[data-question-template="${format}"]`)
     await page.getByRole('combobox', { name: '文件格式', exact: true }).selectOption(format === 'docx' ? 'docx' : 'spreadsheet')
@@ -366,12 +368,14 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
       candidate.request().method() === 'POST'
       && candidate.url().includes('/imports/questions/preview/')
     ))
-    await fileInput.setInputFiles(downloadPath!)
-    expect((await response).status()).toBe(200)
+    await fileInput.setInputFiles(format === 'csv' ? [downloadPath, ...images] : downloadPath)
+    const uploaded = await response
+    expect(uploaded.status()).toBe(200)
+    expect((await uploaded.json()).data.preview.rows).toHaveLength(22)
     await expect(preview).toBeVisible()
-    await expect(summary).toContainText('共解析 12 道完整题')
-    await expect(summary).toContainText('22 个作答项')
-    await expect(summary).toContainText('保存为草稿 12')
+    await expect(summary).toContainText('全部 12')
+    await expect(summary).toContainText('导入后可用 1')
+    await expect(summary).toContainText('保存为草稿 11')
     await expect(summary).toContainText('需修正 0')
     return downloadPath!
   }
@@ -379,10 +383,10 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
   const csvTemplate = await uploadDownloadedTemplate('csv')
   await uploadDownloadedTemplate('xlsx')
   await page.getByRole('combobox', { name: '文件格式', exact: true }).selectOption('docx')
-  await expect(fileInput).toHaveAttribute('accept', '.docx')
+  await expect(fileInput).toHaveAttribute('accept', '.docx,.png,.jpg,.jpeg,.webp')
   await uploadDownloadedTemplate('docx')
   await page.getByRole('combobox', { name: '文件格式', exact: true }).selectOption('spreadsheet')
-  await expect(fileInput).toHaveAttribute('accept', '.csv,.xlsx')
+  await expect(fileInput).toHaveAttribute('accept', '.csv,.xlsx,.png,.jpg,.jpeg,.webp')
 
   const captureImportViewport = async (name: string, width: number, height: number) => {
     await page.setViewportSize({ width, height })
@@ -397,7 +401,7 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
     candidate.request().method() === 'POST'
     && candidate.url().includes('/imports/questions/preview/')
   ))
-  await fileInput.setInputFiles(csvTemplate)
+  await fileInput.setInputFiles([csvTemplate, ...images])
   expect((await response).status()).toBe(200)
   await expect(preview.locator('[data-import-mobile-row]').first()).toBeVisible()
   await captureImportViewport('question-import-preview-390x844', 390, 844)
@@ -411,7 +415,7 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
   await page.locator('[data-confirm-import]').click()
   expect((await response).status()).toBe(201)
   const result = page.getByRole('status').filter({ hasText: '本次导入已完成。' })
-  await expect(result).toContainText('新增 22 道，其中可用 0 道、草稿 22 道；跳过 0 道，未完成 0 道。')
+  await expect(result).toContainText('新增 22 道，其中可用 1 道、草稿 21 道；跳过 0 道，未完成 0 道。')
   await page.setViewportSize({ width: 1440, height: 900 })
   await expect(page.locator('[data-confirm-import]')).toBeDisabled()
 
