@@ -430,7 +430,7 @@ input.kt-qb-visually-hidden { position: absolute; width: 1px !important; min-hei
   #course-kc-panel .kt-qb-kc-list,
   #course-kc-panel .kt-qb-side-stack { display: flex; flex-direction: column; }
   #course-kc-panel .kt-qb-kc-list, #course-kc-panel .kt-qb-form-card { flex: 1; }
-  #course-kc-panel .kt-qb-kc-list .kt-paginator { margin-top: auto; padding-top: 16px; }
+  #course-kc-panel .kt-qb-kc-list .kt-paginator { margin-top: auto; padding-top: 8px; }
   #course-kc-panel .kt-qb-table-wrap:has(tbody tr:nth-child(5)) { display: flex; flex: 1; }
   #course-kc-panel .kt-qb-table { table-layout: fixed; }
   #course-kc-panel .kt-qb-table th:first-child { width: 28%; }
@@ -440,22 +440,20 @@ input.kt-qb-visually-hidden { position: absolute; width: 1px !important; min-hei
   #course-kc-panel .kt-qb-table td:first-child { line-height: 1.4; }
   #course-kc-panel .kt-qb-table td:first-child strong { display: inline; }
   #course-kc-panel .kt-qb-table td:first-child small { display: inline; margin-left: .5em; white-space: nowrap; }
-  #course-kc-panel .kt-qb-form-card { display: flex; flex-direction: column; }
-  #course-kc-panel .kt-qb-form-card form { flex: 1; align-content: space-between; }
-  .kt-teacher-question-banks .kt-qb-grid[data-panel="course-kcs"] { grid-template-columns: minmax(0, 1fr) minmax(265px, 300px); gap: 16px; }
   :is([data-panel="archived-kcs"], [data-panel="course-kcs"]) .kt-qb-main-column--kc .kt-qb-card,
   .kt-qb-grid[data-panel="course-kcs"] .kt-qb-side-stack .kt-qb-card { padding: 14px 16px; }
-  .kt-qb-grid[data-panel="course-kcs"] .kt-qb-overview dl > div { min-height: 44px; grid-auto-flow: column; align-items: center; gap: 8px; }
-  .kt-qb-grid[data-panel="course-kcs"] .kt-qb-overview dd { margin: 0; font-size: 19px; }
+  .kt-qb-grid[data-panel="course-kcs"] .kt-qb-overview dl > div { min-height: 64px; }
   .kt-teacher-question-banks :is([data-panel="archived-kcs"], [data-panel="course-kcs"]) .kt-qb-kc-list .kt-qb-table th,
   .kt-teacher-question-banks :is([data-panel="archived-kcs"], [data-panel="course-kcs"]) .kt-qb-kc-list .kt-qb-table td { height: auto; padding: 4px 9px; }
   .kt-teacher-question-banks :is([data-panel="archived-kcs"], [data-panel="course-kcs"]) .kt-qb-kc-list .kt-qb-table td small { margin-top: 1px; }
+}
+
+@media (min-width: 1280px) and (max-height: 800px) {
+  .kt-qb-grid[data-panel="course-kcs"] .kt-qb-side-stack .kt-qb-form-card form { gap: 5px; }
   .kt-qb-grid[data-panel="course-kcs"] .kt-qb-side-stack .kt-qb-form-card h2 { margin-bottom: 8px; }
   .kt-qb-grid[data-panel="course-kcs"] .kt-qb-side-stack .kt-qb-form-card label { gap: 2px; }
   .kt-qb-grid[data-panel="course-kcs"] .kt-qb-side-stack .kt-qb-form-card input { min-height: 36px; padding-block: 6px; }
-  .kt-qb-grid[data-panel="course-kcs"] .kt-qb-side-stack .kt-qb-form-card textarea { min-height: 48px; padding-block: 6px; }
-  .kt-qb-grid[data-panel="course-kcs"] .kt-qb-form-card .kt-qb-generated-code { display: flex; align-items: center; gap: 10px; }
-  .kt-qb-generated-code input { width: 0; flex: 1; }
+  .kt-qb-grid[data-panel="course-kcs"] .kt-qb-side-stack .kt-qb-form-card textarea { min-height: 48px; height: 48px; padding-block: 6px; }
   .kt-qb-grid[data-panel="course-kcs"] .kt-qb-import-card p { margin-bottom: 8px; }
   .kt-qb-grid[data-panel="course-kcs"] .kt-qb-import-card small { margin-top: 6px; }
 }

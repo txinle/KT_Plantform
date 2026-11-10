@@ -365,10 +365,10 @@ watch([archived, conceptPage, conceptQuery, conceptId], ([nextArchived], [previo
         <aside class="kt-qb-card kt-qb-form-card">
           <h2>新增课程 KC</h2>
           <form data-create-concept @submit.prevent="createConcept">
-            <label>KC 序号 <span>必填</span><input v-model="conceptForm.sequence" name="sequence" type="number" min="1" step="1" placeholder="请输入正整数" required></label>
-            <label class="kt-qb-generated-code">自动生成的编码<input :value="generatedCode" readonly></label>
+            <label>KC 序号 <span>必填</span><small>系统将根据序号自动生成唯一 KC Code</small><input v-model="conceptForm.sequence" name="sequence" type="number" min="1" step="1" placeholder="请输入正整数" required></label>
+            <label>KC Code<input :value="generatedCode" readonly></label>
             <label>KC 名称 <span>必填</span><input v-model="conceptForm.name" name="name" maxlength="160" placeholder="请输入 KC 名称" required></label>
-            <label>说明 <span>可选</span><textarea v-model="conceptForm.description" name="description" rows="2" placeholder="请输入说明" /></label>
+            <label>说明（可选） <span>可选</span><textarea v-model="conceptForm.description" name="description" rows="4" placeholder="请输入说明" /></label>
             <button class="kt-qb-btn kt-qb-btn--primary" type="submit">新增 KC</button>
           </form>
         </aside>

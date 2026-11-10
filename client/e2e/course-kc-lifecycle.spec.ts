@@ -104,6 +104,10 @@ test('adapts the KC page size and finds a later-page KC by name or code', async 
         await expect(pager).toContainText(`第 ${n + 1}/${pages} 页`)
       }
       await expect(rows).toHaveCount(size)
+      const form = page.locator('[data-create-concept]')
+      const sequenceBox = await form.locator('[name="sequence"]').boundingBox()
+      const codeBox = await form.locator('input[readonly]').boundingBox()
+      expect(codeBox!.width).toBeCloseTo(sequenceBox!.width, 0)
       await expect(rows.filter({ hasText: prefix }).first()).toBeVisible()
       const bounds = await page.evaluate(() => {
         const bottom = (selector: string) => Math.round(document.querySelector(selector)!.getBoundingClientRect().bottom)
