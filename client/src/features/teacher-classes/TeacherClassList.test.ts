@@ -70,6 +70,7 @@ describe('TeacherClassList', () => {
       },
     })
     const wrapper = mount(TeacherClassList)
+    expect(wrapper.get('h1').classes()).toContain('kt-visually-hidden')
     await flushPromises()
 
     expect(wrapper.get('h1').text()).toBe('班级')

@@ -32,7 +32,7 @@ test('Site v2 bank import and modal selections continue through the four publica
   const course = '/teacher/courses/1'
   const name = `Site-v2-${browserName}-${Date.now()}`
   await page.goto(`${course}/banks/`)
-  await expect(page.getByRole('heading', { name: '题库', exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: /题库管理/ })).toBeVisible()
   await capture(page, info, '01-bank-list')
   await page.getByRole('button', { name: '新建题库', exact: true }).click()
   const create = page.getByRole('dialog', { name: '创建题库', exact: true })
@@ -164,10 +164,10 @@ test('Site v2 bank import and modal selections continue through the four publica
   await schedule.getByRole('button', { name: '取消', exact: true }).click()
   await expect(schedule).not.toBeVisible()
   await page.goto(`${course}/banks/shared/`)
-  await expect(page.getByRole('heading', { name: '共享题库', exact: true })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '题库模块' }).getByRole('link', { name: '共享题库', exact: true })).toBeVisible()
   await capture(page, info, '18-shared-banks')
   await page.getByRole('link', { name: '已归档', exact: true }).click()
-  await expect(page.getByRole('heading', { name: '已归档题库', exact: true })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '题库模块' }).getByRole('link', { name: '已归档', exact: true })).toBeVisible()
   await capture(page, info, '19-archived-banks')
 
 })

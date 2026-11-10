@@ -247,23 +247,7 @@ watch([archived, conceptPage, conceptQuery, conceptId], ([nextArchived], [previo
 </script>
 
 <template>
-  <nav v-if="banks && activeTab === 'banks'" class="kt-qb-breadcrumb" aria-label="层级目录">
-    <a href="/teacher/courses/">我的课程</a><span>/</span>
-    <a :href="`/teacher/courses/${courseId}/`">{{ banks.course.name }}</a><span>/</span>
-    <strong aria-current="page">题库</strong>
-  </nav>
-
-  <header v-if="activeTab === 'banks'" class="kt-qb-titlebar">
-    <div>
-      <h1>题库</h1>
-      <p>管理题库内容、使用范围与知识点；原有操作完整保留。</p>
-    </div>
-    <div v-if="banks" class="kt-qb-title-actions">
-      <button v-if="banks.course.status === 'active'" class="kt-qb-btn kt-qb-btn--primary" type="button" @click="createOpen = true">新建题库</button>
-    </div>
-  </header>
-
-  <h1 v-else class="kt-visually-hidden">{{ archived ? '已归档课程 KC' : '课程 KC 总库' }}</h1>
+  <h1 class="kt-visually-hidden">{{ activeTab === 'banks' ? '题库' : archived ? '已归档课程 KC' : '课程 KC 总库' }}</h1>
 
   <div v-if="banks && concepts" class="kt-bank-module-tabs">
     <nav class="kt-qb-tabs kt-sidebar-secondary-nav" :class="`is-${activeTab}`" role="tablist" aria-label="题库模块" aria-orientation="horizontal">
@@ -298,7 +282,16 @@ watch([archived, conceptPage, conceptQuery, conceptId], ([nextArchived], [previo
   <template v-else-if="banks && concepts">
     <div v-if="activeTab === 'banks'" id="question-bank-panel" class="kt-qb-grid" data-panel="banks" role="tabpanel" aria-labelledby="question-bank-tab-banks">
       <div class="kt-qb-main-column">
-        <form class="kt-site-bank-toolbar" @submit.prevent="searchBanks"><input v-model="bankQuery" aria-label="搜索题库" placeholder="搜索题库名称或说明" @change="searchBanks"><select v-model="bankVisibility" aria-label="题库可见性" @change="searchBanks"><option value="">全部可见性</option><option value="private">私有题库</option><option value="shared">共享题库</option></select><span>{{ banks.page.total_items }} 个题库</span></form>
+        <form class="kt-site-bank-toolbar" @submit.prevent="searchBanks">
+          <input v-model="bankQuery" aria-label="搜索题库" placeholder="搜索题库名称或说明" @change="searchBanks">
+          <select v-model="bankVisibility" aria-label="题库可见性" @change="searchBanks">
+            <option value="">全部可见性</option>
+            <option value="private">私有题库</option>
+            <option value="shared">共享题库</option>
+          </select>
+          <button v-if="banks.course.status === 'active'" class="kt-qb-btn kt-qb-btn--primary" type="button" @click="createOpen = true">新建题库</button>
+          <span>{{ banks.page.total_items }} 个题库</span>
+        </form>
         <section class="kt-qb-card kt-qb-bank-card" aria-label="课程题库">
           <div class="kt-qb-table-wrap kt-qb-desktop-table">
             <table class="kt-qb-table kt-qb-bank-table">

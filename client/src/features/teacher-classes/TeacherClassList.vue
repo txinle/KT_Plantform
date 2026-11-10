@@ -5,7 +5,6 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Alert from '@/design-system/components/Alert.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import MobileCardList from '@/design-system/components/MobileCardList.vue'
-import PageHeader from '@/design-system/components/PageHeader.vue'
 import Paginator from '@/design-system/components/Paginator.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 import DeletionDialog from '@/features/teacher-deletion/DeletionDialog.vue'
@@ -79,10 +78,7 @@ onMounted(() => load())
 </script>
 
 <template>
-  <PageHeader title="班级">
-    <template #kicker>教学组织</template>
-    <p>查看课程班级、管理成员并进入教学分析。</p>
-  </PageHeader>
+  <h1 class="kt-visually-hidden">班级</h1>
 
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <p v-if="loading" role="status">正在加载班级…</p>

@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Alert from '@/design-system/components/Alert.vue'
 import ModalDialog from '@/design-system/components/ModalDialog.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
-import PageHeader from '@/design-system/components/PageHeader.vue'
+import CourseBankNavigation from './CourseBankNavigation.vue'
 import Paginator from '@/design-system/components/Paginator.vue'
 
 import { getTeacherBankManagementApi, type ArchivedBankCollection } from './api'
@@ -74,12 +74,9 @@ onMounted(load)
   <p v-if="loading" role="status">正在加载归档题库…</p>
   <Alert v-else-if="error && !collection" tone="danger">{{ error }}</Alert>
   <template v-else-if="collection">
-    <PageHeader title="已归档题库">
-      <template #kicker>题库 / 已归档</template>
-      <p>归档题库保持历史内容只读；恢复后将以私有题库回到课程题库列表。</p>
-      <template #actions><RouterLink class="kt-button kt-button--secondary" :to="`/teacher/courses/${courseId}/banks/`">返回题库</RouterLink></template>
-    </PageHeader>
-    <nav class="kt-bank-module-nav" aria-label="题库模块"><RouterLink :to="`/teacher/courses/${courseId}/banks/`">题库管理</RouterLink><RouterLink :to="`/teacher/courses/${courseId}/banks/?tab=course-kcs`">课程 KC 总库</RouterLink><RouterLink :to="`/teacher/courses/${courseId}/banks/shared/`">共享题库</RouterLink><RouterLink :to="`/teacher/courses/${courseId}/banks/archived/`" aria-current="page">已归档</RouterLink></nav>
+    <CourseBankNavigation :course-id="courseId" active="archived">
+      <RouterLink class="kt-button kt-button--secondary" :to="`/teacher/courses/${courseId}/banks/`">返回题库</RouterLink>
+    </CourseBankNavigation>
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
     <EmptyState v-if="!collection.items.length" title="没有归档题库"><p>归档后的题库会显示在这里。</p></EmptyState>
     <section v-else class="kt-card kt-table-card kt-bank-secondary-table" aria-label="归档题库列表">

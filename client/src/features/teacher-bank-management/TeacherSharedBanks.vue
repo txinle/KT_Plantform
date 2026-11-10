@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import Alert from '@/design-system/components/Alert.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
-import PageHeader from '@/design-system/components/PageHeader.vue'
+import CourseBankNavigation from './CourseBankNavigation.vue'
 
 import { getTeacherBankManagementApi, type CourseReference } from './api'
 
@@ -42,5 +42,12 @@ onMounted(async () => {
 
 <template>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
-  <template v-else-if="data"><PageHeader title="共享题库"><template #kicker>题库 / 共享题库</template><p>{{ data.source_course.name }} / {{ data.creator.name }} · 复制后生成内容独立的私有题库。</p><template #actions><RouterLink class="kt-button kt-button--secondary" :to="`/teacher/courses/${courseId}/banks/shared/${sourceCourseId}/`">返回创建者</RouterLink></template></PageHeader><nav class="kt-bank-module-nav" aria-label="题库模块"><RouterLink :to="`/teacher/courses/${courseId}/banks/`">题库管理</RouterLink><RouterLink :to="`/teacher/courses/${courseId}/banks/?tab=course-kcs`">课程 KC 总库</RouterLink><RouterLink :to="`/teacher/courses/${courseId}/banks/shared/`" aria-current="page">共享题库</RouterLink><RouterLink :to="`/teacher/courses/${courseId}/banks/archived/`">已归档</RouterLink></nav><EmptyState v-if="!data.items.length" title="没有可复制的题库"><p>来源课程的共享题库已不再可用。</p></EmptyState><section v-else class="kt-card kt-table-card kt-bank-secondary-table"><div class="kt-table-scroll"><table class="kt-table"><thead><tr><th>题库</th><th>题目数</th><th>操作</th></tr></thead><tbody><tr v-for="bank in data.items" :key="bank.id"><td><strong>{{ bank.name }}</strong><small>{{ bank.description || '未填写说明' }}</small></td><td>{{ bank.complete_question_count ?? bank.question_count }}</td><td><button class="kt-button" type="button" :disabled="copyingId === bank.id" @click="copy(bank.id)">{{ copyingId === bank.id ? '正在复制…' : '复制到当前课程' }}</button></td></tr></tbody></table></div></section></template><p v-else role="status">正在加载共享题库…</p>
+  <template v-else-if="data">
+    <CourseBankNavigation :course-id="courseId" active="shared">
+      <RouterLink class="kt-button kt-button--secondary" :to="`/teacher/courses/${courseId}/banks/shared/${sourceCourseId}/`">返回创建者</RouterLink>
+    </CourseBankNavigation>
+    <p>{{ data.source_course.name }} / {{ data.creator.name }}</p>
+    <EmptyState v-if="!data.items.length" title="没有可复制的题库"><p>来源课程的共享题库已不再可用。</p></EmptyState><section v-else class="kt-card kt-table-card kt-bank-secondary-table"><div class="kt-table-scroll"><table class="kt-table"><thead><tr><th>题库</th><th>题目数</th><th>操作</th></tr></thead><tbody><tr v-for="bank in data.items" :key="bank.id"><td><strong>{{ bank.name }}</strong><small>{{ bank.description || '未填写说明' }}</small></td><td>{{ bank.complete_question_count ?? bank.question_count }}</td><td><button class="kt-button" type="button" :disabled="copyingId === bank.id" @click="copy(bank.id)">{{ copyingId === bank.id ? '正在复制…' : '复制到当前课程' }}</button></td></tr></tbody></table></div></section>
+  </template>
+  <p v-else role="status">正在加载共享题库…</p>
 </template>

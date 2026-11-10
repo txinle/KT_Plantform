@@ -60,7 +60,7 @@ test('independent frontend mounts on the business URL and survives refresh', asy
   await page.getByRole('link', { name: '题库', exact: true }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/banks\/$/)
   await expect(page.locator('#kt-app')).toBeVisible()
-  await expect(page.getByRole('heading', { name: '题库', exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: /题库管理/ })).toBeVisible()
 })
 
 test('teacher creates an experiment and saves a resumable publish draft', async ({ browserName, page }) => {
@@ -227,7 +227,7 @@ test('teacher class center keeps analytics and management on the same frontend r
   await login(page, 'http://127.0.0.1:8000')
   await page.goto('http://127.0.0.1:8000/teacher/courses/1/classes/')
   await expect(page.locator('#kt-app')).toBeVisible()
-  await expect(page.getByRole('heading', { name: '班级', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '搜索班级', exact: true })).toBeVisible()
 
   await page.locator('a[href="/teacher/courses/1/classes/1/"]').filter({ hasText: '进入班级中心' }).click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/classes\/\d+\/$/)
@@ -256,7 +256,7 @@ test('teacher class center reflows at required viewports', async ({ browserName,
     { name: 'class-zoom-200-percent-equivalent', width: 720, height: 450 },
   ]) {
     await page.setViewportSize(viewport)
-    await expect(page.getByRole('heading', { name: '班级', exact: true })).toBeInViewport()
+    await expect(page.locator('.kt-class-list-layout')).toBeInViewport()
     const overflow = await page.evaluate(() => ({
       clientWidth: document.documentElement.clientWidth,
       scrollWidth: document.documentElement.scrollWidth,
@@ -312,7 +312,7 @@ test('question-bank list and detail mount on their business URLs', async ({ page
   await login(page, 'http://127.0.0.1:8000')
   await page.goto('http://127.0.0.1:8000/teacher/courses/1/banks/')
   await expect(page.locator('#kt-app')).toBeVisible()
-  await expect(page.getByRole('heading', { name: '题库', exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: /题库管理/ })).toBeVisible()
   await expect(page.getByRole('tab', { name: /课程 KC 总库 \d+/ })).toBeVisible()
   await page.getByRole('link', { name: '演示题库', exact: true }).first().click()
   await expect(page).toHaveURL(/\/teacher\/courses\/1\/banks\/\d+\/$/)
@@ -484,6 +484,38 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
   await expect(page.getByRole('heading', { name: '导入题目', exact: true })).toBeVisible()
 })
 
+test('teacher bank and class lists open directly on their controls', async ({ page, browserName }, testInfo) => {
+  test.skip(browserName !== 'chromium', 'Layout verification')
+  await login(page, 'http://127.0.0.1:8000')
+  for (const [width, height] of [[1440, 900], [390, 844], [720, 450]]) {
+    await page.setViewportSize({ width, height })
+    for (const path of ['banks', 'banks/shared', 'banks/archived', 'classes']) {
+      await page.goto(`/teacher/courses/1/${path}/`)
+      await expect(page.locator('main h1.kt-visually-hidden')).toHaveCount(1)
+      if (path === 'banks') {
+        const create = page.getByRole('button', { name: '新建题库', exact: true })
+        await expect(create).toBeInViewport()
+        const visibility = await page.getByLabel('题库可见性').boundingBox()
+        const button = await create.boundingBox()
+        if (width === 1440) {
+          expect(button!.x).toBeGreaterThanOrEqual(visibility!.x + visibility!.width)
+          expect(Math.abs(button!.y - visibility!.y)).toBeLessThan(4)
+        }
+        await create.click()
+        await expect(page.getByRole('dialog')).toBeVisible()
+        await page.keyboard.press('Escape')
+        await expect(page.getByRole('dialog')).toHaveCount(0)
+      } else if (path === 'classes') {
+        await expect(page.locator('.kt-class-list-layout')).toBeInViewport()
+      } else {
+        await expect(page.getByRole('link', { name: '返回题库', exact: true })).toBeInViewport()
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+      await page.screenshot({ path: testInfo.outputPath(`${path.replace('/', '-')}-${width}.png`) })
+    }
+  }
+})
+
 test('question-bank pages reflow without horizontal page overflow', async ({ browserName, page }, testInfo) => {
   test.skip(browserName !== 'chromium', 'One rendering engine provides the required viewport evidence.')
   await login(page, 'http://127.0.0.1:8000')
@@ -495,7 +527,7 @@ test('question-bank pages reflow without horizontal page overflow', async ({ bro
   ]) {
     await page.setViewportSize(viewport)
     await page.goto('http://127.0.0.1:8000/teacher/courses/1/banks/')
-    await expect(page.getByRole('heading', { name: '题库', exact: true })).toBeInViewport()
+    await expect(page.getByRole('tab', { name: /题库管理/ })).toBeInViewport()
     await expect(page.getByText('正在加载题库…')).toHaveCount(0)
     await expect(page.getByRole('link', { name: '演示题库', exact: true }).first()).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false)
